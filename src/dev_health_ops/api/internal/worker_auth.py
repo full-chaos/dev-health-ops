@@ -29,15 +29,16 @@ def authorize_metric_repair(authorization: str | None) -> None:
 
 
 def authorize_workgraph_repair(authorization: str | None) -> None:
-    """Require a repair token distinct from the worker bridge capability."""
+    """Require the operator repair token -- delegates to authorize_metric_repair.
 
-    expected = _bounded_secret("WORKER_WORKGRAPH_REPAIR_TOKEN")
-    bridge = _bounded_secret("WORKER_OPERATIONAL_BRIDGE_TOKEN")
-    if expected is None or (
-        bridge is not None and hmac.compare_digest(expected, bridge)
-    ):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    _authorize_bearer(authorization, "WORKER_WORKGRAPH_REPAIR_TOKEN")
+    CHAOS-5042 (chris, "over-engineering"): workgraph and metric-execution
+    repair share ONE operator repair token (WORKER_METRIC_REPAIR_TOKEN), not
+    two distinct ones. This wrapper stays so worker_workgraph.py's call site
+    still names WHICH repair capability it is guarding; the authorization
+    logic itself is entirely authorize_metric_repair's.
+    """
+
+    authorize_metric_repair(authorization)
 
 
 def _authorize_bearer(authorization: str | None, environment_name: str) -> None:

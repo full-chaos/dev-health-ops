@@ -1894,6 +1894,28 @@ async def run_daily_metrics_job(
         # every single run, not just on a recompute.
         skip_file_hotspots_write = "file_hotspots" in skip_families
         skip_file_risk_hotspots_write = "file_risk_hotspots" in skip_families
+        # CHAOS-4283: work_item and work_item_estimate have native Go
+        # executors (WorkItemExecutor/WorkItemEstimateExecutor). This is the
+        # repo_user_commit shape, NOT the team_wellbeing shape -- skip ONLY
+        # the writes, never the computes:
+        #
+        #   * `wi_user_metrics` is a live in-process input to
+        #     `compute_ic_metrics_daily` further down (the `ic_finalize`
+        #     family, still Python), which has no other source for it. If the
+        #     compute were skipped, ic_finalize would silently start seeing an
+        #     empty work-item contribution for every user on every partition
+        #     the Go executor handled -- a wrong number, not a missing one.
+        #   * `estimate_coverage_metrics` feeds nothing else here, so its
+        #     compute COULD be skipped, but is left unconditional to match the
+        #     established file_hotspots precedent and keep the diff minimal.
+        #
+        # Without these two gates the native executors and the unconditional
+        # writes below would BOTH fire for every partition, doubling every row
+        # in work_item_metrics_daily and work_item_user_metrics_daily (plain
+        # MergeTree, no dedup key) on every single run -- exactly the defect
+        # repo_user_commit's own comment above warns about.
+        skip_work_item_write = "work_item" in skip_families
+        skip_work_item_estimate_write = "work_item_estimate" in skip_families
         # CHAOS-4285: ai_governance has a native Go executor
         # (AIGovernanceExecutor). Same write-only-skip shape as
         # repo_user_commit above -- the compute stays unconditional to keep
@@ -1946,13 +1968,13 @@ async def run_daily_metrics_job(
                 if include_commit_metrics:
                     s.write_commit_metrics(result.commit_metrics)
             s.write_team_metrics(team_metrics)
-            if wi_metrics:
+            if wi_metrics and not skip_work_item_write:
                 s.write_work_item_metrics(wi_metrics)
-            if estimate_coverage_metrics:
+            if estimate_coverage_metrics and not skip_work_item_estimate_write:
                 s.write_estimate_coverage_metrics(estimate_coverage_metrics)
-            if wi_user_metrics:
+            if wi_user_metrics and not skip_work_item_write:
                 s.write_work_item_user_metrics(wi_user_metrics)
-            if wi_cycle_times:
+            if wi_cycle_times and not skip_work_item_write:
                 s.write_work_item_cycle_times(wi_cycle_times)
             if wi_team_attributions and hasattr(s, "write_work_item_team_attributions"):
                 s.write_work_item_team_attributions(wi_team_attributions)

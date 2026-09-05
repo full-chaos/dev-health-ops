@@ -166,9 +166,9 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "producer": "River worker `cmd/dev-health-worker/daily.go:235` (`daily.NewPartitionHandler`)",
         "trigger": "driven by dispatch/run rows",
         "gate": "none (family selection is unconditional fan-out)",
-        "writer": "MIXED: Go-native for `team_wellbeing` (CHAOS-4276, `daily.go:212-234` `NewTeamWellbeingExecutor`), `repo_user_commit` (CHAOS-4275, `NewRepoUserCommitExecutor`), `incident` (CHAOS-4295, `NewIncidentExecutor` -- landed WITH the CHAOS-4269 fix: `active_incidents_query`'s `valid_from <= as_of` predicate has no NULL-OK guard, so Python's compute path for this family was permanently zero-yield for every `mapping_kind=\"repository_derived\"` incident mapping; the Go executor adds `valid_from IS NULL OR valid_from <= as_of`, mirroring the symmetric `valid_to` guard), `deploy` (CHAOS-4293, `NewDeployExecutor`, `internal/jobs/metrics/daily/deploy_native_executor.go`), `work_item_state` (CHAOS-4278, `NewWorkItemStateExecutor` -- reads its team attribution from `work_item_team_attributions.is_primary=1` rather than recomputing the 9-source cascade, see that family's own row below; registered `phase=post_bridge` -- runs AFTER the bridge call below, not before, since it depends on `work_item_attribution`'s same-partition write), `cicd` (CHAOS-4292, `NewCICDExecutor`, `internal/jobs/metrics/daily/cicd`), `file_hotspots`/`file_risk_hotspots` (CHAOS-4277, `NewFileHotspotsExecutor`/`NewFileRiskHotspotsExecutor`, `internal/jobs/metrics/daily/filehotspots`), `testops_risk` (CHAOS-4294, `NewTestopsRiskExecutor`), and `compounding_risk` (CHAOS-4287, `NewCompoundingRiskExecutor`, `internal/jobs/metrics/daily/compoundingrisk` -- REPO scope only, registered `phase=post_bridge` because its input `repo_metrics_daily` is written by `repo_user_commit` in the SAME partition and `computeNativeFamilies` walks its family names in SORTED order, where `compounding_risk` precedes `repo_user_commit`; the TEAM-scope rows are still Python, emitted once per org/day from `run_daily_metrics_finalize`, because the Go finalize handler has no per-family registration to carve them out with); and `review_edges` (CHAOS-4279, `NewReviewEdgesExecutor`, `internal/jobs/metrics/daily/reviewedges` -- registered pre_bridge, since both its inputs are RAW SYNC tables rather than another daily family's output; its loader argMax-dedups both ReplacingMergeTree sources, which Python does NOT, so a re-synced review is counted once here and twice in Python); and `benchmarking` (CHAOS-4288, `NewBenchmarkingExecutor`, `internal/jobs/metrics/daily/benchmarking` -- registered pre_bridge; it is ORG-scoped compute that Python runs on EVERY repo partition, appending N identical row sets to six append-only tables per night, so the native executor computes once per org/day on the org's lexicographically-first repo partition and no-ops elsewhere); the other ~11 families still bridge via `internal/jobs/metrics/daily/compatibility_http.go` -> POST `/internal/worker/daily-metrics/v1/execute` -> `worker_metrics.py:1727` -> `src/dev_health_ops/metrics/job_daily.py:1104 run_daily_metrics_job` (NOT `workers/metrics_daily.py`, which is dead Celery-only code, see worker-file ledger)",
+        "writer": "MIXED: Go-native for `team_wellbeing` (CHAOS-4276, `daily.go:212-234` `NewTeamWellbeingExecutor`), `repo_user_commit` (CHAOS-4275, `NewRepoUserCommitExecutor`), `incident` (CHAOS-4295, `NewIncidentExecutor` -- landed WITH the CHAOS-4269 fix: `active_incidents_query`'s `valid_from <= as_of` predicate has no NULL-OK guard, so Python's compute path for this family was permanently zero-yield for every `mapping_kind=\"repository_derived\"` incident mapping; the Go executor adds `valid_from IS NULL OR valid_from <= as_of`, mirroring the symmetric `valid_to` guard), `deploy` (CHAOS-4293, `NewDeployExecutor`, `internal/jobs/metrics/daily/deploy_native_executor.go`), `work_item_state` (CHAOS-4278, `NewWorkItemStateExecutor` -- reads its team attribution from `work_item_team_attributions.is_primary=1` rather than recomputing the 9-source cascade, see that family's own row below; registered `phase=post_bridge` -- runs AFTER the bridge call below, not before, since it depends on `work_item_attribution`'s same-partition write), `cicd` (CHAOS-4292, `NewCICDExecutor`, `internal/jobs/metrics/daily/cicd`), `file_hotspots`/`file_risk_hotspots` (CHAOS-4277, `NewFileHotspotsExecutor`/`NewFileRiskHotspotsExecutor`, `internal/jobs/metrics/daily/filehotspots`), `testops_risk` (CHAOS-4294, `NewTestopsRiskExecutor`), and `compounding_risk` (CHAOS-4287, `NewCompoundingRiskExecutor`, `internal/jobs/metrics/daily/compoundingrisk` -- REPO scope only, registered `phase=post_bridge` because its input `repo_metrics_daily` is written by `repo_user_commit` in the SAME partition and `computeNativeFamilies` walks its family names in SORTED order, where `compounding_risk` precedes `repo_user_commit`; the TEAM-scope rows are still Python, emitted once per org/day from `run_daily_metrics_finalize`, because the Go finalize handler has no per-family registration to carve them out with); and `review_edges` (CHAOS-4279, `NewReviewEdgesExecutor`, `internal/jobs/metrics/daily/reviewedges` -- registered pre_bridge, since both its inputs are RAW SYNC tables rather than another daily family's output; its loader reads both ReplacingMergeTree sources with `FINAL`, which Python does NOT, so a re-synced review is counted once here and twice in Python); and `benchmarking` (CHAOS-4288, `NewBenchmarkingExecutor`, `internal/jobs/metrics/daily/benchmarking` -- registered post_bridge, because this family's metric window ENDS ON THE TARGET DAY (asOfDay = run.TargetDay) so day D's own rows are inside it, and Python writes those rows before calling the family; it is ORG-scoped compute that Python runs on EVERY repo partition, appending N identical row sets to six append-only tables per night, so the native executor computes once per org/day on the org's lexicographically-first repo partition and no-ops elsewhere); the other ~11 families still bridge via `internal/jobs/metrics/daily/compatibility_http.go` -> POST `/internal/worker/daily-metrics/v1/execute` -> `worker_metrics.py:1727` -> `src/dev_health_ops/metrics/job_daily.py:1104 run_daily_metrics_job` (NOT `workers/metrics_daily.py` -- a different module with its own separate live producer via external_ingest/recompute.py, see worker-file ledger)",
         "tables": "`public.daily_metrics_partitions` plus per-family ClickHouse output tables",
-        "evidence": "argued — corrects both `.remember/chaos-3092-port-inventory-2026-08-25.md`'s '21/23 Python' framing (9 families are now native) and a prior fork's mis-citation of `workers/metrics_daily.py` (that file is dead; the live module is `src/dev_health_ops/metrics/job_daily.py`); `incident`'s zero-yield/fix claim is local — executed evidence in CHAOS-4269's ticket comment (2026-09-01: unfiltered `SELECT count() FROM incident_metrics_daily` = 0; predicate swap on a seeded org recovered 36/36 rows)",
+        "evidence": "argued — corrects both `.remember/chaos-3092-port-inventory-2026-08-25.md`'s '21/23 Python' framing (9 families are now native) and a prior fork's mis-citation of `workers/metrics_daily.py` (this bridge route's live module is `src/dev_health_ops/metrics/job_daily.py`, a different file -- `workers/metrics_daily.py` itself is also live, via a separate external-ingest producer, see worker-file ledger CHAOS-4439); `incident`'s zero-yield/fix claim is local — executed evidence in CHAOS-4269's ticket comment (2026-09-01: unfiltered `SELECT count() FROM incident_metrics_daily` = 0; predicate swap on a seeded org recovered 36/36 rows)",
         "state": "mixed (9 native, ~14 bridge)",
         "ticket": "CHAOS-3092 children (per-family, tracked separately; not re-enumerated here)",
     },
@@ -420,7 +420,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "async_runner.py": {
         "category": "c",
-        "evidence": "imported by live sync_bootstrap/system_ops/system_webhooks/work_graph_tasks (and dead metrics_daily/feature_flag_sync) — 'run coroutine inside Celery task' helper",
+        "evidence": "imported by live sync_bootstrap/system_ops/system_webhooks/work_graph_tasks (and feature_flag_sync, itself LIVE per that file's own row) — 'run coroutine inside Celery task' helper",
         "ticket": "n/a",
     },
     "celery_app.py": {
@@ -440,8 +440,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "external_ingest_reconciler.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` (L59 prune_external_ingest_batches); sole importer tasks.py:9",
-        "ticket": "CHAOS-4439 (dead worker modules)",
+        "evidence": "`@celery_app.task` (L59 prune_external_ingest_batches); sole Python importer tasks.py:2-4 -- but CHAOS-4439 found (config.py:164-167) this task is still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod. Not deletable until that fleet stops running it",
+        "ticket": "CHAOS-4439 (kept -- ask-dev acceptance fleet dependency)",
     },
     "feature_flag_sync.py": {
         "category": "a",
@@ -459,14 +459,9 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "n/a",
     },
     "metrics_daily.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` (L19 run_daily_metrics); sole importer tasks.py:5; live daily-metrics route calls dev_health_ops.metrics.job_daily instead (worker_metrics.py:1682) — different module",
-        "ticket": "CHAOS-4439 (dead worker modules)",
-    },
-    "metrics_extra.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` x2 (L14/L88); sole importer tasks.py:6-9; live complexity/DORA routes call metrics.job_complexity_db/job_dora instead",
-        "ticket": "CHAOS-4439 (dead worker modules)",
+        "category": "a",
+        "evidence": "`@celery_app.task` (L19 run_daily_metrics); sole Python importer tasks.py:5 -- CHAOS-4439 peer read (PR #2237, lane-5006-provider-kind) found a live producer that CHAOS-4439's own original ticket evidence missed: external_ingest/recompute.py:356 (celery.chain per-repo fan-out) and :397 (send_task repo-less fallback) dispatch it by the exact registered task name `dev_health_ops.workers.tasks.run_daily_metrics`, reachable live from external_ingest/processor.py:414's batch-accept path. Not the same call path as the live daily-metrics route (worker_metrics.py:1682 -> metrics.job_daily, a different module) -- both are real, independent producers of daily-metrics compute today.",
+        "ticket": "CHAOS-4439 (kept -- live producer via external-ingest recompute chain; deletion waits on CHAOS-4427, not CUT-11/CHAOS-3083 as an earlier draft wrongly cited)",
     },
     "org_guard.py": {
         "category": "c",
@@ -490,8 +485,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "queue_monitor.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` (L84 monitor_queue_depths); importers celery_app.py (comment only) + tasks.py:8; no route caller",
-        "ticket": "CHAOS-4439 (dead worker modules)",
+        "evidence": "`@celery_app.task` (L84 monitor_queue_depths); Python importers celery_app.py (comment only) + tasks.py:5; no route caller -- but CHAOS-4439 found (config.py:164-167) this task is still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod. Not deletable until that fleet stops running it",
+        "ticket": "CHAOS-4439 (kept -- ask-dev acceptance fleet dependency)",
     },
     "queues.py": {
         "category": "c",
@@ -602,11 +597,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "category": "a",
         "evidence": "run_post_sync_team_autoimport imported worker_sync.py:27, served by /team-autoimport",
         "ticket": "CHAOS-4198",
-    },
-    "team_drift_sync.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` (L56 sync_team_drift); sole importer tasks.py:22",
-        "ticket": "CHAOS-4439 (dead worker modules)",
     },
     "work_graph_tasks.py": {
         "category": "a",

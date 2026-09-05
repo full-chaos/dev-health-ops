@@ -611,7 +611,19 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // ObserveDailyMetricsNativeFamily's error is discarded at its call site).
 // "deploy" (CHAOS-4293) and "work_item_state" (CHAOS-4278) added themselves
 // correctly -- included here from those merges.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "review_edges", "benchmarking", "ai_governance", "ai_impact", "work_graph_edges"}
+// "work_item" and "work_item_estimate" (CHAOS-4283) matter here MORE than a
+// pre_bridge family does, not less: both run post_bridge, and Python is told
+// to skip a post_bridge family unconditionally, so a refusal means NOTHING
+// writes work_item_metrics_daily / work_item_user_metrics_daily /
+// work_item_cycle_times / estimate_coverage_metrics_daily for that partition.
+// This counter is the only operator-visible signal that happened -- an
+// unregistered family would have every ObserveDailyMetricsNativeFamily call
+// silently refused, turning a total write outage into silence.
+//
+// "compounding_risk" (CHAOS-4287) is post_bridge for its own reason and
+// carries the same consequence: unregistered means every observation for it is
+// refused, and the family's absence becomes invisible rather than counted.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_state", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "compounding_risk", "review_edges", "benchmarking", "ai_governance", "ai_impact", "work_graph_edges", "work_item", "work_item_estimate"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
@@ -704,6 +716,23 @@ var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_re
 // detected -- a run whose finalize lease is still live is left alone this
 // pass and only becomes eligible on a later one).
 var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
+
+// dailyMetricsBlockedRunOutcomes is the closed set of bounded outcomes a
+// CHAOS-5040 blocked-run reconcile pass can report. "marked" and "cleared"
+// are TRANSITIONS, deliberately not a level: a pass is per-organization, so a
+// "currently blocked" gauge set from one organization's pass would clobber
+// every other organization's contribution. Transitions compose; a level would
+// not.
+//
+// "failed" exists so the reconcile is silent to the JOB but never silent to
+// METRICS. The pass is fail-open by design -- a visibility mechanism must not
+// be able to fail the fan-out that computes the day's metrics -- and a
+// fail-open path with no counter is indistinguishable from one that is
+// working, which is the exact shape this marker was added to eliminate
+// elsewhere. Without it, a reconcile erroring on every pass would leave
+// "marked" and "cleared" both sitting at zero, which reads identically to a
+// healthy fleet with nothing wedged.
+var dailyMetricsBlockedRunOutcomes = []string{"marked", "cleared", "failed"}
 
 // dailyMetricsFinalizeLedgerRepairOutcomes is the closed set of bounded
 // outcomes CHAOS-4409's finalize-ledger bulk repair can report per execution
@@ -945,6 +974,9 @@ type MetricsCollector struct {
 	// activity by bounded outcome. See dailyMetricsFinalizeSweepOutcomes for
 	// the vocabulary.
 	dailyMetricsFinalizeSweep map[string]uint64
+	// dailyMetricsBlockedRun (CHAOS-5040) counts blocked-run reconcile
+	// transitions by bounded outcome. See dailyMetricsBlockedRunOutcomes.
+	dailyMetricsBlockedRun map[string]uint64
 	// dailyMetricsFinalizeLedgerRepair (CHAOS-4409) counts finalize-ledger
 	// bulk-repair activity by bounded outcome. See
 	// dailyMetricsFinalizeLedgerRepairOutcomes for the vocabulary. No
@@ -1201,6 +1233,7 @@ var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
 var _ WorkItemStateMissingAttributionObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsRedriveObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeSweepObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsBlockedRunObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeLedgerRepairObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeRedriveObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsPartitionRecomputeObserver = (*MetricsCollector)(nil)
@@ -1251,6 +1284,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		remainingManualBackfill:              make(map[remainingMetricsManualBackfillLabels]uint64, len(remainingMetricsManualBackfillFamilies)*len(remainingMetricsManualBackfillOutcomes())),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
+		dailyMetricsBlockedRun:               make(map[string]uint64, len(dailyMetricsBlockedRunOutcomes)),
 		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
 		dailyMetricsFinalizeRedrive:          make(map[string]uint64, len(dailyMetricsFinalizeRedriveOutcomes)),
 		dailyMetricsPartitionRecompute:       make(map[dailyMetricsPartitionRecomputeLabels]uint64, len(dailyMetricsPartitionRecomputeFamilies)*len(dailyMetricsPartitionRecomputeOutcomes)),
@@ -1350,6 +1384,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, outcome := range dailyMetricsFinalizeSweepOutcomes {
 		collector.dailyMetricsFinalizeSweep[outcome] = 0
+	}
+	for _, outcome := range dailyMetricsBlockedRunOutcomes {
+		collector.dailyMetricsBlockedRun[outcome] = 0
 	}
 	for _, outcome := range dailyMetricsFinalizeLedgerRepairOutcomes {
 		collector.dailyMetricsFinalizeLedgerRepair[outcome] = 0
@@ -1731,6 +1768,25 @@ func (collector *MetricsCollector) ObserveDailyMetricsFinalizeSweep(outcome stri
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsFinalizeSweep[outcome] += uint64(count)
+	return nil
+}
+
+// ObserveDailyMetricsBlockedRun records count runs for one bounded outcome
+// during a CHAOS-5040 blocked-run reconcile pass. count must be >= 0,
+// matching ObserveDailyMetricsFinalizeSweep's discipline: a pass that
+// changed nothing still calls this with 0 so the series stays present rather
+// than disappearing, which is what lets an alert distinguish "no wedged runs"
+// from "the reconcile stopped running".
+func (collector *MetricsCollector) ObserveDailyMetricsBlockedRun(outcome string, count int) error {
+	if !slices.Contains(dailyMetricsBlockedRunOutcomes, outcome) {
+		return errors.New("daily metrics blocked run outcome is not registered")
+	}
+	if count < 0 {
+		return errors.New("daily metrics blocked run count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsBlockedRun[outcome] += uint64(count)
 	return nil
 }
 
@@ -3329,6 +3385,12 @@ func (collector *MetricsCollector) writeDailyMetricsFinalizeSweep(output *string
 	writeUintSample(output, "dev_health_daily_metrics_stranded_finalize_runs_detected_total", nil, collector.dailyMetricsFinalizeSweep["detected"])
 	writeMetadata(output, "dev_health_daily_metrics_runs_finalized_by_sweep_total", "Daily-metrics runs whose metrics.daily_finalize job was freshly (re-)enqueued by a CHAOS-4389 stranded-finalize sweep, outside the outbox's normal per-run dedupe.", "counter")
 	writeUintSample(output, "dev_health_daily_metrics_runs_finalized_by_sweep_total", nil, collector.dailyMetricsFinalizeSweep["finalized"])
+	writeMetadata(output, "dev_health_daily_metrics_runs_blocked_marked_total", "Daily metrics runs newly marked blocked (a failed_permanent partition with nothing dispatchable left, so the completion fence can never be written).", "counter")
+	writeUintSample(output, "dev_health_daily_metrics_runs_blocked_marked_total", nil, collector.dailyMetricsBlockedRun["marked"])
+	writeMetadata(output, "dev_health_daily_metrics_runs_blocked_cleared_total", "Daily metrics runs whose blocked marker was cleared because the predicate stopped holding.", "counter")
+	writeUintSample(output, "dev_health_daily_metrics_runs_blocked_cleared_total", nil, collector.dailyMetricsBlockedRun["cleared"])
+	writeMetadata(output, "dev_health_daily_metrics_runs_blocked_reconcile_failed_total", "Blocked-run reconcile passes that failed. The pass is fail-open, so this is the only signal that the marker is not being maintained; marked/cleared sitting at zero cannot distinguish a healthy fleet from a broken reconcile.", "counter")
+	writeUintSample(output, "dev_health_daily_metrics_runs_blocked_reconcile_failed_total", nil, collector.dailyMetricsBlockedRun["failed"])
 }
 
 // writeDailyMetricsFinalizeLedgerRepair exposes the CHAOS-4409 finalize-

@@ -49,8 +49,10 @@
         "work_item_user_metrics_daily",
         "work_item_cycle_times"
       ],
-      "port": "pending",
-      "golden": "required"
+      "port": "go",
+      "golden": "required",
+      "phase": "post_bridge",
+      "phase_note": "TEMPORARY (CHAOS-4283): reads work_item_team_attributions, written by the still-Python work_item_attribution family in the SAME partition's compatibility-bridge call. Runs after the bridge so it sees this partition's fresh row, not a stale one -- identical reasoning to work_item_state. Move to pre_bridge (with work_item_state) once the daily work_item_attribution family has a native Go executor that can precede it in the pre_bridge phase."
     },
     {
       "name": "work_item_estimate",
@@ -58,8 +60,10 @@
       "writes": [
         "estimate_coverage_metrics_daily"
       ],
-      "port": "pending",
-      "golden": "required"
+      "port": "go",
+      "golden": "required",
+      "phase": "post_bridge",
+      "phase_note": "TEMPORARY (CHAOS-4283): same work_item_team_attributions dependency, and the same move-to-pre_bridge condition, as the work_item family above."
     },
     {
       "name": "work_item_attribution",

@@ -131,24 +131,55 @@ func (store *PostgresStore) RedriveStrandedPartitions(
 	}()
 
 	now := store.now().UTC()
-	// Step 1: an explicit, operator-scoped override of failed_permanent
-	// (CHAOS-4319's terminal state). Bounded to runs the caller named by
+	// Step 1 and the CHAOS-5040 marker clear are ONE statement, deliberately.
+	//
+	// Step 1 is an explicit, operator-scoped override of failed_permanent
+	// (CHAOS-4319's terminal state), bounded to runs the caller named by
 	// org+day range -- never a blanket resurrection, unlike
 	// DispatchablePartitions's own automatic reclaim, which must keep
 	// excluding failed_permanent rows it did not decide to override.
-	resetCommand, err := tx.Exec(ctx, `
-UPDATE public.daily_metrics_partitions AS partition
-SET status = 'failed', failure_reason = NULL, updated_at = $1
-FROM public.daily_metrics_runs AS run
-WHERE partition.run_id = run.id
-  AND run.org_id = $2::uuid
-  AND run.target_day BETWEEN $3 AND $4
-  AND run.status = 'running'
-  AND partition.status = 'failed_permanent'`, now, orgID, from, to)
-	if err != nil {
+	//
+	// The clear is fused to it via RETURNING rather than run as a second
+	// statement scoped by org+day, because those are NOT the same set. As two
+	// statements under Read Committed each takes its own snapshot, so a run
+	// that becomes blocked BETWEEN them -- terminalized and marked by a
+	// concurrent fan-out reconcile while the reset waits on a lock -- would
+	// have its marker cleared without its partition being reset. Step 2 below
+	// excludes failed_permanent, so nothing would be published for it either:
+	// the run stays wedged AND loses the marker that says so, until the next
+	// fan-out. That is the marker lying in the dangerous direction, which is
+	// worse than not having cleared it at all.
+	//
+	// Data-modifying CTEs share one snapshot and the clear reads the reset's
+	// RETURNING rows, so it can only ever touch runs this pass actually reset.
+	// That is what makes the earlier justification true rather than merely
+	// intended: every run cleared has, by construction, just been given a
+	// dispatchable partition.
+	var resetCount, clearedCount int
+	if err := tx.QueryRow(ctx, `
+WITH reset AS (
+    UPDATE public.daily_metrics_partitions AS partition
+    SET status = 'failed', failure_reason = NULL, updated_at = $1
+    FROM public.daily_metrics_runs AS run
+    WHERE partition.run_id = run.id
+      AND run.org_id = $2::uuid
+      AND run.target_day BETWEEN $3 AND $4
+      AND run.status = 'running'
+      AND partition.status = 'failed_permanent'
+    RETURNING partition.run_id AS run_id
+),
+cleared AS (
+    UPDATE public.daily_metrics_runs AS run
+    SET blocked_at = NULL, blocked_reason = NULL, updated_at = $1
+    WHERE run.id IN (SELECT run_id FROM reset)
+      AND run.blocked_at IS NOT NULL
+    RETURNING 1
+)
+SELECT (SELECT count(*) FROM reset), (SELECT count(*) FROM cleared)`,
+		now, orgID, from, to).Scan(&resetCount, &clearedCount); err != nil {
 		return outcome, ErrUnavailable
 	}
-	outcome.PermanentReset = int(resetCommand.RowsAffected())
+	outcome.PermanentReset = resetCount
 
 	// Step 2: every dispatchable (pending/failed) partition in scope --
 	// including partitions this pass just reset in step 1, and any partition
@@ -174,7 +205,7 @@ WHERE run.org_id = $1::uuid
   AND run.status = 'running'
   AND (
     partition.status IN ('pending', 'failed')
-    OR (partition.status = 'running' AND partition.lease_expires_at < $4)
+    OR (partition.status = 'running' AND partition.lease_expires_at <= $4)
   )
 ORDER BY partition.run_id, partition.ordinal`, orgID, from, to, now)
 	if err != nil {
@@ -239,6 +270,11 @@ ORDER BY partition.run_id, partition.ordinal`, orgID, from, to, now)
 	// (see docs/reference/cli/index.md's `metrics daily-redrive` entry).
 	store.observeRedrive("failed_permanent_reset", outcome.PermanentReset)
 	store.observeRedrive("dispatch_redriven", outcome.RedrivenPartitions)
+	// Reported, not folded into RedriveOutcome: the count is a property of the
+	// CHAOS-5040 marker rather than of the redrive's own repair work, and it is
+	// NOT equal to PermanentReset -- reset counts PARTITIONS, this counts RUNS,
+	// and only the subset that was actually carrying the marker.
+	store.observeRedrive("blocked_marker_cleared", clearedCount)
 	return outcome, nil
 }
 

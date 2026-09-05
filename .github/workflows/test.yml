@@ -25,7 +25,12 @@ permissions:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
+    # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT). Flip the
+    # repo variable SELF_HOSTED_RUNNERS back to 'disabled' to restore the
+    # hosted runner with no code change. Fork PRs always stay hosted -- same
+    # safety condition as go.yml's dual-leg jobs.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     outputs:
@@ -160,7 +165,11 @@ jobs:
       github.event_name == 'merge_group' ||
       github.event_name == 'workflow_dispatch' ||
       needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-26.04-arm
+    # Same ARC routing as `changes` above; falls back to this job's own
+    # ubuntu-26.04-arm (already ARM, just hosted) rather than ubuntu-latest,
+    # so disabling the variable restores the EXACT prior runner, not a
+    # different architecture.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-26.04-arm' }}
     # Test matrix needs package read access for dependency installs.
     permissions:
       contents: read
@@ -327,7 +336,11 @@ jobs:
     if: >-
       github.event_name != 'pull_request' &&
       (github.event_name == 'merge_group' || needs.changes.outputs.code == 'true')
-    runs-on: ubuntu-26.04-arm
+    # Same ARC routing as `changes` above; falls back to this job's own
+    # ubuntu-26.04-arm (already ARM, just hosted) rather than ubuntu-latest,
+    # so disabling the variable restores the EXACT prior runner, not a
+    # different architecture.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-26.04-arm' }}
     # CHAOS-3413: this job has hung indefinitely (1h45m-6h, then auto-cancelled
     # by the next push's `cancel-in-progress` group) instead of failing, for
     # days -- `cancelled` isn't a red check, so it merged silently as routine
@@ -503,7 +516,8 @@ jobs:
     # available answer to "no required job may exit success after skipping
     # substantive work". The cost is ~10s on PRs that changed no docs.
     needs: [changes]
-    runs-on: ubuntu-latest
+    # Same ARC routing as `changes` above.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -529,7 +543,8 @@ jobs:
     # runs unconditionally and the script fails the gate on `cancelled`.
     if: always()
     needs: [changes, test-matrix, coverage, docs-tests]
-    runs-on: ubuntu-latest
+    # Same ARC routing as `changes` above.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

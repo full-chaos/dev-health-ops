@@ -66,7 +66,13 @@ jobs:
     # ALWAYS runs and decides relevance INSIDE itself -- see "Decide whether
     # this change set is typecheck-relevant" below -- so a skip can only ever
     # be an honest, reported one, never an Actions-level job skip).
-    runs-on: ubuntu-latest
+    #
+    # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
+    # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT). Flip the
+    # repo variable SELF_HOSTED_RUNNERS back to 'disabled' to restore the
+    # hosted runner with no code change. Fork PRs always stay hosted -- same
+    # safety condition as go.yml's dual-leg jobs.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     # Typecheck job needs package read access for dependency installs.
     permissions:
       contents: read
@@ -147,7 +153,8 @@ jobs:
     # which moves the silent pass one level up instead of closing it.
     if: always()
     needs: [typecheck-mypy]
-    runs-on: ubuntu-latest
+    # Same ARC routing as `typecheck-mypy` above.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

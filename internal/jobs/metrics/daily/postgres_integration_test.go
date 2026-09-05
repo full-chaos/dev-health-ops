@@ -814,6 +814,109 @@ func TestPostgresStoreReleaseFailurePathsReachLiveSchema(t *testing.T) {
 	}
 }
 
+// TestFailFinalizePermanentlyReachesLiveSchema closes a coverage gap the r3
+// class-sweep found (CHAOS-4290): every existing test that exercises the
+// TERMINAL finalize state (finalize_blocked_marker_integration_test.go)
+// seeds status='failed'/finalization_status='failed' directly via SQL,
+// describing what FailFinalizePermanently writes rather than ever calling
+// it -- the real method's own guards (claim-token match, lease-not-expired,
+// RowsAffected==1) had ZERO coverage against a real Postgres. Modeled on
+// TestPostgresStoreReleaseFailurePathsReachLiveSchema immediately above:
+// the same CHAOS-4043 class (an untyped/mistyped parameter that only a real,
+// alembic-derived schema's column types would catch) is exactly the risk an
+// untested SQL statement carries silently forward.
+func TestFailFinalizePermanentlyReachesLiveSchema(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createDailyTables(t, ctx, pool)
+
+	const (
+		runID       = "00000000-0000-4000-8000-000000000201"
+		partitionID = "00000000-0000-4000-8000-000000000202"
+		orgID       = "00000000-0000-4000-8000-000000000209"
+	)
+	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1,$2,'2026-09-04','daily-v1','running','pending',$3,$3)`, runID, orgID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_partitions (id,run_id,ordinal,repo_ids,status,attempt_count,created_at,updated_at) VALUES ($1,$2,0,'[]'::jsonb,'succeeded',1,$3,$3)`, partitionID, runID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.now = func() time.Time { return now }
+
+	// --- the guard: a claim whose token no longer matches must not
+	// terminalize the run (RowsAffected==0 -> ErrLeaseLost), exactly the
+	// "reports success while doing nothing" shape this method's own
+	// RowsAffected check exists to catch (postgres.go's doc comment).
+	claim, err := store.ClaimFinalize(ctx, runID)
+	if err != nil || claim == nil {
+		t.Fatalf("claim finalize = %#v, %v", claim, err)
+	}
+	staleClaim := *claim
+	staleClaim.Token = uuid.NewString()
+	if err := store.FailFinalizePermanently(ctx, staleClaim); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("FailFinalizePermanently with a stale token = %v, want ErrLeaseLost", err)
+	}
+	var runStatusAfterStaleAttempt string
+	if err := pool.QueryRow(ctx,
+		`SELECT status FROM daily_metrics_runs WHERE id = $1::uuid`, runID,
+	).Scan(&runStatusAfterStaleAttempt); err != nil {
+		t.Fatal(err)
+	}
+	if runStatusAfterStaleAttempt != "running" {
+		t.Fatalf("a stale-token FailFinalizePermanently call changed run status to %q -- "+
+			"it must affect zero rows, not terminalize under someone else's claim",
+			runStatusAfterStaleAttempt)
+	}
+
+	// --- the real write: the CURRENT claim terminalizes the run.
+	if err := store.FailFinalizePermanently(ctx, *claim); err != nil {
+		t.Fatalf("FailFinalizePermanently against live schema: %v", err)
+	}
+	var runStatus, finalizationStatus string
+	var finalizeClaimToken *string
+	var finalizedAt *time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT status, finalization_status, finalization_claim_token::text, finalized_at
+FROM daily_metrics_runs WHERE id = $1::uuid`, runID,
+	).Scan(&runStatus, &finalizationStatus, &finalizeClaimToken, &finalizedAt); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "failed" || finalizationStatus != "failed" || finalizeClaimToken != nil || finalizedAt == nil {
+		t.Fatalf("terminal finalize state = status=%s finalization_status=%s claim_token=%v finalized_at=%v, "+
+			"want failed/failed/nil/non-nil", runStatus, finalizationStatus, finalizeClaimToken, finalizedAt)
+	}
+
+	// --- terminal, not merely retryable: a terminal run must never be
+	// reclaimable again, unlike ReleaseFinalize's failed/running shape a few
+	// lines above in the sibling test.
+	if reclaimed, err := store.ClaimFinalize(ctx, runID); err != nil || reclaimed != nil {
+		t.Fatalf("terminally failed finalize was reclaimed = %#v, %v", reclaimed, err)
+	}
+
+	// --- a SECOND terminalize attempt on the now-terminal run (e.g. a
+	// duplicate River delivery of the same final attempt) must also affect
+	// zero rows rather than double-writing finalized_at.
+	if err := store.FailFinalizePermanently(ctx, *claim); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a second FailFinalizePermanently on an already-terminal run = %v, want ErrLeaseLost", err)
+	}
+}
+
 // TestPostgresStoreReclaimsAPartitionReleasedWithAFailureReason is the
 // CHAOS-4316 codex-review P1 regression control: ReleasePartitionWithReason
 // persists status='failed' with a non-NULL failure_reason (migration 0113's

@@ -25,6 +25,9 @@
     "work_item_estimate": "native",
     "work_item_state": "native"
   },
+  "finalize": {
+    "ic_finalize": "finalize"
+  },
   "remaining": {
     "capacity": "native",
     "complexity": "compat",

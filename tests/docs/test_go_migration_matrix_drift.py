@@ -230,7 +230,6 @@ def test_daily_finalize_compat_families_matches_known_calls() -> None:
     assert compat_families == {
         ("daily", "compounding_risk"),
         ("daily", "team_cognitive_load"),
-        ("daily", "ic_finalize"),
         ("remaining", "complexity"),
     }
 

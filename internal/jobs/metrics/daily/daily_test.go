@@ -1493,6 +1493,7 @@ type fakeStore struct {
 	releasesWithReason            int
 	releaseReason                 string
 	releaseWithReasonErr          error
+	releaseFinalizeErr            error
 }
 
 func (store *fakeStore) LoadRun(context.Context, string) (Run, error) {
@@ -1581,7 +1582,7 @@ func (store *fakeStore) FailFinalizePermanently(context.Context, FinalizeClaim) 
 
 func (store *fakeStore) ReleaseFinalize(context.Context, FinalizeClaim) error {
 	store.finalizeReleases++
-	return nil
+	return store.releaseFinalizeErr
 }
 
 type fakePublisher struct{}

@@ -143,6 +143,7 @@ internal/jobs/investment/categorize	15
 internal/jobs/investment/chquery	122
 internal/jobs/investment/chwrite	130
 internal/jobs/metrics/daily	6
+internal/jobs/metrics/daily/icfinalize	51
 internal/jobs/metrics/remaining	6
 internal/jobs/pagerduty	9
 internal/jobs/report	33

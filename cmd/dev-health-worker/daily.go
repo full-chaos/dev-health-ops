@@ -855,6 +855,28 @@ func dailyNativeFamilyRegistrations(
 			"error", fileRiskHotspotsErr,
 		)
 	}
+	// CHAOS-4285: ai_governance. Same fail-open construction policy as every
+	// other native family above, and registered PRE-BRIDGE like them: this
+	// family reads only raw sync tables (ai_attribution_resolved,
+	// git_pull_requests, ci_pipeline_runs, security_alerts,
+	// ai_tool_allowlist), never another compat family's daily output, so it
+	// has none of work_item_state's post_bridge ordering dependency.
+	//
+	// Unlike every other entry here it is ORG-scoped, not repo-scoped --
+	// see AIGovernanceExecutor's doc comment for why that matches Python
+	// exactly and why the deterministic event_id is what makes the
+	// resulting once-per-partition rewrite idempotent.
+	if aiGovernanceExecutor, aiGovernanceErr := daily.NewAIGovernanceExecutor(clickhouseConnection); aiGovernanceErr == nil {
+		native["ai_governance"] = aiGovernanceExecutor
+	} else {
+		logger.Error(
+			"ai_governance native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", aiGovernanceErr,
+		)
+	}
 	// CHAOS-4294: testops_risk. Same fail-open construction policy as
 	// every other native family above.
 	if testopsRiskExecutor, testopsRiskErr := daily.NewTestopsRiskExecutor(clickhouseConnection); testopsRiskErr == nil {

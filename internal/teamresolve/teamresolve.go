@@ -66,13 +66,57 @@ func applyOwnership(
 	}
 }
 
+// ResolveFromOwnershipMap is the PURE core of ResolveOwnershipThenPatterns,
+// decoupled from ClickHouse exactly the way job_daily.py:497
+// _repo_to_team_map_for_compounding_risk itself is decoupled from
+// load_team_repo_ownership_map: this function takes an ALREADY-RESOLVED
+// {repo_id_str: team_id} ownership map (Python's own parameter shape) rather
+// than querying for it, which is what makes it possible to run this exact
+// logic against the REAL Python function in an oracle test with no
+// ClickHouse involved on either side — the ClickHouse read itself is a
+// separate, already-tested concern (teamownership.OwnedRepoIDs on the Go
+// side, load_team_repo_ownership_map on the Python side; both documented as
+// mirroring the same hardened query).
+//
+// Precedence: ownershipMap wins where it resolves a repo (already gated on
+// repoNamesByID by whoever built it — see applyOwnership / the ClickHouse
+// wrapper below); the pattern resolver is the fallback, for a repo
+// ownershipMap leaves unresolved AND that is still present in repoNamesByID.
+// A repo repoNamesByID does not carry is never guessed by either path.
+func ResolveFromOwnershipMap(
+	ownershipMap map[string]string, repoIDs []uuid.UUID, repoNamesByID map[string]string,
+	patternResolver numerical.RepoTeamResolver,
+) map[string]string {
+	repoToTeam := make(map[string]string, len(repoIDs))
+	for _, repoID := range repoIDs {
+		key := repoID.String()
+		name, known := repoNamesByID[key]
+		if !known {
+			// Not in the current repos catalog -- neither source is trusted,
+			// matching _repo_to_team_map_for_compounding_risk's own guard.
+			continue
+		}
+		if teamID := ownershipMap[key]; teamID != "" {
+			repoToTeam[key] = teamID
+			continue
+		}
+		if patternResolver == nil {
+			continue
+		}
+		teamID, _ := patternResolver.ResolveRepo(name)
+		if teamID != "" {
+			repoToTeam[key] = teamID
+		}
+	}
+	return repoToTeam
+}
+
 // ResolveOwnershipThenPatterns builds {repo_id_str: team_id} exactly as
-// job_daily.py:497 _repo_to_team_map_for_compounding_risk does:
-// team_repo_ownership (teamownership.OwnedRepoIDs, per team) first, the
-// repo-pattern resolver only for a repo it leaves unresolved AND that is
-// still present in the org's current repos catalog (repoNamesByID) — a repo
-// repoNamesByID does not carry is never guessed, matching the Python guard's
-// own comment. Both paths are gated on repoNamesByID (see applyOwnership).
+// job_daily.py:497 _repo_to_team_map_for_compounding_risk does: it resolves
+// team_repo_ownership itself (teamownership.OwnedRepoIDs, per team, gated on
+// repoNamesByID by applyOwnership) into an ownership map, then delegates the
+// precedence decision to ResolveFromOwnershipMap — the pure core this
+// function and Python's own decoupled shape both funnel through.
 //
 // teamIDs is every team's id in the org (Python's get_all_teams() over just
 // the id column — callers already hold the full team row for their own
@@ -87,7 +131,7 @@ func ResolveOwnershipThenPatterns(
 	teamIDs []string, repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
 ) map[string]string {
-	repoToTeam := make(map[string]string, len(repoIDs))
+	ownershipMap := make(map[string]string, len(repoIDs))
 	for _, teamID := range teamIDs {
 		if teamID == "" {
 			continue
@@ -96,24 +140,7 @@ func ResolveOwnershipThenPatterns(
 		if err != nil {
 			continue
 		}
-		applyOwnership(repoToTeam, teamID, owned, repoNamesByID)
+		applyOwnership(ownershipMap, teamID, owned, repoNamesByID)
 	}
-	for _, repoID := range repoIDs {
-		key := repoID.String()
-		if _, resolved := repoToTeam[key]; resolved {
-			continue
-		}
-		name, known := repoNamesByID[key]
-		if !known {
-			continue
-		}
-		if patternResolver == nil {
-			continue
-		}
-		teamID, _ := patternResolver.ResolveRepo(name)
-		if teamID != "" {
-			repoToTeam[key] = teamID
-		}
-	}
-	return repoToTeam
+	return ResolveFromOwnershipMap(ownershipMap, repoIDs, repoNamesByID, patternResolver)
 }

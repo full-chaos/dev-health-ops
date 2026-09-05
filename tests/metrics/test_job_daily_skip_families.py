@@ -909,3 +909,112 @@ async def test_testops_families_not_skipped_write_all_three(
     assert "write_testops_pipeline_metrics" in sink.write_calls
     assert "write_testops_test_metrics" in sink.write_calls
     assert "write_testops_coverage_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_compounding_risk_not_skipped_writes_repo_rows(
+    monkeypatch: Any,
+) -> None:
+    """Baseline for the skip test below: WITHOUT compounding_risk in
+    skip_families the per-partition repo-scope writer runs, so the "never
+    called" assertion below is because of the gate, not because the fixture
+    never reaches that call site."""
+    calls: list[dict[str, Any]] = []
+
+    def _spy(**kwargs: Any) -> int:
+        calls.append(kwargs)
+        return 0
+
+    sink = _RecordingSink("clickhouse://test")
+    # AFTER _neutralize_daily_job: that helper stubs
+    # _write_compounding_risk_for_day itself, so a spy installed before it is
+    # silently overwritten and the assertions below pass vacuously.
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", _spy)
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families=None,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["org_id"] == ORG_ID
+
+
+@pytest.mark.asyncio
+async def test_compounding_risk_in_skip_families_writes_nothing(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-4287: when the Go dispatcher reports compounding_risk already
+    computed and wrote this partition's REPO-scope rows, this job must not
+    call _write_compounding_risk_for_day at all.
+
+    The whole call is gated rather than only the write because nothing else
+    in run_daily_metrics_job consumes its output -- it writes straight to the
+    sinks -- which makes this the cicd/team_wellbeing shape rather than
+    repo_user_commit's write-only skip. And, as for cicd, no zero-rows note
+    may fire for the family under the skip: that would be a false
+    "no_rows_computed" DEGRADE signal on every native-executor partition
+    regardless of how many rows Go actually wrote."""
+    calls: list[dict[str, Any]] = []
+
+    def _spy(**kwargs: Any) -> int:
+        calls.append(kwargs)
+        return 0
+
+    zero_rows_calls: list[tuple[str, str]] = []
+
+    def _spy_record(*, family: str, cause: str) -> None:
+        zero_rows_calls.append((family, cause))
+
+    sink = _RecordingSink("clickhouse://test")
+    # AFTER _neutralize_daily_job, for the same reason as the baseline above --
+    # otherwise `calls == []` would hold whether or not the gate exists.
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", _spy)
+    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"compounding_risk"},
+    )
+
+    assert calls == []
+    assert not any(
+        family.startswith("compounding_risk") for family, _cause in zero_rows_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_compounding_risk_skip_does_not_perturb_other_families(
+    monkeypatch: Any,
+) -> None:
+    """Naming compounding_risk in skip_families must not change any other
+    family's writes -- the gate is one `if` around one call site, and the
+    families around it (repo_metrics, team_metrics, cicd) must be untouched."""
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    await job_daily.run_daily_metrics_job(
+        db_url="clickhouse://test",
+        day=DAY,
+        backfill_days=1,
+        provider="auto",
+        org_id=ORG_ID,
+        skip_finalize=True,
+        skip_families={"compounding_risk"},
+    )
+
+    assert "repo_metrics" in sink.write_calls
+    assert "team_metrics" in sink.write_calls
+    assert "write_cicd_metrics" in sink.write_calls

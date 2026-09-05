@@ -783,6 +783,8 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 	switch args[0] {
 	case "remaining":
 		return dispatchMetricsRemaining(ctx, runtime, args[1:], stdout, stderr)
+	case "daily-start":
+		return dispatchMetricsDailyStart(ctx, runtime, args[1:], stdout, stderr)
 	case "daily-redrive":
 		flags := quietFlags("metrics daily-redrive")
 		org := flags.String("org", "", "organization id (uuid)")
@@ -906,6 +908,126 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 	default:
 		return writeError(stderr, "invalid_request")
 	}
+}
+
+// canonicalDedupedRepositoryIDs canonicalizes AND de-duplicates rawIDs
+// (codex adversarial review round 3, P1). Both steps matter: canonicalizing
+// alone (as an earlier fix already did) is not enough, because
+// ManualDailyRunGeneration hashes this returned slice verbatim BEFORE
+// daily.normalizeRepositoryPartitions deduplicates the persisted partition
+// set downstream. `--repo-id R --repo-id R` used to mint a DIFFERENT
+// generation than a single `--repo-id R`, even though both persist the
+// identical single-repository partition -- and because a repository-scoped
+// request skips StartManualDailyRun's cross-generation coverage check
+// entirely (that check is deferred-discovery-only by design), the two
+// generations dispatched two independent, genuinely duplicate computations
+// of the same (org, day, repo) scope.
+func canonicalDedupedRepositoryIDs(rawIDs []string) ([]daily.RepositoryID, error) {
+	seen := make(map[daily.RepositoryID]struct{}, len(rawIDs))
+	repositoryIDs := make([]daily.RepositoryID, 0, len(rawIDs))
+	for _, id := range rawIDs {
+		canonical, err := canonicalUUID(id)
+		if err != nil {
+			return nil, err
+		}
+		repositoryID := daily.RepositoryID(canonical)
+		if _, duplicate := seen[repositoryID]; duplicate {
+			continue
+		}
+		seen[repositoryID] = struct{}{}
+		repositoryIDs = append(repositoryIDs, repositoryID)
+	}
+	return repositoryIDs, nil
+}
+
+// dispatchMetricsDailyStart handles `metrics daily-start` (CHAOS-5055): the
+// operator entry point that dispatches a daily-metrics run for one
+// (organization, day-range[, repository set]) through the SAME StartRunTx
+// coordinator transaction the post-sync and fixed-schedule fanout paths use.
+// This is the intended replacement for `dev-hops metrics daily`/`rebuild`
+// calling run_daily_metrics_job directly: that bare-Python path never passed
+// skip_families the way worker_metrics.py's own bridge call does, so it
+// recomputed AND rewrote every native family (file_hotspots included -- a
+// SUM-aggregated, non-dedup table) on top of whatever the worker had already
+// written for the same scope. Dispatching through the worker instead means
+// the worker decides the native/bridge split, exactly as it does for every
+// other trigger source.
+func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
+	flags := quietFlags("metrics daily-start")
+	org := flags.String("org", "", "organization id (uuid)")
+	day := flags.String("day", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
+	var repoIDs stringList
+	flags.Var(&repoIDs, "repo-id", "repository uuid to scope this run to (repeatable); omit for every org repository (deferred discovery, same as the fixed-schedule fanout)")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	canonicalOrg, err := canonicalUUID(*org)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	*org = canonicalOrg
+	fromDay, err := time.Parse("2006-01-02", *day)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	toRaw := *to
+	if toRaw == "" {
+		toRaw = *day
+	}
+	toDay, err := time.Parse("2006-01-02", toRaw)
+	if err != nil || toDay.Before(fromDay) {
+		return writeError(stderr, "invalid_request")
+	}
+	// Reuses `metrics remaining start`'s own range bound (manualBackfillMaxDays,
+	// 31): both are operator-triggered day-range fanouts over the same
+	// per-day StartRunTx-style dispatch shape, so a single mistyped year
+	// cannot silently create a month's worth of runs beyond that either.
+	if int(toDay.Sub(fromDay).Hours()/24)+1 > manualBackfillMaxDays {
+		return writeError(stderr, "invalid_request")
+	}
+	repositoryIDs, err := canonicalDedupedRepositoryIDs(repoIDs)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	if runtime.pools == nil || runtime.registry == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	store, err := daily.NewPostgresStore(runtime.pools.Domain)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	publisher, err := daily.NewPostgresPublisher(runtime.pools.Domain, runtime.registry)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	var results []daily.ManualDailyRunOutcome
+	for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
+		dayString := cursor.Format("2006-01-02")
+		generation := daily.ManualDailyRunGeneration(*org, dayString, repositoryIDs)
+		outcome, err := store.StartManualDailyRun(ctx, *org, dayString, generation, repositoryIDs, publisher)
+		if errors.Is(err, daily.ErrDayAlreadyCovered) {
+			// A clean, distinguishable code (codex adversarial review round
+			// 2, P1) rather than the generic operator_request_failed
+			// writeServiceError would otherwise report -- an operator
+			// re-running `metrics daily` over a range needs to see WHICH
+			// day was already covered by a different trigger, not just
+			// that the range as a whole failed partway through.
+			return writeError(stderr, "already_covered")
+		}
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		results = append(results, outcome)
+	}
+	return writeResult(stdout, stderr, map[string]any{
+		"days": results,
+		// deferred_discovery is true when no --repo-id was given: the run(s)
+		// cover every org repository, resolved later by the worker from live
+		// ClickHouse identity, not this command's own (possibly stale) view
+		// of the org's repository set.
+		"deferred_discovery": len(repositoryIDs) == 0,
+	})
 }
 
 // dispatchMetricsDailyBlocked handles `metrics daily-blocked` (CHAOS-5040):
@@ -1665,7 +1787,12 @@ func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, arg
 	switch args[0] {
 	case "start":
 		flags := quietFlags("metrics remaining start")
-		family := flags.String("family", "", "day-scoped remaining-metrics family (complexity, dora, release_impact)")
+		// CHAOS-4254: derived from the family list itself so this help text
+		// can never silently drift from ManualBackfillDayScopedFamilies again
+		// (capacity/recommendations/membership_backfill are deliberately NOT
+		// in that list -- see its own doc comment -- and work_item_attribution
+		// has its own separate `trigger-backstop` verb/family list below).
+		family := flags.String("family", "", "day-scoped remaining-metrics family ("+strings.Join(remaining.ManualBackfillDayScopedFamilies, ", ")+")")
 		day := flags.String("day", "", "first target day, inclusive (YYYY-MM-DD, UTC)")
 		to := flags.String("to", "", "last target day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
 		org := flags.String("org", "", "organization id (uuid)")
@@ -1819,9 +1946,62 @@ func manualBackstopTriggerReadbackHint(family, org string) (string, bool) {
 			"ClickHouse: SELECT run_id, completed_at, promoted_reason FROM work_item_attribution_backstop_runs FINAL WHERE org_id = '%s' ORDER BY completed_at DESC LIMIT 5",
 			org,
 		), true
+	case "complexity":
+		// repo_complexity_daily is a plain MergeTree (not Replacing) -- no
+		// FINAL needed, every row is a distinct write.
+		return fmt.Sprintf(
+			"ClickHouse: SELECT repo_id, day, computed_at FROM repo_complexity_daily WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
+	case "dora":
+		return fmt.Sprintf(
+			"ClickHouse: SELECT repo_id, day, metric_name, computed_at FROM dora_metrics_daily WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
+	case "release_impact":
+		return fmt.Sprintf(
+			"ClickHouse: SELECT repo_id, day, computed_at FROM release_impact_daily WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
+	case "capacity":
+		// capacity_forecasts IS ReplacingMergeTree(computed_at) -- FINAL
+		// collapses to the latest forecast per key.
+		return fmt.Sprintf(
+			"ClickHouse: SELECT forecast_id, team_id, computed_at FROM capacity_forecasts FINAL WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
+	case "recommendations":
+		// recommendations_daily IS ReplacingMergeTree(computed_at).
+		return fmt.Sprintf(
+			"ClickHouse: SELECT team_id, rule_id, fired, computed_at FROM recommendations_daily FINAL WHERE org_id = '%s' ORDER BY computed_at DESC LIMIT 5",
+			org,
+		), true
 	default:
 		return "", false
 	}
+}
+
+// canonicalUUID parses s as a UUID and returns its canonical lowercase
+// string form (codex adversarial review round 2, P1). Any caller that
+// folds a UUID's TEXT verbatim into a generation string or persisted scope
+// JSON -- rather than only ever passing it through as a `$N::uuid`-typed SQL
+// parameter, which Postgres itself case-normalizes -- MUST canonicalize
+// first: dispatchMetricsDailyStart's `--org`/`--repo-id` and
+// dispatchMetricsRemainingTriggerBackstop's `--org`/`--team` all do exactly
+// that (ManualDailyRunGeneration's hash, manualBackstopTriggerGeneration's
+// concatenation, and the capacity/recommendations scope JSON's "team_id"
+// field are all plain string operations with no type-level normalization).
+// Without this, two callers of the identical logical request differing only
+// in UUID case (uppercase vs lowercase) mint two DIFFERENT generations (or
+// two different scope JSON values) and dispatch two separate computations
+// for the same scope -- reopening the exact duplicate-write class this
+// dispatch migration exists to close.
+func canonicalUUID(s string) (string, error) {
+	parsed, err := uuid.Parse(s)
+	if err != nil {
+		return "", err
+	}
+	return parsed.String(), nil
 }
 
 // manualBackstopTriggerGeneration derives a deterministic generation for one
@@ -1834,8 +2014,51 @@ func manualBackstopTriggerReadbackHint(family, org string) (string, bool) {
 // flags lands on insertRun's ON CONFLICT DO NOTHING idempotency path instead
 // of inserting a second run for the same org/day (same reasoning as
 // manualBackfillGeneration above).
-func manualBackstopTriggerGeneration(family, org, day string) string {
-	return "manual-trigger:" + family + ":" + org + ":" + day
+//
+// scopeDiscriminator MUST be non-empty for any family whose real scope is
+// not fully described by (org, day) -- see
+// manualBackstopTriggerScopeDiscriminator below -- or two genuinely distinct
+// requests (different team, different recommendations window) collide onto
+// the SAME deterministic run identity (codex adversarial review round 1,
+// P1): remaining.deterministicRunID hashes (org, family, generation,
+// scope_key), scope_key is unconditionally the day for every trigger-backstop
+// family (startManualTriggerRun's own doc comment), so generation was the
+// ONLY axis available to keep team-A's and team-B's same-day capacity
+// triggers from being treated as the identical retried request.
+func manualBackstopTriggerGeneration(family, org, day, scopeDiscriminator string) string {
+	generation := "manual-trigger:" + family + ":" + org + ":" + day
+	if scopeDiscriminator != "" {
+		generation += ":" + scopeDiscriminator
+	}
+	return generation
+}
+
+// manualBackstopTriggerScopeDiscriminator returns the extra text
+// manualBackstopTriggerGeneration folds into a trigger-backstop generation
+// for families whose real scope is not fully described by (org, day):
+// capacity and recommendations, both scoped by team (or explicitly "every
+// team"), and recommendations additionally by an evaluation window.
+// Day-scoped families (complexity/dora/release_impact/work_item_attribution)
+// return "" unchanged -- day IS their complete scope, and widening their
+// generation format would needlessly risk the existing
+// TestManualBackstopTriggerGenerationsAreStableAndRequestScoped contract for
+// no benefit.
+func manualBackstopTriggerScopeDiscriminator(family string, teamID *string, allTeams bool, window int) string {
+	switch family {
+	case "capacity":
+		if allTeams {
+			return "all-teams"
+		}
+		return "team:" + *teamID
+	case "recommendations":
+		scope := "all-teams"
+		if teamID != nil {
+			scope = "team:" + *teamID
+		}
+		return fmt.Sprintf("%s:window:%d", scope, window)
+	default:
+		return ""
+	}
 }
 
 // dispatchMetricsRemainingTriggerBackstop handles `metrics remaining
@@ -1924,21 +2147,43 @@ func dispatchMetricsRemainingTriggerBackstop(
 	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
 ) int {
 	flags := quietFlags("metrics remaining trigger-backstop")
-	family := flags.String("family", "work_item_attribution", "fixed-schedule backstop family to trigger now (work_item_attribution)")
+	family := flags.String("family", "work_item_attribution", "fixed-schedule backstop family to trigger now ("+strings.Join(remaining.ManualBackstopTriggerFamilies, ", ")+")")
 	org := flags.String("org", "", "organization id (uuid)")
 	day := flags.String("day", "", "dedup key for the run this trigger becomes, NOT a compute window (YYYY-MM-DD, UTC) -- defaults to yesterday UTC; today requires --today")
 	today := flags.Bool("today", false, "REQUIRED to target today's UTC date -- otherwise --day=today is refused; a same-day manual run COEXISTS with (never suppresses) tonight's own 02:30Z occurrence, but both compete for this family's max_concurrency=1 worker slot (families.json), so today should be an explicit choice, not an accident")
 	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: why this backstop is being triggered manually (e.g. \"CHAOS-5016 -- chris wants same-day confirmation, not waiting for the 02:30Z schedule\")")
+	team := flags.String("team", "", "team id (uuid) to scope this trigger to -- capacity/recommendations only, exactly one of --team/--all-teams required for those families; ignored for every other family")
+	allTeams := flags.Bool("all-teams", false, "scope this trigger to every team in the organization -- capacity/recommendations only; ignored for every other family")
+	window := flags.Int("window", 14, "evaluation window in days -- recommendations only, ignored for every other family (default: 14, matching the fixed-schedule fanout)")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return writeError(stderr, "invalid_request")
 	}
 	if !slices.Contains(remaining.ManualBackstopTriggerFamilies, *family) {
 		return writeError(stderr, "invalid_request")
 	}
-	if _, err := uuid.Parse(*org); err != nil {
+	canonicalOrg, err := canonicalUUID(*org)
+	if err != nil {
 		return writeError(stderr, "invalid_request")
 	}
+	*org = canonicalOrg
 	if strings.TrimSpace(*reviewEvidence) == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	// capacity/recommendations scope by team, not by day-window -- exactly
+	// one of --team/--all-teams is required for them (mirroring
+	// capacityScope's own all_teams-XOR-team_id validation, scopes.go);
+	// every other family ignores both flags entirely. Canonicalized for the
+	// same reason *org is above -- it ends up in both the generation string
+	// and the persisted capacity/recommendations scope JSON's "team_id".
+	var teamID *string
+	if strings.TrimSpace(*team) != "" {
+		canonicalTeam, err := canonicalUUID(*team)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		teamID = &canonicalTeam
+	}
+	if (*family == "capacity" || *family == "recommendations") && (teamID != nil) == *allTeams {
 		return writeError(stderr, "invalid_request")
 	}
 	todayUTC := time.Now().UTC().Truncate(24 * time.Hour)
@@ -1989,8 +2234,18 @@ func dispatchMetricsRemainingTriggerBackstop(
 		// rather than print a result with a missing readback hint.
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	generation := manualBackstopTriggerGeneration(*family, *org, dayString)
-	outcome, startErr := store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
+	scopeDiscriminator := manualBackstopTriggerScopeDiscriminator(*family, teamID, *allTeams, *window)
+	generation := manualBackstopTriggerGeneration(*family, *org, dayString, scopeDiscriminator)
+	var outcome remaining.ManualBackfillOutcome
+	var startErr error
+	switch *family {
+	case "capacity":
+		outcome, startErr = store.StartManualCapacityTriggerRun(ctx, *org, dayString, generation, teamID, *allTeams, publisher)
+	case "recommendations":
+		outcome, startErr = store.StartManualRecommendationsTriggerRun(ctx, *org, dayString, generation, teamID, *window, publisher)
+	default:
+		outcome, startErr = store.StartManualBackfillRun(ctx, *family, *org, dayString, generation, publisher)
+	}
 	status := "started"
 	switch {
 	case errors.Is(startErr, remaining.ErrDayAlreadyCovered):

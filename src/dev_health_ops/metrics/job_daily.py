@@ -1135,9 +1135,10 @@ async def run_daily_metrics_job(
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
-    ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294, and
-    ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284);
-    naming any other family here has no effect.
+    ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294,
+    ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284, and
+    ``compounding_risk`` CHAOS-4287); naming any other family here has no
+    effect.
 
     The three CHAOS-4284 names gate WRITES ONLY: their computed values still
     feed ``compute_release_confidence``/``compute_quality_drag``/
@@ -1148,6 +1149,13 @@ async def run_daily_metrics_job(
     ``MergeTree`` with no dedup engine, so a write that is not suppressed after
     the Go executor already wrote the same ``(org_id, repo_id, day)`` doubles
     every metric silently instead of erroring.
+
+    ``compounding_risk`` is REPO scope only: the native executor writes the
+    per-partition repo rows, so this set gates the ``_write_compounding_risk_
+    for_day`` call below. The TEAM-scope rows are emitted once per org/day from
+    ``run_daily_metrics_finalize`` and are NOT covered by this set -- the Go
+    finalize handler has no per-family registration to skip them with, so they
+    remain Python regardless of what this set names.
     """
     skip_families = skip_families or set()
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -2009,16 +2017,35 @@ async def run_daily_metrics_job(
         if "incident" not in skip_families:
             _note_family_zero_rows("incident", incident_metrics, day=d)
 
-        _write_compounding_risk_for_day(
-            sinks=sinks,
-            primary_sink=primary_sink,
-            day=d,
-            org_id=org_id,
-            repo_metrics_rows=result.repo_metrics,
-            computed_at=computed_at,
-            repo_names_by_id=repo_names_by_id,
-            repo_team_resolver=repo_team_resolver,
-        )
+        # CHAOS-4287: compounding_risk has a native Go executor
+        # (CompoundingRiskExecutor), registered post_bridge. When the Go
+        # dispatcher names it in skip_families it has already computed and
+        # written this partition's REPO-scope rows, so skip the whole call
+        # rather than only the write -- nothing else in this function consumes
+        # its output (it writes straight to the sinks), which makes this the
+        # cicd/team_wellbeing shape rather than repo_user_commit's write-only
+        # skip. No _note_family_zero_rows here either way: this call site never
+        # had one, and adding it under a skip would be a false zero-rows signal
+        # exactly as it would have been for cicd.
+        #
+        # TEAM-scope rows are NOT covered by this gate. They are written once
+        # per org/day from run_daily_metrics_finalize
+        # (_write_compounding_risk_team_rows_for_day), which the Go side still
+        # reaches through the opaque compatibility.Finalize bridge call -- there
+        # is no per-family registration or skip-list at finalize to carve them
+        # out with. They stay Python until that hook exists; CHAOS-4287 stays
+        # open until then.
+        if "compounding_risk" not in skip_families:
+            _write_compounding_risk_for_day(
+                sinks=sinks,
+                primary_sink=primary_sink,
+                day=d,
+                org_id=org_id,
+                repo_metrics_rows=result.repo_metrics,
+                computed_at=computed_at,
+                repo_names_by_id=repo_names_by_id,
+                repo_team_resolver=repo_team_resolver,
+            )
 
         # CHAOS-4365 finalize-step fix: team_cognitive_load has no repo-scope
         # table at all -- it is emitted ONCE per org/day from
@@ -2151,6 +2178,7 @@ async def run_daily_metrics_finalize(
     day: date,
     org_id: str,
     sink: str = "auto",
+    skip_families: set[str] | None = None,
 ) -> None:
     """Run only the IC finalize logic (IC metrics + landscape rolling).
 
@@ -2268,22 +2296,32 @@ async def run_daily_metrics_finalize(
             backend,
         )
 
-    ic_metrics = compute_ic_metrics_daily(
-        git_metrics=git_metrics,
-        wi_metrics=wi_user_metrics,
-        team_map=load_team_map(),
-    )
-    for s in sinks_list:
-        s.write_user_metrics(ic_metrics)
+    # CHAOS-4290: same gate shape as run_daily_metrics_job's families
+    # (`"file_hotspots" in skip_families` at :1875 and its siblings). When a
+    # native Go executor already computed and wrote ic_finalize for this run,
+    # recomputing here would append a SECOND generation of the same rows --
+    # and user_metrics_daily is append-only, deduped
+    # `ORDER BY computed_at DESC LIMIT 1 BY (org_id, repo_id, author_email, day)`,
+    # so the later writer wins silently and the native rows would vanish with
+    # nothing failing.
+    skip_families = skip_families or set()
+    if "ic_finalize" not in skip_families:
+        ic_metrics = compute_ic_metrics_daily(
+            git_metrics=git_metrics,
+            wi_metrics=wi_user_metrics,
+            team_map=load_team_map(),
+        )
+        for s in sinks_list:
+            s.write_user_metrics(ic_metrics)
 
-    rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=day)
-    ic_landscape = compute_ic_landscape_rolling(
-        as_of_day=day,
-        rolling_stats=rolling_stats,
-        team_map=load_team_map(),
-    )
-    for s in sinks_list:
-        s.write_ic_landscape_rolling(ic_landscape)
+        rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=day)
+        ic_landscape = compute_ic_landscape_rolling(
+            as_of_day=day,
+            rolling_stats=rolling_stats,
+            team_map=load_team_map(),
+        )
+        for s in sinks_list:
+            s.write_ic_landscape_rolling(ic_landscape)
 
     # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily and
     # ALL of team_cognitive_load_daily are written exactly ONCE here, per

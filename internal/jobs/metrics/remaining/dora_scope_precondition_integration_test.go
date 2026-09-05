@@ -1159,7 +1159,7 @@ func TestHasSucceededPartitionAppliesTheSameOpenDayZeroRowExceptionAsStartRunTx(
 		t.Fatal(err)
 	}
 	defer func() { _ = checkTx.Rollback(ctx) }()
-	covered, err := store.HasSucceededPartition(ctx, checkTx, orgID, "dora", today)
+	covered, err := store.HasSucceededPartition(ctx, checkTx, orgID, "dora", today, scope)
 	if err != nil {
 		t.Fatal(err)
 	}

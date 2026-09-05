@@ -84,6 +84,14 @@ const ScheduledFanoutGenerationPrefix = "fixed-schedule:daily_metrics_fanout:"
 // and must not be widened or reused for this.
 const postSyncGenerationPrefix = "post-sync:"
 
+// ManualDailyGenerationPrefix identifies an operator-triggered `metrics
+// daily-start` run (CHAOS-5055). Exported so manual_run.go's
+// ManualDailyRunGeneration builds the SAME prefix this file's own
+// isManualDailyGeneration matches against, rather than risking the two
+// drifting apart the way the cross-language ScheduledFanoutGenerationPrefix
+// contract above warns about.
+const ManualDailyGenerationPrefix = "manual-daily:"
+
 // PostgresStore is the durable fence around the temporary compatibility
 // compute adapter. Queue retries may repeat a request, but only a claimant
 // with the current persisted token can make a partition/finalizer successful.
@@ -319,6 +327,80 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 	return run, nil
 }
 
+// HasSucceededRunForDay reports whether a SCHEDULED-FANOUT or POST-SYNC
+// daily-metrics run (never a manual one -- see below) under a DIFFERENT
+// generation than excludeGeneration has already reached a successful
+// terminal state for (organizationID, day): 'succeeded' (materialized
+// partitions completed) or 'no_repositories' (deferred discovery genuinely
+// found none, MaterializeScheduledFanout's own terminal fence). Used by
+// StartManualDailyRun to refuse a deferred-discovery (all-repository)
+// manual trigger when a prior scheduled fan-out or post-sync re-drive
+// already covers the same (org, day) -- see ErrDayAlreadyCovered's doc
+// comment for why this check exists and what it deliberately does NOT
+// cover.
+//
+// Restricted to isScheduledFanoutGeneration/isPostSyncGeneration on
+// PURPOSE (codex adversarial review round 3, P1): a manual run's
+// generation is never a valid coverage source here, because a manual
+// `daily_metrics_runs` row can be either deferred-discovery (all
+// repositories) OR repository-scoped (`--repo-id`), and nothing in this
+// table distinguishes the two once partitions are materialized -- both
+// shapes populate `daily_metrics_partitions` identically. Before this
+// restriction, a successful REPOSITORY-SCOPED manual run (say, a single
+// `--repo-id R`) satisfied this EXISTS check for org+day alone, so a LATER
+// all-repository request for the same day was refused as "already
+// covered" even though every OTHER repository in the org had never been
+// computed -- a silent under-computation, worse than the duplicate-compute
+// this check exists to prevent. Excluding manual generations loses no real
+// protection: two manual all-repository requests for the identical (org,
+// day) always derive the SAME generation (ManualDailyRunGeneration is
+// deterministic per logical request), so StartRunTx's own ON CONFLICT DO
+// NOTHING idempotency already dedupes manual-vs-manual without this check's
+// help.
+//
+// excludeGeneration MUST be the CALLER's own about-to-be-used generation.
+// It can never match a scheduled-fanout/post-sync generation (a manual
+// caller's generation always carries the `manual-daily:` prefix), so this
+// is defensive rather than load-bearing after the restriction above --
+// kept for clarity and in case a future caller's generation space widens.
+func (store *PostgresStore) HasSucceededRunForDay(
+	ctx context.Context, tx pgx.Tx, organizationID, day, excludeGeneration string,
+) (bool, error) {
+	if !store.valid() || tx == nil || !validUUID(organizationID) || day == "" {
+		return false, ErrUnavailable
+	}
+	var exists bool
+	err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM public.daily_metrics_runs
+    WHERE org_id = $1::uuid AND target_day = $2::date
+      AND generation <> $3
+      AND (generation LIKE $4 OR generation LIKE $5)
+      AND status IN ('succeeded', 'no_repositories')
+)`, organizationID, day, excludeGeneration,
+		escapeLikePrefix(ScheduledFanoutGenerationPrefix)+"%",
+		escapeLikePrefix(postSyncGenerationPrefix)+"%",
+	).Scan(&exists)
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	return exists, nil
+}
+
+// escapeLikePrefix escapes SQL LIKE's own wildcard characters (%, _) in a
+// literal prefix before it is used as a LIKE pattern. Not merely
+// defense-in-depth: ScheduledFanoutGenerationPrefix itself contains literal
+// underscores ("fixed-schedule:daily_metrics_fanout:"), which LIKE treats
+// as "match any single character" unless escaped -- unescaped, the pattern
+// would still match every real fixed-schedule generation (an underscore
+// matching itself is one of the characters it can match), but would ALSO
+// silently accept a generation that substituted a different character in
+// those two positions. Escaping makes the match exact, not merely adequate.
+func escapeLikePrefix(prefix string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(prefix)
+}
+
 // StartScheduledFanoutRunTx creates the durable state for one organization in
 // the nightly fixed schedule. Repository discovery intentionally happens in
 // the heavy worker after this coordinator transaction commits.
@@ -423,6 +505,21 @@ func isScheduledFanoutGeneration(generation string) bool {
 // triggering sync itself carries in sync_run_units.
 func isPostSyncGeneration(generation string) bool {
 	return strings.HasPrefix(generation, postSyncGenerationPrefix) && len(generation) <= 64
+}
+
+// isManualDailyGeneration reports whether a generation belongs to an
+// operator-triggered `metrics daily-start` run (CHAOS-5055). Deferred
+// repository discovery (empty --repo-id, the CLI's own default/documented
+// path -- see workerctl_dispatch.py's "Omit for every org repository") needs
+// the SAME live-ClickHouse materialize path scheduled fan-out and post-sync
+// runs use -- MaterializeScheduledFanout below -- or a manual daily-start
+// with no explicit repositories permanently fails at materialization (codex
+// adversarial review round 1, P1: Dispatcher.Work treats MaterializeScheduledFanout's
+// ErrInvalidState as jobruntime.Permanent, stranding the run 'running' with
+// no partitions forever) despite the run itself being legitimately deferred-
+// discovery by design.
+func isManualDailyGeneration(generation string) bool {
+	return strings.HasPrefix(generation, ManualDailyGenerationPrefix) && len(generation) <= 64
 }
 
 func normalizeRepositoryPartitions(repositoryIDs []RepositoryID) ([][]RepositoryID, error) {
@@ -608,12 +705,16 @@ func (store *PostgresStore) MaterializeScheduledFanout(
 	repositoryIDs []RepositoryID,
 ) (bool, error) {
 	if !store.valid() || !validUUID(run.ID) || !validUUID(run.OrganizationID) ||
-		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation)) {
+		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation) &&
+			!isManualDailyGeneration(run.Generation)) {
 		return false, ErrInvalidState
 	}
 	trigger := jobruntime.DailyMetricsRunTriggerScheduledFanout
-	if isPostSyncGeneration(run.Generation) {
+	switch {
+	case isPostSyncGeneration(run.Generation):
 		trigger = jobruntime.DailyMetricsRunTriggerPostSync
+	case isManualDailyGeneration(run.Generation):
+		trigger = jobruntime.DailyMetricsRunTriggerManual
 	}
 	// Live ClickHouse discovery has no natural upper bound the way an
 	// explicit StartRunRequest does -- fail loud rather than silently
@@ -1172,9 +1273,9 @@ UPDATE public.daily_metrics_runs AS run
 SET finalization_status = 'running', finalization_claim_token = $2,
     finalization_lease_expires_at = $3, updated_at = $1
 WHERE run.id = $4::uuid
-RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finalization_claim_token::text`,
+RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finalization_claim_token::text, run.target_day`,
 		now, token, now.Add(store.lease), runID,
-	).Scan(&claim.Run.ID, &claim.Run.OrganizationID, &claim.Run.Generation, &claim.Run.Status, &claim.Token)
+	).Scan(&claim.Run.ID, &claim.Run.OrganizationID, &claim.Run.Generation, &claim.Run.Status, &claim.Token, &claim.Run.TargetDay)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -1275,6 +1376,43 @@ func (store *PostgresStore) ReleaseFinalize(ctx context.Context, claim FinalizeC
 		)
 	}
 	return err
+}
+
+// FailFinalizePermanently writes the TERMINAL finalize state (CHAOS-4290).
+//
+// It cannot go through transitionFinalize: that helper rewrites `status` only
+// when the transition is 'succeeded', which is exactly why no finalize failure
+// has ever produced a terminal run. This writes BOTH columns.
+//
+// The same claim guards apply as every other finalize transition -- the claim
+// token must match, finalization_status must still be 'running', and the lease
+// must not have expired -- so a worker that lost its lease cannot terminalize a
+// run another worker now owns.
+//
+// RowsAffected is CHECKED rather than assumed. Those guards mean this statement
+// can legitimately match zero rows, and a terminal write that silently did not
+// happen would leave precisely the stranded run it exists to record -- a fix
+// that reports success while doing nothing.
+func (store *PostgresStore) FailFinalizePermanently(ctx context.Context, claim FinalizeClaim) error {
+	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
+		return ErrUnavailable
+	}
+	now := store.now().UTC()
+	command, err := store.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'failed', finalization_status = 'failed',
+    finalization_claim_token = NULL, finalization_lease_expires_at = NULL,
+    finalized_at = $1, updated_at = $1
+WHERE id = $2::uuid AND finalization_status = 'running'
+  AND finalization_claim_token = $3::uuid AND status = 'running'
+  AND finalization_lease_expires_at > $1`, now, claim.Run.ID, claim.Token)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
 }
 
 func (store *PostgresStore) transitionFinalize(ctx context.Context, claim FinalizeClaim, status string) error {

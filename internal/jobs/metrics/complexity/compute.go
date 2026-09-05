@@ -144,15 +144,18 @@ func CFamilyAnalyzer(path, source string) ([]int, bool, error) {
 // DefaultAnalyzers returns the analyzers available natively, keyed by the
 // language name LanguageFor reports.
 //
-// PR1 (CHAOS-4971a) registered `python` only. PR2a (CHAOS-5156) adds `c` and
-// `cpp`. The remaining lizard languages land in PR2b/2c by adding more
-// entries here -- no other function, the dispatch, the result type, or the
-// extension map needs to change for them.
+// PR1 (CHAOS-4971a) registered `python` only. PR2a (CHAOS-5156) added `c`
+// and `cpp`. This PR adds `go` and `rust`. The remaining lizard languages
+// land in later stacked PRs by adding more entries here -- no other
+// function, the dispatch, the result type, or the extension map needs to
+// change for any of them.
 func DefaultAnalyzers() map[string]AnalyzerFunc {
 	return map[string]AnalyzerFunc{
 		"python": PythonAnalyzer,
 		"c":      CFamilyAnalyzer,
 		"cpp":    CFamilyAnalyzer,
+		"go":     lizardcc.AnalyzeGo,
+		"rust":   lizardcc.AnalyzeRust,
 	}
 }
 

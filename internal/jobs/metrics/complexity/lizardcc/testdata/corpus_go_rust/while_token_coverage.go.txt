@@ -1,0 +1,18 @@
+package main
+
+// CHAOS-5156: lizard's condition_counter is purely token-based, not
+// construct-aware -- a bare "while" token counts as a condition even used
+// as an ordinary identifier (Go has no while keyword at all, only for).
+// This fixture exists so goConditions["while"] has SOMETHING exercising
+// it IN A GO-ONLY FIXTURE -- codex round r2 on #2266 found that the
+// unfiltered coverage-manifest scan let a Rust fixture's real `while`
+// silently satisfy Go's own "while" entry too, which the new
+// assertEveryConditionExercisedByFilteredCorpus (clike_parity_test.go)
+// no longer allows. Measured directly against real lizard 1.23.0:
+// complexity 3 (base 1 + if + while-as-bare-identifier).
+func while() int {
+	if true {
+		return 1
+	}
+	return 0
+}

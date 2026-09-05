@@ -1,0 +1,72 @@
+package shapes
+
+type Rectangle struct {
+	Width  int
+	Height int
+}
+
+func (r Rectangle) Area() int {
+	if r.Width > 0 && r.Height > 0 {
+		return r.Width * r.Height
+	}
+	return 0
+}
+
+func classify(score int) int {
+	if score > 90 {
+		return 3
+	} else if score > 50 {
+		return 2
+	}
+	return 1
+}
+
+func pick(a, b, c int) int {
+	switch a {
+	case 1:
+		return b
+	case 2:
+		return c
+	default:
+		return a
+	}
+}
+
+func loop(n int) int {
+	total := 0
+	for i := 0; i < n; i++ {
+		if i%2 == 0 || i%3 == 0 {
+			total += i
+		}
+	}
+	for total > 100 && n > 0 {
+		total -= n
+		n--
+	}
+	return total
+}
+
+// A closure assigned to a local variable: its own body must be tracked
+// separately from the enclosing function, not folded into it.
+func withCallback(n int) int {
+	adder := func(a int) int {
+		if a > 0 {
+			return a + n
+		}
+		return n
+	}
+	if n > 0 {
+		return adder(1)
+	}
+	return 0
+}
+
+func rawString() string {
+	// Backtick-quoted string: its contents must never be scanned as
+	// tokens -- "if", "&&", "||" and "?" all appear inside it.
+	return `if this && that || other ? were real tokens, this would miscount`
+}
+
+type Greeter interface {
+	Greet() string
+}

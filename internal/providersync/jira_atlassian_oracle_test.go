@@ -23,9 +23,13 @@ type jiraAtlassianOracleSurfaces struct {
 }
 
 func TestJiraAtlassianSurfacesMatchLivePythonProducer(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	// CHAOS-5329/CHAOS-3092: jira.normalize/jira.provider (the Python Jira
+	// ingestion path) is deleted -- providersync's JiraAtlassianRouteHandler
+	// is the only Jira work-items writer now. Frozen, see
+	// testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(
 		t,
-		"jira/work-items/atlassian",
+		"jira_work-items_atlassian",
 		jiraAtlassianOracleCases(),
 		buildJiraAtlassianOracleSurfaces,
 		nil,

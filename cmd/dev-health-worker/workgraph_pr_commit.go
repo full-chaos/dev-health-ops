@@ -108,11 +108,20 @@ func (step *prCommitLinksPreStep) Run(ctx context.Context, claim workgraph.Claim
 	if err != nil {
 		return nil, err
 	}
-	step.shared.store(claim.Request.ID, window)
+	// Store ONLY after ProduceLinks succeeds (codex round chaos-5264-pr-
+	// confirm, P1, EXECUTED repro). Storing first and then failing meant
+	// runPreSteps aborted the whole claim before pr_commit_edges ever ran,
+	// so its `take` -- the ONLY thing that deletes an entry -- never fired,
+	// and the map grew by one leaked entry per distinct failed request for
+	// the worker's entire lifetime. A retried claim (same request id)
+	// overwrites its own stale entry either way, so this ordering change
+	// costs nothing on the success or retry paths; it only closes the
+	// leak on a claim that fails once and is never retried.
 	outcome, err := step.service.ProduceLinks(ctx, claim.Request.OrganizationID, window)
 	if err != nil {
 		return nil, err
 	}
+	step.shared.store(claim.Request.ID, window)
 	return map[string]any{
 		"links_written":   outcome.LinksWritten,
 		"commits_scanned": outcome.CommitsScanned,

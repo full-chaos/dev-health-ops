@@ -99,6 +99,28 @@ func TestPRCommitEdgesPreStepFailsLoudlyWhenNoSharedWindowExists(t *testing.T) {
 	}
 }
 
+// TestPRCommitLinksPreStepDoesNotLeakAWindowOnFailure is the regression test
+// for codex round chaos-5264-pr-confirm's P1 (EXECUTED repro): an earlier
+// version stored the window into the shared map BEFORE calling ProduceLinks,
+// so a failed run (ProduceLinks errors, runPreSteps aborts the whole claim
+// before pr_commit_edges' `take` ever fires) left the entry in the map
+// forever -- one leaked entry per distinct failed request for the worker's
+// entire lifetime. Store now happens only after ProduceLinks succeeds.
+func TestPRCommitLinksPreStepDoesNotLeakAWindowOnFailure(t *testing.T) {
+	shared := newSharedPRCommitWindow()
+	step := &prCommitLinksPreStep{service: nil, shared: shared, now: time.Now}
+
+	_, err := step.Run(context.Background(), workgraph.Claim{
+		Request: workgraph.Request{ID: "leak-req", OrganizationID: "org-a"},
+	})
+	if err == nil {
+		t.Fatal("expected ProduceLinks to fail with a nil service")
+	}
+	if _, ok := shared.take("leak-req"); ok {
+		t.Fatal("a failed Run must not leave a window entry in the shared map")
+	}
+}
+
 // TestPRCommitWindowForDefaultsToThirtyDaysEndingNow mirrors
 // TestBuildWindowDefaultsToThirtyDaysEndingNow for issue_pr_links: this window
 // derivation is deliberately the SAME shared logic, reused rather than

@@ -26,15 +26,33 @@ const tsAddition = `|(?:#\w+)` + `|(?:\$\w+)` + `|(?:\w+\?)` + "|`.*?`"
 
 var tsTokenPattern = buildTokenPattern(tsAddition)
 
-// GenerateTokensTS ports the full TypeScript/JavaScript/Vue tokenizer
-// pipeline: base regex tokenize -> generic-vs-comparison merge -> macro
-// accumulation (all three shared with clike.go's GenerateTokens, since
-// CodeReader.generate_tokens is the one base method every reader calls) ->
+// GenerateTokensTS ports the full TypeScript/JavaScript tokenizer
+// pipeline against tsTokenPattern (TypeScriptReader.generate_tokens's own
+// addition, no more) -- see generateTokensTSWith for the shared pipeline
+// body Vue reuses against its OWN, wider pattern (vue_tokenize.go).
+func GenerateTokensTS(source string) []string {
+	return generateTokensTSWith(tsTokenPattern, source)
+}
+
+// generateTokensTSWith is the full TypeScript/JavaScript/Vue tokenizer
+// pipeline, parameterized on the compiled token pattern: base regex
+// tokenize -> generic-vs-comparison merge -> macro accumulation (all
+// three shared with clike.go's GenerateTokens, since CodeReader.
+// generate_tokens is the one base method every reader calls) ->
 // template-literal splitting (TypeScript-specific) -> regex-literal-vs-
 // division disambiguation (the js_style_regex_expression decorator, shared
 // by every JS-family reader).
-func GenerateTokensTS(source string) []string {
-	raw := tsTokenPattern.FindAllString(source, -1)
+//
+// Vue needs this parameterized rather than calling GenerateTokensTS
+// directly because VueReader.generate_tokens (vue.py:19-22) calls
+// `TypeScriptReader.generate_tokens(source_code, addition, token_class)`
+// with an EXTRA addition appended (an HTML/Vue block-tag alternative,
+// vue_tokenize.go's vueTagAddition) -- the underlying REGEX differs, but
+// every step AFTER tokenizing is identical Python code
+// (TypeScriptReader.generate_tokens's own body), so only the pattern
+// varies, not the pipeline.
+func generateTokensTSWith(pattern *regexp.Regexp, source string) []string {
+	raw := pattern.FindAllString(source, -1)
 	merged := mergeTemplateQuestionRuns(raw)
 	withMacros := accumulateMacros(merged)
 	withTemplates := splitTemplateLiterals(withMacros)

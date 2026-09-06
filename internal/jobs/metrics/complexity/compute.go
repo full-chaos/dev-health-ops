@@ -157,11 +157,14 @@ func CFamilyAnalyzer(path, source string) ([]int, bool, error) {
 // file's package doc), `php` (PHPLanguageStates, a FLAT state machine
 // with no sub_state nesting at all -- lizardcc/php.go) and `objective-c`
 // (ObjCStates, a CLikeStates subclass reusing clike.go's shared hooks
-// exactly like csharp.go does -- lizardcc/objc.go) and `lua` (LuaStateMachine,
+// exactly like csharp.go does -- lizardcc/objc.go), `lua` (LuaStateMachine,
 // a RubylikeStateMachine subclass reusing ruby.go's own hooks the same way
-// -- lizardcc/lua.go). `vue` remains for a follow-up stack in this same
-// PR -- no other function, the dispatch, the result type, or the
-// extension map needs to change for it.
+// -- lizardcc/lua.go) and, closing out CHAOS-4291's 6-language stack,
+// `vue` (VueReader is a TypeScriptReader subclass with NO state-machine
+// override at all -- only a wider tokenizer and a script-block-extracting
+// preprocess -- lizardcc/vue.go). Every LANGUAGE_BY_EXTENSION key is now
+// registered; no other function, the dispatch, the result type, or the
+// extension map needs to change for any future language this package adds.
 func DefaultAnalyzers() map[string]AnalyzerFunc {
 	return map[string]AnalyzerFunc{
 		"python":      PythonAnalyzer,
@@ -180,6 +183,7 @@ func DefaultAnalyzers() map[string]AnalyzerFunc {
 		"php":         lizardcc.AnalyzePHP,
 		"objective-c": lizardcc.AnalyzeObjC,
 		"lua":         lizardcc.AnalyzeLua,
+		"vue":         lizardcc.AnalyzeVue,
 	}
 }
 

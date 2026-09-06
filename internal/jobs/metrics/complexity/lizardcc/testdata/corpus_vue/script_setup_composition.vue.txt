@@ -1,0 +1,49 @@
+<template>
+  <div>{{ pick(flag, "a", "b") }}</div>
+</template>
+
+<script setup lang="ts">
+import { ref } from "vue";
+
+const flag = ref(true);
+
+function pick(flag: boolean, x: string, y: string): string {
+  return flag ? x : y;
+}
+
+const loopSum = (items: number[]): number => {
+  let total = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i] % 2 === 0) {
+      total += items[i];
+    }
+  }
+  return total;
+};
+
+function describe(kind: string): string {
+  switch (kind) {
+    case "a":
+      return "alpha";
+    default:
+      return "unknown";
+  }
+}
+
+function safeDivide(a: number, b: number): number {
+  try {
+    return a / b;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function elseifKeyword(n: number): string {
+  if (n < 0) {
+    return "negative";
+  } elseif (n === 0) {
+    return "zero";
+  }
+  return "positive";
+}
+</script>

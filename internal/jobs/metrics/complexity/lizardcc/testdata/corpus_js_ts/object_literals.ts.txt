@@ -1,0 +1,42 @@
+const config = {
+  name: "widget",
+
+  compute(x: number): number {
+    if (x > 10) {
+      return x * 2;
+    }
+    return x;
+  },
+
+  get label(): string {
+    return this.name;
+  },
+
+  set label(value: string) {
+    if (value.length > 0) {
+      this.name = value;
+    }
+  },
+
+  [Symbol.iterator]: function () {
+    return null;
+  },
+
+  onEvent: (evt: string) => {
+    if (evt === "click" || evt === "tap") {
+      return true;
+    }
+    return false;
+  },
+};
+
+const nested = {
+  outer: {
+    inner(x: number): number {
+      if (x < 0) {
+        return -x;
+      }
+      return x;
+    },
+  },
+};

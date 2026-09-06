@@ -1,0 +1,29 @@
+def add(a, b)
+  a + b
+end
+
+def greet name
+  puts "hello #{name}"
+end
+
+class Greeter
+  def self.build
+    new
+  end
+
+  def initialize(name)
+    @name = name
+  end
+
+  def shout
+    if @name
+      @name.upcase
+    else
+      "?"
+    end
+  end
+end
+
+it "does something useful" do
+  1 + 1
+end

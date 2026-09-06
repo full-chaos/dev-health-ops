@@ -199,18 +199,18 @@ function directly, even for families whose worker kind is now native:
 | ai_impact | NATIVE | Go: `internal/jobs/metrics/daily/ai_impact_native_executor.go` (`AIImpactExecutor`) | CHAOS-4280 (Done) |
 | ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`) -- ports the now-DELETED `work_graph/extractors/ai_workflow.py:extract_ai_workflow_from_pull_requests` (CHAOS-5242); no Python fallback | CHAOS-4286 |
 | benchmarking | NATIVE | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
-| cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
+| cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done), CHAOS-5312 (Done) |
 | compounding_risk | NATIVE, post_bridge (repo) / COMPAT-Python (finalize) | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
 | file_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/file_hotspots_native_executor.go` | CHAOS-4277 (Done) |
 | file_risk_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/` (`FileRiskHotspotsExecutor`, `daily.go`) | CHAOS-4277 (Done) |
 | ic_finalize | NATIVE | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
-| incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done) |
+| incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done), CHAOS-5313 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
 | review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
 | team_cognitive_load | NATIVE | Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` (finalize scope, co-registered with ic_finalize) + `team_cognitive_load_clickhouse.go`. No Python remainder. | CHAOS-5141 |
 | team_complexity | NATIVE | Go: `internal/jobs/metrics/daily/team_complexity_native_executor.go` (finalize scope, no co-registration dependency) + `team_complexity_clickhouse.go`. No Python remainder. | CHAOS-5051 |
-| team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
+| team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done), CHAOS-5311 (Done) |
 | testops_coverage | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse. CHAOS-5245 deleted the Python compute entirely -- no fallback left. | CHAOS-4284 (Done) |
 | testops_pipeline | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute. CHAOS-5245 deleted the Python compute (`compute_testops.py`) entirely -- no fallback left. | CHAOS-4284 (Done) |
 | testops_risk | NATIVE | Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute. CHAOS-5245 deleted the Python compute (`compute_testops_risk.py`) entirely -- no fallback left. | CHAOS-4294 (Done) |

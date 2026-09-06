@@ -1,10 +1,12 @@
 import argparse
 import asyncio
+import json
 import logging
 import os
 import random
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, cast
 
 from dev_health_ops.db import get_postgres_uri, normalize_async_postgres_uri
@@ -21,10 +23,6 @@ from dev_health_ops.fixtures.generators.projects import (
 )
 from dev_health_ops.licensing.gating import LicenseManager
 from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
-from dev_health_ops.metrics.compute_work_item_state_durations import (
-    compute_work_item_state_durations_daily,
-)
-from dev_health_ops.metrics.job_complexity_db import run_complexity_db_job
 from dev_health_ops.metrics.job_daily import (
     run_daily_metrics_finalize,
     run_daily_metrics_job,
@@ -39,7 +37,6 @@ from dev_health_ops.providers.operational_migration import (
     map_issue_incidents,
     write_operational_batch,
 )
-from dev_health_ops.providers.teams import load_team_resolver
 from dev_health_ops.storage import (
     ClickHouseStore,
     SQLAlchemyStore,
@@ -68,6 +65,76 @@ class MixedOrgError(RuntimeError):
 # any other failure (connectivity, auth, syntax) must fail CLOSED, or a
 # transient outage would silently let fixtures pollute a live org.
 _MISSING_TABLE_MARKERS = ("UNKNOWN_TABLE", "does not exist", "doesn't exist")
+
+# CHAOS-4291: the SAME frozen golden the Go ComplexityExecutor's own parity
+# test (internal/jobs/metrics/remaining/complexity_native_integration_test.go)
+# compares against. Reused here rather than duplicated so there is exactly
+# one place that ever needs recapturing.
+_COMPLEXITY_GOLDEN_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "internal"
+    / "jobs"
+    / "metrics"
+    / "remaining"
+    / "testdata"
+    / "complexity_python_golden.json"
+)
+
+
+def _write_complexity_fixture_from_golden(
+    sink: Any, *, repo_id: uuid.UUID, org_id: str, day: date, computed_at: datetime
+) -> None:
+    """Seeds file_complexity_snapshots/repo_complexity_daily from the frozen
+    golden JSON -- a plain JSON load stamped onto this run's actual
+    repo_id/org_id/day, no compute. See this call site's own doc comment for
+    why: job_complexity_db.py (CHAOS-4291) is deleted, so there is no Python
+    complexity compute left for fixture generation to call in-process.
+    """
+    from dev_health_ops.metrics.schemas import (
+        FileComplexitySnapshot,
+        RepoComplexityDaily,
+    )
+
+    golden = json.loads(_COMPLEXITY_GOLDEN_PATH.read_text(encoding="utf-8"))
+
+    snapshots = [
+        FileComplexitySnapshot(
+            repo_id=repo_id,
+            as_of_day=day,
+            ref="HEAD",
+            file_path=snapshot["file_path"],
+            language=snapshot["language"],
+            loc=snapshot["loc"],
+            functions_count=snapshot["functions_count"],
+            cyclomatic_total=snapshot["cyclomatic_total"],
+            cyclomatic_avg=snapshot["cyclomatic_avg"],
+            high_complexity_functions=snapshot["high_complexity_functions"],
+            very_high_complexity_functions=snapshot["very_high_complexity_functions"],
+            computed_at=computed_at,
+            org_id=org_id,
+        )
+        for snapshot in golden["snapshots"]
+    ]
+    sink.write_file_complexity_snapshots(snapshots)
+
+    repo_daily = golden["repo_daily"]
+    sink.write_repo_complexity_daily(
+        [
+            RepoComplexityDaily(
+                repo_id=repo_id,
+                day=day,
+                loc_total=repo_daily["loc_total"],
+                cyclomatic_total=repo_daily["cyclomatic_total"],
+                cyclomatic_per_kloc=repo_daily["cyclomatic_per_kloc"],
+                high_complexity_functions=repo_daily["high_complexity_functions"],
+                very_high_complexity_functions=repo_daily[
+                    "very_high_complexity_functions"
+                ],
+                computed_at=computed_at,
+                org_id=org_id,
+            )
+        ]
+    )
 
 
 async def _detect_live_providers(store: Any, org_id: str) -> set[str]:
@@ -1402,33 +1469,28 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
 
             # 8. Metrics
             #
-            # CHAOS-4338 / fixtures audit section 3: this used to fabricate
-            # file_complexity_snapshots/repo_complexity_daily via pure
-            # random.*, so a green fixtures run proved nothing about the
-            # real compute logic. Calls the SAME entrypoint
-            # `dev-hops metrics complexity` uses against the git_files
-            # (with real synthetic contents -- see CommitsGeneratorMixin.
-            # generate_files) + git_blame rows just written above for this
-            # repo, exercising the real ComplexityScanner instead.
+            # CHAOS-4291: job_complexity_db.py (and the real ComplexityScanner
+            # it drove here since CHAOS-4338) is deleted -- complexity is now
+            # computed exclusively by the native Go ComplexityExecutor, which
+            # this Python fixture tooling cannot call in-process. Seeds
+            # file_complexity_snapshots/repo_complexity_daily from the SAME
+            # frozen golden the Go executor's own parity test compares
+            # against (internal/jobs/metrics/remaining/testdata/
+            # complexity_python_golden.json) -- a plain JSON load stamped
+            # onto this run's actual repo_id/org_id/day, no compute -- so
+            # `fixtures validate`'s Compounding Risk input check
+            # (repo_complexity_daily.cyclomatic_per_kloc IS NOT NULL) still
+            # passes. The numbers are canned, not derived from this run's
+            # actual generated file contents; nothing here still proves the
+            # real compute logic (that proof now lives entirely on the Go
+            # side -- see the golden's own consuming test).
             if ns.with_metrics and sink:
-                # max_files capped (not None/unbounded): team-lead note
-                # 2026-08-26 -- real ComplexityScanner parsing is CPU-bound
-                # per file, and this now runs once per repo on every
-                # `--with-metrics` run instead of the O(1) random.* it
-                # replaced. 200 is comfortably above the fixed ~40-file
-                # synthetic file list (generator.py's `self.files`) so
-                # today's runs are unaffected, while bounding worst-case
-                # wall time if that list grows or --max-files-shaped input
-                # ever varies per repo.
-                await asyncio.to_thread(
-                    run_complexity_db_job,
+                _write_complexity_fixture_from_golden(
+                    sink,
                     repo_id=generator.repo_id,
-                    db_url=ns.sink,
-                    date=now.date(),
-                    backfill_days=1,
-                    language_globs=None,
-                    max_files=200,
                     org_id=org_id,
+                    day=now.date(),
+                    computed_at=datetime.now(timezone.utc),
                 )
 
     try:
@@ -1757,25 +1819,15 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     len(release_impact),
                 )
 
-                team_resolver = load_team_resolver()
-                computed_at = now
-                end_day = now.date()
-                start_day = end_day - timedelta(days=ns.days - 1)
-
-                for day_offset in range(ns.days):
-                    day = start_day + timedelta(days=day_offset)
-                    state_durations = compute_work_item_state_durations_daily(
-                        day=day,
-                        work_items=fixture_data["work_items"],
-                        transitions=fixture_data["transitions"],
-                        computed_at=computed_at,
-                        team_resolver=team_resolver,
-                    )
-                    if state_durations:
-                        sink.write_work_item_state_durations(state_durations)
-
+                # CHAOS-5321/CHAOS-3092 (R6): this used to seed work_item_
+                # state_durations_daily via compute_work_item_state_
+                # durations_daily -- deleted along with it. Standing ruling:
+                # fixture-generation tooling is not a production caller and
+                # does not keep Python compute alive (supersedes CHAOS-5250).
+                # No dependent test asserts on this table, so the seeder
+                # simply stops writing it -- the native Go executor +
+                # providersync ingest derivation are the only producers now.
                 sink.close()
-                logging.info("Wrote work_item_state_durations for %d days", ns.days)
 
     if ns.with_work_graph:
         from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder

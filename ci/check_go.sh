@@ -476,34 +476,18 @@ check_live_python_oracles() {
   # `go test ./...` / `check` verb, same as any other Go test -- it needs no
   # DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker any more.
 
-  printf 'go test -count=1: internal/jobs/metrics/workitemmetrics (work_item + work_item_estimate goldens vs live compute_work_items.py, CHAOS-4283)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestWorkItemGoldenMatchesLivePython$' \
-        ./internal/jobs/metrics/workitemmetrics
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Checked SEPARATELY, one marker per FAMILY, for the same reason the
-  # testops-risk / pipeline-stability pair above is: a single shared marker
-  # would be satisfied by whichever family's guard ran, letting the other be
-  # skipped, renamed, or filtered out of the -run pattern unnoticed.
-  for marker in work-item-golden work-item-estimate-golden; do
-    proof_file="${proof_dir}/${marker}"
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: work_item golden rot guard did not compare against live Python (%s)\n' "${marker}" >&2
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done
+  # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): no live-oracle block here for
+  # internal/jobs/metrics/workitemmetrics any more -- compute_work_item_
+  # metrics_daily and compute_work_item_team_attributions are deleted
+  # entirely (native Go executors + providersync ingest derivation are the
+  # only producers now), so there is no live Python left to run.
+  # TestComputeDailyTripletMatchesPythonGolden (golden_test.go) already
+  # compares Go against the frozen tests/fixtures/daily_work_item_python_
+  # golden.json unconditionally as part of the plain `go test ./...` /
+  # `check` verb -- same shape as ai_workflow above. The live-comparison
+  # guard (TestWorkItemGoldenMatchesLivePython) and its generator
+  # (tests/fixtures/generate_daily_work_item_python_golden.py) are deleted;
+  # no DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker needed any more.
 
   printf 'go test -count=1: internal/jobs/metrics/numerical (frozen numerical golden vs live Python)\n'
   if ! (
@@ -657,29 +641,14 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/metrics/daily/reviewedges (frozen review_edges golden vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestReviewEdgesGoldenMatchesLivePython$' \
-        ./internal/jobs/metrics/daily/reviewedges
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, for the same reason as cicd-golden above (CHAOS-4279).
-  proof_file="${proof_dir}/review-edges-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: review_edges golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # internal/jobs/metrics/daily/reviewedges' live-Python rot guard
+  # (TestReviewEdgesGoldenMatchesLivePython, CHAOS-4279) was retired here:
+  # its producer, compute_review_edges_daily (src/dev_health_ops/metrics/
+  # reviews.py), was DELETED, not merely un-called -- ReviewEdgesExecutor is
+  # the sole computer now. The frozen golden (tests/fixtures/
+  # daily_review_edges_python_golden.json) stays; Go's own
+  # TestComputeMatchesFrozenPythonGolden is the regression guard going
+  # forward.
 
   # internal/jobs/metrics/daily/benchmarking's live-Python rot guard
   # (TestBenchmarkingGoldenMatchesLivePython, CHAOS-4288) was retired here:

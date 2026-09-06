@@ -187,24 +187,24 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4277 (Done)",
     },
     "work_item": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- pre_bridge, ordered after `work_item_attribution` by families.json's `after` edge; reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily`",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- pre_bridge, ordered after `work_item_attribution` by families.json's `after` edge; reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ported `compute_work_item_metrics_daily` (compute_work_items.py), deleted entirely by CHAOS-5310/CHAOS-3092 (fully native, no remaining Python caller)",
         "ticket": "CHAOS-4283",
     },
     "work_item_estimate": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily`",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ported `compute_estimate_coverage_metrics_daily` (compute_work_items.py), deleted entirely by CHAOS-5323/CHAOS-3092 (fully native, no remaining Python caller)",
         "ticket": "CHAOS-4283",
     },
     "work_item_attribution": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_attribution_native_executor.go` -- pre_bridge; ports `compute_work_items.py:1189 compute_work_item_team_attributions`, the FULL daily compute (distinct from §3's native staleness-only backstop of the same table). Runs before its three readers via families.json's `after` edges",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_attribution_native_executor.go` -- pre_bridge; ported `compute_work_item_team_attributions` (compute_work_items.py), the FULL daily compute (distinct from §3's native staleness-only backstop of the same table), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller). Runs before its three readers via families.json's `after` edges",
         "ticket": "CHAOS-4283",
     },
     "work_item_state": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads; ported `compute_work_item_state_durations_daily` (compute_work_item_state_durations.py), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller)",
         "ticket": "CHAOS-4278 (Done)",
     },
     "review_edges": {
-        "citation": "Python: `reviews.py:22 compute_review_edges_daily`",
-        "ticket": "CHAOS-4279",
+        "citation": "Go: `internal/jobs/metrics/daily/review_edges_native_executor.go` (pre_bridge). CHAOS-4279 deleted the Python compute (`reviews.py compute_review_edges_daily`) entirely -- no fallback left.",
+        "ticket": "CHAOS-4279 (Done)",
     },
     "cicd": {
         # CHAOS-5312/CHAOS-5234/CHAOS-3092: this citation was already
@@ -396,14 +396,17 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-3092 PR-B (Done)",
     },
     "complexity": {
-        # CHAOS-5153: was `metrics_extra.py -> job_complexity_db.py
-        # run_complexity_db_job` -- metrics_extra.py does not exist anywhere
-        # in this repo. The real caller is the HTTP compatibility bridge
-        # (`worker_metrics.py:_run_complexity`, matching this row's own
-        # "river, bridge ... uses compatibility directly" route below).
-        "citation": "Python: `api/internal/worker_metrics.py _run_complexity` -> `job_complexity_db.py:238 run_complexity_db_job`",
-        "route": "river, bridge (`daily.go:582-585`, uses `compatibility` directly)",
-        "ticket": "CHAOS-4291",
+        # CHAOS-4291: cut over from the HTTP compatibility bridge
+        # (`worker_metrics.py:_run_complexity` -> `job_complexity_db.py:238
+        # run_complexity_db_job`) to a native executor -- the last
+        # remaining-metrics kind still on the bridge. The Python job itself
+        # is not deleted yet: it stays the parity oracle (frozen golden,
+        # `internal/jobs/metrics/remaining/testdata/complexity_python_golden.json`)
+        # until PR (b) removes it once every language the fail-closed
+        # ErrLanguageNotPorted guard needs is ported (feat-complexity-langs).
+        "citation": "Go: `internal/jobs/metrics/remaining/complexity_native.go`, `complexity_native_clickhouse.go`",
+        "route": "river, native (`daily.go:486-527`)",
+        "ticket": "CHAOS-4291 (Done)",
     },
     "release_impact": {
         "citation": (

@@ -136,6 +136,16 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # module is NOT touched -- it has a real, separate caller
     # (compute_dora.py, still Python).
     "deploy": "compute_deploy_metrics_daily",
+    # CHAOS-5323: work_item_estimate's daily compute deleted from
+    # job_daily.py -- the native Go executor (WorkItemEstimateExecutor,
+    # CHAOS-4283) is the only writer of estimate_coverage_metrics_daily for a
+    # daily partition now. Unlike work_item_attribution above,
+    # compute_estimate_coverage_metrics_daily itself is ALSO deleted from the
+    # codebase (compute_work_items.py): job_work_items.py's
+    # run_work_items_sync_job call site is deleted too -- team-lead's
+    # ruling found that job, unlike the one work_item_attribution shares
+    # with it, is itself a legacy Python path with no live Go dispatcher.
+    "work_item_estimate": "compute_estimate_coverage_metrics_daily",
     # CHAOS-5234: work_graph_edges's daily compute deleted from job_daily.py
     # -- the native Go executor (WorkGraphEdgesExecutor, CHAOS-4286) is the
     # only writer of work_graph_pr_review_outcome_edges/work_graph_pr_
@@ -158,6 +168,21 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # AIWorkflowExtractionResult and extract_ai_workflow_from_pull_requests)
     # are deleted too -- rg confirmed zero remaining callers of any of them.
     "work_graph_edges": "extract_review_deployment_incident_edges",
+    # CHAOS-4279: review_edges's daily compute deleted from job_daily.py --
+    # the native Go executor (ReviewEdgesExecutor,
+    # internal/jobs/metrics/daily/review_edges_native_executor.go) is
+    # unconditionally registered in dailyNativeFamilyRegistrations whenever
+    # the daily worker starts (same reachability analysis already
+    # established for team_cognitive_load/team_complexity/benchmarking,
+    # CHAOS-5141/CHAOS-5051/CHAOS-4288). compute_review_edges_daily itself
+    # is ALSO deleted (the whole src/dev_health_ops/metrics/reviews.py
+    # module) -- its only substantial other caller,
+    # tests/api/graphql/test_go_api_dual_run_review_edges.py, was rewritten
+    # to seed from the frozen golden
+    # (tests/fixtures/daily_review_edges_python_golden.json) instead.
+    # write_review_edges itself is NOT deleted -- that same dual-run test
+    # still calls it directly.
+    "review_edges": "compute_review_edges_daily",
 }
 
 

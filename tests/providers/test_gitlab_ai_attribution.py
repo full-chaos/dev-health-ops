@@ -321,12 +321,10 @@ def _patch_common(
 ) -> None:
     monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
     monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
-    monkeypatch.setattr(
-        job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])
-    )
-    monkeypatch.setattr(
-        job, "compute_work_item_state_durations_daily", lambda **_kwargs: []
-    )
+    # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): no compute_work_item_metrics_daily
+    # / compute_work_item_state_durations_daily to patch here anymore --
+    # job_work_items.py no longer calls either (native Go executors +
+    # providersync ingest derivation own these tables now).
     monkeypatch.setattr(
         job,
         "_discover_repos",

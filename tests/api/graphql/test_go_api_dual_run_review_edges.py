@@ -26,13 +26,20 @@ response digest for this operation.
 Producer note (root AGENTS.md: "an inaccurate coverage claim is worse than
 an admitted gap" / "fixtures are producer-derived"): unlike CHAOS-4367's
 ``featureFlags`` test (no producer exists yet for that table), a REAL
-producer exists here -- ``compute_review_edges_daily``
-(``src/dev_health_ops/metrics/reviews.py``) -- so this test builds
-``PullRequestRow``/``PullRequestReviewRow`` inputs and runs them through
-the actual producer, then persists via the real sink entry point
+producer exists here -- CHAOS-4279 deleted the live Python producer
+(``compute_review_edges_daily``, ``src/dev_health_ops/metrics/reviews.py``)
+once the native Go executor (``ReviewEdgesExecutor``) became the sole
+production writer, so rows are now producer-derived via the frozen
+Go-parity golden instead (``tests/fixtures/
+daily_review_edges_python_golden.json``, proven byte-for-byte against Go by
+``internal/jobs/metrics/daily/reviewedges/compute_test.go``'s
+``TestComputeMatchesFrozenPythonGolden``) --
+``_load_review_edge_golden_template()`` loads one record from it and each
+call site below ``dataclasses.replace()``s the fields it varies, then
+persists via the real sink entry point
 (``ClickHouseMetricsSink.write_review_edges``,
-``metrics/sinks/clickhouse/work_graph.py``), not a hand-authored row
-dict fed directly to ``client.insert`` (contrast
+``metrics/sinks/clickhouse/work_graph.py``), not a hand-authored row dict
+fed directly to ``client.insert`` (contrast
 ``test_review_edges_tie_order_live.py``, which -- for its narrower
 "prove ClickHouse's ORDER BY guarantee holds" goal -- inserts raw rows
 directly; the two tests have different jobs).
@@ -84,8 +91,7 @@ from dev_health_ops.api.graphql.types.review_edges import ReviewEdgesInput
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.fixtures.world import _require_scratch_database
 from dev_health_ops.licensing.types import LicenseTier
-from dev_health_ops.metrics.reviews import compute_review_edges_daily
-from dev_health_ops.metrics.schemas import PullRequestReviewRow, PullRequestRow
+from dev_health_ops.metrics.schemas import ReviewEdgeDailyRecord
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.models.git import Base as GitBase
 from dev_health_ops.models.go_api_registry import CandidateBuild, ProofRun, RoutingState
@@ -235,6 +241,38 @@ def _document_digest(document: str) -> str:
     import hashlib
 
     return hashlib.sha256(document.strip().encode("utf-8")).hexdigest()
+
+
+_REVIEW_EDGE_GOLDEN_PATH = (
+    REPO_ROOT / "tests" / "fixtures" / "daily_review_edges_python_golden.json"
+)
+
+
+def _load_review_edge_golden_template() -> ReviewEdgeDailyRecord:
+    """Loads one frozen, Go-parity-proven ReviewEdgeDailyRecord as a template.
+
+    CHAOS-4279 deleted compute_review_edges_daily -- there is no live Python
+    producer left to build seed rows from. tests/fixtures/
+    daily_review_edges_python_golden.json is producer-derived via the frozen
+    Go-parity golden (internal/jobs/metrics/daily/reviewedges/compute_test.go's
+    TestComputeMatchesFrozenPythonGolden proves the native Go executor
+    reproduces it byte-for-byte). Each call site below takes this template
+    and ``dataclasses.replace()``s the fields it actually varies (repo_id,
+    day, reviewer, author, reviews_count, computed_at, org_id) -- pure data
+    construction, no aggregation/business logic, same "tooling not compute"
+    shape as the existing ``replace(record, org_id=org_id)`` calls below.
+    """
+    payload = json.loads(_REVIEW_EDGE_GOLDEN_PATH.read_text())
+    record = payload["records"][0]
+    return ReviewEdgeDailyRecord(
+        repo_id=uuid.UUID(record["repo_id"]),
+        day=date.fromisoformat(record["day"]),
+        reviewer=record["reviewer"],
+        author=record["author"],
+        reviews_count=int(record["reviews_count"]),
+        computed_at=datetime.fromisoformat(record["computed_at"]),
+        org_id=record["org_id"],
+    )
 
 
 async def _seed_candidate_and_enable_canary(
@@ -515,12 +553,12 @@ def jwks_path(tmp_path_factory: pytest.TempPathFactory):
 async def test_dual_run_happy_path_matches_directed_edges(
     query_api_binary, registry_postgres, jwks_path
 ):
-    """Stage 2: real producer-built rows (compute_review_edges_daily),
-    real sink write (write_review_edges), real Python resolver call, real
-    Go HTTP server -- compared via the CHAOS-4381 comparator. Seeds BOTH
-    ends of a directed reviewer/author pair so a bug that symmetrized or
-    swapped reviewer<->author would show up as a mismatch, not pass
-    silently.
+    """Stage 2: producer-derived rows (via the frozen Go-parity golden --
+    live Python producer deleted CHAOS-4279), real sink write
+    (write_review_edges), real Python resolver call, real Go HTTP server --
+    compared via the CHAOS-4381 comparator. Seeds BOTH ends of a directed
+    reviewer/author pair so a bug that symmetrized or swapped
+    reviewer<->author would show up as a mismatch, not pass silently.
     """
     assert CLICKHOUSE_URI is not None
     _require_scratch_database(CLICKHOUSE_URI, kind="clickhouse")
@@ -532,54 +570,32 @@ async def test_dual_run_happy_path_matches_directed_edges(
     day = date(2026, 8, 10)
     author_a = f"author-a-{uuid.uuid4().hex[:8]}@example.com"
     author_b = f"author-b-{uuid.uuid4().hex[:8]}@example.com"
-    created = datetime(2026, 8, 10, 9, 0, 0, tzinfo=timezone.utc)
     computed_at = datetime(2026, 8, 11, 0, 0, 0, tzinfo=timezone.utc)
 
-    # PR #1 authored by author_a, reviewed by author_b -> edge
-    # (reviewer=author_b, author=author_a). PR #2 authored by author_b,
-    # reviewed by author_a -> edge (reviewer=author_a, author=author_b).
-    # Directed pair, both ends present, neither collapsed into the other.
-    pr_rows: list[PullRequestRow] = [
-        {
-            "repo_id": repo_id,
-            "number": 1,
-            "author_email": author_a,
-            "author_name": "Author A",
-            "created_at": created,
-            "merged_at": created,
-        },
-        {
-            "repo_id": repo_id,
-            "number": 2,
-            "author_email": author_b,
-            "author_name": "Author B",
-            "created_at": created,
-            "merged_at": created,
-        },
+    # Directed pair: (reviewer=author_b, author=author_a) and
+    # (reviewer=author_a, author=author_b), both ends present, neither
+    # collapsed into the other.
+    template = _load_review_edge_golden_template()
+    records = [
+        replace(
+            template,
+            repo_id=repo_id,
+            day=day,
+            reviewer=author_b,
+            author=author_a,
+            reviews_count=1,
+            computed_at=computed_at,
+        ),
+        replace(
+            template,
+            repo_id=repo_id,
+            day=day,
+            reviewer=author_a,
+            author=author_b,
+            reviews_count=1,
+            computed_at=computed_at,
+        ),
     ]
-    review_rows: list[PullRequestReviewRow] = [
-        {
-            "repo_id": repo_id,
-            "number": 1,
-            "reviewer": author_b,
-            "submitted_at": created,
-            "state": "APPROVED",
-        },
-        {
-            "repo_id": repo_id,
-            "number": 2,
-            "reviewer": author_a,
-            "submitted_at": created,
-            "state": "APPROVED",
-        },
-    ]
-
-    records = compute_review_edges_daily(
-        day=day,
-        pull_request_rows=pr_rows,
-        pull_request_review_rows=review_rows,
-        computed_at=computed_at,
-    )
     assert len(records) == 2, "expected exactly the two directed edges seeded above"
     records = [replace(record, org_id=org_id) for record in records]
 
@@ -691,45 +707,26 @@ async def test_dual_run_tied_reviews_count_at_limit_boundary_matches(
     org_id = f"chaos-4513-tie-boundary-{uuid.uuid4()}"
     repo_id = uuid.uuid4()
     day = date(2026, 8, 15)
-    created = datetime(2026, 8, 15, 9, 0, 0, tzinfo=timezone.utc)
     computed_at = datetime(2026, 8, 16, 0, 0, 0, tzinfo=timezone.utc)
     limit = 10
     tied_count = tied_row_count_for_limit(limit)
 
-    # `tied_count` distinct (reviewer, author) pairs, one PR + one review
-    # each, on the SAME repo/day -- every resulting edge shares
-    # reviews_count=1, a genuine tie on the resolver's PRIMARY sort key.
-    pr_rows: list[PullRequestRow] = []
-    review_rows: list[PullRequestReviewRow] = []
-    for i in range(tied_count):
-        author = f"author-{i:03d}-{uuid.uuid4().hex[:6]}@example.com"
-        reviewer = f"reviewer-{i:03d}-{uuid.uuid4().hex[:6]}@example.com"
-        pr_rows.append(
-            {
-                "repo_id": repo_id,
-                "number": i + 1,
-                "author_email": author,
-                "author_name": f"Author {i:03d}",
-                "created_at": created,
-                "merged_at": created,
-            }
+    # `tied_count` distinct (reviewer, author) pairs on the SAME repo/day --
+    # every resulting edge shares reviews_count=1, a genuine tie on the
+    # resolver's PRIMARY sort key.
+    template = _load_review_edge_golden_template()
+    records = [
+        replace(
+            template,
+            repo_id=repo_id,
+            day=day,
+            reviewer=f"reviewer-{i:03d}-{uuid.uuid4().hex[:6]}@example.com",
+            author=f"author-{i:03d}-{uuid.uuid4().hex[:6]}@example.com",
+            reviews_count=1,
+            computed_at=computed_at,
         )
-        review_rows.append(
-            {
-                "repo_id": repo_id,
-                "number": i + 1,
-                "reviewer": reviewer,
-                "submitted_at": created,
-                "state": "APPROVED",
-            }
-        )
-
-    records = compute_review_edges_daily(
-        day=day,
-        pull_request_rows=pr_rows,
-        pull_request_review_rows=review_rows,
-        computed_at=computed_at,
-    )
+        for i in range(tied_count)
+    ]
     assert len(records) == tied_count, (
         f"expected exactly {tied_count} tied edges, computed {len(records)}"
     )
@@ -812,11 +809,11 @@ async def test_dual_run_tied_reviews_count_at_limit_boundary_matches(
     # comparator too if Go regressed identically (codex round 2 class,
     # applied here proactively). Compare the RAW resolver order directly,
     # unsorted, against the known-correct ascending sequence.
-    # review_rows[i]["reviewer"] pairs with pr_rows[i]["author_email"] by
-    # construction above (both built from the same loop index i).
+    # records[i].reviewer pairs with records[i].author by construction
+    # above (both built from the same loop index i, before the org_id
+    # replace() below, which does not touch either field).
     expected_pairs = sorted(
-        (review_rows[i]["reviewer"], pr_rows[i]["author_email"])
-        for i in range(tied_count)
+        (records[i].reviewer, records[i].author) for i in range(tied_count)
     )[:limit]
     actual_pairs = [(e.reviewer, e.author) for e in python_result.edges]
     assert actual_pairs == expected_pairs, (

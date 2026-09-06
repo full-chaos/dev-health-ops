@@ -24,15 +24,27 @@ type fakeLeaseRepairRows struct {
 // oracle. Production selects its list from workitemcontract; keeping this
 // literal here ensures removing a retry-safety tag cannot be hidden by changing
 // both producer and expectation together.
+//
+// CHAOS-5323: estimate_coverage_metrics_daily removed -- its Python compute is
+// deleted entirely (WorkItemEstimateExecutor, native Go, is the sole writer
+// now), so no Python route writes it and no Linear expired-lease retry
+// safety proof applies to it anymore (see workitemcontract/manifest.go's
+// matching LinearExpiredLeaseRetry:false flip).
+//
+// CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): work_item_metrics_daily/
+// work_item_user_metrics_daily/work_item_cycle_times/
+// work_item_team_attributions/work_item_state_durations_daily removed for
+// the same reason -- their Python compute is deleted entirely (native Go
+// executors, daily-partition path, plus providersync's own ingest-time
+// derivation, are the only producers now).
 func wantLinearExpiredLeaseRetrySurfaces() []string {
 	return []string{
-		"ai_attribution", "estimate_coverage_metrics_daily",
+		"ai_attribution",
 		"investment_classifications_daily", "investment_metrics_daily",
-		"issue_type_metrics_daily", "sprints", "work_item_cycle_times",
+		"issue_type_metrics_daily", "sprints",
 		"work_item_dependencies", "work_item_interactions",
-		"work_item_metrics_daily", "work_item_reopen_events",
-		"work_item_state_durations_daily", "work_item_team_attributions",
-		"work_item_transitions", "work_item_user_metrics_daily", "work_items",
+		"work_item_reopen_events",
+		"work_item_transitions", "work_items",
 	}
 }
 

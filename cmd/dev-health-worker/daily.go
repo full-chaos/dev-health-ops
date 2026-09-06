@@ -363,22 +363,14 @@ func buildDailyWorker(
 		// only ever backs PartitionHandler's Claim/CompletePartition here,
 		// never StartRunTx -- see sync_dispatch.go's remainingStore, the
 		// store post-sync's dora coverage check actually runs through.
-		var compatibilityObserver remaining.CompatibilityObserver
-		if candidate, ok := observer.(remaining.CompatibilityObserver); ok {
-			compatibilityObserver = candidate
-		}
-		compatibility, compatibilityErr := remaining.NewHTTPCompatibilityExecutor(
-			metricCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
-			remaining.HTTPCompatibilityConfig{
-				Endpoint:              baseURL + "/internal/worker/remaining-metrics/v1/execute",
-				BearerToken:           cfg.OperationalBridgeToken.Reveal(),
-				AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
-				Logger:                logger,
-				Observer:              compatibilityObserver,
-			},
-		)
+		//
+		// CHAOS-4291 deleted the HTTP compatibility-bridge executor this
+		// block used to construct here: complexity was the last
+		// remaining-metrics kind still served through it (see
+		// remaining.ComplexityExecutor's own doc), and every kind below now
+		// constructs and refuses its own native executor independently.
 		budget, budgetErr := remaining.NewBudget(inventory)
-		if storeErr != nil || compatibilityErr != nil || budgetErr != nil {
+		if storeErr != nil || budgetErr != nil {
 			if metricsClickHouse != nil {
 				_ = metricsClickHouse.Close()
 			}
@@ -488,6 +480,49 @@ func buildDailyWorker(
 				}
 			} else {
 				capacityExecutor = executor
+			}
+		}
+
+		// CHAOS-4291: the complexity kind computes natively too -- the last
+		// remaining kind still served through the HTTP compatibility bridge
+		// (see remaining.ComplexityExecutor's own doc). Same per-kind
+		// discipline as dora/capacity above -- a refusal takes THIS KIND out
+		// of service and leaves its siblings registered, with a positive
+		// signal rather than a metric that merely stops moving.
+		var complexityExecutor *remaining.ComplexityExecutor
+		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
+			return spec.Kind == jobcontract.KindRemainingComplexity
+		}) {
+			if metricsClickHouse == nil {
+				connection, connectionErr := clickhousestore.Open(
+					context.Background(),
+					clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+				)
+				if connectionErr != nil {
+					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				metricsClickHouse = connection
+			}
+			var complexityObserver remaining.ComplexityObserver
+			if candidate, ok := observer.(remaining.ComplexityObserver); ok {
+				complexityObserver = candidate
+			}
+			executor, executorErr := remaining.NewComplexityExecutor(
+				context.Background(), metricsClickHouse, cfg.WorkerRemainingComplexityConfigPath, complexityObserver,
+			)
+			if executorErr != nil {
+				logger.Error(
+					"complexity native executor refused; the complexity kind "+
+						"will not be served and its partitions will accumulate "+
+						"unclaimed. Every other remaining kind is unaffected.",
+					"error", executorErr,
+					"reason", complexityRefusalReason(executorErr),
+				)
+				if refusalObserver, ok := observer.(complexityRefusalObserver); ok {
+					_ = refusalObserver.ObserveComplexityRefused(complexityRefusalReason(executorErr))
+				}
+			} else {
+				complexityExecutor = executor
 			}
 		}
 
@@ -705,8 +740,16 @@ func buildDailyWorker(
 					workers, registry, spec, store, capacityExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingComplexity:
+				if complexityExecutor == nil {
+					// Refused above. Skip rather than register a handler
+					// around a nil executor, which would claim partitions
+					// and fail each one.
+					continue
+				}
+				// Native, not `compatibility` -- this is the CHAOS-4291
+				// cutover.
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingComplexityArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
+					workers, registry, spec, store, complexityExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingDORA:
 				if doraExecutor == nil {
@@ -934,11 +977,26 @@ func dailyNativeFamilyRegistrations(
 			teamWellbeingExecutor.SetRepoCountObserver(repoCountObserver)
 		}
 	} else {
+		// CHAOS-5342: CHAOS-5311 deleted team_wellbeing's Python compute
+		// entirely, so unlike every OTHER family in this function a
+		// construction refusal here has NO fallback to fall open to --
+		// team_metrics_daily simply stops being written for the rest of
+		// this worker process's lifetime. Record it on the SAME
+		// per-partition telemetry channel PartitionHandler already uses
+		// for a runtime refusal, so the gap is observable on a dashboard,
+		// not just a log line that can scroll past.
+		if nativeFamilyObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
+			_ = nativeFamilyObserver.ObserveDailyMetricsNativeFamily(
+				"team_wellbeing", jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+			)
+		}
 		logger.Error(
-			"team_wellbeing native executor refused; the family "+
-				"stays on the Python compatibility bridge for "+
-				"every partition. Every other daily-metrics "+
-				"family is unaffected.",
+			"team_wellbeing native executor refused at worker startup; "+
+				"CHAOS-5311 deleted this family's Python compute entirely, "+
+				"so there is NO fallback -- team_metrics_daily rows will "+
+				"NOT be written for ANY partition until the worker "+
+				"restarts with a healthy connection. Every other "+
+				"daily-metrics family is unaffected.",
 			"error", teamWellbeingErr,
 		)
 	}
@@ -971,27 +1029,45 @@ func dailyNativeFamilyRegistrations(
 		}
 		native["incident"] = incidentExecutor
 	} else {
+		// CHAOS-5342: CHAOS-5313 deleted incident's Python compute
+		// entirely (it was also PERMANENTLY ZERO-YIELD, CHAOS-4269, so
+		// there was never a real fallback in practice -- but now there is
+		// no fallback in CODE either). Same observability fix as
+		// team_wellbeing/cicd above.
+		if nativeFamilyObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
+			_ = nativeFamilyObserver.ObserveDailyMetricsNativeFamily(
+				"incident", jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+			)
+		}
 		logger.Error(
-			"incident native executor refused; the family stays "+
-				"on the Python compatibility bridge, which is "+
-				"PERMANENTLY ZERO-YIELD for repository-derived "+
-				"incident mappings (CHAOS-4269) until this "+
-				"executor can be constructed. Every other "+
-				"daily-metrics family is unaffected.",
+			"incident native executor refused at worker startup; "+
+				"CHAOS-5313 deleted this family's Python compute "+
+				"entirely, so there is NO fallback -- incident_metrics_"+
+				"daily rows will NOT be written for ANY partition until "+
+				"the worker restarts with a healthy connection. Every "+
+				"other daily-metrics family is unaffected.",
 			"error", incidentErr,
 		)
 	}
-	// CHAOS-4293: deploy is the daily bridge's fourth native
-	// family. Same fail-open construction policy as the others
-	// above -- a refusal here leaves ONLY `deploy` on the
-	// Python compatibility bridge.
+	// CHAOS-4293: deploy is the daily bridge's fourth native family.
 	if deployExecutor, deployErr := daily.NewDeployExecutor(clickhouseConnection); deployErr == nil {
 		native["deploy"] = deployExecutor
 	} else {
+		// CHAOS-5342: CHAOS-5309 deleted deploy's Python compute entirely,
+		// so unlike every OTHER family in this function a construction
+		// refusal here has no fallback to fall open to. Same
+		// observability fix as team_wellbeing/cicd/incident above.
+		if nativeFamilyObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
+			_ = nativeFamilyObserver.ObserveDailyMetricsNativeFamily(
+				"deploy", jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+			)
+		}
 		logger.Error(
-			"deploy native executor refused; the family "+
-				"stays on the Python compatibility bridge for "+
-				"every partition. Every other daily-metrics "+
+			"deploy native executor refused at worker startup; CHAOS-5309 "+
+				"deleted this family's Python compute entirely, so there "+
+				"is NO fallback -- deploy_metrics_daily rows will NOT be "+
+				"written for ANY partition until the worker restarts "+
+				"with a healthy connection. Every other daily-metrics "+
 				"family is unaffected.",
 			"error", deployErr,
 		)
@@ -999,10 +1075,21 @@ func dailyNativeFamilyRegistrations(
 	if cicdExecutor, cicdErr := daily.NewCICDExecutor(clickhouseConnection); cicdErr == nil {
 		native["cicd"] = cicdExecutor
 	} else {
+		// CHAOS-5342: CHAOS-5312 deleted cicd's Python compute entirely,
+		// so unlike every OTHER family in this function a construction
+		// refusal here has no fallback to fall open to. Same
+		// observability fix as team_wellbeing/incident above.
+		if nativeFamilyObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
+			_ = nativeFamilyObserver.ObserveDailyMetricsNativeFamily(
+				"cicd", jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+			)
+		}
 		logger.Error(
-			"cicd native executor refused; the family "+
-				"stays on the Python compatibility bridge for "+
-				"every partition. Every other daily-metrics "+
+			"cicd native executor refused at worker startup; CHAOS-5312 "+
+				"deleted this family's Python compute entirely, so there "+
+				"is NO fallback -- cicd_metrics_daily rows will NOT be "+
+				"written for ANY partition until the worker restarts "+
+				"with a healthy connection. Every other daily-metrics "+
 				"family is unaffected.",
 			"error", cicdErr,
 		)
@@ -1444,6 +1531,25 @@ func capacityRefusalReason(err error) string {
 		return jobruntime.CapacityRefusedSchemaIncompatible
 	}
 	return jobruntime.CapacityRefusedInspectFailed
+}
+
+// complexityRefusalObserver is the narrow capability the complexity cutover
+// needs to make a refusal visible, kept local so a collector without it
+// degrades to log-only rather than failing the build.
+type complexityRefusalObserver interface {
+	ObserveComplexityRefused(reason string) error
+}
+
+// complexityRefusalReason maps a construction error onto the closed label
+// set. The two are distinguished because they call for different actions: an
+// unavailable ClickHouse connection (including an unreadable complexity.yaml)
+// is transient and self-heals, an incompatible schema means finish or roll
+// back a migration.
+func complexityRefusalReason(err error) string {
+	if errors.Is(err, remaining.ErrComplexitySchemaIncompatible) {
+		return jobruntime.ComplexityRefusedSchemaIncompatible
+	}
+	return jobruntime.ComplexityRefusedUnavailable
 }
 
 // workItemAttributionRefusalObserver is the narrow capability the

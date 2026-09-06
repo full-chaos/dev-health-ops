@@ -360,8 +360,11 @@ func (columns githubWorkItemCycleTimeOracleColumns) fromRows(
 	return columns
 }
 
-func TestGitLabWorkItemMetricsDailyMatchesLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(t, "gitlab/work-items/metrics-daily", gitlabOracleCases(githubWorkItemMetricTripletOracleCases()), func(t *testing.T, input map[string]any) githubWorkItemMetricsDailyOracleColumns {
+func TestGitLabWorkItemMetricsDailyMatchesFrozenPythonGolden(t *testing.T) {
+	// CHAOS-5310/CHAOS-3092 (R6): compute_work_item_metrics_daily is deleted
+	// (native Go executor + providersync own work_item_metrics_daily now) --
+	// frozen, see testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_metrics-daily", gitlabOracleCases(githubWorkItemMetricTripletOracleCases()), func(t *testing.T, input map[string]any) githubWorkItemMetricsDailyOracleColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
 		triplet, err := buildWorkItemMetricTripletForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
 		if err != nil {
@@ -372,7 +375,7 @@ func TestGitLabWorkItemMetricsDailyMatchesLivePythonProduction(t *testing.T) {
 }
 
 func TestGitLabWorkItemUserMetricsDailyMatchesLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(t, "gitlab/work-items/user-metrics-daily", gitlabOracleCases(githubWorkItemMetricTripletOracleCases()), func(t *testing.T, input map[string]any) githubWorkItemUserMetricsDailyOracleColumns {
+	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_user-metrics-daily", gitlabOracleCases(githubWorkItemMetricTripletOracleCases()), func(t *testing.T, input map[string]any) githubWorkItemUserMetricsDailyOracleColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
 		triplet, err := buildWorkItemMetricTripletForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
 		if err != nil {
@@ -383,7 +386,7 @@ func TestGitLabWorkItemUserMetricsDailyMatchesLivePythonProduction(t *testing.T)
 }
 
 func TestGitLabWorkItemCycleTimesMatchLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(t, "gitlab/work-items/cycle-times", gitlabOracleCases(githubWorkItemMetricTripletOracleCases()), func(t *testing.T, input map[string]any) githubWorkItemCycleTimeOracleColumns {
+	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_cycle-times", gitlabOracleCases(githubWorkItemMetricTripletOracleCases()), func(t *testing.T, input map[string]any) githubWorkItemCycleTimeOracleColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
 		triplet, err := buildWorkItemMetricTripletForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
 		if err != nil {
@@ -395,15 +398,16 @@ func TestGitLabWorkItemCycleTimesMatchLivePythonProduction(t *testing.T) {
 
 func TestGitLabDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 	cases := gitlabOracleCases(githubDerivedOracleCases())
-	compareRowsAgainstPythonOracle(t, "gitlab/work-items/estimate-coverage", cases, func(t *testing.T, input map[string]any) githubEstimateCoverageColumns {
-		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
-		surfaces, err := buildWorkItemDerivedSurfacesForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return newGitHubEstimateCoverageColumns(surfaces.EstimateCoverage)
-	}, nil)
-	compareRowsAgainstPythonOracle(t, "gitlab/work-items/team-attributions", cases, func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
+	// CHAOS-5323/CHAOS-3092: no "gitlab/work-items/estimate-coverage" oracle
+	// pair here anymore -- compute_estimate_coverage_metrics_daily is
+	// deleted entirely (work_item_estimate is fully native, no remaining
+	// Python caller), and its oracle_pairs script (gitlab_work-
+	// items_estimate-coverage.py) is deleted with it.
+	// CHAOS-5321/CHAOS-3092 (R6): compute_work_item_team_attributions/
+	// compute_work_item_state_durations_daily are deleted (native Go
+	// executor + providersync own these tables now) -- frozen, see
+	// testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_team-attributions", cases, func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
 		surfaces, err := buildWorkItemDerivedSurfacesForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
 		if err != nil {
@@ -411,7 +415,7 @@ func TestGitLabDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 		}
 		return newGitHubTeamAttributionColumns(surfaces.TeamAttributions)
 	}, nil)
-	compareRowsAgainstPythonOracle(t, "gitlab/work-items/state-durations", cases, func(t *testing.T, input map[string]any) githubStateDurationColumns {
+	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_state-durations", cases, func(t *testing.T, input map[string]any) githubStateDurationColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
 		surfaces, err := buildWorkItemDerivedSurfacesForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
 		if err != nil {

@@ -97,10 +97,13 @@ type githubWorkItemCycleTimeOracleColumns struct {
 	OrgID           []string                  `json:"org_id"`
 }
 
-func TestGitHubWorkItemMetricsDailyMatchesLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+func TestGitHubWorkItemMetricsDailyMatchesFrozenPythonGolden(t *testing.T) {
+	// CHAOS-5310/CHAOS-3092 (R6): compute_work_item_metrics_daily is deleted
+	// (native Go executor + providersync own work_item_metrics_daily now) --
+	// frozen, see testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(
 		t,
-		"github/work-items/metrics-daily",
+		"github_work-items_metrics-daily",
 		githubWorkItemMetricTripletOracleCases(),
 		func(t *testing.T, input map[string]any) githubWorkItemMetricsDailyOracleColumns {
 			return githubWorkItemMetricTripletOracleResult(t, input).metricsDaily
@@ -110,9 +113,9 @@ func TestGitHubWorkItemMetricsDailyMatchesLivePythonProduction(t *testing.T) {
 }
 
 func TestGitHubWorkItemUserMetricsDailyMatchesLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	compareRowsAgainstFrozenOracle(
 		t,
-		"github/work-items/user-metrics-daily",
+		"github_work-items_user-metrics-daily",
 		githubWorkItemMetricTripletOracleCases(),
 		func(t *testing.T, input map[string]any) githubWorkItemUserMetricsDailyOracleColumns {
 			return githubWorkItemMetricTripletOracleResult(t, input).userMetricsDaily
@@ -122,9 +125,9 @@ func TestGitHubWorkItemUserMetricsDailyMatchesLivePythonProduction(t *testing.T)
 }
 
 func TestGitHubWorkItemCycleTimesMatchLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	compareRowsAgainstFrozenOracle(
 		t,
-		"github/work-items/cycle-times",
+		"github_work-items_cycle-times",
 		githubWorkItemMetricTripletOracleCases(),
 		func(t *testing.T, input map[string]any) githubWorkItemCycleTimeOracleColumns {
 			return githubWorkItemMetricTripletOracleResult(t, input).cycleTimes

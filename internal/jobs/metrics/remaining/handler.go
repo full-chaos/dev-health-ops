@@ -22,6 +22,19 @@ type CompatibilityExecutor interface {
 	ComputePartition(context.Context, Run, Partition) (CompatibilityOutcome, error)
 }
 
+// CompatibilityOutcome reports one partition's actual write result, distinct
+// from the plain nil-error "success" ComputePartition used to return. A
+// caller that only checks the error can no longer tell a real write apart
+// from a reported-zero write; CompletePartition's stored result string is
+// built from this so the two are never conflated durably. Named for the
+// original HTTP compatibility-bridge executor (now deleted, CHAOS-4291 --
+// every remaining-metrics kind computes natively): every native executor
+// still returns this same shape, so the name outlived the bridge it was
+// coined for.
+type CompatibilityOutcome struct {
+	RowsWritten *int
+}
+
 type PartitionHandler[T jobruntime.ContractArgs] struct {
 	store          Store
 	compatibility  CompatibilityExecutor

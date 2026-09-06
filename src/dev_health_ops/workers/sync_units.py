@@ -167,12 +167,6 @@ _LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES = frozenset(
         "work_item_interactions",
         "sprints",
         "ai_attribution",
-        "work_item_metrics_daily",
-        "estimate_coverage_metrics_daily",
-        "work_item_user_metrics_daily",
-        "work_item_cycle_times",
-        "work_item_state_durations_daily",
-        "work_item_team_attributions",
         "issue_type_metrics_daily",
         "investment_metrics_daily",
         "investment_classifications_daily",
@@ -188,18 +182,22 @@ _LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES = frozenset(
 #                                 keyed on a deterministic edge_id hash so duplicate dependency
 #                                 rows collapse to one persisted edge (no global FINAL needed)
 #   ai_attribution                -> RMT(computed_at) + FINAL+ROW_NUMBER resolved view
-#   work_item_metrics_daily       -> RMT(computed_at) (migration 055) + FINAL/argMax readers
-#   estimate_coverage_metrics_daily -> RMT(computed_at) (migration 063) + argMax readers
-#   work_item_user_metrics_daily  -> RMT(computed_at) (migration 055) + FINAL readers
-#   work_item_cycle_times         -> RMT(computed_at) + argMax/FINAL readers
-#   work_item_state_durations_daily -> argMax(duration, computed_at) readers over the key
-#   work_item_team_attributions   -> latest-snapshot (max computed_at) + FINAL resolver
 #   issue_type_metrics_daily      -> only read via SELECT DISTINCT (no aggregation)
 #   investment_metrics_daily      -> argMax(col, computed_at) over the natural key in every
 #                                 reader, incl. the analytics templates (compiler dedup CTE)
 #   investment_classifications_daily -> no production reader (deterministic rule-based rows)
 #   manual_attribution_fallbacks  -> RMT(updated_at) + FINAL reader (registry entry; this
 #                                 job does not write it, but it is a proven-safe surface)
+# CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): work_item_metrics_daily/estimate_
+# coverage_metrics_daily/work_item_user_metrics_daily/work_item_cycle_times/
+# work_item_state_durations_daily/work_item_team_attributions dropped from
+# this job's write surface entirely -- their compute+write calls are deleted
+# from run_work_items_sync_job (native Go executors + providersync ingest
+# derivation are the only producers now). Their idempotency-mechanism notes
+# are moot for THIS JOB, but each stays a proven-safe RETRY TARGET below,
+# same shape as manual_attribution_fallbacks above: the ClickHouse table's
+# RMT/argMax dedup shape is unaffected by which process writes it, so leaving
+# the write-surfaces set above does not mean leaving this wider registry.
 # Retry stays disabled for any unit whose write set is NOT a subset of this set.
 _CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES = frozenset(
     {

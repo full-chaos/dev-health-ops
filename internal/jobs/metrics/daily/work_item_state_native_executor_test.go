@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestNewWorkItemStateExecutorRejectsNilConn(t *testing.T) {
@@ -322,4 +324,52 @@ func TestComputeWorkItemStateDurationsMissingAttributionCountsOnlyProcessedItems
 	if missingAttribution != 1 {
 		t.Fatalf("missingAttribution=%d, want 1 (only withTransitions was processed)", missingAttribution)
 	}
+}
+
+// TestWorkItemStatePartialWriteGuardPinsBothDirections is the codex round 2
+// F3 red-first proof (astra scale review, folded into CHAOS-5190 per
+// team-lead's ruling): ComputeFamily's per-repo loop used to
+// `return total, err` UNWRAPPED at every early-return site, so a LATER
+// repo's failure after an EARLIER repo's rows already landed was reported
+// exactly like a genuine refusal (Refused/0-rows) even though real rows
+// were on disk -- daily.go's dispatcher only distinguishes ErrPartialWrite
+// from everything else, so this misclassification told an operator the
+// OPPOSITE of what a re-drive would create (duplicate rows on
+// work_item_state_durations_daily, a plain MergeTree with no dedup key).
+// Mirrors TestWorkGraphEdgesPartialWriteGuardPinsBothDirections's shape
+// exactly: wrap only when something already landed, never when nothing did.
+func TestWorkItemStatePartialWriteGuardPinsBothDirections(t *testing.T) {
+	cause := errors.New("simulated ClickHouse send failure")
+	repoID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+
+	t.Run("failure AFTER a write is a partial write", func(t *testing.T) {
+		rows, err := wrapWorkItemStatePartialWrite(5, repoID, cause)
+		if !errors.Is(err, ErrPartialWrite) {
+			t.Errorf("a failure after 5 rows landed must wrap ErrPartialWrite so the dispatcher "+
+				"reports PartialWrite, not Refused; got %v", err)
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("the original cause must survive wrapping; got %v", err)
+		}
+		if rows != 5 {
+			t.Errorf("the TRUE rows-written count must be reported, got %d, want 5 -- "+
+				"reporting 0 here tells an operator the opposite of what happened and "+
+				"misinforms the re-drive decision", rows)
+		}
+	})
+
+	t.Run("failure BEFORE any write is an ordinary failure", func(t *testing.T) {
+		rows, err := wrapWorkItemStatePartialWrite(0, repoID, cause)
+		if errors.Is(err, ErrPartialWrite) {
+			t.Error("a failure with nothing written must NOT wrap ErrPartialWrite: this repo's " +
+				"loop iteration produced zero rows, so there is nothing to distinguish from an " +
+				"ordinary refusal")
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("the original cause must be returned unchanged; got %v", err)
+		}
+		if rows != 0 {
+			t.Errorf("rows=%d, want 0", rows)
+		}
+	})
 }

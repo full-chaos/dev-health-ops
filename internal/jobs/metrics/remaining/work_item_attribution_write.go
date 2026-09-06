@@ -164,8 +164,19 @@ is_primary, confidence, evidence, computed_at)`)
 			return 0, fmt.Errorf("append work_item_team_attributions row: %w", err)
 		}
 	}
+	// #2276 confirmation-pass sweep (found independently before launching
+	// the pass, same class the F1 sweep already closed fleet-wide across
+	// internal/jobs/metrics/daily/*): Send() crosses the network -- a Send
+	// error is AMBIGUOUS, ClickHouse may have already committed the insert
+	// server-side and only the acknowledgement was lost. Report the true
+	// row count on THIS specific error path (never on PrepareBatch/Append,
+	// which have not crossed the network and genuinely wrote nothing),
+	// matching work_graph_edges_native_clickhouse.go's established pattern.
+	// This file was never in scope for the original sweep -- it landed via
+	// #2246/CHAOS-5078 on main, merged into this branch after that sweep
+	// already ran.
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send work_item_team_attributions batch: %w", err)
+		return len(rows), fmt.Errorf("send work_item_team_attributions batch: %w", err)
 	}
 	return len(rows), nil
 }

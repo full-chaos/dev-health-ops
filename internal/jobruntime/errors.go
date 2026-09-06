@@ -120,6 +120,18 @@ var (
 	// state, never a reason to park a partition for human review, and never
 	// failed_permanent.
 	ReasonCapacityExhausted = reason("capacity_exhausted")
+	// ReasonPostBridgeFamilyIncomplete marks a daily-metrics partition held
+	// back from 'succeeded' because a post_bridge native family (one that
+	// runs after the compatibility bridge has already returned for this
+	// partition) refused or only partially wrote its rows (CHAOS-5190, astra
+	// scale review F1). Unlike a pre_bridge family failure -- which still has
+	// the bridge as a same-partition fallback -- Python was already told to
+	// skip a post_bridge family unconditionally before the bridge ran, so a
+	// post_bridge failure here means NO writer produced that family's rows
+	// for this partition at all. The partition is released 'failed'
+	// (re-dispatchable) instead of completed, so a retry can still fill the
+	// gap rather than a silently-incomplete partition reading as succeeded.
+	ReasonPostBridgeFamilyIncomplete = reason("post_bridge_family_incomplete")
 	// ReasonPreBridgeFamilyIncomplete marks a daily-metrics partition held
 	// back from 'succeeded' because a pre_bridge native family (one that
 	// runs BEFORE the compatibility bridge for this partition) failed AFTER

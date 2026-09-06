@@ -1,0 +1,14 @@
+// CHAOS-5156: closes a gap codex round r1 on #2292 found (independently
+// confirmed against real lizard 1.23.0 before fixing). stateFunction was
+// missing clikeStates.stateFunction's own "::" branch (clike.go),
+// falling through to the not-a-function-after-all default instead of
+// stateNameWithSpace. Java has no qualified out-of-line definitions, but
+// lizard's tolerant tokenizer still parses this token shape. Measured
+// directly against real lizard 1.23.0: complexity 2 (base 1 + if).
+class C {
+    Foo::bar() {
+        if (x > 0) {
+            x = x;
+        }
+    }
+}

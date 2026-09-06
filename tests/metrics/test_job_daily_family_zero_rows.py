@@ -108,9 +108,10 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     # CHAOS-5234/CHAOS-3092: no build_governance_rows_for_day to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
-    monkeypatch.setattr(
-        job_daily, "_extract_ai_workflow_for_day", lambda **k: ([], [], [])
-    )
+    # CHAOS-5216/CHAOS-5242: no _extract_ai_workflow_for_day to neutralize
+    # either anymore -- both of its halves (ai_workflow, work_graph_edges)
+    # are deleted, so the function itself no longer exists on job_daily at
+    # all (monkeypatch.setattr on a nonexistent attribute raises).
     # CHAOS-5234/CHAOS-3092: no compute_ai_impact_metrics_daily to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).

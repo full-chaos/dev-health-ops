@@ -127,6 +127,28 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # incident+dora test (surgically trimmed to drop only the incident
     # half).
     "incident": "compute_incident_metrics_daily",
+    # CHAOS-5234: work_graph_edges's daily compute deleted from job_daily.py
+    # -- the native Go executor (WorkGraphEdgesExecutor, CHAOS-4286) is the
+    # only writer of work_graph_pr_review_outcome_edges/work_graph_pr_
+    # deployment_edges/work_graph_deployment_incident_edges for a daily
+    # partition now (closes CHAOS-5216 by construction: single native
+    # reader). Same shape as ai_impact: extract_review_deployment_incident_
+    # edges itself is ALSO deleted (from work_graph/extractors/ai_workflow.py)
+    # -- rg confirmed its only real callers, once job_daily.py's own
+    # reference was removed, were its Go bit-exact oracle rot guard
+    # (TestWorkGraphEdgesMatchLivePythonProduction +
+    # testdata/python_work_graph_edges_oracle.py, both also deleted in this
+    # PR) and its own dedicated test (trimmed, not deleted --
+    # tests/work_graph/test_ai_workflow.py's traversal tests survive).
+    #
+    # Merge note (CHAOS-5242, #2307 landed first): that PR deleted this same
+    # function's OTHER half (ai_workflow's runs/artifact_edges/issue_edges,
+    # via extract_ai_workflow_from_pull_requests). With both halves gone in
+    # the merge, _extract_ai_workflow_for_day itself and the whole
+    # work_graph/extractors/ai_workflow.py module (including
+    # AIWorkflowExtractionResult and extract_ai_workflow_from_pull_requests)
+    # are deleted too -- rg confirmed zero remaining callers of any of them.
+    "work_graph_edges": "extract_review_deployment_incident_edges",
 }
 
 

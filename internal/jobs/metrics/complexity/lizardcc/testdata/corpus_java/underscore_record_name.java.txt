@@ -1,0 +1,21 @@
+// CHAOS-5156: closes a gap self-found while diagnosing #2269's r1 void
+// round (independently verified against real lizard 1.23.0 before
+// fixing). stateClassDeclaration used to accept an underscore-prefixed
+// token as a class/record name -- real lizard's own predicate
+// (_state_class_declaration, java.py) only accepts alphabetic first
+// characters, so a record named with a leading underscore never gets
+// its name captured, and its compact constructor is therefore NOT
+// exempted from scoring (the exemption requires the candidate name to
+// equal the captured class_name, which stays empty here). Measured
+// directly against real lizard 1.23.0: complexity 1 (real lizard
+// reports one pseudo-function from the un-exempted compact-constructor
+// body's own "if" condition, not a true function -- this is lizard's own
+// quirky-but-real behavior for this construct, not something this port
+// should "improve" on).
+record _R(int x) {
+    _R {
+        if (x > 0) {
+            x = x;
+        }
+    }
+}

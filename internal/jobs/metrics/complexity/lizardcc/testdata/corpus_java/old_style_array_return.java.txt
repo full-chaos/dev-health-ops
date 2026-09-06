@@ -1,0 +1,16 @@
+// CHAOS-5156: closes a gap self-found while diagnosing #2269's r1 void
+// round (independently verified against real lizard 1.23.0 before
+// fixing). stateDecToImp used to have no "[" branch at all, so legacy
+// Java array-return syntax (valid since Java 1.0, still compiles today)
+// fell through to the not-an-identifier fallback and abandoned the
+// declaration back to global scope -- silently losing the function
+// body's own condition count. Measured directly against real lizard
+// 1.23.0: complexity 2 (base 1 + if).
+class C {
+    int f()[] {
+        if (true) {
+            return new int[0];
+        }
+        return null;
+    }
+}

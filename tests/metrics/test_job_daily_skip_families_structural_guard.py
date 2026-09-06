@@ -93,6 +93,15 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # (the same module) are NOT touched -- they have real, separate callers
     # (the GraphQL API resolver and the opportunities detector).
     "ai_impact": "compute_ai_impact_metrics_daily",
+    # CHAOS-5309 (CHAOS-5234/CHAOS-3092): deploy's daily compute deleted from
+    # job_daily.py -- the native Go executor (DeployExecutor, CHAOS-4293) is
+    # the only writer of deploy_metrics_daily for a daily partition now.
+    # compute_deploy_metrics_daily itself is ALSO deleted (from
+    # compute_deployments.py) -- rg confirmed job_daily.py was its only real
+    # caller. The sibling constant DEPLOYMENT_FAILURE_STATUSES in the same
+    # module is NOT touched -- it has a real, separate caller
+    # (compute_dora.py, still Python).
+    "deploy": "compute_deploy_metrics_daily",
     # CHAOS-5323: work_item_estimate's daily compute deleted from
     # job_daily.py -- the native Go executor (WorkItemEstimateExecutor,
     # CHAOS-4283) is the only writer of estimate_coverage_metrics_daily for a

@@ -19,8 +19,7 @@ The corrected contract (CHAOS-2888 plan, Workstream A):
   relying on the task's implicit today/1 defaults.
 - Any other window (multi-day, or single-day but not today) is a historical
   backfill: complexity is skipped and a ``historical_complexity_unsupported``
-  warning is logged with the requested date range. ``run_daily_metrics``
-  still receives the full historical window -- only complexity is gated.
+  warning is logged with the requested date range.
 
 These tests prove the seam without a live ClickHouse: they patch the same
 Celery ``chain`` / ``signature`` factories the sibling dispatch tests patch.
@@ -38,7 +37,6 @@ import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
 
 _COMPLEXITY_TASK = "dev_health_ops.workers.tasks.run_complexity_job"
-_DAILY_METRICS_TASK = "dev_health_ops.workers.tasks.run_daily_metrics"
 _WORK_GRAPH_TASK = "dev_health_ops.workers.tasks.run_work_graph_build"
 _INVESTMENT_TASK = (
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned"
@@ -96,7 +94,7 @@ def test_current_single_day_sync_enqueues_complexity_with_explicit_date(
         to_date="2026-03-05",
     )
 
-    complexity_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
+    complexity_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert complexity_sig.task_name == _COMPLEXITY_TASK
     assert complexity_sig.sig_kwargs["kwargs"] == {
         "org_id": "org-123",
@@ -105,12 +103,6 @@ def test_current_single_day_sync_enqueues_complexity_with_explicit_date(
     }
     assert complexity_sig.sig_kwargs["queue"] == "metrics"
     assert complexity_sig.sig_kwargs.get("immutable") is True
-    assert daily_sig.task_name == _DAILY_METRICS_TASK
-    assert daily_sig.sig_kwargs["kwargs"] == {
-        "org_id": "org-123",
-        "day": "2026-03-05",
-        "backfill_days": 1,
-    }
     chain_instance.apply_async.assert_called_once_with()
 
 
@@ -128,7 +120,7 @@ def test_current_sync_without_explicit_window_still_enqueues_complexity(
         org_id="org-123",
     )
 
-    complexity_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
+    complexity_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert complexity_sig.task_name == _COMPLEXITY_TASK
     assert complexity_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     chain_instance.apply_async.assert_called_once_with()
@@ -139,7 +131,7 @@ def test_historical_single_day_sync_skips_complexity_dispatch(
 ) -> None:
     """A single historical day (from_date == to_date, but not today) must not
     enqueue complexity -- it would write today's file contents onto that past
-    date. Daily metrics still receives the historical day/backfill_days=1."""
+    date."""
     _freeze_today(monkeypatch, date(2026, 3, 5))
 
     with caplog.at_level(logging.WARNING):
@@ -154,13 +146,8 @@ def test_historical_single_day_sync_skips_complexity_dispatch(
     chain_sigs = mock_chain.call_args.args
     task_names = [sig.task_name for sig in chain_sigs]
     assert _COMPLEXITY_TASK not in task_names
-    daily_sig = chain_sigs[0]
-    assert daily_sig.task_name == _DAILY_METRICS_TASK
-    assert daily_sig.sig_kwargs["kwargs"] == {
-        "org_id": "org-123",
-        "day": "2026-01-01",
-        "backfill_days": 1,
-    }
+    build_sig = chain_sigs[0]
+    assert build_sig.task_name == _WORK_GRAPH_TASK
     chain_instance.apply_async.assert_called_once_with()
     assert "historical_complexity_unsupported" in caplog.text
     assert "2026-01-01" in caplog.text
@@ -170,8 +157,7 @@ def test_historical_multi_day_backfill_skips_complexity_but_keeps_daily_window(
     caplog,
 ) -> None:
     """A multi-day historical backfill must not enqueue complexity (it would
-    fabricate a flat historical trend from current file contents), but
-    run_daily_metrics keeps the full requested historical window."""
+    fabricate a flat historical trend from current file contents)."""
     with caplog.at_level(logging.WARNING):
         _, mock_chain, chain_instance, _ = _run_dispatch(
             provider="github",
@@ -184,14 +170,7 @@ def test_historical_multi_day_backfill_skips_complexity_but_keeps_daily_window(
     chain_sigs = mock_chain.call_args.args
     task_names = [sig.task_name for sig in chain_sigs]
     assert _COMPLEXITY_TASK not in task_names
-    daily_sig = chain_sigs[0]
-    assert daily_sig.task_name == _DAILY_METRICS_TASK
-    assert daily_sig.sig_kwargs["kwargs"] == {
-        "org_id": "org-123",
-        "day": "2026-01-14",
-        "backfill_days": 14,
-    }
-    build_sig, materialize_sig = chain_sigs[1], chain_sigs[2]
+    build_sig, materialize_sig = chain_sigs[0], chain_sigs[1]
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
     chain_instance.apply_async.assert_called_once_with()

@@ -123,15 +123,13 @@ def _neutralize_finalize(monkeypatch: Any, *, sink: Any, calls: dict[str, int]) 
     # gate.
     monkeypatch.setattr(job_daily, "build_repo_pattern_resolver", lambda *a, **k: None)
     monkeypatch.setattr(job_daily, "discover_repos", lambda **k: [])
-    # The finalize-scope CHAOS-4365 writers, which run AFTER the benchmarking
-    # block and are not what these tests are about. Neutralised by their
-    # real names -- an earlier revision patched
-    # _write_compounding_risk_for_day, which exists but is the
-    # PARTITION-scope one and is never called here, so the patch silently
-    # did nothing and the run died further down.
-    monkeypatch.setattr(
-        job_daily, "_write_compounding_risk_team_rows_for_day", lambda **k: 0
-    )
+    # CHAOS-5084/no-straddle (#2275 v2): this used to ALSO neutralise
+    # _write_compounding_risk_team_rows_for_day here (the finalize-scope
+    # CHAOS-4365 writer that ran AFTER the benchmarking block, not what these
+    # tests are about) -- deleted along with the function itself.
+    # CompoundingRiskTeamExecutor (Go) is the sole writer for that scope now,
+    # so there is nothing left in run_daily_metrics_finalize's Python path
+    # for these IC-focused tests to neutralise on this family's behalf.
 
 
 @pytest.mark.asyncio

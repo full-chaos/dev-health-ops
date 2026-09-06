@@ -77,6 +77,9 @@ def run_daily_metrics(
                         "day": target_day.isoformat(),
                     }
 
+        # CHAOS-5254: the old skip_finalize=False inline IC-metrics/landscape
+        # branch this call relied on is deleted; CHAOS-5296's revival must
+        # add an explicit run_daily_metrics_finalize call here too.
         # Run the async job in a new event loop
         run_async(
             run_daily_metrics_job(

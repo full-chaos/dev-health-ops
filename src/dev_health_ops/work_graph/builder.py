@@ -7,19 +7,15 @@ from raw data sources (work items, PRs, commits).
 
 from __future__ import annotations
 
-import argparse
 import bisect
 import logging
-import sys
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from dev_health_ops.metrics.schemas import (
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
-    WorkGraphProjectionRunRecord,
 )
 from dev_health_ops.metrics.sinks.factory import create_sink
 from dev_health_ops.work_graph.extractors.text_parser import (
@@ -52,64 +48,11 @@ def _format_datetime_for_clickhouse(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
-# Mapping from work_item_dependencies relationship types to EdgeType
-DEPENDENCY_TYPE_MAP: dict[str, EdgeType] = {
-    "blocks": EdgeType.BLOCKS,
-    "is_blocked_by": EdgeType.IS_BLOCKED_BY,
-    "relates": EdgeType.RELATES,
-    "is_related_to": EdgeType.IS_RELATED_TO,
-    "duplicates": EdgeType.DUPLICATES,
-    "is_duplicate_of": EdgeType.IS_DUPLICATE_OF,
-    "parent": EdgeType.PARENT_OF,
-    "child": EdgeType.CHILD_OF,
-    "is_parent_of": EdgeType.PARENT_OF,
-    "is_child_of": EdgeType.CHILD_OF,
-}
-
 # CHAOS-2630 Phase C1: confidence ceiling for flag associations inferred from a
 # flag key literally appearing in PR/issue/commit text. Kept well below the 0.9
 # used for structured PROJECT-123 issue refs (flag keys are noisier free-form
 # strings) and strictly below NATIVE, per the design sign-off.
 FLAG_TEXT_REF_CONFIDENCE = 0.6
-BLOCKER_PROJECTION_RULE_VERSION = "canonical-blocks.v2"
-_BLOCKER_TYPES = {"blocks", "blocked_by", "is_blocked_by"}
-
-
-def _canonical_dependency(
-    row: dict,
-) -> tuple[str, str, EdgeType]:
-    """Normalize dependency rows to source --blocks--> target.
-
-    New rows carry an explicit semantics version. Legacy provider signatures
-    are handled separately so a later rebuild never swaps already-canonical
-    rows a second time.
-    """
-    source = str(row.get("source_work_item_id") or "")
-    target = str(row.get("target_work_item_id") or "")
-    relationship = str(row.get("relationship_type") or "").lower()
-    raw = str(row.get("relationship_type_raw") or "").lower()
-    semantics = str(row.get("relationship_semantics_version") or "legacy.v1")
-    if relationship not in _BLOCKER_TYPES:
-        return source, target, DEPENDENCY_TYPE_MAP.get(relationship, EdgeType.RELATES)
-    if semantics == BLOCKER_PROJECTION_RULE_VERSION:
-        return (
-            (source, target, EdgeType.BLOCKS)
-            if relationship == "blocks"
-            else (target, source, EdgeType.BLOCKS)
-        )
-    if source.startswith(("gh:", "ghpr:")) and raw == relationship:
-        # Historical GitHub body parsing encoded both directions backwards.
-        return (
-            (target, source, EdgeType.BLOCKS)
-            if relationship == "blocks"
-            else (source, target, EdgeType.BLOCKS)
-        )
-    if source.startswith("jira:") and relationship in {"blocked_by", "is_blocked_by"}:
-        # Historical Jira inward links already put the blocker in source.
-        return source, target, EdgeType.BLOCKS
-    if relationship in {"blocked_by", "is_blocked_by"}:
-        return target, source, EdgeType.BLOCKS
-    return source, target, EdgeType.BLOCKS
 
 
 @dataclass
@@ -223,30 +166,6 @@ class WorkGraphBuilder:
         if raw:
             return Provenance.NATIVE
         return Provenance.NATIVE
-
-    @staticmethod
-    def _parse_pr_dependency_source(value: object) -> tuple[str, int, str] | None:
-        source = str(value or "")
-        if source.startswith("ghpr:"):
-            body = source.removeprefix("ghpr:")
-            separator = "#"
-            provider = "github"
-        elif source.startswith("gitlab:"):
-            body = source.removeprefix("gitlab:")
-            separator = "!"
-            provider = "gitlab"
-        else:
-            return None
-
-        if separator not in body:
-            return None
-        repo_slug, number = body.rsplit(separator, 1)
-        if not repo_slug or not number.isdigit():
-            return None
-        pr_number = int(number)
-        if pr_number <= 0:
-            return None
-        return repo_slug, pr_number, provider
 
     def add_release_node(
         self,
@@ -421,8 +340,14 @@ class WorkGraphBuilder:
 
         self._delete_stale_pr_dependency_issue_edges()
 
-        # 1. Build issue->issue edges from work_item_dependencies
-        stats["issue_issue_edges"] = self._build_issue_issue_edges()
+        # 1. Issue->issue edges from work_item_dependencies: CHAOS-4924 ported
+        # to Go (internal/jobs/workgraph/edges), wired as a native pre-step
+        # ahead of this bridge call, not here -- deleted the Python
+        # `_build_issue_issue_edges`/`_delete_dependency_edge_candidates`/
+        # `_publish_blocker_projection` trio. stats stays at its 0 default
+        # (see the dict literal above) -- the native pre-step reports its own
+        # counts through the ledger, same as issue_pr_links (CHAOS-5249) and
+        # pr_commit_links/pr_commit_edges (CHAOS-5264).
 
         # issue->PR native-provenance links (work_item_dependencies ->
         # work_graph_issue_pr) are derived by the Go pre-step
@@ -499,225 +424,6 @@ class WorkGraphBuilder:
             parameters=params or None,
         )
 
-    def _build_issue_issue_edges(self) -> int:
-        """
-        Build edges from work_item_dependencies.
-
-        Returns:
-            Number of edges created
-        """
-        logger.info("Building issue->issue edges from work_item_dependencies...")
-
-        query = """
-        SELECT
-            source_work_item_id,
-            target_work_item_id,
-            relationship_type,
-            relationship_type_raw,
-            relationship_semantics_version,
-            last_synced
-        FROM work_item_dependencies
-        """
-        org_id_clause = self._org_id_clause()
-        if org_id_clause:
-            query += f" WHERE 1=1 {org_id_clause}"
-
-        rows = self.sink.query_dicts(query, {})
-        logger.info("Found %d rows in work_item_dependencies", len(rows))
-
-        if not rows:
-            logger.info("No work_item_dependencies found")
-            if self.config.org_id:
-                self._require_projection_writer()
-                self._delete_dependency_edge_candidates(rows)
-                self._publish_blocker_projection(rows, [])
-            return 0
-
-        edges = []
-        for row in rows:
-            source_id, target_id, edge_type = _canonical_dependency(row)
-            rel_type = row.get("relationship_type")
-            rel_type_raw = row.get("relationship_type_raw")
-            last_synced = row.get("last_synced")
-
-            if not source_id or not target_id:
-                continue
-            if self._parse_pr_dependency_source(
-                source_id
-            ) or self._parse_pr_dependency_source(target_id):
-                continue
-
-            edge_id = generate_edge_id(
-                NodeType.ISSUE,
-                source_id,
-                edge_type,
-                NodeType.ISSUE,
-                target_id,
-            )
-
-            # Ensure timezone
-            event_ts = last_synced
-            if isinstance(event_ts, str):
-                try:
-                    event_ts = datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
-                except ValueError:
-                    event_ts = self._now
-
-            if event_ts and event_ts.tzinfo is None:
-                event_ts = event_ts.replace(tzinfo=timezone.utc)
-            if not event_ts:
-                event_ts = self._now
-
-            edge = WorkGraphEdge(
-                edge_id=edge_id,
-                source_type=NodeType.ISSUE,
-                source_id=source_id,
-                target_type=NodeType.ISSUE,
-                target_id=target_id,
-                edge_type=edge_type,
-                provenance=Provenance.NATIVE,
-                confidence=1.0,
-                evidence=rel_type_raw or rel_type or "dependency",
-                discovered_at=self._now,
-                last_synced=self._now,
-                event_ts=event_ts,
-            )
-            edges.append(edge)
-
-        deduped_edges = list({edge.edge_id: edge for edge in edges}.values())
-        if self.config.org_id:
-            self._require_projection_writer()
-        self._delete_dependency_edge_candidates(rows)
-        count = self._write_edges(deduped_edges)
-        self._publish_blocker_projection(rows, deduped_edges)
-        logger.info("Created %d issue->issue edges", count)
-        return count
-
-    def _delete_dependency_edge_candidates(self, rows: list[dict]) -> None:
-        """Remove every historical orientation before deterministic rewrite."""
-        blocker_rows = [
-            row
-            for row in rows
-            if str(row.get("relationship_type") or "").lower() in _BLOCKER_TYPES
-        ]
-        if not self.config.org_id:
-            if blocker_rows:
-                raise RuntimeError("dependency-edge cleanup requires an org scope")
-            return
-        command = getattr(getattr(self.sink, "client", None), "command", None)
-        if not callable(command):
-            raise RuntimeError("dependency-edge cleanup is unavailable for this sink")
-        command(
-            "ALTER TABLE work_graph_projection_runs DELETE WHERE "
-            "org_id = {org_id:String} "
-            "AND projection_name = 'issue_blockers' "
-            "AND rule_version = {rule_version:String} "
-            "SETTINGS mutations_sync=2",
-            parameters={
-                "org_id": self.config.org_id,
-                "rule_version": BLOCKER_PROJECTION_RULE_VERSION,
-            },
-        )
-        candidate_ids: set[str] = set()
-        after = ""
-        while True:
-            existing = self.sink.query_dicts(
-                """
-                SELECT edge_id
-                FROM work_graph_edges FINAL
-                WHERE org_id = {org_id:String}
-                  AND source_type = 'issue'
-                  AND target_type = 'issue'
-                  AND edge_type IN ('blocks', 'is_blocked_by')
-                  AND provenance = 'native'
-                  AND edge_id > {after:String}
-                ORDER BY edge_id
-                LIMIT 1000
-                """,
-                {"org_id": self.config.org_id, "after": after},
-            )
-            page_ids = sorted(
-                str(row.get("edge_id") or "") for row in existing if row.get("edge_id")
-            )
-            if not page_ids:
-                break
-            candidate_ids.update(page_ids)
-            after = page_ids[-1]
-            if len(page_ids) < 1_000:
-                break
-        for row in blocker_rows:
-            source = str(row.get("source_work_item_id") or "")
-            target = str(row.get("target_work_item_id") or "")
-            relationship = str(row.get("relationship_type") or "").lower()
-            if relationship not in _BLOCKER_TYPES or not source or not target:
-                continue
-            for left, right in ((source, target), (target, source)):
-                for edge_type in (
-                    EdgeType.BLOCKS,
-                    EdgeType.IS_BLOCKED_BY,
-                    EdgeType.RELATES,
-                ):
-                    candidate_ids.add(
-                        generate_edge_id(
-                            NodeType.ISSUE,
-                            left,
-                            edge_type,
-                            NodeType.ISSUE,
-                            right,
-                        )
-                    )
-        ordered = sorted(candidate_ids)
-        for offset in range(0, len(ordered), 1_000):
-            command(
-                "ALTER TABLE work_graph_edges DELETE WHERE "
-                "org_id = {org_id:String} AND edge_id IN {edge_ids:Array(String)} "
-                "SETTINGS mutations_sync=2",
-                parameters={
-                    "org_id": self.config.org_id,
-                    "edge_ids": ordered[offset : offset + 1_000],
-                },
-            )
-        logger.info("Removed %d candidate legacy blocker edge ids", len(ordered))
-
-    def _require_projection_writer(
-        self,
-    ) -> Callable[[list[WorkGraphProjectionRunRecord]], None]:
-        writer = getattr(self.sink, "write_work_graph_projection_runs", None)
-        if not callable(writer):
-            raise RuntimeError("work graph projection watermark sink is unavailable")
-        return writer
-
-    def _publish_blocker_projection(
-        self, rows: list[dict], edges: list[WorkGraphEdge]
-    ) -> None:
-        if not self.config.org_id:
-            return
-        writer = self._require_projection_writer()
-        blocker_edges = [edge for edge in edges if edge.edge_type is EdgeType.BLOCKS]
-        watermarks = [
-            edge.event_ts
-            for edge in blocker_edges
-            if isinstance(edge.event_ts, datetime)
-        ]
-        writer(
-            [
-                WorkGraphProjectionRunRecord(
-                    org_id=self.config.org_id,
-                    projection_name="issue_blockers",
-                    scope_repo_id=self.config.repo_id,
-                    rule_version=BLOCKER_PROJECTION_RULE_VERSION,
-                    input_watermark=max(watermarks, default=self._now),
-                    row_count=len(blocker_edges),
-                    completed_at=self._now,
-                )
-            ]
-        )
-        logger.info(
-            "Published blocker projection completion: rows=%d inputs=%d",
-            len(blocker_edges),
-            len(rows),
-        )
-
     def _build_issue_pr_edges(self) -> tuple[set[tuple[str, int]], int]:
         """
         Build issue->PR edges from PR title and body text parsing.
@@ -785,8 +491,9 @@ class WorkGraphBuilder:
 
         # Providers not covered by PR text parsing (notably Linear): their
         # issue<->PR links arrive as native attachments and become edges via
-        # the work_item_dependencies pass (_build_issue_issue_edges), not here.
-        # Counted so this log does not imply they were silently dropped.
+        # the work_item_dependencies pass -- the native Go pre-step
+        # (internal/jobs/workgraph/edges), not here. Counted so this log does
+        # not imply they were silently dropped.
         non_text_path_counts: dict[str, int] = {}
 
         for wi_row in wi_rows:
@@ -1584,118 +1291,19 @@ class WorkGraphBuilder:
             return 0
 
 
-def main() -> int:
-    """CLI entry point for work graph builder."""
-    parser = argparse.ArgumentParser(
-        description="Build work graph from raw data",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Full rebuild
-  python -m work_graph.builder --db clickhouse://localhost:8123/default
-
-  # Rebuild for date range
-  python -m work_graph.builder --from 2025-01-01 --to 2025-01-31 --db ...
-
-  # Rebuild for specific repo
-  python -m work_graph.builder --repo <uuid> --db ...
-        """,
-    )
-
-    parser.add_argument(
-        "--db",
-        required=True,
-        help="ClickHouse connection string",
-    )
-    parser.add_argument(
-        "--from",
-        dest="from_date",
-        type=str,
-        help="Start date (YYYY-MM-DD)",
-    )
-    parser.add_argument(
-        "--to",
-        dest="to_date",
-        type=str,
-        help="End date (YYYY-MM-DD)",
-    )
-    parser.add_argument(
-        "--repo",
-        dest="repo_id",
-        type=str,
-        help="Repository UUID to filter by",
-    )
-    parser.add_argument(
-        "--org-id",
-        dest="org_id",
-        type=str,
-        default="",
-        help="Organization ID to filter by",
-    )
-    parser.add_argument(
-        "--heuristic-window",
-        type=int,
-        default=7,
-        help="Days window for heuristic matching (default: 7)",
-    )
-    parser.add_argument(
-        "--heuristic-confidence",
-        type=float,
-        default=0.3,
-        help="Confidence score for heuristic matches (default: 0.3)",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging",
-    )
-
-    args = parser.parse_args()
-
-    # Setup logging
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-
-    # Parse dates
-    from_date = None
-    to_date = None
-    if args.from_date:
-        from_date = datetime.fromisoformat(args.from_date).replace(tzinfo=timezone.utc)
-    if args.to_date:
-        to_date = datetime.fromisoformat(args.to_date).replace(tzinfo=timezone.utc)
-
-    # Parse repo UUID
-    repo_uuid = None
-    if args.repo_id:
-        repo_uuid = uuid.UUID(args.repo_id)
-
-    config = BuildConfig(
-        dsn=args.db,
-        from_date=from_date,
-        to_date=to_date,
-        repo_id=repo_uuid,
-        heuristic_days_window=args.heuristic_window,
-        heuristic_confidence=args.heuristic_confidence,
-        org_id=args.org_id,
-    )
-
-    builder = WorkGraphBuilder(config)
-    try:
-        stats = builder.build()
-        total = sum(stats.values())
-        logger.info("Work graph build complete. Total edges: %d", total)
-        for key, value in stats.items():
-            logger.info("  %s: %s", key, value)
-        return 0
-    except Exception as e:
-        logger.exception("Work graph build failed: %s", e)
-        return 1
-    finally:
-        builder.close()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+# CHAOS-5303 r1 P2: this module used to end with its own standalone
+# `main()`/`argparse` CLI (`python -m work_graph.builder ...`), a SECOND,
+# undocumented legacy entry point distinct from the tracked, documented one
+# (`work_graph/runner.py`'s `run_work_graph_build`, wired to `dev-hops
+# work-graph build` -- see docs/operate/runbooks/operator-commands.md and
+# docs/go-migration-matrix.md, both of which already list it as legacy and
+# scheduled for retirement, CHAOS-4441). This one was reachable ONLY via a
+# direct `python -m` invocation, appeared in no `dev-hops` dispatch table and
+# no operator runbook, and (found by codex review, not by design) received no
+# Go pre-step coverage at all -- an org that ran the work graph exclusively
+# through this path got zero issue<->issue edges post-CHAOS-4924 with no
+# error, since `builder.build()`'s own stats dict silently reports 0 for a
+# retired stage. Deleted outright rather than ported: it duplicated
+# `runner.py`'s CLI with a strictly smaller flag set (no `--org` blank-scope
+# guard) and no live caller could be found for it beyond its own README
+# examples (README.md updated in the same commit).

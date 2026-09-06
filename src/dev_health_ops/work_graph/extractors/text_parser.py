@@ -203,9 +203,11 @@ def extract_squash_pr_refs(text: str) -> list[int]:
     therefore performs *no* corroboration of its own -- it merely surfaces the
     candidate number. Callers MUST confirm the number against the set of known
     PR numbers in the same ``(org, repo)`` and persist the link with distinct,
-    lower-confidence evidence (see
-    :meth:`WorkGraphBuilder._derive_pr_commit_links`). On squash-merge orgs this
-    recovers the bulk of PR->commit edges that the strict
+    lower-confidence evidence (see the Go port's corroboration logic,
+    ``internal/jobs/workgraph/prcommit.Derive`` -- CHAOS-5264 retired this
+    function's only Python caller, ``WorkGraphBuilder._derive_pr_commit_links``,
+    but this extractor and its parity tests stay live). On squash-merge orgs
+    this recovers the bulk of PR->commit edges that the strict
     :func:`extract_pr_refs` necessarily discards (CHAOS-2435).
 
     Only the trailing parenthetical on the *subject line* (first line) is

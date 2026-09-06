@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -36,9 +35,18 @@ func timePtr(t time.Time) *time.Time { return &t }
 func strPtr(s string) *string        { return &s }
 func u32Ptr(v uint32) *uint32        { return &v }
 
-// fixturePullRequests MUST stay byte-identical to
-// testdata/python_ai_impact_oracle.py's PULL_REQUESTS. Any edit to one side
-// without the other stops the oracle proving anything.
+// CHAOS-5234/CHAOS-3092: this comment used to say fixturePullRequests "MUST
+// stay byte-identical to testdata/python_ai_impact_oracle.py's PULL_REQUESTS"
+// -- that oracle (and the LIVE bit-exact comparison test that used it,
+// TestAIImpactMatchesLivePythonProduction) is deleted; compute_ai_impact_
+// metrics_daily itself is deleted from the codebase (chris's standing rule,
+// CHAOS-5233: once a family's Go executor is on main, its Python compute is
+// deleted). This fixture is still relied on to stay byte-identical to the
+// frozen golden's own inputs, though -- tests/fixtures/ai_impact_python_
+// golden.json is a snapshot of the oracle's LAST live run against this exact
+// fixture, taken before deletion; TestAIImpactMatchesFrozenPythonGolden below
+// replays this same fixture through Compute and compares against that
+// frozen snapshot, no live Python involved.
 func fixturePullRequests() []PullRequestRow {
 	base := func(number int64, createdUS int64, mergedUS *int64, repo uuid.UUID) PullRequestRow {
 		row := PullRequestRow{
@@ -161,6 +169,38 @@ func fixtureParams() Params {
 	}
 }
 
+// CHAOS-5234/CHAOS-3092: runPythonOracle and TestAIImpactMatchesLivePythonProduction
+// (the LIVE bit-exact Go-vs-live-Python oracle comparison, CHAOS-4280) are
+// DELETED, along with testdata/python_ai_impact_oracle.py and
+// compute_ai_impact_metrics_daily itself (src/dev_health_ops/metrics/
+// ai_impact.py) -- chris's standing rule (CHAOS-5233): once a family's Go
+// executor is on main, its Python compute is deleted, never kept alive
+// just to give a rot guard something to compare against.
+//
+// pythonRecord/asPythonRecord/recordKey are NOT deleted -- they are reused
+// below by TestAIImpactMatchesFrozenPythonGolden, which replays the SAME
+// fixture the oracle used against a FROZEN snapshot of the oracle's last
+// live output (tests/fixtures/ai_impact_python_golden.json, captured before
+// the Python function was deleted) instead of shelling out to Python. This
+// is the same shape as issueprlinks' CHAOS-5249 retirement
+// (TestDeriveMatchesFrozenPythonGoldenExhaustively): "Python still agrees
+// with itself" stops being the protection that matters once Python is no
+// longer in the loop -- the frozen snapshot is the contract now.
+//
+// The individual float/string-rule pinning tests below
+// (TestCycleHoursUsesPythonsDivisionOrder, TestMeanUsesCompensatedSummation,
+// TestSigmaFormCannotChangeABucket, etc.) are UNTOUCHED -- they were
+// deliberately written to stay covered even when the live oracle was
+// skipped (see each one's own comment), so they remain a second,
+// independent safety net alongside the frozen golden.
+//
+// internal/jobs/metrics/aiimpact/repoteams_test.go's SEPARATE
+// TestRepoPatternResolverMatchesLivePython (testdata/python_repo_teams_
+// oracle.py) is NOT touched by this deletion -- ci/check_go.sh's own
+// comment states it is "not optional -- it is the sole source of
+// ai_impact's team dimension", a distinct concern from compute_ai_impact_
+// metrics_daily's row-level metrics this PR deletes.
+
 type pythonRecord struct {
 	OrgID                     string   `json:"org_id"`
 	TeamID                    *string  `json:"team_id"`
@@ -239,65 +279,60 @@ func recordKey(r pythonRecord) string {
 	return fmt.Sprintf("%s|%s|%s|%s|%s|%s", r.OrgID, team, r.RepoID, r.WorkType, r.Day, r.AttributionBucket)
 }
 
-func runPythonOracle(t *testing.T, markerName string) []pythonRecord {
+type frozenAIImpactGoldenDocument struct {
+	Schema string         `json:"schema"`
+	Rows   []pythonRecord `json:"rows"`
+}
+
+// loadFrozenAIImpactGolden reads tests/fixtures/ai_impact_python_golden.json
+// -- a snapshot of testdata/python_ai_impact_oracle.py's LAST live run
+// against this file's exact fixture, captured before compute_ai_impact_
+// metrics_daily was deleted (CHAOS-5234/CHAOS-3092). No live Python
+// involved: this is a plain file read.
+func loadFrozenAIImpactGolden(t *testing.T) []pythonRecord {
 	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		t.Fatal("PYTHON is required for the live ai_impact Python oracle")
-	}
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, filepath.Join("testdata", "python_ai_impact_oracle.py"))
-	command.Dir = filepath.Join(root, "internal", "jobs", "metrics", "aiimpact")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("execute production Python oracle: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	path := filepath.Join(root, "tests", "fixtures", "ai_impact_python_golden.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read frozen golden: %v", err)
 	}
-	output := bytes.TrimSpace(stdout.Bytes())
-	if lastLine := bytes.LastIndexByte(output, '\n'); lastLine >= 0 {
-		output = output[lastLine+1:]
+	var doc frozenAIImpactGoldenDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode frozen golden: %v", err)
 	}
-	var decoded []pythonRecord
-	if err := json.Unmarshal(output, &decoded); err != nil {
-		t.Fatalf("decode production Python oracle output: %v", err)
+	if doc.Schema != "ai_impact_python_golden.v1" {
+		t.Fatalf("unexpected golden schema %q -- regenerate or update the decoder", doc.Schema)
 	}
-	if len(decoded) == 0 {
-		t.Fatal("live Python produced zero rows; the fixture or the oracle is broken")
+	if len(doc.Rows) == 0 {
+		t.Fatal("frozen golden has zero rows; regenerate it")
 	}
-	if writeErr := os.WriteFile(filepath.Join(proofDirectory, markerName), []byte("executed"), 0o644); writeErr != nil {
-		t.Fatalf("write live-python-oracle proof: %v", writeErr)
-	}
-	return decoded
+	return doc.Rows
 }
 
-// TestAIImpactMatchesLivePythonProduction compares every persisted column
-// against compute_ai_impact_metrics_daily, BIT-EXACTLY. Floats are compared as
+// TestAIImpactMatchesFrozenPythonGolden compares every persisted column
+// against a FROZEN snapshot of compute_ai_impact_metrics_daily's own
+// output, BIT-EXACTLY -- the same comparison shape the retired live oracle
+// test used, just sourced from a static file instead of shelling out to
+// Python (which no longer exists to shell out to). Floats are compared as
 // their JSON round-trip (Go and Python both emit shortest-round-trip
 // representations for float64), so a one-ULP divergence -- which is exactly
 // what a naive sum or the wrong division order produces -- fails the test
 // rather than hiding inside a tolerance.
-func TestAIImpactMatchesLivePythonProduction(t *testing.T) {
-	want := runPythonOracle(t, "ai-impact-golden")
+func TestAIImpactMatchesFrozenPythonGolden(t *testing.T) {
+	want := loadFrozenAIImpactGolden(t)
 	got := Compute(fixtureParams())
 
 	if len(got) != len(want) {
-		t.Fatalf("row count: go=%d python=%d", len(got), len(want))
+		t.Fatalf("row count: go=%d frozen golden=%d", len(got), len(want))
 	}
 	wantByKey := make(map[string]pythonRecord, len(want))
 	for _, row := range want {
 		if _, clash := wantByKey[recordKey(row)]; clash {
-			t.Fatalf("python emitted two rows with the same ORDER BY key %q -- they would collide in "+
+			t.Fatalf("frozen golden has two rows with the same ORDER BY key %q -- they would collide in "+
 				"ClickHouse, so the fixture cannot distinguish them", recordKey(row))
 		}
 		wantByKey[recordKey(row)] = row
@@ -307,17 +342,17 @@ func TestAIImpactMatchesLivePythonProduction(t *testing.T) {
 		key := recordKey(converted)
 		expected, found := wantByKey[key]
 		if !found {
-			t.Fatalf("go produced a row python did not: %s", key)
+			t.Fatalf("go produced a row the frozen golden did not: %s", key)
 		}
 		wantJSON, _ := json.Marshal(expected)
 		gotJSON, _ := json.Marshal(converted)
 		if !bytes.Equal(wantJSON, gotJSON) {
-			t.Errorf("row %s mismatch:\npython=%s\ngo=    %s", key, wantJSON, gotJSON)
+			t.Errorf("row %s mismatch:\nfrozen=%s\ngo=    %s", key, wantJSON, gotJSON)
 		}
 		delete(wantByKey, key)
 	}
 	for key := range wantByKey {
-		t.Errorf("python produced a row go did not: %s", key)
+		t.Errorf("frozen golden has a row go did not produce: %s", key)
 	}
 }
 

@@ -220,18 +220,21 @@ stopping one process and does not require a global queue owner.
 
 ## Verify worker health
 
-Check that workers answer through Celery:
+**Celery is retired (CHAOS-4026); the commands below are historical.** For the live Go fleet, inspect River
+jobs directly:
+
+```bash
+dev-health-workerctl jobs list --state available --state retryable --state running --state scheduled
+dev-health-workerctl jobs inspect <id>
+```
+
+See [Operator commands § Blocked/failed partition inspection and repair](../runbooks/operator-commands.md#b-blockedfailed-partition-inspection-and-repair)
+for the full read-only inspection surface (jobs, metrics executions, workgraph requests).
+
+Historical, non-prod only (the `tests/acceptance/compose.ask-dev.yml` Celery fleet):
 
 ```bash
 celery -A dev_health_ops.workers.celery_app inspect ping
-```
-
-Inspect active, reserved, and scheduled work before a rollout:
-
-```bash
-dev-hops workers inspect --state active --output json
-dev-hops workers inspect --state reserved --output json
-dev-hops workers inspect --state scheduled --output json
 ```
 
 Verify all of the following:
@@ -272,8 +275,9 @@ appears in the owning status surface and that freshness or output advances.
    active queue.
 6. Verify queue age, failure rate, retries, and downstream freshness after each
    step.
-7. Keep Celery ownership in place unless a separately reviewed route change has
-   completed its parity, canary, and rollback gates.
+7. Verify the Go worker stack still owns every route it is deployed for; Celery
+   has not run in prod since 2026-08-19 (CHAOS-4026), so there is no fallback
+   route to preserve.
 
 Do not purge queues, delete execution rows, or change a route merely to make a
 deployment appear healthy. Those actions can discard work or create duplicate
@@ -329,7 +333,8 @@ downstream persistence.
 - If a provider queue alone stalls, verify its credential, budget, and
   provider-specific consumer before changing global concurrency.
 - If a route or deployment group disagrees with the checked-in contract, stop
-  the incompatible process and restore the reviewed Celery configuration.
+  the incompatible process and restore the reviewed Go worker deployment
+  configuration (Celery is retired and is not a rollback target).
 
 If a job looks stuck but reports no error, read
 [Job recovery lifecycle](job-recovery-lifecycle.md) first: recovery after a

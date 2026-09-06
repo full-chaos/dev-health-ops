@@ -79,14 +79,21 @@ var compoundingRiskTeamSchema = append(append([]string{}, compoundingRiskSchema.
 // internal/teamresolve.ResolveOwnershipThenPatterns, the same shared entry
 // point team_cognitive_load and team_complexity use.
 //
-// This test does not assert WHICH of the two teams wins the shared repo --
-// that is caller-order-dependent under the current teamownership.OwnedRepoIDs
-// (a known gap lane-5055 is fixing on #2255, per team-lead's ranking-fix
-// heads-up: OwnedRepoIDs answers membership, not authoritative owner yet).
-// It asserts the INVARIANT that must hold regardless of which team wins:
-// exactly one of the two possible outcomes is observed, never a blend of
-// both (which would mean the repo was double-counted) and never neither
-// (which would mean it was silently dropped).
+// CHAOS-5084 r1 (P3, codex, confirmed): this test used to accept EITHER team
+// winning the shared repo, on the premise that the winner was
+// caller-order-dependent under the old teamownership.OwnedRepoIDs (a gap
+// #2255 was fixing at the time this test was first written). That gap is
+// closed: ResolveOwnershipThenPatterns resolves via
+// teamownership.AuthoritativeOwnerByRepo, whose ORDER BY (is_primary DESC,
+// specificity DESC, updated_at DESC, team_id ASC) is fully deterministic --
+// with both ownership rows here tied on is_primary/specificity/updated_at,
+// team_id ASC makes "team-a" < "team-b" the ONLY possible winner. Accepting
+// both outcomes let a real regression in that tie-break (e.g. an accidental
+// team_id DESC, or a dropped ORDER BY entirely) pass silently as long as
+// SOME single team won. Asserts the ONE deterministic outcome now, not just
+// the double-count/drop invariant (still checked via the exhaustive
+// unmatched-value error message below, so a genuine double-count or drop
+// still fails loudly and distinguishably from a tie-break regression).
 func TestCompoundingRiskTeamComputeFinalizeFamilyAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -228,10 +235,23 @@ ORDER BY scope_id
 	caseSharedWentToB := *gotA == churnA && *gotB == sharedToB
 	if !caseSharedWentToA && !caseSharedWentToB {
 		t.Fatalf(
-			"team-a rework_churn=%v team-b rework_churn=%v matches NEITHER valid outcome "+
+			"team-a rework_churn=%v team-b rework_churn=%v matches NEITHER valid shape "+
 				"(shared->A: a=%v b=%v; shared->B: a=%v b=%v) -- the shared repo was either "+
 				"double-counted (appears in both means) or dropped (appears in neither)",
 			*gotA, *gotB, sharedToA, churnB, churnA, sharedToB,
+		)
+	}
+	// The deterministic tie-break (team_id ASC, see the doc comment above)
+	// means shared->A is the ONLY correct outcome here -- shared->B matching
+	// the "neither double-counted nor dropped" shape above is not enough; it
+	// would mean the tie-break itself regressed (team-b winning instead of
+	// team-a), which the check above cannot distinguish from success.
+	if caseSharedWentToB {
+		t.Fatalf(
+			"shared repo resolved to team-b (a=%v b=%v), want team-a (a=%v b=%v) -- "+
+				"AuthoritativeOwnerByRepo's team_id ASC tie-break must deterministically "+
+				"prefer team-a over team-b when every other rank field ties",
+			*gotA, *gotB, sharedToA, churnB,
 		)
 	}
 }

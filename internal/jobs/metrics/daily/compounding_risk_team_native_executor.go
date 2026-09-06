@@ -139,38 +139,29 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	// teamownership.AuthoritativeOwnerByRepo query (correctly ranked by
 	// is_primary/specificity/updated_at/team_id), not a per-team loop, so
 	// there is nothing left here to build a teamIDs slice from.
-	repoToTeam := teamresolve.ResolveOwnershipThenPatterns(
+	//
+	// CHAOS-5084 r1 (P1, codex, confirmed via repro): ResolveOwnershipThenPatterns
+	// now PROPAGATES an ownership-query failure instead of degrading to an
+	// empty map -- an earlier round's log-only mitigation stopped short of
+	// this (see that function's own doc comment for why, and why the reason
+	// no longer applies). Propagated here exactly like every other error in
+	// this executor: NO FAIL-OPEN, the finalize retries.
+	repoToTeam, err := teamresolve.ResolveOwnershipThenPatterns(
 		ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver,
 	)
-	// Python: `if not repo_to_team_map: return 0`.
-	//
-	// TELEMETRY (codex round chaos-5084-2275-r1, P2): ResolveOwnershipThenPatterns
-	// degrades to pattern-only resolution on an ownership-query failure
-	// (logging it itself, see that function's own doc comment) rather than
-	// propagating, so an empty repoToTeam here is genuinely ambiguous: it
-	// could mean "no repo in this org resolves to any team today" (a
-	// legitimate, retry-pointless zero), or it could mean "the ownership
-	// query failed AND the pattern-only fallback also resolved nothing" (a
-	// transient ClickHouse problem CHAOS-4290's finalize-scope NO-FAIL-OPEN
-	// policy says should have propagated and retried, not silently
-	// succeeded with zero rows). Distinguishing the two would need
-	// ResolveOwnershipThenPatterns to report its own failure, a teamresolve
-	// API change out of scope for this PR (#2298 owns that package and is
-	// under separate review). This log line is the same
-	// operator-visible-signal-only tradeoff computePostBridgeNativeFamilies'
-	// own doc comment already documents and CHAOS-5183 ticketed for the
-	// analogous post_bridge case -- not a full fix, but Python's own prior
-	// path "at least logged the resolver/zero-row condition"
-	// (job_daily.py:650, job_daily.py:2331), and this restores that
-	// visibility on the Go side.
+	if err != nil {
+		return 0, err
+	}
+	// Python: `if not repo_to_team_map: return 0`. Unambiguous now that a
+	// resolution failure above already returned early: an empty repoToTeam
+	// here can only mean "no repo in this org resolves to any team today", a
+	// legitimate, retry-pointless zero -- never a swallowed backend failure.
 	if len(repoToTeam) == 0 {
 		slog.Default().Warn("compounding_risk_team finalize resolved zero repo-to-team mappings",
 			"run_id", run.ID, "organization_id", run.OrganizationID,
 			"target_day", day.Format("2006-01-02"),
 			"org_repo_count", len(orgRepoMetrics), "teams_in_org", len(teams),
-			"cause", "either no repo resolves to any team today, or the "+
-				"ownership query failed -- ResolveOwnershipThenPatterns cannot "+
-				"distinguish the two (see comment above)",
+			"cause", "no repo in this org resolves to any team today",
 		)
 		return 0, nil
 	}
@@ -226,9 +217,19 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		return 0, nil
 	}
 
+	// CHAOS-5084 r1 (P2, codex, confirmed via repro): WriteRecords reports the
+	// true row count on an AMBIGUOUS Send failure (clickhouse.go's own
+	// comment: the insert may have committed server-side even though the ack
+	// was lost), specifically so a caller can tell "nothing written" apart
+	// from "possibly written, ack lost". Returning 0 here on any error
+	// discarded that distinction, turning every write error into the SAME
+	// zero-row signal PartitionCompletionCounts-style telemetry uses for
+	// "refused" -- losing the ambiguous/partial-write case's own visibility.
+	// Propagate rowsWritten as WriteRecords reported it; the error itself
+	// still makes this a failed, retried finalize either way (NO FAIL-OPEN).
 	rowsWritten, err := executor.writer.WriteRecords(ctx, records, run.OrganizationID)
 	if err != nil {
-		return 0, err
+		return rowsWritten, err
 	}
 	return rowsWritten, nil
 }

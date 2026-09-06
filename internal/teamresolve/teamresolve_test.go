@@ -1,8 +1,13 @@
 package teamresolve
 
 import (
+	"context"
+	stddriver "database/sql/driver"
+	"errors"
 	"testing"
+	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 )
 
@@ -80,5 +85,78 @@ func TestResolveFromOwnershipMapNilResolverDoesNotPanic(t *testing.T) {
 	got := ResolveFromOwnershipMap(map[string]string{}, []uuid.UUID{repo}, repoNamesByID, nil)
 	if len(got) != 0 {
 		t.Errorf("nil resolver + empty ownership map: got %d resolved repos, want 0", len(got))
+	}
+}
+
+// erroringOwnershipConn is a chdriver.Conn whose ONLY reachable method is
+// Query, always failing -- everything else panics if reached. Mirrors
+// internal/jobs/metrics/daily's own erroringOwnershipConn
+// (team_cognitive_load_test.go), which proves the identical propagation
+// contract for resolveDailyFinalizeRepoToTeam;
+// ResolveOwnershipThenPatterns's only conn use is the single
+// teamownership.AuthoritativeOwnerByRepo call (a conn.Query), so this is a
+// faithful, minimal fake for testing that path's error propagation here too.
+type erroringOwnershipConn struct{}
+
+func (erroringOwnershipConn) Contributors() []string { panic("stub: Contributors") }
+func (erroringOwnershipConn) ServerVersion() (*chdriver.ServerVersion, error) {
+	panic("stub: ServerVersion")
+}
+func (erroringOwnershipConn) Select(context.Context, any, string, ...any) error {
+	panic("stub: Select")
+}
+func (erroringOwnershipConn) Query(context.Context, string, ...any) (chdriver.Rows, error) {
+	return nil, errOwnershipQueryFailed
+}
+func (erroringOwnershipConn) QueryRow(context.Context, string, ...any) chdriver.Row {
+	panic("stub: QueryRow")
+}
+func (erroringOwnershipConn) PrepareBatch(
+	context.Context, string, ...chdriver.PrepareBatchOption,
+) (chdriver.Batch, error) {
+	panic("stub: PrepareBatch")
+}
+func (erroringOwnershipConn) Exec(context.Context, string, ...any) error { panic("stub: Exec") }
+func (erroringOwnershipConn) AsyncInsert(context.Context, string, bool, ...any) error {
+	panic("stub: AsyncInsert")
+}
+func (erroringOwnershipConn) Ping(context.Context) error { panic("stub: Ping") }
+func (erroringOwnershipConn) Stats() chdriver.Stats      { panic("stub: Stats") }
+func (erroringOwnershipConn) Close() error               { panic("stub: Close") }
+func (erroringOwnershipConn) CheckNamedValue(*stddriver.NamedValue) error {
+	panic("stub: CheckNamedValue")
+}
+
+var errOwnershipQueryFailed = errors.New("clickhouse: connection reset by peer")
+
+// TestResolveOwnershipThenPatternsPropagatesOwnershipQueryError is the
+// failing-first proof for CHAOS-5084 r1 finding P1 (codex, confirmed via
+// repro): a transient ClickHouse error while loading ownership must FAIL
+// this resolution, never silently degrade to an empty map. The prior
+// revision swallowed this error (logged it, then returned an empty map with
+// a nil error), which let CompoundingRiskTeamExecutor.ComputeFinalizeFamily
+// return (0, nil) -- a SUCCESS with zero rows -- for what was actually an
+// infrastructure failure, and the finalize handler then marked
+// compounding_risk_team Computed for that run, silently losing the family.
+// Same bug class, same fix shape, as CHAOS-5141's
+// TestResolveDailyFinalizeRepoToTeamPropagatesOwnershipQueryError.
+func TestResolveOwnershipThenPatternsPropagatesOwnershipQueryError(t *testing.T) {
+	repo := uuid.New()
+	repoNamesByID := map[string]string{repo.String(): "acme/repo"}
+
+	got, err := ResolveOwnershipThenPatterns(
+		context.Background(), erroringOwnershipConn{}, "acme", time.Now().UTC(),
+		[]uuid.UUID{repo}, repoNamesByID, nil,
+	)
+	if err == nil {
+		t.Fatal("err=nil, want the ownership query failure to propagate -- " +
+			"a resolution failure must never silently become an empty map")
+	}
+	if !errors.Is(err, errOwnershipQueryFailed) {
+		t.Fatalf("err=%v, want it to wrap errOwnershipQueryFailed", err)
+	}
+	if got != nil {
+		t.Fatalf("got=%v, want nil map on a propagated failure -- a caller reading this map "+
+			"instead of checking err first must not see a plausible-looking empty result", got)
 	}
 }

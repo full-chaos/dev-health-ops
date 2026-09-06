@@ -29,7 +29,6 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 )
 from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
-    compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
 )
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
@@ -755,7 +754,6 @@ async def run_daily_metrics_job(
         wi_metrics: list[Any] = []
         wi_user_metrics: list[Any] = []
         wi_cycle_times: list[Any] = []
-        estimate_coverage_metrics: list[Any] = []
         wi_state_durations: list[Any] = []
         if work_items:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
@@ -784,15 +782,23 @@ async def run_daily_metrics_job(
             # (internal/providersync/testdata/oracle_pairs/
             # _github_work_item_derived_helpers.py) that exercise the
             # function directly; only THIS call site is gone.
-            estimate_coverage_metrics = compute_estimate_coverage_metrics_daily(
-                day=d,
-                work_items=work_items,
-                computed_at=computed_at,
-                team_resolver=team_resolver,
-                project_key_resolver=project_key_resolver,
-                linked_issue_resolver=linked_issue_resolver,
-                attribution_context=team_attribution_context,
-            )
+            #
+            # CHAOS-5323/CHAOS-3092: work_item_estimate's daily compute+write
+            # is ALSO deleted here -- the native Go executor
+            # (WorkItemEstimateExecutor, CHAOS-4283) is the only writer of
+            # estimate_coverage_metrics_daily for a daily partition now.
+            # Unlike work_item_attribution above, compute_estimate_coverage_
+            # metrics_daily itself is ALSO deleted from the codebase
+            # (compute_work_items.py): job_work_items.py's run_work_items_
+            # sync_job call site (the same function cited above for
+            # work_item_attribution) is deleted too -- team-lead's ruling:
+            # unlike compute_work_item_team_attributions's genuinely live
+            # backfill-job caller, run_work_items_sync_job is itself a legacy
+            # Python path (no Go job kind dispatches it; Go providersync is
+            # the native work-items writer), so it did not justify keeping
+            # this one function alive. Its dedicated unit tests, fixture
+            # golden generator, and live-Python oracle comparator are also
+            # deleted in this same PR.
             # CHAOS-2377: the state-duration rollup powers /metrics Flow Sankey +
             # Flame and the Operating Review state-duration panel. The compute
             # already exists (and is used by the fixtures runner + job_work_items)
@@ -972,10 +978,9 @@ async def run_daily_metrics_job(
         # skip_families at all -- its compute+write is deleted entirely, see
         # the comment above the deleted `compute_file_risk_hotspots` call
         # site earlier in this function.
-        # CHAOS-4283: work_item and work_item_estimate have native Go
-        # executors (WorkItemExecutor/WorkItemEstimateExecutor). This is the
-        # repo_user_commit shape, NOT the team_wellbeing shape -- skip ONLY
-        # the writes, never the computes:
+        # CHAOS-4283: work_item has a native Go executor (WorkItemExecutor).
+        # This is the repo_user_commit shape, NOT the team_wellbeing shape --
+        # skip ONLY the write, never the compute:
         #
         #   * `wi_user_metrics` feeds its OWN write a few lines down
         #     (`s.write_work_item_user_metrics`, gated separately by
@@ -984,13 +989,13 @@ async def run_daily_metrics_job(
         #     feed ic_finalize's now-deleted Python compute -- CHAOS-4290
         #     PR3 -- but that was never the reason this compute had to stay
         #     unconditional; this write is.)
-        #   * `estimate_coverage_metrics` feeds nothing else here, so its
-        #     compute COULD be skipped, but is left unconditional to keep this
-        #     diff minimal (work_item_estimate is its own separate deletion
-        #     target under CHAOS-5234/CHAOS-3092, not yet done as of this
-        #     comment -- file_hotspots, which this comment used to cite as
-        #     precedent for "unconditional is fine," has since had its own
-        #     compute+write deleted outright rather than left unconditional).
+        #
+        # work_item_estimate (WorkItemEstimateExecutor, also CHAOS-4283) no
+        # longer has a skip flag here at all -- CHAOS-5323/CHAOS-3092 deleted
+        # its compute+write outright (see that call site's comment above for
+        # the full deletion, including its compute function and both former
+        # Python callers): there is no Python fallback to keep alive for the
+        # daily partition anymore.
         #
         # CHAOS-5216/CHAOS-5234/CHAOS-3092: no skip_work_graph_edges_write
         # here -- work_graph_edges' compute+write (both deleted alongside
@@ -1003,7 +1008,8 @@ async def run_daily_metrics_job(
         # MergeTree, no dedup key) on every single run -- exactly the defect
         # repo_user_commit's own comment above warns about.
         skip_work_item_write = "work_item" in skip_families
-        skip_work_item_estimate_write = "work_item_estimate" in skip_families
+        # CHAOS-5323/CHAOS-3092: no skip_work_item_estimate_write here --
+        # deleted alongside the compute call above, not skip-gated.
         # CHAOS-5234/CHAOS-3092: no skip_ai_governance_write here -- deleted
         # alongside the compute call above, not skip-gated.
         # CHAOS-5234/CHAOS-3092: no skip_ai_impact_write here either -- same
@@ -1018,8 +1024,9 @@ async def run_daily_metrics_job(
             s.write_team_metrics(team_metrics)
             if wi_metrics and not skip_work_item_write:
                 s.write_work_item_metrics(wi_metrics)
-            if estimate_coverage_metrics and not skip_work_item_estimate_write:
-                s.write_estimate_coverage_metrics(estimate_coverage_metrics)
+            # CHAOS-5323/CHAOS-3092: no write_estimate_coverage_metrics call
+            # here -- deleted alongside the compute call above; the native
+            # Go executor is the only writer now.
             if wi_user_metrics and not skip_work_item_write:
                 s.write_work_item_user_metrics(wi_user_metrics)
             if wi_cycle_times and not skip_work_item_write:

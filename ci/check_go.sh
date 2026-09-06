@@ -476,7 +476,7 @@ check_live_python_oracles() {
   # `go test ./...` / `check` verb, same as any other Go test -- it needs no
   # DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker any more.
 
-  printf 'go test -count=1: internal/jobs/metrics/workitemmetrics (work_item + work_item_estimate goldens vs live compute_work_items.py, CHAOS-4283)\n'
+  printf 'go test -count=1: internal/jobs/metrics/workitemmetrics (work_item golden vs live compute_work_items.py, CHAOS-4283)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -492,18 +492,18 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  # Checked SEPARATELY, one marker per FAMILY, for the same reason the
-  # testops-risk / pipeline-stability pair above is: a single shared marker
-  # would be satisfied by whichever family's guard ran, letting the other be
-  # skipped, renamed, or filtered out of the -run pattern unnoticed.
-  for marker in work-item-golden work-item-estimate-golden; do
-    proof_file="${proof_dir}/${marker}"
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: work_item golden rot guard did not compare against live Python (%s)\n' "${marker}" >&2
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done
+  # This guard used to ALSO cover work_item_estimate (a second marker,
+  # checked separately -- see this file's own history), until
+  # CHAOS-5323/CHAOS-3092 deleted compute_estimate_coverage_metrics_daily
+  # entirely (fully native, no remaining Python caller): its frozen cases
+  # were extracted into their own file with no generator, so there is no
+  # more live Python for that family to check.
+  proof_file="${proof_dir}/work-item-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: work_item golden rot guard did not compare against live Python\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
 
   printf 'go test -count=1: internal/jobs/metrics/numerical (frozen numerical golden vs live Python)\n'
   if ! (

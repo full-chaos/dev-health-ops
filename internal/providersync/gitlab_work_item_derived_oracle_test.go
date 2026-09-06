@@ -395,14 +395,11 @@ func TestGitLabWorkItemCycleTimesMatchLivePythonProduction(t *testing.T) {
 
 func TestGitLabDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 	cases := gitlabOracleCases(githubDerivedOracleCases())
-	compareRowsAgainstPythonOracle(t, "gitlab/work-items/estimate-coverage", cases, func(t *testing.T, input map[string]any) githubEstimateCoverageColumns {
-		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
-		surfaces, err := buildWorkItemDerivedSurfacesForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return newGitHubEstimateCoverageColumns(surfaces.EstimateCoverage)
-	}, nil)
+	// CHAOS-5323/CHAOS-3092: no "gitlab/work-items/estimate-coverage" oracle
+	// pair here anymore -- compute_estimate_coverage_metrics_daily is
+	// deleted entirely (work_item_estimate is fully native, no remaining
+	// Python caller), and its oracle_pairs script (gitlab_work-
+	// items_estimate-coverage.py) is deleted with it.
 	compareRowsAgainstPythonOracle(t, "gitlab/work-items/team-attributions", cases, func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
 		claim, rows, derived := gitlabWorkItemOracleRows(t, input)
 		surfaces, err := buildWorkItemDerivedSurfacesForProvider("gitlab", claim, rows, gitlabWorkItemOracleDay(t, input), gitlabWorkItemOracleComputedAt(t, input), derived)

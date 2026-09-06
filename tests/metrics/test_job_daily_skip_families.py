@@ -64,7 +64,11 @@ compute+write call sites -- see
 test_file_hotspots_compute_and_write_are_deleted_from_job_daily and
 test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily below,
 the runtime counterparts of the structural guard in
-tests/metrics/test_job_daily_skip_families_structural_guard.py.
+tests/metrics/test_job_daily_skip_families_structural_guard.py. CHAOS-5233
+(work_item_attribution) and CHAOS-5323 (work_item_estimate) apply the same
+rule to two more families -- see
+test_work_item_attribution_compute_and_write_are_deleted_from_job_daily and
+test_work_item_estimate_compute_and_write_are_deleted_from_job_daily below.
 """
 
 from __future__ import annotations
@@ -177,11 +181,10 @@ class _FakeLoader:
 
 
 class _FakeLoaderWithWorkItem(_FakeLoader):
-    """Like _FakeLoader, but returns ONE real work item so
-    compute_work_item_metrics_daily/compute_estimate_coverage_metrics_daily
-    produce non-empty output for the "siblings unaffected" assertion below
-    (base _FakeLoader.load_work_items returns ([], []), which never even
-    reaches the `if work_items:` block)."""
+    """Like _FakeLoader, but returns ONE real work item so compute_work_item_
+    metrics_daily produces non-empty output for the "siblings unaffected"
+    assertion below (base _FakeLoader.load_work_items returns ([], []), which
+    never even reaches the `if work_items:` block)."""
 
     async def load_work_items(self, *a: Any, **k: Any) -> tuple[list, list]:
         item = WorkItem(
@@ -964,12 +967,67 @@ async def test_work_item_attribution_compute_and_write_are_deleted_from_job_dail
             skip_families=skip_families,
         )
         assert "write_work_item_team_attributions" not in sink.write_calls
-        # work_item/work_item_estimate must be entirely unaffected by the
+        # work_item must be entirely unaffected by the deletion -- it shares
+        # the same `if work_items:` block and the same attribution_context,
+        # but neither reads work_item_attribution's output. (work_item_estimate
+        # used to be asserted here too, but CHAOS-5323 deleted its own
+        # compute+write from this same block -- see the dedicated test
+        # below.)
+        assert "write_work_item_metrics" in sink.write_calls
+        assert "write_estimate_coverage_metrics" not in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_work_item_estimate_compute_and_write_are_deleted_from_job_daily(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-5323/CHAOS-3092 close condition 3.
+
+    Same rule as CHAOS-5233's work_item_attribution (see the test above):
+    work_item_estimate gets NO skip_families handling at all -- its daily
+    compute+write call is gone from run_daily_metrics_job entirely, in
+    every mode.
+
+    Unlike work_item_attribution, compute_estimate_coverage_metrics_daily
+    itself is ALSO deleted from the codebase (compute_work_items.py):
+    job_work_items.py's run_work_items_sync_job call site is deleted too.
+    Team-lead's ruling: unlike compute_work_item_team_attributions's
+    genuinely live backfill-job caller, run_work_items_sync_job is itself a
+    legacy Python path (no Go job kind dispatches it; Go providersync is
+    the native work-items writer), so it did not justify keeping this one
+    function alive. Its own dedicated unit tests, fixture golden generator,
+    and live-Python oracle comparator are also deleted.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
+
+    assert not hasattr(job_daily, "compute_estimate_coverage_metrics_daily"), (
+        "compute_estimate_coverage_metrics_daily must not be imported into "
+        "job_daily.py's module namespace at all"
+    )
+    from dev_health_ops.metrics import compute_work_items
+
+    assert not hasattr(compute_work_items, "compute_estimate_coverage_metrics_daily"), (
+        "compute_estimate_coverage_metrics_daily must not exist in "
+        "compute_work_items.py at all anymore"
+    )
+
+    for skip_families in (None, {"work_item_estimate"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_families=skip_families,
+        )
+        assert "write_estimate_coverage_metrics" not in sink.write_calls
+        # work_item/work_item_attribution must be entirely unaffected by the
         # deletion -- they share the same `if work_items:` block and the
-        # same attribution_context, but neither reads work_item_attribution's
+        # same attribution_context, but neither reads work_item_estimate's
         # output.
         assert "write_work_item_metrics" in sink.write_calls
-        assert "write_estimate_coverage_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio

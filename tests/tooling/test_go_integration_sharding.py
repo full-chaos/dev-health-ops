@@ -65,6 +65,13 @@ EXPECTED_PACKAGES = {
     "internal/jobs/metrics/daily",
     "internal/jobs/metrics/daily/icfinalize",
     "internal/jobs/metrics/remaining",
+    # CHAOS-5318: the native GitHub App installation/marketplace_purchase
+    # webhook handler's Postgres-backed proofs (the atomic ON CONFLICT DO
+    # NOTHING upsert's 8-goroutine convergence, credential deactivation on
+    # "deleted"). CHAOS-5319 added a second integration file to this SAME
+    # package (the org/source resolution + scheduled_sync_occurrences/
+    # sync_manual_triggers native dispatch path) -- no further count change.
+    "internal/jobs/operational",
     "internal/jobs/pagerduty",
     "internal/jobs/report",
     "internal/jobs/system",
@@ -388,10 +395,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # added no NEW package -- its one -tags=integration file,
     # review_edges_integration_test.go, lives in the already-discovered
     # internal/jobs/metrics/daily package. Merged total: 47.
-    # CURRENT TOTAL: 47 -- the one number to bump when a new
+    # CHAOS-5318 added internal/jobs/operational's first //go:build
+    # integration file: 47 -> 48. CHAOS-5319 added a second integration file
+    # to the SAME already-discovered package -- no further count change.
+    # CURRENT TOTAL: 48 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "47 package(s) discovered, 0 denylisted, 47 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 47 package(s)" in result.stdout
+    assert "48 package(s) discovered, 0 denylisted, 48 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 48 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -437,8 +447,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4290 and CHAOS-4924 landed independently, each written as 45 -> 46
     # on its own branch: internal/jobs/metrics/daily/icfinalize and
     # internal/jobs/workgraph/operationaledges. Merged total: 47.
-    # CURRENT TOTAL: 47 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 47
+    # CHAOS-5318 added internal/jobs/operational: 47 -> 48. FLATTENED
+    # includes the providersync shard-1 package, same as every other count
+    # in this comment block. CHAOS-5319 added a second integration file to
+    # the SAME already-discovered package -- no further count change.
+    # CURRENT TOTAL: 48 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 48
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1678,14 +1692,6 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5045 (GitHub TestOps duplicate report ingestion): +5 top-level
     # (1319 -> 1324), integration-tagged UNCHANGED at 152.
     #
-    # 2026-09-06, CHAOS-5323/CHAOS-3092 (work_item_estimate Python compute
-    # deletion, merged into this branch from delete-work-item-estimate-
-    # python-compute): -1 top-level (1324 -> 1323),
-    # TestGitHubEstimateCoverageMatchesLivePythonProduction deleted along
-    # with compute_estimate_coverage_metrics_daily and its oracle_pairs
-    # scripts (fully native, no remaining Python caller). Integration-tagged
-    # UNCHANGED at 152.
-    #
     # 2026-09-06, CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6, work_item/work_item_
     # attribution/work_item_state Python compute deletion): -1 top-level
     # (1323 -> 1322), TestGitHubWorkItemTeamAttributionsMatchLivePython
@@ -1722,6 +1728,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # SinceAt filters nothing) and TestGitLabTestsReportPhaseBoundsBothEndsOnUpdatedAt,
     # which asserts GitLab bounds its own report phase server-side so the two
     # providers cannot drift apart silently.
+    # CHAOS-5323/CHAOS-3092 (work_item_estimate full deletion, 2026-09-06):
+    # -1 top-level (1324 -> 1323), integration-tagged UNCHANGED at 152.
+    # TestGitHubEstimateCoverageMatchesLivePythonProduction (the only
+    # standalone top-level test for this family) is deleted along with
+    # compute_estimate_coverage_metrics_daily and its oracle_pairs script;
+    # gitlab/jira/linear each drop only their inline
+    # "<provider>/work-items/estimate-coverage" compareRowsAgainstPythonOracle
+    # call from an existing multi-case test, not a whole top-level test, so
+    # they contribute no further count change.
     assert len(expected_provider_tests) == 1322
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
@@ -1811,9 +1826,13 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # on its own branch: internal/jobs/metrics/daily/icfinalize and
     # internal/jobs/workgraph/operationaledges (47 discovered - 1 for the
     # providersync shard-1 package = 46). Merged total: 46.
-    # CURRENT TOTAL: 46 (== discovered-total-minus-one -- keep this in
+    # CHAOS-5318 added internal/jobs/operational: 46 -> 47 (48 discovered - 1
+    # for the providersync shard-1 package). CHAOS-5319 added a second
+    # integration file to the SAME already-discovered package -- no further
+    # count change.
+    # CURRENT TOTAL: 47 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 46
+    assert len(selected_packages) == len(set(selected_packages)) == 47
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

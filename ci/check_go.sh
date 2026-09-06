@@ -973,7 +973,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$' \
+        -run '^(TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$' \
         ./internal/jobs/workgraph/edges
   ); then
     rm -rf -- "${proof_dir}"
@@ -999,16 +999,15 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  # Its own marker, for the reason spelled out at capacity-forecast-golden: the
-  # edge golden has a different producer from every guard above it, so sharing a
-  # proof file would let this one be renamed or filtered out of the -run pattern
-  # while another guard's success stood in for it.
-  proof_file="${proof_dir}/workgraph-issue-edges-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: workgraph issue-edge golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # internal/jobs/workgraph/edges' live-Python rot guard
+  # (TestWorkgraphIssueEdgesGoldenMatchesLivePython, CHAOS-4766) was retired
+  # here: its producer, _build_issue_issue_edges, was DELETED, not merely
+  # un-called -- the Go native pre-step is the sole producer now. The frozen
+  # golden (tests/fixtures/workgraph_issue_edges_python_golden.json) stays;
+  # Go's own exhaustive frozen-golden comparison in golden_full_test.go is the
+  # regression guard going forward. Proving "Python still agrees with itself"
+  # stops being the protection that matters once Python is no longer in the
+  # loop.
   # Its own marker again, per the capacity-forecast reasoning: this guard derives
   # a Unicode property table from the live interpreter, a different producer from
   # the edge golden above it, and it is the only thing standing between a Python

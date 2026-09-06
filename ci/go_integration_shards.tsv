@@ -162,8 +162,19 @@ internal/jobs/report	33
 internal/jobs/system	12
 internal/jobs/workgraph	7
 internal/jobs/workgraph/edges	20
+# internal/jobs/workgraph/issuecommitedges, issuepredges, prcommit (CHAOS-5358):
+# each gained its first integration-tagged test this PR (repo_id_uuid_bind_
+# integration_test.go), a single Go test function per package, same
+# container-plus-migrations shape as internal/jobs/workgraph/edges above --
+# weighted from the actual measured package time on bigboy (arm64), rounded
+# up: issuecommitedges 25.916s -> 26, issuepredges 26.03s -> 27 (its test
+# calls three Loader methods against one shared container), prcommit 25.19s
+# -> 26 (two Loader methods). Re-time if any of these files gain more tests.
+internal/jobs/workgraph/issuecommitedges	26
+internal/jobs/workgraph/issuepredges	27
 internal/jobs/workgraph/issueprlinks	20
 internal/jobs/workgraph/operationaledges	65
+internal/jobs/workgraph/prcommit	26
 internal/llmorgsettings	15
 internal/providerfoundation	12
 internal/providersync	1166

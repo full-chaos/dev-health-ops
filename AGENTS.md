@@ -81,7 +81,7 @@ dev-hops migrate postgres && dev-hops migrate clickhouse          # required on 
 CLICKHOUSE_URI=… dev-hops sync git --provider local --repo-path PATH
 CLICKHOUSE_URI=… dev-hops sync work-items --provider <jira|github|gitlab|all> -s "org/*"
 CLICKHOUSE_URI=… dev-hops fixtures generate --sink "$CLICKHOUSE_URI" --days 30
-CLICKHOUSE_URI=… dev-hops metrics daily
+dev-hops metrics daily --org <org-id>          # CHAOS-5055: dispatches via dev-health-workerctl, needs --org + that binary on PATH
 ```
 
 **Interim (CHAOS-2475):** bare CLI runs inline and skips credential preflight. Prefer triggering the equivalent job (sync-config/backfill endpoints, `triggerReport` mutation) so workers supply tokens/LLM/Stripe keys. **Celery is retired (CHAOS-4026, 2026-08-21):** `dev-hops workers start-worker`/`start-scheduler` no longer exist; see [`docs/operate/run/workers-and-jobs.md`](docs/operate/run/workers-and-jobs.md) for running the Go worker/scheduler processes.

@@ -82,7 +82,6 @@ _MISSING_CASES = [
     ),
     (("audit", "perf"), ("ClickHouse",)),
     (("audit", "schema"), ("ClickHouse",)),
-    (("recommendations", "compute", "--team", "t1"), ("ClickHouse",)),
     (("investment", "materialize"), ("ClickHouse",)),
     (
         (
@@ -254,18 +253,13 @@ def test_sync_rejects_unsupported_analytics_scheme_cleanly() -> None:
 @pytest.mark.parametrize(
     "args",
     [
-        (
-            "recommendations",
-            "compute",
-            "--team",
-            "t1",
-            "--analytics-db",
-            "sqlite:///x.db",
-        ),
         ("investment", "materialize", "--db", "sqlite:///x.db"),
         # CHAOS-5055: `metrics capacity` no longer takes its own --db / reads
         # a ClickHouse DSN directly -- it dispatches to dev-health-workerctl
         # (org/team-scoped), so this case no longer applies here.
+        # CHAOS-5307: `recommendations compute` deleted entirely (the whole
+        # `dev-hops recommendations` group had exactly this one verb) -- no
+        # replacement case needed here.
     ],
 )
 def test_clickhouse_commands_reject_unsupported_analytics_scheme_cleanly(
@@ -277,20 +271,6 @@ def test_clickhouse_commands_reject_unsupported_analytics_scheme_cleanly(
     assert "Traceback" not in result.stderr
     assert "Unknown or unsupported sink scheme 'sqlite'" in result.stderr
     assert "Only ClickHouse is supported" in result.stderr
-
-
-def test_recommendations_compute_accepts_clickhouse_scheme_preflight() -> None:
-    result = _run_cli(
-        "recommendations",
-        "compute",
-        "--team",
-        "t1",
-        "--analytics-db",
-        "clickhouse://ch:ch@localhost:9/default",
-    )
-
-    assert "missing required input" not in result.stderr
-    assert "Unknown or unsupported sink scheme" not in result.stderr
 
 
 def test_admin_license_create_is_not_a_postgres_preflight_false_positive() -> None:

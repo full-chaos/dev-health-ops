@@ -22,14 +22,18 @@ Three families, one per fixed Go site (CHAOS-4818 RISK-NOTES table):
   - percentile_float: dev_health_ops.metrics.compute._percentile (was
     byte-identical across compute.py / compute_cicd.py /
     compute_deployments.py / compute_incidents.py / compute_work_items.py;
-    compute_cicd.py and compute_incidents.py's own copies are gone now that
-    those two families' Python compute was deleted outright, CHAOS-5234/
-    CHAOS-3092 -- this generator only ever imported the canonical copy from
-    compute.py, so nothing here changes) vs the five duplicated Go
+    compute_cicd.py, compute_deployments.py, and compute_incidents.py's own
+    copies are all gone now that those three families' Python compute was
+    deleted outright, CHAOS-5234/CHAOS-3092/CHAOS-5309 -- this generator only
+    ever imported the canonical copy from compute.py, so nothing here
+    changes) vs the five duplicated Go
     percentile functions (deployPercentile, cicd.percentile,
     incidentPercentile, repouser.percentile, testops.percentile) -- all
     five Go copies stay; only the Python compute.py canonical copy is
-    exercised on this side either way.
+    exercised on this side either way. deployPercentile and cicd/incident's
+    own Go percentile functions simply have no live Python counterpart to
+    cross-check bit-for-bit anymore, only their frozen goldens
+    (TestComputeDeployMetricsGoldenParity and siblings in this package).
   - percentile_int: dev_health_ops.metrics.compute_capacity._percentile vs
     internal/jobs/metrics/numerical.IntegerPercentiles. Int-truncating, so the
     assertion is exact int equality (a truncation boundary can still flip on

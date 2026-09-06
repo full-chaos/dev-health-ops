@@ -1,0 +1,128 @@
+{
+  "count_returned": 2,
+  "edges": [
+    {
+      "confidence": 0.3,
+      "day": "2026-07-15",
+      "discovered_at": "2026-08-02T12:00:00+00:00",
+      "edge_id": "95967ed24deeb452e47ce47cf6b6bc662803c044aff0c99e411ca15af2c8c3e5",
+      "edge_type": "relates",
+      "event_ts": "2026-07-15T14:00:00+00:00",
+      "evidence": "time_window_7d",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "provenance": "heuristic",
+      "provider": null,
+      "repo_id": "00000000-0000-4000-8000-0000000000b1",
+      "source_id": "00000000-0000-4000-8000-0000000000b1#pr11",
+      "source_type": "pr",
+      "target_id": "jira:HEUR-1",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 0.3,
+      "day": "2026-08-01",
+      "discovered_at": "2026-08-02T12:00:00+00:00",
+      "edge_id": "d4a86ea3cc5f1c63b267a3f90d58e67dc16fdf910ead5093c6ccde4341f87d6f",
+      "edge_type": "relates",
+      "event_ts": "2026-08-01T06:00:00+00:00",
+      "evidence": "time_window_7d",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "provenance": "heuristic",
+      "provider": null,
+      "repo_id": "00000000-0000-4000-8000-0000000000b4",
+      "source_id": "00000000-0000-4000-8000-0000000000b4#pr70",
+      "source_type": "pr",
+      "target_id": "jira:HEUR-4",
+      "target_type": "issue"
+    }
+  ],
+  "explicit_links": [
+    [
+      "jira:HEUR-2",
+      999
+    ]
+  ],
+  "frozen_now": "2026-08-02T12:00:00+00:00",
+  "heuristic_confidence": 0.3,
+  "heuristic_days_window": 7,
+  "links_written": [
+    {
+      "confidence": 0.3,
+      "evidence": "time_window_7d",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "pr_number": 11,
+      "provenance": "heuristic",
+      "repo_id": "00000000-0000-4000-8000-0000000000b1",
+      "work_item_id": "jira:HEUR-1"
+    },
+    {
+      "confidence": 0.3,
+      "evidence": "time_window_7d",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "pr_number": 70,
+      "provenance": "heuristic",
+      "repo_id": "00000000-0000-4000-8000-0000000000b4",
+      "work_item_id": "jira:HEUR-4"
+    }
+  ],
+  "org_id": "org-heuristic-golden",
+  "pull_requests": [
+    {
+      "created_at": "2026-06-15T12:00:00+00:00",
+      "number": 10,
+      "repo_id": "00000000-0000-4000-8000-0000000000b1"
+    },
+    {
+      "created_at": "2026-07-15T14:00:00+00:00",
+      "number": 11,
+      "repo_id": "00000000-0000-4000-8000-0000000000b1"
+    },
+    {
+      "created_at": "2026-07-16T12:00:00+00:00",
+      "number": 12,
+      "repo_id": "00000000-0000-4000-8000-0000000000b1"
+    },
+    {
+      "created_at": "2026-07-20T10:00:00+00:00",
+      "number": 50,
+      "repo_id": "00000000-0000-4000-8000-0000000000b2"
+    },
+    {
+      "created_at": "2026-07-02T08:00:00+00:00",
+      "number": 60,
+      "repo_id": "00000000-0000-4000-8000-0000000000b3"
+    },
+    {
+      "created_at": "2026-08-01T06:00:00+00:00",
+      "number": 70,
+      "repo_id": "00000000-0000-4000-8000-0000000000b4"
+    }
+  ],
+  "work_items": [
+    {
+      "repo_id": "00000000-0000-4000-8000-0000000000b1",
+      "updated_at": "2026-07-15T12:00:00+00:00",
+      "work_item_id": "jira:HEUR-1"
+    },
+    {
+      "repo_id": "00000000-0000-4000-8000-0000000000b2",
+      "updated_at": "2026-07-20T09:00:00+00:00",
+      "work_item_id": "jira:HEUR-2"
+    },
+    {
+      "repo_id": "00000000-0000-4000-8000-0000000000b3",
+      "updated_at": "2026-07-10T08:00:00+00:00",
+      "work_item_id": "jira:HEUR-3"
+    },
+    {
+      "repo_id": "00000000-0000-4000-8000-0000000000b4",
+      "updated_at": "2026-07-25T06:00:00+00:00",
+      "work_item_id": "jira:HEUR-4"
+    },
+    {
+      "repo_id": "00000000-0000-4000-8000-0000000000b5",
+      "updated_at": "2026-07-15T12:00:00+00:00",
+      "work_item_id": "jira:HEUR-5"
+    }
+  ]
+}

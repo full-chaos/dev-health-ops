@@ -25,18 +25,20 @@ entirely missing in an earlier revision (the native executor and this
 unconditional write both fired for every partition); these tests pin the
 fixed contract the same way the team_wellbeing tests above pin theirs.
 
-CHAOS-4293 (deploy) has the SAME shape as repo_user_commit: `deploy_metrics`
-is still computed when "deploy" is in skip_families, because it also feeds
-`_note_family_zero_rows("deploy", deploy_metrics, day=d)` (the
-CHAOS-4246/CHAOS-4263 staleness-with-source-data check), which has no other
-source for it -- only `s.write_deploy_metrics(deploy_metrics)` is skipped.
-Codex round 1 on the Go port (CHAOS-4293) caught this gate missing entirely,
-the identical class of finding CHAOS-4275's own gate closed: without it, the
-native DeployExecutor and this unconditional write both fire for every
-partition, doubling every (org_id, repo_id, day) deploy_metrics_daily row's
-generation. `test_deploy_in_skip_families_writes_nothing_but_still_computes`
-is the red-on-baseline proof: it fails against the tree before this guard
-existed (write_deploy_metrics fires unconditionally) and passes after.
+CHAOS-4293 (deploy) used to have the SAME shape as repo_user_commit:
+`deploy_metrics` was still computed when "deploy" was in skip_families,
+because it also fed `_note_family_zero_rows("deploy", deploy_metrics,
+day=d)` (the CHAOS-4246/CHAOS-4263 staleness-with-source-data check), which
+had no other source for it -- only `s.write_deploy_metrics(deploy_metrics)`
+was skipped. Codex round 1 on the Go port (CHAOS-4293) caught this gate
+missing entirely, the identical class of finding CHAOS-4275's own gate
+closed: without it, the native DeployExecutor and this unconditional write
+both fired for every partition, doubling every (org_id, repo_id, day)
+deploy_metrics_daily row's generation. CHAOS-5234/CHAOS-3092 (CHAOS-5309)
+later superseded this write-only gate with outright deletion of the
+compute+write+zero-rows-note -- see
+test_deploy_compute_and_write_are_deleted_from_job_daily below (replaces
+the two write-only-skip tests this paragraph used to describe).
 
 CHAOS-4292 (cicd) HAD a gate shaped like team_wellbeing's (compute skipped
 entirely -- cicd_metrics has no downstream in-process consumer in this
@@ -70,7 +72,11 @@ compute+write call sites -- see
 test_file_hotspots_compute_and_write_are_deleted_from_job_daily and
 test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily below,
 the runtime counterparts of the structural guard in
-tests/metrics/test_job_daily_skip_families_structural_guard.py.
+tests/metrics/test_job_daily_skip_families_structural_guard.py. CHAOS-5233
+(work_item_attribution) and CHAOS-5309 (deploy) apply the same rule to two
+more families -- see
+test_work_item_attribution_compute_and_write_are_deleted_from_job_daily and
+test_deploy_compute_and_write_are_deleted_from_job_daily below.
 """
 
 from __future__ import annotations
@@ -359,16 +365,14 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
         skip_families={"file_hotspots"},
     )
 
+    # CHAOS-5234/CHAOS-3092/CHAOS-5309: cicd's AND deploy's compute+write are
+    # both deleted outright now (see test_cicd_compute_and_write_are_deleted_
+    # from_job_daily and test_deploy_compute_and_write_are_deleted_from_
+    # job_daily below), so neither can serve as the "real, non-empty row"
+    # unrelated-family control the way the codex round-4 (CHAOS-4292)
+    # finding originally wanted -- the repo_metrics assertion above is the
+    # surviving "unrelated write still happens at all" control.
     assert "repo_metrics" in sink.write_calls
-    # CHAOS-5234/CHAOS-3092: cicd's compute+write is deleted outright now
-    # (see test_cicd_compute_and_write_are_deleted_from_job_daily below), so
-    # it can no longer serve as the "real, non-empty row" unrelated-family
-    # control the way the codex round-4 (CHAOS-4292) finding originally
-    # wanted -- write_deploy_metrics takes its place. It is a weaker check
-    # (deploy fires unconditionally regardless of row content in this
-    # fixture, which has no deploy data source), but "unrelated write still
-    # happens at all" is the property this test is actually pinning.
-    assert "write_deploy_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -424,85 +428,58 @@ async def test_repo_user_commit_skip_does_not_affect_other_families(
         skip_families={"repo_user_commit"},
     )
 
-    assert "write_deploy_metrics" in sink.write_calls
+    # CHAOS-5234/CHAOS-3092/CHAOS-5309: this used "write_deploy_metrics" as
+    # its unrelated-family control; deploy's own write is now deleted
+    # outright too, so review_edges (still live, no skip-family gate at all)
+    # takes its place.
+    assert "write_review_edges" in sink.write_calls
 
 
 @pytest.mark.asyncio
-async def test_deploy_in_skip_families_writes_nothing_but_still_computes(
+async def test_deploy_compute_and_write_are_deleted_from_job_daily(
     monkeypatch: Any,
 ) -> None:
-    """CHAOS-4293 red-on-baseline proof. Before the skip_deploy_write guard
-    existed, write_deploy_metrics fired unconditionally regardless of
-    skip_families, which this test would have caught (it asserts the write
-    is ABSENT). compute_deploy_metrics_daily must still run --
-    deploy_metrics feeds _note_family_zero_rows a few lines later, which has
-    no other source for it."""
-    compute_calls: list[Any] = []
-    original = job_daily.compute_deploy_metrics_daily
+    """CHAOS-5234/CHAOS-3092 close condition 3 (CHAOS-5309).
 
-    def _spy(*args: Any, **kwargs: Any) -> Any:
-        compute_calls.append((args, kwargs))
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(job_daily, "compute_deploy_metrics_daily", _spy)
-
+    deploy used to have the write-only-skip shape pinned by
+    test_deploy_in_skip_families_writes_nothing_but_still_computes /
+    test_deploy_skip_does_not_affect_other_families (both replaced by this
+    test): deploy_metrics fed `_note_family_zero_rows("deploy", ...)`, the
+    CHAOS-4246/CHAOS-4263 staleness check, so only the write could be
+    skipped. DeployExecutor being native (CHAOS-4293) superseded that --
+    same rule as CHAOS-5233's work_item_attribution, but unlike that case,
+    compute_deploy_metrics_daily itself is ALSO deleted (from
+    compute_deployments.py): rg confirmed job_daily.py was its only real
+    caller. The sibling constant DEPLOYMENT_FAILURE_STATUSES in the same
+    module is NOT touched -- it has a real, separate caller
+    (compute_dora.py, still Python) plus its own dedicated test coverage in
+    test_job_dora.py.
+    """
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
 
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_families={"deploy"},
+    assert not hasattr(job_daily, "compute_deploy_metrics_daily"), (
+        "compute_deploy_metrics_daily must not be imported into "
+        "job_daily.py's module namespace at all"
     )
 
-    assert len(compute_calls) == 1
-    assert "write_deploy_metrics" not in sink.write_calls
-
-
-@pytest.mark.asyncio
-async def test_deploy_skip_does_not_affect_other_families(
-    monkeypatch: Any,
-) -> None:
-    """Naming deploy in skip_families must not perturb repo_metrics or any
-    other family's write path."""
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_families={"deploy"},
-    )
-
-    assert "repo_metrics" in sink.write_calls
-
-
-@pytest.mark.asyncio
-async def test_deploy_not_skipped_writes_unconditionally(monkeypatch: Any) -> None:
-    """Baseline sanity: with deploy NOT in skip_families, write_deploy_metrics
-    still fires every partition regardless of row content -- mirrors
-    write_repo_metrics' own unconditional-call shape (production sinks
-    no-op internally on an empty list; this call site does not gate on
-    truthiness)."""
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_families=set(),
-    )
-
-    assert "write_deploy_metrics" in sink.write_calls
+    for skip_families in (None, {"deploy"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_families=skip_families,
+        )
+        assert "write_deploy_metrics" not in sink.write_calls
+        # Unrelated families/writes are unaffected by the deletion.
+        # NOTE: this test originally (main/#2318) also asserted "team_metrics"
+        # in sink.write_calls here -- team_wellbeing's own write is ALSO
+        # deleted outright by this same merge (CHAOS-5311/CHAOS-3092), so
+        # that assertion is dropped rather than merged in false.
+        assert "repo_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -573,7 +550,6 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
         # repo_metrics/deploy (unrelated families, same partition) must be
         # entirely unaffected by the deletion.
         assert "repo_metrics" in sink.write_calls
-        assert "write_deploy_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -785,7 +761,6 @@ async def test_compounding_risk_skip_does_not_perturb_other_families(
     )
 
     assert "repo_metrics" in sink.write_calls
-    assert "write_deploy_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -872,7 +847,6 @@ async def test_review_edges_skip_does_not_perturb_other_families(
     )
 
     assert "repo_metrics" in sink.write_calls
-    assert "write_deploy_metrics" in sink.write_calls
 
 
 # CHAOS-5194 (astra F3, #2277): the two benchmarking skip_families tests that
@@ -969,11 +943,11 @@ async def test_ai_governance_compute_and_write_are_deleted_from_job_daily(
         )
         assert "write_ai_policy_events" not in sink.write_calls
         assert "write_ai_governance_coverage_daily" not in sink.write_calls
-        # deploy (unrelated family, same partition) must be entirely
-        # unaffected by the deletion. (Was cicd -- CHAOS-5234/CHAOS-3092
-        # deleted cicd's own compute+write in this same PR, so it can no
-        # longer serve as this control.)
-        assert "write_deploy_metrics" in sink.write_calls
+        # review_edges (unrelated family, same partition) must be entirely
+        # unaffected by the deletion. (Was cicd, then deploy -- both had
+        # their own compute+write deleted in this same PR/sibling PR, so
+        # neither can serve as this control any more.)
+        assert "write_review_edges" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -1014,11 +988,11 @@ async def test_ai_impact_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_ai_impact_metrics" not in sink.write_calls
-        # deploy (unrelated family, same partition) must be entirely
-        # unaffected by the deletion. (Was cicd -- CHAOS-5234/CHAOS-3092
-        # deleted cicd's own compute+write in this same PR, so it can no
-        # longer serve as this control.)
-        assert "write_deploy_metrics" in sink.write_calls
+        # review_edges (unrelated family, same partition) must be entirely
+        # unaffected by the deletion. (Was cicd, then deploy -- both had
+        # their own compute+write deleted in this same PR/sibling PR, so
+        # neither can serve as this control any more.)
+        assert "write_review_edges" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -1094,7 +1068,6 @@ async def test_incident_compute_and_write_are_deleted_from_job_daily(
         # repo_metrics/deploy (unrelated families, same partition) must be
         # entirely unaffected by the deletion.
         assert "repo_metrics" in sink.write_calls
-        assert "write_deploy_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -1157,4 +1130,3 @@ async def test_work_graph_edges_compute_and_write_are_deleted_from_job_daily(
         # sibling PR merged into this same tree, so it can no longer serve
         # as this control.)
         assert "repo_metrics" in sink.write_calls
-        assert "write_deploy_metrics" in sink.write_calls

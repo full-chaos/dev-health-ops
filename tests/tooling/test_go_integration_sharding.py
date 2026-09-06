@@ -65,6 +65,13 @@ EXPECTED_PACKAGES = {
     "internal/jobs/metrics/daily",
     "internal/jobs/metrics/daily/icfinalize",
     "internal/jobs/metrics/remaining",
+    # CHAOS-5318: the native GitHub App installation/marketplace_purchase
+    # webhook handler's Postgres-backed proofs (the atomic ON CONFLICT DO
+    # NOTHING upsert's 8-goroutine convergence, credential deactivation on
+    # "deleted"). CHAOS-5319 added a second integration file to this SAME
+    # package (the org/source resolution + scheduled_sync_occurrences/
+    # sync_manual_triggers native dispatch path) -- no further count change.
+    "internal/jobs/operational",
     "internal/jobs/pagerduty",
     "internal/jobs/report",
     "internal/jobs/system",
@@ -388,10 +395,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # added no NEW package -- its one -tags=integration file,
     # review_edges_integration_test.go, lives in the already-discovered
     # internal/jobs/metrics/daily package. Merged total: 47.
-    # CURRENT TOTAL: 47 -- the one number to bump when a new
+    # CHAOS-5318 added internal/jobs/operational's first //go:build
+    # integration file: 47 -> 48. CHAOS-5319 added a second integration file
+    # to the SAME already-discovered package -- no further count change.
+    # CURRENT TOTAL: 48 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "47 package(s) discovered, 0 denylisted, 47 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 47 package(s)" in result.stdout
+    assert "48 package(s) discovered, 0 denylisted, 48 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 48 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -437,8 +447,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4290 and CHAOS-4924 landed independently, each written as 45 -> 46
     # on its own branch: internal/jobs/metrics/daily/icfinalize and
     # internal/jobs/workgraph/operationaledges. Merged total: 47.
-    # CURRENT TOTAL: 47 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 47
+    # CHAOS-5318 added internal/jobs/operational: 47 -> 48. FLATTENED
+    # includes the providersync shard-1 package, same as every other count
+    # in this comment block. CHAOS-5319 added a second integration file to
+    # the SAME already-discovered package -- no further count change.
+    # CURRENT TOTAL: 48 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 48
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1698,7 +1712,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # SinceAt filters nothing) and TestGitLabTestsReportPhaseBoundsBothEndsOnUpdatedAt,
     # which asserts GitLab bounds its own report phase server-side so the two
     # providers cannot drift apart silently.
-    assert len(expected_provider_tests) == 1324
+    # CHAOS-5316 (Jira relates_to relationship-type normalisation, 2026-09-06):
+    # +2 top-level (1324 -> 1326), integration-tagged UNCHANGED at 152.
+    # TestJiraRelationshipCanonicalizesRelatesTo and
+    # TestNormalizeJiraDependenciesRelatesTo pin the raw-"relates"-to-canonical-
+    # "relates_to" vocabulary fix in jira_work_items_rows.go; both parse/build
+    # in-memory rows only, so the integration-tagged count stays 152.
+    assert len(expected_provider_tests) == 1326
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1715,7 +1735,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1324
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1326
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1787,9 +1807,13 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # on its own branch: internal/jobs/metrics/daily/icfinalize and
     # internal/jobs/workgraph/operationaledges (47 discovered - 1 for the
     # providersync shard-1 package = 46). Merged total: 46.
-    # CURRENT TOTAL: 46 (== discovered-total-minus-one -- keep this in
+    # CHAOS-5318 added internal/jobs/operational: 46 -> 47 (48 discovered - 1
+    # for the providersync shard-1 package). CHAOS-5319 added a second
+    # integration file to the SAME already-discovered package -- no further
+    # count change.
+    # CURRENT TOTAL: 47 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 46
+    assert len(selected_packages) == len(set(selected_packages)) == 47
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -1806,7 +1830,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1324
+    assert len(selected_tests) == len(set(selected_tests)) == 1326
     assert set(selected_tests) == expected_tests
 
 

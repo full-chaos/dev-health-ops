@@ -109,7 +109,7 @@ func (step *operationalIncidentEdgesPreStep) Run(ctx context.Context, claim work
 	rows, err := operationaledges.BuildOperationalIncidentEdges(
 		ctx, step.conn, orgID, now,
 		window.heuristicDaysWindow, window.heuristicConfidence,
-		window.fromDate, window.toDate, window.repoID,
+		&window.fromDate, &window.toDate, window.repoID,
 	)
 	if err != nil {
 		return nil, err
@@ -122,18 +122,22 @@ func (step *operationalIncidentEdgesPreStep) Run(ctx context.Context, claim work
 }
 
 // operationalEdgesWindow is BuildOperationalIncidentEdges' scope, parsed from
-// the claim's request scope. Unlike prCommitWindowFor (issue_pr_links/
-// pr_commit_*'s window), Python's from_date/to_date here are NOT defaulted to
-// a rolling 30-day window when absent -- _build_operational_incident_edges
-// passes self.config.from_date/to_date straight through, and BuildConfig
-// itself leaves them nil/None unless a caller (like the CLI) supplies its own
-// default. The bridge path (worker_workgraph.py) supplies no such default
-// either, so nil bounds here are the FAITHFUL translation of "read the whole
-// table" -- not a bug to fix by inventing a 30-day default this family never
-// had.
+// the claim's request scope.
+//
+// CORRECTED (codex round chaos-4924-pr-d-r1, P1, EXECUTED repro): an earlier
+// version of this doc claimed from_date/to_date have no rolling-30-day
+// default for this family, reasoning from _build_operational_incident_edges/
+// BuildConfig in isolation -- those DO pass from_date/to_date straight
+// through with no default of their own. But nothing in production ever calls
+// them with unresolved dates: the dispatch entrypoint, Celery task
+// `run_work_graph_build` (work_graph_tasks.py:121-124), ALWAYS resolves
+// to_date to now (if absent) and from_date to `to_date - 30 days` (if
+// absent) BEFORE constructing BuildConfig. So the same rolling-30-day
+// default as prCommitWindowFor/issueprlinks.Window applies here too --
+// nil bounds would have been reading the whole table when Python never does.
 type operationalEdgesWindow struct {
-	fromDate            *time.Time
-	toDate              *time.Time
+	fromDate            time.Time
+	toDate              time.Time
 	repoID              *uuid.UUID
 	heuristicDaysWindow int
 	heuristicConfidence float64
@@ -159,6 +163,10 @@ func operationalEdgesWindowFor(rawScope []byte, now func() time.Time) (operation
 		}
 	}
 
+	// Same rolling-30-day default as prCommitWindowFor/issueprlinks.Window --
+	// run_work_graph_build resolves both bounds before BuildConfig ever sees
+	// them, so an absent scope value means "default", not "unbounded".
+	window.toDate = now().UTC()
 	if text, present, err := scopeString(scope["to_date"]); err != nil {
 		return operationalEdgesWindow{}, fmt.Errorf("build scope to_date: %w", err)
 	} else if present {
@@ -166,7 +174,13 @@ func operationalEdgesWindowFor(rawScope []byte, now func() time.Time) (operation
 		if parseErr != nil {
 			return operationalEdgesWindow{}, fmt.Errorf("build scope to_date: %w", parseErr)
 		}
-		window.toDate = &parsed
+		window.toDate = parsed
+	}
+	window.fromDate = window.toDate.AddDate(0, 0, -30)
+	if _, rangeErr := withPythonYearRange("derived from_date", window.fromDate); rangeErr != nil {
+		return operationalEdgesWindow{}, fmt.Errorf(
+			"build scope to_date %s: the default 30-day lower bound falls outside the "+
+				"reference's 1..9999 year range, where it raises OverflowError", window.toDate.Format(time.RFC3339))
 	}
 	if text, present, err := scopeString(scope["from_date"]); err != nil {
 		return operationalEdgesWindow{}, fmt.Errorf("build scope from_date: %w", err)
@@ -175,7 +189,7 @@ func operationalEdgesWindowFor(rawScope []byte, now func() time.Time) (operation
 		if parseErr != nil {
 			return operationalEdgesWindow{}, fmt.Errorf("build scope from_date: %w", parseErr)
 		}
-		window.fromDate = &parsed
+		window.fromDate = parsed
 	}
 	if text, present, err := scopeString(scope["repo_id"]); err != nil {
 		return operationalEdgesWindow{}, fmt.Errorf("build scope repo_id: %w", err)

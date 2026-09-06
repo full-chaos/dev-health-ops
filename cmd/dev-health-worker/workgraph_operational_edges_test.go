@@ -43,7 +43,13 @@ func TestOperationalIncidentEdgesPreStepSkipsUnscopedClaims(t *testing.T) {
 }
 
 func TestOperationalEdgesWindowForDefaultsMatchPython(t *testing.T) {
-	window, err := operationalEdgesWindowFor(nil, time.Now)
+	// CORRECTED (codex round chaos-4924-pr-d-r1, P1): run_work_graph_build
+	// (work_graph_tasks.py:121-124) always resolves to_date to now and
+	// from_date to to_date-30d before BuildConfig is ever constructed, so an
+	// absent scope value means "apply the default window", the same as
+	// issue_pr_links/pr_commit_*, not "read the whole table unbounded".
+	fixedNow := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	window, err := operationalEdgesWindowFor(nil, func() time.Time { return fixedNow })
 	if err != nil {
 		t.Fatalf("operationalEdgesWindowFor: %v", err)
 	}
@@ -54,11 +60,13 @@ func TestOperationalEdgesWindowForDefaultsMatchPython(t *testing.T) {
 	if window.heuristicConfidence != 0.3 {
 		t.Errorf("heuristicConfidence = %v, want 0.3", window.heuristicConfidence)
 	}
-	// Unlike issue_pr_links/pr_commit_*, this family has no rolling-30-day
-	// default -- an absent from_date/to_date means unbounded, matching
-	// BuildConfig's own nil default (see operationalEdgesWindow's doc).
-	if window.fromDate != nil || window.toDate != nil {
-		t.Errorf("fromDate/toDate should be nil by default, got %v/%v", window.fromDate, window.toDate)
+	wantTo := fixedNow
+	wantFrom := fixedNow.AddDate(0, 0, -30)
+	if !window.toDate.Equal(wantTo) {
+		t.Errorf("toDate = %v, want %v", window.toDate, wantTo)
+	}
+	if !window.fromDate.Equal(wantFrom) {
+		t.Errorf("fromDate = %v, want %v", window.fromDate, wantFrom)
 	}
 	if window.repoID != nil {
 		t.Errorf("repoID should be nil by default, got %v", window.repoID)

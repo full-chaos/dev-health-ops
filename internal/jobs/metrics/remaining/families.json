@@ -15,7 +15,7 @@
       "rollback_route": "celery",
       "historical_limitation": "Only persisted git_files and git_blame contents can be scanned; missing historical contents are skipped and max_files remains a hard bound.",
       "parity_state": "numerical_oracle",
-      "port": "pending"
+      "port": "go"
     },
     {
       "name": "dora",

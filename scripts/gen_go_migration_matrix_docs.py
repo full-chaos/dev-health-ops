@@ -377,14 +377,17 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-3092 PR-B (Done)",
     },
     "complexity": {
-        # CHAOS-5153: was `metrics_extra.py -> job_complexity_db.py
-        # run_complexity_db_job` -- metrics_extra.py does not exist anywhere
-        # in this repo. The real caller is the HTTP compatibility bridge
-        # (`worker_metrics.py:_run_complexity`, matching this row's own
-        # "river, bridge ... uses compatibility directly" route below).
-        "citation": "Python: `api/internal/worker_metrics.py _run_complexity` -> `job_complexity_db.py:238 run_complexity_db_job`",
-        "route": "river, bridge (`daily.go:582-585`, uses `compatibility` directly)",
-        "ticket": "CHAOS-4291",
+        # CHAOS-4291: cut over from the HTTP compatibility bridge
+        # (`worker_metrics.py:_run_complexity` -> `job_complexity_db.py:238
+        # run_complexity_db_job`) to a native executor -- the last
+        # remaining-metrics kind still on the bridge. The Python job itself
+        # is not deleted yet: it stays the parity oracle (frozen golden,
+        # `internal/jobs/metrics/remaining/testdata/complexity_python_golden.json`)
+        # until PR (b) removes it once every language the fail-closed
+        # ErrLanguageNotPorted guard needs is ported (feat-complexity-langs).
+        "citation": "Go: `internal/jobs/metrics/remaining/complexity_native.go`, `complexity_native_clickhouse.go`",
+        "route": "river, native (`daily.go:486-527`)",
+        "ticket": "CHAOS-4291 (Done)",
     },
     "release_impact": {
         "citation": (

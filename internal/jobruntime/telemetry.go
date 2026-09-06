@@ -1257,6 +1257,17 @@ type MetricsCollector struct {
 	capacitySkippedScopes uint64
 	capacityRefusals      map[string]uint64
 
+	// Native complexity compute (CHAOS-4291). complexityBlameUnusableRepos
+	// matters most: a repo whose only source is git_blame with no usable line
+	// text is a data-quality gap, not a partition failure, so without a
+	// counter it is indistinguishable from a repo that simply had nothing
+	// changed.
+	complexityPartitions         uint64
+	complexityReposScanned       uint64
+	complexityReposWithData      uint64
+	complexityBlameUnusableRepos uint64
+	complexityRefusals           map[string]uint64
+
 	// Native membership-backfill compute (CHAOS-4282, CHAOS-2439/2433).
 	// membershipRuns counts ComputeOrg calls (one per org-wide or repo-scoped
 	// run), not partitions -- a partition and a run are the same thing for
@@ -1280,16 +1291,6 @@ type MetricsCollector struct {
 	// accumulate with no signal anywhere.
 	membershipPruneFailures uint64
 	membershipRefusals      map[string]uint64
-
-	// Compatibility-bridge partitions (CHAOS-4243). Before this, the bridge
-	// could only ever report a status code, so a partition that wrote real
-	// data and a partition that silently wrote nothing were indistinguishable
-	// from the outside -- the same rationale that native dora/capacity
-	// compute already gets its own rows-written/empty counters for above.
-	// Keyed by family; rowsWritten only counts completions that reported a
-	// non-nil count (not every family's evidence carries one).
-	compatibilityRowsWritten       map[string]uint64
-	compatibilityZeroRowPartitions map[string]uint64
 
 	streamLag                 map[StreamLabels]int64
 	streamPending             map[StreamLabels]int64
@@ -2876,6 +2877,51 @@ func (collector *MetricsCollector) ObserveCapacityRefused(reason string) error {
 	return nil
 }
 
+// Complexity refusal reasons (CHAOS-4291). Closed set, bounded label
+// cardinality, same discipline as capacityRefusalReasons.
+const (
+	ComplexityRefusedUnavailable        = "clickhouse_unavailable"
+	ComplexityRefusedSchemaIncompatible = "schema_incompatible"
+)
+
+var complexityRefusalReasons = []string{
+	ComplexityRefusedUnavailable,
+	ComplexityRefusedSchemaIncompatible,
+}
+
+// ObserveComplexityPartition records one completed native complexity
+// partition.
+func (collector *MetricsCollector) ObserveComplexityPartition(
+	reposScanned, reposWithData, blameUnusableRepos int,
+) error {
+	if reposScanned < 0 || reposWithData < 0 || blameUnusableRepos < 0 {
+		return errors.New("complexity partition counts cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.complexityPartitions++
+	collector.complexityReposScanned += uint64(reposScanned)
+	collector.complexityReposWithData += uint64(reposWithData)
+	collector.complexityBlameUnusableRepos += uint64(blameUnusableRepos)
+	return nil
+}
+
+// ObserveComplexityRefused records that the native complexity executor
+// refused to build, by reason -- the positive signal an alert can bind to,
+// since a flat partitions counter cannot be told apart from a quiet day.
+func (collector *MetricsCollector) ObserveComplexityRefused(reason string) error {
+	if !slices.Contains(complexityRefusalReasons, reason) {
+		return fmt.Errorf("unknown complexity refusal reason %q", reason)
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if collector.complexityRefusals == nil {
+		collector.complexityRefusals = map[string]uint64{}
+	}
+	collector.complexityRefusals[reason]++
+	return nil
+}
+
 // Membership backfill refusal reasons (CHAOS-4282, CHAOS-2439/2433). Closed
 // set, bounded label cardinality, same discipline as
 // doraRefusalReasons/capacityRefusalReasons. Two of these have no capacity
@@ -2948,45 +2994,6 @@ func (collector *MetricsCollector) ObserveMembershipPruneFailed() {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.membershipPruneFailures++
-}
-
-// compatibilityBridgeFamilies is the closed set of remaining-metrics families
-// still routed through the Python compatibility bridge (dora and capacity are
-// native and observed separately above; membership_backfill joins them below,
-// CHAOS-4282). Bounded label cardinality, same discipline as
-// doraRefusalReasons/capacityRefusalReasons.
-var compatibilityBridgeFamilies = []string{
-	"complexity", "release_impact", "recommendations",
-}
-
-// ObserveCompatibilityPartition implements remaining.CompatibilityObserver.
-// rowsWritten nil means the family's evidence carries no countable row
-// signal; a non-nil zero is counted both in compatibilityRowsWritten (as 0,
-// keeping the series present) and in compatibilityZeroRowPartitions, so a
-// success that wrote nothing is visible without waiting on a log line.
-func (collector *MetricsCollector) ObserveCompatibilityPartition(family string, rowsWritten *int) error {
-	if !slices.Contains(compatibilityBridgeFamilies, family) {
-		return fmt.Errorf("unknown compatibility bridge family %q", family)
-	}
-	if rowsWritten != nil && *rowsWritten < 0 {
-		return errors.New("compatibility rows written cannot be negative")
-	}
-	collector.mu.Lock()
-	defer collector.mu.Unlock()
-	if collector.compatibilityRowsWritten == nil {
-		collector.compatibilityRowsWritten = map[string]uint64{}
-	}
-	if collector.compatibilityZeroRowPartitions == nil {
-		collector.compatibilityZeroRowPartitions = map[string]uint64{}
-	}
-	if rowsWritten == nil {
-		return nil
-	}
-	collector.compatibilityRowsWritten[family] += uint64(*rowsWritten)
-	if *rowsWritten == 0 {
-		collector.compatibilityZeroRowPartitions[family]++
-	}
-	return nil
 }
 
 func (collector *MetricsCollector) SetExecutionSaturation(queue string, ratio float64) error {
@@ -3825,6 +3832,20 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 			[]metricLabel{{"reason", reason}}, collector.capacityRefusals[reason])
 	}
 
+	writeMetadata(output, "worker_complexity_native_partitions_total", "Partitions computed by the native Go complexity executor.", "counter")
+	writeUintSample(output, "worker_complexity_native_partitions_total", nil, collector.complexityPartitions)
+	writeMetadata(output, "worker_complexity_native_repos_scanned_total", "Repos the native complexity executor considered.", "counter")
+	writeUintSample(output, "worker_complexity_native_repos_scanned_total", nil, collector.complexityReposScanned)
+	writeMetadata(output, "worker_complexity_native_repos_with_data_total", "Repos the native complexity executor found at least one analysable file for.", "counter")
+	writeUintSample(output, "worker_complexity_native_repos_with_data_total", nil, collector.complexityReposWithData)
+	writeMetadata(output, "worker_complexity_native_blame_unusable_repos_total", "Repos where git_blame carried no usable line text for a file git_files could not source.", "counter")
+	writeUintSample(output, "worker_complexity_native_blame_unusable_repos_total", nil, collector.complexityBlameUnusableRepos)
+	writeMetadata(output, "worker_complexity_native_refused_total", "Native complexity executor construction refusals, by reason.", "counter")
+	for _, reason := range complexityRefusalReasons {
+		writeUintSample(output, "worker_complexity_native_refused_total",
+			[]metricLabel{{"reason", reason}}, collector.complexityRefusals[reason])
+	}
+
 	writeMetadata(output, "worker_membership_backfill_native_runs_total", "Membership-backfill runs completed by the native Go executor.", "counter")
 	writeUintSample(output, "worker_membership_backfill_native_runs_total", nil, collector.membershipRuns)
 	writeMetadata(output, "worker_membership_backfill_native_components_total", "Work-graph components the native membership-backfill executor considered.", "counter")
@@ -3855,19 +3876,6 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 			[]metricLabel{{"reason", reason}}, collector.budgetEstimateFailures[reason])
 	}
 
-	// Compatibility-bridge rows written / zero-row completions, by family
-	// (CHAOS-4243). Emitted for every family in the closed set, including
-	// zeros, so the series exists before it ever needs to move.
-	writeMetadata(output, "worker_remaining_bridge_rows_written_total", "Rows the Python compatibility bridge reported writing for one remaining-metrics family, where the family's evidence carries a count.", "counter")
-	for _, family := range compatibilityBridgeFamilies {
-		writeUintSample(output, "worker_remaining_bridge_rows_written_total",
-			[]metricLabel{{"family", family}}, collector.compatibilityRowsWritten[family])
-	}
-	writeMetadata(output, "worker_remaining_bridge_zero_row_partitions_total", "Compatibility-bridge partitions that reported success while writing zero rows.", "counter")
-	for _, family := range compatibilityBridgeFamilies {
-		writeUintSample(output, "worker_remaining_bridge_zero_row_partitions_total",
-			[]metricLabel{{"family", family}}, collector.compatibilityZeroRowPartitions[family])
-	}
 }
 
 // writeReportDedupGuard exposes CHAOS-4140's report dedup-guard counters

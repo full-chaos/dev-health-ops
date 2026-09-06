@@ -248,7 +248,7 @@ deleted, the frozen file and this one test survive.
 | Family | Executor | Citation | Route transport | Ticket |
 | --- | --- | --- | --- | --- |
 | capacity | NATIVE | Go: `internal/jobs/metrics/remaining/capacity_native.go`, `capacity_native_clickhouse.go` | river, native (`daily.go:571-581`) | CUT-20 R2 (Done) |
-| complexity | COMPAT-Python | Python: `api/internal/worker_metrics.py _run_complexity` -> `job_complexity_db.py:238 run_complexity_db_job` | river, bridge (`daily.go:582-585`, uses `compatibility` directly) | CHAOS-4291 |
+| complexity | NATIVE | Go: `internal/jobs/metrics/remaining/complexity_native.go`, `complexity_native_clickhouse.go` | river, native (`daily.go:486-527`) | CHAOS-4291 (Done) |
 | dora | NATIVE | Go: `internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go` | river, native (`daily.go:586-598`) | CHAOS-3092 R1 (Done) |
 | membership_backfill | NATIVE | Go: `internal/jobs/metrics/remaining/membership_native.go` | river, native (`daily.go:599-609`) | CHAOS-4282 (Done) |
 | recommendations | NATIVE | Go: `internal/jobs/metrics/remaining/recommendations_native.go` | river, native (`daily.go:610-620`) | CHAOS-4281/CHAOS-3092 (Done) |

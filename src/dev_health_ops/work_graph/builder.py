@@ -276,17 +276,6 @@ class WorkGraphBuilder:
             return None
         return repo_slug, pr_number, provider
 
-    def _row_org_id(self, row: dict[str, object]) -> str:
-        return str(row.get("org_id") or self.config.org_id or "")
-
-    def _is_linear_pr_attachment_dependency(self, row: dict[str, object]) -> bool:
-        return (
-            str(row.get("relationship_type_raw") or "") == "linear_attachment"
-            and str(row.get("target_work_item_id") or "").startswith("linear:")
-            and self._parse_pr_dependency_source(row.get("source_work_item_id"))
-            is not None
-        )
-
     def add_release_node(
         self,
         release_ref: str,
@@ -463,7 +452,12 @@ class WorkGraphBuilder:
         # 1. Build issue->issue edges from work_item_dependencies
         stats["issue_issue_edges"] = self._build_issue_issue_edges()
 
-        self._derive_issue_pr_links_from_dependencies()
+        # issue->PR native-provenance links (work_item_dependencies ->
+        # work_graph_issue_pr) are derived by the Go pre-step
+        # (internal/jobs/workgraph/issueprlinks) before this bridge call runs,
+        # not here -- CHAOS-5249 deleted _derive_issue_pr_links_from_dependencies,
+        # retiring the Python half of that straddle (it ran a second time,
+        # every build, after the Go pre-step already wrote the same rows).
 
         # 2. Build issue->PR edges from existing fast-path table (prerequisite)
         issue_pr_existing, stats["issue_pr_edges"] = (
@@ -640,164 +634,6 @@ class WorkGraphBuilder:
             len(links),
         )
         return len(edges)
-
-    def _derive_issue_pr_links_from_dependencies(self) -> int:
-        if not self.config.org_id:
-            return 0
-
-        dependency_query = """
-        SELECT
-            org_id,
-            source_work_item_id,
-            target_work_item_id,
-            relationship_type_raw,
-            last_synced
-        FROM work_item_dependencies FINAL
-        WHERE 1=1
-        """
-        org_id_clause = self._org_id_clause()
-        if org_id_clause:
-            dependency_query += f" {org_id_clause}"
-
-        repo_query = """
-        SELECT org_id, id, repo
-        FROM repos FINAL
-        WHERE 1=1
-        """
-        if org_id_clause:
-            repo_query += f" {org_id_clause}"
-
-        pr_query = """
-        SELECT org_id, repo_id, number, created_at
-        FROM git_pull_requests FINAL
-        WHERE 1=1
-        """
-        if org_id_clause:
-            pr_query += f" {org_id_clause}"
-        if self.config.from_date:
-            pr_query += f" AND created_at >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
-        if self.config.to_date:
-            pr_query += f" AND created_at <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
-        if self.config.repo_id:
-            pr_query += f" AND repo_id = '{self.config.repo_id}'"
-
-        work_item_query = """
-        SELECT org_id, work_item_id
-        FROM work_items FINAL
-        WHERE 1=1
-        """
-        if org_id_clause:
-            work_item_query += f" {org_id_clause}"
-
-        dependency_rows = self.sink.query_dicts(dependency_query, {})
-        if not dependency_rows:
-            return 0
-
-        repo_rows = self.sink.query_dicts(repo_query, {})
-        pr_rows = self.sink.query_dicts(pr_query, {})
-        work_item_rows = self.sink.query_dicts(work_item_query, {})
-
-        repo_lookup: dict[tuple[str, str], uuid.UUID] = {}
-        for row in repo_rows:
-            repo_slug = str(row.get("repo") or "")
-            repo_id = row.get("id")
-            if not repo_slug or not repo_id:
-                continue
-            try:
-                repo_uuid = (
-                    repo_id
-                    if isinstance(repo_id, uuid.UUID)
-                    else uuid.UUID(str(repo_id))
-                )
-            except ValueError:
-                continue
-            repo_lookup[(self._row_org_id(row), repo_slug)] = repo_uuid
-
-        pr_lookup: dict[tuple[str, uuid.UUID, int], object] = {}
-        for row in pr_rows:
-            repo_id = row.get("repo_id")
-            pr_number = row.get("number")
-            if repo_id is None or pr_number is None:
-                continue
-            try:
-                repo_uuid = (
-                    repo_id
-                    if isinstance(repo_id, uuid.UUID)
-                    else uuid.UUID(str(repo_id))
-                )
-                pr_number_int = int(pr_number)
-            except (TypeError, ValueError):
-                continue
-            pr_lookup[(self._row_org_id(row), repo_uuid, pr_number_int)] = row.get(
-                "created_at"
-            )
-
-        valid_work_items = {
-            (self._row_org_id(row), str(row.get("work_item_id")))
-            for row in work_item_rows
-            if row.get("work_item_id")
-        }
-
-        links: list[WorkGraphIssuePR] = []
-        seen: set[tuple[str, uuid.UUID, int]] = set()
-        for row in dependency_rows:
-            if not self._is_linear_pr_attachment_dependency(row):
-                continue
-            parsed = self._parse_pr_dependency_source(row.get("source_work_item_id"))
-            if not parsed:
-                continue
-            target_work_item_id = str(row.get("target_work_item_id") or "")
-            if not target_work_item_id:
-                continue
-
-            org_id = self._row_org_id(row)
-            if (org_id, target_work_item_id) not in valid_work_items:
-                continue
-
-            repo_slug, pr_number, provider = parsed
-            repo_id = repo_lookup.get((org_id, repo_slug))
-            if not repo_id:
-                continue
-            if (org_id, repo_id, pr_number) not in pr_lookup:
-                continue
-
-            identity = (target_work_item_id, repo_id, pr_number)
-            if identity in seen:
-                continue
-            seen.add(identity)
-
-            last_synced = row.get("last_synced") or self._now
-            if isinstance(last_synced, str):
-                try:
-                    last_synced = datetime.fromisoformat(
-                        last_synced.replace("Z", "+00:00")
-                    )
-                except ValueError:
-                    last_synced = self._now
-            if not isinstance(last_synced, datetime):
-                last_synced = self._now
-            if last_synced.tzinfo is None:
-                last_synced = last_synced.replace(tzinfo=timezone.utc)
-
-            links.append(
-                WorkGraphIssuePR(
-                    repo_id=repo_id,
-                    work_item_id=target_work_item_id,
-                    pr_number=pr_number,
-                    confidence=1.0,
-                    provenance=Provenance.NATIVE,
-                    evidence=str(
-                        row.get("relationship_type_raw") or f"{provider}_attachment"
-                    ),
-                    last_synced=last_synced,
-                )
-            )
-
-        self._write_issue_pr_links(links)
-        logger.info(
-            "Derived %d issue->PR links from work_item_dependencies", len(links)
-        )
-        return len(links)
 
     def _delete_stale_pr_dependency_issue_edges(self) -> None:
         if not self.config.org_id:

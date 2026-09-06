@@ -1,0 +1,464 @@
+{
+  "files": {
+    "rules_basic.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 10,
+          "name": "plain"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 15,
+          "name": "single_if"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "function",
+          "lineno": 21,
+          "name": "if_elif_else"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "function",
+          "lineno": 33,
+          "name": "for_with_else"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 43,
+          "name": "while_with_else"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "function",
+          "lineno": 51,
+          "name": "try_except_else_finally"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 7,
+          "kind": "function",
+          "lineno": 65,
+          "name": "boolop_chain"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 74,
+          "name": "ternary"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 9,
+          "kind": "function",
+          "lineno": 79,
+          "name": "comprehensions"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 88,
+          "name": "asserts"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 94,
+          "name": "lambda_not_counted"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 5,
+          "kind": "function",
+          "lineno": 102,
+          "name": "nested_loops"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 113,
+          "name": "async_paths"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 121,
+          "name": "closure_excluded"
+        }
+      ],
+      "cyclomatic_avg": 3.642857142857143,
+      "cyclomatic_total": 51,
+      "functions_count": 14,
+      "high_complexity_functions": 0,
+      "loc": 134,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_classes.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "class",
+          "lineno": 10,
+          "name": "Empty"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "class",
+          "lineno": 14,
+          "name": "Simple"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 15,
+          "name": "method_a"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 3,
+          "kind": "method",
+          "lineno": 20,
+          "name": "method_b"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "class",
+          "lineno": 27,
+          "name": "WithBodyLogic"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 35,
+          "name": "only_method"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "class",
+          "lineno": 39,
+          "name": "Outer"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 46,
+          "name": "outer_method"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "class",
+          "lineno": 52,
+          "name": "WithClosure"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 53,
+          "name": "factory"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 64,
+          "name": "function_holding_a_class"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "class",
+          "lineno": 78,
+          "name": "DecoratedMethods"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 80,
+          "name": "stat"
+        },
+        {
+          "col_offset": 4,
+          "complexity": 2,
+          "kind": "method",
+          "lineno": 86,
+          "name": "prop"
+        }
+      ],
+      "cyclomatic_avg": 2.5,
+      "cyclomatic_total": 35,
+      "functions_count": 14,
+      "high_complexity_functions": 0,
+      "loc": 87,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_nofunctions.py.txt": {
+      "blocks": [],
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 36,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r1_findings.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 1,
+          "name": "annotated_def"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 7,
+          "name": "fstring_ternary"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 11,
+          "name": "match_guard"
+        }
+      ],
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 6,
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 16,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r1_formfeed_loc.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 1,
+          "name": "formfeed_loc"
+        }
+      ],
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r1_mismatched_brackets.py.txt": {
+      "detail": "closing parenthesis ']' does not match opening parenthesis '(' (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r1_mixed_tabs.py.txt": {
+      "detail": "inconsistent use of tabs and spaces in indentation (<unknown>, line 4)",
+      "reason": "TabError",
+      "skipped": true
+    },
+    "rules_r1_trailing_backslash.py.txt": {
+      "detail": "unexpected EOF while parsing (<unknown>, line 3)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r1_unclosed_bracket.py.txt": {
+      "detail": "'(' was never closed (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r2_combining_identifier.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 1,
+          "name": "f"
+        }
+      ],
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r2_fstring_bad_expr.py.txt": {
+      "detail": "f-string: unmatched ')' (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r2_fstring_same_quote.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 1,
+          "name": "f"
+        }
+      ],
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r2_fstring_unterminated.py.txt": {
+      "detail": "f-string: expecting '}' (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r2_invalid_suite_syntax.py.txt": {
+      "detail": "invalid syntax (<unknown>, line 2)",
+      "reason": "SyntaxError",
+      "skipped": true
+    },
+    "rules_r2_parenthesized_capture.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 1,
+          "name": "f"
+        }
+      ],
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 6,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_r3_fstring_multiline.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 1,
+          "name": "f"
+        }
+      ],
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    },
+    "rules_softkeywords.py.txt": {
+      "blocks": [
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 11,
+          "name": "match_is_a_variable"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 4,
+          "kind": "function",
+          "lineno": 21,
+          "name": "match_statement"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 33,
+          "name": "match_with_wildcard"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 2,
+          "kind": "function",
+          "lineno": 44,
+          "name": "match_with_named_capture"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 55,
+          "name": "match_only_wildcard"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 63,
+          "name": "keywords_in_strings"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 1,
+          "kind": "function",
+          "lineno": 77,
+          "name": "keyword_lookalike_identifiers"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 3,
+          "kind": "function",
+          "lineno": 87,
+          "name": "inline_suite"
+        },
+        {
+          "col_offset": 0,
+          "complexity": 5,
+          "kind": "function",
+          "lineno": 94,
+          "name": "continued_lines"
+        }
+      ],
+      "cyclomatic_avg": 2.4444444444444446,
+      "cyclomatic_total": 22,
+      "functions_count": 9,
+      "high_complexity_functions": 0,
+      "loc": 103,
+      "skipped": false,
+      "very_high_complexity_functions": 0
+    }
+  },
+  "radon_version": "6.0.1"
+}

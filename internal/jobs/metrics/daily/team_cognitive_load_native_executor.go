@@ -128,7 +128,10 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 	// -- day-start midnight UTC, no sub-second component (the same value the
 	// query-parameter truncation caveat on load_team_repo_ownership_map warns
 	// callers to already be using).
-	repoToTeam := resolveDailyFinalizeRepoToTeam(ctx, executor.conn, run.OrganizationID, day, teams, repoIDs, repoNamesByID, patternResolver)
+	repoToTeam, err := resolveDailyFinalizeRepoToTeam(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver)
+	if err != nil {
+		return 0, fmt.Errorf("team_cognitive_load: %w", err)
+	}
 
 	computedAt := executor.nowUTC()
 	rows := buildTeamCognitiveLoadRows(run.OrganizationID, day, userRows, teamRows, repoToTeam, computedAt)
@@ -141,60 +144,59 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 	return len(rows), nil
 }
 
-// applyOwnershipToRepoToTeam merges one team's owned repos into repoToTeam,
-// gated on repoNamesByID membership (CHAOS-4365 codex r2 P1 guard) -- an
+// authoritativeOwnersKnownToRepoCatalog filters an org-wide authoritative
+// repo->team ownership map (teamownership.AuthoritativeOwnerByRepo) down to
+// repos ALSO present in repoNamesByID -- CHAOS-4365 codex r2 P1 guard. An
 // owned repo_id that repoNamesByID does not carry (removed/renamed since
 // team_repo_ownership last ran; that table is INSERT-only, CHAOS-2610 tracks
 // writer-side valid_to retirement) is never trusted, exactly matching
 // Python's _repo_to_team_map_for_compounding_risk: "a repo is trusted from
 // EITHER source only when it also appears in repo_names_by_id" -- ownership
 // included, not just the pattern-resolver fallback below. A prior revision of
-// this function gated ONLY the pattern fallback on repoNamesByID and let
-// ownership resolve unconditionally, a real parity gap (found in #2256
-// review): a stale ownership row could attribute a repo that no longer
-// exists in the org's current inventory, something the pattern-resolver path
-// never did.
-func applyOwnershipToRepoToTeam(
-	repoToTeam map[string]string, teamID string, owned []uuid.UUID, repoNamesByID map[string]string,
-) {
-	for _, repoID := range owned {
-		key := repoID.String()
-		if _, known := repoNamesByID[key]; !known {
+// this gate applied ONLY to the pattern fallback and let ownership resolve
+// unconditionally, a real parity gap (found in #2256 review): a stale
+// ownership row could attribute a repo that no longer exists in the org's
+// current inventory, something the pattern-resolver path never did.
+func authoritativeOwnersKnownToRepoCatalog(
+	owners map[string]string, repoNamesByID map[string]string,
+) map[string]string {
+	filtered := make(map[string]string, len(owners))
+	for repoID, teamID := range owners {
+		if _, known := repoNamesByID[repoID]; !known {
 			continue
 		}
-		if _, exists := repoToTeam[key]; !exists {
-			repoToTeam[key] = teamID
-		}
+		filtered[repoID] = teamID
 	}
+	return filtered
 }
 
 // resolveDailyFinalizeRepoToTeam builds {repo_id_str: team_id} exactly as
 // _write_team_cognitive_load_for_day does: team_repo_ownership
-// (teamownership.OwnedRepoIDs, per team) first, the repo-pattern resolver
-// only for a repo it leaves unresolved AND that is still present in the
-// org's current repos catalog (repoNamesByID) -- a repo repoNamesByID does
-// not carry is never guessed, matching the Python guard's own comment.
+// (teamownership.AuthoritativeOwnerByRepo, ranked is_primary/specificity/
+// updated_at, ONE authoritative owner per repo -- CHAOS-5141, #2255 r1
+// finding 2: OwnedRepoIDs answers "is this repo one of this team's", not
+// "who is its authoritative owner", and iterating it per-team let whichever
+// team happened to be encountered first win a multi-claimed repo) first, the
+// repo-pattern resolver only for a repo it leaves unresolved AND that is
+// still present in the org's current repos catalog (repoNamesByID) -- a repo
+// repoNamesByID does not carry is never guessed, matching the Python guard's
+// own comment.
 func resolveDailyFinalizeRepoToTeam(
 	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
-	teams []WellbeingTeam, repoIDs []uuid.UUID, repoNamesByID map[string]string,
+	repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
-) map[string]string {
-	repoToTeam := make(map[string]string, len(repoIDs))
-	for _, team := range teams {
-		if team.ID == "" {
-			continue
-		}
-		owned, err := teamownership.OwnedRepoIDs(ctx, conn, organizationID, team.ID, asOf)
-		if err != nil {
-			// Matches Python's defensive `except Exception` around this whole
-			// resolution block: a resolution failure degrades to "no team
-			// attribution this attempt", never to a partition/finalize error --
-			// team_cognitive_load rows are diagnostic, not load-bearing for any
-			// other family's correctness.
-			continue
-		}
-		applyOwnershipToRepoToTeam(repoToTeam, team.ID, owned, repoNamesByID)
+) (map[string]string, error) {
+	// CHAOS-5141, #2255 r1 finding 3: a resolution failure here is
+	// PROPAGATED, never swallowed. team_cognitive_load is finalize-scope
+	// (CHAOS-4290): a native runtime error must fail the family closed
+	// (Retryable -> River redrive), not silently return a success outcome
+	// with zero/partial rows that the finalize handler would mark Computed
+	// and skip the Python bridge for.
+	owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, organizationID, asOf)
+	if err != nil {
+		return nil, fmt.Errorf("resolve authoritative repo ownership: %w", err)
 	}
+	repoToTeam := authoritativeOwnersKnownToRepoCatalog(owners, repoNamesByID)
 	for _, repoID := range repoIDs {
 		key := repoID.String()
 		if _, resolved := repoToTeam[key]; resolved {
@@ -209,7 +211,7 @@ func resolveDailyFinalizeRepoToTeam(
 			repoToTeam[key] = teamID
 		}
 	}
-	return repoToTeam
+	return repoToTeam, nil
 }
 
 var _ NativeFinalizeFamilyExecutor = (*TeamCognitiveLoadExecutor)(nil)

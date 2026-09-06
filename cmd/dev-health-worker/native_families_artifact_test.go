@@ -55,11 +55,14 @@ type nativeFamiliesArtifact struct {
 	// same kind of thing, and would also silently change Daily's cardinality.
 	Finalize  map[string]string `json:"finalize"`
 	Remaining map[string]string `json:"remaining"`
-	// Workgraph covers the five workgraph/investment River kinds. Added by
-	// CHAOS-4441's cutover: before it, every one of those kinds took the same
-	// HTTP bridge executor, so there was nothing to record and the artifact had
-	// no key for them at all -- which is exactly why the artifact could not
-	// have detected that the cutover had never happened. It can now.
+	// Workgraph covers the two live workgraph/investment River kinds
+	// (workgraph.build, investment.materialize) -- investment.dispatch/
+	// chunk/finalize were deleted under CHAOS-4438 (dead Go shells, zero
+	// producers). Added by CHAOS-4441's cutover: before it, every one of
+	// these kinds took the same HTTP bridge executor, so there was nothing
+	// to record and the artifact had no key for them at all -- which is
+	// exactly why the artifact could not have detected that the cutover had
+	// never happened. It can now.
 	Workgraph map[string]string `json:"workgraph"`
 }
 
@@ -73,6 +76,7 @@ var knownFamilyNameConstants = map[string]string{
 	"ICFinalizeFamilyName":        daily.ICFinalizeFamilyName,
 	"TeamCognitiveLoadFamilyName": daily.TeamCognitiveLoadFamilyName,
 	"TeamComplexityFamilyName":    daily.TeamComplexityFamilyName,
+	"BenchmarkingFamilyName":      daily.BenchmarkingFamilyName,
 }
 
 const nativeFamiliesGeneratedFrom = "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)"
@@ -460,16 +464,27 @@ func TestNativeFamiliesArtifactUpToDate(t *testing.T) {
 }
 
 // TestNativeFamiliesArtifactMatchesKnownSplit is a falsification/regression
-// control: pins the exact 5-native/2-compat remaining split and the 8
-// native + 4 post_bridge daily split,
-// so a future accidental wiring change is caught here even if someone forgot
-// to regenerate the artifact (that case is ALSO caught by the drift test
-// above, but this one names the expected shape explicitly for a reviewer).
+// control: it pins the exact remaining and daily splits, so an accidental
+// wiring change is caught even if someone forgot to regenerate the artifact
+// (that case is ALSO caught by the drift test above, but this one names the
+// expected shape explicitly for a reviewer).
+//
+// The expected shape lives in the four want* slices below and NOWHERE ELSE.
+// This comment used to restate it as "9 native + 1 post_bridge", and that
+// prose went stale in silence: CHAOS-4283 added two post_bridge families and
+// left the sentence saying one, and CHAOS-4285 then added a native family
+// which made the "9" accidentally true again for the wrong reason. A count
+// written in a comment cannot be asserted, so it is not written here -- the
+// cardinality check below derives every total with len(), and the slices are
+// the single source of truth a reviewer should read.
 func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 
-	wantRemainingNative := []string{"capacity", "dora", "membership_backfill", "recommendations", "work_item_attribution"}
-	wantRemainingCompat := []string{"complexity", "release_impact"}
+	wantRemainingNative := []string{
+		"capacity", "dora", "membership_backfill", "recommendations",
+		"release_impact", "work_item_attribution",
+	}
+	wantRemainingCompat := []string{"complexity"}
 	assertExecutorSet(t, artifact.Remaining, wantRemainingNative, "native")
 	assertExecutorSet(t, artifact.Remaining, wantRemainingCompat, "compat")
 	if len(artifact.Remaining) != len(wantRemainingNative)+len(wantRemainingCompat) {
@@ -480,20 +495,60 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	wantDailyNative := []string{
 		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
 		"file_hotspots", "file_risk_hotspots", "testops_risk",
+		// CHAOS-5078: work_item_attribution is native, and its three readers
+		// return to the pre_bridge (native) phase with it. They read
+		// work_item_team_attributions, which it WRITES; families.json's
+		// `after` edges order the writer ahead of its readers within the
+		// phase, which is what made post_bridge unnecessary.
+		"work_item_attribution", "work_item_state", "work_item", "work_item_estimate",
+		// CHAOS-4284: the three TestOps families this PR ports. They were added
+		// to the artifact but NOT to this list, which was a one-way SUBSET check
+		// with no cardinality assertion on this branch -- so it certified a split
+		// it had never seen, exactly the defect CHAOS-4283's r1 P3 added the
+		// cardinality check below to stop. That check caught this on the merge.
+		"testops_pipeline", "testops_test", "testops_coverage",
+		// CHAOS-4285. This entry was MISSING on this branch until the
+		// merge-forward of main exposed it. The branch registered
+		// ai_governance as a native daily executor and updated the generated
+		// artifact, but never updated this expected split -- and the test
+		// still passed, because at that point both halves were one-way SUBSET
+		// checks. Main's own codex r1 (P3) added the cardinality check below,
+		// and that check is what turned this silent gap into a failure.
+		"ai_governance",
+		// CHAOS-4279: review_edges is pre_bridge, not post_bridge -- both its
+		// inputs are RAW SYNC tables, not another daily family's output, so
+		// nothing in this partition has to run before it.
+		"review_edges",
+		// CHAOS-4280, same shape as ai_governance above.
+		"ai_impact",
+		// CHAOS-4286: work_graph_edges is pre_bridge for the same reason --
+		// every input is a raw sync table plus the shared incident
+		// projection, so nothing else in the partition has to precede it.
+		"work_graph_edges",
+		// CHAOS-4286 part B: ai_workflow is pre_bridge for the same reason --
+		// its inputs (git_pull_requests, work_graph_issue_pr) are raw sync
+		// tables, not another daily family's own output.
+		"ai_workflow",
 	}
-	// CHAOS-4283: work_item and work_item_estimate join work_item_state in
-	// post_bridge -- all three read work_item_team_attributions, which the
-	// still-Python work_item_attribution family writes in the same partition.
-	// CHAOS-4287: compounding_risk is post_bridge for a DIFFERENT reason from
-	// the three above -- not a stale attribution snapshot, but execution order.
-	// Its input repo_metrics_daily is written by repo_user_commit in the SAME
+	// CHAOS-5078 retired the CHAOS-4283 three (work_item_state, work_item,
+	// work_item_estimate) from post_bridge -- they moved to native/pre_bridge
+	// above, alongside work_item_attribution which now writes
+	// work_item_team_attributions natively (families.json's `after` edges
+	// order the writer ahead of them within pre_bridge, retiring the reason
+	// post_bridge existed for them). compounding_risk is the one remaining
+	// post_bridge family, for a DIFFERENT reason CHAOS-5078 does not touch:
+	// not a stale attribution snapshot, but execution order -- its input
+	// repo_metrics_daily is written by repo_user_commit in the SAME
 	// partition, and computeNativeFamilies walks families in SORTED order,
-	// where "compounding_risk" precedes "repo_user_commit". Listed here rather
-	// than folded into the CHAOS-4283 comment because CHAOS-5078, which retires
-	// those three, does not touch this one.
-	wantDailyPostBridge := []string{
-		"work_item_state", "work_item", "work_item_estimate", "compounding_risk",
-	}
+	// where "compounding_risk" precedes "repo_user_commit". CHAOS-5078
+	// already retired work_item_state/work_item/work_item_estimate from this
+	// list (moved to native/pre_bridge, per the comment above -- landed on
+	// the base branch between this PR's fork point and its squash-merge, so
+	// they never appear here at all in this PR's own diff).
+	// benchmarking (CHAOS-4288) is NO LONGER in this list either -- CHAOS-5194
+	// relocated it to finalize scope (see wantDailyFinalize below and
+	// BenchmarkingFinalizeExecutor's own doc comment).
+	wantDailyPostBridge := []string{"compounding_risk"}
 	assertExecutorSet(t, artifact.Daily, wantDailyNative, "native")
 	assertExecutorSet(t, artifact.Daily, wantDailyPostBridge, "post_bridge")
 	// The cardinality check the Remaining half above already had, and this half
@@ -512,7 +567,7 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 	// OWN exact-cardinality check rather than joining the count above, because
 	// the two scopes answer different questions and folding them would let a
 	// finalize family appear while a partition family silently disappeared.
-	wantDailyFinalize := []string{"ic_finalize", "team_cognitive_load", "team_complexity"}
+	wantDailyFinalize := []string{"ic_finalize", "team_cognitive_load", "team_complexity", "benchmarking"}
 	assertExecutorSet(t, artifact.Finalize, wantDailyFinalize, "finalize")
 	if len(artifact.Finalize) != len(wantDailyFinalize) {
 		t.Fatalf("expected exactly %d finalize families, got %d: %v",
@@ -742,19 +797,16 @@ func parseJobContractKindValues(t *testing.T, repoRoot string) map[string]string
 // revert of the cutover fails HERE with a readable message even if someone
 // regenerated the artifact to match the reverted wiring.
 //
-// investment.dispatch/chunk/finalize stay compat deliberately -- they are dead
-// shells (CHAOS-4438) with no Python target either, so porting them would be
-// work with no runtime effect. workgraph.build stays compat until CHAOS-4924's
-// six remaining sub-builders land.
+// investment.dispatch/chunk/finalize were deleted entirely under CHAOS-4438
+// (dead Go shells, zero producers ever created a request row for them) --
+// they no longer appear in the artifact at all. workgraph.build stays compat
+// until CHAOS-4924's six remaining sub-builders land.
 func TestWorkgraphArtifactRecordsTheInvestmentCutover(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 
 	want := map[string]string{
 		"workgraph.build":        "compat",
 		"investment.materialize": "native",
-		"investment.dispatch":    "compat",
-		"investment.chunk":       "compat",
-		"investment.finalize":    "compat",
 	}
 	if len(artifact.Workgraph) != len(want) {
 		t.Fatalf("expected %d workgraph kinds, got %d: %v", len(want), len(artifact.Workgraph), artifact.Workgraph)

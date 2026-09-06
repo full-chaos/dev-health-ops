@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import sys
+import uuid
 from datetime import datetime
 from typing import TypedDict
 
@@ -50,6 +51,11 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     "incident": "incident_metrics_daily",
     "testops_pipeline": "testops_pipeline_metrics_daily",
     "testops_test": "testops_test_metrics_daily",
+    # CHAOS-4284: added when testops_coverage went native alongside
+    # testops_pipeline/testops_test (which were already here). Same
+    # (repo_id, day) shape as its two siblings -- one row per repo that
+    # had a coverage snapshot attached to a pipeline run that day.
+    "testops_coverage": "testops_coverage_metrics_daily",
     "repo_user_commit": "repo_metrics_daily",
     "dora": "dora_metrics_daily",
     # "complexity" is the family internal/jobs/metrics/daily/families.json
@@ -73,7 +79,100 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     # awareness -- a repo with either churn OR a complexity snapshot in the
     # window produces rows here.
     "file_risk_hotspots": "file_hotspot_daily",
+    # CHAOS-4279: review_edges_daily is (repo_id, day)-shaped with a
+    # computed_at column, so it needs no new readback shape -- it slots into
+    # the repo-keyed family above unchanged.
+    "review_edges": "review_edges_daily",
+    # CHAOS-4290, r2 finding #4: ic_finalize does NOT belong here -- its
+    # first write target, user_metrics_daily, needs the extra author_email
+    # identity column REPO_DAY_FAMILIES' generic (repo_id, day, computed_at)
+    # shape cannot express (it is a per-author, not a per-repo-day, table).
+    # It is correctly classified below, in SYNTHESIZED_REPO_ID_FAMILIES,
+    # only. An entry here as well (this branch's own stale leftover from
+    # before that reclassification landed) would shadow/duplicate the
+    # --families choice -- test_ic_finalize_is_not_double_registered exists
+    # specifically to catch this class of drift.
 }
+
+# uuid5 namespace + payload MUST match
+# internal/jobs/metrics/daily/icfinalize/executor.go's synthesizedRepoNamespace
+# and SynthesizedRepoID exactly -- see synthesized_repo_id() below.
+_SYNTHESIZED_REPO_NAMESPACE = uuid.UUID("1b4e28ba-2fa1-11d2-883f-b9a761bde3fb")
+
+
+def synthesized_repo_id(org_id: str, identity_id: str) -> str:
+    """Python mirror of SynthesizedRepoID (CHAOS-4290).
+
+    Go computes `uuid.NewSHA1(synthesizedRepoNamespace, []byte(orgID+"\\x1f"+identityID))`
+    -- RFC4122 UUIDv5 (SHA1) over the namespace bytes plus a UTF-8 payload.
+    Python's `uuid.uuid5` is the same construction over the same namespace and
+    payload bytes, so this reproduces the identical UUID for the identical
+    (org_id, identity_id) pair without needing to shell out to Go.
+    """
+    return str(uuid.uuid5(_SYNTHESIZED_REPO_NAMESPACE, f"{org_id}\x1f{identity_id}"))
+
+
+# CHAOS-4290, r2 finding #4: ic_finalize's first write target,
+# user_metrics_daily, mixes TWO id spaces in the same repo_id column -- a
+# git-backed identity keeps its real repo_id, but a work-item-only identity
+# (no git record at all) gets a deterministic per-identity SynthesizedRepoID
+# instead (executor.go's writeUserMetrics). REPO_DAY_FAMILIES' generic
+# stray-check assumes every repo_id is a live repo; applied to this table it
+# flags every synthesized row as a CHAOS-4263 dead id, and family_readback's
+# repo_ids-only filter can undercount total_rows to zero for an org whose
+# identities are all work-item-only. (table, identity_column) per family.
+SYNTHESIZED_REPO_ID_FAMILIES: dict[str, tuple[str, str]] = {
+    # CHAOS-4290: ic_finalize is FINALIZE-scoped (families.json's phase_note --
+    # it runs once per run, after every partition, not once per partition).
+    # The second write, ic_landscape_rolling_30d, is not checked separately
+    # for the same reason no other family here checks every table in its own
+    # `writes` list: one table in a single in-process compute call proves the
+    # call executed. author_email is the identity column: writeUserMetrics
+    # writes the SAME identity string to both author_email and identity_id.
+    "ic_finalize": ("user_metrics_daily", "author_email"),
+}
+
+
+def synthesized_repo_readback(
+    client,
+    table: str,
+    identity_column: str,
+    org_id: str,
+    repo_ids: set[str],
+    run_start: datetime,
+) -> tuple[int, set[str]]:
+    """Like family_readback, but a repo_id is valid if it is EITHER a live
+    repo OR the deterministic synthesized id for that row's own identity --
+    the two id spaces this table's rows deliberately mix (CHAOS-4290).
+
+    Returns (total_rows, stray_repo_ids) rather than the per-repo dict
+    family_readback returns: a synthesized id is per-identity, not
+    org-wide-live, so a "repos with rows" summary would just print every
+    identity's own private synthesized UUID with nothing for a reader to act
+    on.
+    """
+    result = client.query(
+        f"""
+        SELECT repo_id, {identity_column}, count() AS n
+        FROM {table}
+        WHERE org_id = {{org_id:String}}
+          AND computed_at >= {{run_start:DateTime64(6)}}
+        GROUP BY repo_id, {identity_column}
+        """,
+        parameters={"org_id": org_id, "run_start": run_start},
+    )
+    total_rows = 0
+    stray: set[str] = set()
+    for repo_id_value, identity_id, count_value in result.result_rows:
+        repo_id = str(repo_id_value)
+        total_rows += int(count_value)
+        if repo_id in repo_ids:
+            continue
+        if repo_id == synthesized_repo_id(org_id, identity_id):
+            continue
+        stray.add(repo_id)
+    return total_rows, stray
+
 
 # Team-keyed families (CHAOS-4276): unlike REPO_DAY_FAMILIES, these tables are
 # NOT (repo_id, day)-shaped -- team_metrics_daily is keyed (team_id, day) and
@@ -132,6 +231,20 @@ TEAM_DAY_FAMILIES: dict[str, str] = {
 # would make this gate pass on the Python path alone.
 SCOPE_ID_REPO_FAMILIES: dict[str, str] = {
     "compounding_risk": "compounding_risk_daily",
+}
+
+# Scope-KEY families (CHAOS-4288): a FOURTH shape. The benchmarking tables are
+# keyed (metric_name, scope_type, scope_key, period_end) -- no repo_id, no
+# team_id, and no `day` column at all. Their repo-scope rows carry the repo id
+# in `scope_key` (a String), so the same dead-id oracle applies, but the column
+# NAMES differ from compounding_risk's scope/scope_id pair, which is why this
+# cannot reuse SCOPE_ID_REPO_FAMILIES' query.
+#
+# One representative table per family, as everywhere else here:
+# testops_metric_baselines is written from the same in-process call as the
+# other five, so checking it is checking the call executed.
+SCOPE_KEY_FAMILIES: dict[str, str] = {
+    "benchmarking": "testops_metric_baselines",
 }
 
 
@@ -240,6 +353,39 @@ def team_readback(
     }
 
 
+def scope_key_repo_readback(
+    client, table: str, org_id: str, repo_ids: set[str], run_start: datetime
+) -> dict[str, FamilyRowCount]:
+    """scope_id_repo_readback's counterpart for scope_type/scope_key tables.
+
+    Same two properties: `scope_type = 'repo'` is pinned so team- and
+    global-scope rows cannot stand in as proof the repo path ran, and
+    `scope_key` is bound as Array(String) because it is a String column.
+    """
+    if not repo_ids:
+        return {}
+    result = client.query(
+        f"""
+        SELECT scope_key, count() AS n, max(computed_at) AS latest
+        FROM {table}
+        WHERE org_id = {{org_id:String}}
+          AND scope_type = 'repo'
+          AND scope_key IN {{repo_ids:Array(String)}}
+          AND computed_at >= {{run_start:DateTime64(6)}}
+        GROUP BY scope_key
+        """,
+        parameters={
+            "org_id": org_id,
+            "repo_ids": sorted(repo_ids),
+            "run_start": run_start,
+        },
+    )
+    return {
+        str(row[0]): {"rows": int(row[1]), "latest_computed_at": str(row[2])}
+        for row in result.result_rows
+    }
+
+
 def scope_id_repo_readback(
     client, table: str, org_id: str, repo_ids: set[str], run_start: datetime
 ) -> dict[str, FamilyRowCount]:
@@ -314,6 +460,8 @@ def main() -> int:
         sorted(REPO_DAY_FAMILIES)
         + sorted(TEAM_DAY_FAMILIES)
         + sorted(SCOPE_ID_REPO_FAMILIES)
+        + sorted(SCOPE_KEY_FAMILIES)
+        + sorted(SYNTHESIZED_REPO_ID_FAMILIES)
     )
     parser.add_argument(
         "--families",
@@ -367,6 +515,32 @@ def main() -> int:
         summary: dict[str, dict[str, object]] = {}
         failures: list[str] = []
         for family in args.families:
+            if family in SYNTHESIZED_REPO_ID_FAMILIES:
+                table, identity_column = SYNTHESIZED_REPO_ID_FAMILIES[family]
+                total_rows, stray = synthesized_repo_readback(
+                    client, table, identity_column, args.org_id, repo_ids, run_start
+                )
+                summary[family] = {
+                    "table": table,
+                    "org_id": args.org_id,
+                    "rows_written": total_rows,
+                    "repo_ids_outside_org": sorted(stray),
+                }
+                if total_rows == 0:
+                    failures.append(
+                        f"{family} ({table}): zero_rows_with_source_data -- no "
+                        f"row with computed_at >= {args.run_start} for "
+                        f"org {args.org_id}."
+                    )
+                if stray:
+                    failures.append(
+                        f"{family} ({table}): wrote repo_id(s) {sorted(stray)} that "
+                        "are neither a live repo for this org nor the expected "
+                        "synthesized id for their own identity -- the exact "
+                        "CHAOS-4263 dead-id shape."
+                    )
+                continue
+
             if family in TEAM_DAY_FAMILIES:
                 table = TEAM_DAY_FAMILIES[family]
                 team_rows = team_readback(client, table, args.org_id, run_start)
@@ -382,6 +556,27 @@ def main() -> int:
                         f"{family} ({table}): zero_rows_with_source_data -- no "
                         f"row with computed_at >= {args.run_start} for "
                         f"org {args.org_id}."
+                    )
+                continue
+
+            if family in SCOPE_KEY_FAMILIES:
+                table = SCOPE_KEY_FAMILIES[family]
+                key_rows = scope_key_repo_readback(
+                    client, table, args.org_id, repo_ids, run_start
+                )
+                total_rows = sum(int(v["rows"]) for v in key_rows.values())
+                summary[family] = {
+                    "table": table,
+                    "org_id": args.org_id,
+                    "rows_written": total_rows,
+                    "repos_with_rows": sorted(key_rows),
+                }
+                if total_rows == 0:
+                    failures.append(
+                        f"{family} ({table}): zero_rows_with_source_data -- no "
+                        f"scope_type='repo' row with computed_at >= "
+                        f"{args.run_start} for any of org {args.org_id}'s "
+                        f"{len(repo_ids)} live repo(s)."
                     )
                 continue
 

@@ -644,7 +644,7 @@ assert_readback() {
     --clickhouse-uri "${CLICKHOUSE_URI_HTTP}" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
-    --families cicd deploy testops_pipeline testops_test dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk \
+    --families cicd deploy testops_pipeline testops_test testops_coverage dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk ic_finalize \
     --summary-json "${ASSERT_SUMMARY_JSON}"
 }
 
@@ -708,7 +708,12 @@ echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from th
 # wrote the row after the native call fell open". It is now FATAL and covers
 # EVERY native family this gate asserts rows for, not the one family someone
 # happened to wire up first.
-NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk"
+# ic_finalize added (r2 finding #3, CHAOS-4290): it was in the readback
+# --families list above (so a green readback existed) but absent here, so
+# this gate's own FATAL fail-open check -- the one CHAOS-4288 made mandatory
+# specifically because a passing readback does not prove the Go executor
+# produced it -- never actually ran against ic_finalize.
+NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk ic_finalize"
 # Bounded, and bounded deliberately: long enough that a slow family is not
 # reported as a failure, short enough that a genuine fail-open is not paid for
 # in minutes on every run.

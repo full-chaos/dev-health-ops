@@ -42,27 +42,69 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Node and edge type tokens. These are the `.value` of Python's NodeType and
 // EdgeType (str, Enum) members and appear verbatim in the edge_id hash input,
-// so they are a wire contract, not an internal naming choice.
+// so they are a wire contract, not an internal naming choice. The full set
+// mirrors work_graph/models.py's NodeType/EdgeType enums (not just the subset
+// CHAOS-4766 needed) so CHAOS-4924's operational/fast-path/heuristic callers
+// share one definition instead of each re-declaring their own strings.
 const (
-	NodeTypeIssue = "issue"
-	NodeTypePR    = "pr"
+	NodeTypeIssue                 = "issue"
+	NodeTypePR                    = "pr"
+	NodeTypeCommit                = "commit"
+	NodeTypeFile                  = "file"
+	NodeTypeRelease               = "release"
+	NodeTypeFeatureFlag           = "feature_flag"
+	NodeTypeAIWorkflowRun         = "ai_workflow_run"
+	NodeTypeDiff                  = "diff"
+	NodeTypeReviewOutcome         = "review_outcome"
+	NodeTypeDeployment            = "deployment"
+	NodeTypeIncident              = "incident"
+	NodeTypeOperationalService    = "operational_service"
+	NodeTypeOperationalAlert      = "operational_alert"
+	NodeTypeIncidentTimelineEvent = "incident_timeline_event"
+	NodeTypeIncidentResponder     = "incident_responder"
+	NodeTypeEscalationPolicy      = "escalation_policy"
+	NodeTypeRepository            = "repository"
+	NodeTypeUser                  = "user"
+	NodeTypeTeam                  = "team"
 
-	EdgeTypeBlocks        = "blocks"
-	EdgeTypeRelates       = "relates"
-	EdgeTypeDuplicates    = "duplicates"
-	EdgeTypeIsBlockedBy   = "is_blocked_by"
-	EdgeTypeIsRelatedTo   = "is_related_to"
-	EdgeTypeIsDuplicateOf = "is_duplicate_of"
-	EdgeTypeParentOf      = "parent_of"
-	EdgeTypeChildOf       = "child_of"
-	EdgeTypeImplements    = "implements"
-	EdgeTypeReferences    = "references"
-	EdgeTypeContains      = "contains"
+	EdgeTypeBlocks           = "blocks"
+	EdgeTypeRelates          = "relates"
+	EdgeTypeDuplicates       = "duplicates"
+	EdgeTypeIsBlockedBy      = "is_blocked_by"
+	EdgeTypeIsRelatedTo      = "is_related_to"
+	EdgeTypeIsDuplicateOf    = "is_duplicate_of"
+	EdgeTypeParentOf         = "parent_of"
+	EdgeTypeChildOf          = "child_of"
+	EdgeTypeImplements       = "implements"
+	EdgeTypeReferences       = "references"
+	EdgeTypeContains         = "contains"
+	EdgeTypeFixes            = "fixes"
+	EdgeTypeTouches          = "touches"
+	EdgeTypeIntroducedBy     = "introduced_by"
+	EdgeTypeConfigChangedBy  = "config_changed_by"
+	EdgeTypeGuards           = "guards"
+	EdgeTypeImpacts          = "impacts"
+	EdgeTypeHasAIWorkflow    = "has_ai_workflow"
+	EdgeTypeGenerates        = "generates"
+	EdgeTypeHasReviewOutcome = "has_review_outcome"
+	EdgeTypeDeploys          = "deploys"
+	EdgeTypeLinkedIncident   = "linked_incident"
+	EdgeTypeMapsToRepository = "maps_to_repository"
+	EdgeTypeHasIncident      = "has_incident"
+	EdgeTypeHasAlert         = "has_alert"
+	EdgeTypeHasTimelineEvent = "has_timeline_event"
+	EdgeTypeHasResponder     = "has_responder"
+	EdgeTypeAssignedTo       = "assigned_to"
+	EdgeTypeEscalatesWith    = "escalates_with"
+	EdgeTypeRemediatedBy     = "remediated_by"
 
 	ProvenanceNative       = "native"
 	ProvenanceExplicitText = "explicit_text"
@@ -103,6 +145,12 @@ type Row struct {
 	// hold; it is 11275-for-11275 true on the proof org today.
 	Day   time.Time
 	OrgID string
+	// RepoID and Provider are Nullable(UUID)/Nullable(String) in the live
+	// schema (014_work_graph.sql). CHAOS-4766's issue-issue edges never set
+	// either in Python, so they were absent from WriteEdges until CHAOS-4924's
+	// operational/repo-scoped edges needed them -- nil means SQL NULL, not "".
+	RepoID   *uuid.UUID
+	Provider *string
 }
 
 // EdgeID is the deterministic edge identity, byte-identical to Python's
@@ -220,7 +268,7 @@ var Divergences = []Divergence{
 		GoldenCanSee: false,
 		implemented: func() bool {
 			// U+A7CE is one of the 28: x/text lowers it, CPython 16 does not.
-			return pythonLower("\uA7CE") != "\uA7CE"
+			return pythonparity.Lower("\uA7CE") != "\uA7CE"
 		},
 	},
 }

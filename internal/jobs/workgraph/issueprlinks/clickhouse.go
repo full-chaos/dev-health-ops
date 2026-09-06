@@ -9,6 +9,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 )
 
 // ErrUnavailable reports a missing ClickHouse dependency.
@@ -218,7 +220,11 @@ WHERE org_id = {org_id:String}`
 			return nil, fmt.Errorf("window from: %w", err)
 		}
 		query += ` AND created_at >= {from_ts:DateTime64(3)}`
-		args = append(args, clickhouse.Named("from_ts", bound))
+		// Bind the RENDERED literal, never the raw time.Time: clickhouse-go
+		// renders a bound time.Time as a toDateTime(...) expression, which
+		// ClickHouse refuses to parse against a DateTime64(3) placeholder
+		// (code 457) -- see DateTime64Argument's doc comment.
+		args = append(args, clickhouse.Named("from_ts", remaining.DateTime64Argument(bound, remaining.DateTime64MillisecondPrecision)))
 	}
 	if window.To != nil {
 		bound, err := truncateBoundToSecond(*window.To)
@@ -226,7 +232,7 @@ WHERE org_id = {org_id:String}`
 			return nil, fmt.Errorf("window to: %w", err)
 		}
 		query += ` AND created_at <= {to_ts:DateTime64(3)}`
-		args = append(args, clickhouse.Named("to_ts", bound))
+		args = append(args, clickhouse.Named("to_ts", remaining.DateTime64Argument(bound, remaining.DateTime64MillisecondPrecision)))
 	}
 	if window.RepoID != nil {
 		query += ` AND repo_id = {repo_id:UUID}`

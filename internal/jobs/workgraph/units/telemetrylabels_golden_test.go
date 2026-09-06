@@ -217,7 +217,7 @@ func TestStripUsesTheIsSpaceClassNotTheNumericOne(t *testing.T) {
 func TestSigmaLookaheadDivergesAtThirtyOne(t *testing.T) {
 	sigmaForm := func(dotCount int) rune {
 		input := "AΣ" + strings.Repeat(".", dotCount) + "B"
-		for _, character := range pythonLower(input) {
+		for _, character := range pythonparity.Lower(input) {
 			if character == 'σ' || character == 'ς' {
 				return character
 			}
@@ -337,8 +337,8 @@ func TestPythonLowerMatchesPythonDirectly(t *testing.T) {
 			}
 		}
 		t.Run(strings.ToValidUTF8(input, "?"), func(t *testing.T) {
-			if got := pythonLower(input); got != want {
-				t.Errorf("pythonLower(%q) = %q, python = %q", input, got, want)
+			if got := pythonparity.Lower(input); got != want {
+				t.Errorf("pythonparity.Lower(%q) = %q, python = %q", input, got, want)
 			}
 		})
 	}

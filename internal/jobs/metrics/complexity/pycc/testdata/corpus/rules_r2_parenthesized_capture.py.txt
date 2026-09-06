@@ -1,0 +1,6 @@
+def f(x):
+    match x:
+        case (value):
+            return value
+        case 0:
+            return 0

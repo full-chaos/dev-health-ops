@@ -1,0 +1,386 @@
+{
+  "files": {
+    "allman_style_and_macro_leak.cpp.txt": {
+      "cyclomatic_avg": 2.3333333333333335,
+      "cyclomatic_total": 7,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 13,
+          "long_name": "allman_style( int n)",
+          "name": "allman_style"
+        },
+        {
+          "complexity": 3,
+          "lineno": 23,
+          "long_name": "guarded_allman( int n)",
+          "name": "guarded_allman"
+        },
+        {
+          "complexity": 2,
+          "lineno": 33,
+          "long_name": "after_guard( int n)",
+          "name": "after_guard"
+        }
+      ],
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 24,
+      "very_high_complexity_functions": 0
+    },
+    "basic_control_flow.cpp.txt": {
+      "cyclomatic_avg": 3.2857142857142856,
+      "cyclomatic_total": 23,
+      "functions": [
+        {
+          "complexity": 7,
+          "lineno": 5,
+          "long_name": "classify( int score , bool bonus)",
+          "name": "classify"
+        },
+        {
+          "complexity": 2,
+          "lineno": 18,
+          "long_name": "feature_x_value()",
+          "name": "feature_x_value"
+        },
+        {
+          "complexity": 1,
+          "lineno": 27,
+          "long_name": "legacy_total( int n)",
+          "name": "legacy_total"
+        },
+        {
+          "complexity": 1,
+          "lineno": 31,
+          "long_name": "new_total( int n)",
+          "name": "new_total"
+        },
+        {
+          "complexity": 6,
+          "lineno": 38,
+          "long_name": "loop_and_switch( int n)",
+          "name": "loop_and_switch"
+        },
+        {
+          "complexity": 3,
+          "lineno": 63,
+          "long_name": "guarded_body( int n)",
+          "name": "guarded_body"
+        },
+        {
+          "complexity": 3,
+          "lineno": 72,
+          "long_name": "try_catch_example( int n)",
+          "name": "try_catch_example"
+        }
+      ],
+      "functions_count": 7,
+      "high_complexity_functions": 0,
+      "loc": 60,
+      "very_high_complexity_functions": 0
+    },
+    "classes_and_namespaces.cpp.txt": {
+      "cyclomatic_avg": 2.5,
+      "cyclomatic_total": 15,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 5,
+          "long_name": "shapes::Rectangle::Rectangle( int w , int h)",
+          "name": "shapes::Rectangle::Rectangle"
+        },
+        {
+          "complexity": 1,
+          "lineno": 12,
+          "long_name": "shapes::Rectangle::area() const",
+          "name": "shapes::Rectangle::area"
+        },
+        {
+          "complexity": 5,
+          "lineno": 16,
+          "long_name": "shapes::Rectangle::contains( int x , int y) const",
+          "name": "shapes::Rectangle::contains"
+        },
+        {
+          "complexity": 1,
+          "lineno": 25,
+          "long_name": "shapes::Rectangle::operator +( const Rectangle & other) const",
+          "name": "shapes::Rectangle::operator +"
+        },
+        {
+          "complexity": 2,
+          "lineno": 38,
+          "long_name": "shapes::nested::Circle::area() const",
+          "name": "shapes::nested::Circle::area"
+        },
+        {
+          "complexity": 3,
+          "lineno": 52,
+          "long_name": "OuterOnly::pick( int a , int b , int c)",
+          "name": "OuterOnly::pick"
+        }
+      ],
+      "functions_count": 6,
+      "high_complexity_functions": 0,
+      "loc": 48,
+      "very_high_complexity_functions": 0
+    },
+    "lambdas.cpp.txt": {
+      "cyclomatic_avg": 3.5,
+      "cyclomatic_total": 7,
+      "functions": [
+        {
+          "complexity": 5,
+          "lineno": 7,
+          "long_name": "sortAndCount( std :: vector<int> & v , int threshold)",
+          "name": "sortAndCount"
+        },
+        {
+          "complexity": 2,
+          "lineno": 24,
+          "long_name": "captureAndReturnType( int base)",
+          "name": "captureAndReturnType"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 26,
+      "very_high_complexity_functions": 0
+    },
+    "lizard_comment_directives.cpp.txt": {
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "before()",
+          "name": "before"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "local_class_with_inline_method.cpp.txt": {
+      "cyclomatic_avg": 4.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 4,
+          "lineno": 20,
+          "long_name": "outer( int n)",
+          "name": "outer"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 16,
+      "very_high_complexity_functions": 0
+    },
+    "old_c_params_replay_quirk.cpp.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "plain_c.c.txt": {
+      "cyclomatic_avg": 2.75,
+      "cyclomatic_total": 11,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 8,
+          "long_name": "clamp( int v , int lo , int hi)",
+          "name": "clamp"
+        },
+        {
+          "complexity": 4,
+          "lineno": 17,
+          "long_name": "dispatch( int op , int a , int b)",
+          "name": "dispatch"
+        },
+        {
+          "complexity": 3,
+          "lineno": 30,
+          "long_name": "accumulate( const int * values , int count)",
+          "name": "accumulate"
+        },
+        {
+          "complexity": 1,
+          "lineno": 42,
+          "long_name": "apply( BinaryOp op , int a , int b)",
+          "name": "apply"
+        }
+      ],
+      "functions_count": 4,
+      "high_complexity_functions": 0,
+      "loc": 38,
+      "very_high_complexity_functions": 0
+    },
+    "plain_c_header.h.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 13,
+          "long_name": "widget_is_visible( const struct Widget * w)",
+          "name": "widget_is_visible"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 11,
+      "very_high_complexity_functions": 0
+    },
+    "ref_qualified_member.cpp.txt": {
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "S::f() &",
+          "name": "S::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "template_question_masking.cpp.txt": {
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 4,
+          "long_name": "f()",
+          "name": "f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "templates_and_rvalue_refs.cpp.txt": {
+      "cyclomatic_avg": 2.4,
+      "cyclomatic_total": 12,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "maxOf( T a , T b)",
+          "name": "maxOf"
+        },
+        {
+          "complexity": 2,
+          "lineno": 10,
+          "long_name": "bothPositive( T a , U b)",
+          "name": "bothPositive"
+        },
+        {
+          "complexity": 2,
+          "lineno": 18,
+          "long_name": "Buffer::Buffer( Buffer && other)",
+          "name": "Buffer::Buffer"
+        },
+        {
+          "complexity": 3,
+          "lineno": 31,
+          "long_name": "mix( int a , int b)",
+          "name": "mix"
+        },
+        {
+          "complexity": 3,
+          "lineno": 42,
+          "long_name": "afterTypedefs( int a , int b)",
+          "name": "afterTypedefs"
+        }
+      ],
+      "functions_count": 5,
+      "high_complexity_functions": 0,
+      "loc": 37,
+      "very_high_complexity_functions": 0
+    },
+    "unicode_identifier.cpp.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "caf\u00e9()",
+          "name": "caf\u00e9"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "unicode_macro_directive.cpp.txt": {
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "f()",
+          "name": "f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "unicode_whitespace.cpp.txt": {
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "f()",
+          "name": "f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "very_high_complexity.cpp.txt": {
+      "cyclomatic_avg": 14.0,
+      "cyclomatic_total": 28,
+      "functions": [
+        {
+          "complexity": 27,
+          "lineno": 4,
+          "long_name": "monster( int a , int b , int c , int d , int e)",
+          "name": "monster"
+        },
+        {
+          "complexity": 1,
+          "lineno": 27,
+          "long_name": "quiet( int a)",
+          "name": "quiet"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 1,
+      "loc": 23,
+      "very_high_complexity_functions": 1
+    }
+  },
+  "lizard_version": "1.23.0"
+}

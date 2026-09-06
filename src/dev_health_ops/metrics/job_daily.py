@@ -52,11 +52,9 @@ from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
     compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
-    compute_work_item_team_attributions,
 )
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.hotspots import (
-    compute_file_hotspots,
     compute_file_risk_hotspots,
 )
 from dev_health_ops.metrics.identity import (
@@ -73,7 +71,6 @@ from dev_health_ops.metrics.loaders import DataLoader, to_utc
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
 from dev_health_ops.metrics.prometheus import (
     record_metrics_family_zero_rows,
-    record_team_complexity_daily_rows,
     record_team_metrics_daily_repo_rows,
 )
 from dev_health_ops.metrics.quality import (
@@ -89,7 +86,6 @@ from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.team_cognitive_load import (
     build_team_cognitive_load_rows_for_day,
 )
-from dev_health_ops.metrics.team_complexity import build_team_complexity_rows_for_day
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import (
@@ -781,141 +777,6 @@ def _write_team_cognitive_load_for_day(
     return len(cognitive_load_rows)
 
 
-def _fetch_repo_complexity_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
-    """Read the latest ``repo_complexity_daily`` rows for ``day`` as plain
-    dicts, ``argMax(*, computed_at)``-deduped per ``repo_id`` -- mirrors
-    ``job_compounding_risk.py::_fetch_repo_metrics_for_day``.
-
-    Returned objects are duck-typed enough to satisfy
-    ``build_team_complexity_rows_for_day`` -- it only reads attributes via
-    ``getattr(row, name, None)``.
-
-    CHAOS-4365 codex R1 (P1): ``repo_complexity_daily.computed_at`` is a
-    second-precision ``DateTime`` (``007_complexity_investment_issues.sql``),
-    not a ``DateTime64`` -- coarse enough that two recomputes for the same
-    repo/day can land in the same second. A separate ``argMax(col,
-    computed_at)`` per column (as this query originally had) resolves each
-    column's tie independently, which can pick DIFFERENT physical rows per
-    column and assemble a "Frankenstein" row the aggregator then computes an
-    inconsistent ratio from. Collapsed to a SINGLE
-    ``argMax(tuple(...), computed_at)`` instead -- exactly one row wins, and
-    every value is unwrapped from that one row via ``tupleElement`` --
-    matching the same fix ``discover_repos`` already applies to ``repos``
-    (see that function's docstring) for the identical tie class.
-    """
-
-    class _Row:
-        __slots__ = (
-            "repo_id",
-            "loc_total",
-            "cyclomatic_total",
-            "high_complexity_functions",
-            "very_high_complexity_functions",
-        )
-
-        def __init__(self, d: dict[str, Any]) -> None:
-            self.repo_id = d.get("repo_id")
-            self.loc_total = d.get("loc_total")
-            self.cyclomatic_total = d.get("cyclomatic_total")
-            self.high_complexity_functions = d.get("high_complexity_functions")
-            self.very_high_complexity_functions = d.get(
-                "very_high_complexity_functions"
-            )
-
-    query = """
-        SELECT
-            repo_id,
-            tupleElement(latest, 1) AS loc_total,
-            tupleElement(latest, 2) AS cyclomatic_total,
-            tupleElement(latest, 3) AS high_complexity_functions,
-            tupleElement(latest, 4) AS very_high_complexity_functions
-        FROM (
-            SELECT
-                repo_id,
-                argMax(
-                    tuple(
-                        loc_total,
-                        cyclomatic_total,
-                        high_complexity_functions,
-                        very_high_complexity_functions
-                    ),
-                    computed_at
-                ) AS latest
-            FROM repo_complexity_daily
-            WHERE org_id = {org_id:String} AND day = {day:Date}
-            GROUP BY repo_id
-        )
-    """
-    raw = sink.query_dicts(query, {"org_id": org_id, "day": day})
-    return [_Row(r) for r in raw]
-
-
-def _write_team_complexity_for_day(
-    *,
-    sinks: list[Any],
-    primary_sink: Any,
-    day: date,
-    org_id: str,
-    computed_at: datetime,
-    repo_names_by_id: dict[uuid.UUID, str],
-    repo_team_resolver: Any,
-) -> int:
-    """CHAOS-4365 item 3 (4347-C): team-keyed complexity rollup,
-    OWNERSHIP-scoped.
-
-    Reads back this org/day's ``repo_complexity_daily`` rows from ClickHouse
-    (``_fetch_repo_complexity_for_day``, already ``argMax``-deduped) rather
-    than accumulating in-process, the same finalize-step discipline
-    ``_write_compounding_risk_team_rows_for_day`` follows -- correct
-    regardless of how many separate per-repo ``metrics complexity`` runs
-    already landed for this day, and never written per-repo (the CHAOS-4399
-    bug class: a per-repo write lets ``argMax(computed_at)`` dedup silently
-    keep only the last-processed repo's numbers for a multi-repo team).
-    """
-    repo_complexity_rows = _fetch_repo_complexity_for_day(primary_sink, org_id, day)
-    if not repo_complexity_rows:
-        return 0
-
-    try:
-        as_of = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
-        team_repo_ownership_map = load_team_repo_ownership_map(
-            primary_sink, org_id, as_of=as_of
-        )
-        repo_to_team = _repo_to_team_map_for_compounding_risk(
-            repo_metrics_rows=repo_complexity_rows,
-            repo_names_by_id=repo_names_by_id,
-            repo_team_resolver=repo_team_resolver,
-            team_repo_ownership_map=team_repo_ownership_map,
-            org_id=org_id,
-            day=day,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(
-            "repo_team_resolver failed for team complexity: org_id=%s day=%s %s",
-            org_id,
-            day.isoformat(),
-            exc,
-        )
-        repo_to_team = {}
-    if not repo_to_team:
-        return 0
-
-    complexity_rows = build_team_complexity_rows_for_day(
-        day=day,
-        org_id=org_id,
-        repo_complexity_rows=repo_complexity_rows,
-        repo_to_team=repo_to_team,
-        computed_at=computed_at,
-    )
-    if not complexity_rows:
-        return 0
-    for s in sinks:
-        if hasattr(s, "write_team_complexity_daily"):
-            s.write_team_complexity_daily(complexity_rows)
-    record_team_complexity_daily_rows(complexity_rows)
-    return len(complexity_rows)
-
-
 def _secondary_uri_from_env() -> str:
     uri = os.getenv("SECONDARY_DATABASE_URI")
     if not uri:
@@ -1134,10 +995,27 @@ async def run_daily_metrics_job(
     before this parameter existed. Only families with a Go native executor
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
-    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292, ``file_hotspots``/
-    ``file_risk_hotspots`` CHAOS-4277, ``testops_risk`` CHAOS-4294, and
-    ``compounding_risk`` CHAOS-4287); naming any other family here has no
+    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292,
+    ``file_risk_hotspots`` CHAOS-4277 (``file_hotspots`` itself, same
+    ticket, had its Python compute+write deleted outright rather than
+    gated -- CHAOS-5234/CHAOS-3092 -- so it no longer checks this set at
+    all), ``testops_risk`` CHAOS-4294,
+    ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284,
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
+    ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
+    chaos-4280-r3, finding 5 -- this doc had not been updated when
+    ``ai_impact`` was wired below); naming any other family here has no
     effect.
+
+    The three CHAOS-4284 names gate WRITES ONLY: their computed values still
+    feed ``compute_release_confidence``/``compute_quality_drag``/
+    ``compute_pipeline_stability`` in-process further down, so the compute runs
+    regardless of this set -- same shape as ``repo_user_commit`` and
+    ``testops_risk``, not ``team_wellbeing``'s compute+write skip. The gate is
+    load-bearing rather than cosmetic: their three target tables are plain
+    ``MergeTree`` with no dedup engine, so a write that is not suppressed after
+    the Go executor already wrote the same ``(org_id, repo_id, day)`` doubles
+    every metric silently instead of erroring.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_
@@ -1443,7 +1321,18 @@ async def run_daily_metrics_job(
         bus_factor_by_repo: dict[uuid.UUID, int] = {}
         gini_by_repo: dict[uuid.UUID, float] = {}
 
-        all_file_metrics = []
+        # CHAOS-5234/CHAOS-3092: file_hotspots's daily compute (formerly
+        # `compute_file_hotspots` -> `all_file_metrics` -> write_file_metrics)
+        # is DELETED here, not skip-gated -- chris's ruling: "once go is in
+        # main that does the same thing, skip flags are pointless." The
+        # native Go executor (FileHotspotsExecutor, CHAOS-4277) is the only
+        # writer of file_metrics_daily now; neither all_file_metrics nor
+        # file_hotspots fed anything else downstream in this function (see
+        # the deleted gate comment's own admission), so there is no shared
+        # input to preserve. `compute_file_hotspots` itself is NOT deleted --
+        # it has real, unrelated callers (golden-fixture generators, the
+        # live-Python oracle comparator, and its own dedicated unit tests);
+        # only this call site is gone.
         for r_id in active_repos:
             rework_ratio_by_repo[r_id] = compute_rework_churn_ratio(
                 repo_id=str(r_id), window_stats=h_commit_rows
@@ -1457,13 +1346,6 @@ async def run_daily_metrics_job(
             gini_by_repo[r_id] = compute_code_ownership_gini(
                 repo_id=str(r_id), window_stats=h_commit_rows
             )
-            file_metrics = compute_file_hotspots(
-                repo_id=r_id,
-                day=d,
-                window_stats=h_commit_rows,
-                computed_at=computed_at,
-            )
-            all_file_metrics.extend(file_metrics)
 
         # file_hotspot_daily (risk treemap + hotspot drilldown on /complexity)
         # is computed live here by merging the 30d churn window with the latest
@@ -1552,7 +1434,6 @@ async def run_daily_metrics_job(
         wi_user_metrics: list[Any] = []
         wi_cycle_times: list[Any] = []
         estimate_coverage_metrics: list[Any] = []
-        wi_team_attributions: list[Any] = []
         wi_state_durations: list[Any] = []
         if work_items:
             wi_metrics, wi_user_metrics, wi_cycle_times = (
@@ -1567,14 +1448,20 @@ async def run_daily_metrics_job(
                     attribution_context=team_attribution_context,
                 )
             )
-            wi_team_attributions = compute_work_item_team_attributions(
-                work_items=work_items,
-                computed_at=computed_at,
-                team_resolver=team_resolver,
-                project_key_resolver=project_key_resolver,
-                linked_issue_resolver=linked_issue_resolver,
-                attribution_context=team_attribution_context,
-            )
+            # CHAOS-5233/CHAOS-3092: work_item_attribution's daily compute is
+            # DELETED here, not skip-gated -- chris's ruling: "once go is in
+            # main that does the same thing, skip flags are pointless." The
+            # native Go executor (WorkItemAttributionExecutor, #2246) is the
+            # ONLY writer of work_item_team_attributions for this (org, day,
+            # repo) partition scope now; there is no Python fallback to keep
+            # alive here. `compute_work_item_team_attributions` itself is NOT
+            # deleted -- it has a real, unrelated caller
+            # (job_work_items.py's run_work_items_sync_job, a full-backfill
+            # sync job outside this function's scope) plus dedicated unit
+            # tests and the live-Python oracle comparator
+            # (internal/providersync/testdata/oracle_pairs/
+            # _github_work_item_derived_helpers.py) that exercise the
+            # function directly; only THIS call site is gone.
             estimate_coverage_metrics = compute_estimate_coverage_metrics_daily(
                 day=d,
                 work_items=work_items,
@@ -1613,11 +1500,23 @@ async def run_daily_metrics_job(
                 )
             )
 
-        review_edges = compute_review_edges_daily(
-            day=d,
-            pull_request_rows=pr_rows,
-            pull_request_review_rows=review_rows,
-            computed_at=computed_at,
+        # CHAOS-4279: review_edges has a native Go executor
+        # (ReviewEdgesExecutor), registered pre_bridge. When the Go dispatcher
+        # names it in skip_families it has already computed and written this
+        # scope, so skip compute entirely rather than only the write --
+        # nothing else in this function reads review_edges before the write
+        # block, which makes this the cicd/team_wellbeing shape rather than
+        # repo_user_commit's write-only skip.
+        skip_review_edges = "review_edges" in skip_families
+        review_edges = (
+            []
+            if skip_review_edges
+            else compute_review_edges_daily(
+                day=d,
+                pull_request_rows=pr_rows,
+                pull_request_review_rows=review_rows,
+                computed_at=computed_at,
+            )
         )
         # CHAOS-4292: cicd has a native Go executor (CICDExecutor). When the
         # Go dispatcher reports it already computed and wrote this scope,
@@ -1634,6 +1533,12 @@ async def run_daily_metrics_job(
                 day=d, pipeline_runs=pipeline_rows, computed_at=computed_at
             )
         )
+        # CHAOS-4284: see the write block below for why these three are a
+        # WRITE-ONLY skip -- the computed values are still needed in-process by
+        # testops_risk's own three functions further down.
+        skip_testops_pipeline_write = "testops_pipeline" in skip_families
+        skip_testops_test_write = "testops_test" in skip_families
+        skip_testops_coverage_write = "testops_coverage" in skip_families
         testops_pipeline_metrics = compute_pipeline_metrics_daily(
             day=d,
             pipeline_runs=testops_pipeline_rows,
@@ -1868,19 +1773,20 @@ async def run_daily_metrics_job(
         # row's generation -- the same class of gap CHAOS-4275's own guard
         # above exists to close, caught here by codex round 1 on this port.
         skip_deploy_write = "deploy" in skip_families
-        # CHAOS-4277: file_hotspots/file_risk_hotspots have native Go
-        # executors (FileHotspotsExecutor/FileRiskHotspotsExecutor). Same
-        # write-only-skip shape as repo_user_commit above: neither
-        # all_file_metrics nor all_file_hotspots feeds anything else
+        # CHAOS-4277: file_risk_hotspots has a native Go executor
+        # (FileRiskHotspotsExecutor). Same write-only-skip shape as
+        # repo_user_commit above: all_file_hotspots feeds nothing else
         # downstream in this function, so compute could also be skipped,
         # but is left unconditional to match the established, reviewed
         # precedent with the smallest possible diff. Missing this gate is
         # exactly the defect repo_user_commit's own comment warns about --
         # the native executor and this unconditional write would otherwise
-        # BOTH fire for every partition, doubling every row in both
-        # append-only tables (file_metrics_daily, file_hotspot_daily) on
-        # every single run, not just on a recompute.
-        skip_file_hotspots_write = "file_hotspots" in skip_families
+        # BOTH fire for every partition, doubling every row in
+        # file_hotspot_daily on every single run, not just on a recompute.
+        # (file_hotspots itself -- FileHotspotsExecutor's own family -- is no
+        # longer gated here at all: CHAOS-5234/CHAOS-3092 deleted its compute
+        # and write call sites entirely, see the comment a few lines above
+        # this loop.)
         skip_file_risk_hotspots_write = "file_risk_hotspots" in skip_families
         # CHAOS-4283: work_item and work_item_estimate have native Go
         # executors (WorkItemExecutor/WorkItemEstimateExecutor). This is the
@@ -1894,8 +1800,26 @@ async def run_daily_metrics_job(
         #     empty work-item contribution for every user on every partition
         #     the Go executor handled -- a wrong number, not a missing one.
         #   * `estimate_coverage_metrics` feeds nothing else here, so its
-        #     compute COULD be skipped, but is left unconditional to match the
-        #     established file_hotspots precedent and keep the diff minimal.
+        #     compute COULD be skipped, but is left unconditional to keep this
+        #     diff minimal (work_item_estimate is its own separate deletion
+        #     target under CHAOS-5234/CHAOS-3092, not yet done as of this
+        #     comment -- file_hotspots, which this comment used to cite as
+        #     precedent for "unconditional is fine," has since had its own
+        #     compute+write deleted outright rather than left unconditional).
+        #
+        # CHAOS-4286: work_graph_edges has a native Go executor
+        # (WorkGraphEdgesExecutor). WRITE-ONLY skip, like repo_user_commit:
+        # the compute that produces these three lists is the SAME
+        # _extract_ai_workflow_for_day call that produces ai_workflow_runs /
+        # _artifact_edges / _issue_edges, and THOSE are still Python-owned
+        # (ai_workflow is CHAOS-4286's other half, not yet ported). So the
+        # extraction must stay unconditional; only the three edge writes below
+        # are gated.
+        #
+        # Safe because each of ai_review_outcome_edges, ai_pr_deployment_edges
+        # and ai_deployment_incident_edges is assigned once (:1696-1698) and
+        # read ONLY by its own write below -- verified by grep, not assumed.
+        skip_work_graph_edges_write = "work_graph_edges" in skip_families
         #
         # Without these two gates the native executors and the unconditional
         # writes below would BOTH fire for every partition, doubling every row
@@ -1904,6 +1828,38 @@ async def run_daily_metrics_job(
         # repo_user_commit's own comment above warns about.
         skip_work_item_write = "work_item" in skip_families
         skip_work_item_estimate_write = "work_item_estimate" in skip_families
+        # CHAOS-4285: ai_governance has a native Go executor
+        # (AIGovernanceExecutor). Same write-only-skip shape as
+        # repo_user_commit above -- the compute stays unconditional to keep
+        # the diff minimal and match the reviewed precedent, and neither
+        # `ai_policy_events` nor `ai_governance_coverage` feeds anything else
+        # in this function (both are assigned at :1671 and used ONLY by the
+        # two writes below; verified by grep, not assumed).
+        #
+        # This gate is NOT optional hygiene for this family. ai_policy_events
+        # is a ReplacingMergeTree whose ORDER BY key ENDS in event_id, and
+        # Python's event_id is uuid4() -- so an ungated Python write can never
+        # merge with the native executor's rows, nor with its own from a
+        # previous run. Leaving both paths writing would accumulate duplicate
+        # policy events permanently, which is the exact defect the Go port's
+        # deterministic event_id exists to fix.
+        skip_ai_governance_write = "ai_governance" in skip_families
+        # CHAOS-4280: ai_impact has a native Go executor (AIImpactExecutor).
+        # Same write-only-skip shape as repo_user_commit above --
+        # `ai_impact_metrics` is assigned at :1809 and read ONLY by the write
+        # below (verified by grep, not assumed), so compute stays unconditional
+        # and only the write is gated.
+        #
+        # ai_impact_metrics_daily is a ReplacingMergeTree whose ORDER BY key
+        # (org_id, team_id, repo_id, work_type, day, attribution_bucket) fully
+        # covers the producer's grouping, so an ungated double-write would
+        # eventually collapse rather than accumulate. The gate is still
+        # required: until a merge runs, both versions are live, and readers
+        # that do not dedup would double-count -- and the two paths disagree
+        # wherever the Go port's fixes apply (the uint64 revert-rule widening,
+        # and the incident reader's CHAOS-4269 valid_from guard), so which copy
+        # wins would decide the answer.
+        skip_ai_impact_write = "ai_impact" in skip_families
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -1919,21 +1875,42 @@ async def run_daily_metrics_job(
                 s.write_work_item_user_metrics(wi_user_metrics)
             if wi_cycle_times and not skip_work_item_write:
                 s.write_work_item_cycle_times(wi_cycle_times)
-            if wi_team_attributions and hasattr(s, "write_work_item_team_attributions"):
-                s.write_work_item_team_attributions(wi_team_attributions)
+            # CHAOS-5233/CHAOS-3092: no write_work_item_team_attributions
+            # call here -- deleted alongside the compute call above; the
+            # native Go executor is the only writer now.
             if wi_state_durations:
                 s.write_work_item_state_durations(wi_state_durations)
-            s.write_review_edges(review_edges)
+            if not skip_review_edges:
+                s.write_review_edges(review_edges)
             s.write_cicd_metrics(cicd_metrics)
-            s.write_testops_pipeline_metrics(testops_pipeline_metrics)
-            s.write_testops_test_metrics(testops_test_metrics)
-            s.write_testops_coverage_metrics(testops_coverage_metrics)
+            # CHAOS-4284: testops_pipeline/testops_test/testops_coverage have
+            # native Go executors (TestopsPipelineExecutor/TestopsTestExecutor/
+            # TestopsCoverageExecutor). WRITE-ONLY skip, exactly like
+            # repo_user_commit and testops_risk above -- NOT team_wellbeing's
+            # compute+write skip: these three values are consumed IN-PROCESS a
+            # few hundred lines below by compute_release_confidence /
+            # compute_quality_drag / compute_pipeline_stability, so the compute
+            # must keep running here regardless of which side wrote the rows.
+            #
+            # Gating the writes is what actually prevents a double write. The
+            # three target tables are plain MergeTree ORDER BY (repo_id, day)
+            # (029_testops_tables.sql), NOT ReplacingMergeTree -- nothing
+            # collapses a duplicate (repo_id, day) row, so an ungated write
+            # after Go has already written the same scope would silently
+            # double every one of these metrics.
+            if not skip_testops_pipeline_write:
+                s.write_testops_pipeline_metrics(testops_pipeline_metrics)
+            if not skip_testops_test_write:
+                s.write_testops_test_metrics(testops_test_metrics)
+            if not skip_testops_coverage_write:
+                s.write_testops_coverage_metrics(testops_coverage_metrics)
             if not skip_deploy_write:
                 s.write_deploy_metrics(deploy_metrics)
             s.write_incident_metrics(incident_metrics)
-            s.write_ai_policy_events(ai_policy_events)
-            s.write_ai_governance_coverage_daily(ai_governance_coverage)
-            if ai_impact_metrics:
+            if not skip_ai_governance_write:
+                s.write_ai_policy_events(ai_policy_events)
+                s.write_ai_governance_coverage_daily(ai_governance_coverage)
+            if ai_impact_metrics and not skip_ai_impact_write:
                 s.write_ai_impact_metrics(ai_impact_metrics)
             if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
                 s.write_ai_workflow_runs(ai_workflow_runs)
@@ -1943,22 +1920,31 @@ async def run_daily_metrics_job(
                 s.write_ai_workflow_artifact_edges(ai_workflow_artifact_edges)
             if ai_workflow_issue_edges and hasattr(s, "write_ai_workflow_issue_edges"):
                 s.write_ai_workflow_issue_edges(ai_workflow_issue_edges)
-            if ai_review_outcome_edges and hasattr(
-                s, "write_work_graph_pr_review_outcome_edges"
+            if (
+                ai_review_outcome_edges
+                and not skip_work_graph_edges_write
+                and hasattr(s, "write_work_graph_pr_review_outcome_edges")
             ):
                 s.write_work_graph_pr_review_outcome_edges(ai_review_outcome_edges)
-            if ai_pr_deployment_edges and hasattr(
-                s, "write_work_graph_pr_deployment_edges"
+            if (
+                ai_pr_deployment_edges
+                and not skip_work_graph_edges_write
+                and hasattr(s, "write_work_graph_pr_deployment_edges")
             ):
                 s.write_work_graph_pr_deployment_edges(ai_pr_deployment_edges)
-            if ai_deployment_incident_edges and hasattr(
-                s, "write_work_graph_deployment_incident_edges"
+            if (
+                ai_deployment_incident_edges
+                and not skip_work_graph_edges_write
+                and hasattr(s, "write_work_graph_deployment_incident_edges")
             ):
                 s.write_work_graph_deployment_incident_edges(
                     ai_deployment_incident_edges
                 )
-            if all_file_metrics and not skip_file_hotspots_write:
-                s.write_file_metrics(all_file_metrics)
+            # CHAOS-5234/CHAOS-3092: no write_file_metrics call here -- the
+            # file_hotspots compute+write is deleted entirely (see the
+            # comment above the deleted `compute_file_hotspots` call site);
+            # the native Go executor is the only writer of
+            # file_metrics_daily now.
             if (
                 all_file_hotspots
                 and hasattr(s, "write_file_hotspot_daily")
@@ -2080,17 +2066,40 @@ async def run_daily_metrics_job(
         _note_family_zero_rows("testops_risk.pipeline_stability", pipeline_stab, day=d)
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
-        # correlations, insights). Reads from ClickHouse via the sink.
-        for s in sinks:
-            try:
-                run_benchmarking_for_day(
-                    s,
-                    as_of_day=d,
-                    computed_at=computed_at,
-                    org_id=org_id,
-                )
-            except Exception as exc:
-                logger.warning("Benchmarking run failed for day=%s: %s", d, exc)
+        # correlations, insights) MOVED to run_daily_metrics_finalize
+        # (CHAOS-5194, astra design-review finding F3), skip_families gate and
+        # all -- necessary PLUMBING, not a compute fix. It used to run HERE,
+        # once per partition (run_benchmarking_for_day takes no repo_id, so an
+        # org with N repos appended N identical row sets to six append-only
+        # tables), deduplicated on the Go side by an anchor-partition trick
+        # (fixed duplication, not the race F3 found: the anchor partition's
+        # own post_bridge phase could complete before every OTHER partition
+        # for the org/day had written its own inputs).
+        #
+        # The move is required for the skip_families MECHANISM to keep
+        # working, not optional: partition-scope skip_families (built by
+        # computeNativeFamilies/computePostBridgeNativeFamilies) and
+        # finalize-scope skip_families (built by
+        # computeNativeFinalizeFamilies) are TWO INDEPENDENT lists sent to
+        # TWO INDEPENDENT bridge calls. Once the Go executor registers
+        # "benchmarking" as a FINALIZE family instead of a post_bridge one,
+        # the partition-scope skip_families sent here would never contain it
+        # again -- leaving the OLD gate at this call site permanently open
+        # and duplicating Python's own compute on top of the native
+        # executor's correct one, a WORSE bug than before. Moving the call to
+        # where the matching skip_families list actually lives is what keeps
+        # "the Go executor computed it, so Python must not" true.
+        #
+        # This move does NOT fix Python's own compute logic (no ordering
+        # change, no query change) -- team-lead ruling, CHAOS-5194: Python's
+        # race stays exactly as buggy as it always was WHEN THIS CODE PATH
+        # ACTUALLY RUNS. In practice it incidentally runs behind the same
+        # partition barrier as the Go executor now (both live in
+        # run_daily_metrics_finalize, which only runs once every partition
+        # for the day has succeeded), and it runs at all only when the
+        # native executor is absent (skip_families gate below), which is the
+        # existing fail-open-to-Python contract every other native family
+        # already has.
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(
@@ -2262,7 +2271,8 @@ async def run_daily_metrics_finalize(
         )
 
     # CHAOS-4290: same gate shape as run_daily_metrics_job's families
-    # (`"file_hotspots" in skip_families` at :1875 and its siblings). When a
+    # (`"file_risk_hotspots" in skip_families` a few hundred lines up, and
+    # its siblings). When a
     # native Go executor already computed and wrote ic_finalize for this run,
     # recomputing here would append a SECOND generation of the same rows --
     # and user_metrics_daily is append-only, deduped
@@ -2288,12 +2298,33 @@ async def run_daily_metrics_finalize(
         for s in sinks_list:
             s.write_ic_landscape_rolling(ic_landscape)
 
+    computed_at = datetime.now(timezone.utc)
+
+    # CHAOS-5194 (astra F3): benchmarking, relocated here from
+    # run_daily_metrics_job -- see this function's sibling comment at the old
+    # call site for why the move is required plumbing, not a compute fix.
+    # Same skip_families gate shape as ic_finalize above: when the Go
+    # dispatcher names "benchmarking" in skip_families, the native
+    # BenchmarkingFinalizeExecutor already computed and wrote this org/day,
+    # so skip the whole call -- nothing else in this function consumes its
+    # output.
+    if "benchmarking" not in skip_families:
+        for s in sinks_list:
+            try:
+                run_benchmarking_for_day(
+                    s,
+                    as_of_day=day,
+                    computed_at=computed_at,
+                    org_id=org_id,
+                )
+            except Exception as exc:
+                logger.warning("Benchmarking run failed for day=%s: %s", day, exc)
+
     # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily and
     # ALL of team_cognitive_load_daily are written exactly ONCE here, per
     # org/day, after every repo's own partition has landed -- never
     # in-process inside a single per-repo run_daily_metrics_job call (see
     # _write_compounding_risk_for_day's docstring for why that was wrong).
-    computed_at = datetime.now(timezone.utc)
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
     discovered_repos = discover_repos(
@@ -2441,43 +2472,20 @@ async def run_daily_metrics_finalize(
                 },
             )
 
-    # CHAOS-5051: same skip_families gate shape as team_cognitive_load above
-    # (:2246) and ic_finalize. When a native Go executor already computed and
-    # wrote team_complexity for this run, recomputing here would append a
-    # SECOND generation of the same rows -- team_complexity_daily is
-    # append-only, deduped by every reader's own argMax(<col>, computed_at)
-    # GROUP BY (org_id, team_id, day), so the later writer wins silently and
-    # the native rows would vanish with nothing failing.
-    if "team_complexity" not in skip_families:
-        team_complexity_count = _write_team_complexity_for_day(
-            sinks=sinks_list,
-            primary_sink=primary_sink,
-            day=day,
-            org_id=org_id,
-            computed_at=computed_at,
-            repo_names_by_id=repo_names_by_id,
-            repo_team_resolver=repo_team_resolver,
-        )
-        if not team_complexity_count:
-            # CHAOS-4365 item 3: a resolver failure, an org with no
-            # ownership-resolvable repos, or a day with no repo_complexity_daily
-            # rows yet (the complexity scan job runs on its own cadence,
-            # separate from the daily partition loop) all degrade to zero rows
-            # here, never raise -- same CHAOS-4246 contract every other finalize
-            # family follows. record_metrics_family_zero_rows makes a sustained
-            # gap alertable instead of only visible in logs.
-            record_metrics_family_zero_rows(
-                family="team_complexity", cause="no_rows_computed"
-            )
-            logger.warning(
-                "metrics.daily.finalize family produced zero rows",
-                extra={
-                    "family": "team_complexity",
-                    "day": day.isoformat(),
-                    "org_id": org_id,
-                    "cause": "no_rows_computed",
-                },
-            )
+    # CHAOS-5051: team_complexity's Python compute
+    # (_fetch_repo_complexity_for_day + _write_team_complexity_for_day) was
+    # DELETED here, not merely skip-gated. Same reachability analysis
+    # CHAOS-5141 (team_cognitive_load) already established: buildDailyWorker
+    # (cmd/dev-health-worker/daily.go) refuses the WHOLE daily worker if the
+    # ClickHouse connection fails to open, before
+    # dailyNativeFamilyRegistrations is ever called -- so team_complexity is
+    # guaranteed to register natively in every real deployment (it has no
+    # co-registration dependency of its own, unlike team_cognitive_load/
+    # ic_finalize). On a RUNTIME native failure, FinalizeHandler.Work's
+    # computeNativeFinalizeFamilies error path explicitly never calls the
+    # Python bridge either (daily.go's own comment: "The bridge is NOT
+    # called"). No straddle, no live fallback path -- safe to delete outright
+    # rather than leave skip_families-gated.
 
     logger.info("IC finalize complete for day=%s", day.isoformat())
 

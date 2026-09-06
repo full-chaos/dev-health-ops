@@ -3,6 +3,7 @@ package workgraph
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -19,11 +20,13 @@ type handler struct {
 	// A step belongs here rather than in preSteps when the Python stage would
 	// OVERWRITE what it writes; see NativePostStep.
 	postSteps []NativePostStep
+	logger    *slog.Logger
 }
 
 func newHandler(
 	store Store, compatibility CompatibilityExecutor,
 	preSteps []NativePreStep, postSteps []NativePostStep,
+	logger *slog.Logger,
 ) (*handler, error) {
 	if store == nil || compatibility == nil {
 		return nil, ErrUnavailable
@@ -43,9 +46,14 @@ func newHandler(
 			return nil, ErrUnavailable
 		}
 	}
+	// A nil logger falls back to slog.Default() so a permanent-cancel below
+	// is never silently unlogged -- same convention as issueprlinks.Service.
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &handler{
 		store: store, compatibility: compatibility,
-		preSteps: preSteps, postSteps: postSteps,
+		preSteps: preSteps, postSteps: postSteps, logger: logger,
 	}, nil
 }
 
@@ -72,6 +80,17 @@ func (handler *handler) work(ctx context.Context, requestID string, kind Kind, o
 		return nil
 	}
 	if claim.Request.OrganizationID != *organizationID || claim.Request.ID != requestID || claim.Request.Kind != kind {
+		// Loud for the same reason as the lease-renewal permanent-cancel
+		// below: this is a permanent cancel too, and without the mismatch
+		// itself logged an operator sees only "ambiguous", never which of
+		// org/id/kind actually disagreed with the claimed request.
+		handler.logger.Error("workgraph handler: permanent cancel, claimed request does not match envelope",
+			slog.String("request_id", requestID), slog.String("kind", string(kind)),
+			slog.String("organization_id", *organizationID),
+			slog.String("claimed_organization_id", claim.Request.OrganizationID),
+			slog.String("claimed_request_id", claim.Request.ID),
+			slog.String("claimed_kind", string(claim.Request.Kind)),
+		)
 		_ = releaseAmbiguous(handler.store, ctx, *claim, "claimed request no longer matches River envelope")
 		return jobruntime.Permanent(ErrInvalidState)
 	}
@@ -119,6 +138,14 @@ func (handler *handler) work(ctx context.Context, requestID string, kind Kind, o
 		if errors.Is(err, ErrCompatibilityNotSent) || errors.Is(err, ErrCompatibilityRefused) {
 			return jobruntime.Retryable(err)
 		}
+		// Loud, not just recorded on the ambiguous ledger row: this is the
+		// permanent-cancel path, and the underlying error (e.g. a pre-step's
+		// ClickHouse bind failure) is exactly what an operator needs to see
+		// without having to correlate a ledger detail string back to a cause.
+		handler.logger.Error("workgraph handler: permanent cancel after ambiguous compatibility outcome",
+			slog.String("request_id", requestID), slog.String("kind", string(kind)),
+			slog.String("organization_id", *organizationID), slog.Any("error", err),
+		)
 		_ = releaseAmbiguous(handler.store, ctx, *claim, compatibilityAmbiguousDetail(err))
 		return jobruntime.Permanent(err)
 	}
@@ -199,9 +226,6 @@ func runWithLeaseRenewal(ctx context.Context, lease time.Duration, renew func(co
 
 type BuildHandler struct{ *handler }
 type MaterializeHandler struct{ *handler }
-type DispatchHandler struct{ *handler }
-type ChunkHandler struct{ *handler }
-type FinalizeHandler struct{ *handler }
 
 // NewBuildHandler builds the workgraph.build handler. preSteps are native Go
 // producers that run before the Python bridge, in the order given; see
@@ -209,25 +233,14 @@ type FinalizeHandler struct{ *handler }
 func NewBuildHandler(
 	store Store, executor CompatibilityExecutor,
 	preSteps []NativePreStep, postSteps []NativePostStep,
+	logger *slog.Logger,
 ) (*BuildHandler, error) {
-	h, err := newHandler(store, executor, preSteps, postSteps)
+	h, err := newHandler(store, executor, preSteps, postSteps, logger)
 	return &BuildHandler{h}, err
 }
-func NewMaterializeHandler(store Store, executor CompatibilityExecutor) (*MaterializeHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
+func NewMaterializeHandler(store Store, executor CompatibilityExecutor, logger *slog.Logger) (*MaterializeHandler, error) {
+	h, err := newHandler(store, executor, nil, nil, logger)
 	return &MaterializeHandler{h}, err
-}
-func NewDispatchHandler(store Store, executor CompatibilityExecutor) (*DispatchHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
-	return &DispatchHandler{h}, err
-}
-func NewChunkHandler(store Store, executor CompatibilityExecutor) (*ChunkHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
-	return &ChunkHandler{h}, err
-}
-func NewFinalizeHandler(store Store, executor CompatibilityExecutor) (*FinalizeHandler, error) {
-	h, err := newHandler(store, executor, nil, nil)
-	return &FinalizeHandler{h}, err
 }
 
 func (h *BuildHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.WorkGraphBuildArgs]) error {
@@ -241,22 +254,4 @@ func (h *MaterializeHandler) Work(ctx context.Context, execution *jobruntime.Exe
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	return h.work(ctx, execution.Args.Payload.RequestID, KindMaterialize, execution.OrganizationID, execution.Envelope.Domain)
-}
-func (h *DispatchHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.InvestmentDispatchArgs]) error {
-	if execution == nil {
-		return jobruntime.Permanent(ErrInvalidState)
-	}
-	return h.work(ctx, execution.Args.Payload.RequestID, KindDispatch, execution.OrganizationID, execution.Envelope.Domain)
-}
-func (h *ChunkHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.InvestmentChunkArgs]) error {
-	if execution == nil {
-		return jobruntime.Permanent(ErrInvalidState)
-	}
-	return h.work(ctx, execution.Args.Payload.ChunkID, KindChunk, execution.OrganizationID, execution.Envelope.Domain)
-}
-func (h *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.InvestmentFinalizeArgs]) error {
-	if execution == nil {
-		return jobruntime.Permanent(ErrInvalidState)
-	}
-	return h.work(ctx, execution.Args.Payload.RunID, KindFinalize, execution.OrganizationID, execution.Envelope.Domain)
 }

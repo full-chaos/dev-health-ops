@@ -67,6 +67,60 @@ type StrandRepairResult struct {
 	// and the contention is invisible, breaking the same "counted, not
 	// filtered" rule the other refusals follow.
 	SkippedRaceLost int
+	// RetiredKindObservations (r1 finding F1, codex, CHAOS-4438): rows in
+	// worker_job_outbox whose job_kind names a Go kind that has since been
+	// deleted outright (investment.dispatch/chunk/finalize -- registered
+	// handlers with zero producer anywhere, retired under CHAOS-4438). None
+	// of the three shapes above select these kinds any more, so a row like
+	// this would otherwise be invisible to every recovery path this repair
+	// runs -- exactly the swallowed-error class this whole result type
+	// exists to avoid for every OTHER refusal. This is a SEPARATE,
+	// lightweight survey (retiredKindsSQL), not a fourth shape: there is
+	// nothing to rearm or reclaim here, only something to make visible.
+	// Populated even though production should have zero producers for these
+	// kinds (per their own retired_kinds.reason in registry.json) -- the
+	// check costs one bounded query and proves that claim rather than
+	// assuming it.
+	RetiredKindObservations []RetiredKindObservation
+	// RetiredKindObservationsTruncated (r2 finding F3, P2, codex,
+	// CHAOS-4438): true when the observation query returned exactly
+	// retiredKindsObservationCap rows -- meaning there may be MORE retired-
+	// kind rows this pass could not see at all, not just later ones queued
+	// for a future pass. The query orders by id with no cursor between
+	// calls, so unlike the real repair shapes (bounded by the reconciler's
+	// own claim/lease state machine, which naturally drains), a kind with
+	// no producer can only ever accumulate outbox rows, never resolve them
+	// -- the SAME first page would repeat forever without this signal.
+	RetiredKindObservationsTruncated bool
+}
+
+// retiredKindsObservationCap is deliberately independent of the reconciler's
+// own operational limit (minReconcilerLimit..maxReconcilerLimit, currently
+// capped at 100): this query is read-only and diagnostic, not a repair
+// batch a claim/lease state machine will drain over successive passes, so
+// it can afford a much larger single read. Kept far below "unbounded" only
+// so a truly pathological accumulation cannot make one tick scan an
+// unreasonable number of rows.
+const retiredKindsObservationCap = 1000
+
+// retiredKindObservationsLikelyTruncated is a heuristic, not a proof: exactly
+// reaching the cap does not GUARANTEE more rows exist (the true count could
+// happen to equal the cap), but falling short of it DOES guarantee nothing
+// was missed, since the query has no other filter that could hide a row.
+// Fail-closed direction: an occasional false alarm at the boundary is far
+// cheaper than a silent gap, so this is deliberately "biased toward warning".
+func retiredKindObservationsLikelyTruncated(observed int) bool {
+	return observed >= retiredKindsObservationCap
+}
+
+// RetiredKindObservation is one worker_job_outbox row referencing a kind that
+// no longer has any Go handler. jobKind/organizationID are exactly what an
+// operator needs to find and manually resolve the row; outboxID lets them
+// look it up directly.
+type RetiredKindObservation struct {
+	OutboxID       string
+	JobKind        string
+	OrganizationID string
 }
 
 // StrandRepair rearms a daily-metrics or work-graph outbox row whose River
@@ -191,16 +245,80 @@ func (repair *StrandRepair) Step(
 	result := StrandRepairResult{}
 	for _, shape := range repair.shapes {
 		shapeResult, err := repair.stepShape(ctx, shape, now, limit)
-		if err != nil {
-			return StrandRepairResult{}, err
-		}
+		// r3 finding F2 (P2, codex, CHAOS-4438): an EARLIER shape's rearm
+		// already committed in its own queue-pool transaction (phase 3 of
+		// stepShape) before a LATER shape can fail here -- shapes run in a
+		// fixed order (partition, finalize, workgraph). Accumulate this
+		// shape's counts into `result` BEFORE checking err, same fix
+		// shape as the trailing observeRetiredKinds error below, so a
+		// later shape's failure cannot erase an earlier shape's already-
+		// committed work a second time.
 		result.Rearmed += shapeResult.Rearmed
 		result.SkippedJobLive += shapeResult.SkippedJobLive
 		result.SkippedClaimLive += shapeResult.SkippedClaimLive
 		result.SkippedClaimSettled += shapeResult.SkippedClaimSettled
 		result.SkippedRaceLost += shapeResult.SkippedRaceLost
+		if err != nil {
+			return result, err
+		}
 	}
+	observed, err := repair.observeRetiredKinds(ctx)
+	if err != nil {
+		// r2 finding F2 (P2, codex, CHAOS-4438): the 3 shapes above already
+		// COMMITTED their rearms by this point (rearm() runs inside its own
+		// queue-pool transaction, phase 3 of stepShape) -- discarding
+		// `result` here would report zero repair activity for work that
+		// really happened, matching Relay.stepRecovery's own principle one
+		// layer up (it returns its accumulated `result` on a seam error
+		// too, never a fresh zero value). This is a read-only OBSERVABILITY
+		// query failing after the real repair work is done; it must never
+		// erase evidence of that work. Wrapped with a static identifier
+		// (team-lead's discard-on-error sweep, CHAOS-4438) so the eventual
+		// log line at the ReconcilerLoop caller names which of Step's two
+		// query stages failed, without this package taking on a logger of
+		// its own (see the observeRetiredKinds doc comment on staying
+		// DB-only by design).
+		return result, fmt.Errorf("observe retired kinds: %w", err)
+	}
+	result.RetiredKindObservations = observed
+	result.RetiredKindObservationsTruncated = retiredKindObservationsLikelyTruncated(len(observed))
 	return result, nil
+}
+
+// observeRetiredKinds surveys for any worker_job_outbox row naming a kind
+// that has no Go handler at all any more (retiredWorkgraphKinds). It is
+// deliberately read-only -- there is nothing this repair can rearm or
+// reclaim for a kind with no worker, only something an operator needs told
+// about. A caller with a logger (ReconcilerLoop) is responsible for actually
+// emitting one log line per observation; this package stays DB-only by
+// design (see the StrandRepair doc comment on the two-pool split).
+func (repair *StrandRepair) observeRetiredKinds(
+	ctx context.Context,
+) ([]RetiredKindObservation, error) {
+	rows, err := repair.queryQueue(ctx, retiredKindsSQL, retiredWorkgraphKinds, retiredKindsObservationCap)
+	if err != nil || rows == nil {
+		return nil, classifyStrandError(err)
+	}
+	defer rows.Close()
+	// nil, not make([]T, 0): a StepResult/StrandRepairResult with every field
+	// at its zero value (the common "nothing happened" case an integration
+	// test asserts against directly) must stay reflect.DeepEqual-comparable
+	// to a bare zero-value literal -- an allocated empty slice here would
+	// silently break that for every caller, not just the ones that inspect
+	// this specific field.
+	var observations []RetiredKindObservation
+	for rows.Next() {
+		var found RetiredKindObservation
+		if err := rows.Scan(&found.OutboxID, &found.JobKind, &found.OrganizationID); err != nil {
+			return nil, ErrUnavailable
+		}
+		observations = append(observations, found)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, classifyStrandError(rows.Err())
+	}
+	return observations, nil
 }
 
 func (repair *StrandRepair) stepShape(
@@ -214,9 +332,20 @@ func (repair *StrandRepair) stepShape(
 	// Phase 1 -- survey on the queue pool, WITHOUT locking. Locking here would
 	// hold outbox rows across the domain round-trip for no benefit: nothing is
 	// mutated until phase 3 re-proves the predicate under a lock anyway.
+	// Nothing is counted yet at this phase (a survey error means zero
+	// candidates were even classified), so a plain zero-result return here
+	// is correct, not a discard -- unlike phases 2/3 below.
 	candidates, err := repair.survey(ctx, shape.survey, now, limit)
 	if err != nil {
-		return StrandRepairResult{}, err
+		// team-lead ruling (CHAOS-4438, discard-on-error sweep): every error
+		// this function returns must name the shape it happened in --
+		// classifyStrandError already collapses the real DB error down to a
+		// bare sentinel (ErrUnavailable/ErrNotAuthorized) to avoid leaking
+		// raw PG detail, so the shape name is the only identifier left to
+		// carry once that classification has happened. Wrapping (not
+		// replacing) keeps errors.Is(_, ErrUnavailable) true for every
+		// existing caller.
+		return StrandRepairResult{}, fmt.Errorf("shape %q: survey: %w", shape.name, err)
 	}
 	eligible := make([]strandCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -226,7 +355,17 @@ func (repair *StrandRepair) stepShape(
 		case dispositionRearm:
 			eligible = append(eligible, candidate)
 		default:
-			return StrandRepairResult{}, ErrUnavailable
+			// confirmation-pass finding F1 (P3, codex, CHAOS-4438): an EARLIER
+			// candidate in this same loop can already have incremented
+			// result.SkippedJobLive before a LATER candidate hits this
+			// default branch -- "nothing is counted yet at phase 1" is only
+			// true up to the first classified candidate, not for the whole
+			// loop. Return the accumulated `result`, not a fresh zero, same
+			// fix shape as every other seam in this file.
+			return result, fmt.Errorf(
+				"shape %q: outbox %s (job_kind=%q): %w",
+				shape.name, candidate.outboxID, candidate.jobKind, ErrUnavailable,
+			)
 		}
 	}
 	if len(eligible) == 0 {
@@ -234,24 +373,40 @@ func (repair *StrandRepair) stepShape(
 	}
 
 	// Phase 2 -- execution state, on the DOMAIN pool, before any queue
-	// transaction is open.
+	// transaction is open. r3 finding F2 (P2, codex, CHAOS-4438), applied
+	// here too: `result` already carries real SkippedJobLive counts from
+	// phase 1's classification above -- a phase 2 error must not discard
+	// those.
 	approved, live, settled, err := repair.filterByClaim(ctx, eligible, now)
-	if err != nil {
-		return StrandRepairResult{}, err
-	}
+	// confirmation pass 2 finding (P3, codex, CHAOS-4438): filterByClaim can
+	// now return a non-zero live/settled alongside its own default-branch
+	// error (an earlier candidate's counts, preserved for the same reason as
+	// every other seam here) -- accumulate BEFORE checking err, not after,
+	// or this call site silently re-introduces the exact discard the callee
+	// was just fixed to avoid, one layer up.
 	result.SkippedClaimLive += live
 	result.SkippedClaimSettled += settled
+	if err != nil {
+		return result, fmt.Errorf("shape %q: filterByClaim: %w", shape.name, err)
+	}
 	if len(approved) == 0 {
 		return result, nil
 	}
 
-	// Phase 3 -- lock, re-prove, and rearm on the queue pool.
+	// Phase 3 -- lock, re-prove, and rearm on the queue pool. Same
+	// reasoning: `result` already carries phases 1-2's real counts.
 	rearmed, lost, err := repair.rearm(ctx, shape.lock, now, limit, approved)
-	if err != nil {
-		return StrandRepairResult{}, err
-	}
+	// confirmation pass 3 finding (P3, codex, CHAOS-4438): rearm can now
+	// return a non-zero `lost` alongside its own write-loop error (an
+	// observation of another transaction's already-committed race, preserved
+	// for the same reason as every other seam here) -- accumulate BEFORE
+	// checking err, not after, or this call site silently re-introduces the
+	// exact discard the callee was just fixed to avoid, one layer up.
 	result.Rearmed += rearmed
 	result.SkippedRaceLost += lost
+	if err != nil {
+		return result, fmt.Errorf("shape %q: rearm: %w", shape.name, err)
+	}
 	return result, nil
 }
 
@@ -330,7 +485,20 @@ func (repair *StrandRepair) filterByClaim(
 			// duplicate.
 			approved = append(approved, candidate)
 		default:
-			return nil, 0, 0, ErrUnavailable
+			// confirmation pass 2 finding (P3, codex, CHAOS-4438): an EARLIER
+			// candidate in this same loop can already have incremented
+			// liveCount/settledCount before a LATER candidate hits this
+			// default branch -- unlike stepShape's phase-1 survey error, this
+			// is a pure in-memory read-derived observation with no
+			// transaction to roll back, so there is no state-consistency
+			// reason to zero it. Return the accumulated counts, not a fresh
+			// zero, same fix shape as every other seam in this file. approved
+			// is still discarded (nil): the caller never processes it once
+			// err != nil, and phase 3 must not run on an unclassified claim
+			// state.
+			return nil, liveCount, settledCount, fmt.Errorf(
+				"job_kind=%q dedupe_key=%q: %w", candidate.jobKind, candidate.dedupeKey, ErrUnavailable,
+			)
 		}
 	}
 	return approved, liveCount, settledCount, nil
@@ -380,18 +548,32 @@ func (repair *StrandRepair) rearm(
 	}
 	// Anything approved that did not come back rearmable lost a race: another
 	// replica took the row, or the delivery stopped being terminal.
+	//
+	// confirmation pass 3 finding (P3, codex, CHAOS-4438): `lost` is an
+	// observation of OTHER, INDEPENDENT transactions' already-committed state
+	// (another replica rearmed the row, or the row is currently held by a
+	// concurrent transaction) -- it is established by the phase-3 lock query
+	// above, before this transaction's own writes even begin, and is true
+	// regardless of whether THIS transaction's writes below succeed or roll
+	// back. `rearmed` is different: it counts writes made under `tx`, so a
+	// later failure that rolls back `tx` correctly zeroes it -- nothing it
+	// counted was ever persisted. Zeroing `lost` alongside `rearmed` on a
+	// write-loop error was the bug: a real race loss, once observed here,
+	// would never be re-observed on retry (the losing candidate is no longer
+	// a candidate at all next time), so discarding it here means it is
+	// permanently undercounted, not just delayed.
 	lost := len(approved) - len(locked)
 	rearmed := 0
 	for _, found := range locked {
 		deleted, err := repair.client.JobDeleteTx(ctx, tx, found.riverJobID)
 		if err != nil || deleted == nil || deleted.ID != found.riverJobID {
-			return 0, 0, classifyStrandError(err)
+			return 0, lost, classifyStrandError(err)
 		}
 		// The delete must have removed a terminal row. Re-checking the returned
 		// state closes the window between the predicate and the delete: a job
 		// that became runnable in between must not be removed.
 		if !terminalRiverState(deleted.State) {
-			return 0, 0, ErrUnavailable
+			return 0, lost, ErrUnavailable
 		}
 		command, err := tx.Exec(ctx, `
 			UPDATE public.worker_job_outbox
@@ -402,12 +584,16 @@ func (repair *StrandRepair) rearm(
 			WHERE id = $1 AND status = 'delivered'`,
 			found.outboxID, now.UTC(), strandRecoveryCode, strandRecoveryDetail)
 		if err != nil || command.RowsAffected() != 1 {
-			return 0, 0, classifyStrandError(err)
+			return 0, lost, classifyStrandError(err)
 		}
 		rearmed++
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, classifyStrandError(err)
+		// Same reasoning: the commit failing rolls back every rearm this
+		// transaction attempted (rearmed correctly stays 0), but has no
+		// bearing on the OTHER transactions' already-committed changes that
+		// `lost` observed.
+		return 0, lost, classifyStrandError(err)
 	}
 	return rearmed, lost, nil
 }
@@ -658,7 +844,7 @@ const repairStrandedFinalizeSQL = `
 	LIMIT $2::int
 `
 
-// The work-graph shape carries one table for five kinds, so the request is
+// The work-graph shape carries one table for two kinds, so the request is
 // bound by kind as well as by id -- the same pair PostgresStore.Claim keys on.
 // The accepted states are exactly the two Claim will reclaim: 'pending', and
 // 'running' with an expired lease. Every other state is excluded by
@@ -667,6 +853,14 @@ const repairStrandedFinalizeSQL = `
 // of silently inheriting eligibility. That also keeps 'ambiguous' -- which
 // Claim refuses, and which CHAOS-3999's abandonment contract owns -- out of
 // this sweep without naming it.
+//
+// investment.dispatch/chunk/finalize were deleted outright under CHAOS-4438
+// (dead Go shells, zero producer ever) and dropped from this IN-list to
+// match: registerKind's switch (internal/jobrescue/registry.go) has no case
+// for them any more, so rearming a hypothetical row of one of these kinds
+// would reset it to 'pending' with nothing left able to execute it -- the
+// same requeue-into-a-void failure this query's own comment above is
+// designed to prevent for every OTHER kind by refusing unknown states.
 const repairStrandedWorkGraphSQL = `
 	SELECT outbox.id::text, job.id, outbox.job_kind, outbox.dedupe_key,
 		CASE
@@ -681,8 +875,7 @@ const repairStrandedWorkGraphSQL = `
 	JOIN %s AS job
 		ON job.id = outbox.river_job_id
 	WHERE outbox.job_kind IN (
-			'workgraph.build', 'investment.materialize', 'investment.dispatch',
-			'investment.chunk', 'investment.finalize'
+			'workgraph.build', 'investment.materialize'
 		)
 		AND outbox.status = 'delivered'
 		AND outbox.river_job_id IS NOT NULL
@@ -701,5 +894,28 @@ const repairStrandedWorkGraphSQL = `
 		%s
 	ORDER BY outbox.delivered_at, outbox.id
 	%s
+	LIMIT $2::int
+`
+
+// retiredWorkgraphKinds are Go job kinds deleted outright under CHAOS-4438
+// (registered handlers with zero producer anywhere -- same class as
+// CHAOS-4243's earlier retirements). None of the strandShape queries above
+// select them; retiredKindsSQL below is how this repair still notices one,
+// rather than a row of this kind being invisible to every path here.
+var retiredWorkgraphKinds = []string{
+	"investment.dispatch",
+	"investment.chunk",
+	"investment.finalize",
+}
+
+// retiredKindsSQL surveys worker_job_outbox for any row naming a kind this
+// worker fleet no longer has a handler for at all. Unlike the strandShape
+// queries, this is not scoped to 'delivered' -- a retired-kind row is worth
+// surfacing in ANY state, since nothing downstream can ever resolve it.
+const retiredKindsSQL = `
+	SELECT outbox.id::text, outbox.job_kind, coalesce(outbox.args ->> 'organization_id', '')
+	FROM public.worker_job_outbox AS outbox
+	WHERE outbox.job_kind = ANY($1::text[])
+	ORDER BY outbox.id
 	LIMIT $2::int
 `

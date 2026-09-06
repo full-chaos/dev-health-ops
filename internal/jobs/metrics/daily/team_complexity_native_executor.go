@@ -99,7 +99,10 @@ func (executor *TeamComplexityExecutor) ComputeFinalizeFamily(
 		return 0, err
 	}
 
-	repoToTeam := resolveDailyFinalizeRepoToTeam(ctx, executor.conn, run.OrganizationID, day, teams, repoIDs, repoNamesByID, patternResolver)
+	repoToTeam, err := resolveDailyFinalizeRepoToTeam(ctx, executor.conn, run.OrganizationID, day, repoIDs, repoNamesByID, patternResolver)
+	if err != nil {
+		return 0, err
+	}
 
 	computedAt := executor.nowUTC()
 	rows := buildTeamComplexityRows(run.OrganizationID, day, repoRows, repoToTeam, computedAt)

@@ -34,7 +34,7 @@
     },
     {
       "name": "release_impact",
-      "python_sources": ["src/dev_health_ops/metrics/job_release_impact.py", "src/dev_health_ops/metrics/release_impact.py"],
+      "python_sources": ["src/dev_health_ops/metrics/release_impact.py"],
       "writes": ["release_impact_daily"],
       "max_concurrency": 2,
       "clickhouse_read_budget": 2,
@@ -44,8 +44,8 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "The existing seven-day late-data recomputation window and retained telemetry buckets define the recoverable history.",
-      "parity_state": "partial_numerical_oracle",
-      "port": "pending"
+      "parity_state": "native_python_orchestrator_deleted",
+      "port": "go"
     },
     {
       "name": "capacity",

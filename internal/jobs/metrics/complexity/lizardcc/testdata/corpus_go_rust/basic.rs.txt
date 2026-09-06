@@ -1,0 +1,60 @@
+struct Rectangle {
+    width: i32,
+    height: i32,
+}
+
+impl Rectangle {
+    fn area(&self) -> i32 {
+        if self.width > 0 && self.height > 0 {
+            self.width * self.height
+        } else {
+            0
+        }
+    }
+
+    fn classify(&self, score: i32) -> i32 {
+        if score > 90 {
+            3
+        } else if score > 50 {
+            2
+        } else {
+            1
+        }
+    }
+
+    fn pick(&self, x: i32) -> i32 {
+        match x {
+            0 => 10,
+            1 => 11,
+            _ => -1,
+        }
+    }
+
+    fn loop_it(&self, n: i32) -> i32 {
+        let mut total = 0;
+        for i in 0..n {
+            if i % 2 == 0 || i % 3 == 0 {
+                total += i;
+            }
+        }
+        while total > 100 && n > 0 {
+            total -= n;
+        }
+        total
+    }
+}
+
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() {
+        x
+    } else {
+        y
+    }
+}
+
+fn try_something(n: i32) -> Result<i32, String> {
+    if n < 0 {
+        return Err(String::from("negative"));
+    }
+    Ok(n)
+}

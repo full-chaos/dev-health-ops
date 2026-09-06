@@ -2,6 +2,9 @@
   "schema_version": 1,
   "generated_from": "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)",
   "daily": {
+    "ai_governance": "native",
+    "ai_impact": "native",
+    "ai_workflow": "native",
     "cicd": "native",
     "compounding_risk": "post_bridge",
     "deploy": "native",
@@ -9,13 +12,20 @@
     "file_risk_hotspots": "native",
     "incident": "native",
     "repo_user_commit": "native",
+    "review_edges": "native",
     "team_wellbeing": "native",
+    "testops_coverage": "native",
+    "testops_pipeline": "native",
     "testops_risk": "native",
-    "work_item": "post_bridge",
-    "work_item_estimate": "post_bridge",
-    "work_item_state": "post_bridge"
+    "testops_test": "native",
+    "work_graph_edges": "native",
+    "work_item": "native",
+    "work_item_attribution": "native",
+    "work_item_estimate": "native",
+    "work_item_state": "native"
   },
   "finalize": {
+    "benchmarking": "finalize",
     "ic_finalize": "finalize",
     "team_cognitive_load": "finalize",
     "team_complexity": "finalize"
@@ -26,13 +36,10 @@
     "dora": "native",
     "membership_backfill": "native",
     "recommendations": "native",
-    "release_impact": "compat",
+    "release_impact": "native",
     "work_item_attribution": "native"
   },
   "workgraph": {
-    "investment.chunk": "compat",
-    "investment.dispatch": "compat",
-    "investment.finalize": "compat",
     "investment.materialize": "native",
     "workgraph.build": "compat"
   }

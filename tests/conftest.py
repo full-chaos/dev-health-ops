@@ -308,10 +308,41 @@ def answer_catalogue_probes(client):
     genuinely does not exist. 084 then skips at its own existence check and
     never reaches DESCRIBE.
 
+    Migration 087 asks the same kind of question a different way: `SELECT
+    count() FROM system.tables WHERE ...` (its `_table_exists`), expecting an
+    int it can compare with `> 0`. Against a generic mock with a canned
+    `result_rows` tuple (e.g. a migration-version string left over from an
+    unrelated assertion), that comparison raises `TypeError: '>' not
+    supported between instances of 'str' and 'int'` -- a fail-CLOSED probe
+    surfacing a mock mismatch as a crash, not a fail-open swallow, so this
+    belongs here rather than loosening the migration back to fail-open.
+    `[(0,)]` is truthful for the same reason as 084's: these tests construct
+    a store against a client with none of migration 087's tables, so they
+    genuinely do not exist, and `upgrade()` skips each one at its own
+    existence check.
+
     Call tracking survives: this sets `side_effect` on the existing mock rather
     than replacing it, so `client.query.called` and friends still work. The
     fall-through reads `return_value` LAZILY, so a test that configures its rows
     AFTER calling this -- which is the common order -- still gets them.
+
+    CHAOS-4296/#2262 extension: several migrations (027/042/048/049/055/061/067/
+    075/088, the shadow-table-rebuild family) ask the SAME existence question a
+    different way -- `SELECT count() FROM system.tables WHERE ... AND name =
+    {name:String}` -- rather than `EXISTS TABLE`. Migration 088's own probe used
+    to swallow any exception (including a mock returning a non-numeric
+    `result_rows[0][0]`) and treat it as "table absent" -- CHAOS-4296's own
+    codex r1 finding correctly removed that swallow, since a genuine query
+    failure reading as "absent" is worse than surfacing it. That fix then
+    exposed this gap: a mock with no specific stub for this query pattern falls
+    through to whatever `client.query.return_value` was configured to be for
+    UNRELATED reasons in a given test (a migration-version string in one test,
+    a bare MagicMock in another), and comparing that to `0` raises a TypeError
+    instead of participating in the same truthful "no tables exist" answer this
+    function already gives EXISTS TABLE. Answered here for the same reason as
+    EXISTS TABLE: these tests build a store against a client with NO tables at
+    all, so `[(0,)]` is truthful, not a guess -- the migration's own existing
+    "table does not exist, skipping" path then takes over cleanly.
     """
     from types import SimpleNamespace
 
@@ -321,6 +352,8 @@ def answer_catalogue_probes(client):
             return SimpleNamespace(result_rows=[(0,)])
         if text.startswith("DESCRIBE TABLE"):
             return SimpleNamespace(result_rows=[])
+        if text.startswith("SELECT COUNT() FROM SYSTEM.TABLES"):
+            return SimpleNamespace(result_rows=[(0,)])
         return client.query.return_value
 
     client.query.side_effect = _answer

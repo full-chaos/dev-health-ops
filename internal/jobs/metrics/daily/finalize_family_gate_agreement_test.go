@@ -46,15 +46,45 @@ func gateLineFor(family string) string {
 
 func TestEveryRecognisedFinalizeFamilyHasAPythonGate(t *testing.T) {
 	source := pythonFinalizeSource(t)
-	if len(pythonRecognisedFinalizeFamilies) == 0 {
-		t.Fatal("pythonRecognisedFinalizeFamilies is empty -- the guard would admit " +
+	if len(pythonGatedFinalizeFamilies) == 0 {
+		t.Fatal("pythonGatedFinalizeFamilies is empty -- the guard would admit " +
 			"nothing and this test would assert nothing")
 	}
-	for _, family := range pythonRecognisedFinalizeFamilies {
+	for _, family := range pythonGatedFinalizeFamilies {
 		if !strings.Contains(source, gateLineFor(family)) {
-			t.Errorf("Go recognises finalize family %q, but job_daily.py has no gate line %q. "+
-				"Registering it would send a skip entry Python ignores, so the native family "+
-				"and the bridge would BOTH write.", family, gateLineFor(family))
+			t.Errorf("Go believes finalize family %q still has a live Python gate, but "+
+				"job_daily.py has no gate line %q. Either the Python compute for it was "+
+				"deleted (remove it from pythonGatedFinalizeFamilies too, CHAOS-5141-style) "+
+				"or the gate line was lost by accident (registering it natively would then "+
+				"send a skip entry Python ignores, so the native family and the bridge would "+
+				"BOTH write).", family, gateLineFor(family))
+		}
+	}
+}
+
+// CHAOS-5051: team_complexity is registerable as native (still lives in
+// pythonRecognisedFinalizeFamilies) but its Python compute was deleted
+// entirely -- it must NOT have a live gate line for the test above to ever
+// find, or a future accidental re-add of the Python compute would silently
+// re-introduce the two-writer hazard this whole file exists to prevent.
+func TestDeletedPythonComputeFamilyHasNoGateLine(t *testing.T) {
+	source := pythonFinalizeSource(t)
+	for _, family := range pythonRecognisedFinalizeFamilies {
+		gated := false
+		for _, g := range pythonGatedFinalizeFamilies {
+			if g == family {
+				gated = true
+				break
+			}
+		}
+		if gated {
+			continue
+		}
+		if strings.Contains(source, gateLineFor(family)) {
+			t.Errorf("family %q is NOT in pythonGatedFinalizeFamilies (its Python compute is "+
+				"supposed to be deleted), but job_daily.py still has gate line %q -- either "+
+				"add it back to pythonGatedFinalizeFamilies, or finish deleting the Python "+
+				"compute behind that gate.", family, gateLineFor(family))
 		}
 	}
 }

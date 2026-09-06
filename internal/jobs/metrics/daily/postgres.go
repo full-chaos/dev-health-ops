@@ -635,6 +635,47 @@ func dailyPartitionID(runID string, ordinal int) string {
 	return uuid.NewSHA1(uuid.MustParse(runID), []byte("partition:"+strconv.Itoa(ordinal))).String()
 }
 
+// runDiscoveredRepoIDs returns the union of a run's partition scopes, ordered
+// and de-duplicated.
+//
+// This is deliberately read from daily_metrics_partitions and NOT from the
+// repository discoverer: it is the set the partitions were cut from, as
+// persisted, so a consumer choosing from it cannot pick something no partition
+// holds. Re-deriving it from a live source is the defect this replaces
+// (CHAOS-4288).
+func (store *PostgresStore) runDiscoveredRepoIDs(ctx context.Context, runID string) ([]RepositoryID, error) {
+	rows, err := store.pool.Query(ctx, `
+SELECT repo_ids::text FROM public.daily_metrics_partitions
+WHERE run_id = $1::uuid ORDER BY ordinal`, runID)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+	seen := map[RepositoryID]bool{}
+	var union []RepositoryID
+	for rows.Next() {
+		var encoded string
+		if err := rows.Scan(&encoded); err != nil {
+			return nil, ErrUnavailable
+		}
+		scope, err := parsePartitionRepoIDs(encoded)
+		if err != nil {
+			return nil, ErrInvalidState
+		}
+		for _, repoID := range scope {
+			if seen[repoID] {
+				continue
+			}
+			seen[repoID] = true
+			union = append(union, repoID)
+		}
+	}
+	if rows.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	return union, nil
+}
+
 func (store *PostgresStore) LoadRun(ctx context.Context, runID string) (Run, error) {
 	if !store.valid() || !validUUID(runID) {
 		return Run{}, ErrUnavailable
@@ -653,6 +694,11 @@ FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).
 	}
 	if run.TargetDay, err = time.Parse("2006-01-02", targetDay); err != nil {
 		return Run{}, ErrInvalidState
+	}
+	// The union of this run's partition scopes. Read from the partitions
+	// themselves, so it cannot disagree with them -- see Run.DiscoveredRepoIDs.
+	if run.DiscoveredRepoIDs, err = store.runDiscoveredRepoIDs(ctx, runID); err != nil {
+		return Run{}, err
 	}
 	return run, nil
 }
@@ -1174,6 +1220,21 @@ var dailyMetricsPartitionFailureReasons = map[string]struct{}{
 	// dropping the reason on the generic releasePartition path.
 	"resource_exhausted": {},
 	"process_signaled":   {},
+	// pre_bridge_family_incomplete (CHAOS-5078 codex round 3, astra scale
+	// review F1's pre_bridge twin -- see lane-ci-required-to-arc's
+	// CHAOS-5190/#2276 for the post_bridge sibling, "post_bridge_family_
+	// incomplete"): a pre_bridge native family failed AFTER already writing
+	// rows this partition. Retryable, never terminal -- a fresh attempt can
+	// still succeed, exactly like the other reasons in this set.
+	//
+	// codex r1 on #2276 (P2, the class this entry mirrors): omitting a new
+	// reason from THIS map means every real ReleasePartitionWithReason/
+	// FailPartitionPermanently call with it is silently rejected with
+	// ErrInvalidState in production, invisible to any fakeStore-based test
+	// (fakeStore does not enforce this vocabulary at all) -- see
+	// TestPreBridgeReasonIsAcceptedByPostgresStore for the direct
+	// PostgresStore-level proof this entry is actually wired.
+	"pre_bridge_family_incomplete": {},
 }
 
 // FailPartitionPermanently durably terminalizes a partition whose
@@ -1289,6 +1350,28 @@ RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finali
 	return &claim, nil
 }
 
+// PartitionCompletionCounts is the SAME partition-completion fact
+// ClaimFinalize's own `NOT EXISTS (... status <> 'succeeded')` subquery
+// already checks (CHAOS-5194), but returned as counts rather than collapsed
+// into a boolean -- so a finalize-scope executor can verify the barrier for
+// ITSELF and log what it actually saw (total vs succeeded), rather than
+// trusting that ClaimFinalize's gate held, silently, forever.
+func (store *PostgresStore) PartitionCompletionCounts(ctx context.Context, runID string) (int, int, error) {
+	if !store.valid() || !validUUID(runID) {
+		return 0, 0, ErrUnavailable
+	}
+	var total, succeeded int
+	err := store.pool.QueryRow(ctx, `
+SELECT count(*), count(*) FILTER (WHERE status = 'succeeded')
+FROM public.daily_metrics_partitions
+WHERE run_id = $1::uuid`, runID,
+	).Scan(&total, &succeeded)
+	if err != nil {
+		return 0, 0, ErrUnavailable
+	}
+	return total, succeeded, nil
+}
+
 func (store *PostgresStore) RenewFinalize(ctx context.Context, claim FinalizeClaim) error {
 	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
 		return ErrUnavailable
@@ -1376,6 +1459,43 @@ func (store *PostgresStore) ReleaseFinalize(ctx context.Context, claim FinalizeC
 		)
 	}
 	return err
+}
+
+// FailFinalizePermanently writes the TERMINAL finalize state (CHAOS-4290).
+//
+// It cannot go through transitionFinalize: that helper rewrites `status` only
+// when the transition is 'succeeded', which is exactly why no finalize failure
+// has ever produced a terminal run. This writes BOTH columns.
+//
+// The same claim guards apply as every other finalize transition -- the claim
+// token must match, finalization_status must still be 'running', and the lease
+// must not have expired -- so a worker that lost its lease cannot terminalize a
+// run another worker now owns.
+//
+// RowsAffected is CHECKED rather than assumed. Those guards mean this statement
+// can legitimately match zero rows, and a terminal write that silently did not
+// happen would leave precisely the stranded run it exists to record -- a fix
+// that reports success while doing nothing.
+func (store *PostgresStore) FailFinalizePermanently(ctx context.Context, claim FinalizeClaim) error {
+	if !store.valid() || !validUUID(claim.Run.ID) || !validUUID(claim.Token) {
+		return ErrUnavailable
+	}
+	now := store.now().UTC()
+	command, err := store.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'failed', finalization_status = 'failed',
+    finalization_claim_token = NULL, finalization_lease_expires_at = NULL,
+    finalized_at = $1, updated_at = $1
+WHERE id = $2::uuid AND finalization_status = 'running'
+  AND finalization_claim_token = $3::uuid AND status = 'running'
+  AND finalization_lease_expires_at > $1`, now, claim.Run.ID, claim.Token)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
 }
 
 func (store *PostgresStore) transitionFinalize(ctx context.Context, claim FinalizeClaim, status string) error {

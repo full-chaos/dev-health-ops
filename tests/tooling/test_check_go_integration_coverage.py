@@ -119,16 +119,24 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # discovered, 44 -> 45 will run): TestResolveProviderKindForOrg_
     # UsesRealOrgSettings proves the org-BYO precedence end-to-end against
     # llmorgsettings.Store over a real Postgres container.
+    # CHAOS-4924 added internal/jobs/workgraph/operationaledges (45 -> 46
+    # discovered, 45 -> 46 will run): the native operational-incident/
+    # flag-guards edge producer's five Testcontainers-backed tests (the
+    # org-70d529e0 and synthetic golden replays, plus three targeted
+    # regression tests) run against a real migration chain, same
+    # container-per-test shape as internal/jobs/workgraph/edges.
     # This is why the literal is followed by SET MEMBERSHIP assertions below --
     # a count alone cannot tell you WHICH package a merge dropped.
-    # CHAOS-4290 PR2 added internal/jobs/metrics/daily/icfinalize (45 -> 46):
-    # TestARedriveSupersedesInsteadOfAccumulating proves the native
+    # CHAOS-4290 and CHAOS-4924 landed independently, each written as 45 -> 46
+    # on its own branch: internal/jobs/metrics/daily/icfinalize
+    # (TestARedriveSupersedesInsteadOfAccumulating proves the native
     # ic_finalize writer is idempotent under redrive against a real
-    # ClickHouse -- the precondition #2241's no-fail-open ruling rests on.
-    # CURRENT TOTAL: 46. Adding one -tags=integration package bumps every
+    # ClickHouse -- the precondition #2241's no-fail-open ruling rests on)
+    # and internal/jobs/workgraph/operationaledges. Merged total: 47.
+    # CURRENT TOTAL: 47. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "46 package(s) discovered, 0 denylisted, 46 will run" in result.stdout
+    assert "47 package(s) discovered, 0 denylisted, 47 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

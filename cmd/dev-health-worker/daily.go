@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -250,7 +251,7 @@ func buildDailyWorker(
 				// test that matters now calls dailyNativeFamilyRegistrations
 				// directly and asserts on its actual return value, not on
 				// source text.
-				nativeFamilies, postBridgeFamilies, _ := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
+				nativeFamilies, postBridgeFamilies, _ := dailyNativeFamilyRegistrations(store, clickhouseConnection, observer, logger)
 				if len(nativeFamilies) > 0 || len(postBridgeFamilies) > 0 {
 					if nativeObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
 						handler.SetNativeFamilyObserver(nativeObserver)
@@ -262,11 +263,45 @@ func buildDailyWorker(
 					// satisfies daily.NativeFamilyRefusalLogger directly.
 					handler.SetNativeFamilyLogger(logger)
 				}
+				// CHAOS-5078 codex r1 F3 fix: an `after` ORDERING failure
+				// (a genuine graph cycle, or a `after` name that does not
+				// exist in families.json) is a CONSTRUCTION-time contract
+				// defect, not a data condition to degrade around at
+				// runtime -- ErrFamilyOrderCycle/ErrFamilyOrderUnknown's own
+				// doc comments say exactly this ("failing loudly at startup
+				// is the only honest response"). Logging and continuing
+				// contradicted that: it left the daily worker family
+				// registered and running with EVERY native family silently
+				// diverted to the Python bridge, which is a much harder
+				// condition to notice in production than a construction
+				// failure that fails CI/deploy immediately. Mirrors the
+				// adapter/river-registration failures a few lines below,
+				// which already fail construction the same way.
 				if len(nativeFamilies) > 0 {
-					handler.SetNativeFamilies(nativeFamilies)
+					if err := handler.SetNativeFamilies(nativeFamilies); err != nil {
+						logger.Error(
+							"native daily families NOT registered: families.json "+
+								"run order could not be derived; failing worker "+
+								"construction rather than silently degrading every "+
+								"native family to the Python compatibility bridge",
+							"error", err,
+						)
+						_ = clickhouseConnection.Close()
+						return workerFamily{}, fmt.Errorf("%w: %v", errWorkerDependencyUnavailable, err)
+					}
 				}
 				if len(postBridgeFamilies) > 0 {
-					handler.SetPostBridgeNativeFamilies(postBridgeFamilies)
+					if err := handler.SetPostBridgeNativeFamilies(postBridgeFamilies); err != nil {
+						logger.Error(
+							"post_bridge daily families NOT registered: families.json "+
+								"run order could not be derived; failing worker "+
+								"construction rather than silently degrading to the "+
+								"Python compatibility bridge",
+							"error", err,
+						)
+						_ = clickhouseConnection.Close()
+						return workerFamily{}, fmt.Errorf("%w: %v", errWorkerDependencyUnavailable, err)
+					}
 				}
 				adapter, adapterErr := jobruntime.NewAdapter[jobruntime.DailyMetricsPartitionArgs](
 					registry, spec, handler, dailyDependencies,
@@ -295,7 +330,7 @@ func buildDailyWorker(
 				// go through ONE SetNativeFinalizeFamilies call -- the setter
 				// validates every name in the map together against
 				// pythonRecognisedFinalizeFamilies in a single pass.
-				_, _, finalizeFamilies := dailyNativeFamilyRegistrations(clickhouseConnection, observer, logger)
+				_, _, finalizeFamilies := dailyNativeFamilyRegistrations(store, clickhouseConnection, observer, logger)
 				handler.SetNativeFinalizeFamilies(finalizeFamilies)
 				// Same fail-open discipline as the partition path: telemetry
 				// never gates, but a fail-open path with no counter cannot be
@@ -603,6 +638,56 @@ func buildDailyWorker(
 			}
 		}
 
+		// CHAOS-4296: the release_impact kind computes natively too. Same
+		// per-kind discipline as dora/capacity/recommendations above -- a
+		// refusal takes THIS KIND out of service and leaves its siblings
+		// registered, with an error log rather than a metric that merely
+		// stops moving.
+		var releaseImpactExecutor *remaining.ReleaseImpactExecutor
+		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
+			return spec.Kind == jobcontract.KindRemainingReleaseImpact
+		}) {
+			if metricsClickHouse == nil {
+				connection, connectionErr := clickhousestore.Open(
+					context.Background(),
+					clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+				)
+				if connectionErr != nil {
+					// codex r2 (CHAOS-4296/#2262): connectionErr was checked
+					// but never logged -- the caller saw only the generic
+					// errWorkerDependencyUnavailable sentinel, with no way to
+					// tell a DNS failure from a bad password from a refused
+					// connection. This exact discard is pre-existing at every
+					// other clickhousestore.Open call site in this function
+					// (dora/capacity/work_item_attribution/etc.), tracked
+					// fleet-wide as CHAOS-5102's sibling gap and out of scope
+					// to fix everywhere in this PR; fixed here because this
+					// call site is this PR's own diff.
+					logger.Error("release_impact ClickHouse connection failed",
+						"error", connectionErr)
+					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				metricsClickHouse = connection
+			}
+			var releaseImpactObserver remaining.ReleaseImpactObserver
+			if candidate, ok := observer.(remaining.ReleaseImpactObserver); ok {
+				releaseImpactObserver = candidate
+			}
+			executor, executorErr := remaining.NewReleaseImpactExecutor(
+				context.Background(), metricsClickHouse, releaseImpactObserver, logger)
+			if executorErr != nil {
+				logger.Error(
+					"release impact native executor refused; the release_impact "+
+						"kind will not be served and its partitions will "+
+						"accumulate unclaimed. Every other remaining kind is "+
+						"unaffected.",
+					"error", executorErr,
+				)
+			} else {
+				releaseImpactExecutor = executor
+			}
+		}
+
 		for _, spec := range remainingSpecs {
 			family := remainingFamilies[spec.Kind]
 			var registeredSpec jobruntime.HandlerSpec
@@ -659,8 +744,18 @@ func buildDailyWorker(
 					workers, registry, spec, store, recommendationsExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingReleaseImpact:
+				if releaseImpactExecutor == nil {
+					// The native executor refused above (or was never
+					// constructed because no release_impact spec is being
+					// served). Skip rather than register a handler around a
+					// nil executor, which would claim partitions and then
+					// fail each one -- turning a clean "not served" into a
+					// retry loop that looks like flapping.
+					continue
+				}
+				// Native, not `compatibility` -- this is the CHAOS-4296 cutover.
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingReleaseImpactArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
+					workers, registry, spec, store, releaseImpactExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingWorkItemAttribution:
 				if workItemAttributionExecutor == nil {
@@ -711,7 +806,15 @@ func buildDailyWorker(
 // closes it), observer, and logger straight through; every family's
 // construction/fail-open/optional-observer-wiring logic is unchanged from
 // before this extraction, only relocated.
+//
+// store (CHAOS-5194) is the first Postgres dependency this function has
+// needed: BenchmarkingFinalizeExecutor verifies its own partition-completion
+// barrier against daily_metrics_partitions, which lives in Postgres, not
+// ClickHouse. A nil store degrades ONLY benchmarking's finalize registration
+// (fail-open, matching every other family's construction-time policy) --
+// every other family in this function is unaffected.
 func dailyNativeFamilyRegistrations(
+	store daily.Store,
 	clickhouseConnection driver.Conn,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
@@ -779,6 +882,23 @@ func dailyNativeFamilyRegistrations(
 				"bridge for every run. Every other daily-metrics "+
 				"family is unaffected.",
 			"error", teamComplexityErr,
+		)
+	}
+	// CHAOS-5194: benchmarking, relocated from post_bridge (see the removed
+	// registration below, and BenchmarkingFinalizeExecutor's own doc comment
+	// for why). No co-registration dependency on ic_finalize above: this
+	// family reads repo_metrics_daily/testops_*/dora tables written by
+	// partition-scope families, never ic_finalize's user_metrics_daily output.
+	if benchmarkingFinalizeExecutor, benchmarkingFinalizeErr := daily.NewBenchmarkingFinalizeExecutor(
+		store, clickhouseConnection, logger,
+	); benchmarkingFinalizeErr == nil {
+		finalize[daily.BenchmarkingFamilyName] = benchmarkingFinalizeExecutor
+	} else {
+		logger.Error(
+			"benchmarking finalize native executor refused; the family "+
+				"stays on the Python compatibility bridge for every "+
+				"partition. Every other daily-metrics family is unaffected.",
+			"error", benchmarkingFinalizeErr,
 		)
 	}
 	if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
@@ -892,6 +1012,82 @@ func dailyNativeFamilyRegistrations(
 			"error", fileRiskHotspotsErr,
 		)
 	}
+	// CHAOS-4285: ai_governance. Same fail-open construction policy as every
+	// other native family above, and registered PRE-BRIDGE like them: this
+	// family reads only raw sync tables (ai_attribution_resolved,
+	// git_pull_requests, ci_pipeline_runs, security_alerts,
+	// ai_tool_allowlist), never another compat family's daily output, so it
+	// has none of work_item_state's post_bridge ordering dependency.
+	//
+	// Unlike every other entry here it is ORG-scoped, not repo-scoped --
+	// see AIGovernanceExecutor's doc comment for why that matches Python
+	// exactly and why the deterministic event_id is what makes the
+	// resulting once-per-partition rewrite idempotent.
+	if aiGovernanceExecutor, aiGovernanceErr := daily.NewAIGovernanceExecutor(clickhouseConnection); aiGovernanceErr == nil {
+		native["ai_governance"] = aiGovernanceExecutor
+	} else {
+		logger.Error(
+			"ai_governance native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", aiGovernanceErr,
+		)
+	}
+	// CHAOS-4280: ai_impact. Same fail-open construction policy, and
+	// PRE-BRIDGE like the rest: it reads only raw sync tables plus the
+	// incident family's own reader, never another compat family's daily
+	// output. Repo-scoped, unlike ai_governance above.
+	if aiImpactExecutor, aiImpactErr := daily.NewAIImpactExecutor(clickhouseConnection); aiImpactErr == nil {
+		native["ai_impact"] = aiImpactExecutor
+	} else {
+		logger.Error(
+			"ai_impact native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", aiImpactErr,
+		)
+	}
+	// CHAOS-4286: work_graph_edges. Same fail-open construction policy, and
+	// PRE-BRIDGE: it reads raw sync tables plus the shared incident
+	// projection (LoadIncidentsStarted), never another compat family's daily
+	// output.
+	//
+	// The "auto" argument is the daily job's `provider`, which discover_repos
+	// falls back to when a repo's own provider column is empty or literally
+	// "unknown" (job_daily.py:194). It is NOT a guess: the compatibility
+	// bridge passes no provider at all, so the Python side runs on
+	// discover_repos' own default, which is "auto" (job_daily.py:127).
+	// Consequence worth knowing when reading rows: "auto" is a real, expected
+	// value in these tables' provider columns.
+	if workGraphEdgesExecutor, workGraphEdgesErr := daily.NewWorkGraphEdgesExecutor(clickhouseConnection, "auto"); workGraphEdgesErr == nil {
+		native["work_graph_edges"] = workGraphEdgesExecutor
+	} else {
+		logger.Error(
+			"work_graph_edges native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", workGraphEdgesErr,
+		)
+	}
+	// CHAOS-4280 part B / CHAOS-4286 part B: ai_workflow. Same fail-open
+	// construction policy, and PRE-BRIDGE: it reads git_pull_requests and
+	// work_graph_issue_pr, never another compat family's daily output.
+	// Shares the SAME "auto" job-provider convention as work_graph_edges
+	// above for the identical reason (discover_repos' own default).
+	if aiWorkflowExecutor, aiWorkflowErr := daily.NewAIWorkflowExecutor(clickhouseConnection, "auto"); aiWorkflowErr == nil {
+		native["ai_workflow"] = aiWorkflowExecutor
+	} else {
+		logger.Error(
+			"ai_workflow native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", aiWorkflowErr,
+		)
+	}
 	// CHAOS-4294: testops_risk. Same fail-open construction policy as
 	// every other native family above.
 	if testopsRiskExecutor, testopsRiskErr := daily.NewTestopsRiskExecutor(clickhouseConnection); testopsRiskErr == nil {
@@ -905,25 +1101,126 @@ func dailyNativeFamilyRegistrations(
 			"error", testopsRiskErr,
 		)
 	}
-	// CHAOS-4278: work_item_state reads its team attribution
-	// from work_item_team_attributions.is_primary=1 rather than
-	// recomputing the 9-source cascade -- see
-	// WorkItemStateExecutor's and
-	// LoadWorkItemPrimaryTeamAttributions's doc comments. It is
-	// registered POST-BRIDGE, not in the native map
-	// above (SetPostBridgeNativeFamilies, not SetNativeFamilies)
-	// -- families.json declares "phase":"post_bridge" for the
-	// SAME reason: work_item_team_attributions is written by
-	// work_item_attribution, still Python-bridged (CHAOS-4283),
-	// in the SAME partition's compatibility call, so this
-	// executor must run AFTER that call returns, not before
-	// (codex round-1 P1 on this PR caught the pre_bridge
-	// placement reading stale data -- see
-	// computePostBridgeNativeFamilies's doc comment). TEMPORARY:
-	// move back into native above once CHAOS-4283 ports
-	// work_item_attribution to Go and families.json's phase_note
-	// says work_item_state can return to pre_bridge.
+	// CHAOS-5078: work_item_attribution is now NATIVE, and it is the reason the
+	// three families below can return to pre_bridge. It WRITES
+	// work_item_team_attributions; work_item, work_item_estimate and
+	// work_item_state READ it. families.json declares that with
+	// `"after":["work_item_attribution"]` on each reader, and FamilyRunOrder
+	// turns those edges into the execution order -- so the writer runs first
+	// WITHIN the pre_bridge phase, which is what made the post_bridge
+	// workaround unnecessary.
+	//
+	// Moving them back is a resilience IMPROVEMENT, not merely tidying:
+	// skipFamiliesForBridge adds pre_bridge names only for families that
+	// actually RAN, but post_bridge names UNCONDITIONALLY. Under post_bridge a
+	// refused executor meant nobody wrote the family for that partition; under
+	// pre_bridge a refusal falls back to the Python bridge again.
+	if workItemAttributionExecutor, workItemAttributionErr := daily.NewWorkItemAttributionExecutor(clickhouseConnection); workItemAttributionErr == nil {
+		native["work_item_attribution"] = workItemAttributionExecutor
+	} else {
+		logger.Error(
+			"work_item_attribution native executor refused; the family "+
+				"stays on the Python compatibility bridge for every "+
+				"partition. Its READERS (work_item, work_item_estimate, "+
+				"work_item_state) still run natively and still read "+
+				"work_item_team_attributions -- the bridge writes it in the "+
+				"same partition call, so they would read the PREVIOUS run's "+
+				"rows. Every other daily-metrics family is unaffected.",
+			"error", workItemAttributionErr,
+		)
+	}
+	// CHAOS-4278/CHAOS-5078: work_item_state reads its team attribution from
+	// work_item_team_attributions.is_primary=1 rather than recomputing the
+	// 9-source cascade -- see WorkItemStateExecutor's and
+	// LoadWorkItemPrimaryTeamAttributions's doc comments.
+	//
+	// It shipped pre_bridge, was moved to POST_BRIDGE by codex round-1 P1
+	// (2026-09-01) because work_item_team_attributions was written by the
+	// still-Python work_item_attribution family in the SAME partition call, so
+	// a pre_bridge read saw the PREVIOUS run's rows -- and is now back in the
+	// native (pre_bridge) map above, because that writer is native as of
+	// CHAOS-5078 and families.json's `after` edges order it ahead of its
+	// readers within the phase. The condition the old comment named
+	// ("once CHAOS-4283 ports work_item_attribution to Go") is the condition
+	// that has now been met.
+	//
+	// postBridge stays declared and returned, EMPTY of these three families
+	// (benchmarking/compounding_risk below still populate it for their own,
+	// different reasons). The phase itself is not removed: it is a working
+	// mechanism with a real use (a native family whose correctness depends on
+	// a still-Python family's same-partition write), and the next family to
+	// need it should find it here rather than re-deriving it.
+	//
+	// CHAOS-4284: testops_pipeline / testops_test / testops_coverage.
+	// Registered as THREE separate families, matching families.json, so a
+	// failure in one leaves only that one on the Python bridge -- see
+	// TestopsPipelineExecutor's doc comment for why they are not one
+	// executor. Same fail-open construction policy as every family above.
+	if testopsPipelineExecutor, testopsPipelineErr := daily.NewTestopsPipelineExecutor(clickhouseConnection); testopsPipelineErr == nil {
+		native["testops_pipeline"] = testopsPipelineExecutor
+	} else {
+		logger.Error(
+			"testops_pipeline native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsPipelineErr,
+		)
+	}
+	if testopsTestExecutor, testopsTestErr := daily.NewTestopsTestExecutor(clickhouseConnection); testopsTestErr == nil {
+		native["testops_test"] = testopsTestExecutor
+	} else {
+		logger.Error(
+			"testops_test native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsTestErr,
+		)
+	}
+	if testopsCoverageExecutor, testopsCoverageErr := daily.NewTestopsCoverageExecutor(clickhouseConnection); testopsCoverageErr == nil {
+		native["testops_coverage"] = testopsCoverageExecutor
+	} else {
+		logger.Error(
+			"testops_coverage native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", testopsCoverageErr,
+		)
+	}
+	// CHAOS-4279: review_edges reads only RAW SYNC tables
+	// (git_pull_requests, git_pull_request_reviews), written by
+	// the provider sync path rather than by any daily family, so
+	// it has no same-partition write-ordering dependency and
+	// registers PRE-bridge like cicd -- unlike compounding_risk
+	// below, whose input repo_metrics_daily is written by
+	// repo_user_commit in the same partition.
+	if reviewEdgesExecutor, reviewEdgesErr := daily.NewReviewEdgesExecutor(clickhouseConnection); reviewEdgesErr == nil {
+		native["review_edges"] = reviewEdgesExecutor
+	} else {
+		logger.Error(
+			"review_edges native executor refused; the family "+
+				"stays on the Python compatibility bridge for "+
+				"every partition. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", reviewEdgesErr,
+		)
+	}
+
 	postBridge = map[string]daily.NativeFamilyExecutor{}
+	// CHAOS-4288/CHAOS-5194: benchmarking used to register HERE, post_bridge,
+	// via an anchor-partition trick (one partition per org/day computed it,
+	// every other partition no-op'd). That fixed the duplication class
+	// (#2235/#2259) but not a race astra's F3 finding identified: the anchor
+	// partition's own post_bridge phase could complete before every OTHER
+	// partition for the same org/day had written its own cross-repo inputs.
+	// Relocated to FINALIZE scope (see dailyNativeFamilyRegistrations' finalize
+	// map below, and BenchmarkingFinalizeExecutor's own doc comment) --
+	// finalize is claimed only after every partition succeeds
+	// (ClaimFinalize's own barrier), which removes both the anchor mechanism
+	// and the race in the same move.
+
 	// CHAOS-4287: compounding_risk reads repo_metrics_daily, which
 	// repo_user_commit writes in the SAME partition. repo_user_commit
 	// is native and pre_bridge, but computeNativeFamilies walks
@@ -952,7 +1249,7 @@ func dailyNativeFamilyRegistrations(
 		)
 	}
 	if workItemStateExecutor, workItemStateErr := daily.NewWorkItemStateExecutor(clickhouseConnection); workItemStateErr == nil {
-		postBridge["work_item_state"] = workItemStateExecutor
+		native["work_item_state"] = workItemStateExecutor
 		// CHAOS-4278: the team-attribution-READ guard counter --
 		// see WorkItemStateMissingAttributionObserver's doc
 		// comment. Same optional-observer discipline as
@@ -988,7 +1285,7 @@ func dailyNativeFamilyRegistrations(
 	// DailyMetricsNativeFamilyOutcomeRefused counter is the
 	// operator-visible signal.
 	if workItemExecutor, workItemErr := daily.NewWorkItemExecutor(clickhouseConnection); workItemErr == nil {
-		postBridge["work_item"] = workItemExecutor
+		native["work_item"] = workItemExecutor
 	} else {
 		logger.Error(
 			"work_item native executor refused; NO writer produces "+
@@ -1001,7 +1298,7 @@ func dailyNativeFamilyRegistrations(
 		)
 	}
 	if workItemEstimateExecutor, workItemEstimateErr := daily.NewWorkItemEstimateExecutor(clickhouseConnection); workItemEstimateErr == nil {
-		postBridge["work_item_estimate"] = workItemEstimateExecutor
+		native["work_item_estimate"] = workItemEstimateExecutor
 	} else {
 		logger.Error(
 			"work_item_estimate native executor refused; NO writer "+

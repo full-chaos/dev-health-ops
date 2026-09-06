@@ -123,13 +123,24 @@ WITH decided AS (
                      AND partition.lease_expires_at <= $2::timestamptz
                  )
            ) AS blocked,
-           -- CHAOS-4290 #2241 r3 F2: a run whose partitions ALL succeeded but
-           -- whose finalization terminally failed is equally wedged -- nothing
-           -- automatic will re-run it -- and was invisible here because the
-           -- predicate above requires a failed_permanent PARTITION, which this
-           -- shape never has.
+           -- CHAOS-4290 #2241 r3 F2, CORRECTED by the confirmation pass.
+           --
+           -- The first version keyed on finalization_status='failed' alone and
+           -- fired EXACTLY BACKWARDS. That state is what ReleaseFinalize writes
+           -- after ANY failed attempt, and ClaimFinalize treats it as claimable
+           -- (postgres.go), so it is the ordinary retryable state -- while a
+           -- terminally failed run also has status='failed' and was excluded by
+           -- this query's own status='running' scope. The marker therefore fired
+           -- on healthy retrying runs and never on stranded ones.
+           --
+           -- It now keys on the TERMINAL shape, which FailFinalizePermanently
+           -- writes only on the final River attempt: BOTH columns 'failed'.
+           -- Because the state exists only after retries are exhausted, a
+           -- transient failure followed by a successful retry never acquires a
+           -- marker, so CompleteFinalize needs no clearing path.
            (
-               run.finalization_status = 'failed'
+               run.status = 'failed'
+               AND run.finalization_status = 'failed'
                AND NOT EXISTS (
                    SELECT 1 FROM public.daily_metrics_partitions AS partition
                    WHERE partition.run_id = run.id
@@ -146,7 +157,25 @@ WITH decided AS (
                  AND partition.status = 'succeeded'
            ) AS none_succeeded
     FROM public.daily_metrics_runs AS run
-    WHERE run.org_id = $1::uuid AND run.status = 'running'
+    -- Widened from status='running' (CHAOS-4290 confirmation pass): a
+    -- terminally failed finalize has status='failed', so the old scope excluded
+    -- the exact rows the finalize arm needs to see.
+    --
+    -- WHAT KEEPS THIS SAFE is more than "the partition arms need a
+    -- failed_permanent partition" (peer read, lane-gate-rounds). Widening
+    -- exposes EVERY status='failed' row to both arms, including
+    -- MaterializeScheduledFanout's overCap rows. Three things hold the outcome:
+    --
+    --   1. finalize_blocked requires EXISTS(partition) -- overCap only fires
+    --      when the run has ZERO partitions, so those rows cannot match it.
+    --   2. finalize_blocked requires NOT EXISTS(partition <> 'succeeded'), so a
+    --      run with any unfinished or permanently-failed partition is excluded.
+    --   3. blocked_reason's CASE evaluates the PARTITION reasons first, so a row
+    --      that somehow satisfied both arms still reports the partition cause --
+    --      which is the one an operator must act on.
+    --
+    -- The guards are what make this correct, not the absence of overlap.
+    WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed')
 )
 UPDATE public.daily_metrics_runs AS run
 SET blocked_at = CASE WHEN decided.blocked OR decided.finalize_blocked THEN $2::timestamptz ELSE NULL END,
@@ -207,9 +236,16 @@ func (store *PostgresStore) ReconcileBlockedRuns(
 	// total from the deltas would report 0 blocked on a steady state that
 	// still has wedged runs -- exactly the silent-zero the gauge exists to
 	// prevent.
+	//
+	// status IN ('running', 'failed'), not status = 'running' (r2 finding #2,
+	// CHAOS-4290): reconcileBlockedRunsSQL above writes blocked_at on a
+	// finalize_blocked row whose status is 'failed', not 'running' -- the
+	// WRITE was widened for exactly this shape, but this readback still
+	// scoped to 'running' alone would silently undercount the gauge by every
+	// terminally-failed finalize the write side had just correctly marked.
 	if err := store.pool.QueryRow(ctx, `
 SELECT count(*) FROM public.daily_metrics_runs
-WHERE org_id = $1::uuid AND status = 'running' AND blocked_at IS NOT NULL`,
+WHERE org_id = $1::uuid AND status IN ('running', 'failed') AND blocked_at IS NOT NULL`,
 		orgID).Scan(&outcome.Blocked); err != nil {
 		return BlockedReconcileOutcome{}, ErrUnavailable
 	}
@@ -259,7 +295,12 @@ SELECT run.id::text, run.target_day, run.blocked_at, run.blocked_reason,
        (SELECT count(*) FROM public.daily_metrics_partitions AS partition
         WHERE partition.run_id = run.id AND partition.status = 'succeeded')
 FROM public.daily_metrics_runs AS run
-WHERE run.org_id = $1::uuid AND run.status = 'running' AND run.blocked_at IS NOT NULL
+-- status IN ('running', 'failed'), not status = 'running' (r2 finding #2,
+-- CHAOS-4290): a finalize_blocked run's status is 'failed', matching
+-- ReconcileBlockedRuns' own gauge query above -- without this, the operator
+-- readback (workerctl's own entry point for this marker) can never show the
+-- exact run class BlockedReasonFinalizeFailed exists to surface.
+WHERE run.org_id = $1::uuid AND run.status IN ('running', 'failed') AND run.blocked_at IS NOT NULL
 ORDER BY run.target_day DESC, run.id
 LIMIT $2::int`, orgID, limit)
 	if err != nil {

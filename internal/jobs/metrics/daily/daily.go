@@ -17,8 +17,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
-	"sort"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -67,6 +68,27 @@ var (
 	// doc comment on StartManualDailyRun).
 	ErrDayAlreadyCovered = errors.New("daily metrics day is already covered by a succeeded run")
 )
+
+// ErrPreBridgeFamilyIncomplete means computeNativeFamilies hit an
+// ErrPartialWrite for at least one pre_bridge family this partition
+// (CHAOS-5078 codex round 3, astra scale review F1's pre_bridge twin -- see
+// lane-ci-required-to-arc's CHAOS-5190/#2276 for the post_bridge sibling,
+// same reason-code shape, no code dependency between the two PRs). Work
+// uses it to hold the partition out of CompletePartition instead of letting
+// it complete 'succeeded' over a silent gap.
+//
+// The comment this error's introduction replaces claimed a partial write
+// meant "the partition is re-driven" -- that was never backed by any code:
+// neither redrive.go nor postgres.go ever inspected PartialWrite, so nothing
+// automatic re-drove anything. This error is what actually closes that gap.
+//
+// An ORDINARY (non-partial) pre_bridge refusal is UNAFFECTED by this error
+// and stays fail-open exactly as before: nothing was written for that
+// family yet, so the compatibility bridge remains a safe, correct fallback
+// -- this error exists ONLY for the partial-write case, where the bridge is
+// deliberately excluded (skipFamiliesForBridge's own contract, unchanged)
+// because re-running it would duplicate the rows already written.
+var ErrPreBridgeFamilyIncomplete = errors.New("daily metrics pre_bridge native family did not complete")
 
 // ErrRepositoryCapExceeded means live ClickHouse repository discovery
 // (MaterializeScheduledFanout) resolved more repositories than
@@ -171,6 +193,24 @@ type Run struct {
 	// generation while it has no durable partitions. A metrics-queue worker owns the
 	// ClickHouse read and resolves this state before it can publish a partition.
 	RepositoryDiscoveryRequired bool
+	// DiscoveredRepoIDs is the UNION of this run's partition scopes -- the
+	// set the partitions were actually cut from, read back from
+	// daily_metrics_partitions rather than re-derived from a live source.
+	//
+	// CHAOS-4288, codex r1 on #2235. benchmarking computes ONCE per org/day and
+	// picks an anchor partition to do it in. That anchor used to come from a
+	// live `min(id)` read of the `repos` table, which is a DIFFERENT set from
+	// the one partitions were cut from: a run over a subset of the org's repos,
+	// or a repo inserted between discovery and execution, could name an anchor
+	// that no partition contains. Every partition then answered "not mine",
+	// returned zero rows and SUCCESS, and the org silently got no benchmarking
+	// output at all.
+	//
+	// Choosing the anchor from this field makes anchor-and-partition agreement
+	// true BY CONSTRUCTION rather than by two reads happening to agree, which
+	// is the invariant that was missing. An empty union means the caller built
+	// a Run without partitions and is a bug, not a quiet no-op.
+	DiscoveredRepoIDs []RepositoryID
 	// TargetDay is the UTC calendar day this run computes metrics for
 	// (`daily_metrics_runs.target_day`). CHAOS-4276: a native family
 	// executor needs this to scope its own ClickHouse reads/writes -- the
@@ -255,6 +295,31 @@ type Store interface {
 	RenewFinalize(context.Context, FinalizeClaim) error
 	CompleteFinalize(context.Context, FinalizeClaim) error
 	ReleaseFinalize(context.Context, FinalizeClaim) error
+	// FailFinalizePermanently writes the TERMINAL finalize state --
+	// status='failed' AND finalization_status='failed' -- on the final River
+	// attempt (CHAOS-4290, #2241 confirmation pass).
+	//
+	// Nothing produced that state for a finalize before this. ReleaseFinalize
+	// sets finalization_status='failed' and leaves status='running', which
+	// ClaimFinalize treats as CLAIMABLE, so attempt 1 and an exhausted run were
+	// indistinguishable forever. The blocked marker keyed on the only state
+	// that existed and therefore fired on healthy retryable runs while never
+	// seeing a stranded one.
+	//
+	// Named after FailPartitionPermanently, which is the same shape one layer
+	// down: the point at which retrying stops and an operator has to look.
+	FailFinalizePermanently(ctx context.Context, claim FinalizeClaim) error
+	// PartitionCompletionCounts reports how many of a run's partitions exist
+	// (total) and how many have reached status='succeeded' (succeeded),
+	// independent of ClaimFinalize's own gating (CHAOS-5194). ClaimFinalize
+	// already refuses to hand out a finalize claim until every partition for
+	// the run has succeeded (its own `NOT EXISTS (... status <> 'succeeded')`
+	// check) -- but a finalize-scope native family must not TRUST that
+	// upstream guarantee blindly (the same discipline CHAOS-5141's own
+	// repoNamesByID gate follows for a different upstream invariant): this
+	// method lets an executor verify the barrier itself, log what it saw, and
+	// refuse loudly if the guarantee it depends on ever silently regresses.
+	PartitionCompletionCounts(ctx context.Context, runID string) (total int, succeeded int, err error)
 }
 
 // RepositoryDiscoverer reads the authoritative repository IDs for one
@@ -508,17 +573,25 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 }
 
 type PartitionHandler struct {
-	store               Store
-	publisher           Publisher
-	compatibility       CompatibilityExecutor
-	sourceChecker       SourceDataChecker
-	zeroRowsObserver    jobruntime.DailyMetricsZeroRowsObserver
-	nativeFamilies      map[string]NativeFamilyExecutor
-	nativeFamilyNames   []string
-	nativeObserver      jobruntime.DailyMetricsNativeFamilyObserver
-	nativeFamilyLogger  NativeFamilyRefusalLogger
-	nativeFamiliesNow   func() time.Time
-	compatRetryObserver jobruntime.DailyMetricsCompatRetryObserver
+	store             Store
+	publisher         Publisher
+	compatibility     CompatibilityExecutor
+	sourceChecker     SourceDataChecker
+	zeroRowsObserver  jobruntime.DailyMetricsZeroRowsObserver
+	nativeFamilies    map[string]NativeFamilyExecutor
+	nativeFamilyNames []string
+	// nativeFamilyDependencies (CHAOS-5078 codex r2 F3) is each pre_bridge
+	// native family's DIRECT `after` dependencies, restricted to the
+	// registered subset -- see registeredDependencies. computeNativeFamilies
+	// uses it to block a family's runtime execution when its dependency
+	// already failed or was itself blocked this same pass, so a reader can
+	// never run natively against a stale/absent snapshot its writer failed
+	// to produce THIS partition.
+	nativeFamilyDependencies map[string][]string
+	nativeObserver           jobruntime.DailyMetricsNativeFamilyObserver
+	nativeFamilyLogger       NativeFamilyRefusalLogger
+	nativeFamiliesNow        func() time.Time
+	compatRetryObserver      jobruntime.DailyMetricsCompatRetryObserver
 
 	// postBridgeFamilies/postBridgeFamilyNames (CHAOS-4278) are native
 	// families that must run AFTER the compatibility bridge call for the
@@ -649,17 +722,41 @@ func (handler *PartitionHandler) SetZeroRowsObserver(observer jobruntime.DailyMe
 // simply never leaves the compatibility path; see NativeFamilyExecutor's
 // doc comment for the runtime (per-partition) fail-open policy on top of
 // that construction-time decision.
-func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFamilyExecutor) {
+func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFamilyExecutor) error {
 	if handler == nil {
-		return
+		return nil
 	}
-	handler.nativeFamilies = families
 	names := make([]string, 0, len(families))
 	for name := range families {
 		names = append(names, name)
 	}
-	sort.Strings(names)
-	handler.nativeFamilyNames = names
+	registry, err := LoadRegistry()
+	if err != nil {
+		return err
+	}
+	// CHAOS-4283 PR2: run order comes from families.json's `after` edges, not
+	// from sort.Strings. Alphabetical order silently put the readers of
+	// work_item_team_attributions ahead of the family that writes it.
+	//
+	// On error we register NOTHING and return it. That is deliberate on both
+	// counts. Registering nothing is fail-SAFE, not fail-open: an unregistered
+	// family is computed by the Python compatibility bridge exactly as it was
+	// before any native executor existed, which is the same degradation policy
+	// a refused executor already follows. What we must never do is fall back to
+	// alphabetical -- that produces a plausible order in which a reader
+	// precedes its writer, which is the very defect this ordering exists to
+	// prevent, reintroduced through the error path.
+	ordered, err := FamilyRunOrder(registry, names)
+	if err != nil {
+		handler.nativeFamilies = nil
+		handler.nativeFamilyNames = nil
+		handler.nativeFamilyDependencies = nil
+		return err
+	}
+	handler.nativeFamilies = families
+	handler.nativeFamilyNames = ordered
+	handler.nativeFamilyDependencies = registeredDependencies(registry, names)
+	return nil
 }
 
 // SetPostBridgeNativeFamilies registers the families.json families that
@@ -670,17 +767,32 @@ func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFam
 // SetNativeFamilies exactly (REPLACES its map on every call, sorts names for
 // deterministic iteration) -- the only difference is WHEN the dispatcher
 // runs these executors, in Work.
-func (handler *PartitionHandler) SetPostBridgeNativeFamilies(families map[string]NativeFamilyExecutor) {
+func (handler *PartitionHandler) SetPostBridgeNativeFamilies(families map[string]NativeFamilyExecutor) error {
 	if handler == nil {
-		return
+		return nil
 	}
-	handler.postBridgeFamilies = families
 	names := make([]string, 0, len(families))
 	for name := range families {
 		names = append(names, name)
 	}
-	sort.Strings(names)
-	handler.postBridgeFamilyNames = names
+	registry, err := LoadRegistry()
+	if err != nil {
+		return err
+	}
+	// post_bridge families get the SAME `after` treatment as pre_bridge ones.
+	// Today no post_bridge family depends on another, so the result equals the
+	// alphabetical order it replaced -- but leaving this phase on sort.Strings
+	// would mean the ordering guarantee silently depended on WHICH phase a
+	// family happened to be in, and CHAOS-5078 moves families between phases.
+	ordered, err := FamilyRunOrder(registry, names)
+	if err != nil {
+		handler.postBridgeFamilies = nil
+		handler.postBridgeFamilyNames = nil
+		return err
+	}
+	handler.postBridgeFamilies = families
+	handler.postBridgeFamilyNames = ordered
+	return nil
 }
 
 // SetNativeFamilyObserver wires the optional telemetry observer for native
@@ -759,20 +871,138 @@ func (handler *PartitionHandler) observeCompatRetry(decision jobruntime.DailyMet
 // any native executor existed -- one family degrading to Python must never
 // take the other 22 down with it, and must never turn a transient ClickHouse
 // hiccup into a Permanent partition failure.
-func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run Run, partition Partition) []string {
+//
+// FAIL-OPEN DOES NOT MEAN "RUN ANYWAY" FOR A FAMILY'S OWN DEPENDENTS
+// (CHAOS-5078 codex round 2 F3, on the PR that first put work_item_attribution
+// into this SAME loop ahead of its three readers): before this fix, a
+// dependency's runtime failure did not stop this loop from still calling
+// ComputeFamily on the families declaring `after` on it. A reader that then
+// succeeded (reading the PREVIOUS partition's attribution snapshot, since
+// today's write never landed) was added to skipFamilies -- excluding it from
+// the bridge's own recompute -- while its failed dependency was NOT added,
+// so the bridge WOULD recompute the dependency. The correction never reaches
+// the reader: the partition reports success with a stale or absent
+// team-derived output. Every family is still attempted exactly once and a
+// failure still degrades only that one family plus its transitive
+// dependents to the bridge -- see blockedNativeDependency.
+//
+// A PARTIAL WRITE IS NOT FAIL-OPEN AT THE PARTITION LEVEL EITHER (CHAOS-5078
+// codex round 3, astra scale review F1's pre_bridge twin -- see
+// lane-ci-required-to-arc's CHAOS-5190/#2276 for the post_bridge sibling).
+// The returned error is non-nil exactly when at least one family failed
+// AFTER already writing rows (ErrPartialWrite): that family is excluded from
+// the bridge's own recompute (skipFamiliesForBridge's contract, unchanged --
+// re-running it would duplicate the rows already written to an append-only
+// table), so nothing completes its rows for this partition at all. The
+// comment this replaces claimed the partition was "re-driven" in that case;
+// nothing in redrive.go or postgres.go ever inspected PartialWrite, so that
+// was never true. Work now surfaces this error to hold the partition
+// 'failed' (re-dispatchable) instead of letting it complete over the gap.
+// An ORDINARY (non-partial) refusal is UNAFFECTED: the returned error is
+// nil for it, and it stays fail-open to the bridge exactly as before, since
+// nothing was written for it yet.
+func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run Run, partition Partition) ([]string, error) {
 	if handler == nil || len(handler.nativeFamilyNames) == 0 {
-		return nil
+		return nil, nil
 	}
 	skipFamilies := make([]string, 0, len(handler.nativeFamilyNames))
+	// incomplete (CHAOS-5078 codex r3) names every family that failed AFTER
+	// already writing rows this pass -- the partition-level signal Work uses
+	// to decide whether to hold the partition out of CompletePartition.
+	// Deliberately separate from `blocked`: blocked also includes ordinary
+	// (non-partial) refusals, which must NOT hold the partition (they stay
+	// fail-open to the bridge), so `blocked`'s membership is not the right
+	// set to report here.
+	var incomplete []string
+	// blocked (CHAOS-5078 codex r2 F3) accumulates every family that did NOT
+	// successfully compute this pass -- both an outright ComputeFamily error
+	// and a family skipped here because ITS dependency is already in this
+	// set. Checked before every family runs, so a failure propagates
+	// transitively through the run order for free: work_item_attribution
+	// fails -> added here -> work_item_state (after: work_item_attribution)
+	// is blocked and added here in turn -> anything declaring `after:
+	// work_item_state` would be blocked by IT, without needing to walk the
+	// dependency graph more than one edge at a time.
+	blocked := make(map[string]struct{}, len(handler.nativeFamilyNames))
 	for _, name := range handler.nativeFamilyNames {
 		executor := handler.nativeFamilies[name]
 		if executor == nil {
+			continue
+		}
+		if dependency, isBlocked := handler.blockedNativeDependency(name, blocked); isBlocked {
+			// The dependency failed or was itself blocked THIS pass -- the
+			// table this family reads may be stale (still holding an
+			// earlier partition's snapshot) or entirely unwritten today.
+			// Running anyway and then being added to skipFamilies (as
+			// "computed") would permanently exclude this family from the
+			// Python bridge's own recompute, so the correction the bridge
+			// makes to the dependency is never propagated to this reader.
+			// Not attempting it at all -- and leaving it OFF skipFamilies,
+			// exactly like a direct refusal -- keeps the bridge as the
+			// safety net for both the dependency AND this family together.
+			if handler.nativeFamilyLogger != nil {
+				handler.nativeFamilyLogger.Error(
+					"native metrics.daily family blocked for this partition because its "+
+						"declared dependency failed or was blocked; falling back to the "+
+						"Python compatibility bridge for both (CHAOS-5078 codex r2 F3)",
+					"family", name,
+					"blocked_by", dependency,
+					"organization_id", run.OrganizationID,
+					"target_day", run.TargetDay,
+					"partition_id", partition.ID,
+					"repo_ids", partition.RepoIDs,
+					"run_id", run.ID,
+				)
+			}
+			if handler.nativeObserver != nil {
+				_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
+					name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+				)
+			}
+			blocked[name] = struct{}{}
 			continue
 		}
 		started := handler.nativeFamiliesNow()
 		rows, err := executor.ComputeFamily(ctx, run, partition)
 		duration := handler.nativeFamiliesNow().Sub(started)
 		if err != nil {
+			blocked[name] = struct{}{}
+			// PARTIAL WRITE IS NOT FAIL-OPEN. An executor that already wrote
+			// rows before failing wraps ErrPartialWrite; fail-open there would
+			// let the bridge write the same family again, and the output tables
+			// are append-only MergeTrees with no version column, so the earlier
+			// batches are not replaced -- they DUPLICATE. The family joins the
+			// skip list instead.
+			//
+			// CHAOS-5078 codex round 3 (astra scale review F1's pre_bridge
+			// twin): this comment used to say "the partition is re-driven"
+			// here. That was false -- nothing in redrive.go or postgres.go
+			// ever inspected PartialWrite, so no automatic re-drive existed.
+			// `incomplete` below is what actually closes the gap: it makes
+			// Work hold the partition 'failed' (re-dispatchable) instead of
+			// letting it complete over a family with no writer for this
+			// partition's rows.
+			//
+			// The rows count reported is the executor's TRUE count, not zero:
+			// zero would understate what landed, which is exactly the number an
+			// operator needs to judge duplication. See CHAOS-4288 / codex r1 on
+			// #2235.
+			//
+			// Still added to `blocked` above (CHAOS-5078 codex r2 F3): a
+			// partial write is an INCOMPLETE result for this partition, not a
+			// trustworthy one. A family declaring `after` on it must not run
+			// natively either, even though the partially-written family itself
+			// is excluded from fail-open.
+			if errors.Is(err, ErrPartialWrite) {
+				skipFamilies = append(skipFamilies, name)
+				incomplete = append(incomplete, name)
+				if handler.nativeObserver != nil {
+					_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
+						name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rows, duration,
+					)
+				}
+				continue
+			}
 			if handler.nativeFamilyLogger != nil {
 				handler.nativeFamilyLogger.Error(
 					"native metrics.daily family refused for this partition; "+
@@ -782,6 +1012,7 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 					"organization_id", run.OrganizationID,
 					"target_day", run.TargetDay,
 					"partition_id", partition.ID,
+					"repo_ids", partition.RepoIDs,
 					"run_id", run.ID,
 					"error", err,
 				)
@@ -800,7 +1031,25 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			)
 		}
 	}
-	return skipFamilies
+	if len(incomplete) > 0 {
+		return skipFamilies, fmt.Errorf("%w: %s", ErrPreBridgeFamilyIncomplete, strings.Join(incomplete, ","))
+	}
+	return skipFamilies, nil
+}
+
+// blockedNativeDependency reports whether `name` has a registered `after`
+// dependency present in `blocked` (already failed, or itself blocked
+// transitively earlier in this same pass), and if so, which one -- naming
+// ONE culprit is enough for an operator to start looking, and
+// nativeFamilyDependencies's declaration order makes the choice
+// deterministic run to run.
+func (handler *PartitionHandler) blockedNativeDependency(name string, blocked map[string]struct{}) (string, bool) {
+	for _, dependency := range handler.nativeFamilyDependencies[name] {
+		if _, ok := blocked[dependency]; ok {
+			return dependency, true
+		}
+	}
+	return "", false
 }
 
 // skipFamiliesForBridge is what the compatibility bridge call is told NOT to
@@ -819,12 +1068,17 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 // already told to skip it) -- see computePostBridgeNativeFamilies's doc
 // comment for why that tradeoff is inherent to the phase itself, not an
 // oversight.
-func (handler *PartitionHandler) skipFamiliesForBridge(ctx context.Context, run Run, partition Partition) []string {
-	skipFamilies := handler.computeNativeFamilies(ctx, run, partition)
+//
+// The returned error (CHAOS-5078 codex round 3) is computeNativeFamilies'
+// own ErrPreBridgeFamilyIncomplete, passed through unchanged -- the
+// post_bridge names appended below never produce an error here, since they
+// have not run yet at this point in the partition.
+func (handler *PartitionHandler) skipFamiliesForBridge(ctx context.Context, run Run, partition Partition) ([]string, error) {
+	skipFamilies, err := handler.computeNativeFamilies(ctx, run, partition)
 	if handler == nil || len(handler.postBridgeFamilyNames) == 0 {
-		return skipFamilies
+		return skipFamilies, err
 	}
-	return append(skipFamilies, handler.postBridgeFamilyNames...)
+	return append(skipFamilies, handler.postBridgeFamilyNames...), err
 }
 
 // computePostBridgeNativeFamilies runs every registered POST_BRIDGE native
@@ -883,20 +1137,31 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 		duration := handler.nativeFamiliesNow().Sub(started)
 		outcome := jobruntime.DailyMetricsNativeFamilyOutcomeComputed
 		if err != nil {
-			rows = 0
-			outcome = jobruntime.DailyMetricsNativeFamilyOutcomeRefused
-			if handler.nativeFamilyLogger != nil {
-				handler.nativeFamilyLogger.Error(
-					"native metrics.daily post_bridge family refused for "+
-						"this partition; no writer produces this family's "+
-						"rows for this partition (CHAOS-5139)",
-					"family", name,
-					"organization_id", run.OrganizationID,
-					"target_day", run.TargetDay,
-					"partition_id", partition.ID,
-					"run_id", run.ID,
-					"error", err,
-				)
+			// A post_bridge partial write cannot cause BRIDGE duplication --
+			// Python was already told to skip this family unconditionally. But
+			// the outcome and the row count must still be truthful: reporting
+			// "refused, 0 rows" for a family that wrote several thousand before
+			// failing tells an operator the opposite of what happened, and the
+			// re-drive decision depends on knowing rows landed. So the outcome
+			// is distinguished here even though the skip decision is not.
+			if errors.Is(err, ErrPartialWrite) {
+				outcome = jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite
+			} else {
+				rows = 0
+				outcome = jobruntime.DailyMetricsNativeFamilyOutcomeRefused
+				if handler.nativeFamilyLogger != nil {
+					handler.nativeFamilyLogger.Error(
+						"native metrics.daily post_bridge family refused for "+
+							"this partition; no writer produces this family's "+
+							"rows for this partition (CHAOS-5139)",
+						"family", name,
+						"organization_id", run.OrganizationID,
+						"target_day", run.TargetDay,
+						"partition_id", partition.ID,
+						"run_id", run.ID,
+						"error", err,
+					)
+				}
 			}
 		}
 		if handler.nativeObserver != nil {
@@ -939,7 +1204,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			return handler.store.RenewPartition(renewCtx, *claim)
 		},
 		func(workCtx context.Context) error {
-			skipFamilies := handler.skipFamiliesForBridge(workCtx, run, claim.Partition)
+			skipFamilies, preBridgeErr := handler.skipFamiliesForBridge(workCtx, run, claim.Partition)
 			// CHAOS-4316: bound only the compatibility bridge call, not the
 			// native-family compute above (or the post_bridge native
 			// compute below, CHAOS-4278, for the SAME reason -- a separate,
@@ -952,6 +1217,15 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 				bridgeCtx, cancel = context.WithTimeout(bridgeCtx, ceiling)
 				defer cancel()
 			}
+			// preBridgeErr (CHAOS-5078 codex round 3) is deliberately NOT
+			// returned here: the bridge call must still run normally for
+			// every OTHER family regardless of one pre_bridge family's
+			// partial write, exactly as it already does for an ordinary
+			// pre_bridge refusal. It is returned at the end of this closure
+			// instead (below), once the bridge and post_bridge computes have
+			// both had their normal chance to run -- mirroring how a
+			// post_bridge failure is only ever discovered after its own
+			// full loop completes.
 			if err := handler.compatibility.ComputePartition(bridgeCtx, run, claim.Partition, skipFamilies); err != nil {
 				return err
 			}
@@ -961,9 +1235,47 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// phase, and why it never returns an error here (fail-open,
 			// narrower safety net than pre_bridge).
 			handler.computePostBridgeNativeFamilies(workCtx, run, claim.Partition)
-			return nil
+			return preBridgeErr
 		},
 	); err != nil {
+		if errors.Is(err, ErrPreBridgeFamilyIncomplete) {
+			// CHAOS-5078 codex round 3 (astra scale review F1's pre_bridge
+			// twin -- see lane-ci-required-to-arc's CHAOS-5190/#2276 for the
+			// post_bridge sibling, same shape, no code dependency): a
+			// pre_bridge family failed AFTER already writing rows, and that
+			// family was deliberately excluded from the bridge's own
+			// recompute (skipFamiliesForBridge's contract, unchanged) to
+			// avoid duplicating an append-only write. Nothing else produces
+			// this family's rows for this partition, so it is released
+			// 'failed' (re-dispatchable) instead of completed -- a retry can
+			// still fill the gap rather than a silently-incomplete partition
+			// reading as succeeded. Not wired through retryCompatibilityError:
+			// this is not a compatibility bridge error (the bridge call
+			// already returned successfully) -- reusing it would misclassify
+			// a pre_bridge native failure as a compat-bridge one. Per-family
+			// detail (which family, how many rows) already landed via
+			// nativeObserver inside computeNativeFamilies.
+			//
+			// CHAOS-5078 codex confirmation pass (P2): the durable release
+			// itself can fail (a transient DB error, or the lease already
+			// expired by the time this 5s-detached call runs) -- discarding
+			// that outcome with `_ =` left no trace of whether the
+			// 'failed'/pre_bridge_family_incomplete row was ever actually
+			// persisted, same class of silent-loss gap CHAOS-4319/CHAOS-4543
+			// already closed for the compat-bridge branches below. Now gated
+			// exactly like those: observeCompatRetry fires ONLY when the
+			// write is confirmed to have landed, and a failed write wraps
+			// the returned error with an explicit note rather than looking
+			// identical to a successful release.
+			if releasePartitionWithReason(handler.store, ctx, *claim, jobruntime.ReasonPreBridgeFamilyIncomplete.String(), handler.nativeFamilyLogger, run) {
+				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedPreBridgeFamilyIncomplete)
+				return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonPreBridgeFamilyIncomplete)
+			}
+			return jobruntime.WithReason(
+				jobruntime.Retryable(fmt.Errorf("%w (durable release-with-reason also failed to persist)", err)),
+				jobruntime.ReasonPreBridgeFamilyIncomplete,
+			)
+		}
 		if errors.Is(err, ErrCompatibilityAmbiguousStuck) {
 			// CHAOS-4319: this ledger row will refuse every future attempt
 			// identically until a human /repair call moves it -- releasing
@@ -1001,7 +1313,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// partition row can tell a liveness kill apart from any other
 			// 'failed' outcome without cross-referencing River's attempt
 			// log or Sentry.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProgressStalled)
 			}
 			return retryCompatibilityError(err)
@@ -1014,7 +1326,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// failure_reason attached so an operator reading the partition
 			// row can tell a pids-capacity refusal apart from any other
 			// 'failed' outcome without cross-referencing River's attempt log.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "capacity_exhausted") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "capacity_exhausted", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedCapacityExhausted)
 			}
 			return retryCompatibilityError(err)
@@ -1039,7 +1351,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// that recorded nothing durable at all: the exact silent-loss
 			// shape CHAOS-4319 exists to close, reintroduced for this new
 			// no-retry optimization if left unguarded.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic)
 				return retryCompatibilityError(err)
 			}
@@ -1058,7 +1370,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// eventually discards the job after its attempt budget) left an
 			// operator with a bare 'failed' row and no clue why, the exact
 			// CHAOS-4543 "raw text not captured" gap this ticket closes.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhausted)
 			}
 			return retryCompatibilityError(err)
@@ -1068,7 +1380,7 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// runner subprocess killed by an external signal (kernel OOM,
 			// SIGTERM) is the same non-terminal, retryable shape and hit the
 			// identical missing-branch gap.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "process_signaled") {
+			if releasePartitionWithReason(handler.store, ctx, *claim, "process_signaled", handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProcessSignaled)
 			}
 			return retryCompatibilityError(err)
@@ -1143,7 +1455,32 @@ func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*Fina
 // trusting that whatever string a caller registers happens to be one Python
 // understands. finalizeFamilyGateAgreementTest pins this slice against the
 // Python source, with a negative control, so the copy cannot drift silently.
-var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, TeamComplexityFamilyName}
+var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, TeamComplexityFamilyName, BenchmarkingFamilyName}
+
+// pythonGatedFinalizeFamilies is the STRICT SUBSET of
+// pythonRecognisedFinalizeFamilies whose Python compute still exists behind a
+// live `if "<name>" not in skip_families:` gate in job_daily.py's
+// run_daily_metrics_finalize. This is what
+// TestEveryRecognisedFinalizeFamilyHasAPythonGate source-scans job_daily.py
+// for -- pythonRecognisedFinalizeFamilies itself stays the (unchanged)
+// registration-validation and declared-iteration-order authority for ALL
+// four families above; only the "does Python still gate on this name"
+// question narrows. ic_finalize, team_cognitive_load, and benchmarking
+// (CHAOS-5194, moved to finalize scope but its Python compute is still
+// skip_families-gated) all still have a live gate line.
+//
+// CHAOS-5051 deleted team_complexity's Python compute entirely (not just
+// skip-gated it), same reachability analysis CHAOS-5141
+// (team_cognitive_load) already established for this file:
+// buildDailyWorker refuses the WHOLE daily worker if the ClickHouse
+// connection fails to open, before dailyNativeFamilyRegistrations is ever
+// called -- so team_complexity is guaranteed to register natively in every
+// real deployment (it has no co-registration dependency of its own,
+// unlike team_cognitive_load/ic_finalize). team_complexity stays in
+// pythonRecognisedFinalizeFamilies (it is still a fully valid, always-
+// registerable native finalize family) but drops out of THIS list, since
+// there is no longer a Python gate line for the source-scan to find.
+var pythonGatedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, BenchmarkingFamilyName}
 
 // ErrUnknownFinalizeFamily is returned when a registered finalize family is
 // not one the Python bridge gates on.
@@ -1186,10 +1523,21 @@ func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]Na
 	if handler == nil {
 		return nil
 	}
-	for name := range families {
+	for name, executor := range families {
 		if !slices.Contains(pythonRecognisedFinalizeFamilies, name) {
 			return fmt.Errorf("%w: %q (bridge gates on %v)",
 				ErrUnknownFinalizeFamily, name, pythonRecognisedFinalizeFamilies)
+		}
+		// A nil executor passed the name check above but would silently vanish
+		// in computeNativeFinalizeFamilies (`if executor == nil { continue }`,
+		// WITHOUT adding the name to skipFamilies) -- Python's bridge would then
+		// compute this family too, exactly the two-writer hazard this function's
+		// own name-validation exists to prevent, just reached through a nil
+		// value instead of an unrecognised string. Reject it here, at the same
+		// "fail loudly, all-or-nothing" boundary as the name check, rather than
+		// let it degrade silently three calls later.
+		if executor == nil {
+			return fmt.Errorf("%w: %q registered with a nil executor", ErrUnknownFinalizeFamily, name)
 		}
 	}
 	names := make([]string, 0, len(families))
@@ -1225,16 +1573,37 @@ func (handler *FinalizeHandler) finalizeNow() time.Time {
 // observeFinalizeFamily reports one attempt. The observer's own error is
 // swallowed deliberately: telemetry that can fail a job is worse than no
 // telemetry, and this is the rule every observer in this package follows.
+// CHAOS-5151. The observer error used to be discarded outright (`_ =
+// ...ObserveDailyMetricsNativeFamily(...)`) -- exercised directly by
+// TestFailingNativeFinalizeFamilyIsReportedRefused's telemetry-down fixture,
+// which proved Work still succeeds when the observer errors but never checked
+// whether that failure left any trace. A family whose outcome telemetry
+// silently fails to record is invisible in exactly the same way an
+// unregistered family is (see dailyMetricsNativeFamilies' doc comment in
+// telemetry.go): the counter this call was supposed to move never moves, and
+// nothing says why. run carries the identifiers (run_id, org_id, target_day)
+// this call site has and the observer interface itself does not -- logged
+// here, not inside the observer, because only the caller knows which run and
+// family this failure belongs to.
 func (handler *FinalizeHandler) observeFinalizeFamily(
-	family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome,
+	run Run, family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome,
 	rowsWritten int, started time.Time,
 ) {
 	if handler.nativeFinalizeObserver == nil {
 		return
 	}
-	_ = handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
+	if err := handler.nativeFinalizeObserver.ObserveDailyMetricsNativeFamily(
 		family, outcome, rowsWritten, handler.finalizeNow().Sub(started),
-	)
+	); err != nil {
+		slog.Default().Error("daily finalize telemetry failed",
+			"error", err,
+			"run_id", run.ID,
+			"organization_id", run.OrganizationID,
+			"target_day", run.TargetDay.Format("2006-01-02"),
+			"family", family,
+			"outcome", outcome,
+		)
+	}
 }
 
 // computeNativeFinalizeFamilies runs every registered finalize-scope executor
@@ -1299,7 +1668,7 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 			// diverge as soon as a family is skipped for a nil executor.
 			for _, remaining := range handler.nativeFinalizeFamilyNames[index:] {
 				handler.observeFinalizeFamily(
-					remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
+					run, remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
 				)
 			}
 			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
@@ -1314,16 +1683,16 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 		switch {
 		case err == nil:
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rowsWritten, started,
 			)
 		case rowsWritten > 0:
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
 			)
 			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		default:
 			handler.observeFinalizeFamily(
-				name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
 			)
 			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		}
@@ -1347,7 +1716,19 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		return nil
 	}
 	if execution.OrganizationID == nil || claim.Run.ID != runID || claim.Run.Status != "running" || claim.Run.OrganizationID != *execution.OrganizationID {
-		_ = handler.store.ReleaseFinalize(ctx, *claim)
+		// Class-sweep on r2 finding #1 (CHAOS-4290): logged, not discarded --
+		// a release failure here leaves the claim's lease live under a run
+		// this handler has already decided never to work, which is exactly
+		// the kind of silent stranding the blocked-marker sweep exists to
+		// catch, just with nothing here to tell it something went wrong.
+		if releaseErr := handler.store.ReleaseFinalize(ctx, *claim); releaseErr != nil {
+			finalizeExecutionLogger(execution).Error("daily finalize release failed",
+				"error", releaseErr,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+			)
+		}
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	if err := runWithLeaseRenewal(
@@ -1372,17 +1753,122 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			return handler.compatibility.Finalize(workCtx, claim.Run, skipFamilies)
 		},
 	); err != nil {
-		releaseFinalize(handler.store, ctx, *claim)
+		// LOG THE UNDERLYING ERROR BEFORE RETURNING (CHAOS-4290, #2243's
+		// metrics-executed-proof failure).
+		//
+		// The retryable error the caller returns is wrapped by the adapter into
+		// the fixed string "dev-health job failed [retryable]", and the cause is
+		// serialised NOWHERE. On #2243's E2E every finalize job on every run
+		// exhausted its four attempts -- 96 starts, 96 discards -- and the only
+		// evidence of WHY was 96 identical wrapper strings. A family that fails
+		// every attempt on every run must not be that quiet.
+		//
+		// Logged here rather than left to the adapter because this is the only
+		// frame that still has the family scope: which run, which org, which
+		// attempt of how many.
+		// slog.Default() rather than skipping on a nil logger, following
+		// providerunit.go's pattern. `if logger != nil { log }` would make a nil
+		// logger produce SILENCE -- reintroducing, in a different place, exactly
+		// the defect this block exists to remove.
+		finalizeLogger := execution.Logger
+		if finalizeLogger == nil {
+			finalizeLogger = slog.Default()
+		}
+		{
+			finalizeLogger.Error("daily finalize failed",
+				"error", err,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				"attempt", execution.Attempt,
+				"max_attempts", execution.Definition.MaxAttempts,
+				"native_families", handler.nativeFinalizeFamilyNames,
+				"terminal", execution.Attempt >= execution.Definition.MaxAttempts,
+			)
+		}
+		// FINAL ATTEMPT: write the terminal state rather than releasing for a
+		// retry that will never come. River discards after this, and without a
+		// terminal write the run sits at status='running',
+		// finalization_status='failed' -- byte-identical to attempt 1 -- so
+		// nothing downstream can tell a stranded run from a retrying one.
+		//
+		// Attempt and MaxAttempts come from the adapter's own pair, the same
+		// values River acts on, so "final" here means what River means by it
+		// rather than a parallel notion maintained beside it.
+		if execution.Attempt >= execution.Definition.MaxAttempts {
+			// The terminal write's OWN error is logged, not discarded (r2
+			// finding #1, CHAOS-4290): a failure here means the run is left at
+			// status='running' -- byte-identical to attempt 1, invisible to the
+			// blocked-marker sweep -- and silently swallowing it would have made
+			// this exactly the "the fix reports success while doing nothing"
+			// shape FailFinalizePermanently's own RowsAffected check exists to
+			// catch on the write side, just moved one frame up to the caller
+			// that never looked.
+			if failErr := failFinalizePermanently(handler.store, ctx, *claim); failErr != nil {
+				finalizeLogger.Error("daily finalize terminal write failed",
+					"error", failErr,
+					"run_id", runID,
+					"organization_id", claim.Run.OrganizationID,
+					"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+				)
+			}
+			return retryCompatibilityError(err)
+		}
+		// Class-sweep on r2 finding #1 (CHAOS-4290): logged, not discarded --
+		// same reasoning as the terminal write above, one severity notch down
+		// (a lease this fails to release still expires and becomes
+		// reclaimable, where a failed terminal write has no other recovery
+		// path at all).
+		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
+			finalizeLogger.Error("daily finalize release failed",
+				"error", releaseErr,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+			)
+		}
 		return retryCompatibilityError(err)
 	}
 	if err := handler.store.CompleteFinalize(ctx, *claim); err != nil {
 		// Symmetric with the partition layer: this exit claimed and returned
 		// retryable without releasing, which is the most likely way the lease
 		// behind CHAOS-3991 was orphaned in the first place.
-		releaseFinalize(handler.store, ctx, *claim)
+		//
+		// err itself is logged here too (r3 finding), not only a subsequent
+		// release failure: before this, a CompleteFinalize failure whose
+		// release succeeded left NO log at all naming why completion failed --
+		// exactly the swallowed-error shape the standing telemetry rule exists
+		// to catch, just one call deeper than the release path r2/the
+		// class-sweep already covered.
+		logger := finalizeExecutionLogger(execution)
+		logger.Error("daily finalize completion failed",
+			"error", err,
+			"run_id", runID,
+			"organization_id", claim.Run.OrganizationID,
+			"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+		)
+		if releaseErr := releaseFinalize(handler.store, ctx, *claim); releaseErr != nil {
+			logger.Error("daily finalize release failed",
+				"error", releaseErr,
+				"run_id", runID,
+				"organization_id", claim.Run.OrganizationID,
+				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
+			)
+		}
 		return jobruntime.Retryable(err)
 	}
 	return nil
+}
+
+// finalizeExecutionLogger returns execution's own logger, or slog.Default()
+// when none is set. `if logger != nil { log }` would turn a nil logger into
+// silence, exactly the defect this file's finalize-failure logging exists to
+// remove -- see finalizeLogger's identical fallback above.
+func finalizeExecutionLogger(execution *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs]) *slog.Logger {
+	if execution != nil && execution.Logger != nil {
+		return execution.Logger
+	}
+	return slog.Default()
 }
 
 func runWithLeaseRenewal(
@@ -1474,10 +1960,39 @@ func releasePartition(store Store, ctx context.Context, claim PartitionClaim) {
 // row was never transitioned at all, exactly the kind of telemetry/reality
 // mismatch this ticket's own diagnosis had to work around (failure_reason
 // silently NULL despite a classified failure).
-func releasePartitionWithReason(store Store, ctx context.Context, claim PartitionClaim, reason string) bool {
+//
+// CHAOS-5078 codex confirmation pass: logs the underlying store error
+// before returning false, covering every call site below in one place.
+// Before this, a durable release-with-reason failure was invisible at this
+// function's own boundary -- every caller only ever saw a bare bool, so
+// none of them (including the five call sites that predate this fix) could
+// distinguish "release failed, here is why" from "release failed" with no
+// further trace beyond the eventual, silent lease-reclaim path. logger is
+// optional (nil is a no-op, same discipline as nativeFamilyLogger
+// elsewhere) -- absence of a logger must never change return behavior.
+func releasePartitionWithReason(
+	store Store, ctx context.Context, claim PartitionClaim, reason string,
+	logger NativeFamilyRefusalLogger, run Run,
+) bool {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	return store.ReleasePartitionWithReason(releaseCtx, claim, reason) == nil
+	if err := store.ReleasePartitionWithReason(releaseCtx, claim, reason); err != nil {
+		if logger != nil {
+			logger.Error(
+				"daily metrics partition release-with-reason failed; the durable "+
+					"failure_reason may not have been persisted",
+				"organization_id", run.OrganizationID,
+				"target_day", run.TargetDay,
+				"partition_id", claim.Partition.ID,
+				"repo_ids", claim.Partition.RepoIDs,
+				"run_id", claim.Partition.RunID,
+				"reason", reason,
+				"error", err,
+			)
+		}
+		return false
+	}
+	return true
 }
 
 // failPartitionPermanently durably terminalizes a partition stuck ambiguous
@@ -1496,8 +2011,28 @@ func failPartitionPermanently(store Store, ctx context.Context, claim PartitionC
 	return store.FailPartitionPermanently(failCtx, claim, reason) == nil
 }
 
-func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) {
+// releaseFinalize returns the store's own error (r2 finding #1's class,
+// CHAOS-4290) instead of discarding it, matching failFinalizePermanently
+// below: a caller that already decided this claim's work is over is the last
+// frame with the identifiers to explain why a release failed, if it does.
+func releaseFinalize(store Store, ctx context.Context, claim FinalizeClaim) error {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = store.ReleaseFinalize(releaseCtx, claim)
+	return store.ReleaseFinalize(releaseCtx, claim)
+}
+
+// failFinalizePermanently writes the terminal state on a context detached from
+// the failing one, exactly as releaseFinalize does: the work context may already
+// be cancelled, and a terminal write that silently did not happen is the whole
+// defect this fixes.
+//
+// Returns the store's own error (r2 finding #1, CHAOS-4290) instead of
+// discarding it: this is the LAST write in the finalize failure path -- unlike
+// releaseFinalize, whose failure a River-driven redrive or lease expiry can
+// still recover from, a terminal write that fails here has no other
+// mechanism behind it. The caller logs it with the run's own identifiers.
+func failFinalizePermanently(store Store, ctx context.Context, claim FinalizeClaim) error {
+	terminalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return store.FailFinalizePermanently(terminalCtx, claim)
 }

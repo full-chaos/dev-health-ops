@@ -1,0 +1,32 @@
+#include <algorithm>
+#include <vector>
+
+// A lambda passed as a call argument. Its body's control flow is scored
+// against the ENCLOSING function -- lizard never splits a lambda into its
+// own block the way it does a named nested function.
+int sortAndCount(std::vector<int>& v, int threshold) {
+    std::sort(v.begin(), v.end(), [](int a, int b) {
+        if (a < b) {
+            return true;
+        }
+        return false;
+    });
+    int count = 0;
+    for (int x : v) {
+        if (x > threshold && x % 2 == 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+// A lambda with an explicit capture list and a trailing return type.
+int captureAndReturnType(int base) {
+    auto adder = [base](int x) -> int {
+        if (x > 0) {
+            return base + x;
+        }
+        return base;
+    };
+    return adder(1) + adder(-1);
+}

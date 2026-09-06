@@ -11,6 +11,7 @@ lifecycle: active
 
 - [Ingestion failure](ingestion-failure.md)
 - [Worker or queue failure](worker-or-queue-failure.md)
+- [Operator commands for the Go worker stack](operator-commands.md)
 - [Database or migration failure](database-or-migration-failure.md)
 - [Provider authentication failure](provider-authentication-failure.md)
 - [Ask Dev web proxy or browser failure](ask-dev-web-proxy-or-browser-failure.md)

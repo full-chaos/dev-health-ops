@@ -162,6 +162,7 @@ nav:
           - operate/runbooks/index.md
           - Ingestion failure: operate/runbooks/ingestion-failure.md
           - Worker or queue failure: operate/runbooks/worker-or-queue-failure.md
+          - Operator commands for the Go worker stack: operate/runbooks/operator-commands.md
           - Database or migration failure: operate/runbooks/database-or-migration-failure.md
           - Provider authentication failure: operate/runbooks/provider-authentication-failure.md
           - Ask Dev web proxy or browser failure: operate/runbooks/ask-dev-web-proxy-or-browser-failure.md

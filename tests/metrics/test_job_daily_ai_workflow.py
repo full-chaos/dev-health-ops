@@ -1,11 +1,19 @@
-"""CHAOS-2187 + CHAOS-2367: daily-job AI workflow extraction wiring.
+"""CHAOS-2187: daily-job AI workflow extraction wiring.
 
 Covers ``job_daily._extract_ai_workflow_for_day`` — the helper that turns the
-day's PR/review/deployment/incident rows into AI workflow runs and Work
-Graph edges. These edge tables were previously never populated because the
-extractor had no production call site (CHAOS-2187 for issue/artifact/review
-edges; CHAOS-2367 for pr_deployment and deployment_incident edges, where the
-extractor existed but was called without deployments/incidents rows).
+day's PR rows into AI workflow runs and Work Graph edges. These edge tables
+were previously never populated because the extractor had no production
+call site (CHAOS-2187 for issue/artifact/review edges).
+
+CHAOS-5234/CHAOS-3092: this file used to ALSO cover the review/deployment/
+incident edge extraction (CHAOS-2367) that lived in the same function --
+that half (extract_review_deployment_incident_edges, the work_graph_edges
+family) is deleted, chris's standing rule (CHAOS-5233): once a family's Go
+executor is on main, its Python compute is deleted, never kept alive just
+for a rot guard. WorkGraphEdgesExecutor (native Go) is now the sole
+computer/writer of those three tables (closes CHAOS-5216 by construction:
+single native reader). _extract_ai_workflow_for_day now returns a 3-tuple
+(runs, artifact_edges, issue_edges) instead of the old 6-tuple.
 """
 
 from __future__ import annotations
@@ -66,52 +74,12 @@ class _Sink:
             ]
         if "FROM work_graph_issue_pr" in query:
             return [{"repo_id": REPO_ID, "pr_number": 7, "work_item_id": "jira:ABC-1"}]
-        if "FROM git_pull_request_reviews" in query:
-            return [
-                {
-                    "repo_id": REPO_ID,
-                    "number": 7,
-                    "review_id": "rev_7_0",
-                    "state": "APPROVED",
-                    "submitted_at": START,
-                    "last_synced": START,
-                }
-            ]
-        if "FROM deployments" in query:
-            return [
-                {
-                    # Native PR link: produces a confidence-1.0 edge.
-                    "repo_id": REPO_ID,
-                    "deployment_id": "deploy-1",
-                    "pull_request_number": 7,
-                    "started_at": START,
-                    "finished_at": START,
-                    "deployed_at": START,
-                    "last_synced": START,
-                }
-            ]
-        if "operational_incidents" in query:
-            return [
-                {
-                    "repo_id": REPO_ID,
-                    "incident_id": "inc-1",
-                    "started_at": START,
-                    "last_synced": START,
-                }
-            ]
         return []
 
 
-def test_extracts_runs_and_all_edge_kinds() -> None:
+def test_extracts_runs_and_ai_workflow_edges() -> None:
     sink = _Sink()
-    (
-        runs,
-        artifact_edges,
-        issue_edges,
-        review_edges,
-        pr_deploy_edges,
-        deploy_incident_edges,
-    ) = _extract_ai_workflow_for_day(
+    runs, artifact_edges, issue_edges = _extract_ai_workflow_for_day(
         primary_sink=sink,
         org_id=ORG_ID,
         start=START,
@@ -130,57 +98,6 @@ def test_extracts_runs_and_all_edge_kinds() -> None:
     assert len(issue_edges) == 1
     assert issue_edges[0].issue_id == "jira:ABC-1"
 
-    assert len(review_edges) == 1
-    assert review_edges[0].pr_id == f"{REPO_ID}:7"
-    assert review_edges[0].review_outcome_id == "rev_7_0"
-    assert review_edges[0].outcome == "APPROVED"
-
-    assert len(pr_deploy_edges) == 1
-    assert pr_deploy_edges[0].pr_id == f"{REPO_ID}:7"
-    assert pr_deploy_edges[0].deployment_id == "deploy-1"
-    assert pr_deploy_edges[0].confidence == 1.0
-    assert pr_deploy_edges[0].source == "native"
-
-    assert len(deploy_incident_edges) == 1
-    assert deploy_incident_edges[0].deployment_id == "deploy-1"
-    assert deploy_incident_edges[0].incident_id == "inc-1"
-    # incidents rows carry no deployment_id, so the link is the same-day
-    # same-repo heuristic.
-    assert deploy_incident_edges[0].source == "heuristic"
-
-
-def test_mapped_canonical_incident_is_deduplicated_before_ai_linkage() -> None:
-    class _CanonicalIncidentSink(_Sink):
-        def query_dicts(
-            self, query: str, parameters: dict[str, Any]
-        ) -> list[dict[str, Any]]:
-            if "operational_incidents" in query:
-                assert parameters["org_id"] == ORG_ID
-                assert "repo_id IS NOT NULL" in query
-                assert query.count("WHERE org_id = {org_id:String}") >= 2
-                canonical_row = {
-                    "repo_id": REPO_ID,
-                    "incident_id": "pd-1",
-                    "status": "resolved",
-                    "started_at": START,
-                    "resolved_at": END,
-                    "last_synced": END,
-                }
-                return [canonical_row, canonical_row]
-            return super().query_dicts(query, parameters)
-
-    result = _extract_ai_workflow_for_day(
-        primary_sink=_CanonicalIncidentSink(),
-        org_id=ORG_ID,
-        start=START,
-        end=END,
-        repo_id=None,
-        repo_provider_by_id={str(REPO_ID): "github"},
-    )
-
-    assert len(result[-1]) == 1
-    assert result[-1][0].incident_id == "pd-1"
-
 
 def test_non_uuid_org_skips_extraction_without_queries() -> None:
     sink = _Sink()
@@ -193,21 +110,19 @@ def test_non_uuid_org_skips_extraction_without_queries() -> None:
         repo_provider_by_id={},
     )
 
-    assert result == ([], [], [], [], [], [])
+    assert result == ([], [], [])
     assert sink.queries == []
 
 
 def test_unknown_repo_provider_falls_back_to_unknown() -> None:
     sink = _Sink()
-    runs, _artifacts, _issues, _reviews, _deploys, _incidents = (
-        _extract_ai_workflow_for_day(
-            primary_sink=sink,
-            org_id=ORG_ID,
-            start=START,
-            end=END,
-            repo_id=REPO_ID,
-            repo_provider_by_id={},
-        )
+    runs, _artifacts, _issues = _extract_ai_workflow_for_day(
+        primary_sink=sink,
+        org_id=ORG_ID,
+        start=START,
+        end=END,
+        repo_id=REPO_ID,
+        repo_provider_by_id={},
     )
 
     assert len(runs) == 1
@@ -248,18 +163,9 @@ def test_malformed_rows_are_dropped_row_locally() -> None:
                     {"repo_id": "not-a-uuid", "number": 9, "title": "bad"},
                     {"repo_id": REPO_ID, "number": None, "title": "bad"},
                 ]
-            if "FROM git_pull_request_reviews" in query:
-                rows = rows + [{"repo_id": object(), "number": 3}]
-            if "FROM deployments" in query:
-                rows = rows + [
-                    {"repo_id": "not-a-uuid", "deployment_id": "d-bad"},
-                    {"repo_id": REPO_ID, "deployment_id": ""},
-                ]
-            if "operational_incidents" in query:
-                rows = rows + [{"repo_id": REPO_ID, "incident_id": None}]
             return rows
 
-    runs, artifacts, issues, reviews, deploys, incidents = _extract_ai_workflow_for_day(
+    runs, artifacts, issues = _extract_ai_workflow_for_day(
         primary_sink=_MalformedRowSink(),
         org_id=ORG_ID,
         start=START,
@@ -272,6 +178,3 @@ def test_malformed_rows_are_dropped_row_locally() -> None:
     assert len(runs) == 1
     assert len(artifacts) == 1
     assert len(issues) == 1
-    assert len(reviews) == 1
-    assert len(deploys) == 1
-    assert len(incidents) == 1

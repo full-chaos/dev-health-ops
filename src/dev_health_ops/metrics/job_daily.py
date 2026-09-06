@@ -15,11 +15,6 @@ from typing import Any
 
 from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.db import resolve_sink_uri
-from dev_health_ops.metrics.active_incidents import (
-    IncidentWindow,
-    active_incidents_query,
-    deduplicate_active_incidents,
-)
 from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
@@ -98,7 +93,6 @@ from dev_health_ops.utils.cli import (
 )
 from dev_health_ops.work_graph.extractors.ai_workflow import (
     extract_ai_workflow_from_pull_requests,
-    extract_review_deployment_incident_edges,
 )
 
 logger = logging.getLogger(__name__)
@@ -255,19 +249,28 @@ def _extract_ai_workflow_for_day(
     end: datetime,
     repo_id: uuid.UUID | None,
     repo_provider_by_id: dict[str, str],
-) -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any], list[Any]]:
-    """Extract AI workflow runs and Work Graph edges for one UTC day window.
+) -> tuple[list[Any], list[Any], list[Any]]:
+    """Extract AI workflow runs for one UTC day window.
 
-    Returns ``(runs, artifact_edges, issue_edges, review_outcome_edges,
-    pr_deployment_edges, deployment_incident_edges)``.
-    Returns six empty lists when ``org_id`` is not a UUID — AIWorkflowRun
+    Returns ``(runs, artifact_edges, issue_edges)``.
+    Returns three empty lists when ``org_id`` is not a UUID — AIWorkflowRun
     requires a tenant UUID by contract, so extraction without one would
     fabricate attribution (CHAOS-2187).
 
-    Deployment↔incident correlation is day-scoped (CHAOS-2367): an incident
-    links natively when the deployment row carries its PR number, and
-    heuristically (confidence 0.3) to same-repo deployments within the same
-    UTC day otherwise.
+    CHAOS-5234/CHAOS-3092: this function used to ALSO extract Work Graph
+    edges (review_outcome_edges/pr_deployment_edges/deployment_incident_edges,
+    a 6-tuple return) via extract_review_deployment_incident_edges. That
+    family (work_graph_edges) now has a native Go executor
+    (WorkGraphEdgesExecutor) whose read semantics close CHAOS-5216 (FINAL on
+    git_pull_request_reviews; this Python path never had that fix and never
+    will -- port-with-fix, standing order). extract_review_deployment_
+    incident_edges itself is deleted (rg confirmed job_daily.py was its only
+    real caller besides its own oracle and dedicated test, both also
+    deleted/trimmed in this PR) along with the review/deployment/incident row
+    loading that fed ONLY it -- wf_pr_rows loading and
+    extract_ai_workflow_from_pull_requests (still Python, CHAOS-4286's other
+    half) are the only things left here, since nothing else in this function
+    ever read reviews_by_provider/deployments_by_provider/incidents_by_provider.
     """
     org_uuid: uuid.UUID | None = None
     if org_id:
@@ -277,7 +280,7 @@ def _extract_ai_workflow_for_day(
             org_uuid = None
     if org_uuid is None:
         logger.debug("AI workflow extraction skipped: org_id %r is not a UUID", org_id)
-        return [], [], [], [], [], []
+        return [], [], []
 
     wf_params: dict[str, Any] = {
         "org_id": org_id,
@@ -361,76 +364,6 @@ def _extract_ai_workflow_for_day(
                 wi_id
             )
 
-    wf_review_rows = primary_sink.query_dicts(
-        "SELECT repo_id, number, review_id, state, submitted_at, last_synced"
-        " FROM git_pull_request_reviews"
-        " WHERE org_id = {org_id:String}"
-        "   AND submitted_at >= {start:DateTime64(3, 'UTC')}"
-        "   AND submitted_at < {end:DateTime64(3, 'UTC')}"
-        f"{wf_repo_filter}",
-        wf_params,
-    )
-    wf_review_rows = _valid_rows(wf_review_rows, "git_pull_request_reviews")
-
-    # Deployments/incidents feed the PR→deployment and deployment→incident
-    # Work Graph edges (CHAOS-2367). Their identity is repo_id + an opaque
-    # string id, so they get their own row hygiene instead of _valid_rows
-    # (which requires a PR number).
-    def _valid_id_rows(
-        rows: list[dict[str, Any]], id_key: str, source: str
-    ) -> list[dict[str, Any]]:
-        valid: list[dict[str, Any]] = []
-        dropped = 0
-        for row in rows:
-            try:
-                uuid.UUID(str(row.get("repo_id")))
-            except (ValueError, TypeError, AttributeError):
-                dropped += 1
-                continue
-            if not str(row.get(id_key) or ""):
-                dropped += 1
-                continue
-            valid.append(row)
-        if dropped:
-            logger.warning(
-                "AI workflow extraction dropped %d malformed %s row(s)",
-                dropped,
-                source,
-            )
-        return valid
-
-    # Event time falls back to last_synced (non-nullable) so in-flight
-    # deployments with no timestamps yet still land in a day bucket instead
-    # of silently never matching any window. FINAL: deployments may hold
-    # pre-merge duplicate rows during
-    # active sync.
-    wf_deployment_rows = primary_sink.query_dicts(
-        "SELECT repo_id, deployment_id, pull_request_number,"
-        " started_at, finished_at, deployed_at, last_synced"
-        " FROM deployments FINAL"
-        " WHERE org_id = {org_id:String}"
-        "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
-        "       >= {start:DateTime64(3, 'UTC')}"
-        "   AND coalesce(deployed_at, finished_at, started_at, last_synced)"
-        "       < {end:DateTime64(3, 'UTC')}"
-        f"{wf_repo_filter}",
-        wf_params,
-    )
-    wf_deployment_rows = _valid_id_rows(
-        wf_deployment_rows, "deployment_id", "deployments"
-    )
-
-    wf_incident_rows = primary_sink.query_dicts(
-        active_incidents_query(
-            window=IncidentWindow.STARTED,
-            org_id=org_id,
-            repo_filter=wf_repo_filter,
-        ),
-        wf_params,
-    )
-    wf_incident_rows = deduplicate_active_incidents(wf_incident_rows)
-    wf_incident_rows = _valid_id_rows(wf_incident_rows, "incident_id", "incidents")
-
     def _by_provider(
         rows: list[dict[str, Any]],
     ) -> dict[str, list[dict[str, Any]]]:
@@ -443,16 +376,10 @@ def _extract_ai_workflow_for_day(
         return grouped
 
     prs_by_provider = _by_provider(wf_pr_rows)
-    reviews_by_provider = _by_provider(wf_review_rows)
-    deployments_by_provider = _by_provider(wf_deployment_rows)
-    incidents_by_provider = _by_provider(wf_incident_rows)
 
     runs: list[Any] = []
     artifact_edges: list[Any] = []
     issue_edges: list[Any] = []
-    review_outcome_edges: list[Any] = []
-    pr_deployment_edges: list[Any] = []
-    deployment_incident_edges: list[Any] = []
     for wf_provider, provider_prs in prs_by_provider.items():
         extraction = extract_ai_workflow_from_pull_requests(
             provider_prs,
@@ -463,30 +390,7 @@ def _extract_ai_workflow_for_day(
         runs.extend(extraction.runs)
         artifact_edges.extend(extraction.artifact_edges)
         issue_edges.extend(extraction.issue_edges)
-    edge_providers = (
-        set(reviews_by_provider)
-        | set(deployments_by_provider)
-        | set(incidents_by_provider)
-    )
-    for wf_provider in sorted(edge_providers):
-        review_extraction = extract_review_deployment_incident_edges(
-            org_id=org_uuid,
-            provider=wf_provider,
-            reviews=reviews_by_provider.get(wf_provider),
-            deployments=deployments_by_provider.get(wf_provider),
-            incidents=incidents_by_provider.get(wf_provider),
-        )
-        review_outcome_edges.extend(review_extraction.review_outcome_edges)
-        pr_deployment_edges.extend(review_extraction.pr_deployment_edges)
-        deployment_incident_edges.extend(review_extraction.deployment_incident_edges)
-    return (
-        runs,
-        artifact_edges,
-        issue_edges,
-        review_outcome_edges,
-        pr_deployment_edges,
-        deployment_incident_edges,
-    )
+    return runs, artifact_edges, issue_edges
 
 
 def _repo_to_team_map_for_compounding_risk(
@@ -1633,25 +1537,29 @@ async def run_daily_metrics_job(
         # ai_attribution_rows was never read by anything else in this
         # function.
 
-        # CHAOS-2187: extract AI workflow runs + Work Graph edges from today's
-        # PRs/reviews so ai_workflow_issue_edges, ai_workflow_artifact_edges,
-        # and work_graph_pr_review_outcome_edges are populated by ingestion.
-        # Infrastructure failures (ClickHouse query errors) propagate and fail
-        # the job: there is no persisted job-health table to record a partial
-        # day, and empty edge tables are indistinguishable from "no AI
-        # activity today" — swallowing here would be silent partial data.
-        # Row-local issues (malformed repo ids) are skipped inside the helper
-        # (CHAOS-5234/CHAOS-3092: this comment used to say "below" -- the
-        # pr_commit_stats build it referred to, built solely for ai_impact,
-        # is deleted; _valid_rows above is now the only sibling of this
-        # pattern in this file).
+        # CHAOS-2187: extract AI workflow runs from today's PRs so
+        # ai_workflow_issue_edges/ai_workflow_artifact_edges are populated by
+        # ingestion. Infrastructure failures (ClickHouse query errors)
+        # propagate and fail the job: there is no persisted job-health table
+        # to record a partial day, and empty edge tables are indistinguishable
+        # from "no AI activity today" — swallowing here would be silent
+        # partial data. Row-local issues (malformed repo ids) are skipped
+        # inside the helper (CHAOS-5234/CHAOS-3092: this comment used to say
+        # "below" -- the pr_commit_stats build it referred to, built solely
+        # for ai_impact, is deleted; _valid_rows above is now the only
+        # sibling of this pattern in this file).
+        #
+        # CHAOS-5234/CHAOS-3092: this used to ALSO return
+        # ai_review_outcome_edges/ai_pr_deployment_edges/ai_deployment_
+        # incident_edges (work_graph_edges' own outputs, a 6-tuple) --
+        # WorkGraphEdgesExecutor (native Go) is now the only writer of those
+        # three tables (closes CHAOS-5216 by construction: single native
+        # reader), so the extraction and the writes below are both deleted,
+        # not skip-gated.
         (
             ai_workflow_runs,
             ai_workflow_artifact_edges,
             ai_workflow_issue_edges,
-            ai_review_outcome_edges,
-            ai_pr_deployment_edges,
-            ai_deployment_incident_edges,
         ) = _extract_ai_workflow_for_day(
             primary_sink=primary_sink,
             org_id=org_id,
@@ -1759,19 +1667,19 @@ async def run_daily_metrics_job(
         #     precedent for "unconditional is fine," has since had its own
         #     compute+write deleted outright rather than left unconditional).
         #
-        # CHAOS-4286: work_graph_edges has a native Go executor
-        # (WorkGraphEdgesExecutor). WRITE-ONLY skip, like repo_user_commit:
-        # the compute that produces these three lists is the SAME
-        # _extract_ai_workflow_for_day call that produces ai_workflow_runs /
-        # _artifact_edges / _issue_edges, and THOSE are still Python-owned
-        # (ai_workflow is CHAOS-4286's other half, not yet ported). So the
-        # extraction must stay unconditional; only the three edge writes below
-        # are gated.
-        #
-        # Safe because each of ai_review_outcome_edges, ai_pr_deployment_edges
-        # and ai_deployment_incident_edges is assigned once (:1696-1698) and
-        # read ONLY by its own write below -- verified by grep, not assumed.
-        skip_work_graph_edges_write = "work_graph_edges" in skip_families
+        # CHAOS-5234/CHAOS-3092: no skip_work_graph_edges_write here -- the
+        # extraction that used to produce review_outcome_edges/
+        # pr_deployment_edges/deployment_incident_edges (a WRITE-ONLY skip,
+        # like repo_user_commit) is DELETED, not skip-gated, along with the
+        # three writes below. WorkGraphEdgesExecutor (native Go) is the only
+        # writer of these three tables now, closing CHAOS-5216 (the Go
+        # executor reads git_pull_request_reviews FINAL; this Python path
+        # never had that fix and never will) by construction: single native
+        # reader. extract_ai_workflow_from_pull_requests/ai_workflow_runs/
+        # _artifact_edges/_issue_edges (ai_workflow, CHAOS-4286's other half,
+        # not yet ported) are NOT touched -- nothing else in
+        # _extract_ai_workflow_for_day ever read the review/deployment/
+        # incident rows this deletion also removes.
         #
         # Without these two gates the native executors and the unconditional
         # writes below would BOTH fire for every partition, doubling every row
@@ -1847,26 +1755,11 @@ async def run_daily_metrics_job(
                 s.write_ai_workflow_artifact_edges(ai_workflow_artifact_edges)
             if ai_workflow_issue_edges and hasattr(s, "write_ai_workflow_issue_edges"):
                 s.write_ai_workflow_issue_edges(ai_workflow_issue_edges)
-            if (
-                ai_review_outcome_edges
-                and not skip_work_graph_edges_write
-                and hasattr(s, "write_work_graph_pr_review_outcome_edges")
-            ):
-                s.write_work_graph_pr_review_outcome_edges(ai_review_outcome_edges)
-            if (
-                ai_pr_deployment_edges
-                and not skip_work_graph_edges_write
-                and hasattr(s, "write_work_graph_pr_deployment_edges")
-            ):
-                s.write_work_graph_pr_deployment_edges(ai_pr_deployment_edges)
-            if (
-                ai_deployment_incident_edges
-                and not skip_work_graph_edges_write
-                and hasattr(s, "write_work_graph_deployment_incident_edges")
-            ):
-                s.write_work_graph_deployment_incident_edges(
-                    ai_deployment_incident_edges
-                )
+            # CHAOS-5234/CHAOS-3092: no write_work_graph_pr_review_outcome_edges/
+            # write_work_graph_pr_deployment_edges/write_work_graph_deployment_
+            # incident_edges calls here -- deleted alongside the extraction
+            # above; WorkGraphEdgesExecutor (native Go) is the only writer
+            # now (closes CHAOS-5216 by construction: single native reader).
             # CHAOS-5234/CHAOS-3092: no write_file_metrics call here -- the
             # file_hotspots compute+write is deleted entirely (see the
             # comment above the deleted `compute_file_hotspots` call site);

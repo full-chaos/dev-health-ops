@@ -489,33 +489,15 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/metrics/workgraphedges (work_graph_edges port vs live Python, CHAOS-4286)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestWorkGraphEdgesMatchLivePythonProduction$' \
-        ./internal/jobs/metrics/workgraphedges
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Own marker, checked separately, for the same reason as the siblings above:
-  # a shared marker would be satisfied by whichever oracle happened to run.
-  # This one compares edge_id too -- unlike ai_governance's, whose Python side
-  # randomises the id -- so it is the only guard that can catch a change to the
-  # _hash join or its part order.
-  proof_file="${proof_dir}/work-graph-edges-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: work_graph_edges live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # internal/jobs/metrics/workgraphedges' live-Python rot guard
+  # (TestWorkGraphEdgesMatchLivePythonProduction, CHAOS-4286) was retired
+  # here (CHAOS-5234/CHAOS-3092), same shape as issueprlinks' CHAOS-5249
+  # retirement above: its producer, extract_review_deployment_incident_edges,
+  # was DELETED, not merely un-called -- WorkGraphEdgesExecutor is the sole
+  # computer/writer now (closing CHAOS-5216 by construction: single native
+  # reader). The frozen golden (tests/fixtures/work_graph_edges_python_
+  # golden.json) stays; Go's own TestWorkGraphEdgesMatchFrozenPythonGolden is
+  # the regression guard going forward.
 
   printf 'go test -count=1: internal/jobs/metrics/aiworkflow (ai_workflow port vs live Python, CHAOS-4280/CHAOS-4286)\n'
   if ! (

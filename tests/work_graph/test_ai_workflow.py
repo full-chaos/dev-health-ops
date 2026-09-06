@@ -11,7 +11,6 @@ from dev_health_ops.work_graph.ai_workflow import (
 )
 from dev_health_ops.work_graph.extractors.ai_workflow import (
     extract_ai_workflow_from_pull_requests,
-    extract_review_deployment_incident_edges,
 )
 from dev_health_ops.work_graph.models import (
     EdgeType,
@@ -56,34 +55,16 @@ def test_extracts_ai_workflow_from_pr_without_raw_prompt_fields() -> None:
     assert result.artifact_edges[0].artifact_id == f"{REPO}:42"
 
 
-def test_extracts_pr_review_deployment_incident_edges_with_partial_links() -> None:
-    result = extract_review_deployment_incident_edges(
-        org_id=ORG,
-        provider="github",
-        reviews=[
-            {
-                "repo_id": REPO,
-                "number": 42,
-                "review_id": "review-1",
-                "state": "APPROVED",
-                "submitted_at": NOW,
-            }
-        ],
-        deployments=[
-            {
-                "repo_id": REPO,
-                "deployment_id": "deploy-1",
-                "pull_request_number": 42,
-                "deployed_at": NOW,
-            }
-        ],
-        incidents=[{"repo_id": REPO, "incident_id": "inc-1", "started_at": NOW}],
-    )
-
-    assert result.review_outcome_edges[0].review_outcome_id == "review-1"
-    assert result.pr_deployment_edges[0].deployment_id == "deploy-1"
-    assert result.deployment_incident_edges[0].incident_id == "inc-1"
-    assert result.deployment_incident_edges[0].confidence == 0.3
+# CHAOS-5234/CHAOS-3092: test_extracts_pr_review_deployment_incident_edges_
+# with_partial_links (the only test of extract_review_deployment_incident_
+# edges in this file) is DELETED alongside that function -- chris's standing
+# rule (CHAOS-5233): once a family's Go executor is on main, its Python
+# compute is deleted, never kept alive just for a rot guard. The other tests
+# in this file (test_traversal_from_issue_root_loads_partial_ai_metadata,
+# test_traversal_from_pr_root_reaches_review_deployment_incident, etc.) are
+# NOT touched -- they test the TRAVERSAL/read side (load_ai_workflow_graph_
+# for_issue/_for_pr) against synthetic already-written edge rows, unrelated
+# to which side wrote them.
 
 
 def test_traversal_from_issue_root_loads_partial_ai_metadata() -> None:

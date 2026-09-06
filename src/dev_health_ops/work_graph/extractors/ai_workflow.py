@@ -209,98 +209,23 @@ def extract_ai_workflow_from_pull_requests(
     return result
 
 
-def extract_review_deployment_incident_edges(
-    *,
-    org_id: UUID,
-    provider: str,
-    reviews: list[dict[str, Any]] | None = None,
-    deployments: list[dict[str, Any]] | None = None,
-    incidents: list[dict[str, Any]] | None = None,
-) -> AIWorkflowExtractionResult:
-    """Extract PR→review, PR→deployment, and deployment→incident edges."""
-
-    result = AIWorkflowExtractionResult()
-    for row in reviews or []:
-        repo_id_raw = row.get("repo_id")
-        number = _int_str(row, "number")
-        review_id = _str(row, "review_id")
-        if repo_id_raw is None or not number or not review_id:
-            continue
-        repo_id = UUID(str(repo_id_raw))
-        pr_id = f"{repo_id}:{number}"
-        result.review_outcome_edges.append(
-            WorkGraphPRReviewOutcomeEdge(
-                edge_id=_hash("pr_review", org_id, pr_id, review_id),
-                org_id=org_id,
-                pr_id=pr_id,
-                review_outcome_id=review_id,
-                outcome=_str(row, "state") or None,
-                provider=provider,
-                repo_id=repo_id,
-                confidence=1.0,
-                source="native",
-                evidence=_json({"review_id": review_id, "state": row.get("state")}),
-                observed_at=_dt(row, "submitted_at", "last_synced"),
-            )
-        )
-
-    deployments_by_repo: dict[str, list[str]] = {}
-    for row in deployments or []:
-        repo_id_raw = row.get("repo_id")
-        deployment_id = _str(row, "deployment_id")
-        pr_number_value = row.get("pull_request_number")
-        if repo_id_raw is None or not deployment_id:
-            continue
-        repo_id = UUID(str(repo_id_raw))
-        deployments_by_repo.setdefault(str(repo_id), []).append(deployment_id)
-        if pr_number_value is None:
-            continue
-        pr_id = f"{repo_id}:{pr_number_value}"
-        result.pr_deployment_edges.append(
-            WorkGraphPRDeploymentEdge(
-                edge_id=_hash("pr_deployment", org_id, pr_id, deployment_id),
-                org_id=org_id,
-                pr_id=pr_id,
-                deployment_id=deployment_id,
-                provider=provider,
-                repo_id=repo_id,
-                confidence=1.0,
-                source="native",
-                evidence=_json({"deployment_id": deployment_id}),
-                observed_at=_dt(
-                    row, "deployed_at", "finished_at", "started_at", "last_synced"
-                ),
-            )
-        )
-
-    for row in incidents or []:
-        repo_id_raw = row.get("repo_id")
-        incident_id = _str(row, "incident_id")
-        deployment_id = _str(row, "deployment_id")
-        if repo_id_raw is None or not incident_id:
-            continue
-        repo_id = UUID(str(repo_id_raw))
-        linked_deployments = (
-            [deployment_id]
-            if deployment_id
-            else deployments_by_repo.get(str(repo_id), [])
-        )
-        for linked_deployment_id in linked_deployments:
-            result.deployment_incident_edges.append(
-                WorkGraphDeploymentIncidentEdge(
-                    edge_id=_hash(
-                        "deployment_incident", org_id, linked_deployment_id, incident_id
-                    ),
-                    org_id=org_id,
-                    deployment_id=linked_deployment_id,
-                    incident_id=incident_id,
-                    provider=provider,
-                    repo_id=repo_id,
-                    confidence=1.0 if deployment_id else 0.3,
-                    source="native" if deployment_id else "heuristic",
-                    evidence=_json({"incident_id": incident_id}),
-                    observed_at=_dt(row, "started_at", "last_synced"),
-                )
-            )
-
-    return result
+# CHAOS-5234/CHAOS-3092: extract_review_deployment_incident_edges (PR->review,
+# PR->deployment, deployment->incident edges -- the work_graph_edges family)
+# is DELETED -- chris's standing rule (CHAOS-5233): once a family's Go
+# executor is on main, its Python compute is deleted, never skip-gated.
+# WorkGraphEdgesExecutor (native Go) is now the only computer/writer of
+# work_graph_pr_review_outcome_edges/work_graph_pr_deployment_edges/
+# work_graph_deployment_incident_edges, closing CHAOS-5216 by construction
+# (single native reader; the Go executor reads git_pull_request_reviews
+# FINAL, this Python path never had that fix and never will -- port-with-fix,
+# standing order). rg confirmed job_daily.py was its only real production
+# caller; its own dedicated test (tests/work_graph/test_ai_workflow.py) and
+# Go oracle (internal/jobs/metrics/workgraphedges/testdata/
+# python_work_graph_edges_oracle.py) were the only other callers, both
+# handled in this same PR. AIWorkflowExtractionResult's review_outcome_edges/
+# pr_deployment_edges/deployment_incident_edges fields (and the
+# WorkGraphPRReviewOutcomeEdge/WorkGraphPRDeploymentEdge/
+# WorkGraphDeploymentIncidentEdge types) are NOT removed -- the dataclass is
+# still returned by extract_ai_workflow_from_pull_requests (ai_workflow,
+# CHAOS-4286's other half, not yet ported), just always empty on those three
+# fields now that nothing populates them.

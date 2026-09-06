@@ -156,31 +156,6 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
         ],
     )
     sink.client.insert(
-        "git_pull_request_reviews",
-        [
-            [
-                repo,
-                7,
-                "rev_7_0",
-                "bob@example.com",
-                "APPROVED",
-                created,
-                created,
-                str(org),
-            ]
-        ],
-        column_names=[
-            "repo_id",
-            "number",
-            "review_id",
-            "reviewer",
-            "state",
-            "submitted_at",
-            "last_synced",
-            "org_id",
-        ],
-    )
-    sink.client.insert(
         "work_graph_issue_pr",
         [[repo, "jira:ABC-1", 7, 1.0, "native", "test", created, str(org)]],
         column_names=[
@@ -196,14 +171,12 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
     )
 
     def _run_once() -> None:
-        (
-            runs,
-            artifacts,
-            issues,
-            reviews,
-            pr_deploys,
-            deploy_incidents,
-        ) = _extract_ai_workflow_for_day(
+        # CHAOS-5234/CHAOS-3092: this used to ALSO unpack reviews/pr_deploys/
+        # deploy_incidents and write the three work_graph_edges tables --
+        # WorkGraphEdgesExecutor (native Go) is now the sole computer/writer
+        # of those (closes CHAOS-5216 by construction: single native reader),
+        # so _extract_ai_workflow_for_day no longer produces them at all.
+        runs, artifacts, issues = _extract_ai_workflow_for_day(
             primary_sink=sink,
             org_id=str(org),
             start=day_start,
@@ -211,15 +184,10 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
             repo_id=None,
             repo_provider_by_id={str(repo): "github"},
         )
-        assert runs and artifacts and issues and reviews
+        assert runs and artifacts and issues
         sink.write_ai_workflow_runs(runs)
         sink.write_ai_workflow_artifact_edges(artifacts)
         sink.write_ai_workflow_issue_edges(issues)
-        sink.write_work_graph_pr_review_outcome_edges(reviews)
-        if pr_deploys:
-            sink.write_work_graph_pr_deployment_edges(pr_deploys)
-        if deploy_incidents:
-            sink.write_work_graph_deployment_incident_edges(deploy_incidents)
 
     assert CLICKHOUSE_URI is not None  # skipif guard guarantees it
     client = await get_global_client(CLICKHOUSE_URI)
@@ -227,7 +195,10 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
 
     _run_once()
     first = await load_ai_workflow_graph_for_pr(client, str(org), pr_root)
-    assert len(first.edges) == 3  # generates, has_ai_workflow, has_review_outcome
+    # CHAOS-5234/CHAOS-3092: this used to be 3 (generates, has_ai_workflow,
+    # has_review_outcome) -- has_review_outcome is no longer written by this
+    # Python path (see _run_once's own comment above).
+    assert len(first.edges) == 2  # generates, has_ai_workflow
     assert not first.partial
 
     _run_once()  # rerun the same day — same deterministic ids, new computed_at

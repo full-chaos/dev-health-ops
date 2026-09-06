@@ -133,9 +133,10 @@ func TestTeamComplexityEndToEndFromNativeComplexityExecutor(t *testing.T) {
 		t.Fatalf("no team_complexity_daily row for org %s day %s", orgID, day)
 	}
 	var (
-		teamID                                                                            string
-		locTotal, cyclomaticTotal, highComplexity, veryHighComplexity, contributingRepoCnt uint64
-		cyclomaticPerKLOC                                                                  float64
+		teamID                                                        string
+		locTotal, cyclomaticTotal, highComplexity, veryHighComplexity uint64
+		contributingRepoCnt                                           uint32
+		cyclomaticPerKLOC                                             float64
 	)
 	if err := rows.Scan(
 		&teamID, &locTotal, &cyclomaticTotal, &cyclomaticPerKLOC,

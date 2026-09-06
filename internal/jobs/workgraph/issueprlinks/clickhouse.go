@@ -236,7 +236,7 @@ WHERE org_id = {org_id:String}`
 	}
 	if window.RepoID != nil {
 		query += ` AND repo_id = {repo_id:UUID}`
-		args = append(args, clickhouse.Named("repo_id", *window.RepoID))
+		args = append(args, clickhouse.Named("repo_id", window.RepoID.String()))
 	}
 
 	rows, err := loader.conn.Query(ctx, query, args...)

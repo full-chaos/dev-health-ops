@@ -1100,7 +1100,6 @@ async def test_work_graph_edges_compute_and_write_are_deleted_from_job_daily(
             backfill_days=1,
             provider="auto",
             org_id=ORG_ID,
-            skip_finalize=True,
             skip_families=skip_families,
         )
         assert "write_work_graph_pr_review_outcome_edges" not in sink.write_calls

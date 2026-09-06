@@ -1561,7 +1561,7 @@ metrics_readback() {
     --days 7 --commits-per-day 3 --pr-count 5 \
     --seed 20260825 || return 1
 
-  printf '   computing daily/dora/complexity SYNCHRONOUSLY (direct Python job calls)\n'
+  printf '   computing daily/dora SYNCHRONOUSLY (direct Python job calls)\n'
   # --sink here takes a BACKEND NAME ("clickhouse"), not a URI -- unlike
   # fixtures generate's --sink above. The connection itself comes from
   # CLICKHOUSE_URI (add_sink_arg / validate_sink in utils/cli.py); passing the
@@ -1588,10 +1588,18 @@ metrics_readback() {
   # not). --org isn't a flag either module registers (it was always the
   # top-level dev-hops parser's global flag) -- set on the namespace
   # explicitly from ORG_ID, mirroring what `_resolve_org` did for a real CLI
-  # invocation. This stage exercises Python COMPAT compute only (daily/dora/
-  # complexity are all still Python-computed per docs/go-migration-matrix.md
-  # as of CHAOS-5055) and should retire once the matrix shows zero COMPAT
-  # rows for these families.
+  # invocation. This stage exercises Python COMPAT compute only (daily is
+  # still Python-computed per docs/go-migration-matrix.md) and should retire
+  # once the matrix shows zero COMPAT rows for these families.
+  #
+  # CHAOS-4291: complexity dropped out of this stage entirely.
+  # job_complexity_db.py (its own direct-call target here) is deleted --
+  # the native ComplexityExecutor has no Python fallback, and this
+  # lightweight scratch-DB proof has no worker to dispatch a real Go
+  # partition to. dora stays only because job_dora.py is still on disk
+  # (kept alive by fixtures/runner.py and this same gate-tooling pattern
+  # for a different family); the day complexity's Python equivalent is
+  # gone, its readback assertion below goes too, not skip-gated.
   # Written to a temp file via the printf BUILTIN, never a heredoc: bash
   # writes a here-document into a pipe it also holds the read end of, which
   # hangs forever on a host with a small effective pipe buffer (CHAOS-3362/
@@ -1609,7 +1617,7 @@ metrics_readback() {
 import asyncio
 import os
 
-from dev_health_ops.metrics import job_complexity_db, job_daily, job_dora
+from dev_health_ops.metrics import job_daily, job_dora
 
 org_id = os.environ.get("ORG_ID") or None
 
@@ -1617,7 +1625,6 @@ parser = argparse.ArgumentParser()
 sub = parser.add_subparsers(dest="cmd")
 job_daily.register_commands(sub)
 job_dora.register_commands(sub)
-job_complexity_db.register_commands(sub)
 
 ns = parser.parse_args(["daily", "--backfill", "7"])
 ns.org = org_id
@@ -1628,12 +1635,6 @@ if rc:
 ns = parser.parse_args(["dora", "--backfill", "7"])
 ns.org = org_id
 rc = job_dora._cmd_metrics_dora(ns)
-if rc:
-    raise SystemExit(rc)
-
-ns = parser.parse_args(["complexity"])
-ns.org = org_id
-rc = job_complexity_db._cmd_metrics_complexity(ns)
 if rc:
     raise SystemExit(rc)
 ' >"${metrics_readback_py}"
@@ -1703,7 +1704,7 @@ if rc:
   CLICKHOUSE_URI="${SCRATCH_URI}" PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
     --org-id "${METRICS_READBACK_ORG_ID}" \
     --run-start "${run_start}" \
-    --families cicd deploy testops_pipeline testops_test testops_coverage repo_user_commit dora complexity file_hotspots team_wellbeing work_item_state compounding_risk ic_finalize team_cognitive_load
+    --families cicd deploy testops_pipeline testops_test testops_coverage repo_user_commit dora file_hotspots team_wellbeing work_item_state compounding_risk ic_finalize team_cognitive_load
 }
 
 print_summary() {

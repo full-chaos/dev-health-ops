@@ -24,13 +24,19 @@ const (
 // That file was generated on 2026-07-23 from REAL production Python and then
 // frozen. TestPythonNumericalGoldenParity asserts Go matches it. Nothing
 // asserted that PYTHON still matches it -- so the moment
-// compute_dora_metrics_daily, compute_percentiles, _build_snapshots or
-// _compute_confidence changes its numbers, the frozen `expected` keeps
-// encoding the OLD Python behaviour, Go keeps matching the frozen file, and
-// the parity test stays green while the two implementations have actually
-// diverged. A golden file with no regeneration guard measures history, not
-// parity, and it degrades silently: nothing fails, the credit it supplies to
-// R1/R2/R3 just stops being true.
+// compute_dora_metrics_daily, compute_percentiles or _compute_confidence
+// changes its numbers, the frozen `expected` keeps encoding the OLD Python
+// behaviour, Go keeps matching the frozen file, and the parity test stays
+// green while the two implementations have actually diverged. A golden file
+// with no regeneration guard measures history, not parity, and it degrades
+// silently: nothing fails, the credit it supplies to R1/R2/R3 just stops
+// being true.
+//
+// CHAOS-4291 dropped this golden's "complexity" section (and Go's own
+// AggregateComplexity/ComplexityFile/ComplexitySummary, TestPythonNumerical
+// GoldenParity's matching case) along with job_complexity_db.py's
+// _build_snapshots -- the native ComplexityExecutor has no Python fallback
+// left to guard against drifting from.
 //
 // The generator already had a --check mode. It had never been wired to
 // anything. This runs it against the live interpreter and reports WHERE the

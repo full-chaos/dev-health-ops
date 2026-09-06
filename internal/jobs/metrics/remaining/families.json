@@ -4,7 +4,7 @@
   "families": [
     {
       "name": "complexity",
-      "python_sources": ["src/dev_health_ops/metrics/job_complexity_db.py"],
+      "python_sources": [],
       "writes": ["file_complexity_snapshots", "repo_complexity_daily"],
       "max_concurrency": 2,
       "clickhouse_read_budget": 2,
@@ -14,7 +14,7 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Only persisted git_files and git_blame contents can be scanned; missing historical contents are skipped and max_files remains a hard bound.",
-      "parity_state": "numerical_oracle",
+      "parity_state": "native_python_orchestrator_deleted",
       "port": "go"
     },
     {

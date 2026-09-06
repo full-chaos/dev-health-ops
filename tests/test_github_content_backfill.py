@@ -1,15 +1,26 @@
 """Tests for API-based file-content backfill (no local checkout).
 
 Covers the scanner-driven path selection in
-``processors.github._fetch_scannable_contents``, content propagation through
-``processors.base_git.backfill_file_records``, and the complexity job's
-loud-failure exit when an org has no scannable contents at all.
+``processors.github._fetch_scannable_contents`` and content propagation
+through ``processors.base_git.backfill_file_records``.
+
+CHAOS-4291 deleted job_complexity_db.py (the native Go ComplexityExecutor
+has no Python fallback): the complexity-readiness regression coverage this
+file used to carry (TestGithubBackfillFeedsComplexityReadiness,
+test_complexity_job_returns_nonzero_when_no_repo_has_contents) went with it,
+since its whole point was proving persisted git_files rows satisfied that
+now-deleted job's readiness contract. test_historical_backfill_uses_resolved_
+ref_for_tree_content_blame_and_complexity is UNRELATED to that job -- it
+covers processors.base_git.write_historical_complexity, a separate,
+still-live synchronous write path invoked during historical backfill -- and
+stays, using the local _FakeComplexitySink below in place of the deleted
+tests._complexity_readiness_fixtures.ComplexityReadinessSink.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, Mock
@@ -20,7 +31,6 @@ import pytest
 # pre-existing providers._base <-> connectors circular import when this file
 # is collected in isolation.
 import dev_health_ops.connectors  # noqa: F401
-import dev_health_ops.metrics.job_complexity_db as job
 from dev_health_ops.exceptions import RateLimitException
 from dev_health_ops.models.git import Repo
 from dev_health_ops.processors.base_git import backfill_file_records
@@ -29,10 +39,22 @@ from dev_health_ops.processors.github import (
     GitHubFilesTraversalFailed,
     _fetch_scannable_contents,
 )
-from tests._complexity_readiness_fixtures import (
-    ComplexityReadinessClient,
-    ComplexityReadinessSink,
-)
+
+
+class _FakeComplexitySink:
+    """Records writes from processors.base_git.write_historical_complexity
+    -- a plain recorder, no query-answering: that function never reads back
+    from ClickHouse, it only computes from contents_by_path and writes."""
+
+    def __init__(self):
+        self.snapshots: list = []
+        self.dailies: list = []
+
+    def write_file_complexity_snapshots(self, rows):
+        self.snapshots.extend(rows)
+
+    def write_repo_complexity_daily(self, rows):
+        self.dailies.extend(rows)
 
 
 class _FakeCodeClient:
@@ -286,57 +308,6 @@ class TestBackfillFileRecordsContents:
         await backfill_file_records(sink, uuid.uuid4(), ["a.py"], "octo/repo")
 
         assert [f.contents for f in written] == [None]
-
-
-class _EmptyClickHouseClient:
-    def query(self, query, parameters=None):
-        class _Result:
-            result_rows = []
-
-        result = _Result()
-        if "count()" in query and "FROM git_files" in query:
-            result.result_rows = [[0, 0]]
-        elif "maxOrNull" in query:
-            result.result_rows = [[None]]
-        return result
-
-
-class _EmptySink:
-    def __init__(self):
-        self.client = _EmptyClickHouseClient()
-        self.snapshots = []
-        self.dailies = []
-
-    def ensure_tables(self):
-        return None
-
-    def write_file_complexity_snapshots(self, rows):
-        self.snapshots.extend(rows)
-
-    def write_repo_complexity_daily(self, rows):
-        self.dailies.extend(rows)
-
-    def close(self):
-        return None
-
-
-def test_complexity_job_returns_nonzero_when_no_repo_has_contents(monkeypatch):
-    sink = _EmptySink()
-    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
-
-    rc = job.run_complexity_db_job(
-        repo_id=uuid.uuid4(),
-        db_url="clickhouse://localhost:8123/default",
-        date=date(2026, 6, 12),
-        backfill_days=1,
-        language_globs=None,
-        max_files=None,
-        org_id="test-org",
-    )
-
-    assert rc == 1
-    assert not sink.snapshots
-    assert not sink.dailies
 
 
 class _FakeTreeEntry:
@@ -878,7 +849,7 @@ class TestCommitStatsBackfill:
         sink.insert_git_file_data = AsyncMock(side_effect=insert_files)
         sink.insert_blame_data = AsyncMock(side_effect=insert_blame)
 
-        metrics_sink = ComplexityReadinessSink(ComplexityReadinessClient([]))
+        metrics_sink = _FakeComplexitySink()
 
         gh_repo = Mock()
         gh_repo.get_git_tree.return_value = Mock(
@@ -1011,254 +982,3 @@ class TestCommitStatsBackfill:
 
         assert stats_args == [2]
         assert [row.commit_hash for row in written] == ["sha-0", "sha-1"]
-
-
-class TestGithubBackfillFeedsComplexityReadiness:
-    """CHAOS-2888 Workstream D: the whole point of scanner-driven content
-    backfill (CHAOS-2859) is that persisted ``git_files`` rows are enough for
-    ``job_complexity_db.run_complexity_db_job`` to succeed. These regression
-    tests wire the GitHub-specific fetch+persist path directly into the
-    complexity job's readiness contract, so a change on either side that
-    breaks the contract fails loudly here -- not only in production."""
-
-    @pytest.mark.asyncio
-    async def test_github_scanner_backfilled_contents_satisfy_complexity_job(
-        self, monkeypatch
-    ):
-        client = _FakeCodeClient(
-            contents={
-                "src/alpha.py": "def alpha():\n    return 1\n",
-                "src/beta.py": (
-                    "def beta(x):\n    if x:\n        return x\n    return 0\n"
-                ),
-            }
-        )
-        file_paths = ["src/alpha.py", "src/beta.py"]
-        blob_sizes: dict[str, int | None] = {"src/alpha.py": 40, "src/beta.py": 70}
-
-        contents_by_path = await _fetch_scannable_contents(
-            client, "octo", "repo", "main", file_paths, blob_sizes, "octo/repo"
-        )
-
-        written: list = []
-
-        async def insert(batch):
-            written.extend(batch)
-
-        sink = Mock()
-        sink.insert_git_file_data = AsyncMock(side_effect=insert)
-        repo_id = uuid.uuid4()
-
-        await backfill_file_records(
-            sink,
-            repo_id,
-            file_paths,
-            "octo/repo",
-            contents_by_path=contents_by_path,
-        )
-
-        ch_client = ComplexityReadinessClient([(f.path, f.contents) for f in written])
-        ch_sink = ComplexityReadinessSink(ch_client)
-        monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: ch_sink)
-
-        rc = job.run_complexity_db_job(
-            repo_id=repo_id,
-            db_url="clickhouse://localhost:8123/default",
-            date=date(2026, 6, 12),
-            backfill_days=1,
-            language_globs=None,
-            max_files=None,
-            org_id="test-org",
-        )
-
-        assert rc == 0
-        assert client.file_content_calls == [
-            ("octo", "repo", ["src/alpha.py", "src/beta.py"], "main")
-        ]
-        assert {snap.file_path for snap in ch_sink.snapshots} == {
-            "src/alpha.py",
-            "src/beta.py",
-        }
-        assert sum(snap.functions_count for snap in ch_sink.snapshots) == 2
-        assert len(ch_sink.dailies) == 1
-        daily = ch_sink.dailies[0]
-        assert daily.day == date(2026, 6, 12)
-        assert daily.org_id == "test-org"
-        assert daily.loc_total > 0
-        assert daily.cyclomatic_total > 0
-
-    @pytest.mark.asyncio
-    async def test_github_paths_only_records_do_not_satisfy_complexity_job(
-        self, monkeypatch
-    ):
-        """A GitHub sync that has only written path rows (content backfill
-        not yet run, CHAOS-2859) must NOT let the complexity job silently
-        report success -- it must fail loudly per the job's existing
-        readiness contract."""
-        written: list = []
-
-        async def insert(batch):
-            written.extend(batch)
-
-        sink = Mock()
-        sink.insert_git_file_data = AsyncMock(side_effect=insert)
-        repo_id = uuid.uuid4()
-
-        await backfill_file_records(
-            sink, repo_id, ["src/alpha.py", "src/beta.py"], "octo/repo"
-        )
-
-        assert [f.contents for f in written] == [None, None]
-
-        ch_client = ComplexityReadinessClient([(f.path, f.contents) for f in written])
-        ch_sink = ComplexityReadinessSink(ch_client)
-        monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: ch_sink)
-
-        rc = job.run_complexity_db_job(
-            repo_id=repo_id,
-            db_url="clickhouse://localhost:8123/default",
-            date=date(2026, 6, 12),
-            backfill_days=1,
-            language_globs=None,
-            max_files=None,
-            org_id="test-org",
-        )
-
-        assert rc == 1
-        assert not ch_sink.snapshots
-        assert not ch_sink.dailies
-
-    @pytest.mark.asyncio
-    async def test_partial_content_backfill_still_computes_complexity_for_available_files(
-        self, monkeypatch
-    ):
-        """A repo where content backfill only hydrated some paths (mixed
-        content / paths-only rows -- e.g. an in-progress CHAOS-2859 upgrade)
-        must still compute complexity from the files that DO have contents.
-        This exercises the complexity job's missing-paths query and
-        git_blame usable-line-text probe branches that the full-content and
-        empty-content cases above never reach."""
-        client = _FakeCodeClient(
-            contents={
-                "src/alpha.py": "def alpha():\n    return 1\n",
-                "src/beta.py": (
-                    "def beta(x):\n    if x:\n        return x\n    return 0\n"
-                ),
-            }
-        )
-        file_paths = ["src/alpha.py", "src/beta.py", "src/gamma.py"]
-        blob_sizes: dict[str, int | None] = {
-            "src/alpha.py": 40,
-            "src/beta.py": 70,
-            "src/gamma.py": 30,
-        }
-
-        contents_by_path = await _fetch_scannable_contents(
-            client, "octo", "repo", "main", file_paths, blob_sizes, "octo/repo"
-        )
-
-        written: list = []
-
-        async def insert(batch):
-            written.extend(batch)
-
-        sink = Mock()
-        sink.insert_git_file_data = AsyncMock(side_effect=insert)
-        repo_id = uuid.uuid4()
-
-        await backfill_file_records(
-            sink,
-            repo_id,
-            file_paths,
-            "octo/repo",
-            contents_by_path=contents_by_path,
-        )
-
-        by_path = {f.path: f.contents for f in written}
-        assert by_path == {
-            "src/alpha.py": "def alpha():\n    return 1\n",
-            "src/beta.py": "def beta(x):\n    if x:\n        return x\n    return 0\n",
-            "src/gamma.py": None,
-        }
-
-        ch_client = ComplexityReadinessClient([(f.path, f.contents) for f in written])
-        ch_sink = ComplexityReadinessSink(ch_client)
-        monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: ch_sink)
-
-        rc = job.run_complexity_db_job(
-            repo_id=repo_id,
-            db_url="clickhouse://localhost:8123/default",
-            date=date(2026, 6, 12),
-            backfill_days=1,
-            language_globs=None,
-            max_files=None,
-            org_id="test-org",
-        )
-
-        assert rc == 0
-        assert {snap.file_path for snap in ch_sink.snapshots} == {
-            "src/alpha.py",
-            "src/beta.py",
-        }
-        assert len(ch_sink.dailies) == 1
-        assert ch_sink.dailies[0].loc_total > 0
-
-    @pytest.mark.asyncio
-    async def test_backfill_days_greater_than_one_does_not_fabricate_historical_rows(
-        self, monkeypatch
-    ):
-        """CHAOS-2850/2888: even when a historical multi-day window is
-        requested, the job has no historical content snapshot store, so it
-        must write exactly ONE ``repo_complexity_daily`` row -- for the
-        requested ``date`` only -- never ``backfill_days`` duplicate flat
-        rows that would fabricate a misleading historical trend."""
-        client = _FakeCodeClient(
-            contents={
-                "src/alpha.py": "def alpha():\n    return 1\n",
-                "src/beta.py": (
-                    "def beta(x):\n    if x:\n        return x\n    return 0\n"
-                ),
-            }
-        )
-        file_paths = ["src/alpha.py", "src/beta.py"]
-        blob_sizes: dict[str, int | None] = {"src/alpha.py": 40, "src/beta.py": 70}
-
-        contents_by_path = await _fetch_scannable_contents(
-            client, "octo", "repo", "main", file_paths, blob_sizes, "octo/repo"
-        )
-
-        written: list = []
-
-        async def insert(batch):
-            written.extend(batch)
-
-        sink = Mock()
-        sink.insert_git_file_data = AsyncMock(side_effect=insert)
-        repo_id = uuid.uuid4()
-
-        await backfill_file_records(
-            sink,
-            repo_id,
-            file_paths,
-            "octo/repo",
-            contents_by_path=contents_by_path,
-        )
-
-        ch_client = ComplexityReadinessClient([(f.path, f.contents) for f in written])
-        ch_sink = ComplexityReadinessSink(ch_client)
-        monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: ch_sink)
-
-        rc = job.run_complexity_db_job(
-            repo_id=repo_id,
-            db_url="clickhouse://localhost:8123/default",
-            date=date(2026, 6, 12),
-            backfill_days=5,
-            language_globs=None,
-            max_files=None,
-            org_id="test-org",
-        )
-
-        assert rc == 0
-        assert len(ch_sink.dailies) == 1
-        assert ch_sink.dailies[0].day == date(2026, 6, 12)
-        assert len({snap.as_of_day for snap in ch_sink.snapshots}) == 1

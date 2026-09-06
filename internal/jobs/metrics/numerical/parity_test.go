@@ -33,10 +33,6 @@ type goldenFixture struct {
 		Mean        float64   `json:"mean"`
 		Stddev      float64   `json:"stddev"`
 	} `json:"capacity"`
-	Complexity []struct {
-		Files    []ComplexityFile  `json:"files"`
-		Expected ComplexitySummary `json:"expected"`
-	} `json:"complexity"`
 	ReleaseConfidence []struct {
 		Coverage          float64 `json:"coverage"`
 		TotalSessions     int     `json:"total_sessions"`
@@ -88,11 +84,6 @@ func TestPythonNumericalGoldenParity(t *testing.T) {
 		got := ThroughputStatistics(testCase.History)
 		if !close(got.Mean, testCase.Mean) || !close(got.Stddev, testCase.Stddev) {
 			t.Fatalf("capacity stats case %d = %#v, want mean=%f stddev=%f", index, got, testCase.Mean, testCase.Stddev)
-		}
-	}
-	for index, testCase := range fixture.Complexity {
-		if got := AggregateComplexity(testCase.Files); !equalJSON(got, testCase.Expected) {
-			t.Fatalf("complexity case %d = %#v, want %#v", index, got, testCase.Expected)
 		}
 	}
 	for index, testCase := range fixture.ReleaseConfidence {

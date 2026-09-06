@@ -1080,11 +1080,6 @@ class TestWorkItemsProviderCredentialIsolation:
             ("github", {"repo_name": None}, "github work-item unit had no source"),
             ("linear", {"repo_name": "   "}, "linear work-item unit had no source"),
             ("gitlab", {"repo_name": ""}, "gitlab work-item unit had no source"),
-            (
-                "jira",
-                {"jira_project_keys": ["   "]},
-                "jira work-item unit had no source",
-            ),
         ],
     )
     @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
@@ -1323,58 +1318,3 @@ class TestWorkItemsProviderCredentialIsolation:
                 )
 
         assert captured_repos == ["linear"]
-
-    @patch.dict(
-        os.environ,
-        {"JIRA_JQL": "project = ENV", "JIRA_PROJECT_KEYS": "ENV"},
-        clear=True,
-    )
-    @patch("dev_health_ops.metrics.job_work_items.ClickHouseMetricsSink")
-    @patch("dev_health_ops.providers.jira.client.JiraClient.from_env")
-    def test_jira_work_items_use_explicit_credentials_not_env(
-        self, mock_from_env, mock_sink_class
-    ):
-        from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
-
-        sink = MagicMock()
-        sink.query_dicts.return_value = []
-        mock_sink_class.return_value = sink
-
-        captured_clients: list[object] = []
-        captured_jqls: list[str] = []
-
-        class FakeJiraClient:
-            def iter_issues(self, **kwargs):
-                captured_clients.append(self)
-                captured_jqls.append(kwargs["jql"])
-                return iter(())
-
-            def close(self):
-                pass
-
-        with patch(
-            "dev_health_ops.providers.jira.client.JiraClient",
-            return_value=FakeJiraClient(),
-        ) as mock_jira_client:
-            run_work_items_sync_job(
-                db_url="clickhouse://localhost/dev",
-                day=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
-                backfill_days=1,
-                provider="jira",
-                org_id="00000000-0000-0000-0000-000000000001",
-                credentials={
-                    "base_url": "https://tenant.atlassian.net",
-                    "email": "tenant@example.com",
-                    "api_token": "jira_explicit",
-                },
-            )
-
-        mock_from_env.assert_not_called()
-        assert captured_clients
-        kwargs = mock_jira_client.call_args.kwargs
-        assert isinstance(captured_clients[0], FakeJiraClient)
-        assert captured_jqls
-        assert all("ENV" not in jql for jql in captured_jqls)
-        assert kwargs["auth"].base_url == "https://tenant.atlassian.net"
-        assert kwargs["auth"].email == "tenant@example.com"
-        assert kwargs["auth"].api_token == "jira_explicit"

@@ -1,0 +1,47 @@
+@implementation Calculator
+
+- (int)sumTo:(int)n {
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        total += i;
+    }
+    return total;
+}
+
+- (int)countDown:(int)n {
+    int steps = 0;
+    while (n > 0) {
+        n--;
+        steps++;
+    }
+    return steps;
+}
+
+- (int)safeDivide:(int)a by:(int)b {
+    @try {
+        return a / b;
+    } @catch (NSException *e) {
+        return 0;
+    }
+}
+
+- (int)classifySwitch:(int)value {
+    switch (value) {
+        case 1:
+            return 10;
+        case 2:
+            return 20;
+        default:
+            return 0;
+    }
+}
+
+- (int)pick:(BOOL)flag x:(int)x y:(int)y {
+    return flag ? x : y;
+}
+
+- (BOOL)checkBoth:(BOOL)a and:(BOOL)b {
+    return a || b;
+}
+
+@end

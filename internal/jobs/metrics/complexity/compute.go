@@ -154,27 +154,30 @@ func CFamilyAnalyzer(path, source string) ([]int, bool, error) {
 // TypeScriptReader unchanged in Python, so both keys share one Go
 // analyzer). CHAOS-4291 also adds `ruby` (RubylikeReader's own state
 // machine, lizardcc/ruby.go -- NOT a GoLikeStates subclass, see that
-// file's package doc) and `php` (PHPLanguageStates, a FLAT state machine
-// with no sub_state nesting at all -- lizardcc/php.go). `objective-c`,
-// `lua` and `vue` remain for a follow-up stack in this same PR -- no other
-// function, the dispatch, the result type, or the extension map needs to
-// change for any of them.
+// file's package doc), `php` (PHPLanguageStates, a FLAT state machine
+// with no sub_state nesting at all -- lizardcc/php.go) and `objective-c`
+// (ObjCStates, a CLikeStates subclass reusing clike.go's shared hooks
+// exactly like csharp.go does -- lizardcc/objc.go). `lua` and `vue` remain
+// for a follow-up stack in this same PR -- no other function, the
+// dispatch, the result type, or the extension map needs to change for
+// either of them.
 func DefaultAnalyzers() map[string]AnalyzerFunc {
 	return map[string]AnalyzerFunc{
-		"python":     PythonAnalyzer,
-		"c":          CFamilyAnalyzer,
-		"cpp":        CFamilyAnalyzer,
-		"go":         lizardcc.AnalyzeGo,
-		"rust":       lizardcc.AnalyzeRust,
-		"csharp":     lizardcc.AnalyzeCSharp,
-		"java":       lizardcc.AnalyzeJava,
-		"kotlin":     lizardcc.AnalyzeKotlin,
-		"scala":      lizardcc.AnalyzeScala,
-		"swift":      lizardcc.AnalyzeSwift,
-		"javascript": lizardcc.AnalyzeJavaScript,
-		"typescript": lizardcc.AnalyzeTypeScript,
-		"ruby":       lizardcc.AnalyzeRuby,
-		"php":        lizardcc.AnalyzePHP,
+		"python":      PythonAnalyzer,
+		"c":           CFamilyAnalyzer,
+		"cpp":         CFamilyAnalyzer,
+		"go":          lizardcc.AnalyzeGo,
+		"rust":        lizardcc.AnalyzeRust,
+		"csharp":      lizardcc.AnalyzeCSharp,
+		"java":        lizardcc.AnalyzeJava,
+		"kotlin":      lizardcc.AnalyzeKotlin,
+		"scala":       lizardcc.AnalyzeScala,
+		"swift":       lizardcc.AnalyzeSwift,
+		"javascript":  lizardcc.AnalyzeJavaScript,
+		"typescript":  lizardcc.AnalyzeTypeScript,
+		"ruby":        lizardcc.AnalyzeRuby,
+		"php":         lizardcc.AnalyzePHP,
+		"objective-c": lizardcc.AnalyzeObjC,
 	}
 }
 

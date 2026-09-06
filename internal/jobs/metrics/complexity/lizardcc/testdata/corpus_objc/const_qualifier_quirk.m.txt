@@ -1,0 +1,10 @@
+// PRESERVED, NOT FIXED (see objc.go's stateDecToImp doc): a C++-style
+// "const"-qualified free function written in a .m/.mm file drives
+// ObjCStates' overridden _state_dec_to_imp into restarting a bogus new
+// function on the "const" token itself, discarding the real "realFn"
+// declaration entirely -- kept isolated in its own file so this quirk's
+// effect on the count is provable without touching any other fixture's
+// coverage.
+int realFn(int a) const {
+    return a;
+}

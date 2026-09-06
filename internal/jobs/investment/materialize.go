@@ -26,6 +26,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
@@ -112,6 +114,14 @@ type Stats struct {
 	DroppedEdges        int            `json:"dropped_edges"`
 	DroppedNodes        int            `json:"dropped_nodes"`
 	PartitionedHubs     int            `json:"partitioned_hubs"`
+	// RepoCascadeOwn/Ancestor/Children/Unassigned (CHAOS-5359) partition every
+	// component this run built by how (or whether) it resolved a repo --
+	// own-edges, inherited from an ancestor, inherited from unanimous
+	// children, or neither. They always sum to Components.
+	RepoCascadeOwn        int `json:"repo_cascade_own"`
+	RepoCascadeAncestor   int `json:"repo_cascade_ancestor"`
+	RepoCascadeChildren   int `json:"repo_cascade_children"`
+	RepoCascadeUnassigned int `json:"repo_cascade_unassigned"`
 }
 
 // Materializer holds the collaborators one org-scoped run needs. All three are
@@ -198,6 +208,36 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 	}
 
+	// CHAOS-5359 (R22, 4452 design-of-record vol.2): a pre-pass computing each
+	// component's OWN repo resolution (the same collectSingleRepoID logic
+	// MaterializeComponent runs per-component, mirrored here org-wide so the
+	// cascade below can see EVERY component's own resolution, not just this
+	// one's), then walking the issue hierarchy for every component that came
+	// back unresolved. This has to run before the per-component loop, because
+	// an ancestor/child's resolution can only be known once every component in
+	// the batch has been examined.
+	ownRepoByComponent := make(map[int]*uuid.UUID, len(components))
+	for index, component := range components {
+		ownRepoByComponent[index] = collectSingleRepoID(component.Edges, edgeRepoIDs)
+	}
+	issueComponent := buildIssueComponentIndex(components)
+	repoCascades := computeRepoHierarchyCascade(components, ownRepoByComponent, entities.WorkItems, issueComponent)
+	for _, cascade := range repoCascades {
+		switch {
+		case cascade.Source == RepoSourceChildren:
+			stats.RepoCascadeChildren++
+		case cascade.Source != "":
+			stats.RepoCascadeAncestor++
+		}
+	}
+	stats.RepoCascadeOwn = 0
+	for _, repoID := range ownRepoByComponent {
+		if repoID != nil {
+			stats.RepoCascadeOwn++
+		}
+	}
+	stats.RepoCascadeUnassigned = len(components) - stats.RepoCascadeOwn - stats.RepoCascadeAncestor - stats.RepoCascadeChildren
+
 	// PREPROCESS. Every component is assembled deterministically first, then
 	// split into "needs an LLM call" and "already has its answer". The split
 	// has to happen before any call is made, because the skip-existing lookup
@@ -207,11 +247,13 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	all := make([]preprocessed, 0, len(components))
 
 	for index, component := range components {
+		cascade := repoCascades[index]
 		result, err := MaterializeComponent(MaterializeComponentInput{
 			Component: component, WorkItems: entities.WorkItems, PRs: entities.PRs, Commits: entities.Commits,
 			EdgeRepoIDs: edgeRepoIDs, PRChurn: entities.PRChurn, CommitChurn: entities.CommitChurn,
 			ActiveHours: entities.ActiveHours, ParentTitles: entities.ParentTitles, EpicTitles: entities.EpicTitles,
 			FromTS: cfg.FromTS, ToTS: cfg.ToTS,
+			CascadeRepoID: cascade.RepoID, CascadeRepoSource: cascade.Source,
 		})
 		if err != nil {
 			return Stats{}, fmt.Errorf("assemble component %d: %w", index, err)

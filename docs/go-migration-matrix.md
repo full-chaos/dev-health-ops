@@ -315,7 +315,7 @@ it.
 
 | Area | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `operational.webhook_delivery` | COMPAT-Python (Go job shell only) | Go: `internal/jobs/operational/http.go:19,35,44,50,63` (`webhookEndpoint`) <- `cmd/dev-health-worker/operational.go:65` (`POST /api/internal/worker-operational/webhook`); Python: `worker_operational.py:119 process_webhook_reference` -> `system_webhooks.py:63 process_webhook_event`. 100% of webhook receipt/parse/reconciliation is Python -- no native pre-step exists (unlike `workgraph.build`'s prestep). | CHAOS-4440 (stale docstring only) |
+| `operational.webhook_delivery` | NATIVE | Go: `internal/jobs/operational/handler.go` (`WebhookHandler.Work`) -- routes every recognised event natively via `SyncDispatchWriter.TriggerScopedSync` (github/gitlab/jira) or the two native GitHub App event types (`InstallationWriter`), with an explicit counted ignore (`recordIgnoredWebhookEvent`) for anything else. CHAOS-5320 deletes the HTTP compatibility bridge (`internal/jobs/operational/http.go`'s `webhookEndpoint`, `POST /api/internal/worker-operational/webhook`, `worker_operational.py:119 process_webhook_reference`, `system_webhooks.py:63 process_webhook_event`) entirely -- no Python callback of any kind remains. | CHAOS-5320 (this PR) |
 
 ## STREAMS
 

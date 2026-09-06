@@ -286,7 +286,21 @@ cleanup() {
   return "${rc}"
 }
 
-trap cleanup EXIT INT TERM
+# CHAOS-5320 confirmation-round F5: a signal trap only fires once bash
+# resumes the interpreter loop -- it does NOT terminate the script on its
+# own. A single `trap cleanup EXIT INT TERM` cleaned up correctly on INT/TERM
+# but then let execution CONTINUE against the just-deleted TMP_DIR instead of
+# exiting. Route INT/TERM through their own handler that disarms every trap,
+# cleans up once, then re-raises the signal against itself so bash's default
+# disposition actually terminates the process (exit code 128+signum).
+on_signal() {
+  trap - EXIT INT TERM
+  cleanup
+  kill -s "$1" "$$"
+}
+trap cleanup EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
 
 # A private SUBDIRECTORY of our own temp dir, not a shared /tmp and not TMP_DIR
 # itself: `python <script>` puts the script directory on sys.path[0] (where

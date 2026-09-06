@@ -1564,7 +1564,7 @@
         "line": 396
       },
       "queue_or_cadence": "webhooks / ops",
-      "dispatches": "process_webhook_event",
+      "dispatches": "WebhookHandler.Work",
       "dispatch_mechanism": "job_registry_descriptor",
       "owner_role": "primary",
       "target_owner": {
@@ -1572,12 +1572,12 @@
         "value": "operational.webhook_delivery"
       },
       "target_kind_id": "kind:operational.webhook_delivery",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `operational.webhook_delivery` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. CHAOS-5320 deletes process_webhook_event and the HTTP compatibility bridge it dispatched to entirely; WebhookHandler.Work (internal/jobs/operational/handler.go) routes every recognised event natively or records an explicit counted ignore -- no Python callback of any kind.",
+      "deletion_evidence_requirement": "Already satisfied by this PR: registry.json kind `operational.webhook_delivery` passes Registry.ValidateStartup with WebhookHandler as its concrete non-HTTP-bridge handler, and the compatibility runner import is removed from the Python API.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": ""
+      "notes": "corrected 2026-09-06 (CHAOS-5320 confirmation-round F6): this row was still describing the pre-cutover HTTP-bridge shape"
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:428",

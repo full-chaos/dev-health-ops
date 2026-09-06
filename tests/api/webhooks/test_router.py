@@ -48,6 +48,61 @@ def mock_dispatch(monkeypatch):
     return calls
 
 
+class _FakeTxn:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _FakeAsyncSession:
+    def begin(self):
+        return _FakeTxn()
+
+    async def run_sync(self, fn):
+        return fn(None)
+
+
+class _FakeSessionCtx:
+    async def __aenter__(self):
+        return _FakeAsyncSession()
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+@pytest.fixture
+def mock_route_failure(monkeypatch):
+    """CHAOS-5320 confirmation-round F1 repro-as-test: exercises the REAL
+    _route_webhook_delivery (a fake DB session stands in for Postgres) with
+    resolve_worker_job_route raising WorkerJobRouteError -- the exact shape
+    the checked-in-policy-drift guard produces -- so enqueue_worker_job must
+    never be reached, proving the failure surfaces as a real error instead
+    of a false "accepted" with a silently dropped delivery."""
+    webhook_router = importlib.import_module("dev_health_ops.api.webhooks.router")
+    enqueue_calls = []
+
+    async def fake_persist(event):
+        return event.id
+
+    def fake_resolve(sync_session, kind):
+        raise webhook_router.WorkerJobRouteError(
+            "worker job route drifts from checked-in policy"
+        )
+
+    def fake_enqueue(*args, **kwargs):
+        enqueue_calls.append((args, kwargs))
+
+    monkeypatch.setattr(webhook_router, "_persist_webhook_delivery", fake_persist)
+    monkeypatch.setattr(
+        webhook_router, "get_postgres_session", lambda: _FakeSessionCtx()
+    )
+    monkeypatch.setattr(webhook_router, "resolve_worker_job_route", fake_resolve)
+    monkeypatch.setattr(webhook_router, "enqueue_worker_job", fake_enqueue)
+    return enqueue_calls
+
+
 def _sign_github_payload(body: bytes, secret: str) -> str:
     digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return f"sha256={digest}"
@@ -148,6 +203,43 @@ class TestGitHubWebhook:
         data = response.json()
         assert data["status"] == "accepted"
         assert "not processed" in data["message"]
+
+    def test_route_failure_returns_503_not_accepted(
+        self, client, github_secret, mock_route_failure, caplog
+    ):
+        """CHAOS-5320 confirmation-round F1: a routing failure must never
+        be swallowed into a false "accepted" response with a silently
+        dropped delivery."""
+        payload = {"ref": "refs/heads/main", "commits": [{"id": "abc"}]}
+        body = json.dumps(payload).encode()
+        signature = _sign_github_payload(body, github_secret)
+
+        with caplog.at_level("ERROR", logger="dev_health_ops.api.webhooks.router"):
+            response = client.post(
+                "/api/v1/webhooks/github",
+                content=body,
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "delivery-route-fail",
+                    "X-Hub-Signature-256": signature,
+                },
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"] != "accepted"
+        assert mock_route_failure == []
+
+        [message] = [
+            r.getMessage()
+            for r in caplog.records
+            if "route/enqueue failed" in r.getMessage()
+        ]
+        assert "provider=" in message
+        assert "event_type=" in message
+        assert "org_id=" in message
+        assert "kind=" in message
+        assert "webhook_event_id=" in message
+        assert "delivery_id=" in message
 
 
 class TestGitLabWebhook:

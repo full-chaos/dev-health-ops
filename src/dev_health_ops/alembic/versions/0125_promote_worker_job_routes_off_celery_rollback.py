@@ -59,11 +59,14 @@ to a dead transport.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from alembic import op
+
+logger = logging.getLogger(__name__)
 
 revision: str = "0125"
 down_revision: str | None = "0124"
@@ -115,8 +118,10 @@ def upgrade() -> None:
         sa.column("updated_at", sa.DateTime(timezone=True)),
     )
     now = datetime.now(UTC)
+    total_promoted = 0
+    bind = op.get_bind()
     for kind, target_route in _KIND_TARGET_ROUTE.items():
-        op.execute(
+        result = bind.execute(
             routes.update()
             .where(
                 sa.and_(
@@ -130,6 +135,22 @@ def upgrade() -> None:
                 updated_at=now,
             )
         )
+        # -1 means the DBAPI driver didn't report a row count; treat that as
+        # "unknown", not zero, so an operator reading this log doesn't mistake
+        # a silent driver limitation for a real no-op kind.
+        rowcount = result.rowcount
+        total_promoted += max(rowcount, 0)
+        logger.info(
+            "0125: promoted worker_job_routes off celery kind=%s target_route=%s rows=%s",
+            kind,
+            target_route,
+            rowcount,
+        )
+    logger.info(
+        "0125: promotion complete kinds_checked=%d rows_promoted=%d",
+        len(_KIND_TARGET_ROUTE),
+        total_promoted,
+    )
 
 
 def downgrade() -> None:

@@ -89,7 +89,8 @@ func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.E
 	// handled entirely natively when the store supports it -- no HTTP
 	// dispatch to the Python bridge at all for these two event types. Every
 	// other event (all of gitlab/jira, and every other github event type)
-	// falls through to the unchanged HTTP dispatch below.
+	// falls through to the native sync-dispatch check below (CHAOS-5320
+	// deleted the HTTP bridge entirely -- there is no HTTP fallback left).
 	if delivery.Provider == "github" && isNativeGithubAppEvent(delivery.EventType) {
 		if writer, ok := handler.store.(InstallationWriter); ok {
 			if _, err := writer.UpsertGithubAppEvent(ctx, delivery.EventType, delivery.Payload, time.Now().UTC()); err != nil {

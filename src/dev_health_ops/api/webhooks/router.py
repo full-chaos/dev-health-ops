@@ -24,9 +24,13 @@ from sqlalchemy.exc import IntegrityError
 
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.operational_deliveries import WebhookDelivery
-from dev_health_ops.workers.job_contracts import WebhookDeliveryPayload
-from dev_health_ops.workers.job_outbox import enqueue_worker_job
+from dev_health_ops.workers.job_contracts import (
+    ContractDecodeError,
+    WebhookDeliveryPayload,
+)
+from dev_health_ops.workers.job_outbox import OutboxEnqueueError, enqueue_worker_job
 from dev_health_ops.workers.job_routes import (
+    WorkerJobRouteError,
     resolve_worker_job_route,
     route_requires_outbox,
 )
@@ -99,24 +103,45 @@ async def _dispatch_webhook_task(event: WebhookEvent) -> uuid.UUID:
     itself -- native Go handling (CHAOS-5318/5319/5320) plus its own
     explicit-ignore path (WebhookHandler.Work) fully replaced it, so every
     delivery now goes through _route_webhook_delivery's outbox enqueue only.
+
+    CHAOS-5320 confirmation-round F1 fix: a routing/enqueue failure is no
+    longer swallowed into a false "accepted" response -- WorkerJobRouteError/
+    ContractDecodeError/OutboxEnqueueError are logged with full routing
+    context and re-raised as a 503, so the caller sees a real failure
+    instead of a silently dropped delivery. 503, not 500: the durable
+    WebhookDelivery row this function already persisted is uniquely keyed
+    on (provider, delivery_key) with an IntegrityError-based idempotent
+    lookup (_persist_webhook_delivery's own conflict fallback), so a
+    provider retry safely re-resolves to the SAME row and re-attempts the
+    SAME idempotent enqueue (job_outbox's dedupe_key ON CONFLICT DO
+    NOTHING) -- the failure is safe to retry, not a reason to also mark the
+    row failed or delete it.
     """
     delivery_id = await _persist_webhook_delivery(event)
     try:
         await _route_webhook_delivery(event, delivery_id)
-        logger.info(
-            "Dispatched webhook event: provider=%s type=%s delivery=%s",
+    except (WorkerJobRouteError, ContractDecodeError, OutboxEnqueueError) as error:
+        logger.error(
+            "Webhook route/enqueue failed: provider=%s event_type=%s "
+            "org_id=%s kind=%s webhook_event_id=%s delivery_id=%s error=%s",
             event.provider,
             event.event_type,
+            event.org_id,
+            WebhookDeliveryPayload.KIND,
+            event.id,
             delivery_id,
+            error,
         )
-    except Exception as e:
-        # Log but don't fail - webhook should still return 200
-        # to prevent provider retries flooding the system
-        logger.error(
-            "Failed to dispatch webhook delivery: %s (event_id=%s)",
-            e,
-            delivery_id,
-        )
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook delivery could not be routed; retry",
+        ) from error
+    logger.info(
+        "Dispatched webhook event: provider=%s type=%s delivery=%s",
+        event.provider,
+        event.event_type,
+        delivery_id,
+    )
     return delivery_id
 
 

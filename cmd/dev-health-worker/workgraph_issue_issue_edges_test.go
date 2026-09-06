@@ -6,31 +6,24 @@ import "testing"
 // declared order is asserted separately from the construction, so a test can
 // read it without a ClickHouse connection and so appending is a deliberate act.
 //
-// A step belongs in THIS list rather than the pre-step one when Python's build
-// would OVERWRITE what it writes. That is a narrower condition than the
-// pre-step ordering invariant and is easy to get backwards: the pre-step rule
-// is about what a later stage READS, this one is about what a later stage
-// WRITES over.
+// Empty since CHAOS-4924 moved `issue_issue_edges` (the last remaining
+// post-step) into buildPreStepOrder: its Python producer
+// (`_build_issue_issue_edges`) was DELETED, so there is nothing left for a
+// post-step to overwrite. A step belongs in buildPostStepOrder only if the
+// Python stage that still runs would OVERWRITE its rows -- that condition no
+// longer holds for anything in this build.
 func TestBuildPostStepOrderIsPinned(t *testing.T) {
-	want := []string{"issue_issue_edges"}
+	want := []string{}
 	got := buildPostStepOrder()
 
 	if len(got) != len(want) {
 		t.Fatalf(
-			"build post-step order is %v, want %v.\n"+
+			"build post-step order is %v, want %v (empty).\n"+
 				"A step belongs here only if the Python stage that still runs would OVERWRITE "+
-				"its rows — `issue_issue_edges` is here because builder.py:905 writes "+
-				"confidence=1.0 over variant-C's 0.9 and work_graph_edges is "+
-				"ReplacingMergeTree(last_synced). If the Python stage has retired, the step "+
-				"should MOVE to buildPreStepOrder rather than stay here: being last writer is a "+
-				"property this arrangement depends on, not one worth keeping.",
+				"its rows. If you are adding one back, confirm that condition genuinely holds "+
+				"-- issueIssueEdgesPreStep's own doc comment explains why it does not any more.",
 			got, want,
 		)
-	}
-	for index := range want {
-		if got[index] != want[index] {
-			t.Fatalf("build post-step order is %v, want %v", got, want)
-		}
 	}
 }
 

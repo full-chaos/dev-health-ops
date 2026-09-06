@@ -133,10 +133,16 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # ic_finalize writer is idempotent under redrive against a real
     # ClickHouse -- the precondition #2241's no-fail-open ruling rests on)
     # and internal/jobs/workgraph/operationaledges. Merged total: 47.
-    # CURRENT TOTAL: 47. Adding one -tags=integration package bumps every
+    # CHAOS-5318 added internal/jobs/operational's first //go:build
+    # integration file (github_app_events_integration_test.go, 5 Postgres-
+    # backed tests): 47 -> 48. CHAOS-5319 added a second integration file to
+    # the SAME already-discovered package (sync_dispatch_integration_test.go,
+    # 11 more Postgres-backed tests) -- no further package-count change,
+    # since the package was already counted once CHAOS-5318 landed.
+    # CURRENT TOTAL: 48. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "47 package(s) discovered, 0 denylisted, 47 will run" in result.stdout
+    assert "48 package(s) discovered, 0 denylisted, 48 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

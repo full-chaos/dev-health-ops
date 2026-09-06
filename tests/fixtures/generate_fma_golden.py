@@ -20,10 +20,15 @@ Three families, one per fixed Go site (CHAOS-4818 RISK-NOTES table):
     concurrent_deploys), so it necessarily contains representatives of the
     12.5% CHAOS-4818 measured as fused != unfused.
   - percentile_float: dev_health_ops.metrics.compute._percentile (byte-identical
-    across compute.py / compute_cicd.py / compute_deployments.py /
-    compute_incidents.py / compute_work_items.py) vs the five duplicated Go
+    across compute.py / compute_cicd.py / compute_incidents.py /
+    compute_work_items.py -- compute_deployments.py's own copy was deleted by
+    CHAOS-5234/CHAOS-3092 alongside compute_deploy_metrics_daily, deploy
+    being fully native with no Python straddle) vs the five duplicated Go
     percentile functions (deployPercentile, cicd.percentile,
-    incidentPercentile, repouser.percentile, testops.percentile).
+    incidentPercentile, repouser.percentile, testops.percentile) -- Go still
+    has all five; deployPercentile simply has no live Python counterpart to
+    cross-check bit-for-bit anymore, only the frozen deploy golden
+    (TestComputeDeployMetricsGoldenParity in this package).
   - percentile_int: dev_health_ops.metrics.compute_capacity._percentile vs
     internal/jobs/metrics/numerical.IntegerPercentiles. Int-truncating, so the
     assertion is exact int equality (a truncation boundary can still flip on

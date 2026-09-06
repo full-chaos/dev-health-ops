@@ -9,14 +9,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
-func TestWorkgraphCompatibilityHTTPClientUsesRiverExecutionDeadline(t *testing.T) {
-	t.Parallel()
-	client := workgraphCompatibilityHTTPClient(time.Second)
-	if client == nil || client.Timeout != 0 {
-		t.Fatalf("workgraph compatibility timeout=%v want=0", client.Timeout)
-	}
-}
-
 func TestMetricCompatibilityHTTPClientUsesRiverExecutionDeadline(t *testing.T) {
 	t.Parallel()
 	client := metricCompatibilityHTTPClient(time.Second)

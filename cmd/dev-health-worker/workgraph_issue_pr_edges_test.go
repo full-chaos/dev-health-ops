@@ -39,7 +39,7 @@ func TestIssuePREdgesStepNamesMatchDeclaredOrder(t *testing.T) {
 	}
 
 	want := buildPreStepOrder()
-	if len(want) != 11 || want[1] != "issue_pr_edges_fast_path" || want[2] != "issue_pr_edges_text_parse" || want[4] != "issue_pr_edges_heuristic" {
+	if len(want) != 12 || want[2] != "issue_pr_edges_fast_path" || want[3] != "issue_pr_edges_text_parse" || want[5] != "issue_pr_edges_heuristic" {
 		t.Fatalf("buildPreStepOrder() = %v, want [issue_pr_links issue_pr_edges_fast_path issue_pr_edges_text_parse ... issue_pr_edges_heuristic ...]", want)
 	}
 }

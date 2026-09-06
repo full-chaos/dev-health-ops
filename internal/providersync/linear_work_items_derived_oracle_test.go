@@ -46,11 +46,15 @@ func TestLinearWorkItemDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 	// deleted entirely (work_item_estimate is fully native, no remaining
 	// Python caller), and its oracle_pairs script (linear_work-
 	// items_estimate-coverage.py) is deleted with it.
-	compareRowsAgainstPythonOracle(t, "linear/work-items/team-attributions", cases,
+	// CHAOS-5321/CHAOS-3092 (R6): compute_work_item_team_attributions/
+	// compute_work_item_state_durations_daily are deleted (native Go
+	// executor + providersync own these tables now) -- frozen, see
+	// testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(t, "linear_work-items_team-attributions", cases,
 		func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
 			return newGitHubTeamAttributionColumns(buildGitHubDerivedOracleSurfaces(t, input).TeamAttributions)
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "linear/work-items/state-durations", cases,
+	compareRowsAgainstFrozenOracle(t, "linear_work-items_state-durations", cases,
 		func(t *testing.T, input map[string]any) githubStateDurationColumns {
 			return newGitHubStateDurationColumns(buildGitHubDerivedOracleSurfaces(t, input).StateDurations)
 		}, nil)
@@ -58,15 +62,18 @@ func TestLinearWorkItemDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 
 func TestLinearWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
 	cases := linearizeWorkItemOracleCases(githubWorkItemMetricTripletOracleCases())
-	compareRowsAgainstPythonOracle(t, "linear/work-items/metrics-daily", cases,
+	// CHAOS-5310/CHAOS-3092 (R6): compute_work_item_metrics_daily is deleted
+	// (native Go executor + providersync own work_item_metrics_daily now) --
+	// frozen, see testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(t, "linear_work-items_metrics-daily", cases,
 		func(t *testing.T, input map[string]any) githubWorkItemMetricsDailyOracleColumns {
 			return githubWorkItemMetricTripletOracleResult(t, input).metricsDaily
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "linear/work-items/user-metrics-daily", cases,
+	compareRowsAgainstFrozenOracle(t, "linear_work-items_user-metrics-daily", cases,
 		func(t *testing.T, input map[string]any) githubWorkItemUserMetricsDailyOracleColumns {
 			return githubWorkItemMetricTripletOracleResult(t, input).userMetricsDaily
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "linear/work-items/cycle-times", cases,
+	compareRowsAgainstFrozenOracle(t, "linear_work-items_cycle-times", cases,
 		func(t *testing.T, input map[string]any) githubWorkItemCycleTimeOracleColumns {
 			return githubWorkItemMetricTripletOracleResult(t, input).cycleTimes
 		}, nil)

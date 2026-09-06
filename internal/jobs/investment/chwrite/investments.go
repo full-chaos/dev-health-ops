@@ -53,12 +53,17 @@ func NewWriter(connection conn) (*Writer, error) {
 // NOT serialized JSON text despite the column name (plan.md section 3) -- a
 // Go writer that sends JSON text here would silently write garbage.
 type InvestmentRecord struct {
-	WorkUnitID                 string
-	WorkUnitType               *string
-	WorkUnitName               *string
-	FromTS                     time.Time
-	ToTS                       time.Time
-	RepoID                     *uuid.UUID
+	WorkUnitID   string
+	WorkUnitType *string
+	WorkUnitName *string
+	FromTS       time.Time
+	ToTS         time.Time
+	RepoID       *uuid.UUID
+	// RepoSource (CHAOS-5359, migration 089) records how RepoID was decided:
+	// "own_edges" (collectSingleRepoID's pre-existing resolution),
+	// "ancestor:<issue_id>" or "children" (the issue-hierarchy cascade,
+	// investment.computeRepoHierarchyCascade), or nil when RepoID is nil.
+	RepoSource                 *string
 	Provider                   *string
 	EffortMetric               string
 	EffortValue                float64
@@ -79,8 +84,10 @@ type InvestmentRecord struct {
 // WorkUnitRepoEffortRecord written by write_work_unit_repo_effort
 // (sinks/clickhouse/investment.py:150-169).
 type RepoEffortRecord struct {
-	WorkUnitID          string
-	RepoID              *uuid.UUID
+	WorkUnitID string
+	RepoID     *uuid.UUID
+	// RepoSource mirrors InvestmentRecord.RepoSource -- see its doc comment.
+	RepoSource          *string
 	EffortMetric        string
 	EffortValue         float64
 	AllocationWeight    float64
@@ -117,7 +124,7 @@ func (w *Writer) WriteInvestments(ctx context.Context, orgID string, records []I
 	}
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO work_unit_investments (
 		work_unit_id, work_unit_type, work_unit_name, from_ts, to_ts, repo_id,
-		provider, effort_metric, effort_value, theme_distribution_json,
+		repo_source, provider, effort_metric, effort_value, theme_distribution_json,
 		subcategory_distribution_json, structural_evidence_json, evidence_quality,
 		evidence_quality_band, categorization_status, categorization_errors_json,
 		categorization_model_version, categorization_input_hash,
@@ -129,7 +136,8 @@ func (w *Writer) WriteInvestments(ctx context.Context, orgID string, records []I
 	for _, record := range records {
 		if err := batch.Append(
 			record.WorkUnitID, record.WorkUnitType, record.WorkUnitName,
-			record.FromTS.UTC(), record.ToTS.UTC(), record.RepoID, record.Provider,
+			record.FromTS.UTC(), record.ToTS.UTC(), record.RepoID, record.RepoSource,
+			record.Provider,
 			record.EffortMetric, record.EffortValue, record.ThemeDistribution,
 			record.SubcategoryDistribution, record.StructuralEvidenceJSON,
 			record.EvidenceQuality, record.EvidenceQualityBand,
@@ -159,7 +167,7 @@ func (w *Writer) WriteRepoEffort(ctx context.Context, orgID string, records []Re
 		return 0, nil
 	}
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO work_unit_repo_effort (
-		work_unit_id, repo_id, effort_metric, effort_value, allocation_weight,
+		work_unit_id, repo_id, repo_source, effort_metric, effort_value, allocation_weight,
 		allocation_source, categorization_run_id, computed_at, org_id
 	)`)
 	if err != nil {
@@ -167,7 +175,7 @@ func (w *Writer) WriteRepoEffort(ctx context.Context, orgID string, records []Re
 	}
 	for _, record := range records {
 		if err := batch.Append(
-			record.WorkUnitID, record.RepoID, record.EffortMetric, record.EffortValue,
+			record.WorkUnitID, record.RepoID, record.RepoSource, record.EffortMetric, record.EffortValue,
 			record.AllocationWeight, record.AllocationSource, record.CategorizationRunID,
 			record.ComputedAt.UTC(), orgID,
 		); err != nil {

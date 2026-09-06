@@ -942,7 +942,11 @@ bridge (`daily.HTTPCompatibilityExecutor` →
 `run_daily_metrics_job`,
 `ops/src/dev_health_ops/metrics/job_daily.py:729-1446`) already computes and
 writes every table both families targeted — `compute_team_wellbeing_metrics_daily`
-(team_metrics_daily), `_write_compounding_risk_for_day` (compounding_risk_daily),
+(team_metrics_daily; CHAOS-5311 has since deleted this function and its call
+site outright, team_metrics_daily is now written exclusively by the native
+Go executor, TeamWellbeingExecutor -- this historical analysis is unaffected
+since the bridge covered every table listed here at the TIME of this ruling),
+`_write_compounding_risk_for_day` (compounding_risk_daily),
 `compute_release_confidence`/`quality_drag`/`pipeline_stability`, and
 `run_benchmarking_for_day` (benchmarking_rollups) unconditionally on every
 partition call, plus `compute_ic_metrics_daily`/`compute_ic_landscape_rolling`
@@ -954,13 +958,15 @@ would have double-computed and double-written against the same ClickHouse
 tables every night rather than closed a coverage gap.
 
 **These inline call sites in `job_daily.py`, driven by
-`daily_metrics_fanout`, are the producer of record for every table either
-retired family would have written** — nothing else covers them, and nothing
-needs to: `compute_team_wellbeing_metrics_daily` (team_metrics_daily),
+`daily_metrics_fanout`, were the producer of record at the time of this
+ruling for every table either retired family would have written** —
 `_write_compounding_risk_for_day` (compounding_risk_daily),
 `compute_release_confidence`/`quality_drag`/`pipeline_stability`,
 `run_benchmarking_for_day` (benchmarking_rollups), and, on the finalize call,
-`compute_ic_metrics_daily`/`compute_ic_landscape_rolling`.
+`compute_ic_metrics_daily`/`compute_ic_landscape_rolling` still are. Team
+metrics is the one exception: CHAOS-5311 deleted `compute_team_wellbeing_
+metrics_daily` outright, so `team_metrics_daily` is now written exclusively
+by the native Go `TeamWellbeingExecutor`, not by this fanout at all.
 
 Leaving the two kinds registered-but-unreachable was judged itself the
 broken state the audit exists to catch, so the orchestrator ruled retirement

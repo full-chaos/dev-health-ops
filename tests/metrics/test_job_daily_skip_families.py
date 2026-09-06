@@ -154,10 +154,15 @@ class _FakeLoader:
         return [commit_row], [], []
 
     async def load_cicd_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        # One in-window pipeline run for REPO_ID -- enough for
-        # compute_cicd_metrics_daily to produce exactly one row when NOT
-        # skipped, so the skip tests below can tell "computed nothing"
-        # apart from "computed something and just didn't write it".
+        # One in-window pipeline run for REPO_ID. CHAOS-5234/CHAOS-3092
+        # deleted cicd's own compute+write outright (see
+        # test_cicd_compute_and_write_are_deleted_from_job_daily below) --
+        # there is no more cicd skip test for this row to distinguish
+        # "computed nothing" from "computed something and just didn't
+        # write it" for. pipeline_rows (this loader's return value) still
+        # feeds active_repos elsewhere in run_daily_metrics_job, which is
+        # why this fixture data stays non-empty rather than being trimmed
+        # to `[], []`.
         pipeline_row = {
             "repo_id": REPO_ID,
             "run_id": "run-1",

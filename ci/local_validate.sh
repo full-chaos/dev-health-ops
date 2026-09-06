@@ -1668,12 +1668,15 @@ if rc:
   # CHAOS-4794: cicd/deploy/.../file_hotspots are REPO_DAY_FAMILIES entries
   # only -- this list never included a TEAM_DAY_FAMILIES entry, missing
   # team_wellbeing (CHAOS-4276) since it landed and now also work_item_state
-  # (CHAOS-4278). Both are computed by the `metrics daily --backfill 7` call
-  # above already (compute_team_wellbeing_metrics_daily and
-  # compute_work_item_state_durations_daily both run in-process inside
-  # compute_daily_metrics, using the work_items/transitions `fixtures
-  # generate` seeds unconditionally -- see generate_work_item_transitions in
-  # fixtures/runner.py), so no extra seeding/compute call is needed here.
+  # (CHAOS-4278). Both are covered by the `metrics daily --backfill 7` call
+  # above already: work_item_state's compute_work_item_state_durations_daily
+  # still runs in-process inside compute_daily_metrics; team_wellbeing's own
+  # Python compute (compute_team_wellbeing_metrics_daily) is DELETED outright
+  # by CHAOS-5311 -- the same `metrics daily` invocation now drives it via
+  # the native Go TeamWellbeingExecutor instead, using the same
+  # work_items/transitions `fixtures generate` seeds unconditionally -- see
+  # generate_work_item_transitions in fixtures/runner.py -- so no extra
+  # seeding/compute call is needed here.
   # team_cognitive_load and recommendations (the other two TEAM_DAY_FAMILIES
   # entries) are deliberately NOT added: team_cognitive_load resolves team_id
   # from repo ownership only and this fixture org has none configured, so it

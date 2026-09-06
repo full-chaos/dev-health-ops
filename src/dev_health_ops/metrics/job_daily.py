@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -37,9 +37,6 @@ from dev_health_ops.metrics.compute_work_items import (
     compute_work_item_metrics_daily,
 )
 from dev_health_ops.metrics.dependencies import get_metrics_dependencies
-from dev_health_ops.metrics.hotspots import (
-    compute_file_risk_hotspots,
-)
 from dev_health_ops.metrics.identity import (
     get_team_resolver,
     init_team_resolver,
@@ -61,9 +58,6 @@ from dev_health_ops.metrics.quality import (
     compute_single_owner_file_ratio,
 )
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
-from dev_health_ops.metrics.schemas import (
-    FileComplexitySnapshot,
-)
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.providers.identity import load_identity_resolver
@@ -78,9 +72,6 @@ from dev_health_ops.utils.cli import (
     add_sink_arg,
     resolve_date_range,
     validate_sink,
-)
-from dev_health_ops.work_graph.extractors.ai_workflow import (
-    extract_ai_workflow_from_pull_requests,
 )
 
 logger = logging.getLogger(__name__)
@@ -229,156 +220,23 @@ def _date_range(end_day: date, backfill_days: int) -> list[date]:
     return [start_day + timedelta(days=i) for i in range(backfill_days)]
 
 
-def _extract_ai_workflow_for_day(
-    *,
-    primary_sink: Any,
-    org_id: str,
-    start: datetime,
-    end: datetime,
-    repo_id: uuid.UUID | None,
-    repo_provider_by_id: dict[str, str],
-) -> tuple[list[Any], list[Any], list[Any]]:
-    """Extract AI workflow runs for one UTC day window.
-
-    Returns ``(runs, artifact_edges, issue_edges)``.
-    Returns three empty lists when ``org_id`` is not a UUID — AIWorkflowRun
-    requires a tenant UUID by contract, so extraction without one would
-    fabricate attribution (CHAOS-2187).
-
-    CHAOS-5234/CHAOS-3092: this function used to ALSO extract Work Graph
-    edges (review_outcome_edges/pr_deployment_edges/deployment_incident_edges,
-    a 6-tuple return) via extract_review_deployment_incident_edges. That
-    family (work_graph_edges) now has a native Go executor
-    (WorkGraphEdgesExecutor) whose read semantics close CHAOS-5216 (FINAL on
-    git_pull_request_reviews; this Python path never had that fix and never
-    will -- port-with-fix, standing order). extract_review_deployment_
-    incident_edges itself is deleted (rg confirmed job_daily.py was its only
-    real caller besides its own oracle and dedicated test, both also
-    deleted/trimmed in this PR) along with the review/deployment/incident row
-    loading that fed ONLY it -- wf_pr_rows loading and
-    extract_ai_workflow_from_pull_requests (still Python, CHAOS-4286's other
-    half) are the only things left here, since nothing else in this function
-    ever read reviews_by_provider/deployments_by_provider/incidents_by_provider.
-    """
-    org_uuid: uuid.UUID | None = None
-    if org_id:
-        try:
-            org_uuid = uuid.UUID(org_id)
-        except ValueError:
-            org_uuid = None
-    if org_uuid is None:
-        logger.debug("AI workflow extraction skipped: org_id %r is not a UUID", org_id)
-        return [], [], []
-
-    wf_params: dict[str, Any] = {
-        "org_id": org_id,
-        "start": start,
-        "end": end,
-        "as_of": datetime.now(timezone.utc),
-    }
-    wf_repo_filter = ""
-    if repo_id is not None:
-        wf_params["repo_id"] = str(repo_id)
-        wf_repo_filter = " AND repo_id = {repo_id:UUID}"
-
-    wf_pr_rows = primary_sink.query_dicts(
-        "SELECT repo_id, number, title, body, head_branch,"
-        " author_name, author_email, created_at, merged_at,"
-        " closed_at, last_synced"
-        " FROM git_pull_requests"
-        " WHERE org_id = {org_id:String}"
-        "   AND ((created_at >= {start:DateTime64(3, 'UTC')}"
-        "         AND created_at < {end:DateTime64(3, 'UTC')})"
-        "    OR (merged_at IS NOT NULL"
-        "        AND merged_at >= {start:DateTime64(3, 'UTC')}"
-        "        AND merged_at < {end:DateTime64(3, 'UTC')}))"
-        f"{wf_repo_filter}",
-        wf_params,
-    )
-
-    # Row-local hygiene: drop rows whose repo_id/number cannot parse instead
-    # of letting one malformed row abort the whole day (the extractor calls
-    # UUID() on every row). CHAOS-5234/CHAOS-3092: this comment used to say
-    # "mirrors the pr_commit_stats per-row handling" -- that block (built
-    # solely for ai_impact) was deleted from run_daily_metrics_job, so this
-    # is now the only per-row UUID-hygiene pattern left in this file.
-    def _valid_rows(rows: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
-        valid: list[dict[str, Any]] = []
-        dropped = 0
-        for row in rows:
-            try:
-                uuid.UUID(str(row.get("repo_id")))
-                int(row.get("number"))  # type: ignore[arg-type]
-            except (ValueError, TypeError, AttributeError):
-                dropped += 1
-                continue
-            valid.append(row)
-        if dropped:
-            logger.warning(
-                "AI workflow extraction dropped %d malformed %s row(s)",
-                dropped,
-                source,
-            )
-        return valid
-
-    wf_pr_rows = _valid_rows(wf_pr_rows, "git_pull_requests")
-
-    issue_ids_by_pr: dict[str, list[str]] = {}
-    wf_pr_numbers = sorted({int(row["number"]) for row in wf_pr_rows})
-    if wf_pr_numbers:
-        link_params: dict[str, Any] = {
-            "org_id": org_id,
-            "pr_numbers": wf_pr_numbers,
-        }
-        link_repo_filter = ""
-        if repo_id is not None:
-            link_params["repo_id"] = str(repo_id)
-            link_repo_filter = " AND repo_id = {repo_id:UUID}"
-        link_rows = primary_sink.query_dicts(
-            "SELECT repo_id, pr_number, work_item_id"
-            " FROM work_graph_issue_pr"
-            " WHERE org_id = {org_id:String}"
-            "   AND pr_number IN {pr_numbers:Array(UInt32)}"
-            f"{link_repo_filter}",
-            link_params,
-        )
-        for link in link_rows:
-            wi_id = str(link.get("work_item_id") or "")
-            link_repo = str(link.get("repo_id") or "")
-            link_number = link.get("pr_number")
-            if not wi_id or not link_repo or link_number is None:
-                continue
-            issue_ids_by_pr.setdefault(f"{link_repo}:{int(link_number)}", []).append(
-                wi_id
-            )
-
-    def _by_provider(
-        rows: list[dict[str, Any]],
-    ) -> dict[str, list[dict[str, Any]]]:
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            row_provider = repo_provider_by_id.get(
-                str(row.get("repo_id") or ""), "unknown"
-            )
-            grouped.setdefault(row_provider, []).append(row)
-        return grouped
-
-    prs_by_provider = _by_provider(wf_pr_rows)
-
-    runs: list[Any] = []
-    artifact_edges: list[Any] = []
-    issue_edges: list[Any] = []
-    for wf_provider, provider_prs in prs_by_provider.items():
-        extraction = extract_ai_workflow_from_pull_requests(
-            provider_prs,
-            org_id=org_uuid,
-            provider=wf_provider,
-            issue_ids_by_pr=issue_ids_by_pr,
-        )
-        runs.extend(extraction.runs)
-        artifact_edges.extend(extraction.artifact_edges)
-        issue_edges.extend(extraction.issue_edges)
-    return runs, artifact_edges, issue_edges
+# CHAOS-5216/CHAOS-5234/CHAOS-3092/CHAOS-5242: _extract_ai_workflow_for_day
+# (work_graph_edges' review/deployment/incident extraction, CHAOS-4286) is
+# DELETED -- chris's standing rule (CHAOS-5233): once a family's Go executor
+# is on main, its Python compute is deleted, never skip-gated.
+# WorkGraphEdgesExecutor (native Go) is now the only computer/writer of
+# work_graph_pr_review_outcome_edges/work_graph_pr_deployment_edges/
+# work_graph_deployment_incident_edges, closing CHAOS-5216 by construction
+# (single native reader; the Go executor reads git_pull_request_reviews
+# FINAL, this Python path never had that fix and never will -- port-with-fix,
+# standing order). This function's OTHER half (ai_workflow_runs/
+# _artifact_edges/_issue_edges, via extract_ai_workflow_from_pull_requests)
+# was already deleted by CHAOS-5242 (#2307) -- both halves are now gone, so
+# the function itself, extract_review_deployment_incident_edges,
+# extract_ai_workflow_from_pull_requests, AIWorkflowExtractionResult and the
+# whole work_graph/extractors/ai_workflow.py module are deleted together in
+# this same PR -- rg confirmed no remaining caller once this deletion and
+# #2307's were combined.
 
 
 def _repo_to_team_map_for_compounding_risk(
@@ -569,184 +427,6 @@ def _secondary_uri_from_env() -> str:
     return uri
 
 
-def _hotspot_repo_ids(
-    active_repos: set[uuid.UUID],
-    discovered_repo_ids: Iterable[uuid.UUID],
-) -> set[uuid.UUID]:
-    """Repos eligible for the live ``file_hotspot_daily`` risk pass.
-
-    The risk-hotspot computation must NOT be gated on same-day activity:
-    ``compute_file_risk_hotspots`` unions complexity-only files with churned
-    files, so a discovered repo whose risk comes from static complexity (no
-    commits/pipelines/deployments that day) must still produce rows. Returning
-    ``active_repos`` UNION every discovered repo ensures idle complexity-only
-    repos are covered; the compute returns no rows for repos with neither churn
-    nor complexity, so empty repos are never fabricated (CHAOS-2376 round-4).
-    """
-    return set(active_repos) | set(discovered_repo_ids)
-
-
-def _load_complexity_map_for_repo(
-    *,
-    primary_sink: Any,
-    org_id: str,
-    repo_id: uuid.UUID,
-    day: date,
-) -> dict[str, FileComplexitySnapshot]:
-    """Load the latest complexity snapshot per file for ``repo_id`` on or before
-    ``day`` from ``file_complexity_snapshots``.
-
-    ``file_complexity_snapshots`` is written by the separate complexity job
-    (``metrics complexity``); this read joins that compute into the daily
-    hotspot/risk computation (CHAOS-2376). Selects, per file, the snapshot with
-    the latest ``as_of_day`` on or before ``day`` (breaking ties by
-    ``computed_at``) via ``argMax(*, (as_of_day, computed_at))``. The temporal
-    key MUST lead with ``as_of_day`` -- keying on ``computed_at`` alone would
-    let an older ``as_of_day`` that was *backfilled/recomputed later* clobber a
-    newer snapshot and persist stale risk_score/cyclomatic into
-    ``file_hotspot_daily`` (CHAOS-2376 round-2). This mirrors the
-    ``max(as_of_day)``-first invariant in ``get_file_complexity_snapshots``.
-    Returns an empty map (callers treat complexity as 0) on any query failure so
-    a missing or unmigrated table never aborts the daily job.
-    """
-    query = """
-        SELECT
-            file_path,
-            argMax(language,                       (as_of_day, computed_at)) AS language,
-            argMax(loc,                            (as_of_day, computed_at)) AS loc,
-            argMax(functions_count,                (as_of_day, computed_at)) AS functions_count,
-            argMax(cyclomatic_total,               (as_of_day, computed_at)) AS cyclomatic_total,
-            argMax(cyclomatic_avg,                 (as_of_day, computed_at)) AS cyclomatic_avg,
-            argMax(high_complexity_functions,      (as_of_day, computed_at)) AS high_complexity_functions,
-            argMax(very_high_complexity_functions, (as_of_day, computed_at)) AS very_high_complexity_functions
-        FROM file_complexity_snapshots
-        WHERE repo_id = {repo_id:UUID}
-          AND as_of_day <= {day:Date}
-    """
-    params: dict[str, Any] = {"repo_id": str(repo_id), "day": day}
-    if org_id:
-        query += "\n          AND org_id = {org_id:String}"
-        params["org_id"] = org_id
-    query += "\n        GROUP BY file_path"
-
-    try:
-        rows = primary_sink.query_dicts(query, params)
-    except Exception as exc:
-        logger.warning(
-            "Complexity snapshot load failed for repo_id=%s day=%s: %s",
-            repo_id,
-            day,
-            exc,
-        )
-        return {}
-
-    complexity_map: dict[str, FileComplexitySnapshot] = {}
-    for row in rows:
-        path = row.get("file_path")
-        if not path:
-            continue
-        complexity_map[path] = FileComplexitySnapshot(
-            repo_id=repo_id,
-            as_of_day=day,
-            ref="",
-            file_path=path,
-            language=row.get("language") or "",
-            loc=int(row.get("loc") or 0),
-            functions_count=int(row.get("functions_count") or 0),
-            cyclomatic_total=int(row.get("cyclomatic_total") or 0),
-            cyclomatic_avg=float(row.get("cyclomatic_avg") or 0.0),
-            high_complexity_functions=int(row.get("high_complexity_functions") or 0),
-            very_high_complexity_functions=int(
-                row.get("very_high_complexity_functions") or 0
-            ),
-            computed_at=datetime.now(timezone.utc),
-            org_id=org_id,
-        )
-    return complexity_map
-
-
-def _load_blame_map_for_repo(
-    *,
-    primary_sink: Any,
-    org_id: str,
-    repo_id: uuid.UUID,
-) -> dict[str, float]:
-    """Load per-file ownership concentration for ``repo_id`` from ``git_blame``.
-
-    Concentration is the share of currently-blamed lines attributed to the
-    single largest contributor for each file (a max-share / dominant-owner
-    metric in ``[0, 1]``). This surfaces the Ownership/blame dimension of the
-    risk hotspot (CHAOS-2376): a value near ``1.0`` means one author owns
-    almost all lines (bus-factor risk), near ``0`` means broad ownership.
-
-    The aggregation is pushed server-side. ``git_blame`` is
-    ``ReplacingMergeTree(last_synced)`` keyed by ``(org_id, repo_id, path,
-    line_no)`` (migration 027 prepends ``org_id`` to the sorting key and adds
-    the ``org_id`` column), so a per-line ``argMax(author, last_synced)``
-    collapses re-synced lines to their latest author before the per-file share
-    is computed. The read is scoped by BOTH ``org_id`` and ``repo_id``: blame
-    rows are tenant-partitioned, and a stale/default-org row for a reused
-    ``repo_id`` must not contaminate another tenant's ownership data
-    (CHAOS-2376 round-2: cross-org leak). Returns an empty map (callers treat
-    concentration as ``NULL``) on any query failure so a missing/unmigrated
-    table never aborts the daily job.
-    """
-    query = """
-        SELECT
-            path,
-            max(author_lines) / sum(author_lines) AS concentration
-        FROM
-        (
-            SELECT
-                path,
-                author,
-                count() AS author_lines
-            FROM
-            (
-                SELECT
-                    path,
-                    line_no,
-                    argMax(
-                        coalesce(author_email, author_name, ''),
-                        last_synced
-                    ) AS author
-                FROM git_blame
-                WHERE repo_id = {repo_id:UUID}
-    """
-    params: dict[str, Any] = {"repo_id": str(repo_id)}
-    if org_id:
-        query += "                  AND org_id = {org_id:String}\n"
-        params["org_id"] = org_id
-    query += """                GROUP BY path, line_no
-            )
-            WHERE author != ''
-            GROUP BY path, author
-        )
-        GROUP BY path
-    """
-
-    try:
-        rows = primary_sink.query_dicts(query, params)
-    except Exception as exc:
-        logger.warning(
-            "Blame map load failed for repo_id=%s: %s",
-            repo_id,
-            exc,
-        )
-        return {}
-
-    blame_map: dict[str, float] = {}
-    for row in rows:
-        path = row.get("path")
-        if not path:
-            continue
-        concentration = row.get("concentration")
-        if concentration is None:
-            continue
-        blame_map[path] = float(concentration)
-    return blame_map
-
-
 async def run_daily_metrics_job(
     *,
     db_url: str | None = None,
@@ -780,11 +460,10 @@ async def run_daily_metrics_job(
     before this parameter existed. Only families with a Go native executor
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
     CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
-    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292,
-    ``file_risk_hotspots`` CHAOS-4277 (``file_hotspots`` itself, same
-    ticket, had its Python compute+write deleted outright rather than
-    gated -- CHAOS-5234/CHAOS-3092 -- so it no longer checks this set at
-    all),
+    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292
+    (``file_hotspots``/``file_risk_hotspots``, CHAOS-4277, had their Python
+    compute+write deleted outright rather than gated --
+    CHAOS-5234/CHAOS-3092 -- so neither checks this set at all anymore),
     ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
     ``benchmarking`` CHAOS-4288 (``ai_impact`` CHAOS-4280 had the same
     write-only-skip shape as file_hotspots above until CHAOS-5234/CHAOS-3092
@@ -859,11 +538,11 @@ async def run_daily_metrics_job(
         org_id=org_id,
     )
     repo_names_by_id = {r.repo_id: r.full_name for r in discovered_repos}
-    # Provider per repo for AI workflow extraction (CHAOS-2187). Falls back to
-    # "unknown" so a missing provider never blocks edge extraction.
-    repo_provider_by_id = {
-        str(r.repo_id): (r.source or "unknown") for r in discovered_repos
-    }
+    # CHAOS-5216/CHAOS-5234/CHAOS-3092/CHAOS-5242: repo_provider_by_id used to
+    # feed _extract_ai_workflow_for_day's by-provider grouping (CHAOS-2187) --
+    # deleted alongside that function, both of whose halves (ai_workflow via
+    # #2307, work_graph_edges in this PR) are now gone; rg confirmed no other
+    # reader of this dict.
 
     loader = await _get_loader(db_url, backend, org_id=org_id)
 
@@ -1065,10 +744,12 @@ async def run_daily_metrics_job(
         # writer of file_metrics_daily now; neither all_file_metrics nor
         # file_hotspots fed anything else downstream in this function (see
         # the deleted gate comment's own admission), so there is no shared
-        # input to preserve. `compute_file_hotspots` itself is NOT deleted --
-        # it has real, unrelated callers (golden-fixture generators, the
-        # live-Python oracle comparator, and its own dedicated unit tests);
-        # only this call site is gone.
+        # input to preserve. `compute_file_hotspots` itself IS ALSO deleted
+        # (src/dev_health_ops/metrics/hotspots.py, removed whole-file) --
+        # its only other callers were golden-fixture generators and unit
+        # tests, never a real production caller (correction from an earlier
+        # PR pass on this same family, which left the function in place on
+        # that flawed premise; see this PR's own body for the writeup).
         for r_id in active_repos:
             rework_ratio_by_repo[r_id] = compute_rework_churn_ratio(
                 repo_id=str(r_id), window_stats=h_commit_rows
@@ -1083,48 +764,26 @@ async def run_daily_metrics_job(
                 repo_id=str(r_id), window_stats=h_commit_rows
             )
 
-        # file_hotspot_daily (risk treemap + hotspot drilldown on /complexity)
-        # is computed live here by merging the 30d churn window with the latest
-        # complexity snapshot per file, so real OAuth orgs get data instead of
-        # only fixtures (CHAOS-2376).
-        #
-        # The risk-hotspot pass is NOT gated on active_repos: a repo's risk can
-        # come purely from static complexity (compute_file_risk_hotspots unions
-        # complexity-only files with churned files), and discovered repos can
-        # have complexity snapshots with zero same-day commits/pipelines/
-        # deployments -- common right after onboarding or on quiet-but-risky
-        # repos. Gating on active_repos there left /complexity empty/stale for
-        # those repos. Iterate over active_repos UNION all discovered repos so
-        # idle complexity-only repos still produce rows; compute_file_risk_
-        # hotspots returns [] when a repo has neither churn nor complexity, so
-        # this never fabricates rows for genuinely empty repos (CHAOS-2376
-        # round-4).
-        all_file_hotspots = []
-        hotspot_repos = _hotspot_repo_ids(active_repos, repo_names_by_id)
-        for r_id in hotspot_repos:
-            complexity_map = _load_complexity_map_for_repo(
-                primary_sink=primary_sink,
-                org_id=org_id,
-                repo_id=r_id,
-                day=d,
-            )
-            # Ownership concentration per file from git_blame (backfilled on
-            # onboarding) feeds blame_concentration so the /complexity
-            # Ownership-risk dimension is non-NULL for real orgs (CHAOS-2376).
-            blame_map = _load_blame_map_for_repo(
-                primary_sink=primary_sink,
-                org_id=org_id,
-                repo_id=r_id,
-            )
-            file_hotspots = compute_file_risk_hotspots(
-                repo_id=r_id,
-                day=d,
-                window_stats=h_commit_rows,
-                complexity_map=complexity_map,
-                blame_map=blame_map,
-                computed_at=computed_at,
-            )
-            all_file_hotspots.extend(file_hotspots)
+        # CHAOS-5234/CHAOS-3092: file_risk_hotspots's daily compute (formerly
+        # `compute_file_risk_hotspots` over `hotspot_repos` -> `all_file_
+        # hotspots` -> write_file_hotspot_daily) is DELETED here, not
+        # skip-gated -- chris's ruling: "once go is in main that does the
+        # same thing, skip flags are pointless." The native Go executor
+        # (FileRiskHotspotsExecutor, CHAOS-4277) is the only writer of
+        # file_hotspot_daily now; all_file_hotspots fed nothing else
+        # downstream in this function (see the deleted gate comment's own
+        # admission), so there is no shared input to preserve.
+        # `compute_file_risk_hotspots` itself IS ALSO deleted
+        # (src/dev_health_ops/metrics/hotspots.py, removed whole-file),
+        # along with the private helpers it used
+        # (`_hotspot_repo_ids`/`_load_complexity_map_for_repo`/
+        # `_load_blame_map_for_repo`, all formerly defined just above
+        # `run_daily_metrics_job` in this file) -- none of the four had a
+        # real production caller once this call site is gone, only golden-
+        # fixture generators and their own unit tests (which are deleted in
+        # the same PR). `post_sync_dispatch.py`'s worker-chaining comment
+        # naming `_load_complexity_map_for_repo` is updated in the same PR
+        # to no longer describe a live dependency.
 
         result = compute_daily_metrics(
             day=d,
@@ -1310,37 +969,12 @@ async def run_daily_metrics_job(
         # ai_attribution_rows was never read by anything else in this
         # function.
 
-        # CHAOS-2187: extract AI workflow runs from today's PRs so
-        # ai_workflow_issue_edges/ai_workflow_artifact_edges are populated by
-        # ingestion. Infrastructure failures (ClickHouse query errors)
-        # propagate and fail the job: there is no persisted job-health table
-        # to record a partial day, and empty edge tables are indistinguishable
-        # from "no AI activity today" — swallowing here would be silent
-        # partial data. Row-local issues (malformed repo ids) are skipped
-        # inside the helper (CHAOS-5234/CHAOS-3092: this comment used to say
-        # "below" -- the pr_commit_stats build it referred to, built solely
-        # for ai_impact, is deleted; _valid_rows above is now the only
-        # sibling of this pattern in this file).
-        #
-        # CHAOS-5234/CHAOS-3092: this used to ALSO return
-        # ai_review_outcome_edges/ai_pr_deployment_edges/ai_deployment_
-        # incident_edges (work_graph_edges' own outputs, a 6-tuple) --
-        # WorkGraphEdgesExecutor (native Go) is now the only writer of those
-        # three tables (closes CHAOS-5216 by construction: single native
-        # reader), so the extraction and the writes below are both deleted,
-        # not skip-gated.
-        (
-            ai_workflow_runs,
-            ai_workflow_artifact_edges,
-            ai_workflow_issue_edges,
-        ) = _extract_ai_workflow_for_day(
-            primary_sink=primary_sink,
-            org_id=org_id,
-            start=start,
-            end=end,
-            repo_id=repo_id,
-            repo_provider_by_id=repo_provider_by_id,
-        )
+        # CHAOS-5216/CHAOS-5234/CHAOS-3092/CHAOS-5242: no
+        # _extract_ai_workflow_for_day call here anymore -- both of its
+        # halves (ai_workflow's runs/artifact_edges/issue_edges, deleted by
+        # #2307/CHAOS-5242; work_graph_edges' review/deployment/incident
+        # edges, deleted in this PR) are gone, so the function itself is
+        # deleted too (see the comment above its old definition).
 
         # CHAOS-5234/CHAOS-3092: ai_impact's daily compute is DELETED here,
         # not skip-gated -- chris's standing rule (CHAOS-5233): once a
@@ -1406,21 +1040,11 @@ async def run_daily_metrics_job(
         # row's generation -- the same class of gap CHAOS-4275's own guard
         # above exists to close, caught here by codex round 1 on this port.
         skip_deploy_write = "deploy" in skip_families
-        # CHAOS-4277: file_risk_hotspots has a native Go executor
-        # (FileRiskHotspotsExecutor). Same write-only-skip shape as
-        # repo_user_commit above: all_file_hotspots feeds nothing else
-        # downstream in this function, so compute could also be skipped,
-        # but is left unconditional to match the established, reviewed
-        # precedent with the smallest possible diff. Missing this gate is
-        # exactly the defect repo_user_commit's own comment warns about --
-        # the native executor and this unconditional write would otherwise
-        # BOTH fire for every partition, doubling every row in
-        # file_hotspot_daily on every single run, not just on a recompute.
-        # (file_hotspots itself -- FileHotspotsExecutor's own family -- is no
-        # longer gated here at all: CHAOS-5234/CHAOS-3092 deleted its compute
-        # and write call sites entirely, see the comment a few lines above
-        # this loop.)
-        skip_file_risk_hotspots_write = "file_risk_hotspots" in skip_families
+        # CHAOS-4277/CHAOS-5234/CHAOS-3092: file_risk_hotspots (like
+        # file_hotspots, its sibling CHAOS-4277 family) no longer checks
+        # skip_families at all -- its compute+write is deleted entirely, see
+        # the comment above the deleted `compute_file_risk_hotspots` call
+        # site earlier in this function.
         # CHAOS-4283: work_item and work_item_estimate have native Go
         # executors (WorkItemExecutor/WorkItemEstimateExecutor). This is the
         # repo_user_commit shape, NOT the team_wellbeing shape -- skip ONLY
@@ -1440,21 +1064,12 @@ async def run_daily_metrics_job(
         #     precedent for "unconditional is fine," has since had its own
         #     compute+write deleted outright rather than left unconditional).
         #
-        # CHAOS-5234/CHAOS-3092: no skip_work_graph_edges_write here -- the
-        # extraction that used to produce review_outcome_edges/
-        # pr_deployment_edges/deployment_incident_edges (a WRITE-ONLY skip,
-        # like repo_user_commit) is DELETED, not skip-gated, along with the
-        # three writes below. WorkGraphEdgesExecutor (native Go) is the only
-        # writer of these three tables now, closing CHAOS-5216 (the Go
-        # executor reads git_pull_request_reviews FINAL; this Python path
-        # never had that fix and never will) by construction: single native
-        # reader. extract_ai_workflow_from_pull_requests/ai_workflow_runs/
-        # _artifact_edges/_issue_edges (ai_workflow, CHAOS-4286's other half,
-        # not yet ported) are NOT touched -- nothing else in
-        # _extract_ai_workflow_for_day ever read the review/deployment/
-        # incident rows this deletion also removes.
+        # CHAOS-5216/CHAOS-5234/CHAOS-3092: no skip_work_graph_edges_write
+        # here -- work_graph_edges' compute+write (both deleted alongside
+        # _extract_ai_workflow_for_day above) is not skip-gated;
+        # WorkGraphEdgesExecutor (native Go) is the only writer now.
         #
-        # Without these two gates the native executors and the unconditional
+        # Without this gate the native executor and the unconditional
         # writes below would BOTH fire for every partition, doubling every row
         # in work_item_metrics_daily and work_item_user_metrics_daily (plain
         # MergeTree, no dedup key) on every single run -- exactly the defect
@@ -1503,30 +1118,22 @@ async def run_daily_metrics_job(
             # CHAOS-5234/CHAOS-3092: no write_ai_impact_metrics call here
             # either -- deleted alongside the compute call above;
             # AIImpactExecutor (native Go) is the only writer now.
-            if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
-                s.write_ai_workflow_runs(ai_workflow_runs)
-            if ai_workflow_artifact_edges and hasattr(
-                s, "write_ai_workflow_artifact_edges"
-            ):
-                s.write_ai_workflow_artifact_edges(ai_workflow_artifact_edges)
-            if ai_workflow_issue_edges and hasattr(s, "write_ai_workflow_issue_edges"):
-                s.write_ai_workflow_issue_edges(ai_workflow_issue_edges)
-            # CHAOS-5234/CHAOS-3092: no write_work_graph_pr_review_outcome_edges/
-            # write_work_graph_pr_deployment_edges/write_work_graph_deployment_
-            # incident_edges calls here -- deleted alongside the extraction
-            # above; WorkGraphEdgesExecutor (native Go) is the only writer
-            # now (closes CHAOS-5216 by construction: single native reader).
-            # CHAOS-5234/CHAOS-3092: no write_file_metrics call here -- the
-            # file_hotspots compute+write is deleted entirely (see the
-            # comment above the deleted `compute_file_hotspots` call site);
-            # the native Go executor is the only writer of
-            # file_metrics_daily now.
-            if (
-                all_file_hotspots
-                and hasattr(s, "write_file_hotspot_daily")
-                and not skip_file_risk_hotspots_write
-            ):
-                s.write_file_hotspot_daily(all_file_hotspots)
+            # CHAOS-5242: no write_ai_workflow_runs/_artifact_edges/
+            # _issue_edges calls here either -- deleted, not skip-gated,
+            # alongside extract_ai_workflow_from_pull_requests above;
+            # AIWorkflowExecutor (native Go) is the only writer now.
+            # CHAOS-5216/CHAOS-5234/CHAOS-3092: no
+            # write_work_graph_pr_review_outcome_edges/
+            # write_work_graph_pr_deployment_edges/
+            # write_work_graph_deployment_incident_edges calls here either --
+            # deleted alongside _extract_ai_workflow_for_day above;
+            # WorkGraphEdgesExecutor (native Go) is the only writer now.
+            # CHAOS-5234/CHAOS-3092: no write_file_metrics or
+            # write_file_hotspot_daily call here -- both file_hotspots' and
+            # file_risk_hotspots' compute+write are deleted entirely (see
+            # the comments above their deleted call sites); the native Go
+            # executors are the only writers of file_metrics_daily and
+            # file_hotspot_daily now.
 
         # CHAOS-4246: cicd/deploy/incident are written unconditionally above
         # (write_*_metrics no-ops on an empty list) -- note it here so a run
@@ -1802,8 +1409,8 @@ async def run_daily_metrics_finalize(
         )
 
     # CHAOS-4290: same gate shape as run_daily_metrics_job's families
-    # (`"file_risk_hotspots" in skip_families` a few hundred lines up, and
-    # its siblings). When a
+    # (`"deploy" in skip_families` a few hundred lines up, and its
+    # siblings). When a
     # native Go executor already computed and wrote ic_finalize for this run,
     # recomputing here would append a SECOND generation of the same rows --
     # and user_metrics_daily is append-only, deduped

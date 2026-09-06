@@ -1656,7 +1656,9 @@ if rc:
   # correct, present mapping row). That is a real bug (CHAOS-4269, filed
   # 2026-08-25), not the CHAOS-4263/4264 defect this stage exists to catch,
   # so it is cited rather than papered over or misdiagnosed as a fixture gap.
-  # "file_hotspots" (compute_file_hotspots -> file_metrics_daily) is included
+  # "file_hotspots" (native FileHotspotsExecutor -> file_metrics_daily,
+  # CHAOS-5234/CHAOS-3092 deleted the old compute_file_hotspots Python path)
+  # is included
   # here but NOT in ci/run_metrics_executed_proof.sh's list: `fixtures
   # generate` above seeds real commit stats (--commits-per-day 3), which
   # `metrics daily` needs to compute it, but the CI job's synthetic

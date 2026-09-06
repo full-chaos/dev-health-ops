@@ -1,0 +1,172 @@
+{
+    "runs": [
+        {
+            "run_id": "56146edf4691f666b21a95a710848e5b4a1bec8e266238e499e61160899497ae",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "provider": "github",
+            "run_kind": "chat_assisted",
+            "status": "completed",
+            "tool": null,
+            "actor": "dev-a",
+            "repo_id": "3a9c1e00-1111-4222-8333-944444445555",
+            "prompts_redacted": true,
+            "started_at": "2026-09-01T09:00:00+00:00",
+            "completed_at": "2026-09-01T10:00:00+00:00",
+            "observed_at": "2026-09-01T10:00:00+00:00",
+            "metadata": "{\"signals\":[{\"label\":\"copilot\"},{\"label\":\"claude-code\"}],\"subject_id\":\"3a9c1e00-1111-4222-8333-944444445555:101\",\"subject_type\":\"pull_request\"}"
+        },
+        {
+            "run_id": "0a898620b8258843ea14a3e8c45f14bb9639be4f7b08eaa36a89e82b38c0f8cb",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "provider": "github",
+            "run_kind": "agent_autonomous",
+            "status": "completed",
+            "tool": "copilot[bot]",
+            "actor": "copilot[bot]",
+            "repo_id": "3a9c1e00-1111-4222-8333-944444445555",
+            "prompts_redacted": true,
+            "started_at": "2026-09-01T11:00:00+00:00",
+            "completed_at": "2026-09-01T23:00:00+00:00",
+            "observed_at": "2026-09-01T11:00:00+00:00",
+            "metadata": "{\"signals\":[{\"app_slug\":\"\",\"known_ai_bot\":true,\"login\":\"copilot[bot]\",\"user_type\":\"Bot\"}],\"subject_id\":\"3a9c1e00-1111-4222-8333-944444445555:102\",\"subject_type\":\"pull_request\"}"
+        },
+        {
+            "run_id": "8dc5b8289626731621d21d6edb382e022d9bdd80cc401085ebbda7d52eb415ab",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "provider": "github",
+            "run_kind": "agent_autonomous",
+            "status": "completed",
+            "tool": "devin",
+            "actor": "devin",
+            "repo_id": "3a9c1e00-1111-4222-8333-944444445555",
+            "prompts_redacted": true,
+            "started_at": "2026-09-01T12:00:00+00:00",
+            "completed_at": "2026-09-01T13:00:00+00:00",
+            "observed_at": "2026-09-01T13:00:00+00:00",
+            "metadata": "{\"signals\":[{\"branch\":\"devin/refactor-flaky-test\",\"matched_pattern\":\"(?:^|[-/])devin(?:[-/]|$)\"}],\"subject_id\":\"3a9c1e00-1111-4222-8333-944444445555:103\",\"subject_type\":\"pull_request\"}"
+        },
+        {
+            "run_id": "1c67731816a8e23fe413ebe5ac7ff32a6d35ffe28bceea0c3e391a31ca1f358f",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "provider": "github",
+            "run_kind": "chat_assisted",
+            "status": "completed",
+            "tool": null,
+            "actor": "dev-c",
+            "repo_id": "3a9c1e00-2222-4333-8444-955555556666",
+            "prompts_redacted": true,
+            "started_at": "2026-09-01T14:00:00+00:00",
+            "completed_at": "2026-09-01T15:00:00+00:00",
+            "observed_at": "2026-09-01T15:00:00+00:00",
+            "metadata": "{\"signals\":[{\"matched_pattern\":\"\\\\bai[\\\\s\\\\-]assisted\\\\b\",\"matched_text\":\"ai\\u00a0assisted\"}],\"subject_id\":\"3a9c1e00-2222-4333-8444-955555556666:201\",\"subject_type\":\"pull_request\"}"
+        },
+        {
+            "run_id": "85946be9ad00f2e7f4c9df00fde91b85598323c296dc39ea884ee2408bc9be78",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "provider": "github",
+            "run_kind": "agent_autonomous",
+            "status": "completed",
+            "tool": null,
+            "actor": "dev-f",
+            "repo_id": "3a9c1e00-2222-4333-8444-955555556666",
+            "prompts_redacted": true,
+            "started_at": "2026-09-01T17:00:00+00:00",
+            "completed_at": "2026-09-01T17:30:00.123000+00:00",
+            "observed_at": "2026-09-01T17:30:00.123000+00:00",
+            "metadata": "{\"signals\":[{\"matched_pattern\":\"\\\\bagent[\\\\s\\\\-]created\\\\b\",\"matched_text\":\"agent-created\"}],\"subject_id\":\"3a9c1e00-2222-4333-8444-955555556666:203\",\"subject_type\":\"pull_request\"}"
+        }
+    ],
+    "artifact_edges": [
+        {
+            "edge_id": "ab732e0bf52f0acaa96b65362551512ee4f45295d56e04485597329febe17904",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "run_id": "56146edf4691f666b21a95a710848e5b4a1bec8e266238e499e61160899497ae",
+            "artifact_type": "pull_request",
+            "artifact_id": "3a9c1e00-1111-4222-8333-944444445555:101",
+            "provider": "github",
+            "repo_id": "3a9c1e00-1111-4222-8333-944444445555",
+            "confidence": 0.95,
+            "source": "pr_label",
+            "evidence": "{\"label\":\"copilot\"}",
+            "observed_at": "2026-09-01T10:00:00+00:00"
+        },
+        {
+            "edge_id": "97c03bd8b69ce1c3152b6a85c470288f6727032639666f3fa97a163f888ab25e",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "run_id": "0a898620b8258843ea14a3e8c45f14bb9639be4f7b08eaa36a89e82b38c0f8cb",
+            "artifact_type": "pull_request",
+            "artifact_id": "3a9c1e00-1111-4222-8333-944444445555:102",
+            "provider": "github",
+            "repo_id": "3a9c1e00-1111-4222-8333-944444445555",
+            "confidence": 0.9,
+            "source": "bot_author",
+            "evidence": "{\"app_slug\":\"\",\"known_ai_bot\":true,\"login\":\"copilot[bot]\",\"user_type\":\"Bot\"}",
+            "observed_at": "2026-09-01T11:00:00+00:00"
+        },
+        {
+            "edge_id": "cddc7525913cf869efa927f663a764c6f37c94765156cbf72fbd7953b9e767c9",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "run_id": "8dc5b8289626731621d21d6edb382e022d9bdd80cc401085ebbda7d52eb415ab",
+            "artifact_type": "pull_request",
+            "artifact_id": "3a9c1e00-1111-4222-8333-944444445555:103",
+            "provider": "github",
+            "repo_id": "3a9c1e00-1111-4222-8333-944444445555",
+            "confidence": 0.35,
+            "source": "branch_name",
+            "evidence": "{\"branch\":\"devin/refactor-flaky-test\",\"matched_pattern\":\"(?:^|[-/])devin(?:[-/]|$)\"}",
+            "observed_at": "2026-09-01T13:00:00+00:00"
+        },
+        {
+            "edge_id": "040629862568be16d8cfa4270acc2d5059d645b7559f8a1baa2ef85481056b53",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "run_id": "1c67731816a8e23fe413ebe5ac7ff32a6d35ffe28bceea0c3e391a31ca1f358f",
+            "artifact_type": "pull_request",
+            "artifact_id": "3a9c1e00-2222-4333-8444-955555556666:201",
+            "provider": "github",
+            "repo_id": "3a9c1e00-2222-4333-8444-955555556666",
+            "confidence": 0.25,
+            "source": "pr_body",
+            "evidence": "{\"matched_pattern\":\"\\\\bai[\\\\s\\\\-]assisted\\\\b\",\"matched_text\":\"ai\\u00a0assisted\"}",
+            "observed_at": "2026-09-01T15:00:00+00:00"
+        },
+        {
+            "edge_id": "f104b976ab9bffb7cc90f8fe4344a17f1496e9cfb2b3a72587f6c89acf45b3ab",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "run_id": "85946be9ad00f2e7f4c9df00fde91b85598323c296dc39ea884ee2408bc9be78",
+            "artifact_type": "pull_request",
+            "artifact_id": "3a9c1e00-2222-4333-8444-955555556666:203",
+            "provider": "github",
+            "repo_id": "3a9c1e00-2222-4333-8444-955555556666",
+            "confidence": 0.25,
+            "source": "pr_body",
+            "evidence": "{\"matched_pattern\":\"\\\\bagent[\\\\s\\\\-]created\\\\b\",\"matched_text\":\"agent-created\"}",
+            "observed_at": "2026-09-01T17:30:00.123000+00:00"
+        }
+    ],
+    "issue_edges": [
+        {
+            "edge_id": "558f0d4894e4b8b0ec43edab191ad4efca56df98cd62a562900656f2680097be",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "issue_id": "jira:ABC-1",
+            "run_id": "56146edf4691f666b21a95a710848e5b4a1bec8e266238e499e61160899497ae",
+            "provider": "github",
+            "repo_id": "3a9c1e00-1111-4222-8333-944444445555",
+            "confidence": 0.95,
+            "source": "pr_label",
+            "evidence": "{\"pr_id\":\"3a9c1e00-1111-4222-8333-944444445555:101\",\"signal\":{\"label\":\"copilot\"}}",
+            "observed_at": "2026-09-01T10:00:00+00:00"
+        },
+        {
+            "edge_id": "67a9fd2baeddfbf4f5f264ca74321ed9fa519e1c471f9073b75d4b17e56c4dcc",
+            "org_id": "8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+            "issue_id": "jira:ABC-2",
+            "run_id": "56146edf4691f666b21a95a710848e5b4a1bec8e266238e499e61160899497ae",
+            "provider": "github",
+            "repo_id": "3a9c1e00-1111-4222-8333-944444445555",
+            "confidence": 0.95,
+            "source": "pr_label",
+            "evidence": "{\"pr_id\":\"3a9c1e00-1111-4222-8333-944444445555:101\",\"signal\":{\"label\":\"copilot\"}}",
+            "observed_at": "2026-09-01T10:00:00+00:00"
+        }
+    ]
+}

@@ -466,34 +466,15 @@ check_live_python_oracles() {
   # golden.json) stays; Go's own TestWorkGraphEdgesMatchFrozenPythonGolden is
   # the regression guard going forward.
 
-  printf 'go test -count=1: internal/jobs/metrics/aiworkflow (ai_workflow port vs live Python, CHAOS-4280/CHAOS-4286)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestAIWorkflowMatchesLivePythonProduction$' \
-        ./internal/jobs/metrics/aiworkflow
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Own marker, checked separately, for the same reason as the siblings
-  # above: a shared marker would be satisfied by whichever oracle happened
-  # to run. This one is the ONLY guard proving Go's strongestSignal keeps
-  # the FIRST maximal element on a tie against production's real
-  # extract_ai_workflow_from_pull_requests, not a synthetic fixture in this
-  # repo's own Go test.
-  proof_file="${proof_dir}/ai-workflow-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: ai_workflow live Python oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # CHAOS-5242: no live-oracle block here for internal/jobs/metrics/aiworkflow
+  # any more -- extract_ai_workflow_from_pull_requests is deleted alongside
+  # its own native Go port (AIWorkflowExecutor, #2280), so there is no live
+  # Python left to run. TestAIWorkflowMatchesFrozenPythonGolden (renamed from
+  # TestAIWorkflowMatchesLivePythonProduction) now compares against a frozen
+  # JSON (tests/fixtures/ai_workflow_python_golden.json, captured from that
+  # function's last live run) and runs unconditionally as part of the plain
+  # `go test ./...` / `check` verb, same as any other Go test -- it needs no
+  # DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker any more.
 
   printf 'go test -count=1: internal/jobs/metrics/workitemmetrics (work_item + work_item_estimate goldens vs live compute_work_items.py, CHAOS-4283)\n'
   if ! (
@@ -567,9 +548,16 @@ check_live_python_oracles() {
     return 1
   fi
   # Same reasoning again: the CHAOS-4818 FMA golden (release_impact
-  # ._compute_confidence, compute._percentile, compute_capacity._percentile,
-  # hotspots.compute_file_hotspots) is a fourth distinct golden/producer in
-  # this same package and gets its own proof marker.
+  # ._compute_confidence, compute._percentile, compute_capacity._percentile)
+  # is a fourth distinct golden/producer in this same package and gets its
+  # own proof marker. hotspot_score (Go's ComputeFileHotspots) used to be a
+  # fourth Python producer feeding this same fma_golden.json -- retired
+  # (CHAOS-5234/CHAOS-3092: compute_file_hotspots deleted) by splitting its
+  # frozen cases VERBATIM into their own file with no generator
+  # (tests/fixtures/fma_hotspot_score_golden.json,
+  # filehotspots/fma_golden_test.go now reads it directly), rather than
+  # leaving fma_golden.json a key this generator can no longer reproduce.
+  # This marker and TestFMAGoldenMatchesLivePython are otherwise unchanged.
   proof_file="${proof_dir}/fma-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: FMA golden rot guard did not compare against live Python\n' >&2
@@ -577,59 +565,20 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/metrics/daily/filehotspots (frozen file-hotspots goldens vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^(TestFileHotspotsGoldenMatchesLivePython|TestFMAFollowupGoldenMatchesLivePython|TestRiskHotspotsOrderGoldenMatchesLivePython)$' \
-        ./internal/jobs/metrics/daily/filehotspots
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # TestFileHotspotsGoldenMatchesLivePython (CHAOS-4277) had NO registration
-  # anywhere in this function before this block -- found while adding the
-  # AST-lint follow-up's own guard to this same package and checking for a
-  # sibling block to extend, per lane-4441's CHAOS-4849 finding that a guard
-  # missing from this -run filter does not fail, it silently never runs. Its
-  # own marker for the reason spelled out above every other entry here: a
-  # shared marker is satisfied by whichever guard happened to run.
-  proof_file="${proof_dir}/file-hotspots-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: file_hotspots golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # CHAOS-4818 AST-lint follow-up: sampleZScores' compound-assignment FMA
-  # site (hotspot_risk_score family). Used to also cover CodeOwnershipGini's
-  # own compound-assignment FMA site (ownership_gini family) -- dropped once
-  # this branch rebased onto PR #2123 (CHAOS-4824), which rewrote
-  # CodeOwnershipGini to use math/big.Int exclusively and made that site's
-  # FMA-fusion risk structurally impossible, not merely guarded.
-  proof_file="${proof_dir}/fma-followup-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: FMA follow-up golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # CHAOS-4863: ComputeFileRiskHotspots' risk_score must not depend on
-  # iteration order. This generator does more than the others above -- it
-  # re-verifies at generation time that live Python's own output is still
-  # order-invariant across several separate python3 invocations per case,
-  # so a failure here can mean either Go drift OR that Python itself has
-  # become order-dependent (the generator's own stderr distinguishes them).
-  proof_file="${proof_dir}/risk-hotspots-order-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: risk-hotspots order-invariance golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # internal/jobs/metrics/daily/filehotspots' three live-Python rot guards
+  # (TestFileHotspotsGoldenMatchesLivePython CHAOS-4277,
+  # TestFMAFollowupGoldenMatchesLivePython, TestRiskHotspotsOrderGoldenMatchesLivePython
+  # CHAOS-4863) were retired here: their producers,
+  # compute_file_hotspots/compute_file_risk_hotspots, were DELETED, not
+  # merely un-called -- the native Go executors (FileHotspotsExecutor/
+  # FileRiskHotspotsExecutor, CHAOS-4277) are the sole producers now. The
+  # frozen goldens (tests/fixtures/{file_hotspots_python_golden,
+  # fma_followup_golden,risk_hotspots_order_golden}.json) stay; Go's own
+  # TestComputeMatchesFrozenPythonGolden-family bit-exact tests
+  # (golden_full_test.go, fma_golden_test.go, risk_hotspots_order_golden_test.go)
+  # are the regression guard going forward. Proving "Python still agrees
+  # with itself" stops being the protection that matters once Python is no
+  # longer in the loop -- same shape as the issueprlinks retirement below.
 
   # internal/jobs/workgraph/issueprlinks' live-Python rot guard
   # (TestIssuePRLinksGoldenMatchesLivePython, CHAOS-4757) was retired here:

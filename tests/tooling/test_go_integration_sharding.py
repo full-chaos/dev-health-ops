@@ -1721,7 +1721,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # "<provider>/work-items/estimate-coverage" compareRowsAgainstPythonOracle
     # call from an existing multi-case test, not a whole top-level test, so
     # they contribute no further count change.
-    assert len(expected_provider_tests) == 1323
+    # CHAOS-5316 (Jira relates_to relationship-type normalisation, landed on
+    # top of the above, 2026-09-06): +2 top-level (1323 -> 1325),
+    # integration-tagged UNCHANGED at 152. TestJiraRelationshipCanonicalizes
+    # RelatesTo and TestNormalizeJiraDependenciesRelatesTo pin the
+    # raw-"relates"-to-canonical-"relates_to" vocabulary fix in
+    # jira_work_items_rows.go; both parse/build in-memory rows only, so the
+    # integration-tagged count stays 152.
+    assert len(expected_provider_tests) == 1325
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1738,7 +1745,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1323
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1325
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1833,7 +1840,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1323
+    assert len(selected_tests) == len(set(selected_tests)) == 1325
     assert set(selected_tests) == expected_tests
 
 

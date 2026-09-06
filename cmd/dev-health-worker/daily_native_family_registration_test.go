@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 )
 
@@ -188,4 +191,102 @@ func readFamiliesJSONPortGoPhases(t *testing.T) map[string]string {
 		}
 	}
 	return goFamilyPhase
+}
+
+// recordingNativeFamilyObserver captures every ObserveDailyMetricsNativeFamily
+// call, mirroring internal/jobs/metrics/daily's own test double of the same
+// name (daily_test.go) -- that one lives in a different package, so this is
+// a separate copy rather than an import, matching this file's existing
+// pattern of duplicating small fakes per package rather than exporting them.
+// Embeds jobruntime.Observer (nil), same shape as this file's own
+// fakeObserverWithNoCollector (daily_test.go), to satisfy
+// dailyNativeFamilyRegistrations' wide observer parameter without stubbing
+// every unrelated method by hand.
+type recordingNativeFamilyObserver struct {
+	jobruntime.Observer
+	mu    sync.Mutex
+	calls []recordingNativeFamilyObservation
+}
+
+type recordingNativeFamilyObservation struct {
+	family      string
+	outcome     jobruntime.DailyMetricsNativeFamilyOutcome
+	rowsWritten int
+}
+
+func (observer *recordingNativeFamilyObserver) ObserveDailyMetricsNativeFamily(
+	family string, outcome jobruntime.DailyMetricsNativeFamilyOutcome, rowsWritten int, _ time.Duration,
+) error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.calls = append(observer.calls, recordingNativeFamilyObservation{family: family, outcome: outcome, rowsWritten: rowsWritten})
+	return nil
+}
+
+// TestDailyNativeFamilyRegistrationsObservesRefusalForDeletedPythonFamilies is
+// CHAOS-5342 (found during #2317's r1 review, delete-unowned-daily-families):
+// CHAOS-3092/CHAOS-5311/CHAOS-5312/CHAOS-5313/CHAOS-5309 deleted
+// team_wellbeing/cicd/incident/deploy's Python compute ENTIRELY, so a
+// construction-time refusal for these four specifically has no fallback
+// left at all -- unlike every OTHER family in
+// dailyNativeFamilyRegistrations, where a refusal genuinely does leave the
+// family on a still-live Python compatibility bridge (fail-open by design,
+// one family degrading must never take another down). deploy was folded in
+// alongside the original three (team_wellbeing/cicd/incident): identical
+// gap, same fix, one PR rather than a second near-duplicate ticket.
+//
+// Before this fix, a refusal for these four was logged (with the FALSE
+// claim that the family "stays on the Python compatibility bridge") and
+// otherwise produced nothing observable: no counter, nothing a dashboard
+// could alert on -- the family's rows simply stop being written for the rest
+// of the worker's process lifetime, indistinguishable from a quiet day. This
+// test forces every constructor to refuse (nil connection) and asserts the
+// four deleted-Python families are recorded as
+// DailyMetricsNativeFamilyOutcomeRefused via the SAME per-partition
+// telemetry channel PartitionHandler already uses
+// (jobruntime.DailyMetricsNativeFamilyObserver) -- reusing existing
+// observability plumbing rather than inventing a new metric. Other,
+// still-Python-fallback families' refusal behavior is intentionally
+// untouched and out of this ticket's scope.
+func TestDailyNativeFamilyRegistrationsObservesRefusalForDeletedPythonFamilies(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	observer := &recordingNativeFamilyObserver{}
+
+	// nil connection fails every native executor's own `conn != nil` check,
+	// refusing construction for the whole registry.
+	native, _, _ := dailyNativeFamilyRegistrations(fakeDailyStoreForRegistrationTest{}, nil, observer, logger)
+
+	for _, family := range []string{"team_wellbeing", "cicd", "incident", "deploy"} {
+		if _, stillRegistered := native[family]; stillRegistered {
+			t.Fatalf("family %q registered natively with a nil connection -- "+
+				"the refusal path this test exercises never ran", family)
+		}
+	}
+
+	observer.mu.Lock()
+	calls := append([]recordingNativeFamilyObservation(nil), observer.calls...)
+	observer.mu.Unlock()
+
+	observed := make(map[string]jobruntime.DailyMetricsNativeFamilyOutcome, len(calls))
+	for _, call := range calls {
+		observed[call.family] = call.outcome
+	}
+	for _, family := range []string{"team_wellbeing", "cicd", "incident", "deploy"} {
+		outcome, ok := observed[family]
+		if !ok {
+			t.Errorf(
+				"family %q refused construction with no Python fallback left "+
+					"(CHAOS-3092/CHAOS-5311/CHAOS-5312/CHAOS-5313/CHAOS-5309) but "+
+					"dailyNativeFamilyRegistrations recorded NO "+
+					"ObserveDailyMetricsNativeFamily call for it -- the refusal "+
+					"is invisible to the same telemetry every partition-level "+
+					"refusal already uses",
+				family,
+			)
+			continue
+		}
+		if outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
+			t.Errorf("family %q recorded outcome %q, want %q", family, outcome, jobruntime.DailyMetricsNativeFamilyOutcomeRefused)
+		}
+	}
 }

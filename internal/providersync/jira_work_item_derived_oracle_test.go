@@ -102,18 +102,11 @@ func TestJiraWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
 
 func TestJiraDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 	cases := jiraDerivedOracleCases(githubDerivedOracleCases())
-	compareRowsAgainstPythonOracle(t, "jira/work-items/estimate-coverage", cases,
-		func(t *testing.T, input map[string]any) githubEstimateCoverageColumns {
-			claim, rows, derived := jiraDerivedOracleRows(t, input)
-			surfaces, err := buildWorkItemDerivedSurfacesForProvider(
-				"jira", claim, rows, gitlabWorkItemOracleDay(t, input),
-				gitlabWorkItemOracleComputedAt(t, input), derived,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return newGitHubEstimateCoverageColumns(surfaces.EstimateCoverage)
-		}, nil)
+	// CHAOS-5323/CHAOS-3092: no "jira/work-items/estimate-coverage" oracle
+	// pair here anymore -- compute_estimate_coverage_metrics_daily is
+	// deleted entirely (work_item_estimate is fully native, no remaining
+	// Python caller), and its oracle_pairs script (jira_work-
+	// items_estimate-coverage.py) is deleted with it.
 	compareRowsAgainstPythonOracle(t, "jira/work-items/team-attributions", cases,
 		func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
 			claim, rows, derived := jiraDerivedOracleRows(t, input)

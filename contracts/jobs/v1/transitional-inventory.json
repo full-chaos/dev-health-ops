@@ -94,7 +94,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 760
+        "line": 759
       },
       "queue_or_cadence": "sync",
       "dispatches": "sync.provider_unit outbox rows (per unit)",
@@ -118,7 +118,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1177
+        "line": 1176
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -142,7 +142,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2052
+        "line": 2051
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -1198,7 +1198,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1683
+        "line": 1682
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -1222,7 +1222,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2674
+        "line": 2673
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",

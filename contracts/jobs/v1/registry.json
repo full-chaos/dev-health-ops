@@ -758,7 +758,7 @@
       "retired_on": "2026-08-24",
       "reason": "registered handler with zero producer anywhere; its writer duplicated daily_metrics_fanout's existing unconditional compute",
       "ticket": "CHAOS-4243",
-      "replacement": "run_daily_metrics_job (job_daily.py:729) -> compute_team_wellbeing_metrics_daily (job_daily.py:1057)"
+      "replacement": "run_daily_metrics_job (job_daily.py:729) -> compute_team_wellbeing_metrics_daily (job_daily.py:1057) at the time of this retirement; CHAOS-5311 has since deleted compute_team_wellbeing_metrics_daily outright -- team_metrics_daily is now written exclusively by the native Go TeamWellbeingExecutor, not by run_daily_metrics_job at all"
     }
   ]
 }

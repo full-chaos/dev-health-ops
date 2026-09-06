@@ -139,10 +139,14 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # the SAME already-discovered package (sync_dispatch_integration_test.go,
     # 11 more Postgres-backed tests) -- no further package-count change,
     # since the package was already counted once CHAOS-5318 landed.
-    # CURRENT TOTAL: 48. Adding one -tags=integration package bumps every
+    # CHAOS-5358 added THREE new -tags=integration packages in one PR:
+    # internal/jobs/workgraph/issuecommitedges, issuepredges, and prcommit
+    # (each gained its first integration-tagged test, the repo_id-as-string
+    # bind fix's regression test). 48 -> 51.
+    # CURRENT TOTAL: 51. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "48 package(s) discovered, 0 denylisted, 48 will run" in result.stdout
+    assert "51 package(s) discovered, 0 denylisted, 51 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

@@ -1,0 +1,18 @@
+// CHAOS-5156: closes a gap codex round r1 on #2292 found (independently
+// confirmed against real lizard 1.23.0 before fixing) and exercises the
+// new stateNameWithSpace/stateOperator/stateOperatorNext code this fix
+// added -- a BARE (unqualified) `operator+()` does NOT reach this path in
+// real lizard's Java reader either (JavaStates.try_new_function is a full
+// override with no "operator" special-case of its own, verified from
+// source), so that shape was intentionally left unchanged. A QUALIFIED
+// operator (`Foo::operator+()`) DOES reach it, via stateNameWithSpace,
+// which JavaStates does NOT override and therefore inherits from
+// clikeStates unchanged (confirmed from source). Measured directly
+// against real lizard 1.23.0: complexity 2 (base 1 + if).
+class C {
+    Foo::operator+() {
+        if (x > 0) {
+            x = x;
+        }
+    }
+}

@@ -1648,6 +1648,31 @@ func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*Fina
 // Python source, with a negative control, so the copy cannot drift silently.
 var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, BenchmarkingFamilyName}
 
+// pythonGatedFinalizeFamilies is the STRICT SUBSET of
+// pythonRecognisedFinalizeFamilies whose Python compute still exists behind a
+// live `if "<name>" not in skip_families:` gate in job_daily.py's
+// run_daily_metrics_finalize. This is what
+// TestEveryRecognisedFinalizeFamilyHasAPythonGate source-scans job_daily.py
+// for -- pythonRecognisedFinalizeFamilies itself stays the (unchanged)
+// registration-validation and declared-iteration-order authority for ALL
+// three families above; only the "does Python still gate on this name"
+// question narrows. ic_finalize and benchmarking (CHAOS-5194, moved to
+// finalize scope but its Python compute is still skip_families-gated) both
+// still have a live gate line.
+//
+// CHAOS-5141 deleted team_cognitive_load's Python compute entirely (not just
+// skip-gated it): buildDailyWorker refuses the WHOLE daily worker if the
+// ClickHouse connection fails to open, before dailyNativeFamilyRegistrations
+// is ever called, so team_cognitive_load's own construction-time nil-conn
+// check and its co-registration-with-ic_finalize check are both unreachable
+// in every real deployment -- a fallback to Python was never actually
+// reachable in practice, so keeping a Python gate line to agree against
+// would just be dead code agreeing with dead code. team_cognitive_load stays
+// in pythonRecognisedFinalizeFamilies (it is still a fully valid, always-
+// registerable native finalize family) but drops out of THIS list, since
+// there is no longer a Python gate line for the source-scan to find.
+var pythonGatedFinalizeFamilies = []string{"ic_finalize", BenchmarkingFamilyName}
+
 // ErrUnknownFinalizeFamily is returned when a registered finalize family is
 // not one the Python bridge gates on.
 var ErrUnknownFinalizeFamily = errors.New("daily: finalize family is not recognised by the compatibility bridge")

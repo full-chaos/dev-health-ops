@@ -152,9 +152,10 @@ def _neutralize_daily_job(
 
     monkeypatch.setattr(job_daily, "init_team_resolver", _noop_init_team_resolver)
     monkeypatch.setattr(job_daily, "get_team_resolver", lambda: _NullResolver())
-    monkeypatch.setattr(
-        job_daily, "build_repo_pattern_resolver", lambda *a, **k: _NullResolver()
-    )
+    # CHAOS-5308/CHAOS-3092: no build_repo_pattern_resolver to neutralize
+    # here anymore -- its only consumer was repo_team_resolver, deleted
+    # alongside repo_user_commit's and team_wellbeing's compute+write
+    # (monkeypatch.setattr on a nonexistent attribute raises).
     # CHAOS-5308/CHAOS-3092: no load_identity_resolver to neutralize here
     # anymore -- its only consumer was compute_daily_metrics' identity_
     # resolver argument, deleted alongside repo_user_commit's compute+write

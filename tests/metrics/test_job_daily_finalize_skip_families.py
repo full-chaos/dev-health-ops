@@ -121,7 +121,10 @@ def _neutralize_finalize(monkeypatch: Any, *, sink: Any, calls: dict[str, int]) 
     monkeypatch.setattr(job_daily, "get_metrics_dependencies", lambda: _Deps())
     # Everything after the benchmarking block belongs to CHAOS-4365, not this
     # gate.
-    monkeypatch.setattr(job_daily, "build_repo_pattern_resolver", lambda *a, **k: None)
+    # CHAOS-5308/CHAOS-3092: no build_repo_pattern_resolver to neutralize
+    # here anymore -- its only consumer was repo_team_resolver, deleted
+    # alongside repo_user_commit's and team_wellbeing's compute+write
+    # (monkeypatch.setattr on a nonexistent attribute raises).
     monkeypatch.setattr(job_daily, "discover_repos", lambda **k: [])
     # CHAOS-5084/no-straddle (#2275 v2): this used to ALSO neutralise
     # _write_compounding_risk_team_rows_for_day here (the finalize-scope

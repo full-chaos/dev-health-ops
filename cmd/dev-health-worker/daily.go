@@ -864,6 +864,26 @@ func dailyNativeFamilyRegistrations(
 				"on the Python compatibility bridge.",
 		)
 	}
+	// CHAOS-5051: team_complexity is also a finalize-scope native family
+	// (RUN-scoped, written exactly once per org/day from
+	// run_daily_metrics_finalize), but unlike team_cognitive_load it has NO
+	// co-registration dependency on ic_finalize or team_cognitive_load --
+	// its only input is repo_complexity_daily, populated by the complexity
+	// scan job on its own cadence, never by another finalize family in this
+	// same run. So it constructs independently. Same fail-open discipline as
+	// every other native family here: a refusal leaves team_complexity on
+	// the Python compatibility bridge for every run.
+	if teamComplexityExecutor, teamComplexityErr := daily.NewTeamComplexityExecutor(clickhouseConnection); teamComplexityErr == nil {
+		finalize[daily.TeamComplexityFamilyName] = teamComplexityExecutor
+	} else {
+		logger.Error(
+			"team_complexity native finalize family refused; "+
+				"the family stays on the Python compatibility "+
+				"bridge for every run. Every other daily-metrics "+
+				"family is unaffected.",
+			"error", teamComplexityErr,
+		)
+	}
 	// CHAOS-5194: benchmarking, relocated from post_bridge (see the removed
 	// registration below, and BenchmarkingFinalizeExecutor's own doc comment
 	// for why). No co-registration dependency on ic_finalize above: this

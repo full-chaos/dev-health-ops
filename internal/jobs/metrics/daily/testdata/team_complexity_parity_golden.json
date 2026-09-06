@@ -1,0 +1,24 @@
+{
+  "org_id": "00000000-0000-4000-8000-0000000ec101",
+  "day": "2026-09-04",
+  "team_complexity": [
+    {
+      "team_id": "team-a",
+      "loc_total": 1500,
+      "cyclomatic_total": 250,
+      "cyclomatic_per_kloc": 166.66666666666666,
+      "high_complexity_functions": 8,
+      "very_high_complexity_functions": 1,
+      "contributing_repo_count": 2
+    },
+    {
+      "team_id": "team-b",
+      "loc_total": 2000,
+      "cyclomatic_total": 50,
+      "cyclomatic_per_kloc": 25.0,
+      "high_complexity_functions": 1,
+      "very_high_complexity_functions": 0,
+      "contributing_repo_count": 1
+    }
+  ]
+}

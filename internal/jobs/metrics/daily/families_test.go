@@ -211,14 +211,19 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// this map -- they are pre_bridge now (asserted in their own loop above).
 	// CHAOS-5194 moved benchmarking from post_bridge to finalize (see
 	// BenchmarkingFinalizeExecutor). compounding_risk/ic_finalize/
-	// benchmarking/team_cognitive_load are the families left with a
-	// deliberate non-default phase.
+	// benchmarking/team_cognitive_load/team_complexity/compounding_risk_team
+	// are the families left with a deliberate non-default phase.
+	// team_complexity (CHAOS-5051) is finalize-scope like team_cognitive_load
+	// and ic_finalize -- see its own families.json phase_note.
+	// compounding_risk_team (CHAOS-5084) is finalize-scope too -- see the
+	// comment on the assertion above.
 	nonDefaultPhase := map[string]string{
 		"compounding_risk":      "post_bridge",
 		"benchmarking":          "finalize",
 		"ic_finalize":           "finalize",
 		"team_cognitive_load":   "finalize",
 		"compounding_risk_team": "finalize",
+		"team_complexity":       "finalize",
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

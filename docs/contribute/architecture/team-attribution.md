@@ -1910,20 +1910,29 @@ re-computation inserts a new row with a later `computed_at`; readers dedup
 per `(org_id, team_id, day)` via `argMax(<col>, computed_at)`. Never
 `ReplacingMergeTree`.
 
-**Producer runs in the finalize step, once per org/day** —
-`run_daily_metrics_finalize` (`metrics/job_daily.py`,
-`_write_team_complexity_for_day`), the same once-per-org/day stage
-CHAOS-4399 established for `compounding_risk_daily`'s team-scope rows and
-`team_cognitive_load_daily`. Unlike `team_cognitive_load_daily` (which
-aggregates the current run's already-computed in-memory rows directly),
-`team_complexity_daily` reads `repo_complexity_daily` back from ClickHouse
-via `argMax(*, computed_at)` for the org/day
-(`_fetch_repo_complexity_for_day`) — `repo_complexity_daily` is written by a
+**Producer runs in the finalize step, once per org/day** — the native Go
+executor (`internal/jobs/metrics/daily/team_complexity_native_executor.go`,
+`TeamComplexityExecutor.ComputeFinalizeFamily`, registered via
+`FinalizeHandler.SetNativeFinalizeFamilies`), the same once-per-org/day
+finalize scope `ic_finalize`/`team_cognitive_load_daily` use (CHAOS-4399's
+original once-per-org/day discipline, CHAOS-5051's native port). Unlike
+`team_cognitive_load_daily` (which aggregates the current run's
+already-computed in-memory rows directly), `team_complexity_daily` reads
+`repo_complexity_daily` back from ClickHouse via
+`argMax(tuple(...), computed_at)` for the org/day
+(`loadRepoComplexityInputsForDay`) — `repo_complexity_daily` is written by a
 separate job (`metrics complexity`) on its own cadence, not inside the daily
 partition loop, so there is no in-memory copy to reuse. A day with no
-`repo_complexity_daily` rows yet degrades to zero team rows, logged and
-counted (never raised) — same CHAOS-4246 contract every finalize family
-follows.
+`repo_complexity_daily` rows yet degrades to zero team rows (`return 0,
+nil`), logged and counted (never raised) — same CHAOS-4246 contract every
+finalize family follows. The Python compute this executor replaced
+(`job_daily.py`'s `_write_team_complexity_for_day`/
+`_fetch_repo_complexity_for_day`) was deleted outright, not skip-gated
+(CHAOS-5051, same reachability argument as CHAOS-5141's team_cognitive_load
+deletion): `buildDailyWorker` refuses the whole daily worker before any
+native family construction is attempted if the ClickHouse connection fails
+to open, so a construction-time fallback to Python was never actually
+reachable in production.
 
 **Fixtures finding (CHAOS-4365 item 3):** `dev-hops fixtures generate
 --with-metrics` never called `run_daily_metrics_finalize` before this

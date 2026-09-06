@@ -19,7 +19,6 @@ each responsible for one table family:
   RecommendationsMixin      — recommendations_daily (CHAOS-1622)
   CompoundingRiskMixin      — compounding_risk_daily (CHAOS-1641)
   TeamCognitiveLoadMixin    — team_cognitive_load_daily (CHAOS-4365 item 2 / 4347-C)
-  TeamComplexityMixin       — team_complexity_daily (CHAOS-4365 item 3 / 4347-C)
 
 Public API (stable — do not remove):
     from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
@@ -56,7 +55,6 @@ from dev_health_ops.metrics.sinks.clickhouse.recommendations import Recommendati
 from dev_health_ops.metrics.sinks.clickhouse.team_cognitive_load import (
     TeamCognitiveLoadMixin,
 )
-from dev_health_ops.metrics.sinks.clickhouse.team_complexity import TeamComplexityMixin
 from dev_health_ops.metrics.sinks.clickhouse.wellbeing import WellbeingMixin
 from dev_health_ops.metrics.sinks.clickhouse.work_graph import WorkGraphMixin
 
@@ -72,7 +70,6 @@ class ClickHouseMetricsSink(
     RecommendationsMixin,
     CompoundingRiskMixin,
     TeamCognitiveLoadMixin,
-    TeamComplexityMixin,
     DoraMixin,
     WellbeingMixin,
     InvestmentMixin,

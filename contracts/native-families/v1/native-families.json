@@ -28,7 +28,8 @@
     "benchmarking": "finalize",
     "compounding_risk_team": "finalize",
     "ic_finalize": "finalize",
-    "team_cognitive_load": "finalize"
+    "team_cognitive_load": "finalize",
+    "team_complexity": "finalize"
   },
   "remaining": {
     "capacity": "native",

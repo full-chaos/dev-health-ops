@@ -251,9 +251,20 @@ def test_daily_finalize_compat_families_matches_known_calls() -> None:
     # test_split_render_fires_through_the_actual_count_helpers_and_reverses)
     # are deleted along with it -- the "port genuinely finishing" state they
     # simulated via mocking is now the real, permanent state.
-    assert compat_families == {
-        ("remaining", "complexity"),
-    }
+    #
+    # ("remaining", "complexity") is ALSO now absent (CHAOS-5051): it was
+    # never really about remaining/complexity's own compute -- it was
+    # _write_team_complexity_for_day's call misattributed via
+    # FINALIZE_CALL_IRREGULAR_FAMILY, the only mechanical evidence available
+    # before team_complexity had its own native "daily" registration to
+    # classify under. CHAOS-5051 deletes that call (and its Python compute)
+    # entirely, so there is no finalize-scope Python call left for the AST
+    # walk to find under either name.
+    #
+    # With BOTH of the remaining two compat-family entries gone, the set this
+    # test pins is now EMPTY -- every finalize-scope family that once had a
+    # live Python remainder now has none.
+    assert compat_families == set()
 
 
 def test_finalize_completeness_guard_rejects_an_unmapped_write_call() -> None:
@@ -487,18 +498,22 @@ def test_is_compat_executor_counts_a_split_row_but_not_a_bare_native_one() -> No
     assert gen.is_compat_executor("NATIVE, post_bridge") is False
 
 
-# CHAOS-5084/no-straddle (#2275 v2): test_split_status_still_counts_as_compat_once_repo_scope_goes_native
-# and test_split_render_fires_through_the_actual_count_helpers_and_reverses
-# used to live here, using compounding_risk as the vehicle for proving the
-# split-status render/count logic handles a family whose repo scope went
-# native while its finalize scope was still real Python. compounding_risk's
-# finalize-scope Python (_write_compounding_risk_team_rows_for_day) is
-# deleted in this change -- CompoundingRiskTeamExecutor (Go) is the sole
-# writer for that scope now -- so the transitional state those tests
-# exercised no longer exists to simulate; the "port genuinely finishing"
-# end-state the second test's own docstring anticipated via mocking is now
-# the real, permanent state, pinned instead by
-# test_daily_finalize_compat_families_matches_known_calls' updated set above.
+# CHAOS-5084/no-straddle (#2275 v2) and CHAOS-5051 (#2299):
+# test_split_status_still_counts_as_compat_once_repo_scope_goes_native and
+# test_split_render_fires_through_the_actual_count_helpers_and_reverses used
+# to live here, using compounding_risk (daily namespace) and complexity
+# (remaining namespace) as the vehicles for proving the split-status
+# render/count logic handles a family whose repo scope went native while its
+# finalize scope was still real Python. Both vehicles' finalize-scope Python
+# is deleted in/around this change -- compounding_risk_team's by this PR
+# (CompoundingRiskTeamExecutor is the sole writer for that scope now) and
+# complexity's (really team_complexity's _write_team_complexity_for_day) by
+# #2299 -- so the transitional state those tests exercised no longer exists
+# to simulate in either namespace; the "port genuinely finishing" end-state
+# each test's own docstring anticipated via mocking is now the real,
+# permanent state, pinned instead by
+# test_daily_finalize_compat_families_matches_known_calls' updated
+# (now-empty) set above.
 
 
 # ---------------------------------------------------------------------------

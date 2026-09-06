@@ -466,32 +466,6 @@ if _PROMETHEUS_AVAILABLE:
     )
 
     # ---------------------------------------------------------------------------
-    # team_complexity_daily finalize-step producer (CHAOS-4365 item 3 / 4347-C)
-    # ---------------------------------------------------------------------------
-    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_ROWS_WRITTEN_TOTAL = (
-        _prometheus_client_module.Counter(
-            "dev_health_team_complexity_daily_rows_written_total",
-            "team_complexity_daily rows written by run_daily_metrics_finalize. "
-            "Decision-basis signal for the CHAOS-4365 item 3 producer: a "
-            "sustained flatline here (while repo_complexity_daily keeps "
-            "writing) means ownership resolution or the finalize wiring "
-            "regressed, without needing a fresh investigation to notice.",
-        )
-    )
-    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_CONTRIBUTING_REPO_COUNT = (
-        _prometheus_client_module.Histogram(
-            "dev_health_team_complexity_daily_contributing_repo_count",
-            "contributing_repo_count on each team_complexity_daily row "
-            "written. Same CHAOS-4399 bug-class signature as "
-            "dev_health_team_metrics_daily_repo_count: a value stuck at 1 "
-            "across every multi-repo team means the finalize-step "
-            "aggregation regressed to a per-repo write. A value of 1 is an "
-            "ordinary single-repo team, not a defect.",
-            buckets=(1, 2, 3, 5, 8, 13, 21, 34, 55),
-        )
-    )
-
-    # ---------------------------------------------------------------------------
     # Recommendations readiness gate (CHAOS-4073)
     # ---------------------------------------------------------------------------
     RECOMMENDATIONS_READINESS_GATE_FAIL_OPEN_TOTAL = _prometheus_client_module.Counter(
@@ -654,39 +628,6 @@ if _PROMETHEUS_AVAILABLE:
         "replicas keep working.",
     )
 
-    # CHAOS-4350: per-partition row volume for the ClickHouseDataLoader
-    # testops reads (test_suite_results / test_case_results). These two
-    # tables are the highest-cardinality reads in metrics/loaders/clickhouse.py
-    # -- a single load_testops_test_data call spans a rolling 30-day window
-    # org-wide with no cap -- so this histogram is what makes an
-    # unexpectedly huge partition visible before it OOMs the compatibility
-    # runner, rather than after.
-    DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _prometheus_client_module.Histogram(
-        "devhealth_testops_loader_rows_loaded",
-        "Rows returned by a single ClickHouseDataLoader testops query, by "
-        "source table (CHAOS-4350).",
-        ["table"],
-        buckets=(10, 100, 1_000, 10_000, 50_000, 100_000, 200_000, 500_000),
-    )
-
-    # Incremented whenever a testops loader read hit the hard row cap. Unlike
-    # an ordinary degrade counter, a nonzero rate here means the READ FAILED
-    # (TestopsRowCapExceeded, a MemoryError subclass) rather than returning a
-    # partial/truncated sample -- test_suite_results/test_case_results are
-    # ordered by (repo_id, run_id, ...), not event time, so letting compute
-    # proceed on a capped-but-unordered result could silently produce wrong
-    # testops metrics (drop today's rows or whole repos while keeping stale
-    # ones). See the accompanying error log line for the org/table/count.
-    DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL = (
-        _prometheus_client_module.Counter(
-            "devhealth_testops_loader_row_cap_exceeded_total",
-            "Testops loader reads that hit the hard row cap and were refused "
-            "(the read raises instead of computing on a partial result) "
-            "(CHAOS-4350).",
-            ["table"],
-        )
-    )
-
     # ---------------------------------------------------------------------------
     # Metric compatibility bridge pids/thread capacity bound (CHAOS-4317)
     # ---------------------------------------------------------------------------
@@ -741,45 +682,6 @@ if _PROMETHEUS_AVAILABLE:
         "is still running (a disabled tracer is not worth crashing the api "
         "over) but this counter is the durable, alertable signal that it is.",
         ["attempt"],
-    )
-
-    # CHAOS-4350 PR 2: per-call size of the historical-failed-case-names
-    # aggregate query, which replaced fetching every raw case row for the
-    # 29-day historical window with a `GROUP BY case_name` bounded by
-    # distinct failing test names. ROWS_FETCHED is what actually crossed the
-    # wire into Python (the aggregate row count -- small); ROWS_AGGREGATED_FROM
-    # is a separate unfiltered `count()` over the same joined window/scope
-    # (codex round 2: summing the failure-only aggregate's `occurrences`
-    # undercounted this -- it only ever reflected failed rows), i.e. the raw
-    # case-row volume this aggregation replaced -- the gap between the two IS
-    # the measured win. On the real local-stack repo that motivated this (org
-    # 70d529e0 / repo 7b9583ee, ~1.1M raw case rows/30d), ROWS_AGGREGATED_FROM
-    # tracks what PR 1 alone would still have had to materialize for this
-    # signal; ROWS_FETCHED tracks what this query actually returns.
-    DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED = _prometheus_client_module.Histogram(
-        "devhealth_testops_historical_rows_fetched",
-        "Distinct (repo_id, case_name) rows returned by the historical "
-        "failed-case-names aggregate query per call (CHAOS-4350 PR 2).",
-        buckets=(1, 10, 50, 100, 500, 1_000, 5_000, 10_000),
-    )
-    DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM = (
-        _prometheus_client_module.Histogram(
-            "devhealth_testops_historical_rows_aggregated_from",
-            "Sum of per-case-name occurrence counts behind one historical "
-            "failed-case-names aggregate call -- the raw test_case_results "
-            "row volume this query's GROUP BY replaced (CHAOS-4350 PR 2).",
-            buckets=(
-                1,
-                100,
-                1_000,
-                10_000,
-                50_000,
-                100_000,
-                500_000,
-                1_000_000,
-                2_000_000,
-            ),
-        )
     )
 
     # CHAOS-4602 fork 2: the bounded await
@@ -900,13 +802,7 @@ else:
     TELEMETRY_ORG_ID_REJECTED_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
-    DEV_HEALTH_TESTOPS_LOADER_ROWS_LOADED = _noop_histogram()
-    DEV_HEALTH_TESTOPS_LOADER_ROW_CAP_EXCEEDED_TOTAL = _noop_counter()
-    DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_FETCHED = _noop_histogram()
-    DEV_HEALTH_TESTOPS_HISTORICAL_ROWS_AGGREGATED_FROM = _noop_histogram()
     DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT = _noop_histogram()
-    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_ROWS_WRITTEN_TOTAL = _noop_counter()
-    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_CONTRIBUTING_REPO_COUNT = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = _noop_histogram()
     DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE = _noop_gauge()
@@ -1132,24 +1028,6 @@ def record_team_metrics_daily_repo_rows(rows: list[Any]) -> None:
         repos_by_team.setdefault(row.team_id, set()).add(row.repo_id)
     for repo_ids in repos_by_team.values():
         DEV_HEALTH_TEAM_METRICS_DAILY_REPO_COUNT.observe(len(repo_ids))
-
-
-def record_team_complexity_daily_rows(rows: list[Any]) -> None:
-    """Observe team_complexity_daily's rows-written counter and per-row
-    contributing_repo_count histogram (CHAOS-4365 item 3). ``rows`` is the
-    exact list passed to ``write_team_complexity_daily`` -- every row must
-    carry a ``contributing_repo_count`` attribute
-    (``TeamComplexityDailyRecord`` does). Call once per write, after the
-    sink call, never per-sink (a dual-sink write would otherwise double
-    every observation) -- mirrors ``record_team_metrics_daily_repo_rows``.
-    """
-    if not rows:
-        return
-    DEV_HEALTH_TEAM_COMPLEXITY_DAILY_ROWS_WRITTEN_TOTAL.inc(len(rows))
-    for row in rows:
-        DEV_HEALTH_TEAM_COMPLEXITY_DAILY_CONTRIBUTING_REPO_COUNT.observe(
-            row.contributing_repo_count
-        )
 
 
 def record_metrics_family_zero_rows(*, family: str, cause: str) -> None:

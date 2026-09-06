@@ -15,7 +15,7 @@ func TestDestinationSelectorsExposeOnlyTheirOwnEligibilityTags(t *testing.T) {
 	// for. A single `want` reused for both would have let the new GitHub-effect
 	// surfaces slip into the Linear retry policy by construction.
 	shared := []string{
-		"ai_attribution", "estimate_coverage_metrics_daily",
+		"ai_attribution",
 		"investment_classifications_daily", "investment_metrics_daily",
 		"issue_type_metrics_daily", "sprints", "work_item_cycle_times",
 		"work_item_dependencies", "work_item_interactions",
@@ -23,15 +23,20 @@ func TestDestinationSelectorsExposeOnlyTheirOwnEligibilityTags(t *testing.T) {
 		"work_item_state_durations_daily", "work_item_team_attributions",
 		"work_item_transitions", "work_item_user_metrics_daily", "work_items",
 	}
-	// GitHub effect construction owns two more: the Projects V2 route produces
-	// board memberships and the `projects` catalogue row that makes their
-	// destination resolvable.
+	// GitHub effect construction owns three more: the Projects V2 route
+	// produces board memberships and the `projects` catalogue row that makes
+	// their destination resolvable; estimate_coverage_metrics_daily is
+	// GitHub-effect-tagged for a separate, still-valid Go-route reason (out of
+	// scope here) but CHAOS-5323 deleted its Python compute entirely, so no
+	// Linear expired-lease retry safety proof exists for it either -- same
+	// falseness-is-the-claim shape as the other two.
 	// Inserted in ALPHABETICAL position, matching the manifest's declaration
 	// order -- which is the order effects are built and ledger-indexed in, so
 	// the two must not drift. TestTheDestinationManifestIsAlphabetical pins the
 	// invariant itself.
 	wantGitHub := slices.Concat(
-		shared[:5], []string{"project_membership_transitions", "projects"}, shared[5:],
+		shared[:1], []string{"estimate_coverage_metrics_daily"}, shared[1:4],
+		[]string{"project_membership_transitions", "projects"}, shared[4:],
 	)
 	if got := GitHubEffectDestinations(); !slices.Equal(got, wantGitHub) {
 		t.Fatalf("GitHub effect destinations = %v, want %v", got, wantGitHub)
@@ -47,7 +52,7 @@ func TestDestinationSelectorsExposeOnlyTheirOwnEligibilityTags(t *testing.T) {
 	// LinearExpiredLeaseRetry:true would only have to update one literal to go
 	// green, and the policy would silently grow two surfaces nobody reasoned
 	// about.
-	for _, destination := range []string{"project_membership_transitions", "projects"} {
+	for _, destination := range []string{"estimate_coverage_metrics_daily", "project_membership_transitions", "projects"} {
 		if slices.Contains(LinearExpiredLeaseRetryDestinations(), destination) {
 			t.Fatalf("%q entered the Linear expired-lease retry policy with no safety proof", destination)
 		}

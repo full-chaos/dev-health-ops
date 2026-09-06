@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,7 +13,7 @@ import (
 
 // isNativeGithubAppEvent reports whether eventType is one of the two GitHub
 // App lifecycle events WebhookHandler.Work handles entirely inside this
-// process (CHAOS-5312 PR1) instead of dispatching to the Python HTTP bridge.
+// process (CHAOS-5318 PR1) instead of dispatching to the Python HTTP bridge.
 // Every other github event type (push, pull_request, issue_*, deployment,
 // workflow_run, ...) is unaffected: it still dispatches to Python's
 // _process_github_event, which still triggers the full-repo sync pipeline --
@@ -73,6 +74,13 @@ func (store *PostgresStore) UpsertGithubAppEvent(
 	}
 
 	if eventType == "marketplace_purchase" {
+		// CHAOS-5318 r1 F3: entitlement mapping (CHAOS-2236) is still
+		// deferred, matching Python's own no-op branch for this event type
+		// -- but a silent no-op with zero telemetry is indistinguishable
+		// from a bug when an operator is tracing installation events, so
+		// this logs the receipt explicitly.
+		slog.InfoContext(ctx, "github app marketplace_purchase event received (no-op, entitlement mapping deferred CHAOS-2236)",
+			"event_type", eventType)
 		return GithubAppEventResult{Processed: true, Action: eventType}, nil
 	}
 

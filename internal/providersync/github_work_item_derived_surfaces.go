@@ -220,12 +220,17 @@ func buildWorkItemDerivedSurfacesForProvider(
 }
 
 // buildGitHubEstimateCoverageMetricsDaily adapts providersync's row shape onto
-// the shared compute_estimate_coverage_metrics_daily port
-// (internal/jobs/metrics/workitemmetrics.ComputeEstimateCoverage). The
-// arithmetic moved there under CHAOS-4283 so the metrics.daily_partition native
-// executor and this sync-time deriver cannot drift apart; the oracle pairs
-// {github,gitlab,jira,linear}_work-items_estimate-coverage.py continuing to pass
-// unchanged is the proof the move was behaviour-neutral.
+// the shared workitemmetrics.ComputeEstimateCoverage port. The arithmetic
+// moved there under CHAOS-4283 so the metrics.daily_partition native executor
+// and this sync-time deriver cannot drift apart; the frozen golden parity
+// test (TestComputeEstimateCoverageMatchesPythonGolden,
+// internal/jobs/metrics/workitemmetrics) was the proof the move was
+// behaviour-neutral against production Python at the time. The oracle pairs
+// {github,gitlab,jira,linear}_work-items_estimate-coverage.py that used to
+// re-verify this against LIVE Python on every run were deleted by
+// CHAOS-5323/CHAOS-3092 alongside compute_estimate_coverage_metrics_daily
+// itself (work_item_estimate is fully native, no remaining Python caller
+// left to compare against).
 //
 // Two things stay HERE, deliberately: tenancy assertion (a providersync
 // concern), and the millisecond computed_at stamp -- that truncation exists so

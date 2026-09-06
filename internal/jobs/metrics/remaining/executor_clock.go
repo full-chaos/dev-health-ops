@@ -95,3 +95,12 @@ func (executor *RecommendationsExecutor) nowOrRefuse() (time.Time, error) {
 func (executor *MembershipExecutor) nowOrRefuse() (time.Time, error) {
 	return clockOrRefuse("MembershipExecutor", executor.nowUTC)
 }
+
+// nowOrRefuse yields this executor's instant, refusing an uninjected clock.
+//
+// NewComplexityExecutor sets nowUTC unconditionally on its only
+// non-nil-returning path, same as every other kind above, so a nil clock
+// here is exactly as unreachable in production as it is for them.
+func (executor *ComplexityExecutor) nowOrRefuse() (time.Time, error) {
+	return clockOrRefuse("ComplexityExecutor", executor.nowUTC)
+}

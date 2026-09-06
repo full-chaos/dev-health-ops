@@ -194,7 +194,10 @@ _LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES = frozenset(
 # this job's write surface entirely -- their compute+write calls are deleted
 # from run_work_items_sync_job (native Go executors + providersync ingest
 # derivation are the only producers now). Their idempotency-mechanism notes
-# are moot for this job; the tables themselves are untouched.
+# are moot for THIS JOB, but each stays a proven-safe RETRY TARGET below,
+# same shape as manual_attribution_fallbacks above: the ClickHouse table's
+# RMT/argMax dedup shape is unaffected by which process writes it, so leaving
+# the write-surfaces set above does not mean leaving this wider registry.
 # Retry stays disabled for any unit whose write set is NOT a subset of this set.
 _CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES = frozenset(
     {
@@ -205,6 +208,12 @@ _CLICKHOUSE_RETRY_PROVEN_SAFE_SURFACES = frozenset(
         "work_item_interactions",
         "sprints",
         "ai_attribution",
+        "work_item_metrics_daily",
+        "estimate_coverage_metrics_daily",
+        "work_item_user_metrics_daily",
+        "work_item_cycle_times",
+        "work_item_state_durations_daily",
+        "work_item_team_attributions",
         "issue_type_metrics_daily",
         "investment_metrics_daily",
         "investment_classifications_daily",

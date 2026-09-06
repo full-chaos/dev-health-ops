@@ -19,7 +19,6 @@ from datetime import datetime, timedelta, timezone
 from dev_health_ops.metrics.schemas import (
     WorkGraphEdgeRecord,
     WorkGraphIssuePRRecord,
-    WorkGraphPRCommitRecord,
     WorkGraphProjectionRunRecord,
 )
 from dev_health_ops.metrics.sinks.factory import create_sink
@@ -28,8 +27,6 @@ from dev_health_ops.work_graph.extractors.text_parser import (
     extract_github_issue_refs,
     extract_gitlab_issue_refs,
     extract_jira_keys,
-    extract_pr_refs,
-    extract_squash_pr_refs,
 )
 from dev_health_ops.work_graph.ids import (
     generate_commit_id,
@@ -44,7 +41,6 @@ from dev_health_ops.work_graph.models import (
     Provenance,
     WorkGraphEdge,
     WorkGraphIssuePR,
-    WorkGraphPRCommit,
 )
 
 logger = logging.getLogger(__name__)
@@ -200,19 +196,6 @@ class WorkGraphBuilder:
             org_id=self.config.org_id,
         )
 
-    def _pr_commit_to_record(self, link: WorkGraphPRCommit) -> WorkGraphPRCommitRecord:
-        """Convert WorkGraphPRCommit to WorkGraphPRCommitRecord for sink."""
-        return WorkGraphPRCommitRecord(
-            repo_id=link.repo_id,
-            pr_number=link.pr_number,
-            commit_hash=link.commit_hash,
-            confidence=link.confidence,
-            provenance=link.provenance.value,
-            evidence=link.evidence,
-            last_synced=link.last_synced or self._now,
-            org_id=self.config.org_id,
-        )
-
     def _write_edges(self, edges: list[WorkGraphEdge]) -> int:
         """Write edges via the sink."""
         if not edges:
@@ -227,13 +210,6 @@ class WorkGraphBuilder:
             return
         records = [self._issue_pr_to_record(lnk) for lnk in links]
         self.sink.write_work_graph_issue_pr(records)
-
-    def _write_pr_commit_links(self, links: list[WorkGraphPRCommit]) -> None:
-        """Write PR-commit links via the sink."""
-        if not links:
-            return
-        records = [self._pr_commit_to_record(lnk) for lnk in links]
-        self.sink.write_work_graph_pr_commit(records)
 
     @staticmethod
     def _parse_provenance(value: str | None) -> Provenance:
@@ -473,13 +449,11 @@ class WorkGraphBuilder:
             issue_pr_explicit
         )
 
-        # 4b. Derive PR->commit links from commit messages (fills fast path).
-        # Without this, work_graph_pr_commit is only ever written by fixtures, so
-        # real orgs see no commits under PRs in the /work GraphView.
-        self._derive_pr_commit_links()
-
-        # 5. Build PR->commit edges from fast-path table (prerequisite)
-        stats["pr_commit_edges"] = self._build_pr_commit_edges_from_fast_path()
+        # 4b/5. PR->commit link derivation and fast-path edges: CHAOS-5264
+        # ported both to Go (internal/jobs/workgraph/prcommit), wired as
+        # native pre-steps ahead of this bridge call, not here. stats stays at
+        # its 0 default (line 441) -- the native pre-steps report their own
+        # counts through the ledger, same as issue_pr_links (CHAOS-5249).
 
         # 6. Commit->file edges are handled by view over git_commit_stats
         stats["commit_file_edges"] = self._count_commit_file_edges()
@@ -1591,271 +1565,6 @@ class WorkGraphBuilder:
         count = self._write_edges(edges)
         logger.info("Created %d issue->PR edges from fast-path table", count)
         return links, count
-
-    def _derive_pr_commit_links(self) -> int:
-        """Derive PR->commit fast-path links from already-synced git tables.
-
-        Mirrors the issue<->PR self-fill: the live OAuth-provider sync writes raw
-        ``git_pull_requests`` and ``git_commits`` but never populates
-        ``work_graph_pr_commit`` (only fixtures did), so the ``CONTAINS`` edges
-        built by :meth:`_build_pr_commit_edges_from_fast_path` were empty for real
-        orgs. Here we parse commit messages for PR/MR numbers via two tiers:
-
-        1. **Explicit merge keywords** (``Merge pull request #N``,
-           ``See merge request grp/proj!N``) -- unambiguous, persisted with
-           ``provenance=explicit_text``, ``confidence=0.9`` and
-           ``evidence='commit_message_pr_ref'`` (see :func:`extract_pr_refs`).
-        2. **Squash-merge subject suffix** (``<subject> (#N)``) -- GitHub's
-           *squash and merge* default, which leaves no explicit merge keyword.
-           This form is ambiguous with a hand-authored issue reference, so it is
-           only promoted when ``N`` matches a *known* PR number in the **same
-           (org, repo)**, and is then tagged distinctly:
-           ``provenance=heuristic``, ``confidence=0.6`` and
-           ``evidence='commit_message_squash_pr_ref'`` so downstream consumers
-           can weight or filter it. Without this tier, squash-merge orgs lose
-           nearly all PR->commit edges (CHAOS-2435: live org a78c1a6a had only
-           22 explicit-merge edges while ~3218 squash commits were discarded).
-
-        Bare ``#N`` references are never accepted (indistinguishable from issue
-        mentions). Re-running is idempotent: ``work_graph_pr_commit`` is a
-        ReplacingMergeTree keyed on (org_id, repo_id, pr_number, commit_hash).
-
-        Tenant isolation: known PRs are keyed by ``(org_id, repo_id)`` and a
-        commit is only ever matched against PRs in its *own* org, so a squash
-        ``(#N)`` in org A can never link to org B's PR #N even when ``repo_id``
-        collides across tenants (CHAOS-2189 mirror).
-
-        Returns:
-            Number of PR->commit links written.
-        """
-        logger.info("Deriving PR->commit links from commit messages...")
-
-        # Known PR numbers per (org, repo), so we only link to PRs that actually
-        # exist *within the same tenant*. ``repo_id`` can collide across orgs, so
-        # org_id MUST be part of the key (tenant isolation).
-        pr_query = """
-        SELECT
-            org_id,
-            repo_id,
-            number
-        FROM git_pull_requests
-        """
-        pr_where: list[str] = []
-        if self.config.repo_id:
-            pr_where.append(f"repo_id = '{self.config.repo_id}'")
-        if self.config.org_id:
-            pr_where.append(f"org_id = '{self.config.org_id}'")
-        if pr_where:
-            pr_query += " WHERE " + " AND ".join(pr_where)
-
-        pr_rows = self.sink.query_dicts(pr_query, {})
-        if not pr_rows:
-            logger.info("No PRs found; skipping PR->commit derivation")
-            return 0
-
-        known_prs: dict[tuple[str, str], set[int]] = {}
-        for pr_row in pr_rows:
-            repo_id = pr_row.get("repo_id")
-            number = pr_row.get("number")
-            if repo_id is None or number is None:
-                continue
-            org_key = str(pr_row.get("org_id") or "")
-            known_prs.setdefault((org_key, str(repo_id)), set()).add(int(number))
-
-        commit_query = """
-        SELECT
-            org_id,
-            repo_id,
-            hash,
-            message,
-            author_when
-        FROM git_commits
-        WHERE message IS NOT NULL AND message != ''
-        """
-        where_clauses = []
-        if self.config.from_date:
-            where_clauses.append(
-                f"author_when >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
-            )
-        if self.config.to_date:
-            where_clauses.append(
-                f"author_when <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
-            )
-        if self.config.repo_id:
-            where_clauses.append(f"repo_id = '{self.config.repo_id}'")
-        if self.config.org_id:
-            where_clauses.append(f"org_id = '{self.config.org_id}'")
-        if where_clauses:
-            commit_query += " AND " + " AND ".join(where_clauses)
-
-        commit_rows = self.sink.query_dicts(commit_query, {})
-        logger.info("Found %d commits to scan for PR refs", len(commit_rows))
-        if not commit_rows:
-            return 0
-
-        # Two extraction tiers, processed in order so the higher-confidence
-        # explicit-merge link wins the (org, repo, pr, hash) dedup over a squash
-        # match for the same pair:
-        #   1. explicit merge keywords  -> explicit_text, 0.9
-        #   2. squash subject "(#N)"    -> heuristic, 0.6 (ambiguous; corroborated
-        #      only against known PRs in the same (org, repo), tagged distinctly)
-        link_tiers: tuple[
-            tuple[Callable[[str], list[int]], float, Provenance, str], ...
-        ] = (
-            (extract_pr_refs, 0.9, Provenance.EXPLICIT_TEXT, "commit_message_pr_ref"),
-            (
-                extract_squash_pr_refs,
-                0.6,
-                Provenance.HEURISTIC,
-                "commit_message_squash_pr_ref",
-            ),
-        )
-
-        links: list[WorkGraphPRCommit] = []
-        seen: set[tuple[str, str, int, str]] = set()
-        for commit_row in commit_rows:
-            repo_id = commit_row.get("repo_id")
-            commit_hash = commit_row.get("hash")
-            message = commit_row.get("message") or ""
-
-            if not commit_hash or repo_id is None:
-                continue
-
-            repo_id_str = str(repo_id)
-            commit_hash_str = str(commit_hash)
-            org_key = str(commit_row.get("org_id") or "")
-            # Only PRs in this commit's *own* (org, repo) are candidates --
-            # never another tenant's PRs, even on a repo_id collision.
-            repo_prs = known_prs.get((org_key, repo_id_str))
-            if not repo_prs:
-                continue
-
-            for extractor, confidence, provenance, evidence in link_tiers:
-                for pr_number in extractor(message):
-                    if pr_number not in repo_prs:
-                        continue
-                    key = (org_key, repo_id_str, pr_number, commit_hash_str)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    links.append(
-                        WorkGraphPRCommit(
-                            repo_id=uuid.UUID(repo_id_str),
-                            pr_number=pr_number,
-                            commit_hash=commit_hash_str,
-                            confidence=confidence,
-                            provenance=provenance,
-                            evidence=evidence,
-                            last_synced=self._now,
-                        )
-                    )
-
-        self._write_pr_commit_links(links)
-        logger.info("Derived %d PR->commit links from commit messages", len(links))
-        return len(links)
-
-    def _build_pr_commit_edges_from_fast_path(self) -> int:
-        logger.info(
-            "Building PR->commit edges from dev_health_ops.work_graph_pr_commit..."
-        )
-
-        # Tenant isolation: ``git_commits`` carries an ``org_id`` column
-        # (migration 027) and ``repo_id``/``hash`` values can collide across
-        # tenants (documented in metrics/loaders/ai_impact.py). The commit side
-        # of this join MUST be scoped to the same org as the PR-commit row, or a
-        # tenant-scoped build could satisfy the commit from another org and stamp
-        # a cross-tenant edge into the current org's work_graph_edges. Matching
-        # ``c.org_id = p.org_id`` keeps both sides within one tenant. The
-        # ``p.org_id`` WHERE filter below then pins it to the selected org.
-        query = """
-        SELECT
-            p.repo_id,
-            p.pr_number,
-            p.commit_hash,
-            p.confidence,
-            p.provenance,
-            p.evidence,
-            p.last_synced,
-            c.author_when
-        FROM work_graph_pr_commit AS p FINAL
-        INNER JOIN git_commits AS c FINAL ON (
-            toString(p.repo_id) = toString(c.repo_id)
-            AND p.commit_hash = c.hash
-            AND toString(p.org_id) = toString(c.org_id)
-        )
-        """
-        where_parts: list[str] = []
-        if self.config.repo_id:
-            where_parts.append(f"p.repo_id = '{self.config.repo_id}'")
-        if self.config.org_id:
-            where_parts.append(f"p.org_id = '{self.config.org_id}'")
-        if self.config.from_date:
-            where_parts.append(
-                f"c.author_when >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
-            )
-        if self.config.to_date:
-            where_parts.append(
-                f"c.author_when <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
-            )
-        if where_parts:
-            query += " WHERE " + " AND ".join(where_parts)
-
-        rows = self.sink.query_dicts(query, {})
-        logger.info("Found %d rows in work_graph_pr_commit", len(rows))
-        if not rows:
-            return 0
-
-        edges: list[WorkGraphEdge] = []
-        for row in rows:
-            repo_id = row.get("repo_id")
-            pr_number = int(row.get("pr_number") or 0)
-            commit_hash = str(row.get("commit_hash"))
-            confidence = float(row.get("confidence") or 1.0)
-            provenance = row.get("provenance")
-            evidence = row.get("evidence")
-            author_when = row.get("author_when")
-
-            repo_uuid = uuid.UUID(str(repo_id))
-            pr_id = generate_pr_id(repo_uuid, pr_number)
-            commit_id = generate_commit_id(repo_uuid, commit_hash)
-            edge_id = generate_edge_id(
-                NodeType.PR,
-                pr_id,
-                EdgeType.CONTAINS,
-                NodeType.COMMIT,
-                commit_id,
-            )
-
-            # Ensure timezone
-            event_ts = author_when
-            if isinstance(event_ts, str):
-                event_ts = datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
-            if event_ts and event_ts.tzinfo is None:
-                event_ts = event_ts.replace(tzinfo=timezone.utc)
-            if not event_ts:
-                event_ts = self._now
-
-            edges.append(
-                WorkGraphEdge(
-                    edge_id=edge_id,
-                    source_type=NodeType.PR,
-                    source_id=pr_id,
-                    target_type=NodeType.COMMIT,
-                    target_id=commit_id,
-                    edge_type=EdgeType.CONTAINS,
-                    repo_id=repo_uuid,
-                    provenance=self._parse_provenance(str(provenance)),
-                    confidence=confidence,
-                    evidence=str(evidence or "pr_commit_fast_path"),
-                    discovered_at=self._now,
-                    last_synced=self._now,
-                    event_ts=event_ts,
-                )
-            )
-
-        count = self._write_edges(edges)
-        logger.info("Created %d PR->commit edges from fast-path table", count)
-        return count
 
     def _count_commit_file_edges(self) -> int:
         """Count commit->file edges."""

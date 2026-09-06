@@ -242,8 +242,19 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4285 (Done)",
     },
     "ai_impact": {
-        "citation": "Python: `ai_impact.py:312 compute_ai_impact_metrics_daily`",
-        "ticket": "CHAOS-4280",
+        # CHAOS-5234/CHAOS-3092: this citation was already stale before this
+        # PR -- AIImpactExecutor (native Go) has computed this family since
+        # CHAOS-4280, but the citation here still described the old Python
+        # compute path. This PR deletes job_daily.py's own reference to
+        # compute_ai_impact_metrics_daily AND the function itself (from
+        # metrics/ai_impact.py), along with its Go bit-exact oracle rot
+        # guard (TestAIImpactMatchesLivePythonProduction +
+        # testdata/python_ai_impact_oracle.py) and its own dedicated tests
+        # -- codegraph_explore + rg confirmed those were its only real
+        # callers once job_daily.py's own reference was removed, so the old
+        # citation would now point at code that no longer exists.
+        "citation": "Go: `internal/jobs/metrics/daily/ai_impact_native_executor.go` (`AIImpactExecutor`)",
+        "ticket": "CHAOS-4280 (Done)",
     },
     "ai_workflow": {
         # CHAOS-5153's citation fix (job_daily.py:258, not ai_workflow.py:212
@@ -268,20 +279,17 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4287",
     },
     "team_cognitive_load": {
-        # CHAOS-5153's citation-drift fix (on main, merged forward here)
-        # updated this entry's ticket from a stale "NONE found" to
-        # CHAOS-5141 -- but that fix predates CHAOS-5141's own native port
-        # landing on THIS branch, so its citation text still described the
-        # pre-port, wholly-Python state. Keeping this branch's own
-        # (already-correct, already-CHAOS-5141-ticketed) citation: the
-        # native executor + ClickHouse loader, with the Python function
-        # retained only as the skip_families-gated compat fallback.
+        # CHAOS-5141: fully native, no Python remainder at all. The
+        # skip_families-gated compat fallback this citation used to mention
+        # was DELETED (not merely gated) once reachability analysis proved
+        # it: buildDailyWorker refuses the whole daily worker before any
+        # native family construction is attempted if the ClickHouse
+        # connection fails to open, so a construction-time fallback to
+        # Python was never actually reachable in production.
         "citation": (
             "Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` "
             "(finalize scope, co-registered with ic_finalize) + "
-            "`team_cognitive_load_clickhouse.go`. Python "
-            "`team_cognitive_load.py build_team_cognitive_load_rows_for_day` is retained "
-            "as the compatibility-bridge fallback, gated behind `skip_families`"
+            "`team_cognitive_load_clickhouse.go`. No Python remainder."
         ),
         "ticket": "CHAOS-5141",
     },
@@ -520,40 +528,35 @@ FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, tuple[str, str]] = {
     "_write_team_complexity_for_day": ("remaining", "complexity"),
 }
 
-# CHAOS-5141: `_write_team_cognitive_load_for_day` is the FIRST call this
-# generator has seen that is the INVERSE of ic_finalize's shape above --
-# where ic_finalize's calls were irregular-NAMED but genuinely dormant
-# (removable from the ledger, falling through to None), this call fits the
-# `_write_<family>_..._for_day` naming convention EXACTLY (it naturally
-# resolves to ("daily", "team_cognitive_load") via that convention, with no
-# ledger entry needed or possible to remove) -- but it is JUST AS DORMANT:
-# the entire call is gated behind `if "team_cognitive_load" not in
-# skip_families:` in job_daily.py (CHAOS-5141's own routing-only change,
-# team_cognitive_load_native_executor.go's co-registration ruling), the
-# identical dormant-bridge-fallback shape every other wholly-native family
-# uses. Left unhandled, the naming-convention match alone would render the
-# same misleading "NATIVE (repo) / COMPAT-Python (finalize)" split label
-# ic_finalize used to get -- implying a repo-scope component that does not
-# exist for a family whose ENTIRE scope is finalize. This dict names calls
-# that WOULD resolve via the naming convention but must be forced dormant
-# instead; checked in `_finalize_call_family` before the naming-convention
-# branch runs.
+# CHAOS-5141 (historical): `_write_team_cognitive_load_for_day` was once the
+# FIRST call this generator saw that fit the `_write_<family>_..._for_day`
+# naming convention exactly while being fully dormant (skip_families-gated,
+# never actually reachable in production -- see the reachability analysis in
+# team_cognitive_load's DAILY_CITATION_LEDGER entry above). That call, and
+# its entire Python compute path, has since been DELETED outright rather than
+# left dormant -- job_daily.py no longer has any call this generator's AST
+# walk could even find, so no entry is needed here for it anymore.
 #
-# #2255 confirmation-pass finding (P2, CHAOS-5141): the first version of
-# this was a bare `set[str]` -- forcing a call dormant with NO check that
-# its (namespace, family) is still a LIVE family name, unlike
+# This dict stays as GENERIC infrastructure for the same class recurring on a
+# future family: a call that fits the naming convention exactly but is
+# provably dormant (skip_families-gated with no reachable fallback) and must
+# be forced to resolve as None instead of the naming convention's own
+# ("daily"/"remaining", family) guess. Currently empty -- see
+# FINALIZE_CALL_IRREGULAR_FAMILY above for the sibling (irregular-named,
+# also dormant) case, which DOES have a live entry (team_complexity's old
+# call name maps to "complexity" in the remaining namespace).
+#
+# #2255 confirmation-pass finding (P2, CHAOS-5141), kept for history: the
+# first version of this was a bare `set[str]` -- forcing a call dormant with
+# NO check that its (namespace, family) was still a LIVE family name, unlike
 # FINALIZE_CALL_IRREGULAR_FAMILY's dict shape, which validates exactly that
 # in both _finalize_call_family and _assert_no_stale_finalize_ledger_entries.
-# A rename/removal of team_cognitive_load from families.json while
-# job_daily.py's call kept its old name would have silently kept returning
-# None here -- correct-looking output for the wrong reason, no signal that
-# the mapping had gone stale. Now a dict, mapping call name to the exact
-# (namespace, family) it forces dormant, validated the same way the
-# irregular ledger is (see both call sites below): renaming/removing the
-# family raises SystemExit instead of staying silently dormant.
-FINALIZE_CALL_DORMANT_SKIP_GATED: dict[str, tuple[str, str]] = {
-    "_write_team_cognitive_load_for_day": ("daily", "team_cognitive_load"),
-}
+# Fixed to a dict, mapping call name to the exact (namespace, family) it
+# forces dormant, validated the same way the irregular ledger is (see both
+# call sites below) -- renaming/removing the mapped family now raises
+# SystemExit instead of staying silently dormant. That validation logic
+# stays in place even with the dict empty, ready for the next instance.
+FINALIZE_CALL_DORMANT_SKIP_GATED: dict[str, tuple[str, str]] = {}
 
 
 def load_finalize_write_calls() -> set[str]:

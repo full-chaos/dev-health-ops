@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/prcommit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
@@ -170,6 +171,28 @@ func workgraphBuildPreSteps(
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 
+	prCommitLoader, prCommitLoaderErr := prcommit.NewLoader(connection)
+	if prCommitLoaderErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	prCommitWriter, prCommitWriterErr := prcommit.NewWriter(connection)
+	if prCommitWriterErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	prCommitService, prCommitServiceErr := prcommit.NewService(prCommitLoader, prCommitWriter, connection, logger)
+	if prCommitServiceErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	prCommitSharedWindow := newSharedPRCommitWindow()
+	prCommitLinksStep, prCommitLinksStepErr := newPRCommitLinksPreStep(prCommitService, prCommitSharedWindow)
+	if prCommitLinksStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	prCommitEdgesStep, prCommitEdgesStepErr := newPRCommitEdgesPreStep(prCommitService, prCommitSharedWindow)
+	if prCommitEdgesStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
 	flagGuardsStep, flagGuardsStepErr := newFlagGuardsEdgesPreStep(connection)
 	if flagGuardsStepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
@@ -179,7 +202,9 @@ func workgraphBuildPreSteps(
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 
-	steps := []workgraph.NativePreStep{step, flagGuardsStep, operationalIncidentStep}
+	steps := []workgraph.NativePreStep{
+		step, prCommitLinksStep, prCommitEdgesStep, flagGuardsStep, operationalIncidentStep,
+	}
 
 	// The constructed steps must match the DECLARED order exactly. Without
 	// this, the declaration would be a comment: a step could be added to the
@@ -243,13 +268,21 @@ func buildPostStepOrder() []string {
 // the actual dispatch" split daily_native_family_registration_test.go uses.
 //
 // Appending here is a real decision, not a formality: see the ordering
-// invariant on workgraph.NativePreStep. "flag_guards_edges" and
-// "operational_incident_edges" (CHAOS-4924) read neither work_graph_issue_pr
-// nor any table another pre-step writes, so their position relative to
-// "issue_pr_links" is free -- placed last, preserving Python's own relative
-// order between the two of them (builder.py:468/470).
+// invariant on workgraph.NativePreStep. "pr_commit_edges" (CHAOS-5264) is the
+// realized case that invariant was written for: it READS work_graph_pr_commit,
+// which "pr_commit_links" WRITES, so it must register strictly after it --
+// unlike issue_pr_links' still-Python fast-path half, both halves of the
+// PR<->commit straddle are native here, registered back to back.
+// "flag_guards_edges" and "operational_incident_edges" (CHAOS-4924) read
+// neither work_graph_issue_pr nor any table another pre-step writes, so
+// their position relative to the other four is free -- placed last,
+// preserving Python's own relative order between the two of them
+// (builder.py:468/470).
 func buildPreStepOrder() []string {
-	return []string{"issue_pr_links", "flag_guards_edges", "operational_incident_edges"}
+	return []string{
+		"issue_pr_links", "pr_commit_links", "pr_commit_edges",
+		"flag_guards_edges", "operational_incident_edges",
+	}
 }
 
 // addWorkgraphWorker routes each kind to its executor. `executor` is the

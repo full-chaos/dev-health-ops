@@ -83,7 +83,7 @@ func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
 		}
 	})
 
-	t.Run("an ordinary failure still fails open", func(t *testing.T) {
+	t.Run("an ordinary failure now also fails the partition (CHAOS-5243)", func(t *testing.T) {
 		observer := &recordingObserver{}
 		handler := &PartitionHandler{
 			nativeFamilies: map[string]NativeFamilyExecutor{
@@ -96,18 +96,27 @@ func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
 
 		skip, err := handler.computeNativeFamilies(context.Background(), Run{ID: "r"}, Partition{ID: "p"})
 
-		if len(skip) != 0 {
-			t.Fatalf("skip = %v, want empty -- a family that wrote NOTHING must fail open to "+
-				"the bridge, which is the whole native-family contract", skip)
+		// CHAOS-5243 (chris, "it should fail loudly so we find it"): the
+		// CHAOS-4276 fail-open-to-Python-bridge path for an ORDINARY
+		// (non-partial) refusal is DELETED. A family that wrote nothing is
+		// now treated the same as one that wrote SOMETHING and then
+		// failed: excluded from the bridge's recompute and held incomplete.
+		if len(skip) != 1 || skip[0] != "benchmarking" {
+			t.Fatalf("skip = %v, want [benchmarking] -- an ordinary refusal is now excluded "+
+				"from the bridge's recompute too, same as a partial write", skip)
 		}
 		if observer.outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
-			t.Errorf("outcome = %q, want %q", observer.outcome,
-				jobruntime.DailyMetricsNativeFamilyOutcomeRefused)
+			t.Errorf("outcome = %q, want %q -- the OUTCOME stays distinguished from PartialWrite "+
+				"(nothing was written), only the partition-level disposition changed",
+				observer.outcome, jobruntime.DailyMetricsNativeFamilyOutcomeRefused)
 		}
-		// CHAOS-5078 codex round 3: an ordinary refusal must NOT hold the
-		// partition -- only a partial write does.
-		if err != nil {
-			t.Fatalf("err = %v, want nil -- an ordinary refusal stays fail-open at the partition level too", err)
+		if observer.rows != 0 {
+			t.Errorf("rows = %d, want 0 -- genuinely nothing was written", observer.rows)
+		}
+		if !errors.Is(err, ErrPreBridgeFamilyIncomplete) {
+			t.Fatalf("err = %v, want it to wrap ErrPreBridgeFamilyIncomplete -- an ordinary "+
+				"refusal now holds the partition incomplete, exactly like a partial write does "+
+				"(CHAOS-5243)", err)
 		}
 	})
 }

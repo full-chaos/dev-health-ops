@@ -20,7 +20,6 @@ from dev_health_ops.metrics.active_incidents import (
     active_incidents_query,
     deduplicate_active_incidents,
 )
-from dev_health_ops.metrics.ai_impact import compute_ai_impact_metrics_daily
 from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
@@ -80,12 +79,8 @@ from dev_health_ops.metrics.quality import (
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
 from dev_health_ops.metrics.schemas import (
     FileComplexitySnapshot,
-    TeamMetricsDailyRecord,
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-from dev_health_ops.metrics.team_cognitive_load import (
-    build_team_cognitive_load_rows_for_day,
-)
 from dev_health_ops.metrics.team_complexity import build_team_complexity_rows_for_day
 from dev_health_ops.metrics.work_items import DiscoveredRepo
 from dev_health_ops.providers.identity import load_identity_resolver
@@ -312,7 +307,10 @@ def _extract_ai_workflow_for_day(
 
     # Row-local hygiene: drop rows whose repo_id/number cannot parse instead
     # of letting one malformed row abort the whole day (the extractor calls
-    # UUID() on every row). Mirrors the pr_commit_stats per-row handling.
+    # UUID() on every row). CHAOS-5234/CHAOS-3092: this comment used to say
+    # "mirrors the pr_commit_stats per-row handling" -- that block (built
+    # solely for ai_impact) was deleted from run_daily_metrics_job, so this
+    # is now the only per-row UUID-hygiene pattern left in this file.
     def _valid_rows(rows: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
         valid: list[dict[str, Any]] = []
         dropped = 0
@@ -670,112 +668,6 @@ def _write_compounding_risk_team_rows_for_day(
     for s in sinks:
         s.write_compounding_risk_daily(team_rows)
     return len(team_rows)
-
-
-def _try_parse_uuid(value: str) -> uuid.UUID | None:
-    """Parse ``value`` as a UUID, returning ``None`` instead of raising.
-
-    ``repo_names_by_id`` is keyed by ``uuid.UUID``, but callers here may only
-    have a repo id as ``str`` (e.g. ``TeamMetricsDailyRecord.repo_id``) --
-    this lets them probe the map without a try/except at every call site.
-    """
-    try:
-        return uuid.UUID(value)
-    except (ValueError, AttributeError, TypeError):
-        return None
-
-
-def _write_team_cognitive_load_for_day(
-    *,
-    sinks: list[Any],
-    primary_sink: Any,
-    day: date,
-    org_id: str,
-    user_metrics_rows: list[Any],
-    team_wellbeing_rows: list[Any],
-    computed_at: datetime,
-    repo_names_by_id: dict[uuid.UUID, str],
-    repo_team_resolver: Any,
-) -> int:
-    """CHAOS-4365 item 2 (4347-C): team-keyed cognitive load, OWNERSHIP-scoped.
-
-    Aggregates THIS run's already-computed ``user_metrics_rows`` /
-    ``team_wellbeing_rows`` (never re-queries ClickHouse for them) by
-    ``repo_id``, resolves each repo's team the SAME way item 1's
-    compounding-risk producer does -- ``team_repo_ownership`` (loaded fresh,
-    as-of this day's own instant) merged over the ``teams.repo_patterns``
-    pattern resolver -- and deliberately ignores both input row types' own
-    ``team_id`` field (CHAOS-4396: it can fall back to author-membership
-    resolution, which CHAOS-4321 forbids as a team-attribution source).
-    """
-    if not user_metrics_rows and not team_wellbeing_rows:
-        return 0
-
-    try:
-        as_of = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
-        team_repo_ownership_map = load_team_repo_ownership_map(
-            primary_sink, org_id, as_of=as_of
-        )
-        repo_to_team: dict[str, str] = {}
-        for row in (*user_metrics_rows, *team_wellbeing_rows):
-            row_repo_id = getattr(row, "repo_id", None)
-            if not row_repo_id:
-                continue
-            repo_id_str = str(row_repo_id)
-            if repo_id_str in repo_to_team:
-                continue
-            # UserMetricsDailyRecord.repo_id is a uuid.UUID;
-            # TeamMetricsDailyRecord.repo_id is already a str -- coerce to
-            # uuid.UUID either way, since repo_names_by_id is keyed by
-            # uuid.UUID regardless of which record type supplied the id
-            # (CHAOS-4365 codex R1: the str case was previously skipped
-            # entirely, silently disabling pattern-fallback resolution for
-            # every team_wellbeing-only repo).
-            repo_uuid = (
-                row_repo_id
-                if isinstance(row_repo_id, uuid.UUID)
-                else _try_parse_uuid(repo_id_str)
-            )
-            if repo_uuid is None or repo_uuid not in repo_names_by_id:
-                # CHAOS-4365 codex R2 (P2): not in the current repos catalog
-                # -- neither source is trusted, matching
-                # _repo_to_team_map_for_compounding_risk's existing guard.
-                # team_repo_ownership rows never expire on their own
-                # (writers only ever INSERT; CHAOS-2610 tracks writer-side
-                # valid_to retirement), so a repo removed/renamed since
-                # auto-import last ran can still carry a stale ownership row
-                # -- without this guard a deleted repo would keep
-                # contributing cognitive load to a team.
-                continue
-            team_id = team_repo_ownership_map.get(repo_id_str)
-            if not team_id:
-                full_name = repo_names_by_id[repo_uuid]
-                team_id, _ = repo_team_resolver.resolve(full_name)
-            if team_id:
-                repo_to_team[repo_id_str] = team_id
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(
-            "repo_team_resolver failed for team cognitive load: org_id=%s day=%s %s",
-            org_id,
-            day.isoformat(),
-            exc,
-        )
-        repo_to_team = {}
-
-    cognitive_load_rows = build_team_cognitive_load_rows_for_day(
-        day=day,
-        org_id=org_id,
-        user_metrics_rows=user_metrics_rows,
-        team_wellbeing_rows=team_wellbeing_rows,
-        repo_to_team=repo_to_team,
-        computed_at=computed_at,
-    )
-    if not cognitive_load_rows:
-        return 0
-    for s in sinks:
-        if hasattr(s, "write_team_cognitive_load_daily"):
-            s.write_team_cognitive_load_daily(cognitive_load_rows)
-    return len(cognitive_load_rows)
 
 
 def _fetch_repo_complexity_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
@@ -1137,11 +1029,11 @@ async def run_daily_metrics_job(
     gated -- CHAOS-5234/CHAOS-3092 -- so it no longer checks this set at
     all), ``testops_risk`` CHAOS-4294,
     ``testops_pipeline``/``testops_test``/``testops_coverage`` CHAOS-4284,
-    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
-    ``benchmarking`` CHAOS-4288, and ``ai_impact`` CHAOS-4280 (codex round
-    chaos-4280-r3, finding 5 -- this doc had not been updated when
-    ``ai_impact`` was wired below); naming any other family here has no
-    effect.
+    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
+    ``benchmarking`` CHAOS-4288 (``ai_impact`` CHAOS-4280 had the same
+    write-only-skip shape as file_hotspots above until CHAOS-5234/CHAOS-3092
+    -- its Python compute+write was deleted outright, so it no longer checks
+    this set at all); naming any other family here has no effect.
 
     The three CHAOS-4284 names gate WRITES ONLY: their computed values still
     feed ``compute_release_confidence``/``compute_quality_drag``/
@@ -1734,14 +1626,12 @@ async def run_daily_metrics_job(
         # comparator at internal/jobs/metrics/aigovernance/testdata/
         # python_governance_oracle.py, the GraphQL API resolver, and their
         # own dedicated tests).
-        ai_attribution_rows = []
-        ai_loader: Any = loader
-        if hasattr(ai_loader, "load_ai_pr_attributions"):
-            ai_attribution_rows = await ai_loader.load_ai_pr_attributions(
-                start=start,
-                end=end,
-                repo_id=repo_id,
-            )
+        # CHAOS-5234/CHAOS-3092: no ai_attribution_rows load here anymore --
+        # it existed solely to feed compute_ai_impact_metrics_daily's
+        # ai_attribution_rows parameter, deleted below alongside the compute
+        # call and the pr_commit_stats build; verified via rg that
+        # ai_attribution_rows was never read by anything else in this
+        # function.
 
         # CHAOS-2187: extract AI workflow runs + Work Graph edges from today's
         # PRs/reviews so ai_workflow_issue_edges, ai_workflow_artifact_edges,
@@ -1750,8 +1640,11 @@ async def run_daily_metrics_job(
         # the job: there is no persisted job-health table to record a partial
         # day, and empty edge tables are indistinguishable from "no AI
         # activity today" — swallowing here would be silent partial data.
-        # Row-local issues (malformed repo ids) are skipped inside the helper,
-        # mirroring the per-row handling in the pr_commit_stats build below.
+        # Row-local issues (malformed repo ids) are skipped inside the helper
+        # (CHAOS-5234/CHAOS-3092: this comment used to say "below" -- the
+        # pr_commit_stats build it referred to, built solely for ai_impact,
+        # is deleted; _valid_rows above is now the only sibling of this
+        # pattern in this file).
         (
             ai_workflow_runs,
             ai_workflow_artifact_edges,
@@ -1768,122 +1661,31 @@ async def run_daily_metrics_job(
             repo_provider_by_id=repo_provider_by_id,
         )
 
-        # Build pr_commit_stats: {(repo_id, pr_number) -> [{"file_path": ...}]} so that
-        # compute_ai_impact_metrics_daily can determine which PRs touched test files.
-        #
-        # Design notes (CHAOS-2183):
-        #  • We join work_graph_pr_commit with git_commit_stats rather than using the
-        #    day-scoped commit_rows — a PR merged today may have test commits from prior
-        #    days (window-mismatch false-gap bug).
-        #  • Query is bounded to today's in-window PR numbers (not all-time), so the
-        #    scan is proportional to the batch size, not the full table.
-        #  • LEFT JOIN ensures PRs whose commits have no file-stat rows still appear in
-        #    the result (they get file_path=NULL → has_test_change=False, a real gap).
-        #  • UUID parsing is per-row so one malformed row is skipped, not fatal.
-        #  • On any outer exception, pr_commit_stats stays None and ai_impact treats
-        #    test_gap as unavailable (None), preventing the 100%-inflation false alarm.
-        pr_commit_stats: dict[tuple[uuid.UUID, int], list[Any]] | None = None
-        try:
-            # Identify which PRs fall inside today's UTC window (mirrors the logic in
-            # compute_ai_impact_metrics_daily so the sets are consistent).
-            in_window_prs: set[tuple[str, int]] = set()
-            for pr in pr_rows:
-                merged_at_raw = pr.get("merged_at")
-                event_at = _to_utc(
-                    merged_at_raw if merged_at_raw is not None else pr["created_at"]
-                )
-                if start <= event_at < end:
-                    in_window_prs.add((str(pr["repo_id"]), int(pr["number"])))
-
-            if in_window_prs:
-                # Scope to just today's PR numbers (+ optional repo filter).
-                pr_numbers: list[int] = list({pr_num for _, pr_num in in_window_prs})
-                pc_params: dict[str, Any] = {
-                    "org_id": org_id,
-                    "pr_numbers": pr_numbers,
-                }
-                pc_repo_filter = ""
-                if repo_id is not None:
-                    pc_params["repo_id"] = str(repo_id)
-                    pc_repo_filter = " AND p.repo_id = {repo_id:UUID}"
-
-                # LEFT JOIN so PRs with commits that have no file stats still appear
-                # (file_path=NULL → not a test path → has_test_change=False for that PR).
-                # commit_hash + committer_when (from git_commits, org-scoped) feed
-                # follow-up-commit derivation (CHAOS-2437); committer_when is
-                # de-duplicated per commit downstream so RMT version rows are
-                # harmless. git_commit_stats carries no org_id column, so its join
-                # stays on (repo_id, commit_hash) -- p is already org-scoped by the
-                # WHERE clause.
-                raw_link_rows = primary_sink.query_dicts(
-                    "SELECT p.repo_id, p.pr_number, p.commit_hash, p.evidence,"
-                    " c.committer_when, s.file_path"
-                    " FROM work_graph_pr_commit AS p"
-                    " LEFT JOIN git_commit_stats AS s"
-                    "   ON s.repo_id = p.repo_id AND s.commit_hash = p.commit_hash"
-                    " LEFT JOIN git_commits AS c"
-                    "   ON c.repo_id = p.repo_id AND c.hash = p.commit_hash"
-                    "   AND c.org_id = p.org_id"
-                    f" WHERE p.org_id = {{org_id:String}}{pc_repo_filter}"
-                    "   AND p.pr_number IN {pr_numbers:Array(UInt32)}",
-                    pc_params,
-                )
-
-                built: dict[tuple[uuid.UUID, int], list[Any]] = {}
-                for link in raw_link_rows:
-                    rid_str = str(link.get("repo_id") or "")
-                    pr_num_raw = link.get("pr_number")
-                    if not rid_str or pr_num_raw is None:
-                        continue
-                    pr_num = int(pr_num_raw)
-                    # Filter cross-repo collisions (pr_number is per-repo, not global).
-                    if (rid_str, pr_num) not in in_window_prs:
-                        continue
-                    try:
-                        rid = uuid.UUID(rid_str)
-                    except (ValueError, AttributeError):
-                        # One malformed row → skip it, don't abort the whole build.
-                        logger.debug(
-                            "Skipping malformed repo_id in work_graph_pr_commit: %r",
-                            rid_str,
-                        )
-                        continue
-                    built.setdefault((rid, pr_num), []).append(
-                        {
-                            "file_path": link.get("file_path"),
-                            "commit_hash": link.get("commit_hash"),
-                            "committer_when": link.get("committer_when"),
-                            "evidence": link.get("evidence"),
-                        }
-                    )
-                pr_commit_stats = built
-            else:
-                pr_commit_stats = {}
-
-        except Exception as exc:
-            logger.warning(
-                "pr_commit_stats build failed, test_gap_rate unavailable for day=%s: %s",
-                d,
-                exc,
-            )
-            # pr_commit_stats stays None → _test_changes_by_pr returns {} → every PR
-            # gets has_test_change=None → test_gap_rate=None (unavailable, not 100%).
-
-        ai_impact_metrics = compute_ai_impact_metrics_daily(
-            day=d,
-            org_id=org_id,
-            pull_request_rows=pr_rows,
-            pull_request_review_rows=review_rows,
-            ai_attribution_rows=ai_attribution_rows,
-            incident_rows=incident_rows,
-            commit_stat_rows=commit_rows,
-            computed_at=computed_at,
-            team_resolver=lambda _repo_id, repo_name, _identity: (
-                repo_team_resolver.resolve(repo_name)
-            ),
-            repo_names_by_id=repo_names_by_id,
-            pr_commit_stats=pr_commit_stats,
-        )
+        # CHAOS-5234/CHAOS-3092: ai_impact's daily compute is DELETED here,
+        # not skip-gated -- chris's standing rule (CHAOS-5233): once a
+        # family's Go executor is on main, its Python compute is deleted,
+        # never skip-gated. AIImpactExecutor (native Go, CHAOS-4280) is now
+        # the only writer of ai_impact_metrics_daily for a daily partition.
+        # This deletion also removes the pr_commit_stats build this comment
+        # replaces (a ~100-line work_graph_pr_commit/git_commit_stats/
+        # git_commits join, CHAOS-2183) and the ai_attribution_rows load
+        # above -- both existed SOLELY to feed compute_ai_impact_metrics_
+        # daily's own parameters (verified via rg: neither name is read
+        # anywhere else in this function). Unlike CHAOS-5233's
+        # work_item_attribution, compute_ai_impact_metrics_daily ITSELF is
+        # ALSO deleted (from metrics/ai_impact.py), along with its Go
+        # bit-exact oracle rot guard (TestAIImpactMatchesLivePythonProduction
+        # + testdata/python_ai_impact_oracle.py) and its own dedicated tests
+        # (tests/metrics/test_ai_impact.py) -- codegraph_explore + rg
+        # confirmed the oracle and those tests were its only real callers
+        # once job_daily.py's own reference was removed, so deleting the
+        # oracle alongside the compute function leaves nothing to keep it
+        # alive for. AttributionBucket/AI_BUCKETS (the same module) are NOT
+        # touched -- they have real, separate callers (the GraphQL API
+        # resolver and the opportunities detector).
+        # pr_rows/review_rows/incident_rows/commit_rows themselves are NOT
+        # touched -- they are shared inputs other, still-Python
+        # computations in this function also read.
 
         # CHAOS-4264: this is the FIRST write for (repo_id, d) in the whole
         # function -- everything above is loading/compute, no sink writes.
@@ -1980,22 +1782,9 @@ async def run_daily_metrics_job(
         skip_work_item_estimate_write = "work_item_estimate" in skip_families
         # CHAOS-5234/CHAOS-3092: no skip_ai_governance_write here -- deleted
         # alongside the compute call above, not skip-gated.
-        # CHAOS-4280: ai_impact has a native Go executor (AIImpactExecutor).
-        # Same write-only-skip shape as repo_user_commit above --
-        # `ai_impact_metrics` is assigned at :1809 and read ONLY by the write
-        # below (verified by grep, not assumed), so compute stays unconditional
-        # and only the write is gated.
-        #
-        # ai_impact_metrics_daily is a ReplacingMergeTree whose ORDER BY key
-        # (org_id, team_id, repo_id, work_type, day, attribution_bucket) fully
-        # covers the producer's grouping, so an ungated double-write would
-        # eventually collapse rather than accumulate. The gate is still
-        # required: until a merge runs, both versions are live, and readers
-        # that do not dedup would double-count -- and the two paths disagree
-        # wherever the Go port's fixes apply (the uint64 revert-rule widening,
-        # and the incident reader's CHAOS-4269 valid_from guard), so which copy
-        # wins would decide the answer.
-        skip_ai_impact_write = "ai_impact" in skip_families
+        # CHAOS-5234/CHAOS-3092: no skip_ai_impact_write here either -- same
+        # deletion, not skip-gated. AIImpactExecutor (native Go) is the only
+        # writer of ai_impact_metrics_daily now.
         for s in sinks:
             if not skip_repo_user_commit_write:
                 s.write_repo_metrics(result.repo_metrics)
@@ -2047,8 +1836,9 @@ async def run_daily_metrics_job(
             # write_ai_governance_coverage_daily call here -- deleted
             # alongside the compute call above; AIGovernanceExecutor (native
             # Go) is the only writer now.
-            if ai_impact_metrics and not skip_ai_impact_write:
-                s.write_ai_impact_metrics(ai_impact_metrics)
+            # CHAOS-5234/CHAOS-3092: no write_ai_impact_metrics call here
+            # either -- deleted alongside the compute call above;
+            # AIImpactExecutor (native Go) is the only writer now.
             if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
                 s.write_ai_workflow_runs(ai_workflow_runs)
             if ai_workflow_artifact_edges and hasattr(
@@ -2457,11 +2247,15 @@ async def run_daily_metrics_finalize(
             except Exception as exc:
                 logger.warning("Benchmarking run failed for day=%s: %s", day, exc)
 
-    # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily and
-    # ALL of team_cognitive_load_daily are written exactly ONCE here, per
-    # org/day, after every repo's own partition has landed -- never
-    # in-process inside a single per-repo run_daily_metrics_job call (see
-    # _write_compounding_risk_for_day's docstring for why that was wrong).
+    # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily is
+    # written exactly ONCE here, per org/day, after every repo's own
+    # partition has landed -- never in-process inside a single per-repo
+    # run_daily_metrics_job call (see _write_compounding_risk_for_day's
+    # docstring for why that was wrong). team_cognitive_load_daily used to
+    # be written from this same finalize step too; CHAOS-5141 deleted that
+    # Python compute entirely once it was confirmed unreachable in
+    # production -- it is now written ONLY by the Go worker's native
+    # FinalizeHandler, never from this Python path.
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
     discovered_repos = discover_repos(
@@ -2498,117 +2292,19 @@ async def run_daily_metrics_finalize(
             },
         )
 
-    team_metrics_field_names = {f.name for f in _dc.fields(TeamMetricsDailyRecord)}
-    # CHAOS-4365 codex R2 (P1): dedup_from('team_metrics_daily') keys on
-    # (org_id, team_id, repo_id, day) -- team_id INCLUDED, because that
-    # registration exists for readers that actually want the tainted
-    # legacy team_id dimension kept apart (CHAOS-4329). This aggregator
-    # deliberately ignores that column and remaps every row via ownership
-    # instead (CHAOS-4396/CHAOS-4321) -- if a repo's legacy team_id changed
-    # between two compute generations for the same day, dedup_from would
-    # keep BOTH generations (different team_id -> different key), and
-    # summing both here double-counts that repo's commits/ratios. Dedup by
-    # (org_id, repo_id, day) ONLY instead, so a recompute always collapses
-    # to its single latest generation regardless of what its legacy
-    # team_id happened to be at write time.
-    # Neither ``day`` nor ``computed_at`` is selected from ClickHouse --
-    # both are injected from the outer scope instead (below). Aliasing an
-    # aggregate output with the SAME name as a plain column referenced
-    # elsewhere in the same SELECT list is rejected by ClickHouse
-    # (ILLEGAL_AGGREGATION: this version resolves the bare identifier
-    # against the SELECT-list alias, not the source column, even inside an
-    # unrelated argMax(...) call or the WHERE clause). Every row this query
-    # returns is already restricted to exactly one day by the WHERE clause,
-    # and TeamMetricsDailyRecord.computed_at is never read by the
-    # aggregator these rows feed (build_team_cognitive_load_rows_for_day
-    # only reads repo_id/commits_count/after_hours_commits_count/
-    # weekend_commits_count off team_wellbeing_rows) -- stamping it with
-    # this finalize call's own computed_at is a safe, meaningless-to-omit
-    # placeholder, not a value anything downstream depends on.
-    # CHAOS-4365 codex R3 (P1): a single-step argMax(..., computed_at)
-    # GROUP BY (org_id, repo_id) picks exactly ONE row per repo -- correct
-    # when a recompute leaves stale OLDER-generation rows behind (that's
-    # the R2 fix), but WRONG when the pattern resolver misses and
-    # team_wellbeing falls back to membership: a repo can then legitimately
-    # get MULTIPLE rows in the SAME compute generation (same computed_at),
-    # one per matched legacy team_id split. argMax would silently pick one
-    # of those arbitrarily, dropping the rest. Two-step instead: find each
-    # repo's latest computed_at (its generation), then INNER JOIN back and
-    # SUM every row that shares that exact timestamp -- so multiple
-    # same-generation splits are summed together, while an older, stale
-    # generation (a different, earlier computed_at) is excluded entirely.
-    day_filter = "day = {day:Date}"
-    team_metrics_params: dict[str, Any] = {"day": day}
-    if org_id:
-        day_filter += " AND org_id = {org_id:String}"
-        team_metrics_params["org_id"] = org_id
-    team_metrics_query = f"""
-        SELECT
-            t.org_id AS org_id,
-            t.repo_id AS repo_id,
-            any(t.team_id) AS team_id,
-            any(t.team_name) AS team_name,
-            sum(t.commits_count) AS commits_count,
-            sum(t.after_hours_commits_count) AS after_hours_commits_count,
-            sum(t.weekend_commits_count) AS weekend_commits_count,
-            any(t.after_hours_commit_ratio) AS after_hours_commit_ratio,
-            any(t.weekend_commit_ratio) AS weekend_commit_ratio
-        FROM team_metrics_daily AS t
-        INNER JOIN (
-            SELECT org_id, repo_id, max(computed_at) AS latest_computed_at
-            FROM team_metrics_daily
-            WHERE {day_filter}
-            GROUP BY org_id, repo_id
-        ) AS latest_gen
-        ON t.org_id = latest_gen.org_id
-           AND t.repo_id = latest_gen.repo_id
-           AND t.computed_at = latest_gen.latest_computed_at
-        WHERE {day_filter}
-        GROUP BY t.org_id, t.repo_id
-    """
-    org_team_metrics: list[Any] = []
-    for row in deps.clickhouse_query_dicts(
-        ch_client, team_metrics_query, team_metrics_params
-    ):
-        try:
-            fields = {k: v for k, v in row.items() if k in team_metrics_field_names}
-            fields["day"] = day
-            fields["computed_at"] = computed_at
-            org_team_metrics.append(TeamMetricsDailyRecord(**fields))
-        except Exception:
-            logger.debug("Skipping malformed team_metrics row: %s", row)
-
-    # CHAOS-5141: same skip_families gate shape as ic_finalize above (:2246).
-    # When a native Go executor already computed and wrote
-    # team_cognitive_load for this run, recomputing here would append a
-    # SECOND generation of the same rows -- team_cognitive_load_daily is
-    # append-only, deduped by every reader's own
-    # argMax(<col>, computed_at) GROUP BY (org_id, team_id, day), so the
-    # later writer wins silently and the native rows would vanish with
-    # nothing failing.
-    if "team_cognitive_load" not in skip_families:
-        team_cognitive_load_count = _write_team_cognitive_load_for_day(
-            sinks=sinks_list,
-            primary_sink=primary_sink,
-            day=day,
-            org_id=org_id,
-            user_metrics_rows=git_metrics,
-            team_wellbeing_rows=org_team_metrics,
-            computed_at=computed_at,
-            repo_names_by_id=repo_names_by_id,
-            repo_team_resolver=repo_team_resolver,
-        )
-        if not team_cognitive_load_count:
-            logger.warning(
-                "metrics.daily.finalize family produced zero rows",
-                extra={
-                    "family": "team_cognitive_load",
-                    "day": day.isoformat(),
-                    "org_id": org_id,
-                    "cause": "no_rows_computed",
-                },
-            )
-
+    # CHAOS-5141: team_cognitive_load's Python compute (the team_metrics_daily
+    # aggregation query + _write_team_cognitive_load_for_day) was DELETED
+    # here, not merely skip-gated. Reachability analysis at deletion time:
+    # buildDailyWorker (cmd/dev-health-worker/daily.go) refuses the WHOLE
+    # daily worker if the ClickHouse connection fails to open, before
+    # dailyNativeFamilyRegistrations is ever called -- so team_cognitive_load
+    # (and ic_finalize, its co-registration dependency) are guaranteed to
+    # register natively in every real deployment; a construction-time
+    # fallback to this Python path was never actually reachable. On a
+    # RUNTIME native failure, FinalizeHandler.Work's computeNativeFinalizeFamilies
+    # error path explicitly never calls the Python bridge either (daily.go's
+    # own comment: "The bridge is NOT called"). No straddle, no live fallback
+    # path -- safe to delete outright rather than leave skip_families-gated.
     team_complexity_count = _write_team_complexity_for_day(
         sinks=sinks_list,
         primary_sink=primary_sink,
@@ -2714,16 +2410,19 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             # pattern, which this bare-CLI path now also follows).
             skip_finalize=True,
         )
-        # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily and
-        # ALL of team_cognitive_load_daily are written from
-        # run_daily_metrics_finalize, not from run_daily_metrics_job itself
-        # -- this bare `dev-hops metrics daily` path (AGENTS.md's documented
-        # usage) is the ONLY caller that did not already invoke the
-        # standalone finalizer (_cmd_metrics_rebuild always has; the worker
-        # partition loop triggers a separate "finalize" operation after all
-        # repos land). Without this, the command exits 0 having silently
-        # produced neither family. Idempotent to call even for a
-        # single-repo run (--repo-id): finalize reads the WHOLE org's
+        # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
+        # written from run_daily_metrics_finalize, not from
+        # run_daily_metrics_job itself -- this bare `dev-hops metrics daily`
+        # path (AGENTS.md's documented usage) is the ONLY caller that did not
+        # already invoke the standalone finalizer (_cmd_metrics_rebuild
+        # always has; the worker partition loop triggers a separate
+        # "finalize" operation after all repos land). Without this, the
+        # command exits 0 having silently produced no compounding_risk_team
+        # rows. (team_cognitive_load_daily USED to be produced here too;
+        # CHAOS-5141 deleted its Python compute -- this bare CLI path no
+        # longer produces it at all, only the Go worker's finalize handler
+        # does now.) Idempotent to call even for a single-repo run
+        # (--repo-id): finalize reads the WHOLE org's
         # repo_metrics_daily/user_metrics_daily/team_metrics_daily back from
         # ClickHouse, so it reflects every repo's already-persisted state,
         # not just this run's repo_id scope.

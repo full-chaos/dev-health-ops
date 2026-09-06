@@ -152,7 +152,10 @@ func TestPreStepNameIsStable(t *testing.T) {
 // it — but only one of its halves lands in THIS list; see the note below and
 // buildPostStepOrder for why the other went to the post-step seam.
 func TestBuildPreStepOrderIsPinned(t *testing.T) {
-	want := []string{"issue_pr_links", "flag_guards_edges", "operational_incident_edges"}
+	want := []string{
+		"issue_pr_links", "pr_commit_links", "pr_commit_edges",
+		"flag_guards_edges", "operational_incident_edges",
+	}
 	got := buildPreStepOrder()
 
 	if len(got) != len(want) {

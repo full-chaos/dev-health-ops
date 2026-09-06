@@ -881,12 +881,12 @@
       "notes": "POST /teams/trigger-drift-sync; dynamic name-based dispatch, TODO CHAOS-2653 to replace with concrete import"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:271",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:275",
       "surface": "chain(*chain_sigs).apply_async",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 271
+        "line": 275
       },
       "queue_or_cadence": "n/a",
       "dispatches": "complexity/build/materialize/daily-metrics signatures",
@@ -1025,12 +1025,12 @@
       "notes": "feeds chord at work_graph_tasks.py:654"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:214",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:218",
       "surface": "celery_app.signature (post-sync builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 214
+        "line": 218
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_complexity_job",
@@ -1049,12 +1049,12 @@
       "notes": "feeds chain at post_sync_dispatch.py:271"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:250",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:254",
       "surface": "celery_app.signature (post-sync builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 250
+        "line": 254
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_work_graph_build",
@@ -1073,12 +1073,12 @@
       "notes": "feeds chain at post_sync_dispatch.py:271"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:256",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:260",
       "surface": "celery_app.signature (post-sync builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 256
+        "line": 260
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_investment_materialize",
@@ -1097,12 +1097,12 @@
       "notes": "feeds chain at post_sync_dispatch.py:271"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:262",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:266",
       "surface": "celery_app.signature (post-sync builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 262
+        "line": 266
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dispatch_daily_metrics_partitioned",
@@ -1169,12 +1169,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:276",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:280",
       "surface": "celery_app.send_task",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 276
+        "line": 280
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic (post-sync fan-out)",
@@ -1193,12 +1193,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:299",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:303",
       "surface": "celery_app.send_task",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 299
+        "line": 303
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic (post-sync fan-out)",

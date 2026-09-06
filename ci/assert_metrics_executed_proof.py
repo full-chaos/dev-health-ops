@@ -59,8 +59,10 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     "repo_user_commit": "repo_metrics_daily",
     "dora": "dora_metrics_daily",
     # "complexity" is the family internal/jobs/metrics/daily/families.json
-    # calls "file_hotspots" (python: compute_file_hotspots) -- its table is
-    # file_metrics_daily. The actual `metrics complexity` CLI command (a
+    # calls "file_hotspots" (native FileHotspotsExecutor;
+    # CHAOS-5234/CHAOS-3092 deleted the old Python compute_file_hotspots
+    # path, src/dev_health_ops/metrics/hotspots.py, whole-file) -- its table
+    # is file_metrics_daily. The actual `metrics complexity` CLI command (a
     # separate job, job_complexity.py/job_complexity_db.py, not in
     # families.json at all) writes repo_complexity_daily/
     # file_complexity_snapshots instead. This dict originally pointed
@@ -69,9 +71,10 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     # table its own compute call actually writes.
     "complexity": "repo_complexity_daily",
     "file_hotspots": "file_metrics_daily",
-    # CHAOS-4277: file_risk_hotspots is file_hotspots' sibling family (same
-    # source file, hotspots.py:113 compute_file_risk_hotspots) writing
-    # file_hotspot_daily. Unlike every other REPO_DAY_FAMILIES entry it has
+    # CHAOS-4277: file_risk_hotspots is file_hotspots' sibling family
+    # (same deleted source file, formerly hotspots.py:113
+    # compute_file_risk_hotspots -- now native, FileRiskHotspotsExecutor)
+    # writing file_hotspot_daily. Unlike every other REPO_DAY_FAMILIES entry it has
     # no same-day activity gate (see FileRiskHotspotsExecutor's doc comment,
     # internal/jobs/metrics/daily/file_hotspots_native_executor.go): it
     # unions churned files with complexity-only files, so family_readback's
@@ -191,6 +194,15 @@ TEAM_DAY_FAMILIES: dict[str, str] = {
     # is no synthetic "unassigned" bucket here: an org with zero owned repos
     # for any team on a given day legitimately writes zero rows for it.
     "team_cognitive_load": "team_cognitive_load_daily",
+    # CHAOS-5051: team_complexity_daily is (org_id, team_id, day)-shaped
+    # identically to team_cognitive_load_daily above, and the SAME ownership-
+    # only resolution contract applies -- team_id comes from
+    # team_repo_ownership/teams.repo_patterns exclusively, never a synthetic
+    # "unassigned" fallback, so an org with zero owned repos for a team on a
+    # given day legitimately writes zero rows for it (see
+    # buildTeamComplexityRows' own "unowned repo contributes to no team"
+    # contract, proven by team_complexity_test.go).
+    "team_complexity": "team_complexity_daily",
     # CHAOS-4278: work_item_state_durations_daily has no repo_id column at
     # all (day, provider, work_scope_id, team_id, status) -- it is neither
     # REPO_DAY_FAMILIES- nor a repo-scoped TEAM_DAY_FAMILIES-shaped table,

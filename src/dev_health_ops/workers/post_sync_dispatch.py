@@ -172,21 +172,24 @@ def _dispatch_post_sync_tasks(
         if metrics_backfill_days is None:
             metrics_backfill_days = (metrics_window_end - metrics_window_start).days + 1
 
-    # run_complexity_job writes file_complexity_snapshots. This used to feed a
-    # chained run_daily_metrics (job_daily._load_complexity_map_for_repo) so the
-    # daily risk/hotspot rows reflected the just-synced file contents instead of
-    # the previous cycle's snapshot. CHAOS-5254: run_daily_metrics no longer
-    # participates in THIS chain -- the prod Celery workers/Beat that would
-    # have consumed it are stopped (CHAOS-4026), so daily metrics execution
-    # now runs entirely off the Go scheduler/reconciler's own cadence + the
-    # HTTP bridge (api/internal/worker_metrics.py) into run_daily_metrics_job.
-    # (The Celery task itself, workers/metrics_daily.py, is NOT deleted -- it
+    # run_complexity_job writes file_complexity_snapshots, which the native Go
+    # daily worker's FileRiskHotspotsExecutor reads
+    # (internal/jobs/metrics/daily/filehotspots) -- CHAOS-5234/CHAOS-3092
+    # deleted job_daily.py's own Python reader (_load_complexity_map_for_repo)
+    # once the family went fully native, but the freshness dependency itself
+    # is unchanged, just on the Go side now. Chaining complexity -> daily
+    # guarantees the daily risk/hotspot rows reflect the just-synced file
+    # contents instead of the previous cycle's snapshot -- important for a newly
+    # onboarded org's first daily run, which would otherwise show zero complexity.
+    # CHAOS-5254: run_daily_metrics no longer participates in THIS chain --
+    # the prod Celery workers/Beat that would have consumed it are stopped
+    # (CHAOS-4026), so daily metrics execution now runs entirely off the Go
+    # scheduler/reconciler's own cadence + the HTTP bridge
+    # (api/internal/worker_metrics.py) into run_daily_metrics_job. (The
+    # Celery task itself, workers/metrics_daily.py, is NOT deleted -- it
     # keeps a second live caller, external_ingest/recompute.py's webhook-
-    # triggered dispatch; see CHAOS-5296.) The complexity -> daily freshness
-    # ordering this comment used to guarantee is therefore no longer this
-    # function's concern; complexity is still chained ahead of build/
-    # materialize below for the same reason it always was (fresh-or-nothing
-    # on a terminal failure, see the trade-off note next).
+    # triggered dispatch; see CHAOS-5296.) Complexity is still chained ahead
+    # of build/materialize below for the same freshness reason as always.
     #
     # Trade-off (CHAOS review #1078): as the chain head, a *terminal* complexity
     # failure (after its 3 internal retries) aborts the rest of the chain

@@ -197,7 +197,7 @@ function directly, even for families whose worker kind is now native:
 | --- | --- | --- | --- |
 | ai_governance | NATIVE | Go: `internal/jobs/metrics/daily/ai_governance_native_executor.go` (`AIGovernanceExecutor`) | CHAOS-4285 (Done) |
 | ai_impact | NATIVE | Go: `internal/jobs/metrics/daily/ai_impact_native_executor.go` (`AIImpactExecutor`) | CHAOS-4280 (Done) |
-| ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`) | CHAOS-4286 |
+| ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`) -- ports the now-DELETED `work_graph/extractors/ai_workflow.py:extract_ai_workflow_from_pull_requests` (CHAOS-5242); no Python fallback | CHAOS-4286 |
 | benchmarking | NATIVE | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
 | compounding_risk | NATIVE, post_bridge (repo) / COMPAT-Python (finalize) | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
@@ -209,6 +209,7 @@ function directly, even for families whose worker kind is now native:
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
 | review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
 | team_cognitive_load | NATIVE | Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` (finalize scope, co-registered with ic_finalize) + `team_cognitive_load_clickhouse.go`. No Python remainder. | CHAOS-5141 |
+| team_complexity | NATIVE | Go: `internal/jobs/metrics/daily/team_complexity_native_executor.go` (finalize scope, no co-registration dependency) + `team_complexity_clickhouse.go`. No Python remainder. | CHAOS-5051 |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done) |
 | testops_coverage | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse. CHAOS-5245 deleted the Python compute entirely -- no fallback left. | CHAOS-4284 (Done) |
 | testops_pipeline | NATIVE | Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute. CHAOS-5245 deleted the Python compute (`compute_testops.py`) entirely -- no fallback left. | CHAOS-4284 (Done) |
@@ -220,12 +221,6 @@ function directly, even for families whose worker kind is now native:
 | work_item_estimate | NATIVE | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily` | CHAOS-4283 |
 | work_item_state | NATIVE | Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads | CHAOS-4278 (Done) |
 <!-- END GENERATED DAILY METRICS MATRIX -->
-
-**`team_complexity`** (writes `team_complexity_daily`, `job_daily.py:853-915 _write_team_complexity_for_day`)
-is a live, currently-computing 25th family that is **not in `families.json` at all** -- invisible to this
-page's own drift gate, per `.remember/remaining-python-compute-inventory-2026-09-01.md` §3 (not
-independently re-verified this pass; tracked as a follow-up ticket, not listed as a row here per team-lead's
-instruction not to fold doc-drift findings into the doc itself).
 
 **`internal/jobs/metrics/testops/compute.go`** is the pure Go compute shared by `testops_risk` and the three
 `testops_{pipeline,test,coverage}` families. It was written by CHAOS-4294 as an internal dependency of

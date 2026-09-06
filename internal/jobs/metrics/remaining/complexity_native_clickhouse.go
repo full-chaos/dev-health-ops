@@ -146,7 +146,7 @@ func gitFileCounts(
 		FROM git_files
 		WHERE repo_id = {repo_id:UUID}
 		  AND org_id = {org_id:String}
-	`, namedArguments(map[string]any{"repo_id": repoID, "org_id": orgID})...)
+	`, namedArguments(map[string]any{"repo_id": repoID.String(), "org_id": orgID})...)
 	if queryErr != nil {
 		return 0, 0, fmt.Errorf("git file counts: %w", queryErr)
 	}
@@ -155,10 +155,13 @@ func gitFileCounts(
 	if !rows.Next() {
 		return 0, 0, rows.Err()
 	}
-	if err := rows.Scan(&total, &nonEmpty); err != nil {
+	// count()/countIf() come back as ClickHouse UInt64, not a Go int -- the
+	// driver refuses to scan straight into *int.
+	var totalCount, nonEmptyCount uint64
+	if err := rows.Scan(&totalCount, &nonEmptyCount); err != nil {
 		return 0, 0, fmt.Errorf("scan git file counts: %w", err)
 	}
-	return total, nonEmpty, rows.Err()
+	return int(totalCount), int(nonEmptyCount), rows.Err()
 }
 
 // complexityFileContent mirrors a (path, contents) pair -- both
@@ -181,7 +184,7 @@ func loadComplexityGitFiles(
 		  AND contents != ''
 		ORDER BY path
 	`
-	arguments := map[string]any{"repo_id": repoID, "org_id": orgID}
+	arguments := map[string]any{"repo_id": repoID.String(), "org_id": orgID}
 	if limit != nil {
 		query += " LIMIT {limit:UInt64}"
 		arguments["limit"] = uint64(*limit)
@@ -201,7 +204,7 @@ func loadComplexityMissingPaths(
 		  AND (contents IS NULL OR contents = '')
 		ORDER BY path
 	`
-	arguments := map[string]any{"repo_id": repoID, "org_id": orgID}
+	arguments := map[string]any{"repo_id": repoID.String(), "org_id": orgID}
 	if limit != nil {
 		query += " LIMIT {limit:UInt64}"
 		arguments["limit"] = uint64(*limit)
@@ -243,7 +246,7 @@ func loadComplexityBlameContents(
 		WHERE repo_id = {repo_id:UUID}
 		  AND org_id = {org_id:String}
 	`
-	arguments := map[string]any{"repo_id": repoID, "org_id": orgID}
+	arguments := map[string]any{"repo_id": repoID.String(), "org_id": orgID}
 	if len(paths) > 0 {
 		query += " AND path IN {paths:Array(String)}"
 		arguments["paths"] = paths
@@ -291,7 +294,7 @@ func hasComplexityBlameLineText(
 		  AND line IS NOT NULL
 		  AND line != ''
 		LIMIT 1
-	`, namedArguments(map[string]any{"repo_id": repoID, "org_id": orgID})...)
+	`, namedArguments(map[string]any{"repo_id": repoID.String(), "org_id": orgID})...)
 	if err != nil {
 		return false, fmt.Errorf("has blame line text: %w", err)
 	}
@@ -312,7 +315,7 @@ func maxLastSyncedComplexity(
 		WHERE repo_id = {repo_id:UUID}
 		  AND org_id = {org_id:String}
 	`, table)
-	rows, err := conn.Query(ctx, query, namedArguments(map[string]any{"repo_id": repoID, "org_id": orgID})...)
+	rows, err := conn.Query(ctx, query, namedArguments(map[string]any{"repo_id": repoID.String(), "org_id": orgID})...)
 	if err != nil {
 		return nil, fmt.Errorf("max last synced (%s): %w", table, err)
 	}

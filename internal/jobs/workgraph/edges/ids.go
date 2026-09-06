@@ -38,6 +38,15 @@ func GeneratePRIDFromDigits(repoID uuid.UUID, digits string) string {
 	return fmt.Sprintf("%s#pr%s", repoID.String(), trimmed)
 }
 
+// GenerateCommitID is the Go port of work_graph/ids.py::generate_commit_id.
+//
+// Format: "{repo_uuid}@{sha}", using the UUID's canonical lowercase-with-hyphens
+// string form -- identical between Python's str(uuid.UUID) and Go's
+// uuid.UUID.String(), so no reformatting is needed to match Python byte-for-byte.
+func GenerateCommitID(repoID uuid.UUID, commitHash string) string {
+	return fmt.Sprintf("%s@%s", repoID.String(), commitHash)
+}
+
 // GenerateFeatureFlagID is the Go port of
 // work_graph/ids.py::generate_feature_flag_id: a SHA-256 hex digest of
 // "flag:{org_id}/{provider}/{project_key}/{flag_key}".

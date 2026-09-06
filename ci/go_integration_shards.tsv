@@ -150,6 +150,9 @@ internal/joboutbox	12
 internal/jobrescue	5
 internal/jobroute	6
 internal/jobruntime	5
+# internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
+# measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run).
+internal/jobs/investment	34
 internal/jobs/investment/categorize	15
 internal/jobs/investment/chquery	122
 internal/jobs/investment/chwrite	130

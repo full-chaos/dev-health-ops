@@ -9,8 +9,8 @@
 -- The fix (R22, 4452 design-of-record vol.2) is a repo-attribution CASCADE
 -- through the issue hierarchy -- walk work_items.parent_id upward to the
 -- nearest ancestor whose OWN unit resolved to exactly one repo (bounded
--- depth, cycle-safe); failing that, check direct children (all resolving to
--- the same single repo -> inherit); otherwise stay unassigned. This is
+-- depth, cycle-safe) -- failing that, check direct children (all resolving
+-- to the same single repo -> inherit) -- otherwise stay unassigned. This is
 -- explicitly NOT component fusion (CHAOS-2774's mega-work-unit failure
 -- class) -- unit identity never changes, ids are never re-cut, only the
 -- repo_id/repo_effort fields on the SAME units gain an inherited value.
@@ -26,9 +26,9 @@
 --
 -- PURE ADD COLUMN (CF-cleared): acr reads work_unit_investments by an
 -- explicit column list, so a new column is invisible to it until acr is
--- updated to read it; acr has zero references to work_unit_repo_effort at
+-- updated to read it -- acr has zero references to work_unit_repo_effort at
 -- all. Both tables keep their existing ENGINE/ORDER BY exactly as declared
--- (ReplacingMergeTree(computed_at); work_unit_investments ORDER BY
+-- (ReplacingMergeTree(computed_at) -- work_unit_investments ORDER BY
 -- (work_unit_id), work_unit_repo_effort ORDER BY (org_id, work_unit_id,
 -- ifNull(toString(repo_id), ''))) -- acr mirrors that DDL and a sorting-key
 -- change would require the 027_add_org_id_to_sorting_keys.py rebuild

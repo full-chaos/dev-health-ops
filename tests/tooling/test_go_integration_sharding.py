@@ -55,6 +55,11 @@ EXPECTED_PACKAGES = {
     # explicit platform LLM_PROVIDER, only the none/mock kill-switch
     # beats org BYO) holds against llmorgsettings.Store.ResolveUsableProvider
     # over a REAL Postgres container, not a fake resolver.
+    # CHAOS-5359: the package root's first //go:build integration file,
+    # hierarchycascade_integration_test.go -- proves the repo-hierarchy
+    # cascade's Materializer.Run end-to-end wiring, and the sankeycoverage.go
+    # repo-resolution expression it feeds, against a real ClickHouse.
+    "internal/jobs/investment",
     "internal/jobs/investment/categorize",
     "internal/jobs/investment/chquery",
     # CHAOS-4441: the ClickHouse writer for investment.materialize's three
@@ -398,10 +403,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5318 added internal/jobs/operational's first //go:build
     # integration file: 47 -> 48. CHAOS-5319 added a second integration file
     # to the SAME already-discovered package -- no further count change.
-    # CURRENT TOTAL: 48 -- the one number to bump when a new
+    # CHAOS-5359 added internal/jobs/investment's first //go:build
+    # integration file: 48 -> 49.
+    # CURRENT TOTAL: 49 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "48 package(s) discovered, 0 denylisted, 48 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 48 package(s)" in result.stdout
+    assert "49 package(s) discovered, 0 denylisted, 49 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 49 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -451,8 +458,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # includes the providersync shard-1 package, same as every other count
     # in this comment block. CHAOS-5319 added a second integration file to
     # the SAME already-discovered package -- no further count change.
-    # CURRENT TOTAL: 48 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 48
+    # CHAOS-5359 added internal/jobs/investment: 48 -> 49.
+    # CURRENT TOTAL: 49 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 49
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1811,9 +1819,11 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # for the providersync shard-1 package). CHAOS-5319 added a second
     # integration file to the SAME already-discovered package -- no further
     # count change.
-    # CURRENT TOTAL: 47 (== discovered-total-minus-one -- keep this in
+    # CHAOS-5359 added internal/jobs/investment: 47 -> 48 (49 discovered - 1
+    # for the providersync shard-1 package).
+    # CURRENT TOTAL: 48 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 47
+    assert len(selected_packages) == len(set(selected_packages)) == 48
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

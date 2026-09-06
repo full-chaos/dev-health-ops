@@ -1696,25 +1696,29 @@ var ErrFinalizeFamilyIncomplete = errors.New("daily metrics finalize family has 
 // -- see TestFinalizeFamiliesIterateInDeclaredOrderNotSortedName, which pins
 // it with two families whose sorted and declared orders differ.
 //
-// IT VALIDATES THE NAMES (CHAOS-4290, #2241 r1 Finding 2). The names travel to
-// Python as SkipFamilies and are compared there by string equality, so a name
-// Python does not recognise means the native family runs AND the bridge runs:
-// two writers on an append-only table, both succeeding, the later one winning
-// silently. A typo -- "ic_finalise" -- is enough, and nothing downstream can
-// detect it, because from Python's side an unrecognised skip entry is
-// indistinguishable from one meant for a family it does not own.
+// IT VALIDATES THE NAMES (CHAOS-4290, #2241 r1 Finding 2). CHAOS-3092 PR-A'
+// deleted the Python compatibility bridge these names used to travel to as
+// SkipFamilies, so a typo here can no longer produce the old two-writer
+// race (native family runs AND the bridge runs, both succeeding, the later
+// one winning silently) -- there is no bridge left to run. The validation
+// itself stays: pythonRecognisedFinalizeFamilies remains the SOLE authority
+// on which names are registerable at all (see its own doc comment above),
+// so a name outside it is still a real bug -- now it means a caller is
+// registering a family this handler was never told about, which
+// computeNativeFinalizeFamilies would otherwise silently accept and
+// iterate in an undeclared, unvalidated order.
 //
-// Registration is the last place the two vocabularies can be compared while a
-// human is still watching, so it fails LOUDLY here rather than degrading. It is
-// also all-or-nothing: a partial registration would leave the caller believing
-// a family is native when it is not.
+// Registration is the last place a bad name can be caught while a human is
+// still watching, so it fails LOUDLY here rather than degrading. It is also
+// all-or-nothing: a partial registration would leave the caller believing a
+// family is native when it is not.
 func (handler *FinalizeHandler) SetNativeFinalizeFamilies(families map[string]NativeFinalizeFamilyExecutor) error {
 	if handler == nil {
 		return nil
 	}
 	for name, executor := range families {
 		if !slices.Contains(pythonRecognisedFinalizeFamilies, name) {
-			return fmt.Errorf("%w: %q (bridge gates on %v)",
+			return fmt.Errorf("%w: %q (recognised finalize families: %v)",
 				ErrUnknownFinalizeFamily, name, pythonRecognisedFinalizeFamilies)
 		}
 		// A nil executor passed the name check above but would silently vanish

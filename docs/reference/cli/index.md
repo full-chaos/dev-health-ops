@@ -89,15 +89,15 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 
 | Requirement | Commands |
 |-------------|----------|
-| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `recommendations compute` (read-only preview, CHAOS-5055); `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
-| `dev-health-workerctl` binary on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN`), Postgres coordinator (+org) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics release-impact` (CHAOS-5055: dispatch to the Go worker, no direct ClickHouse connection of their own) |
+| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
+| `dev-health-workerctl` binary on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN`), Postgres coordinator (+org) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055: dispatch to the Go worker, no direct ClickHouse connection of their own) |
 | ClickHouse via `--db` (`CLICKHOUSE_URI`) | `investment materialize` |
 | PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); `migrate configs-to-integrations` (one-time child-config -> integration data migration; `--dry-run` to preview); legacy `migrate upgrade`/`downgrade`/`current` |
-| Organization (`--org` / `ORG_ID`) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics release-impact` (CHAOS-5055), `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
+| Organization (`--org` / `ORG_ID`) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055), `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
 
 > The org id auto-resolves from the first organization in PostgreSQL when `--org`/`ORG_ID` are omitted; the preflight only fails when no org can be resolved.
 
-> Read-only Alembic commands that do not open a connection (`migrate [postgres] heads`, `migrate [postgres] history`) are intentionally **not** gated. Commands that declare their own `required=True` flag (e.g. `audit completeness`/`coverage` `--db`, `metrics capacity` `--db`, `fixtures validate` `--sink`) keep using argparse's own required-argument error.
+> Read-only Alembic commands that do not open a connection (`migrate [postgres] heads`, `migrate [postgres] history`) are intentionally **not** gated. Commands that declare their own `required=True` flag (e.g. `audit completeness`/`coverage` `--db`, `fixtures validate` `--sink`) keep using argparse's own required-argument error.
 
 ---
 

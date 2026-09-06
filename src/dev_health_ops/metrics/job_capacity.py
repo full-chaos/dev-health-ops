@@ -135,5 +135,9 @@ async def run_capacity_forecast(
 # capacity`), and nothing anywhere in the repo still called these functions
 # or `job_capacity.register_commands` by name (verified by repo-wide search
 # before deletion). `run_capacity_forecast` above is NOT dead -- it still
-# has live callers (the worker bridge, the GraphQL capacity resolver,
-# tests) -- only the unwired CLI wrapper functions were removed.
+# has live callers (the worker bridge at
+# `api/internal/worker_metrics.py:1788`, `scripts/worker/compute_parity_fixtures.py`,
+# and tests) -- only the unwired CLI wrapper functions were removed. NOTE:
+# the GraphQL capacity resolver does NOT call this function -- it reads via
+# `compute_capacity.forecast_capacity` in a different module
+# (`api/graphql/resolvers/capacity.py`), a separate compute path.

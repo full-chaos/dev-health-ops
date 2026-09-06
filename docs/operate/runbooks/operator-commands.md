@@ -32,9 +32,9 @@ Auth: `WORKER_OPERATOR_TOKEN`/`WORKER_OPERATOR_TOKEN_FILE` for job-list/cancel/r
 sync-dispatch-outbox cleanups; `WORKER_METRIC_REPAIR_TOKEN` for every metrics/workgraph repair verb (one
 shared repair token across metrics execution repair, workgraph repair, and finalize repair, per chris's
 CHAOS-5042 ruling). `dev-hops` = the Python CLI (`src/dev_health_ops/cli.py`); every `dev-hops metrics ...`
-verb is marked **legacy** or **deleted** below -- several bypass the Go native executors entirely even where
-a native executor exists for that family (`docs/go-migration-matrix.md` METRICS section, "CLI verb layer
-largely bypasses" note).
+verb below is marked **no longer legacy** (dispatches through the Go worker, CHAOS-5055/#2232), **legacy**
+(still a standalone Python compute path), or **deleted** (CHAOS-5307) -- see the table below for which is
+which per verb.
 
 ## (a) Daily metrics backfill / redrive per org/day/family
 

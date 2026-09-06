@@ -22,9 +22,10 @@ Seeded shapes, one per rule the derivation has to get right:
 
 CHAOS-3374 adds a second project, Jira-shaped exactly like production
 (``team_autoimport_jira._project_id`` mints the catalog id as
-``f"{org_id}:jira:{project_key}"``; ``providers/jira/normalize`` writes the
-RAW key onto ``work_items.project_key`` via the real
-``canonical_jira_issue_to_work_item`` producer), plus a cross-provider
+``f"{org_id}:jira:{project_key}"``; the (now-deleted, CHAOS-5329) Python
+Jira normalizer wrote the RAW key onto ``work_items.project_key`` -- the
+Jira-shaped row here is loaded from a fixture frozen from that producer's
+real output, see ``_jira_work_item`` below), plus a cross-provider
 collision row that shares the Jira project's raw key under a DIFFERENT
 provider:
 
@@ -42,15 +43,16 @@ Opt-in (filtered from unit/CI by ``ci/run_tests.sh``'s
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from atlassian import JiraIssue
 
 from dev_health_ops.api.dev.native_status_change import (
     PROJECT_REPOSITORIES_SQL,
@@ -69,8 +71,8 @@ from dev_health_ops.api.dev.status_change_service import (
 )
 from dev_health_ops.api.queries.client import query_dicts
 from dev_health_ops.metrics.schemas import ProjectRecord
+from dev_health_ops.models.work_items import WorkItem
 from dev_health_ops.providers.identity import IdentityResolver
-from dev_health_ops.providers.jira.normalize import canonical_jira_issue_to_work_item
 from dev_health_ops.providers.linear.normalize import linear_issue_to_work_item
 from dev_health_ops.providers.status_mapping import StatusMapping
 
@@ -205,6 +207,14 @@ def _work_item(
     )
 
 
+_JIRA_SHAPED_WORK_ITEM_FIXTURE = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "jira_shaped_work_items"
+    / "canonical_work_item.json"
+)
+
+
 def _jira_work_item(
     key: str,
     *,
@@ -213,39 +223,30 @@ def _jira_work_item(
     repo_id: uuid.UUID | None,
     updated_at: datetime | None = None,
 ) -> Any:
-    """One work item through the production Jira canonical normalizer.
+    """One Jira-shaped work item, loaded from a frozen fixture (CHAOS-5329, R24).
 
-    ``canonical_jira_issue_to_work_item`` is the real producer that sets
-    ``project_id=None`` and ``project_key=issue.project_key`` (see
-    ``providers/jira/normalize.py``) -- the exact identity mismatch
-    CHAOS-3374 fixes: the catalog id is ``f"{org_id}:jira:{project_key}"``
-    (provider-prefixed) but ``work_items.project_key`` carries the RAW key.
+    The Python Jira normalizer (``canonical_jira_issue_to_work_item``) that
+    used to produce this row is deleted -- providersync's Go
+    ``JiraAtlassianRouteHandler`` is the only Jira ingestion path now. The
+    fixture is that function's real, captured-once output (see
+    ``tests/fixtures/jira_shaped_work_items/canonical_work_item.json``); it
+    set ``project_id=None`` and ``project_key=issue.project_key`` (a direct
+    passthrough) -- the exact identity mismatch CHAOS-3374 fixes: the catalog
+    id is ``f"{org_id}:jira:{project_key}"`` (provider-prefixed) but
+    ``work_items.project_key`` carries the RAW key. ``work_item_id``/
+    ``title`` are also direct 1:1 passthroughs of ``key`` in the real
+    producer, so substituting them here (like ``project_key``/``org_id``/
+    ``updated_at``, already caller-supplied overrides before this change)
+    is not re-implementing the producer's logic.
     """
-
-    identity = MagicMock(spec=IdentityResolver)
-    identity.resolve.side_effect = lambda **kwargs: "user:dev@example.com"
-    status_mapping = MagicMock(spec=StatusMapping)
-    status_mapping.normalize_status.return_value = "in_progress"
-    status_mapping.normalize_type.return_value = "task"
-
-    issue = JiraIssue(
-        cloud_id="cloud-live",
-        key=key,
-        project_key=project_key,
-        issue_type="Task",
-        status="In Progress",
-        created_at=(NOW - timedelta(days=10)).isoformat(),
-        updated_at=(NOW - timedelta(days=1)).isoformat(),
-    )
-    item = canonical_jira_issue_to_work_item(
-        issue=issue,
-        status_mapping=status_mapping,
-        identity=identity,
-        repo_id=repo_id,
-    )
+    data = json.loads(_JIRA_SHAPED_WORK_ITEM_FIXTURE.read_text())
+    data["created_at"] = datetime.fromisoformat(data["created_at"])
+    item = WorkItem(work_item_id=f"jira:{key}", title=key, **data)
     return replace(
         item,
         org_id=org_id,
+        project_key=project_key,
+        repo_id=repo_id,
         updated_at=updated_at or (NOW - timedelta(days=1)),
     )
 
@@ -448,8 +449,8 @@ def seeded(sink: Any, raw_client: Any) -> Any:
                     repo_id=data.revoked_repo,
                 ),
                 # CHAOS-3374: the Jira project's own work item, attributed
-                # ONLY via the raw project_key arm (project_id is None, from
-                # the real canonical_jira_issue_to_work_item producer).
+                # ONLY via the raw project_key arm (project_id is None, per
+                # the frozen fixture's own captured producer output).
                 _jira_work_item(
                     "ASK-9",
                     org_id=data.org_id,

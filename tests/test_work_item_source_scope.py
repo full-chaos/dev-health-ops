@@ -532,13 +532,7 @@ def test_provider_all_with_repo_name_scopes_both_providers(
     monkeypatch.setattr(
         job, "_build_gitlab_work_client", lambda **_kwargs: ("gl-token", None)
     )
-    monkeypatch.setattr(job, "_build_jira_work_client", lambda **_kwargs: object())
     monkeypatch.setattr(job, "_build_linear_work_client", lambda **_kwargs: object())
-    monkeypatch.setattr(
-        job,
-        "fetch_jira_work_items_with_extras",
-        lambda **_kwargs: ([], [], [], [], [], []),
-    )
     monkeypatch.setattr(
         "dev_health_ops.metrics.work_items.fetch_synthetic_work_items",
         lambda **_kwargs: ([], []),

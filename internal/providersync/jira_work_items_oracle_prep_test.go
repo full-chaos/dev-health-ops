@@ -45,9 +45,12 @@ type jiraWorkItemOraclePrepRow struct {
 }
 
 func TestJiraWorkItemMatchesLivePythonProductionRow(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	// CHAOS-5329/CHAOS-3092: jira_issue_to_work_item (Python) is deleted --
+	// providersync's normalizeJiraWorkItem owns this row now. Frozen, see
+	// testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(
 		t,
-		"jira/work-items/issue",
+		"jira_work-items_issue",
 		jiraWorkItemOraclePrepCases(),
 		buildJiraWorkItemOraclePrepRow,
 		nil,

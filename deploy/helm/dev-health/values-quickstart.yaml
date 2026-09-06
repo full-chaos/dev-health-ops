@@ -141,16 +141,3 @@ cronjobs:
       limits:
         memory: "1Gi"
         cpu: "500m"
-  syncJira:
-    enabled: false
-    schedule: "0 */4 * * *"
-    command: ["dev-hops", "sync", "work-items", "--provider", "jira", "--backfill", "1"]
-    activeDeadlineSeconds: 3600
-    backoffLimit: 2
-    resources:
-      requests:
-        memory: "256Mi"
-        cpu: "100m"
-      limits:
-        memory: "1Gi"
-        cpu: "500m"

@@ -10,20 +10,15 @@ from typing import Any
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
 
-AUDIT_PROVIDERS = ("jira", "github", "gitlab", "synthetic")
+AUDIT_PROVIDERS = ("github", "gitlab", "synthetic")
 
 REQUIRED_CONFIG_KEYS: dict[str, Sequence[str]] = {
-    "jira": ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"),
     "github": ("GITHUB_TOKEN",),
     "gitlab": ("GITLAB_TOKEN",),
     "synthetic": (),
 }
 
 COLLECTOR_SPECS: dict[str, dict[str, Sequence[str]]] = {
-    "jira": {
-        "modules": ("providers/jira/client.py",),
-        "entrypoints": ("fetch_jira_work_items_with_extras", "fetch_jira_work_items"),
-    },
     "github": {
         "modules": ("providers/github/client.py",),
         "entrypoints": ("fetch_github_work_items", "fetch_github_project_v2_items"),

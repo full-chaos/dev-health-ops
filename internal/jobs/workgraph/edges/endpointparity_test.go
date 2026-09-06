@@ -25,7 +25,16 @@ import (
 // reproduces it perfectly and every existing assertion stays green.
 //
 // The expectations are the reference's own evaluation of that expression over
-// pairs, frozen by tests/fixtures/generate_pr_dependency_id_parity.py.
+// pairs, frozen by generate_pr_dependency_id_parity.py -- CHAOS-5303 deleted
+// that generator once its sole caller (_parse_pr_dependency_source) was
+// deleted from builder.py. Named here without its tests/fixtures/ path
+// prefix on purpose: this file is scanned by
+// test_every_fixture_named_in_a_go_test_exists (tests/tooling/
+// test_go_workflow_path_filters.py), which requires every tests/fixtures/*
+// path a Go test names -- comments included -- to exist on disk. The frozen
+// pr_dependency_id_parity.json this generator produced is kept forever
+// (tests/fixtures/pr_dependency_id_parity.json) and still exists; only the
+// generator script itself is gone.
 func TestEndpointFieldParity(t *testing.T) {
 	corpus := loadEndpointParity(t)
 	buildClock := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)

@@ -104,29 +104,18 @@ Edges include a confidence score (0.0 - 1.0):
 
 ## CLI Usage
 
-Build the work graph:
+CHAOS-5303 r1 (P2): `builder.py` used to have its own standalone
+`python -m work_graph.builder ...` CLI, undocumented anywhere outside this
+file and receiving no Go pre-step coverage. It has been deleted -- it
+duplicated the CLI below with a strictly smaller flag set. Build the work
+graph via the tracked, documented entry point instead
+(`work_graph/runner.py`'s `run_work_graph_build`, wired to `dev-hops
+work-graph build` -- see `docs/operate/runbooks/operator-commands.md`, which
+already lists this as **legacy**, direct Python compute that bypasses the
+worker's own dispatch/idempotency; prefer `workgraph trigger` where possible):
 
 ```bash
-# Full rebuild
-python -m work_graph.builder \
-    --db "clickhouse://localhost:9000/default"
-
-# Incremental build (date range)
-python -m work_graph.builder \
-    --db "clickhouse://localhost:9000/default" \
-    --from 2024-01-01 \
-    --to 2024-01-31
-
-# Single repository
-python -m work_graph.builder \
-    --db "clickhouse://localhost:9000/default" \
-    --repo-id "550e8400-e29b-41d4-a716-446655440000"
-
-# Custom heuristic settings
-python -m work_graph.builder \
-    --db "clickhouse://localhost:9000/default" \
-    --heuristic-window 14 \
-    --heuristic-confidence 0.4
+dev-hops work-graph build --db "clickhouse://localhost:9000/default"
 ```
 
 ## Module Structure

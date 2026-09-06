@@ -39,7 +39,7 @@ package teamresolve
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -130,22 +130,32 @@ func ResolveFromOwnershipMap(
 // break -- confirmed via codegraph before removing it).
 //
 // A resolution failure (teamownership.AuthoritativeOwnerByRepo returning an
-// error) degrades ownership to empty -- matching Python's defensive
-// `except Exception` around this whole resolution block, team-scoped rows
-// are diagnostic, never load-bearing for another family's correctness -- but
-// is now LOGGED (this repo's own standing review rule: a swallowed error
-// must never go unlogged), where the prior per-team version silently
-// continued with no telemetry at all (codex round r1 finding F2).
+// error) is PROPAGATED, never swallowed (CHAOS-5084 r1 finding P1, codex,
+// confirmed via a real repro: a ClickHouse ownership-query error used to
+// degrade silently to an empty ownership map, which a finalize-scope caller
+// like CompoundingRiskTeamExecutor cannot distinguish from "no repo in this
+// org resolves to any team today" -- a legitimate, retry-pointless zero. The
+// two states are semantically opposite (one is success, one is a transient
+// backend failure CHAOS-4290's finalize-scope NO-FAIL-OPEN policy requires
+// to retry, not silently succeed with zero rows) and this function is the
+// only place that can still tell them apart, so it must not collapse them
+// before returning. Matches team_cognitive_load's own
+// resolveDailyFinalizeRepoToTeam precedent (team_cognitive_load_native_executor.go),
+// which propagates the identical AuthoritativeOwnerByRepo error for the
+// identical reason (CHAOS-5141, #2255 r1 finding 3) -- this was the ONE
+// caller of this function that had drifted from that precedent by degrading
+// instead of propagating, an earlier round's log-only mitigation
+// (chaos-5084-2275-r1, P2) having stopped short of it because
+// teamresolve.go was "owned by #2298, under separate review" at the time;
+// #2298 has since merged, so that scope boundary no longer applies.
 func ResolveOwnershipThenPatterns(
 	ctx context.Context, conn driver.Conn, organizationID string, asOf time.Time,
 	repoIDs []uuid.UUID, repoNamesByID map[string]string,
 	patternResolver numerical.RepoTeamResolver,
-) map[string]string {
+) (map[string]string, error) {
 	ownershipMap, err := teamownership.AuthoritativeOwnerByRepo(ctx, conn, organizationID, asOf)
 	if err != nil {
-		slog.Error("teamresolve: authoritative ownership lookup failed, degrading to pattern-only resolution",
-			"org_id", organizationID, "as_of", asOf, "error", err)
-		ownershipMap = map[string]string{}
+		return nil, fmt.Errorf("teamresolve: resolve authoritative repo ownership: %w", err)
 	}
-	return ResolveFromOwnershipMap(ownershipMap, repoIDs, repoNamesByID, patternResolver)
+	return ResolveFromOwnershipMap(ownershipMap, repoIDs, repoNamesByID, patternResolver), nil
 }

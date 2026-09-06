@@ -1,0 +1,191 @@
+{
+  "commits": [
+    {
+      "author_when": "2026-09-06T12:00:00+00:00",
+      "hash": "c-jira-ref",
+      "message": "Fix rendering bug, see PROJ-1 for context",
+      "repo_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "author_when": "2026-09-06T12:00:00+00:00",
+      "hash": "c-gh-closes",
+      "message": "Closes #42",
+      "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+      "author_when": "2026-09-06T12:00:00+00:00",
+      "hash": "c-gl-closes",
+      "message": "Fixes #7",
+      "repo_id": "33333333-3333-3333-3333-333333333333"
+    },
+    {
+      "author_when": "2026-09-06T12:00:00+00:00",
+      "hash": "c-gh-unresolvable",
+      "message": "See #999 for background",
+      "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+      "author_when": "2026-09-06T12:00:00+00:00",
+      "hash": "c-multi-both",
+      "message": "Closes #9, relates to MULTI-9",
+      "repo_id": "44444444-4444-4444-4444-444444444444"
+    },
+    {
+      "author_when": "2026-09-06T12:00:00+00:00",
+      "hash": "c-empty-message",
+      "message": "",
+      "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+      "author_when": "2026-09-06T12:00:00+00:00",
+      "hash": "",
+      "message": "Closes #42",
+      "repo_id": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+      "author_when": null,
+      "hash": "c-gh-no-author-when",
+      "message": "Closes #42",
+      "repo_id": "22222222-2222-2222-2222-222222222222"
+    }
+  ],
+  "counts": {
+    "edges_written": 6,
+    "github_refs_found": 5,
+    "gitlab_refs_found": 5,
+    "jira_refs_found": 2
+  },
+  "edge_rows": [
+    {
+      "confidence": 0.85,
+      "day": "2026-09-06",
+      "discovered_at": "2026-09-06T12:00:00+00:00",
+      "edge_id": "997b49f530f719de72b2b5331fccbd48db51e45c3b39f4ab327ca05bcfec0825",
+      "edge_type": "references",
+      "event_ts": "2026-09-06T12:00:00+00:00",
+      "evidence": "PROJ-1",
+      "last_synced": "2026-09-06T12:00:00+00:00",
+      "provenance": "explicit_text",
+      "provider": "jira",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "source_id": "11111111-1111-1111-1111-111111111111@c-jira-ref",
+      "source_type": "commit",
+      "target_id": "jira:PROJ-1",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 0.85,
+      "day": "2026-09-06",
+      "discovered_at": "2026-09-06T12:00:00+00:00",
+      "edge_id": "59db84f3a26433af159f7b295fe221b78d01b4023009b43d6bdd1083bec2257f",
+      "edge_type": "implements",
+      "event_ts": "2026-09-06T12:00:00+00:00",
+      "evidence": "Closes #42",
+      "last_synced": "2026-09-06T12:00:00+00:00",
+      "provenance": "explicit_text",
+      "provider": "github",
+      "repo_id": "22222222-2222-2222-2222-222222222222",
+      "source_id": "22222222-2222-2222-2222-222222222222@c-gh-closes",
+      "source_type": "commit",
+      "target_id": "gh:acme/repo#42",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 0.85,
+      "day": "2026-09-06",
+      "discovered_at": "2026-09-06T12:00:00+00:00",
+      "edge_id": "073357548678267f60785a823de11fc6432fb4cd764d6205bc956a23533126a6",
+      "edge_type": "implements",
+      "event_ts": "2026-09-06T12:00:00+00:00",
+      "evidence": "Fixes #7",
+      "last_synced": "2026-09-06T12:00:00+00:00",
+      "provenance": "explicit_text",
+      "provider": "gitlab",
+      "repo_id": "33333333-3333-3333-3333-333333333333",
+      "source_id": "33333333-3333-3333-3333-333333333333@c-gl-closes",
+      "source_type": "commit",
+      "target_id": "gl:acme/repo#7",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 0.85,
+      "day": "2026-09-06",
+      "discovered_at": "2026-09-06T12:00:00+00:00",
+      "edge_id": "6ac289d4e314680f16ef93f6aec7a8de776b5848bc4959d4deadeef4ec3edbdd",
+      "edge_type": "references",
+      "event_ts": "2026-09-06T12:00:00+00:00",
+      "evidence": "MULTI-9",
+      "last_synced": "2026-09-06T12:00:00+00:00",
+      "provenance": "explicit_text",
+      "provider": "jira",
+      "repo_id": "44444444-4444-4444-4444-444444444444",
+      "source_id": "44444444-4444-4444-4444-444444444444@c-multi-both",
+      "source_type": "commit",
+      "target_id": "jira:MULTI-9",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 0.85,
+      "day": "2026-09-06",
+      "discovered_at": "2026-09-06T12:00:00+00:00",
+      "edge_id": "53151ca203fbbb6bac6e327b9e477cf853c68aaa15e15fa5e7be05b4fa3574fc",
+      "edge_type": "implements",
+      "event_ts": "2026-09-06T12:00:00+00:00",
+      "evidence": "Closes #9",
+      "last_synced": "2026-09-06T12:00:00+00:00",
+      "provenance": "explicit_text",
+      "provider": "github",
+      "repo_id": "44444444-4444-4444-4444-444444444444",
+      "source_id": "44444444-4444-4444-4444-444444444444@c-multi-both",
+      "source_type": "commit",
+      "target_id": "gh:acme/multi#9",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 0.85,
+      "day": "2026-09-06",
+      "discovered_at": "2026-09-06T12:00:00+00:00",
+      "edge_id": "b0997c0a6a949aef6548d37da8b1620049e6379849a0286b04899532de433c38",
+      "edge_type": "implements",
+      "event_ts": "2026-09-06T12:00:00+00:00",
+      "evidence": "Closes #42",
+      "last_synced": "2026-09-06T12:00:00+00:00",
+      "provenance": "explicit_text",
+      "provider": "github",
+      "repo_id": "22222222-2222-2222-2222-222222222222",
+      "source_id": "22222222-2222-2222-2222-222222222222@c-gh-no-author-when",
+      "source_type": "commit",
+      "target_id": "gh:acme/repo#42",
+      "target_type": "issue"
+    }
+  ],
+  "frozen_now": "2026-09-06T12:00:00+00:00",
+  "org_id": "org-a-11111111",
+  "work_items": [
+    {
+      "provider": "jira",
+      "repo_id": "11111111-1111-1111-1111-111111111111",
+      "work_item_id": "jira:PROJ-1"
+    },
+    {
+      "provider": "github",
+      "repo_id": "22222222-2222-2222-2222-222222222222",
+      "work_item_id": "gh:acme/repo#42"
+    },
+    {
+      "provider": "gitlab",
+      "repo_id": "33333333-3333-3333-3333-333333333333",
+      "work_item_id": "gl:acme/repo#7"
+    },
+    {
+      "provider": "github",
+      "repo_id": "44444444-4444-4444-4444-444444444444",
+      "work_item_id": "gh:acme/multi#9"
+    },
+    {
+      "provider": "jira",
+      "repo_id": "44444444-4444-4444-4444-444444444444",
+      "work_item_id": "jira:MULTI-9"
+    }
+  ]
+}

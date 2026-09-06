@@ -353,8 +353,8 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4294 (Done)",
     },
     "benchmarking": {
-        "citation": "Python: `benchmarking/runner.py:259 run_benchmarking_for_day`",
-        "ticket": "CHAOS-4288",
+        "citation": "Go: `internal/jobs/metrics/daily/benchmarking_finalize_native_executor.go` (finalize scope). CHAOS-4288 deleted the Python compute (`src/dev_health_ops/metrics/benchmarking/`) entirely -- no fallback left.",
+        "ticket": "CHAOS-4288 (Done)",
     },
     "ic_finalize": {
         "citation": "Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope)",

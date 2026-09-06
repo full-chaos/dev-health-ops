@@ -41,15 +41,19 @@ import (
 // construction, so there is nothing left to anchor) AND the race, in the
 // same change.
 //
-// Python has the IDENTICAL bug today (run_benchmarking_for_day is called
-// from run_daily_metrics_job, once per partition, never from
-// run_daily_metrics_finalize) and this change does not touch Python's own
-// compute path -- it only moves WHEN the Go executor runs and, via the new
+// Python had the IDENTICAL bug at the time (run_benchmarking_for_day was
+// called from run_daily_metrics_job, once per partition, never from
+// run_daily_metrics_finalize); this move did not touch Python's own compute
+// path at the time -- it only moved WHEN the Go executor ran and, via the
 // "benchmarking" skip_families gate in run_daily_metrics_finalize (this
-// family's name is UNCHANGED from its partition-scope name -- this is a
+// family's name is UNCHANGED from its partition-scope name -- this was a
 // RELOCATION of the same family to a different seam, not a new family),
-// suppresses Python's per-partition call so it no longer fires at all when
-// the native executor is registered. See RISK-NOTES in the PR body.
+// suppressed Python's per-partition call so it no longer fired at all when
+// the native executor was registered. CHAOS-4288 has since deleted
+// run_benchmarking_for_day (and the rest of
+// src/dev_health_ops/metrics/benchmarking/) entirely -- there is no more
+// Python compute path or skip_families gate to speak of; this executor is
+// the only computer left.
 //
 // # BELT AND BRACES: THIS EXECUTOR DOES NOT TRUST THE CALLER'S GATE BLINDLY
 //

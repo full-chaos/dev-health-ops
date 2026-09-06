@@ -951,6 +951,33 @@ authoritative Python-computed row after the fact — there is nothing in the sch
 Anyone adding a second writer to this table must either add a provenance column first or accept that
 divergence will be silent.
 
+### 0.7 Python compute deleted entirely (CHAOS-5310/CHAOS-5321/CHAOS-3092, R6) — added 2026-09-06
+
+**Everything in §0.6 above is now HISTORICAL for the daily-partition path.** `compute_work_item_
+team_attributions` (and its `work_item`/`work_item_state` siblings, `compute_work_item_metrics_
+daily`/`compute_work_item_state_durations_daily`) is deleted from the codebase entirely —
+`WorkItemAttributionExecutor`/`WorkItemExecutor`/`WorkItemStateExecutor` (native Go,
+`internal/jobs/metrics/daily/`) are the only writers of `work_item_team_attributions`/`work_item_
+metrics_daily`/`work_item_user_metrics_daily`/`work_item_cycle_times`/`work_item_state_durations_
+daily` for the daily-partition path. The §0.6 HTTP compatibility bridge to Python no longer carries
+these three families at all; `families.json`'s `python` field now reads `"DELETED (CHAOS-5310/5321)
+-- ..."` for each.
+
+Python was ALSO the oracle §0.6 describes ("Python is still authoritative for the precedence
+ladder's correctness... the Go port... is verified against it") for the SEPARATE ingest-time
+derivation this section does not cover (`internal/providersync`'s `resolve()`, run per-provider at
+sync time, not at daily-partition time) — that oracle relationship is gone too. Prod Celery has
+been stopped since 2026-08-19, so the Python callers that used to invoke `compute_work_item_team_
+attributions` (`job_daily.py`'s daily job, `job_work_items.py`'s `run_work_items_sync_job` via
+webhook/backfill Celery tasks) never execute in production regardless. The live-Python comparison
+tests (`internal/providersync/*_oracle_test.go`'s `Test*MatchesLivePythonProduction` functions for
+these three families) are converted to frozen-golden comparisons against a checked-in snapshot
+(`internal/providersync/testdata/oracle_frozen/`, captured before deletion) instead — see that
+directory's README.md. `resolve_team_attribution` itself (the precedence-ladder function §1 below
+describes) is UNCHANGED and still Python — only the two wrapper functions that packaged its output
+into `work_item_metrics_daily`/`work_item_team_attributions`/`work_item_state_durations_daily`
+records are gone.
+
 ---
 
 ## 1. Attribution cascade (decision flow)

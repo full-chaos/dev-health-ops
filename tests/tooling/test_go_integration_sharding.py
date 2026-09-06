@@ -1678,6 +1678,30 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5045 (GitHub TestOps duplicate report ingestion): +5 top-level
     # (1319 -> 1324), integration-tagged UNCHANGED at 152.
     #
+    # 2026-09-06, CHAOS-5323/CHAOS-3092 (work_item_estimate Python compute
+    # deletion, merged into this branch from delete-work-item-estimate-
+    # python-compute): -1 top-level (1324 -> 1323),
+    # TestGitHubEstimateCoverageMatchesLivePythonProduction deleted along
+    # with compute_estimate_coverage_metrics_daily and its oracle_pairs
+    # scripts (fully native, no remaining Python caller). Integration-tagged
+    # UNCHANGED at 152.
+    #
+    # 2026-09-06, CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6, work_item/work_item_
+    # attribution/work_item_state Python compute deletion): -1 top-level
+    # (1323 -> 1322), TestGitHubWorkItemTeamAttributionsMatchLivePython
+    # ProductionAcrossDays deleted -- its CHAOS-3494 write-amplification
+    # differential pin asserted compute_work_item_team_attributions was
+    # still called inside job_work_items.py's day loop before comparing
+    # anything, which is unrepresentable once that call site (and the
+    # function) is deleted (native Go executor + providersync ingest
+    # derivation are the sole producers now). The 20 other affected
+    # providersync tests (4 providers x {metrics-daily, user-metrics-daily,
+    # cycle-times, team-attributions, state-durations}, plus the backstop
+    # and jira-route tests that reuse a pair id with their own cases) were
+    # RENAMED (Live -> Frozen) or had their case sets frozen in place, never
+    # added or removed, so they do not move this count. Integration-tagged
+    # UNCHANGED at 152.
+    #
     # This PR ships NO production change. Two designs were attempted and both
     # were withdrawn after adversarial review found a P1 in each:
     #   r1: bounding the report window on the run's updated_at silently and
@@ -1698,7 +1722,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # SinceAt filters nothing) and TestGitLabTestsReportPhaseBoundsBothEndsOnUpdatedAt,
     # which asserts GitLab bounds its own report phase server-side so the two
     # providers cannot drift apart silently.
-    assert len(expected_provider_tests) == 1324
+    assert len(expected_provider_tests) == 1322
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1715,7 +1739,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1324
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1322
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1806,7 +1830,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1324
+    assert len(selected_tests) == len(set(selected_tests)) == 1322
     assert set(selected_tests) == expected_tests
 
 

@@ -254,23 +254,47 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         # CHAOS-5153's citation fix (job_daily.py:258, not ai_workflow.py:212
         # -- the module AND the line were both wrong before) is now moot:
         # CHAOS-4286 ported this family to native Go, same shape as the
-        # testops_* rows above.
-        "citation": "Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`)",
+        # testops_* rows above. CHAOS-5242 (codex chaos-5242-r1 P3): the
+        # Python source this citation named is DELETED -- there is no
+        # Python fallback any more, the frozen golden
+        # (tests/fixtures/ai_workflow_python_golden.json) is the permanent
+        # contract now.
+        "citation": "Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`) -- ports the now-DELETED `work_graph/extractors/ai_workflow.py:extract_ai_workflow_from_pull_requests` (CHAOS-5242); no Python fallback",
         "ticket": "CHAOS-4286",
     },
     "work_graph_edges": {
-        "citation": "Python: `ai_workflow.py extract_review_deployment_incident_edges`",
-        "ticket": "CHAOS-4286",
+        # CHAOS-5234/CHAOS-3092: this citation was already stale before this
+        # PR -- WorkGraphEdgesExecutor (native Go) has computed this family
+        # since CHAOS-4286, but the citation here still described the old
+        # Python compute path. This PR deletes job_daily.py's own reference
+        # to extract_review_deployment_incident_edges AND the function
+        # itself (from work_graph/extractors/ai_workflow.py), along with its
+        # Go bit-exact oracle rot guard
+        # (TestWorkGraphEdgesMatchLivePythonProduction +
+        # testdata/python_work_graph_edges_oracle.py) -- rg confirmed those
+        # were its only real callers once job_daily.py's own reference was
+        # removed, so the old citation would now point at code that no
+        # longer exists. Closes CHAOS-5216 by construction (single native
+        # reader).
+        "citation": "Go: `internal/jobs/metrics/daily/work_graph_edges_native_executor.go` (`WorkGraphEdgesExecutor`)",
+        "ticket": "CHAOS-4286 (Done)",
     },
     "compounding_risk": {
         # CHAOS-4287: the ticket and this citation both said :502, which is
         # inside _repo_to_team_map_for_compounding_risk, not the writer. The
-        # writer is :568. The TEAM-scope half lives at :613
-        # (_write_compounding_risk_team_rows_for_day, called from
-        # run_daily_metrics_finalize) and is still Python -- see the family's
-        # phase_note in internal/jobs/metrics/daily/families.json.
-        "citation": "Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python)",
+        # writer is :568 (REPO scope, post_bridge). TEAM scope is now its own
+        # entry below, "compounding_risk_team" (CHAOS-5084) -- see that row
+        # and internal/jobs/metrics/daily/families.json's phase_notes for both.
+        "citation": "Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, native)",
         "ticket": "CHAOS-4287",
+    },
+    "compounding_risk_team": {
+        # CHAOS-5084: the TEAM-scope half of compounding_risk, split into its
+        # own family entry because it is a SEPARATE finalize-scope writer to
+        # the SAME table (compounding_risk_daily) -- see the "compounding_risk"
+        # row above and families.json's phase_notes for both.
+        "citation": "Python: `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, now native, finalize scope)",
+        "ticket": "CHAOS-5084",
     },
     "team_cognitive_load": {
         # CHAOS-5141: fully native, no Python remainder at all. The

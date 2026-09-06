@@ -33,8 +33,8 @@ func TestPRCommitStepNamesMatchDeclaredOrder(t *testing.T) {
 	}
 
 	want := buildPreStepOrder()
-	if len(want) != 3 || want[1] != "pr_commit_links" || want[2] != "pr_commit_edges" {
-		t.Fatalf("buildPreStepOrder() = %v, want [issue_pr_links pr_commit_links pr_commit_edges]", want)
+	if len(want) != 5 || want[1] != "pr_commit_links" || want[2] != "pr_commit_edges" {
+		t.Fatalf("buildPreStepOrder() = %v, want [issue_pr_links pr_commit_links pr_commit_edges ...]", want)
 	}
 }
 
@@ -147,6 +147,29 @@ func TestPRCommitWindowForDefaultsToThirtyDaysEndingNow(t *testing.T) {
 		if window.RepoID != nil {
 			t.Errorf("repo_id should be unset by default, got %v", window.RepoID)
 		}
+	}
+}
+
+// TestPRCommitWindowForExplicitFromDateAvoidsDefaultUnderflow pins
+// CHAOS-5297: the derived-bound overflow guard must run ONLY when from_date
+// is absent from scope, matching Python's if/else (work_graph_tasks.py
+// never evaluates `to - 30d` when from_date is supplied). An explicit
+// from_date/to_date pair that is each individually valid must not be
+// rejected over a derived value Python would never have computed. Same bug
+// shape and repro as #2301's operationalEdgesWindowFor
+// (chaos-4924-pr-d-r1-confirm, P1, EXECUTED).
+func TestPRCommitWindowForExplicitFromDateAvoidsDefaultUnderflow(t *testing.T) {
+	window, err := prCommitWindowFor(
+		[]byte(`{"from_date":"0001-01-01","to_date":"0001-01-01"}`), time.Now)
+	if err != nil {
+		t.Fatalf("prCommitWindowFor with explicit year-0001 bounds should not error, got: %v", err)
+	}
+	want := time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
+	if window.From == nil || !window.From.Equal(want) {
+		t.Errorf("from = %v, want %v", window.From, want)
+	}
+	if window.To == nil || !window.To.Equal(want) {
+		t.Errorf("to = %v, want %v", window.To, want)
 	}
 }
 

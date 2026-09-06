@@ -104,3 +104,12 @@ e586dede3:tests/api/dev/test_production_runtime.py:generic-api-key:113
 # that never reaches a store. Nothing to rotate.
 d1f5bb1f55f56f0a5bdd7fba92664f58890ad875:internal/jobs/investment/nativeexecutor_test.go:generic-api-key:83
 d1f5bb1f5:internal/jobs/investment/nativeexecutor_test.go:generic-api-key:83
+# CHAOS-4290 (PR3, parity-ic-finalize-oracle): the literal is the field-name
+# string "CycleP5030dHours" -- passed as a label to assertFloatEqual(t, key,
+# "CycleP5030dHours", row.CycleP5030dHours, want.CycleP5030dHours) in the
+# frozen-golden parity test -- whose mixed-case/digit shape happens to clear
+# generic-api-key's entropy threshold. Not a credential; nothing to rotate.
+# Full SHA and short-id forms both listed per this file's own note above
+# (CI emits full SHAs, gitleaks >=8.3x matches on the short id).
+43d0e17879177195ace1fdda2a352d99c292a87c:internal/jobs/metrics/daily/icfinalize/parity_golden_test.go:generic-api-key:462
+43d0e1787:internal/jobs/metrics/daily/icfinalize/parity_golden_test.go:generic-api-key:462

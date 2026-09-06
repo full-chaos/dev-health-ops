@@ -62,12 +62,24 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     "ai_governance": "build_governance_rows_for_day",
     # CHAOS-5234: file_hotspots's daily compute deleted from job_daily.py --
     # the native Go executor (FileHotspotsExecutor, CHAOS-4277) is the only
-    # writer of file_metrics_daily for a daily partition now.
-    # compute_file_hotspots itself is NOT deleted from the codebase (golden-
-    # fixture generators and the live-Python oracle comparator still call it
-    # directly, as do its own dedicated unit tests), only job_daily.py's own
-    # reference to it.
+    # writer of file_metrics_daily for a daily partition now. Unlike
+    # work_item_attribution above, compute_file_hotspots itself IS ALSO
+    # deleted from the codebase (src/dev_health_ops/metrics/hotspots.py,
+    # removed whole-file): its only other callers were golden-fixture
+    # generators and unit tests, never a real production caller -- a
+    # correction to an earlier pass on this same family, which left the
+    # function in place on that flawed premise (see this PR's own body).
     "file_hotspots": "compute_file_hotspots",
+    # CHAOS-5234: file_risk_hotspots's daily compute deleted from
+    # job_daily.py -- the native Go executor (FileRiskHotspotsExecutor,
+    # CHAOS-4277) is the only writer of file_hotspot_daily for a daily
+    # partition now. compute_file_risk_hotspots itself is ALSO deleted from
+    # the codebase (same file, same reasoning as file_hotspots above), along
+    # with the three private job_daily.py helpers it used
+    # (_hotspot_repo_ids/_load_complexity_map_for_repo/
+    # _load_blame_map_for_repo) and every golden-fixture generator/unit test
+    # that existed only to exercise these two families.
+    "file_risk_hotspots": "compute_file_risk_hotspots",
     # CHAOS-5234: ai_impact's daily compute deleted from job_daily.py -- the
     # native Go executor (AIImpactExecutor, CHAOS-4280) is the only writer
     # of ai_impact_metrics_daily for a daily partition now. Unlike
@@ -81,6 +93,28 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # (the same module) are NOT touched -- they have real, separate callers
     # (the GraphQL API resolver and the opportunities detector).
     "ai_impact": "compute_ai_impact_metrics_daily",
+    # CHAOS-5234: work_graph_edges's daily compute deleted from job_daily.py
+    # -- the native Go executor (WorkGraphEdgesExecutor, CHAOS-4286) is the
+    # only writer of work_graph_pr_review_outcome_edges/work_graph_pr_
+    # deployment_edges/work_graph_deployment_incident_edges for a daily
+    # partition now (closes CHAOS-5216 by construction: single native
+    # reader). Same shape as ai_impact: extract_review_deployment_incident_
+    # edges itself is ALSO deleted (from work_graph/extractors/ai_workflow.py)
+    # -- rg confirmed its only real callers, once job_daily.py's own
+    # reference was removed, were its Go bit-exact oracle rot guard
+    # (TestWorkGraphEdgesMatchLivePythonProduction +
+    # testdata/python_work_graph_edges_oracle.py, both also deleted in this
+    # PR) and its own dedicated test (trimmed, not deleted --
+    # tests/work_graph/test_ai_workflow.py's traversal tests survive).
+    #
+    # Merge note (CHAOS-5242, #2307 landed first): that PR deleted this same
+    # function's OTHER half (ai_workflow's runs/artifact_edges/issue_edges,
+    # via extract_ai_workflow_from_pull_requests). With both halves gone in
+    # the merge, _extract_ai_workflow_for_day itself and the whole
+    # work_graph/extractors/ai_workflow.py module (including
+    # AIWorkflowExtractionResult and extract_ai_workflow_from_pull_requests)
+    # are deleted too -- rg confirmed zero remaining callers of any of them.
+    "work_graph_edges": "extract_review_deployment_incident_edges",
 }
 
 

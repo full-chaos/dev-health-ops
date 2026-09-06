@@ -16,7 +16,10 @@ _CURRENT_READ_MODULES = (
     _ROOT / "src/dev_health_ops/storage/clickhouse.py",
     _ROOT / "src/dev_health_ops/backfill/operational_clickhouse.py",
     _ROOT / "src/dev_health_ops/metrics/active_incidents.py",
-    _ROOT / "src/dev_health_ops/work_graph/operational_edges.py",
+    # work_graph/operational_edges.py was deleted under CHAOS-4924 (ported to
+    # Go, internal/jobs/workgraph/operationaledges) -- removed from this
+    # Python-source scan since the file no longer exists. No equivalent
+    # direct-FINAL/bare-argMax guard exists for the Go reader today.
     _ROOT / "src/dev_health_ops/api/graphql/resolvers/work_graph.py",
 )
 _CANONICAL_FINAL = re.compile(

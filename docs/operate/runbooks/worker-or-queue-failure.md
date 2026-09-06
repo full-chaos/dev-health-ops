@@ -14,7 +14,7 @@ lifecycle: active
 
 # Worker or queue failure
 
-Use this runbook when expected work is not created, a queue stops advancing, workers repeatedly retry without domain progress, or a Go coexistence process closes readiness. Start by identifying the active runtime owner; current production routes remain Celery-owned unless the checked-in migration state explicitly says otherwise.
+Use this runbook when expected work is not created, a queue stops advancing, workers repeatedly retry without domain progress, or a Go coexistence process closes readiness. **Celery stopped in prod 2026-08-19 (CHAOS-4026); the Go worker stack owns every production route today.** The "Active Celery recovery" section below is retained for the non-prod Celery-based acceptance fleet and historical reference only -- confirm which runtime actually owns the route before following it.
 {: .fc-page-lede }
 
 ## Preserve the failing boundary
@@ -51,7 +51,7 @@ double-drives it.
 | Operator command reports `outcome_unknown` | Database commit ambiguity; inspect before retrying |
 | Operator command reports `audit_pending` | Mutation committed; audit finalization needs recovery |
 
-## Active Celery recovery
+## Active Celery recovery (non-prod / historical)
 
 1. Confirm each configured queue has an intended deployed consumer.
 2. Confirm provider-specific and cost-class routing settings match worker queue lists.
@@ -144,9 +144,11 @@ Do not delete or update the abandonment fact, reset the pending run, or republis
 
 ## Scheduler failure
 
-Celery Beat remains the active production scheduler. Verify it is running exactly once and that due work is persisted and dispatched.
-
-The Go scheduler foundation currently evaluates bounded schedule timing for comparison and does not own production publication. Unsupported cron grammar must remain unsupported rather than guessed.
+The Go scheduler owns production scheduling; Celery Beat has not run in prod since 2026-08-19 (CHAOS-4026).
+Verify the Go scheduler is running exactly once and that due work is persisted (`worker_job_outbox`) and
+relayed into `river_job` by the reconciler -- an empty `river_job` table with a ticking scheduler means the
+reconciler is off, not a scheduling bug. See [Run workers and jobs](../run/workers-and-jobs.md) for the Go
+fleet's deploy ordering. Unsupported cron grammar must remain unsupported rather than guessed.
 
 ## Retry safety
 

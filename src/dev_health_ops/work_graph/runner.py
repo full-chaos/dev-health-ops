@@ -74,13 +74,16 @@ def run_work_graph_build(ns: argparse.Namespace) -> int:
         repo_id = uuid.UUID(ns.repo_id)
 
     # Resolve the tenant scope. If --org was supplied it MUST flow into
-    # BuildConfig so every read/write the builder performs is org-scoped:
-    # _derive_pr_commit_links and the *_from_fast_path readers only apply the
-    # org filter (and stamp org_id onto work_graph_pr_commit rows) when
-    # BuildConfig.org_id is set. Dropping it here let `dev-hops work-graph build`
-    # scan all visible PRs/commits and persist derived PR-commit links under the
-    # empty org -- the intended tenant would miss its links while cross-tenant
-    # linkage material accumulated in the empty-org bucket (CHAOS-2375 round-3).
+    # BuildConfig so every read/write the builder performs is org-scoped: the
+    # *_from_fast_path readers still in Python only apply the org filter (and
+    # stamp org_id onto their written rows) when BuildConfig.org_id is set.
+    # Dropping it here let `dev-hops work-graph build` scan all visible
+    # PRs/commits and persist derived links under the empty org -- the intended
+    # tenant would miss its links while cross-tenant linkage material
+    # accumulated in the empty-org bucket (CHAOS-2375 round-3). PR->commit
+    # derivation itself moved off this path entirely (CHAOS-5264, native Go
+    # pre-step, internal/jobs/workgraph/prcommit) -- this CLI entry point does
+    # NOT run it, same known gap as CHAOS-5256 for issue-PR links.
     org_raw = getattr(ns, "org", None)
     org_id = org_raw or None
     if org_raw is not None and not str(org_raw).strip():

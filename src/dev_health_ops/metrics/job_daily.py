@@ -604,7 +604,6 @@ def _write_compounding_risk_for_day(
     return len(compounding_rows)
 
 
-
 def _fetch_repo_complexity_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
     """Read the latest ``repo_complexity_daily`` rows for ``day`` as plain
     dicts, ``argMax(*, computed_at)``-deduped per ``repo_id`` -- mirrors

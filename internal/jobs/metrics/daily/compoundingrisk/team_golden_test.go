@@ -17,9 +17,10 @@ func teamGoldenRepoID(suffix string) string {
 	return goldenRepoStem + suffix
 }
 
-// teamGoldenCases mirrors generate_daily_compounding_risk_team_python_golden.py's
-// CASES list -- same order (repo_id suffix ascending, load-bearing: see that
-// generator's module docstring and BuildTeamRows' own doc comment on why
+// teamGoldenCases mirrors the CASES list the (now-deleted, CHAOS-5084
+// no-straddle) Python generator used to produce
+// daily_compounding_risk_team_python_golden.json -- same order (repo_id
+// suffix ascending, load-bearing: see BuildTeamRows' own doc comment on why
 // summation order must match), same team assignments, same values. A team of
 // "" means "present in repo_inputs but unresolved" (excluded from
 // repoToTeam), matching CompoundingRiskTeamExecutor's own shape for a repo
@@ -102,8 +103,11 @@ func TestBuildTeamRowsMatchesFrozenPythonGolden(t *testing.T) {
 	if len(golden.Records) != len(records) {
 		t.Fatalf(
 			"frozen golden has %d records but BuildTeamRows produced %d -- the two "+
-				"corpora have drifted; regenerate with\n"+
-				"    python tests/fixtures/generate_daily_compounding_risk_team_python_golden.py",
+				"corpora have drifted. The Python generator that originally produced "+
+				"tests/fixtures/daily_compounding_risk_team_python_golden.json is deleted "+
+				"(CHAOS-5084/no-straddle: _build_team_rows no longer exists) -- this is "+
+				"either a real BuildTeamRows/teamGoldenCases regression, or the frozen "+
+				"file itself needs hand-editing to match a deliberate, reviewed change.",
 			len(golden.Records), len(records),
 		)
 	}

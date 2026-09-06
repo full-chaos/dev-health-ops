@@ -235,4 +235,3 @@ def test_backfill_day_with_no_repo_metrics_rows_is_named_in_final_summary(
     # only one of the two backfilled days actually produced diagnostics.
     for reason in MISSING_INPUT_REASONS:
         assert f"'{reason}': 0" in done_message
-

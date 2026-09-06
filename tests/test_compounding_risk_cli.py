@@ -71,4 +71,3 @@ def test_compounding_risk_rejects_removed_day_alias():
 
     with pytest.raises(SystemExit):
         parser.parse_args(["metrics", "compounding-risk", "--day", "2025-02-01"])
-

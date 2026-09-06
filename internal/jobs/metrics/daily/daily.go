@@ -365,16 +365,17 @@ type RunPublisher interface {
 // An empty/nil skipFamilies is a no-op: every existing caller (and the
 // Python side, run_daily_metrics_job's skip_families parameter) behaves
 // exactly as before this field existed.
+// CHAOS-3092 (PR-A'): this interface used to also declare Finalize(ctx, run,
+// skipFamilies) for the same reason ComputePartition takes skipFamilies
+// (CHAOS-4290): a NativeFinalizeFamilyExecutor that already computed and
+// wrote a finalize-scope family had to stop the Python bridge recomputing
+// it, or the two writers would race on an append-only table deduped
+// `ORDER BY computed_at DESC LIMIT 1 BY ...`, where the LATER writer wins
+// silently. That bridge call is deleted now that every finalize-scope
+// family's Python compute is gone -- see FinalizeHandler.Work and
+// computeNativeFinalizeFamilies.
 type CompatibilityExecutor interface {
 	ComputePartition(ctx context.Context, run Run, partition Partition, skipFamilies []string) error
-	// Finalize takes skipFamilies for the same reason ComputePartition does
-	// (CHAOS-4290): a NativeFinalizeFamilyExecutor that already computed and
-	// wrote a finalize-scope family must stop the Python bridge recomputing
-	// it. Without this the two writers race on an append-only table deduped
-	// `ORDER BY computed_at DESC LIMIT 1 BY ...`, where the LATER writer wins
-	// silently -- so a correct native family would be invisibly superseded
-	// and the port would change nothing in production.
-	Finalize(ctx context.Context, run Run, skipFamilies []string) error
 }
 
 // NativeFamilyExecutor computes and writes ONE families.json family's rows
@@ -1600,11 +1601,14 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 }
 
 type FinalizeHandler struct {
-	store         Store
-	compatibility CompatibilityExecutor
-	// nativeFinalizeFamilies mirrors PartitionHandler.nativeFamilies: a
-	// nil/empty map is a no-op, so every family stays on the compatibility
-	// path exactly as before this capability existed.
+	store Store
+	// nativeFinalizeFamilies mirrors PartitionHandler.nativeFamilies. CHAOS-3092
+	// PR-A': there is no more compatibility bridge to fall open to -- every
+	// name in pythonRecognisedFinalizeFamilies MUST have a registered,
+	// non-nil executor here by the time Work runs, or
+	// computeNativeFinalizeFamilies fails the attempt loudly
+	// (ErrFinalizeFamilyIncomplete) instead of silently leaving it
+	// unwritten.
 	nativeFinalizeFamilies    map[string]NativeFinalizeFamilyExecutor
 	nativeFinalizeFamilyNames []string
 	// nativeFinalizeObserver reports each family's outcome. Reuses the
@@ -1617,82 +1621,57 @@ type FinalizeHandler struct {
 	nativeFinalizeNow func() time.Time
 }
 
-func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*FinalizeHandler, error) {
-	if store == nil || compatibility == nil {
+func NewFinalizeHandler(store Store) (*FinalizeHandler, error) {
+	if store == nil {
 		return nil, ErrUnavailable
 	}
-	return &FinalizeHandler{store: store, compatibility: compatibility}, nil
+	return &FinalizeHandler{store: store}, nil
 }
 
 // pythonRecognisedFinalizeFamilies is the set of ALL registerable
-// finalize-family names -- not only the ones still gated by a live line in
-// src/dev_health_ops/metrics/job_daily.py's run_daily_metrics_finalize (see
-// pythonGatedFinalizeFamilies below for that narrower question). The shape a
-// still-gated family's line takes there:
+// finalize-family names. It used to also be duplicated against a live gate
+// line in src/dev_health_ops/metrics/job_daily.py's run_daily_metrics_finalize
+// (the STRICT SUBSET tracked by the now-deleted pythonGatedFinalizeFamilies) --
+// that Python side is gone entirely (CHAOS-3092 PR-A': the compatibility
+// bridge's Finalize call, the HTTP executor's Finalize method, and the Python
+// finalize half of /internal/worker/daily-metrics/v1/execute are all deleted;
+// see this package's own removal history for team_cognitive_load (CHAOS-5141),
+// team_complexity (CHAOS-5051), compounding_risk_team (CHAOS-5084),
+// benchmarking (CHAOS-4288), and ic_finalize (CHAOS-4290 PR3) -- each deleted
+// its Python compute entirely before this bridge-removal PR, so the strict
+// subset had already shrunk to empty).
 //
-//	if "benchmarking" not in skip_families:
-//
-// It is duplicated here because the Go and Python processes cannot share a
-// value, and duplicated deliberately rather than inferred: the alternative is
-// trusting that whatever string a caller registers happens to be one Python
-// understands. finalizeFamilyGateAgreementTest pins this slice against the
-// Python source, with a negative control, so the copy cannot drift silently.
+// This slice now stays the SOLE authority for two things, both unchanged in
+// mechanism: (1) SetNativeFinalizeFamilies validates every registered name
+// against it (ErrUnknownFinalizeFamily on a name outside it); (2)
+// computeNativeFinalizeFamilies iterates it in this DECLARED order (not a
+// lexical sort -- see SetNativeFinalizeFamilies's own doc comment) to decide
+// which families get computed before a mid-loop cancellation and which get
+// marked refused without running, AND -- CHAOS-3092 PR-A', the new part --
+// to detect a recognised family with NO registered executor at all: with no
+// bridge left to fall open to, that is now ErrFinalizeFamilyIncomplete, not a
+// silent no-op.
 var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, TeamComplexityFamilyName, BenchmarkingFamilyName, CompoundingRiskTeamFamilyName}
 
-// pythonGatedFinalizeFamilies is the STRICT SUBSET of
-// pythonRecognisedFinalizeFamilies whose Python compute still exists behind a
-// live `if "<name>" not in skip_families:` gate in job_daily.py's
-// run_daily_metrics_finalize. This is what
-// TestEveryRecognisedFinalizeFamilyHasAPythonGate source-scans job_daily.py
-// for -- pythonRecognisedFinalizeFamilies itself stays the (unchanged)
-// registration-validation and declared-iteration-order authority for ALL
-// five families above; the "does Python still gate on this name" question
-// now narrows to NONE of them.
-//
-// team_cognitive_load (CHAOS-5141), team_complexity (CHAOS-5051),
-// compounding_risk_team (CHAOS-5084), and benchmarking (CHAOS-4288) all
-// deleted their Python compute entirely (not just skip-gated it), same
-// reachability analysis for each: buildDailyWorker refuses the WHOLE daily
-// worker if the ClickHouse connection fails to open, before
-// dailyNativeFamilyRegistrations is ever called -- so a construction-time
-// fallback to Python was never actually reachable in production for any of
-// them (team_cognitive_load's own construction-time nil-conn check and its
-// co-registration-with-ic_finalize check are both unreachable for the same
-// reason; team_complexity, compounding_risk_team, and benchmarking have no
-// co-registration dependency of their own to begin with).
-//
-// CHAOS-4290 (PR3, CHAOS-3092 no-straddle) deleted ic_finalize's Python
-// compute (compute_ic_metrics_daily / compute_ic_landscape_rolling) the same
-// way, for the same reason -- the native executor has been the sole writer
-// since #2241's finalize policy landed, so a still-present Python gate line
-// would have been dead code agreeing with dead code too. Parity is proved by
-// icfinalize's TestICFinalizeMatchesTheFrozenPythonGolden instead of a live
-// Python fallback.
-//
-// All five (team_cognitive_load, team_complexity, compounding_risk_team,
-// benchmarking, ic_finalize) stay in pythonRecognisedFinalizeFamilies (each
-// is still a fully valid, always-registerable native finalize family) but
-// this list -- the STRICT SUBSET with a live Python gate line -- is now
-// EMPTY: TestDeletedPythonComputeFamilyHasNoGateLine generalizes over the
-// set-difference automatically, so an empty slice here is a valid, already
-// correctly-handled state, not a special case.
-//
-// CHAOS-3092 (PR-A'): an empty pythonGatedFinalizeFamilies means the
-// compatibility bridge's Finalize call (FinalizeHandler.Work ->
-// handler.compatibility.Finalize) now has ZERO Python families left to fall
-// open to -- see this file's own removal of that call, the HTTP executor's
-// Finalize method, and the Python finalize half of
-// /internal/worker/daily-metrics/v1/execute.
-var pythonGatedFinalizeFamilies = []string{}
+// ErrUnknownFinalizeFamily is returned when SetNativeFinalizeFamilies is
+// asked to register a name outside pythonRecognisedFinalizeFamilies.
+var ErrUnknownFinalizeFamily = errors.New("daily: finalize family is not a recognised finalize-scope family")
 
-// ErrUnknownFinalizeFamily is returned when a registered finalize family is
-// not one the Python bridge gates on.
-var ErrUnknownFinalizeFamily = errors.New("daily: finalize family is not recognised by the compatibility bridge")
-
-// ErrNativeFinalizeFamilyFailed wraps any native finalize-family failure.
-// retryCompatibilityError's default arm makes it Retryable, which is the whole
-// policy: the run is redriven rather than completed.
+// ErrNativeFinalizeFamilyFailed wraps a native finalize-family executor that
+// ran and failed (or partially wrote before failing). retryCompatibilityError's
+// default arm makes it Retryable, which is the whole policy: the run is
+// redriven rather than completed.
 var ErrNativeFinalizeFamilyFailed = errors.New("daily: native finalize family failed")
+
+// ErrFinalizeFamilyIncomplete (CHAOS-3092 PR-A', ports ErrPostBridgeFamilyIncomplete's
+// pattern) means computeNativeFinalizeFamilies found a recognised finalize
+// family with no registered executor at all -- distinct from
+// ErrNativeFinalizeFamilyFailed, which means an executor ran and failed.
+// Before this PR a missing executor silently fell open to the Python
+// compatibility bridge; with that bridge deleted, nothing else would ever
+// produce this family's rows for this run, so it must fail the attempt
+// loudly instead of completing with a family unwritten.
+var ErrFinalizeFamilyIncomplete = errors.New("daily metrics finalize family has no registered executor")
 
 // SetNativeFinalizeFamilies registers the finalize-scope families computed
 // natively in Go instead of by the Python compatibility bridge. Mirrors
@@ -1809,11 +1788,9 @@ func (handler *FinalizeHandler) observeFinalizeFamily(
 	}
 }
 
-// computeNativeFinalizeFamilies runs every registered finalize-scope executor
-// and returns the names that SUCCEEDED, in sorted order.
-//
-// computeNativeFinalizeFamilies runs every registered finalize-scope executor
-// and returns the names to skip plus the first failure.
+// computeNativeFinalizeFamilies runs every RECOGNISED finalize-scope family
+// (pythonRecognisedFinalizeFamilies, not merely the registered ones -- see
+// below) and returns an error the moment any one of them is incomplete.
 //
 // NO FAIL-OPEN, AT ALL (CHAOS-4290, #2241 r2 Findings 1 and 2; team-lead's
 // ruling). CHAOS-4276's fail-open is correct for partition scope and wrong
@@ -1830,19 +1807,30 @@ func (handler *FinalizeHandler) observeFinalizeFamily(
 //     records success over incomplete output, with nothing to repair it.
 //
 // So any native error -- before, during or after a write -- fails the attempt.
-// The family stays in the skip list, the bridge is not called, the run does not
-// complete, and River's existing attempt machinery redrives it; after max
-// attempts the CHAOS-5040 blocked-run marker records it under
-// BlockedReasonFinalizeFailed. Python therefore never writes a family
-// registered as native, which is what makes per-run durable state unnecessary.
+// The run does not complete, and River's existing attempt machinery redrives
+// it; after max attempts the CHAOS-5040 blocked-run marker records it under
+// BlockedReasonFinalizeFailed.
 //
-// That last sentence about the marker was FALSE when first written (#2241 r3
-// Finding 2): reconcileBlockedRunsSQL fired only on a failed_permanent
-// PARTITION, and a stranded finalize has none, so blocked_at stayed NULL and
-// the run was invisible to the sweep built to surface wedged runs. The
-// predicate now covers it. Recording the correction rather than quietly editing
-// the claim, because the failure was writing a mechanism from a ruling's
-// wording instead of verifying the mechanism existed.
+// CHAOS-3092 (PR-A'): there is no more compatibility bridge for a family to
+// fall open to at all, which closes a SECOND, previously-silent gap the ruling
+// above did not have to consider: a recognised family with no registered
+// executor (handler.nativeFinalizeFamilies[name] == nil) used to be skipped
+// by this loop entirely -- it iterated ONLY handler.nativeFinalizeFamilyNames,
+// the already-registered subset, so a family missing from registration was
+// invisible here and the Python bridge silently covered it. This now iterates
+// pythonRecognisedFinalizeFamilies (the FULL set) instead, and a nil executor
+// is ErrFinalizeFamilyIncomplete -- the same "fail the attempt, let River
+// redrive" treatment as ErrNativeFinalizeFamilyFailed below, just for a
+// different root cause (never wired, vs. wired and failed). Ports
+// computePostBridgeNativeFamilies' nil-executor-is-incomplete rule
+// (CHAOS-5190) to finalize scope, but keeps THIS function's own established
+// fail-FAST shape (return on the first incomplete family) rather than that
+// function's fail-SLOW "collect every incomplete name, report at the end"
+// shape -- deliberately: CHAOS-4290's ruling above already established that a
+// finalize attempt stops at the first failure and lets the retry redrive
+// everything from scratch, and a missing executor is exactly one more
+// reason a family can be incomplete, not a new policy for how failures are
+// collected.
 //
 // THIS REQUIRES THE NATIVE WRITER TO BE IDEMPOTENT: a redrive must land on the
 // same keys with a later computed_at so the dedup read supersedes rather than
@@ -1852,37 +1840,33 @@ func (handler *FinalizeHandler) observeFinalizeFamily(
 // The outcome vocabulary still distinguishes the two failure shapes, because
 // they mean different things to an operator even though both now redrive:
 // partial_write (rows already landed, a redrive may duplicate if the writer is
-// not idempotent) versus refused (nothing landed).
-func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Context, run Run) ([]string, error) {
-	if handler == nil || len(handler.nativeFinalizeFamilyNames) == 0 {
-		return nil, nil
+// not idempotent) versus refused (nothing landed, including a missing
+// executor -- there was never anything to write with).
+func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Context, run Run) error {
+	if handler == nil {
+		return nil
 	}
-	skipFamilies := make([]string, 0, len(handler.nativeFinalizeFamilyNames))
-	for index, name := range handler.nativeFinalizeFamilyNames {
+	for index, name := range pythonRecognisedFinalizeFamilies {
 		executor := handler.nativeFinalizeFamilies[name]
 		if executor == nil {
-			continue
+			handler.observeFinalizeFamily(
+				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
+			)
+			return fmt.Errorf("%w: %s", ErrFinalizeFamilyIncomplete, name)
 		}
 		// Between-family cancellation check. Once the lease is lost another
 		// worker may already own this run, so continuing to write is the
 		// two-writer hazard with extra steps.
 		if err := ctx.Err(); err != nil {
-			// Sliced from the LOOP INDEX, not from len(skipFamilies): the two
-			// diverge as soon as a family is skipped for a nil executor.
-			for _, remaining := range handler.nativeFinalizeFamilyNames[index:] {
+			for _, remaining := range pythonRecognisedFinalizeFamilies[index:] {
 				handler.observeFinalizeFamily(
 					run, remaining, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, handler.finalizeNow(),
 				)
 			}
-			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
+			return fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		}
 		started := handler.finalizeNow()
 		rowsWritten, err := executor.ComputeFinalizeFamily(ctx, run)
-		// The family is added to the skip list BEFORE the error is examined:
-		// on the failing attempt the bridge must not compute it either, and on
-		// a future change that lets the bridge run anyway this is what keeps
-		// Python out.
-		skipFamilies = append(skipFamilies, name)
 		switch {
 		case err == nil:
 			handler.observeFinalizeFamily(
@@ -1892,19 +1876,19 @@ func (handler *FinalizeHandler) computeNativeFinalizeFamilies(ctx context.Contex
 			handler.observeFinalizeFamily(
 				run, name, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, rowsWritten, started,
 			)
-			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
+			return fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		default:
 			handler.observeFinalizeFamily(
 				run, name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, started,
 			)
-			return skipFamilies, fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
+			return fmt.Errorf("%w: %s: %w", ErrNativeFinalizeFamilyFailed, name, err)
 		}
 	}
-	return skipFamilies, nil
+	return nil
 }
 
 func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsFinalizeArgs]) error {
-	if handler == nil || handler.store == nil || handler.compatibility == nil || execution == nil {
+	if handler == nil || handler.store == nil || execution == nil {
 		return jobruntime.Permanent(ErrUnavailable)
 	}
 	runID := execution.Args.Payload.RunID
@@ -1941,19 +1925,16 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			return handler.store.RenewFinalize(renewCtx, *claim)
 		},
 		func(workCtx context.Context) error {
-			// Native families run FIRST and their names become the bridge's
-			// skip list, so the bridge never recomputes what Go just wrote.
-			// Inside the lease-renewal callback deliberately: a native
-			// family's compute is real work and must hold the lease the same
-			// way the bridge call does.
-			skipFamilies, err := handler.computeNativeFinalizeFamilies(workCtx, claim.Run)
-			if err != nil {
-				// The bridge is NOT called. Calling it after a native failure
-				// is the fail-open this ruling removed, and completing the run
-				// afterwards is what recorded success over partial output.
-				return err
-			}
-			return handler.compatibility.Finalize(workCtx, claim.Run, skipFamilies)
+			// CHAOS-3092 (PR-A'): there is no more compatibility bridge call
+			// after this -- every recognised finalize family must be
+			// computed here, natively, or computeNativeFinalizeFamilies
+			// itself fails the attempt (ErrFinalizeFamilyIncomplete for a
+			// family with no registered executor, ErrNativeFinalizeFamilyFailed
+			// for one that ran and failed). Inside the lease-renewal
+			// callback deliberately: a native family's compute is real work
+			// and must hold the lease for its own duration, same as the
+			// deleted bridge call used to.
+			return handler.computeNativeFinalizeFamilies(workCtx, claim.Run)
 		},
 	); err != nil {
 		// LOG THE UNDERLYING ERROR BEFORE RETURNING (CHAOS-4290, #2243's

@@ -312,7 +312,7 @@ func buildDailyWorker(
 				}
 				registered = append(registered, adapter.Spec())
 			case jobcontract.KindDailyMetricsFinalize:
-				handler, handlerErr := daily.NewFinalizeHandler(store, compatibility)
+				handler, handlerErr := daily.NewFinalizeHandler(store)
 				if handlerErr != nil {
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable

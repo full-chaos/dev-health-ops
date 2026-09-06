@@ -1670,10 +1670,12 @@ if rc:
   # team_wellbeing (CHAOS-4276) since it landed and now also work_item_state
   # (CHAOS-4278). Both are computed by the `metrics daily --backfill 7` call
   # above already (compute_team_wellbeing_metrics_daily and
-  # compute_work_item_state_durations_daily both run in-process inside
-  # compute_daily_metrics, using the work_items/transitions `fixtures
-  # generate` seeds unconditionally -- see generate_work_item_transitions in
-  # fixtures/runner.py), so no extra seeding/compute call is needed here.
+  # compute_work_item_state_durations_daily both run as their own top-level
+  # calls inside run_daily_metrics_job -- CHAOS-5308/CHAOS-3092 deleted
+  # compute_daily_metrics itself, unrelated to either of these two -- using
+  # the work_items/transitions `fixtures generate` seeds unconditionally --
+  # see generate_work_item_transitions in fixtures/runner.py), so no extra
+  # seeding/compute call is needed here.
   # team_cognitive_load and recommendations (the other two TEAM_DAY_FAMILIES
   # entries) are deliberately NOT added: team_cognitive_load resolves team_id
   # from repo ownership only and this fixture org has none configured, so it

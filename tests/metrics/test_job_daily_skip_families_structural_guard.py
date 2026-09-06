@@ -124,6 +124,25 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # AIWorkflowExtractionResult and extract_ai_workflow_from_pull_requests)
     # are deleted too -- rg confirmed zero remaining callers of any of them.
     "work_graph_edges": "extract_review_deployment_incident_edges",
+    # CHAOS-5308 (CHAOS-3092): repo_user_commit's daily compute deleted from
+    # job_daily.py -- the native Go executor (RepoUserCommitExecutor,
+    # CHAOS-4275) is the only writer of repo_metrics_daily/user_metrics_
+    # daily/commit_metrics for a daily partition now. compute_daily_metrics
+    # itself is ALSO deleted (from compute.py, along with DailyMetricsResult
+    # in schemas.py and commit_size_bucket) -- rg confirmed zero production
+    # callers outside job_daily.py once this call site is gone.
+    "repo_user_commit": "compute_daily_metrics",
+    # CHAOS-5308 (CHAOS-3092): compounding_risk's REPO-scope daily compute
+    # deleted from job_daily.py -- the native Go executor
+    # (CompoundingRiskExecutor, CHAOS-4287) is the only writer of REPO-scope
+    # compounding_risk_daily rows now. _write_compounding_risk_for_day
+    # itself is ALSO deleted -- rg confirmed job_daily.py was its only real
+    # caller (build_compounding_risk_rows_for_day and
+    # _fetch_repo_metrics_for_day, its two helpers, are SHARED functions
+    # with a real other caller, job_compounding_risk.py's own standalone
+    # job, and are NOT touched). TEAM-scope compounding_risk_team
+    # (CHAOS-5084) is a separate family, already deleted, unaffected.
+    "compounding_risk": "_write_compounding_risk_for_day",
 }
 
 

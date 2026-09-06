@@ -16,8 +16,6 @@ from typing import Any
 from dev_health_ops.clickhouse_dedup import dedup_from
 from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
-from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
-from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
 from dev_health_ops.metrics.compute_wellbeing import (
@@ -36,25 +34,15 @@ from dev_health_ops.metrics.identity import (
     get_team_resolver,
     init_team_resolver,
 )
-from dev_health_ops.metrics.job_compounding_risk import _fetch_repo_metrics_for_day
-from dev_health_ops.metrics.knowledge import (
-    compute_bus_factor,
-    compute_code_ownership_gini,
-)
 from dev_health_ops.metrics.loaders import DataLoader, to_utc
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
 from dev_health_ops.metrics.prometheus import (
     record_metrics_family_zero_rows,
     record_team_metrics_daily_repo_rows,
 )
-from dev_health_ops.metrics.quality import (
-    compute_rework_churn_ratio,
-    compute_single_owner_file_ratio,
-)
 from dev_health_ops.metrics.reviews import compute_review_edges_daily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.work_items import DiscoveredRepo
-from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import (
     build_project_key_resolver,
     build_repo_pattern_resolver,
@@ -232,119 +220,24 @@ def _date_range(end_day: date, backfill_days: int) -> list[date]:
 # #2307's were combined.
 
 
-def _repo_to_team_map_for_compounding_risk(
-    *,
-    repo_metrics_rows: list[Any],
-    repo_names_by_id: dict[uuid.UUID, str],
-    repo_team_resolver: Any,
-    team_repo_ownership_map: dict[str, str] | None = None,
-    org_id: str = "",
-    day: date | None = None,
-) -> dict[str, str]:
-    """Resolve one team per repo for compounding-risk team-scope rows.
-
-    CHAOS-4365: ``team_repo_ownership_map`` (explicit ``team_repo_ownership``
-    rows, repo_id-keyed) wins where it resolves a repo -- it is populated for
-    every native GitHub/GitLab/Jira/Linear auto-import, unlike
-    ``teams.repo_patterns`` (glob strings the pattern resolver reads, which
-    those imports never set). The pattern resolver remains the fallback for
-    repos it doesn't cover (fixtures orgs, manually configured team globs).
-
-    CHAOS-4365 codex round 2 (P1): a repo is trusted from EITHER source only
-    when it also appears in ``repo_names_by_id`` -- the current ``repos``
-    catalog for this run. ``team_repo_ownership`` rows never expire on their
-    own (writers only ever INSERT; CHAOS-2610 tracks writer-side ``valid_to``
-    retirement), so a repo removed/renamed after auto-import last ran can
-    still carry a stale ownership row; without this guard that row would
-    attribute a team-scope compounding-risk row to a repo that no longer
-    exists in the org's current inventory -- something the pattern-resolver
-    path never did, since it always required ``repo_names_by_id`` first.
-    """
-    ownership_map = team_repo_ownership_map or {}
-    repo_to_team_map: dict[str, str] = {}
-    # CHAOS-4365 telemetry: which source actually resolved each repo, so a
-    # future "team rows still zero" report is diagnosable from the run's own
-    # log line (ownership vs pattern vs neither) instead of a fresh
-    # investigation into whether the wiring itself regressed.
-    resolved_via_ownership = 0
-    resolved_via_pattern = 0
-    unresolved = 0
-    for row in repo_metrics_rows:
-        row_repo_id = getattr(row, "repo_id", None)
-        if row_repo_id is None:
-            continue
-        repo_id_str = str(row_repo_id)
-        full_name = repo_names_by_id.get(row_repo_id)
-        if not full_name:
-            # Not in the current repos catalog -- neither source is trusted
-            # (matches the pattern-only path's pre-existing behavior).
-            unresolved += 1
-            continue
-        team_id = ownership_map.get(repo_id_str)
-        if team_id:
-            resolved_via_ownership += 1
-        else:
-            team_id, _ = repo_team_resolver.resolve(full_name)
-            if team_id:
-                resolved_via_pattern += 1
-            else:
-                unresolved += 1
-        if team_id:
-            repo_to_team_map[repo_id_str] = team_id
-    logger.info(
-        "compounding-risk: repo-to-team resolution org_id=%s day=%s via_ownership=%d "
-        "via_pattern=%d unresolved=%d",
-        org_id,
-        day.isoformat() if day else None,
-        resolved_via_ownership,
-        resolved_via_pattern,
-        unresolved,
-    )
-    return repo_to_team_map
-
-
-def _write_compounding_risk_for_day(
-    *,
-    sinks: list[Any],
-    primary_sink: Any,
-    day: date,
-    org_id: str,
-    repo_metrics_rows: list[Any],
-    computed_at: datetime,
-    repo_names_by_id: dict[uuid.UUID, str],
-    repo_team_resolver: Any,
-) -> int:
-    """Write REPO-scope compounding-risk rows only.
-
-    CHAOS-4365 finalize-step fix: this runs once per repo (CHAOS-4264's
-    one-repo-at-a-time partition loop), so it can never see a team's other
-    repos. It used to also resolve and emit a team-scope row here anyway --
-    for a team owning 2+ repos, each partition wrote its OWN "complete" team
-    row from only that one repo's inputs, and argMax(computed_at) dedup then
-    kept whichever repo's partition happened to run last, silently dropping
-    every other owned repo's contribution (confirmed live: contributing_repo_
-    count stuck at 1 for a 2-repo team). Team-scope rows are now written
-    exactly once per org/day, from run_daily_metrics_finalize, after every
-    repo's partition has landed -- see the team-aggregation block there.
-    """
-    rows_for_compounding = list(repo_metrics_rows)
-    if not rows_for_compounding:
-        rows_for_compounding = _fetch_repo_metrics_for_day(primary_sink, org_id, day)
-    if not rows_for_compounding:
-        return 0
-
-    compounding_rows = build_compounding_risk_rows_for_day(
-        sink=primary_sink,
-        day=day,
-        org_id=org_id,
-        repo_metrics_rows=rows_for_compounding,
-        computed_at=computed_at,
-    )
-    if not compounding_rows:
-        return 0
-    for s in sinks:
-        s.write_compounding_risk_daily(compounding_rows)
-    return len(compounding_rows)
+# CHAOS-5308/CHAOS-3092: _repo_to_team_map_for_compounding_risk and
+# _write_compounding_risk_for_day (REPO-scope compounding_risk) are deleted
+# together. repo_user_commit and compounding_risk (repo scope) both have
+# native Go executors (RepoUserCommitExecutor, CompoundingRiskExecutor) that
+# are the sole writers now -- chris's ruling: "once go is in main that does
+# the same thing, skip flags are pointless." _repo_to_team_map_for_
+# compounding_risk had ZERO production callers left even before this PR (an
+# orphan from CHAOS-5084's team-scope deletion, which removed the
+# run_daily_metrics_finalize call site but not this helper) -- rg confirmed
+# only its own dedicated test and a golden-fixture generator referenced it.
+# Both are deleted in this same PR (see test_job_daily_compounding_risk.py's
+# and tests/fixtures/generate_teamresolve_python_golden.py's deletion, and
+# internal/teamresolve/golden_rot_guard_test.go's deletion -- the frozen
+# tests/fixtures/teamresolve_python_golden.json and
+# internal/teamresolve/golden_test.go stay, they need no live Python).
+# TEAM-scope compounding_risk (compounding_risk_team, CHAOS-5084) is
+# unaffected -- its own native executor already has no Python compute or
+# skip_families gate anywhere in this module.
 
 
 def _secondary_uri_from_env() -> str:
@@ -361,7 +254,6 @@ async def run_daily_metrics_job(
     backfill_days: int,
     repo_id: uuid.UUID | None = None,
     repo_name: str | None = None,
-    include_commit_metrics: bool = True,
     sink: str = "auto",
     provider: str = "auto",
     org_id: str,
@@ -427,7 +319,9 @@ async def run_daily_metrics_job(
     days = _date_range(day, backfill_days)
     computed_at = datetime.now(timezone.utc)
 
-    identity = load_identity_resolver()
+    # CHAOS-5308/CHAOS-3092: no load_identity_resolver() call here anymore --
+    # its only consumer was compute_daily_metrics' identity_resolver
+    # argument, deleted alongside repo_user_commit's compute+write below.
 
     primary_sink: Any
 
@@ -484,26 +378,6 @@ async def run_daily_metrics_job(
     business_tz = os.getenv("BUSINESS_TIMEZONE", "UTC")
     business_start = int(os.getenv("BUSINESS_HOURS_START", "9"))
     business_end = int(os.getenv("BUSINESS_HOURS_END", "17"))
-
-    daily_commit_cache: dict[date, list[Any]] = {}
-
-    async def _get_cached_commits_for_window(
-        window_start: date, window_end: date
-    ) -> list[Any]:
-        """Load commits for date range using per-day cache to avoid redundant fetches."""
-        result = []
-        current = window_start
-        while current <= window_end:
-            if current not in daily_commit_cache:
-                d_start = datetime.combine(current, time.min, tzinfo=timezone.utc)
-                d_end = d_start + timedelta(days=1)
-                rows, _, _ = await loader.load_git_rows(
-                    d_start, d_end, repo_id=repo_id, repo_name=repo_name
-                )
-                daily_commit_cache[current] = rows
-            result.extend(daily_commit_cache[current])
-            current += timedelta(days=1)
-        return result
 
     # CHAOS-4246: cicd/deploy/incident stayed at zero rows for
     # 16 days while every metrics.daily_partition run reported succeeded --
@@ -617,12 +491,17 @@ async def run_daily_metrics_job(
         commit_rows, pr_rows, review_rows = await loader.load_git_rows(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
-        daily_commit_cache[d] = commit_rows
 
-        pipeline_rows, deployment_rows = await loader.load_cicd_data(
+        # CHAOS-5308/CHAOS-3092: the second tuple element (deployment_rows,
+        # raw loader data) is discarded here now -- it fed `active_repos`,
+        # deleted alongside repo_user_commit's Python compute below; nothing
+        # else in this function ever consumed it. `load_cicd_data`'s own
+        # signature is untouched (a shared loader interface with other
+        # backends), the call still fetches both, only this unpacking drops
+        # the half nothing here reads anymore.
+        pipeline_rows, _deployment_rows = await loader.load_cicd_data(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
-        h_start_date = d - timedelta(days=29)
         # CHAOS-5245 deleted the testops_pipeline/testops_test/testops_coverage
         # compute+write block that used to sit here (the loader fetches for
         # testops_pipeline_rows/testops_job_rows/testops_suite_rows/
@@ -630,13 +509,10 @@ async def run_daily_metrics_job(
         # prior_coverage_rows and the compute_pipeline_metrics_daily/
         # compute_test_metrics_daily/compute_coverage_metrics_daily calls that
         # consumed them) -- their native Go executors (CHAOS-4284) have no
-        # Python fallback left to feed. h_start_date stays: h_commit_rows below
-        # is unrelated (file/complexity history), not a testops fetch.
+        # Python fallback left to feed.
         incident_rows = await loader.load_incidents(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
-
-        h_commit_rows = await _get_cached_commits_for_window(h_start_date, d)
 
         work_items: list[Any] = []
         work_item_transitions: list[Any] = []
@@ -645,32 +521,41 @@ async def run_daily_metrics_job(
                 start, end, repo_id, repo_name
             )
 
-        mttr_by_repo: dict[uuid.UUID, float] = {}
-        bug_times: dict[uuid.UUID, list[float]] = {}
-        for item in work_items:
-            if item.type == "bug" and item.completed_at and item.started_at:
-                comp_dt = _to_utc(item.completed_at)
-                if start <= comp_dt < end:
-                    rid = getattr(item, "repo_id", None)
-                    if rid:
-                        bug_times.setdefault(rid, []).append(
-                            (comp_dt - _to_utc(item.started_at)).total_seconds()
-                            / 3600.0
-                        )
-        for rid, times in bug_times.items():
-            mttr_by_repo[rid] = sum(times) / len(times)
-
-        # Build active_repos from ALL data sources, not just commits.
-        # Repos with CI/CD or deployment data but no commits in the window
-        # were previously excluded, causing missing metrics (gh-377).
-        active_repos: set[uuid.UUID] = {r["repo_id"] for r in commit_rows}
-        active_repos |= {r["repo_id"] for r in pipeline_rows if "repo_id" in r}
-        active_repos |= {r["repo_id"] for r in deployment_rows if "repo_id" in r}
-        rework_ratio_by_repo: dict[uuid.UUID, float] = {}
-        single_owner_ratio_by_repo: dict[uuid.UUID, float] = {}
-        bus_factor_by_repo: dict[uuid.UUID, int] = {}
-        gini_by_repo: dict[uuid.UUID, float] = {}
-
+        # CHAOS-5308/CHAOS-3092: repo_user_commit's daily compute+write
+        # (formerly `compute_daily_metrics` -> write_repo_metrics/
+        # write_user_metrics/write_commit_metrics) is DELETED here, not
+        # skip-gated -- chris's ruling: "once go is in main that does the
+        # same thing, skip flags are pointless." The native Go executor
+        # (RepoUserCommitExecutor, CHAOS-4275) is the only writer of
+        # repo_metrics_daily/user_metrics_daily/commit_metrics now.
+        # `compute_daily_metrics` itself IS ALSO deleted (compute.py, along
+        # with `DailyMetricsResult` in schemas.py and `commit_size_bucket`,
+        # its only other caller) -- rg confirmed zero production callers
+        # outside this call site; its remaining "callers" were dedicated
+        # unit tests (test_metrics_rework/reciprocity/quality/cognitive_
+        # load/compute.py, tests/fixtures/test_pr_review_latency_coverage.py,
+        # all deleted in this same PR) and the golden generator/rot-guard
+        # pair for tests/fixtures/repo_user_commit_python_golden.json
+        # (generate_repo_user_commit_python_golden.py and
+        # internal/jobs/metrics/daily/repouser/golden_rot_guard_test.go, both
+        # deleted -- the frozen golden JSON and Go's own
+        # TestComputeMatchesFrozenPythonGolden stay, they need no live
+        # Python). The whole feeder block this call needed -- h_commit_rows,
+        # active_repos, and the mttr_by_repo/rework_ratio_by_repo/
+        # single_owner_ratio_by_repo/bus_factor_by_repo/gini_by_repo per-repo
+        # loop -- is deleted with it: none of those five dicts nor
+        # h_commit_rows/active_repos had any other consumer in this
+        # function. `compute_rework_churn_ratio`/`compute_single_owner_
+        # file_ratio` (quality.py) are ALSO deleted -- zero production
+        # callers anywhere (quality.py's only production importer was this
+        # file; the whole module is deleted). `compute_code_ownership_gini`
+        # and `compute_bus_factor` (both knowledge.py) STAY -- both have a
+        # real, unrelated caller each: compute_code_ownership_gini is
+        # imported directly by tests/fixtures/generate_pysum_golden.py
+        # (CHAOS-4824's floating-point-summation golden), compute_bus_factor
+        # (api/graphql/resolvers/bus_factor.py) -- only this file's now-dead
+        # import of it is removed.
+        #
         # CHAOS-5234/CHAOS-3092: file_hotspots's daily compute (formerly
         # `compute_file_hotspots` -> `all_file_metrics` -> write_file_metrics)
         # is DELETED here, not skip-gated -- chris's ruling: "once go is in
@@ -685,20 +570,7 @@ async def run_daily_metrics_job(
         # tests, never a real production caller (correction from an earlier
         # PR pass on this same family, which left the function in place on
         # that flawed premise; see this PR's own body for the writeup).
-        for r_id in active_repos:
-            rework_ratio_by_repo[r_id] = compute_rework_churn_ratio(
-                repo_id=str(r_id), window_stats=h_commit_rows
-            )
-            single_owner_ratio_by_repo[r_id] = compute_single_owner_file_ratio(
-                repo_id=str(r_id), window_stats=h_commit_rows
-            )
-            bus_factor_by_repo[r_id] = compute_bus_factor(
-                repo_id=str(r_id), window_stats=h_commit_rows
-            )
-            gini_by_repo[r_id] = compute_code_ownership_gini(
-                repo_id=str(r_id), window_stats=h_commit_rows
-            )
-
+        #
         # CHAOS-5234/CHAOS-3092: file_risk_hotspots's daily compute (formerly
         # `compute_file_risk_hotspots` over `hotspot_repos` -> `all_file_
         # hotspots` -> write_file_hotspot_daily) is DELETED here, not
@@ -719,24 +591,6 @@ async def run_daily_metrics_job(
         # the same PR). `post_sync_dispatch.py`'s worker-chaining comment
         # naming `_load_complexity_map_for_repo` is updated in the same PR
         # to no longer describe a live dependency.
-
-        result = compute_daily_metrics(
-            day=d,
-            commit_stat_rows=commit_rows,
-            pull_request_rows=pr_rows,
-            pull_request_review_rows=review_rows,
-            computed_at=computed_at,
-            include_commit_metrics=include_commit_metrics,
-            team_resolver=team_resolver,
-            repo_team_resolver=repo_team_resolver,
-            repo_names_by_id=repo_names_by_id,
-            identity_resolver=identity,
-            mttr_by_repo=mttr_by_repo,
-            rework_churn_ratio_by_repo=rework_ratio_by_repo,
-            single_owner_file_ratio_by_repo=single_owner_ratio_by_repo,
-            bus_factor_by_repo=bus_factor_by_repo,
-            code_ownership_gini_by_repo=gini_by_repo,
-        )
 
         # CHAOS-4276: team_wellbeing has a native Go executor. When the Go
         # dispatcher reports it already computed and wrote this scope,
@@ -874,8 +728,8 @@ async def run_daily_metrics_job(
         # the same module is NOT touched, it has a real, separate caller
         # (compute_dora.py, still Python) plus its own dedicated test
         # coverage in test_job_dora.py. `deployment_rows` itself (the raw
-        # loader data) stays -- it also feeds `active_repos` earlier in this
-        # function.
+        # loader data) is now DISCARDED at its fetch site above -- CHAOS-5308
+        # deleted `active_repos`, its last consumer.
         # CHAOS-4269/CHAOS-4295: incident has a native Go executor, WITH the
         # CHAOS-4269 NULL-guard fix (this Python path stays permanently
         # zero-yield for repository-derived incident mappings -- port-with-fix
@@ -960,18 +814,14 @@ async def run_daily_metrics_job(
         if on_write_starting is not None:
             on_write_starting()
 
-        # CHAOS-4275: repo_user_commit has a native Go executor
-        # (RepoUserCommitExecutor). When the Go dispatcher reports it
-        # already computed and wrote this scope, skip ONLY the write here --
-        # unlike team_wellbeing above, `compute_daily_metrics` itself is
-        # NOT skipped: `result.repo_metrics` is a live in-process input to
-        # `_write_compounding_risk_for_day` a few lines below, and
-        # compounding_risk (not yet ported) has no other source for it. A
-        # codex adversarial review (round 2) on the Go port caught that this
-        # gate was missing entirely -- the native executor and this
-        # unconditional write path would otherwise both fire for every
-        # partition, doubling every repo/user/commit row's generation.
-        skip_repo_user_commit_write = "repo_user_commit" in skip_families
+        # CHAOS-5308/CHAOS-3092: no skip_repo_user_commit_write here anymore
+        # -- repo_user_commit's compute+write (result.repo_metrics/
+        # user_metrics/commit_metrics) is deleted entirely, not skip-gated;
+        # RepoUserCommitExecutor (native Go, CHAOS-4275) is the only writer
+        # now. compounding_risk (repo scope), the one other consumer of
+        # `result.repo_metrics`, is ALSO deleted outright above -- see the
+        # comment above the deleted `compute_daily_metrics` call site
+        # earlier in this function.
         # CHAOS-5234/CHAOS-3092: no skip_deploy_write here anymore -- deploy
         # used to have the SAME write-only-skip shape as repo_user_commit
         # above (deploy_metrics fed `_note_family_zero_rows("deploy", ...)`,
@@ -1023,11 +873,11 @@ async def run_daily_metrics_job(
         # deletion, not skip-gated. AIImpactExecutor (native Go) is the only
         # writer of ai_impact_metrics_daily now.
         for s in sinks:
-            if not skip_repo_user_commit_write:
-                s.write_repo_metrics(result.repo_metrics)
-                s.write_user_metrics(result.user_metrics)
-                if include_commit_metrics:
-                    s.write_commit_metrics(result.commit_metrics)
+            # CHAOS-5308/CHAOS-3092: no write_repo_metrics/write_user_metrics/
+            # write_commit_metrics call here -- deleted alongside the
+            # compute_daily_metrics call above; RepoUserCommitExecutor
+            # (native Go) is the only writer of repo_metrics_daily/
+            # user_metrics_daily/commit_metrics now.
             s.write_team_metrics(team_metrics)
             if wi_metrics and not skip_work_item_write:
                 s.write_work_item_metrics(wi_metrics)
@@ -1099,18 +949,14 @@ async def run_daily_metrics_job(
         if "incident" not in skip_families:
             _note_family_zero_rows("incident", incident_metrics, day=d)
 
-        # CHAOS-4287: compounding_risk has a native Go executor
-        # (CompoundingRiskExecutor), registered post_bridge. When the Go
-        # dispatcher names it in skip_families it has already computed and
-        # written this partition's REPO-scope rows, so skip the whole call
-        # rather than only the write -- nothing else in this function consumes
-        # its output (it writes straight to the sinks), which makes this the
-        # cicd/team_wellbeing shape rather than repo_user_commit's write-only
-        # skip. No _note_family_zero_rows here either way: this call site never
-        # had one, and adding it under a skip would be a false zero-rows signal
-        # exactly as it would have been for cicd.
+        # CHAOS-5308/CHAOS-3092: no compounding_risk (REPO scope) call here
+        # anymore -- deleted entirely, not skip-gated; CompoundingRiskExecutor
+        # (native Go, CHAOS-4287) is the only writer of REPO-scope
+        # compounding_risk_daily rows now. `_write_compounding_risk_for_day`
+        # itself is ALSO deleted (see the comment above the deleted
+        # `compute_daily_metrics` call site earlier in this function).
         #
-        # TEAM-scope rows are NOT covered by this gate -- CHAOS-5084/
+        # TEAM-scope rows are NOT covered by this deletion -- CHAOS-5084/
         # no-straddle (#2275 v2): CompoundingRiskTeamExecutor (Go) is the
         # SOLE writer for team scope now, with no Python compute or
         # skip_families gate for it anywhere in this module at all (the old
@@ -1118,17 +964,6 @@ async def run_daily_metrics_job(
         # is deleted, not merely gated) -- same no-fail-open posture
         # ic_finalize/team_cognitive_load's own finalize-scope families
         # already have.
-        if "compounding_risk" not in skip_families:
-            _write_compounding_risk_for_day(
-                sinks=sinks,
-                primary_sink=primary_sink,
-                day=d,
-                org_id=org_id,
-                repo_metrics_rows=result.repo_metrics,
-                computed_at=computed_at,
-                repo_names_by_id=repo_names_by_id,
-                repo_team_resolver=repo_team_resolver,
-            )
 
         # CHAOS-4365 finalize-step fix: team_cognitive_load has no repo-scope
         # table at all -- it is emitted ONCE per org/day from
@@ -1416,13 +1251,9 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         "--repo-id", type=uuid.UUID, help="Filter to a specific repository UUID."
     )
     daily.add_argument("--repo-name", help="Filter to a specific repository by name.")
-    daily.add_argument(
-        "--no-commits",
-        dest="commit_metrics",
-        action="store_false",
-        help="Skip per-commit metrics; compute work-item and derived metrics only.",
-    )
-    daily.set_defaults(commit_metrics=True)
+    # CHAOS-5308/CHAOS-3092: --no-commits is removed -- it only ever gated
+    # repo_user_commit's now-deleted write_commit_metrics call; there is no
+    # remaining commit-metrics compute in this job to skip.
     add_sink_arg(daily)
     daily.add_argument(
         "--provider",
@@ -1469,7 +1300,6 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             backfill_days=backfill_days,
             repo_id=ns.repo_id,
             repo_name=ns.repo_name,
-            include_commit_metrics=ns.commit_metrics,
             sink=ns.sink,
             provider=ns.provider,
             org_id=org_id,

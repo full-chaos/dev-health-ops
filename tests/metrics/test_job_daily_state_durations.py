@@ -155,7 +155,10 @@ def _neutralize_daily_job(
     monkeypatch.setattr(
         job_daily, "build_repo_pattern_resolver", lambda *a, **k: _NullResolver()
     )
-    monkeypatch.setattr(job_daily, "load_identity_resolver", lambda *a, **k: None)
+    # CHAOS-5308/CHAOS-3092: no load_identity_resolver to neutralize here
+    # anymore -- its only consumer was compute_daily_metrics' identity_
+    # resolver argument, deleted alongside repo_user_commit's compute+write
+    # (monkeypatch.setattr on a nonexistent attribute raises).
     monkeypatch.setattr(job_daily, "discover_repos", lambda **k: [])
     # CHAOS-5234/CHAOS-3092: no build_governance_rows_for_day to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
@@ -168,7 +171,9 @@ def _neutralize_daily_job(
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
     monkeypatch.setattr(job_daily, "run_benchmarking_for_day", lambda *a, **k: None)
-    monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", lambda **k: 0)
+    # CHAOS-5308/CHAOS-3092: no _write_compounding_risk_for_day to neutralize
+    # here anymore -- job_daily.py no longer calls it at all (deleted, not
+    # skip-gated; see CHAOS-5233's shape for work_item_attribution).
 
 
 @pytest.mark.asyncio

@@ -263,8 +263,21 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4286",
     },
     "work_graph_edges": {
-        "citation": "Python: `ai_workflow.py extract_review_deployment_incident_edges`",
-        "ticket": "CHAOS-4286",
+        # CHAOS-5234/CHAOS-3092: this citation was already stale before this
+        # PR -- WorkGraphEdgesExecutor (native Go) has computed this family
+        # since CHAOS-4286, but the citation here still described the old
+        # Python compute path. This PR deletes job_daily.py's own reference
+        # to extract_review_deployment_incident_edges AND the function
+        # itself (from work_graph/extractors/ai_workflow.py), along with its
+        # Go bit-exact oracle rot guard
+        # (TestWorkGraphEdgesMatchLivePythonProduction +
+        # testdata/python_work_graph_edges_oracle.py) -- rg confirmed those
+        # were its only real callers once job_daily.py's own reference was
+        # removed, so the old citation would now point at code that no
+        # longer exists. Closes CHAOS-5216 by construction (single native
+        # reader).
+        "citation": "Go: `internal/jobs/metrics/daily/work_graph_edges_native_executor.go` (`WorkGraphEdgesExecutor`)",
+        "ticket": "CHAOS-4286 (Done)",
     },
     "compounding_risk": {
         # CHAOS-4287: the ticket and this citation both said :502, which is

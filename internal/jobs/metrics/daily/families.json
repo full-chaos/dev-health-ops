@@ -8,7 +8,7 @@
     {"name":"file_hotspots","python":"DELETED (CHAOS-5272) -- was compute_file_hotspots; native Go executor has no Python fallback","writes":["file_metrics_daily"],"port":"go","golden":"required"},
     {"name":"file_risk_hotspots","python":"DELETED (CHAOS-5272) -- was compute_file_risk_hotspots; native Go executor has no Python fallback","writes":["file_hotspot_daily"],"port":"go","golden":"required"},
     {"name":"work_item","python":"compute_work_item_metrics_daily","writes":["work_item_metrics_daily","work_item_user_metrics_daily","work_item_cycle_times"],"port":"go","golden":"required","after":["work_item_attribution"]},
-    {"name":"work_item_estimate","python":"compute_estimate_coverage_metrics_daily","writes":["estimate_coverage_metrics_daily"],"port":"go","golden":"required","after":["work_item_attribution"]},
+    {"name":"work_item_estimate","python":"DELETED (CHAOS-5323) -- was compute_estimate_coverage_metrics_daily; native Go executor has no Python fallback","writes":["estimate_coverage_metrics_daily"],"port":"go","golden":"required","after":["work_item_attribution"]},
     {"name":"work_item_attribution","python":"compute_work_item_team_attributions","writes":["work_item_team_attributions"],"port":"go","golden":"required"},
     {"name":"work_item_state","python":"compute_work_item_state_durations_daily","writes":["work_item_state_durations_daily"],"port":"go","golden":"required","after":["work_item_attribution"]},
     {"name":"review_edges","python":"DELETED (CHAOS-4279) -- was compute_review_edges_daily (src/dev_health_ops/metrics/reviews.py); native Go executor has no Python fallback","writes":["review_edges_daily"],"port":"go","golden":"required"},

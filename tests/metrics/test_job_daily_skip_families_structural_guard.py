@@ -158,6 +158,21 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # AIWorkflowExtractionResult and extract_ai_workflow_from_pull_requests)
     # are deleted too -- rg confirmed zero remaining callers of any of them.
     "work_graph_edges": "extract_review_deployment_incident_edges",
+    # CHAOS-4279: review_edges's daily compute deleted from job_daily.py --
+    # the native Go executor (ReviewEdgesExecutor,
+    # internal/jobs/metrics/daily/review_edges_native_executor.go) is
+    # unconditionally registered in dailyNativeFamilyRegistrations whenever
+    # the daily worker starts (same reachability analysis already
+    # established for team_cognitive_load/team_complexity/benchmarking,
+    # CHAOS-5141/CHAOS-5051/CHAOS-4288). compute_review_edges_daily itself
+    # is ALSO deleted (the whole src/dev_health_ops/metrics/reviews.py
+    # module) -- its only substantial other caller,
+    # tests/api/graphql/test_go_api_dual_run_review_edges.py, was rewritten
+    # to seed from the frozen golden
+    # (tests/fixtures/daily_review_edges_python_golden.json) instead.
+    # write_review_edges itself is NOT deleted -- that same dual-run test
+    # still calls it directly.
+    "review_edges": "compute_review_edges_daily",
 }
 
 

@@ -382,9 +382,13 @@ async def run_daily_metrics_job(
     set is a no-op: every family computes and writes exactly as it did
     before this parameter existed. Only families with a Go native executor
     AND a live Python fallback still check this set (``repo_user_commit``
-    CHAOS-4275 and ``compounding_risk`` CHAOS-4287); naming any other
-    family here has no effect. ``benchmarking`` CHAOS-4288 was NEVER
-    checked in this set within THIS function -- it was moved to
+    CHAOS-4275, ``compounding_risk`` CHAOS-4287, ``work_item_state``
+    CHAOS-4278, and ``work_item``/``work_item_estimate`` -- the last three
+    are BLOCKED from outright deletion because job_work_items.py's
+    run_work_items_sync_job, an unrelated full-backfill sync job, still
+    calls their compute functions directly); naming any other family here
+    has no effect. ``benchmarking`` CHAOS-4288 was NEVER checked in this
+    set within THIS function -- it was moved to
     ``run_daily_metrics_finalize``'s own skip_families gate by CHAOS-5194
     before this docstring paragraph was last touched, and that gate is
     itself now gone too (CHAOS-4288 deleted the Python compute entirely;
@@ -398,15 +402,18 @@ async def run_daily_metrics_job(
     shape as file_hotspots/ai_impact above), so it no longer checks this
     set either. ``deploy`` (CHAOS-4293) had the same write-only-skip shape
     too, plus a zero-rows note, until CHAOS-5309 deleted its Python
-    compute+write+note outright, so it no longer checks this set either;
-    ``work_item_state`` (CHAOS-4278) and ``work_item_attribution`` still
-    skip-gate (BLOCKED from outright deletion: their compute functions
-    have a second live production caller, job_work_items.py's
-    run_work_items_sync_job) -- none of these check this set at all
-    anymore. CHAOS-5245 deleted testops_pipeline/testops_test/
-    testops_coverage/testops_risk's Python compute entirely (their native
-    Go executors, CHAOS-4284/CHAOS-4294, have no Python fallback left) --
-    those four names no longer appear here at all, not even as a no-op.
+    compute+write+note outright, so it no longer checks this set either.
+    ``work_item_attribution`` (CHAOS-5233) also no longer checks this set
+    -- unlike work_item/work_item_estimate/work_item_state above, THIS
+    function's own call to its compute (compute_work_item_team_attributions)
+    is deleted outright, even though the function itself survives
+    elsewhere (job_work_items.py's run_work_items_sync_job still calls it
+    directly) -- see the deletion ledger in
+    test_job_daily_skip_families_structural_guard.py. CHAOS-5245 deleted
+    testops_pipeline/testops_test/testops_coverage/testops_risk's Python
+    compute entirely (their native Go executors, CHAOS-4284/CHAOS-4294,
+    have no Python fallback left) -- those four names no longer appear
+    here at all, not even as a no-op.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_

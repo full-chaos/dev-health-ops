@@ -345,9 +345,11 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
     monkeypatch: Any,
 ) -> None:
     """A family that does not check skip_families is unaffected by being
-    named in it -- only repo_user_commit, deploy, compounding_risk,
-    review_edges, and benchmarking check this set today
-    (testops_pipeline/testops_test/testops_coverage/testops_risk used to as
+    named in it -- only repo_user_commit, compounding_risk, work_item_state,
+    work_item, and work_item_estimate check this set today (deploy,
+    review_edges, and benchmarking used to as well, until CHAOS-5309/
+    CHAOS-4279/CHAOS-4288 deleted their Python compute+write outright;
+    testops_pipeline/testops_test/testops_coverage/testops_risk used to as
     well, until CHAOS-5245 deleted their Python compute+write entirely;
     team_wellbeing/cicd/incident used to as well, until CHAOS-5234/
     CHAOS-3092 deleted theirs -- naming any of them now has no effect at

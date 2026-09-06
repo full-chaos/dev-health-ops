@@ -529,9 +529,11 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
     generate_daily_cicd_python_golden.py, both also deleted in this PR) plus
     its own dedicated tests (tests/metrics/test_cicd_daily_recompute_dedup_
     live.py, deleted, and tests/metrics/test_compute_delivery_ops.py's cicd
-    test function, removed). pipeline_rows (loader.load_cicd_data) itself is
-    NOT touched -- it also feeds active_repos, verified via rg that this
-    compute call was its only OTHER reader.
+    test function, removed). pipeline_rows is now ALSO deleted (CHAOS-5308):
+    its other reader, active_repos, is deleted too, so the
+    loader.load_cicd_data call site in job_daily.py has no remaining
+    consumer for either return value -- deleted entirely. The loader METHOD
+    itself stays (a shared interface with real other callers).
     """
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())

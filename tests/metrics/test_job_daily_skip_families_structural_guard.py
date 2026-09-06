@@ -110,8 +110,11 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # rot guard (TestCICDGoldenMatchesLivePython +
     # generate_daily_cicd_python_golden.py, both also deleted in this PR)
     # and its own dedicated/shared tests (deleted or surgically trimmed).
-    # pipeline_rows (loader.load_cicd_data) itself is NOT deleted -- it also
-    # feeds active_repos, an unrelated live reader.
+    # pipeline_rows is now ALSO deleted (CHAOS-5308): its other reader,
+    # active_repos, is deleted too, so the loader.load_cicd_data call site
+    # in job_daily.py has no remaining consumer for either return value --
+    # deleted entirely, not just this compute's own read of it. The loader
+    # METHOD itself stays (a shared interface with real other callers).
     "cicd": "compute_cicd_metrics_daily",
     # CHAOS-5234/CHAOS-3092: incident's daily compute deleted from
     # job_daily.py -- the native Go executor (IncidentExecutor,

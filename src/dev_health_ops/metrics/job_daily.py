@@ -490,16 +490,15 @@ async def run_daily_metrics_job(
             start, end, repo_id=repo_id, repo_name=repo_name
         )
 
-        # CHAOS-5308/CHAOS-3092: the second tuple element (deployment_rows,
-        # raw loader data) is discarded here now -- it fed `active_repos`,
-        # deleted alongside repo_user_commit's Python compute below; nothing
-        # else in this function ever consumed it. `load_cicd_data`'s own
-        # signature is untouched (a shared loader interface with other
-        # backends), the call still fetches both, only this unpacking drops
-        # the half nothing here reads anymore.
-        pipeline_rows, _deployment_rows = await loader.load_cicd_data(
-            start, end, repo_id=repo_id, repo_name=repo_name
-        )
+        # CHAOS-5308/CHAOS-3092: the `loader.load_cicd_data` call that used to
+        # sit here is deleted entirely, not just half-discarded -- BOTH tuple
+        # elements are now dead. `deployment_rows` fed `active_repos`, deleted
+        # alongside repo_user_commit's Python compute below; `pipeline_rows`
+        # fed cicd's own compute, already deleted by CHAOS-5312/CHAOS-3092
+        # (verified via rg: no other reference to `pipeline_rows` anywhere in
+        # this function besides this call site). `load_cicd_data`'s own
+        # signature/implementation is untouched -- a shared loader interface
+        # with other backends -- only this now-unconsumed call site is gone.
         # CHAOS-5245 deleted the testops_pipeline/testops_test/testops_coverage
         # compute+write block that used to sit here (the loader fetches for
         # testops_pipeline_rows/testops_job_rows/testops_suite_rows/
@@ -709,9 +708,9 @@ async def run_daily_metrics_job(
         # skip-gated -- chris's standing rule (CHAOS-5233): once a family's
         # Go executor is on main, its Python compute is deleted, never
         # skip-gated. CICDExecutor (native Go, CHAOS-4292) is now the only
-        # writer of cicd_metrics_daily for a daily partition. pipeline_rows
-        # itself is NOT touched by that deletion, but CHAOS-5308 below removes
-        # its only OTHER reader (active_repos).
+        # writer of cicd_metrics_daily for a daily partition. `pipeline_rows`
+        # itself is deleted too (CHAOS-5308, see the `load_cicd_data` removal
+        # above) -- this compute's own call site was its only reader.
         #
         # CHAOS-5234/CHAOS-3092/CHAOS-5309: deploy's daily compute is DELETED
         # here too, not skip-gated -- same standing rule. DeployExecutor
@@ -722,8 +721,9 @@ async def run_daily_metrics_job(
         # DEPLOYMENT_FAILURE_STATUSES in the same module is NOT touched, it has
         # a real, separate caller (compute_dora.py, still Python) plus its own
         # dedicated test coverage in test_job_dora.py. `deployment_rows` itself
-        # (the raw loader data) is now DISCARDED at its fetch site above --
-        # CHAOS-5308 deleted `active_repos`, its last consumer.
+        # (the raw loader data) is deleted along with its `load_cicd_data`
+        # fetch site above (CHAOS-5308) -- `active_repos`, its last consumer,
+        # is deleted too.
         #
         # CHAOS-5234/CHAOS-3092: incident's daily compute is DELETED here too
         # (see the loader.load_incidents removal above) -- no

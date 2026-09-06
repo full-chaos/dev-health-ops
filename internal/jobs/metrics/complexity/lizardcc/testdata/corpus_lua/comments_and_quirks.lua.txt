@@ -1,0 +1,48 @@
+--[[
+This is a Lua block comment.
+It spans multiple lines and must not be split into a line comment.
+]]
+
+-- this line comment mentions if and while but must not be counted
+function withLineComment(x)
+    return x
+end
+
+local longString = [[
+a long bracket string literal
+]]
+
+local longStringEq = [==[
+a long bracket string with equals padding
+]==]
+
+function withLengthOperator(t)
+    if #t > 0 then
+        return #t
+    end
+    return 0
+end
+
+-- The following members of rubyConditions (ruby.go, reused unmodified by
+-- Lua since LuaReader defines no condition-category override of its own)
+-- have no natural Lua spelling: "elsif"/"elseif"/"rescue"/"ensure"/"when"
+-- (Ruby-only keywords LuaReader inherits by not overriding the category)
+-- and "||"/"&&"/"?" (Lua spells these "or"/"and" and has no ternary
+-- operator at all). Exercised here as bare tokens purely for
+-- TestEveryConditionIsExercisedByTheLuaCorpus's coverage-manifest check,
+-- the same convention typescript.go's "elseif" fixture and ruby.go's
+-- "elseif_probe" already established -- lizard tokenizes and dispatches
+-- without parsing Lua grammar, so a syntactically-invalid filler line
+-- still exercises the exact condition-counting code path a REAL
+-- occurrence would.
+function conditionCoverageFiller(a, b)
+    elsif(a)
+    elseif(a)
+    rescue(a)
+    ensure(a)
+    when(a)
+    local c = a || b
+    local d = a && b
+    local e = a ? b
+    return c
+end

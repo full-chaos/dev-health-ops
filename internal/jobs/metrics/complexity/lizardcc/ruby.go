@@ -56,7 +56,12 @@ var rubyConditions = map[string]bool{
 	"?": true,
 }
 
-// rubyFuncKeyword ports RubylikeStateMachine.FUNC_KEYWORD (rubylike.py:15).
+// rubyFuncKeyword ports RubylikeStateMachine.FUNC_KEYWORD (rubylike.py:15),
+// the DEFAULT value -- LuaStateMachine overrides this class attribute to
+// "function" (lua.py:34), read dynamically wherever rubylike.py's own
+// _state_global spells `self.FUNC_KEYWORD` (its one read site). Ported as
+// an instance field (rubyMachine.funcKeyword), not a package const, for
+// exactly that reason -- see funcKeyword's own doc below.
 const rubyFuncKeyword = "def"
 
 // rubyMachine ports RubylikeStateMachine (rubylike.py:18-95). It embeds
@@ -67,11 +72,46 @@ type rubyMachine struct {
 	core
 	ctx       *Context
 	lastToken string
+
+	// funcKeyword ports self.FUNC_KEYWORD, read by stateGlobal's own
+	// dispatch -- rubyFuncKeyword ("def") by default, "function" for a
+	// LuaStateMachine instance (lua.go). An instance field rather than a
+	// direct reference to the package const because stateGlobal itself is
+	// the SAME method value for both languages (Lua overrides
+	// _state_global as a whole, but falls back to calling this exact
+	// method via super() for every token that isn't "="), so the
+	// distinguishing behaviour has to live in data this method reads, not
+	// in which method got called.
+	funcKeyword string
+
+	// globalState exists ONLY because Python's bare `self._state_global`
+	// references INSIDE this file's own methods (stateDefContinue's
+	// callback, stateIf, stateForWhile) resolve dynamically to a
+	// subclass's override at runtime -- LuaStateMachine overrides
+	// _state_global (lua.go). Every such reference is ported here as a
+	// read of this field, defaulting to this base's own stateGlobal, the
+	// same pattern golike.go's funcNameState/expectFunctionImplState use
+	// for the same reason. stateGlobal itself is UNAFFECTED: nothing
+	// inside it calls itself by name, so the method value stored in
+	// m.state (set directly by whichever constructor built this instance)
+	// is all dispatch ever needs there.
+	globalState state
+
+	// clone ports self.statemachine_clone() (`self.__class__(self.context)`,
+	// code_reader.py:20-21) -- Python's dynamic dispatch always
+	// constructs the ACTUAL runtime subclass, never hardcoding
+	// RubylikeStateMachine. Every nested block/if/loop-body spawn in this
+	// file goes through this field instead of calling newRubyMachine
+	// directly, so LuaStateMachine's override (lua.go) is used for every
+	// NESTED scope too, not just the file's top-level machine.
+	clone func() subMachine
 }
 
 func newRubyMachine(ctx *Context) *rubyMachine {
-	m := &rubyMachine{ctx: ctx}
+	m := &rubyMachine{ctx: ctx, funcKeyword: rubyFuncKeyword}
 	m.state = m.stateGlobal
+	m.globalState = m.stateGlobal
+	m.clone = func() subMachine { return newRubyMachine(ctx) }
 	return m
 }
 
@@ -94,7 +134,7 @@ func (m *rubyMachine) stateGlobal(tok string) {
 	case tok == "end" || tok == "}":
 		m.statemachineReturn()
 
-	case tok == rubyFuncKeyword:
+	case tok == m.funcKeyword:
 		m.state = m.stateDef
 
 	case tok == "it":
@@ -102,7 +142,7 @@ func (m *rubyMachine) stateGlobal(tok string) {
 
 	case (tok == "begin" || tok == "do" || tok == "class" || tok == "module" ||
 		tok == "{" || tok == "${") && m.lastToken != ".":
-		m.subState(newRubyMachine(m.ctx), nil)
+		m.subState(m.clone(), nil)
 
 	case tok == "while" || tok == "for":
 		if m.isNewline() {
@@ -111,7 +151,7 @@ func (m *rubyMachine) stateGlobal(tok string) {
 
 	case tok == "if" || tok == "unless":
 		if m.isNewline() {
-			m.subState(newRubyMachine(m.ctx), nil)
+			m.subState(m.clone(), nil)
 		} else {
 			m.state = m.stateIf
 		}
@@ -159,9 +199,9 @@ func (m *rubyMachine) stateDefContinue(tok string) {
 	case "(":
 		m.state = m.stateDefParameters
 	default:
-		m.subStateTok(newRubyMachine(m.ctx), func() {
+		m.subStateTok(m.clone(), func() {
 			m.ctx.EndOfFunction()
-			m.state = m.stateGlobal
+			m.state = m.globalState
 		}, tok)
 	}
 }
@@ -195,11 +235,11 @@ func (m *rubyMachine) stateDefParameters(tok string) {
 func (m *rubyMachine) stateIf(tok string) {
 	switch {
 	case m.isNewline():
-		m.state = m.stateGlobal
-		m.stateGlobal(tok)
+		m.state = m.globalState
+		m.globalState(tok)
 	case tok == "then":
-		m.state = m.stateGlobal
-		m.subState(newRubyMachine(m.ctx), nil)
+		m.state = m.globalState
+		m.subState(m.clone(), nil)
 	}
 }
 
@@ -213,9 +253,9 @@ func (m *rubyMachine) stateIf(tok string) {
 // stateDefContinue's default branch immediately above.
 func (m *rubyMachine) stateForWhile(tok string) {
 	if m.isNewline() || tok == "do" {
-		m.state = m.stateGlobal
+		m.state = m.globalState
 		if tok != "end" {
-			m.subState(newRubyMachine(m.ctx), nil)
+			m.subState(m.clone(), nil)
 		}
 	}
 }

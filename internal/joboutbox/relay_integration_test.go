@@ -1455,6 +1455,13 @@ func integrationRouteRegistry(
 				descriptors[index].MigrationState = "go_default"
 			case "celery":
 				descriptors[index].MigrationState = "go_implemented"
+				// CHAOS-5320: production's checked-in RollbackRoute for a kind
+				// this override targets may itself now be "none" (celery
+				// promoted off the rollback route fleet-wide) -- a caller
+				// simulating the pre-cutover celery-routed shape needs a
+				// self-consistent descriptor, not one carrying today's
+				// RollbackRoute value.
+				descriptors[index].RollbackRoute = "celery"
 			}
 		}
 		byKind[descriptors[index].Kind] = descriptors[index]

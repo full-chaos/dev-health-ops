@@ -473,6 +473,20 @@ WORKER_LOG_FILE="${METRICS_PROOF_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
   export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
   export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN
+  # CHAOS-4291/CHAOS-5320: the native ComplexityExecutor reads complexity.yaml
+  # from config.go's localComplexityConfigPath default
+  # ("/app/config/complexity.yaml"), which only exists inside the built
+  # container image -- this harness runs the go-built binary directly against
+  # the checked-out source tree, with no /app. Previously masked: complexity's
+  # rollback_route was "celery" in contracts/jobs/v1/migration-state.json, so
+  # ValidateStartup's queue-coverage check treated the native executor's
+  # construction failure as recoverable via that fallback. CHAOS-5320 promotes
+  # complexity (and 17 other kinds) off the celery rollback route
+  # fleet-wide -- with no fallback left, the SAME missing-config condition is
+  # now a fatal refusal of the whole "metrics" queue's coverage instead of a
+  # masked one. Point the override at the real repo-relative file, same as
+  # ci/lib/go_worker_fixture.sh's identical override.
+  export WORKER_REMAINING_COMPLEXITY_CONFIG_PATH="${ROOT_DIR}/src/dev_health_ops/config/complexity.yaml"
   # --shutdown-timeout is 7260s BY CONTRACT -- do not "optimise" it down.
   # CHAOS-5025 tried 120s and then 30s on the theory that 2h1m was an
   # unbounded-teardown time bomb. It is not, and the worker REFUSES to start

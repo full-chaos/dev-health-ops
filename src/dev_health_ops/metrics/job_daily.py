@@ -1243,7 +1243,13 @@ async def run_daily_metrics_job(
         # called" -- see PR3's body for the exact citation), so this call
         # was already dead weight, never a live fallback, before its
         # deletion. `skip_finalize` (this function's own parameter) existed
-        # only to gate this block and is removed with it.
+        # only to gate this block and is removed with it (CHAOS-5254
+        # independently arrived at the same deletion for the same code, one
+        # commit earlier in this branch's history -- the two tickets'
+        # reasoning is complementary, not conflicting: CHAOS-5254 traced
+        # every live caller and found none still needed skip_finalize=False;
+        # CHAOS-4290 PR3 additionally confirms the Go executor made this
+        # block's OUTPUT itself redundant, not just its opt-out flag).
 
         if len(days) > 1:
             # CHAOS-4264: a backfill_days > 1 call holds this day's source
@@ -1553,6 +1559,15 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             provider=ns.provider,
             org_id=org_id,
         )
+        # CHAOS-5254: run_daily_metrics_job no longer has an inline IC
+        # metrics/landscape finalize path to opt out of (that dead branch's
+        # only two callers that ever hit its default skip_finalize=False
+        # were the Celery run_daily_metrics task -- NOT deleted, see
+        # workers/metrics_daily.py's own doc -- and the now-DELETED
+        # scripts/compute_metrics_daily.py, which never passed the kwarg
+        # either) -- the standalone finalizer below is the only place IC
+        # metrics/landscape compute now.
+        #
         # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
         # written from run_daily_metrics_finalize, not from
         # run_daily_metrics_job itself -- this bare `dev-hops metrics daily`

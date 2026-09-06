@@ -10,9 +10,13 @@ def test_every_current_work_graph_and_investment_entrypoint_has_one_river_target
     # CHAOS-4438: their Go-side kinds (investment.dispatch/chunk/finalize)
     # were deleted outright (dead Go shells, zero producers), so there is no
     # longer any River target for these three Celery-only entrypoints to
-    # claim.
+    # claim. `run_work_graph_build` was REMOVED under CHAOS-4924: its Python
+    # compute was already a 0-stats no-op (every stage ported natively), and
+    # the Go worker already creates `workgraph.build` requests after a sync
+    # independent of any Celery entrypoint
+    # (`cmd/dev-health-worker/sync_dispatch.go:273-310`'s
+    # `workGraphPostSyncWriter.StartRequestTx`).
     assert RIVER_CONTRACT_TARGETS == {
-        "run_work_graph_build": "workgraph.build",
         "run_investment_materialize": "investment.materialize",
     }
     registry = load_registry()

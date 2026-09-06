@@ -3,9 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net/http"
-	"strings"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -59,23 +56,15 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	compatibility, err := workgraph.NewHTTPCompatibilityExecutor(
-		workgraphCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
-		workgraph.HTTPCompatibilityConfig{
-			Endpoint:              strings.TrimRight(cfg.OperationalBridgeURL, "/") + "/internal/worker/workgraph/v1/execute",
-			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
-			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
-		},
-	)
-	if err != nil {
-		return workerFamily{}, errWorkerDependencyUnavailable
-	}
-	// THE CUTOVER (CHAOS-4441). investment.materialize's compute is native Go
-	// from here; workgraph.build's is not yet (CHAOS-4924 carries its six
-	// remaining sub-builders), so the two kinds now take DIFFERENT executors
-	// and `compatibility` is no longer the single executor for every kind.
+	// THE CUTOVER (CHAOS-4924). workgraph.build no longer takes an HTTP
+	// bridge executor at all -- its Python compute was already a 0-stats
+	// no-op (every stage ported to a native pre-step), so there is nothing
+	// left to bridge to; `NewBuildHandler` below takes no executor argument.
+	// investment.materialize is unaffected (its own track, CHAOS-4441
+	// landed its native cutover separately) and keeps taking
+	// `nativeInvestment`.
 	//
-	// A ClickHouse failure REFUSES the family rather than falling back to the
+	// A ClickHouse failure REFUSES the family rather than falling back to a
 	// bridge. The fallback would be the more "available" choice and the wrong
 	// one: it would silently return the family to Python compute, so the
 	// cutover would appear complete while production kept running the old
@@ -99,7 +88,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 
 	registered := make([]jobruntime.HandlerSpec, 0, len(specs))
 	for _, spec := range specs {
-		if err := addWorkgraphWorker(workers, registry, spec, store, compatibility, nativeInvestment, dependencies, buildPreSteps, buildPostSteps); err != nil {
+		if err := addWorkgraphWorker(workers, registry, spec, store, nativeInvestment, dependencies, buildPreSteps, buildPostSteps); err != nil {
 			return workerFamily{}, errWorkerDependencyUnavailable
 		}
 		registered = append(registered, spec)
@@ -111,14 +100,6 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 		handlers: registered,
 		queues:   budgets,
 	}, nil
-}
-
-func workgraphCompatibilityHTTPClient(connectTimeout time.Duration) *http.Client {
-	// Work-graph and investment handler contracts have substantially different
-	// execution budgets. The River execution context is the authoritative
-	// deadline; the shared 30-second operational bridge timeout would abort a
-	// healthy synchronous investment materialization.
-	return contractDeadlineHTTPClient(connectTimeout)
 }
 
 // workgraphBuildPreSteps constructs the native Go producers that run inside a
@@ -151,6 +132,10 @@ func workgraphBuildPreSteps(
 		context.Background(), clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
 	)
 	if connectionErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	staleDependencyCleanupStep, staleDependencyCleanupStepErr := newStaleDependencyIssueEdgesCleanupPreStep(connection)
+	if staleDependencyCleanupStepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 	loader, loaderErr := issueprlinks.NewLoader(connection)
@@ -264,6 +249,7 @@ func workgraphBuildPreSteps(
 	}
 
 	steps := []workgraph.NativePreStep{
+		staleDependencyCleanupStep,
 		step, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issueCommitStep, issuePREdgesHeuristicStep,
 		prCommitLinksStep, prCommitEdgesStep, commitFileEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
 	}
@@ -316,7 +302,13 @@ func buildPostStepOrder() []string {
 // the actual dispatch" split daily_native_family_registration_test.go uses.
 //
 // Appending here is a real decision, not a formality: see the ordering
-// invariant on workgraph.NativePreStep. "issue_pr_edges_fast_path"
+// invariant on workgraph.NativePreStep. "stale_pr_dependency_issue_edges_cleanup"
+// (CHAOS-4924) is placed FIRST, matching where Python's
+// `_delete_stale_pr_dependency_issue_edges` ran inside `build()` (its first
+// action, before any derivation stage) -- it is pure cleanup deleting a
+// legacy mislabelled-edge shape and reads/writes nothing another pre-step
+// touches, so its position is free by the ordering invariant; first is
+// simply the position it always held. "issue_pr_edges_fast_path"
 // (CHAOS-4924) READS work_graph_issue_pr, which "issue_pr_links" WRITES, so
 // it must register strictly after it; "issue_pr_edges_text_parse" has no such
 // table dependency on the fast-path step, but registers immediately after it
@@ -342,7 +334,10 @@ func buildPostStepOrder() []string {
 // equally free; placed last of all. "issue_commit_edges" and
 // "commit_file_edges" (CHAOS-5304/CHAOS-5306) are the same free-position
 // case: issue_commit_edges reads git_commits/work_items and writes only
-// COMMIT->ISSUE edges no other step reads; commit_file_edges writes nothing
+// COMMIT->ISSUE edges into work_graph_edges -- a ROW-LEVEL predicate
+// (edge_type/source_type/target_type) disjoint from every other step's own
+// writes to that SAME shared table, not table-level exclusivity (several
+// pre-steps here write work_graph_edges); commit_file_edges writes nothing
 // at all (a pure readback over git_commit_stats). Both placed to preserve
 // Python's own relative stage order (builder.py's issue->commit stage "3b"
 // sat between the text-parse and heuristic issue-PR stages, "3" and "4";
@@ -350,6 +345,7 @@ func buildPostStepOrder() []string {
 // "7"/"8") rather than for any dependency reason.
 func buildPreStepOrder() []string {
 	return []string{
+		"stale_pr_dependency_issue_edges_cleanup",
 		"issue_pr_links",
 		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_commit_edges", "issue_pr_edges_heuristic",
 		"pr_commit_links", "pr_commit_edges", "commit_file_edges",
@@ -357,17 +353,17 @@ func buildPreStepOrder() []string {
 	}
 }
 
-// addWorkgraphWorker routes each kind to its executor. `executor` is the
-// Python bridge and still serves workgraph.build; `nativeInvestment` serves
-// investment.materialize only. investment.dispatch/chunk/finalize (the
-// pre-cutover partitioned pipeline) were deleted under CHAOS-4438: zero
+// addWorkgraphWorker routes each kind to its handler. workgraph.build is
+// fully native (CHAOS-4924) and takes no executor at all; `nativeInvestment`
+// serves investment.materialize only. investment.dispatch/chunk/finalize
+// (the pre-cutover partitioned pipeline) were deleted under CHAOS-4438: zero
 // producers ever created a request row for them (RequestWriter.WriteTx's
 // sole call site only ever writes workgraph.build), confirmed exhaustively
 // after #2227 landed investment.materialize's native cutover.
-func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, executor workgraph.CompatibilityExecutor, nativeInvestment workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep, buildPostSteps []workgraph.NativePostStep) error {
+func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, nativeInvestment workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep, buildPostSteps []workgraph.NativePostStep) error {
 	switch spec.Kind {
 	case jobcontract.KindWorkGraphBuild:
-		h, err := workgraph.NewBuildHandler(store, executor, buildPreSteps, buildPostSteps, dependencies.Logger)
+		h, err := workgraph.NewBuildHandler(store, buildPreSteps, buildPostSteps, dependencies.Logger)
 		if err != nil {
 			return err
 		}

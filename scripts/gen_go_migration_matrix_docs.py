@@ -452,15 +452,17 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
 # ---------------------------------------------------------------------------
 WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
     "workgraph.build": {
-        "executor": "COMPAT-Python (narrow native pre/post-step)",
+        "executor": "NATIVE",
         "citation": (
-            "Go: `internal/jobs/workgraph/prestep.go` (issue-PR edge mapping, runs BEFORE the "
-            "bridge) + one `poststep.go` edge type (runs AFTER); Python: `worker_workgraph.py:367 "
-            'execute` (LLM categorization -- "Python owns 100% of the compute" per prestep.go\'s '
-            "own doc comment)"
+            "Go: `internal/jobs/workgraph/handler.go`'s `buildHandler` runs the full "
+            "`buildPreStepOrder()` sequence (issue<->PR/issue<->commit/PR<->commit edges, "
+            "flag-guards, operational-incident, issue<->issue edges) natively, no bridge call "
+            "at all. Python's `WorkGraphBuilder.build()` "
+            "(`src/dev_health_ops/work_graph/builder.py`) is DELETED -- every stage it used to "
+            "run was already a 0-stats no-op by the time of this cutover"
         ),
-        "route": "bridge -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case still takes the HTTP `executor`",
-        "ticket": "CHAOS-4924 (six remaining sub-builders + cutover)",
+        "route": "river, native -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case takes no executor at all",
+        "ticket": "CHAOS-4924 (cutover landed)",
     },
     "investment.materialize": {
         "executor": "NATIVE",

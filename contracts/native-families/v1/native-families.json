@@ -42,6 +42,6 @@
   },
   "workgraph": {
     "investment.materialize": "native",
-    "workgraph.build": "compat"
+    "workgraph.build": "native"
   }
 }

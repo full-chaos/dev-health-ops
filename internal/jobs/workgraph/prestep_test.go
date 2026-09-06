@@ -7,9 +7,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
-// recordingPreStep notes when it ran, relative to the executor.
+// recordingPreStep notes when it ran, relative to the other steps.
 type recordingPreStep struct {
 	name     string
 	sequence *[]string
@@ -24,32 +26,16 @@ func (step *recordingPreStep) Run(context.Context, Claim) (map[string]any, error
 	return step.fragment, step.err
 }
 
-// sequencingExecutor records that it ran and returns a JSON-object evidence
-// payload, the shape the Python bridge actually produces.
-type sequencingExecutor struct {
-	sequence *[]string
-	evidence []byte
-}
-
-func (e sequencingExecutor) Execute(context.Context, Claim) ([]byte, error) {
-	*e.sequence = append(*e.sequence, "executor")
-	if e.evidence == nil {
-		return []byte(`{"outcome":"ok"}`), nil
-	}
-	return e.evidence, nil
-}
-
-// TestBuildRunsPreStepsBeforeTheBridge is the ordering guarantee the whole
-// seam exists for: the Python build reads `work_graph_issue_pr` four lines
-// after the producer writes it (builder.py:466 then :470), so a mapping step
-// that ran after the bridge would leave that read seeing the previous run's
-// rows.
-func TestBuildRunsPreStepsBeforeTheBridge(t *testing.T) {
+// TestBuildRunsPreStepsInOrder pins the ordering invariant NativePreStep
+// documents: steps run in the order given. Before CHAOS-4924 this also
+// asserted pre-steps ran BEFORE the Python bridge; there is no bridge left
+// on Build to order against, so that half of the old test name/assertion is
+// gone, not just renamed.
+func TestBuildRunsPreStepsInOrder(t *testing.T) {
 	var sequence []string
 	store := &fakeStore{claim: testClaim(time.Minute)}
 	handler, err := NewBuildHandler(
 		store,
-		sequencingExecutor{sequence: &sequence},
 		[]NativePreStep{
 			&recordingPreStep{name: "first", sequence: &sequence},
 			&recordingPreStep{name: "second", sequence: &sequence},
@@ -64,7 +50,7 @@ func TestBuildRunsPreStepsBeforeTheBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"prestep:first", "prestep:second", "executor"}
+	want := []string{"prestep:first", "prestep:second"}
 	if len(sequence) != len(want) {
 		t.Fatalf("sequence = %v, want %v", sequence, want)
 	}
@@ -78,41 +64,35 @@ func TestBuildRunsPreStepsBeforeTheBridge(t *testing.T) {
 	}
 }
 
-// TestInvestmentKindsCarryNoPreSteps pins that the seam is build-only. The
-// investment handler takes the same `newHandler`, so a shared default would
-// silently run the mapping producer on investment.materialize too.
-func TestInvestmentKindsCarryNoPreSteps(t *testing.T) {
-	store := &fakeStore{claim: testClaim(time.Minute)}
-	for _, build := range []func() (*handler, error){
-		func() (*handler, error) {
-			h, err := NewMaterializeHandler(store, blockingExecutor{}, nil)
-			if h == nil {
-				return nil, err
-			}
-			return h.handler, err
-		},
-	} {
-		h, err := build()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(h.preSteps) != 0 {
-			t.Fatalf("an investment handler carries %d pre-steps, want 0", len(h.preSteps))
-		}
+// TestInvestmentHandlerCarriesNoPreSteps pins that the seam is build-only.
+// Before CHAOS-4924 this was a runtime check on a shared handler type that
+// COULD have carried pre-steps for either kind if not careful; buildHandler
+// and materializeHandler are now separate types, and materializeHandler has
+// no preSteps field AT ALL -- a structural, compile-time guarantee stronger
+// than the runtime check this replaces.
+func TestInvestmentHandlerCarriesNoPreSteps(t *testing.T) {
+	store := &fakeStore{claim: testMaterializeClaim(time.Minute)}
+	h, err := NewMaterializeHandler(store, blockingExecutor{}, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if h.materializeHandler == nil {
+		t.Fatal("NewMaterializeHandler returned a nil handler")
+	}
+	// h.materializeHandler has no preSteps field to check -- its absence
+	// from the struct definition IS the assertion.
 }
 
-// TestPreStepFailureFailsTheBuildAmbiguously: the build must NOT continue past
+// TestPreStepFailureFailsTheBuildPermanently: the build must NOT continue past
 // a failed mapping step. Continuing would emit an edge set silently missing
-// every provider-attached link — a wrong answer that looks healthy. The release
-// is AMBIGUOUS because a step that writes in batches may have written some rows
-// before failing.
-func TestPreStepFailureFailsTheBuildAmbiguously(t *testing.T) {
+// every provider-attached link — a wrong answer that looks healthy. CHAOS-4924
+// cutover: this is NEVER ambiguous for Build (no bridge means nothing
+// half-applied to repair) — a non-transient error like this one is Permanent.
+func TestPreStepFailureFailsTheBuildPermanently(t *testing.T) {
 	var sequence []string
 	store := &fakeStore{claim: testClaim(time.Minute)}
 	handler, err := NewBuildHandler(
 		store,
-		sequencingExecutor{sequence: &sequence},
 		[]NativePreStep{
 			&recordingPreStep{name: "mapping", sequence: &sequence, err: errors.New("clickhouse refused the batch")},
 		},
@@ -127,23 +107,21 @@ func TestPreStepFailureFailsTheBuildAmbiguously(t *testing.T) {
 	if workErr == nil {
 		t.Fatal("Work returned nil after a pre-step failure")
 	}
-	for _, entry := range sequence {
-		if entry == "executor" {
-			t.Fatal("the bridge ran after a failed pre-step")
-		}
+	if !strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf("Work = %v, want category %s", workErr, jobruntime.CategoryPermanent)
 	}
 	if store.completions != 0 {
 		t.Fatalf("completions=%d, want 0", store.completions)
 	}
-	if store.ambiguous != 1 {
-		t.Fatalf("ambiguous=%d, want 1", store.ambiguous)
+	if store.ambiguous != 0 {
+		t.Fatalf("ambiguous=%d, want 0 -- Build never has a half-applied bridge write to repair", store.ambiguous)
 	}
 }
 
 func TestNewBuildHandlerRejectsANilPreStep(t *testing.T) {
 	// A nil step is a wiring bug that would silently skip ported compute —
 	// exactly the failure this seam exists to prevent.
-	if _, err := NewBuildHandler(&fakeStore{}, blockingExecutor{}, []NativePreStep{nil}, nil, nil); !errors.Is(err, ErrUnavailable) {
+	if _, err := NewBuildHandler(&fakeStore{}, []NativePreStep{nil}, nil, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("NewBuildHandler with a nil pre-step = %v, want ErrUnavailable", err)
 	}
 }

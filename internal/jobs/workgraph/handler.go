@@ -4,65 +4,34 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
-type handler struct {
-	store         Store
-	compatibility CompatibilityExecutor
-	// preSteps run before the bridge, in order, inside the same lease
-	// renewal. Only KindBuild carries any today; see NativePreStep.
-	preSteps []NativePreStep
-	// postSteps run AFTER the bridge, in order, inside the same lease renewal.
-	// A step belongs here rather than in preSteps when the Python stage would
-	// OVERWRITE what it writes; see NativePostStep.
-	postSteps []NativePostStep
-	logger    *slog.Logger
-}
-
-func newHandler(
-	store Store, compatibility CompatibilityExecutor,
-	preSteps []NativePreStep, postSteps []NativePostStep,
-	logger *slog.Logger,
-) (*handler, error) {
-	if store == nil || compatibility == nil {
-		return nil, ErrUnavailable
-	}
-	for _, step := range preSteps {
-		// A nil step would be a wiring bug that silently skips ported compute,
-		// which is exactly the failure this seam exists to prevent.
-		if step == nil {
-			return nil, ErrUnavailable
-		}
-	}
-	for _, step := range postSteps {
-		// Same reasoning, slightly sharper: a skipped POST-step leaves the
-		// bridge's own values in place, so the build succeeds with rows that
-		// look right and carry the pre-port policy.
-		if step == nil {
-			return nil, ErrUnavailable
-		}
-	}
-	// A nil logger falls back to slog.Default() so a permanent-cancel below
-	// is never silently unlogged -- same convention as issueprlinks.Service.
-	if logger == nil {
-		logger = slog.Default()
-	}
-	return &handler{
-		store: store, compatibility: compatibility,
-		preSteps: preSteps, postSteps: postSteps, logger: logger,
-	}, nil
-}
-
-func (handler *handler) work(ctx context.Context, requestID string, kind Kind, organizationID *string, domain jobcontract.DomainLink) error {
-	if handler == nil || handler.store == nil || handler.compatibility == nil || !validUUID(requestID) ||
+// runClaimedWork is the claim/lease-renewal/complete skeleton shared by the
+// Build and Materialize handlers. It owns every codepath that is IDENTICAL
+// between the two kinds: claiming, the claimed-request-mismatch permanent
+// cancel (still Ambiguous for both -- an operator needs to see which of
+// org/id/kind disagreed with the claimed request, regardless of whether the
+// kind bridges to Python), lease renewal around runWork, and Complete.
+//
+// The two kinds diverge ONLY in what runs inside the lease (runWork) and how
+// a non-lease-lost failure from it is classified (classify) -- see
+// buildHandler.work and materializeHandler.work for why classify differs.
+func runClaimedWork(
+	ctx context.Context, store Store, logger *slog.Logger,
+	requestID string, kind Kind, organizationID *string, domain jobcontract.DomainLink,
+	runWork func(workCtx context.Context, claim Claim) ([]byte, error),
+	classify func(ctx context.Context, claim Claim, err error) error,
+) error {
+	if store == nil || !validUUID(requestID) ||
 		organizationID == nil || domain.ID != requestID || domain.Type != domainFor(kind) {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
-	claim, err := handler.store.Claim(ctx, requestID, kind)
+	claim, err := store.Claim(ctx, requestID, kind)
 	if err != nil {
 		if errors.Is(err, ErrInvalidState) {
 			return jobruntime.Permanent(err)
@@ -84,72 +53,30 @@ func (handler *handler) work(ctx context.Context, requestID string, kind Kind, o
 		// below: this is a permanent cancel too, and without the mismatch
 		// itself logged an operator sees only "ambiguous", never which of
 		// org/id/kind actually disagreed with the claimed request.
-		handler.logger.Error("workgraph handler: permanent cancel, claimed request does not match envelope",
+		logger.Error("workgraph handler: permanent cancel, claimed request does not match envelope",
 			slog.String("request_id", requestID), slog.String("kind", string(kind)),
 			slog.String("organization_id", *organizationID),
 			slog.String("claimed_organization_id", claim.Request.OrganizationID),
 			slog.String("claimed_request_id", claim.Request.ID),
 			slog.String("claimed_kind", string(claim.Request.Kind)),
 		)
-		_ = releaseAmbiguous(handler.store, ctx, *claim, "claimed request no longer matches River envelope")
+		_ = releaseAmbiguous(store, ctx, *claim, "claimed request no longer matches River envelope")
 		return jobruntime.Permanent(ErrInvalidState)
 	}
-	// The pre-steps and the bridge share ONE lease renewal: the lease has to
+	// runWork shares ONE lease renewal with the caller: the lease has to
 	// cover the whole execution, and a step that ran under an expired lease
 	// would be writing outside its fence.
 	evidence, err := runWithLeaseRenewal(ctx, claim.LeaseDuration,
-		func(renewCtx context.Context) error { return handler.store.Renew(renewCtx, *claim) },
-		func(workCtx context.Context) ([]byte, error) {
-			fragments, preStepErr := runPreSteps(workCtx, handler.preSteps, *claim)
-			if preStepErr != nil {
-				return nil, preStepErr
-			}
-			executed, executeErr := handler.compatibility.Execute(workCtx, *claim)
-			if executeErr != nil {
-				return nil, executeErr
-			}
-			// Post-steps run AFTER the bridge because the bridge OVERWRITES
-			// what they write; see NativePostStep. A failure here fails the
-			// build: the rows exist but carry Python's values, which is a wrong
-			// answer that looks healthy rather than a missing one.
-			postFragments, postStepErr := runPostSteps(workCtx, handler.postSteps, *claim)
-			if postStepErr != nil {
-				return nil, postStepErr
-			}
-			return mergePreStepEvidence(executed, mergeStepFragments(fragments, postFragments)), nil
-		},
+		func(renewCtx context.Context) error { return store.Renew(renewCtx, *claim) },
+		func(workCtx context.Context) ([]byte, error) { return runWork(workCtx, *claim) },
 	)
 	if err != nil {
 		if errors.Is(err, ErrLeaseLost) {
 			return jobruntime.Retryable(err)
 		}
-		// A failure the executor could positively place as "never sent" or
-		// "the bridge declined" carries no possibility of a half-applied
-		// side effect, so there is nothing ambiguous to record. Releasing
-		// ambiguous here is what wedged CHAOS-4970's chain: 'ambiguous' is a
-		// state Claim refuses and joboutbox's strand-repair sweep excludes
-		// by construction, and no Go caller exists for the Python /repair
-		// endpoint that is the only way out of it -- so a transient DNS
-		// blip or a 401 became a permanently dead request. Leaving the lease
-		// alone instead keeps the ordinary reclaim path reachable: the next
-		// attempt parks on LeaseActiveError until the lease expires, then
-		// Claim's expired-lease branch reclaims it, all inside River's own
-		// attempt budget.
-		if errors.Is(err, ErrCompatibilityNotSent) || errors.Is(err, ErrCompatibilityRefused) {
-			return jobruntime.Retryable(err)
-		}
-		// Loud, not just recorded on the ambiguous ledger row: this is the
-		// permanent-cancel path, and the underlying error (e.g. a pre-step's
-		// ClickHouse bind failure) is exactly what an operator needs to see
-		// without having to correlate a ledger detail string back to a cause.
-		handler.logger.Error("workgraph handler: permanent cancel after ambiguous compatibility outcome",
-			slog.String("request_id", requestID), slog.String("kind", string(kind)),
-			slog.String("organization_id", *organizationID), slog.Any("error", err),
-		)
-		_ = releaseAmbiguous(handler.store, ctx, *claim, compatibilityAmbiguousDetail(err))
-		return jobruntime.Permanent(err)
+		return classify(ctx, *claim, err)
 	}
-	if err := handler.store.Complete(ctx, *claim, evidence); err != nil {
+	if err := store.Complete(ctx, *claim, evidence); err != nil {
 		if errors.Is(err, ErrLeaseLost) {
 			return jobruntime.Retryable(err)
 		}
@@ -224,22 +151,189 @@ func runWithLeaseRenewal(ctx context.Context, lease time.Duration, renew func(co
 	return evidence, workErr
 }
 
-type BuildHandler struct{ *handler }
-type MaterializeHandler struct{ *handler }
+// isTransientStepError reports whether err is a connectivity-class failure
+// (ClickHouse dial failure, query/context timeout, cancellation) rather than
+// a genuine defect -- context.DeadlineExceeded/context.Canceled cover a
+// cancelled or timed-out query context, and net.Error covers everything
+// clickhouse-go's driver itself returns for a dial failure or a read/write
+// timeout (both satisfy net.Error via Timeout()/the underlying *net.OpError).
+func isTransientStepError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
+// buildHandler runs workgraph.build entirely natively: no CompatibilityExecutor
+// field exists on this type at all (CHAOS-4924 cutover) -- Python's remaining
+// build() compute was already a 0-stats no-op (every stage ported to a native
+// pre-step), so there is nothing left to bridge to, and the absence is
+// structural (a compile-time fact, not a runtime nil-check) rather than a
+// poison executor that would fail loud if ever called. See classify's own
+// reasoning in work() for why a step failure here is NEVER Ambiguous.
+type buildHandler struct {
+	store Store
+	// preSteps run first, in order, inside the one lease renewal. See
+	// NativePreStep for the ordering invariant.
+	preSteps []NativePreStep
+	// postSteps run after preSteps, in order, inside the same lease renewal.
+	// Empty since CHAOS-4924 retired the last one (issue_issue_edges moved
+	// into preSteps once its Python producer was deleted) -- kept as a typed
+	// seam, not removed, so a future step that genuinely needs to run last
+	// has a declared home. See buildPostStepOrder's own doc comment.
+	postSteps []NativePostStep
+	logger    *slog.Logger
+}
+
+func newBuildHandler(store Store, preSteps []NativePreStep, postSteps []NativePostStep, logger *slog.Logger) (*buildHandler, error) {
+	if store == nil {
+		return nil, ErrUnavailable
+	}
+	for _, step := range preSteps {
+		// A nil step would be a wiring bug that silently skips ported compute,
+		// which is exactly the failure this seam exists to prevent.
+		if step == nil {
+			return nil, ErrUnavailable
+		}
+	}
+	for _, step := range postSteps {
+		if step == nil {
+			return nil, ErrUnavailable
+		}
+	}
+	// A nil logger falls back to slog.Default() so a permanent-cancel below
+	// is never silently unlogged -- same convention as issueprlinks.Service.
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &buildHandler{store: store, preSteps: preSteps, postSteps: postSteps, logger: logger}, nil
+}
+
+func (h *buildHandler) work(ctx context.Context, requestID string, organizationID *string, domain jobcontract.DomainLink) error {
+	if h == nil {
+		return jobruntime.Permanent(ErrInvalidState)
+	}
+	return runClaimedWork(ctx, h.store, h.logger, requestID, KindBuild, organizationID, domain,
+		func(workCtx context.Context, claim Claim) ([]byte, error) {
+			fragments, preStepErr := runPreSteps(workCtx, h.preSteps, claim)
+			if preStepErr != nil {
+				return nil, preStepErr
+			}
+			postFragments, postStepErr := runPostSteps(workCtx, h.postSteps, claim)
+			if postStepErr != nil {
+				return nil, postStepErr
+			}
+			// No bridge means no base evidence payload to merge fragments
+			// into -- mergePreStepEvidence returns its input UNCHANGED when
+			// that input is empty, which would silently drop every
+			// fragment. "{}" is a valid empty JSON object, so the merge
+			// proceeds and every fragment lands as a top-level key.
+			return mergePreStepEvidence([]byte("{}"), mergeStepFragments(fragments, postFragments)), nil
+		},
+		func(_ context.Context, _ Claim, err error) error {
+			// Ambiguous exists to record a HALF-APPLIED Python write: the
+			// bridge may have succeeded before a later step failed, leaving
+			// rows that carry Python's values behind. Build has no bridge,
+			// so a step failure here never leaves anything half-applied --
+			// there is nothing for an operator to repair via
+			// `workerctl workgraph repair`, only a build to retry or fix.
+			// This NEVER releases Ambiguous, deliberately, for Build.
+			if isTransientStepError(err) {
+				return jobruntime.Retryable(err)
+			}
+			// Loud, not just returned: a permanent-cancel needs the
+			// underlying cause (e.g. a pre-step's ClickHouse bind failure)
+			// visible without correlating a ledger detail string back to it
+			// -- same reasoning the bridge-era permanent-cancel log carried,
+			// now without an ambiguous ledger row to also record it on.
+			h.logger.Error("workgraph build handler: permanent cancel after step failure",
+				slog.String("request_id", requestID), slog.String("organization_id", *organizationID),
+				slog.Any("error", err),
+			)
+			return jobruntime.Permanent(err)
+		},
+	)
+}
+
+// materializeHandler runs investment.materialize through the Python bridge,
+// unchanged by the CHAOS-4924 Build cutover -- investment.materialize is its
+// own track (CHAOS-4441 landed its own native path separately; this type
+// exists for whichever configuration still routes through the bridge).
+type materializeHandler struct {
+	store         Store
+	compatibility CompatibilityExecutor
+	logger        *slog.Logger
+}
+
+func newMaterializeHandler(store Store, compatibility CompatibilityExecutor, logger *slog.Logger) (*materializeHandler, error) {
+	if store == nil || compatibility == nil {
+		return nil, ErrUnavailable
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &materializeHandler{store: store, compatibility: compatibility, logger: logger}, nil
+}
+
+func (h *materializeHandler) work(ctx context.Context, requestID string, organizationID *string, domain jobcontract.DomainLink) error {
+	if h == nil || h.compatibility == nil {
+		return jobruntime.Permanent(ErrInvalidState)
+	}
+	return runClaimedWork(ctx, h.store, h.logger, requestID, KindMaterialize, organizationID, domain,
+		func(workCtx context.Context, claim Claim) ([]byte, error) {
+			return h.compatibility.Execute(workCtx, claim)
+		},
+		func(ctx context.Context, claim Claim, err error) error {
+			// A failure the executor could positively place as "never sent" or
+			// "the bridge declined" carries no possibility of a half-applied
+			// side effect, so there is nothing ambiguous to record. Releasing
+			// ambiguous here is what wedged CHAOS-4970's chain: 'ambiguous' is a
+			// state Claim refuses and joboutbox's strand-repair sweep excludes
+			// by construction, and no Go caller exists for the Python /repair
+			// endpoint that is the only way out of it -- so a transient DNS
+			// blip or a 401 became a permanently dead request. Leaving the lease
+			// alone instead keeps the ordinary reclaim path reachable: the next
+			// attempt parks on LeaseActiveError until the lease expires, then
+			// Claim's expired-lease branch reclaims it, all inside River's own
+			// attempt budget.
+			if errors.Is(err, ErrCompatibilityNotSent) || errors.Is(err, ErrCompatibilityRefused) {
+				return jobruntime.Retryable(err)
+			}
+			// Loud, not just recorded on the ambiguous ledger row: this is the
+			// permanent-cancel path, and the underlying error is exactly what
+			// an operator needs to see without having to correlate a ledger
+			// detail string back to a cause.
+			h.logger.Error("workgraph handler: permanent cancel after ambiguous compatibility outcome",
+				slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+				slog.String("organization_id", *organizationID), slog.Any("error", err),
+			)
+			_ = releaseAmbiguous(h.store, ctx, claim, compatibilityAmbiguousDetail(err))
+			return jobruntime.Permanent(err)
+		},
+	)
+}
+
+type BuildHandler struct{ *buildHandler }
+type MaterializeHandler struct{ *materializeHandler }
 
 // NewBuildHandler builds the workgraph.build handler. preSteps are native Go
-// producers that run before the Python bridge, in the order given; see
-// NativePreStep for why they live inside this execution rather than beside it.
+// producers that run before postSteps, in the order given; see NativePreStep
+// for why they live inside this execution rather than beside it. There is no
+// CompatibilityExecutor here at all -- see buildHandler's own doc comment.
 func NewBuildHandler(
-	store Store, executor CompatibilityExecutor,
+	store Store,
 	preSteps []NativePreStep, postSteps []NativePostStep,
 	logger *slog.Logger,
 ) (*BuildHandler, error) {
-	h, err := newHandler(store, executor, preSteps, postSteps, logger)
+	h, err := newBuildHandler(store, preSteps, postSteps, logger)
 	return &BuildHandler{h}, err
 }
 func NewMaterializeHandler(store Store, executor CompatibilityExecutor, logger *slog.Logger) (*MaterializeHandler, error) {
-	h, err := newHandler(store, executor, nil, nil, logger)
+	h, err := newMaterializeHandler(store, executor, logger)
 	return &MaterializeHandler{h}, err
 }
 
@@ -247,11 +341,11 @@ func (h *BuildHandler) Work(ctx context.Context, execution *jobruntime.Execution
 	if execution == nil {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
-	return h.work(ctx, execution.Args.Payload.RequestID, KindBuild, execution.OrganizationID, execution.Envelope.Domain)
+	return h.work(ctx, execution.Args.Payload.RequestID, execution.OrganizationID, execution.Envelope.Domain)
 }
 func (h *MaterializeHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.InvestmentMaterializeArgs]) error {
 	if execution == nil {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
-	return h.work(ctx, execution.Args.Payload.RequestID, KindMaterialize, execution.OrganizationID, execution.Envelope.Domain)
+	return h.work(ctx, execution.Args.Payload.RequestID, execution.OrganizationID, execution.Envelope.Domain)
 }

@@ -87,63 +87,12 @@ class TestWorkGraphBuilder:
             fake_sink.close.assert_called_once()
 
 
-class TestDependencyIssuePrLinks:
-    def test_stale_pr_dependency_issue_edge_cleanup_is_scoped(self):
-        fake_sink = MagicMock()
-        fake_sink.backend_type = "clickhouse"
-        fake_sink.client = MagicMock()
-
-        config = BuildConfig(dsn="clickhouse://localhost:9000/default", org_id="org-a")
-        with patch(
-            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
-        ):
-            builder = WorkGraphBuilder(config)
-            builder._delete_stale_pr_dependency_issue_edges()
-            builder.close()
-
-        sql = fake_sink.client.command.call_args.args[0]
-        params = fake_sink.client.command.call_args.kwargs["parameters"]
-        assert "ALTER TABLE work_graph_edges DELETE WHERE" in sql
-        assert "source_type = 'issue'" in sql
-        assert "target_type = 'issue'" in sql
-        assert "evidence = 'linear_attachment'" in sql
-        assert "github_comment_linear_url" not in sql
-        assert "startsWith(source_id, 'ghpr:')" in sql
-        assert "startsWith(source_id, 'gitlab:')" in sql
-        assert "startsWith(target_id, 'linear:')" in sql
-        assert "org_id = {org_id:String}" in sql
-        assert params == {"org_id": "org-a"}
-
-    def test_stale_pr_dependency_cleanup_skips_unscoped_builds(self):
-        fake_sink = MagicMock()
-        fake_sink.backend_type = "clickhouse"
-        fake_sink.query_dicts = MagicMock()
-
-        config = BuildConfig(dsn="clickhouse://localhost:9000/default")
-        with patch(
-            "dev_health_ops.work_graph.builder.create_sink", return_value=fake_sink
-        ):
-            builder = WorkGraphBuilder(config)
-            builder._delete_stale_pr_dependency_issue_edges()
-            builder.close()
-
-        fake_sink.query_dicts.assert_not_called()
-        fake_sink.client.command.assert_not_called()
-
-
-class TestWorkGraphBuilderIntegration:
-    """Integration tests for WorkGraphBuilder.
-
-    These tests are skipped by default and require a real ClickHouse instance.
-    Run with: pytest -m integration
-    """
-
-    @pytest.mark.skip(reason="Requires ClickHouse instance")
-    def test_full_build(self):
-        """Build complete work graph."""
-        pass
-
-    @pytest.mark.skip(reason="Requires ClickHouse instance")
-    def test_incremental_build(self):
-        """Incremental build with from_date parameter."""
-        pass
+### `TestDependencyIssuePrLinks` (test_stale_pr_dependency_issue_edge_cleanup_is_scoped
+### / test_stale_pr_dependency_cleanup_skips_unscoped_builds) and
+### `TestWorkGraphBuilderIntegration` (test_full_build / test_incremental_build, both
+### already skipped stubs) are REMOVED under CHAOS-4924: `WorkGraphBuilder.build()` and
+### `_delete_stale_pr_dependency_issue_edges` are deleted -- the stale-edge cleanup is
+### ported to Go (`edges.DeleteStalePRDependencyIssueEdges`,
+### internal/jobs/workgraph/edges/clickhouse.go) with its own live-ClickHouse red/green
+### proof (stale_dependency_edges_integration_test.go), not a mocked SQL-string
+### assertion.

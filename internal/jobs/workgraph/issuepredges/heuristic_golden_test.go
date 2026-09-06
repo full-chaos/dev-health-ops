@@ -19,8 +19,8 @@ import (
 // corpus captured from the deployed Python producer
 // (tests/fixtures/heuristic_issue_pr_edges_python_golden.json, via a
 // throwaway, never-committed generator run directly against the ORIGINAL
-// (pre-deletion) _build_heuristic_issue_pr_edges, loaded from git history
-// since this PR deletes the method from the live builder.py) through
+// (pre-deletion) _build_heuristic_issue_pr_edges, loaded from git history --
+// golden frozen; the method is deleted from the live builder.py) through
 // DeriveHeuristicEdges, and asserts field-for-field identity against what
 // Python actually wrote.
 //

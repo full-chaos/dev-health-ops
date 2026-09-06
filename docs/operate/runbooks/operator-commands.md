@@ -107,7 +107,7 @@ Diff it against the same query after step 5. This is a prerequisite, not an opti
 | Team membership resolution (admin override layer) | `docs/contribute/architecture/team-attribution.md` §CHAOS-4321 | Not a CLI command. Admin panel `/org/admin/identities` writes `identities.team_ids`; `teams.manual_members` is the admin-exclusive override roster. No CLI mutation path exists. |
 
 **Team-attribution recovery order** (`docs/contribute/architecture/team-attribution.md` §5): (1) merge +
-deploy the mechanism, (2) backfill ALL providers via sync/backfill, (3) work-graph build, (4) investment
+deploy the mechanism, (2) backfill ALL providers via sync/backfill, (3) `workgraph trigger`, (4) investment
 materialize `--force` (or `investment trigger`), (5) verify via the query-time join (coverage %, chord). The
 backfill runner only re-runs the sync job -- it does **not** fan out to work-graph or investment
 automatically; both must be triggered explicitly.
@@ -123,8 +123,9 @@ resolution (admin override in `identities`/`teams.manual_members`, else provider
 |---|---|---|
 | `dev-health-workerctl workgraph trigger ...` | `trigger_workgraph.go:98-283` (CHAOS-5172) | Enqueue a FRESH `workgraph.build` request through the same coordinator path the automatic producers use, instead of a second, unguarded Python compute. |
 | `dev-health-workerctl investment trigger ...` | `trigger_investment.go:73-222` (CHAOS-5173) | Enqueue a fresh `investment.materialize` request through the native executor (`internal/jobs/investment/nativeexecutor.go`). |
-| `dev-hops work-graph build` | `work_graph/runner.py` `run_work_graph_build` | **Legacy** -- direct Python compute, bypasses the worker's own dispatch/idempotency. Prefer `workgraph trigger`. |
 | `dev-hops investment materialize [--force]` | `work_graph/runner.py` `run_investment_materialization` | **Legacy**, separate entry point from the native River kind (CHAOS-4767 tracks removal). |
+
+`dev-hops work-graph build` (`work_graph/runner.py`'s `run_work_graph_build`) is DELETED under CHAOS-4924 -- `WorkGraphBuilder.build()` had shrunk to a 0-stats no-op by then. Use `workgraph trigger` above.
 
 See §(c) above for the full ordered recovery sequence these two commands participate in.
 

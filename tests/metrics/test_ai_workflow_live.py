@@ -2,15 +2,18 @@
 
 Covers (each against a throwaway random org so runs are isolated):
 
-1. Daily-job rerun produces NO query-visible duplicate AI workflow edges
-   through the real reader path (``load_ai_workflow_graph_for_pr`` — the
-   UNION ALL now reads every ReplacingMergeTree with FINAL).
-2. Detector anti-join and doc-drift join predicates carry the tenant key:
+1. Detector anti-join and doc-drift join predicates carry the tenant key:
    org B's rows can no longer suppress or pollute org A's detections even
    when repo_id / PR number / commit hash collide across orgs.
-3. Governance allowlist precedence: exact tool+model rows beat wildcard
+2. Governance allowlist precedence: exact tool+model rows beat wildcard
    rows, latest version wins, and overlapping policy rows never fan an
    artifact out into duplicates.
+
+CHAOS-5216/CHAOS-5234/CHAOS-3092/CHAOS-5242: this file used to also cover a
+daily-job rerun producing NO query-visible duplicate AI workflow edges
+through the real reader path -- deleted along with the Python compute it
+exercised (_extract_ai_workflow_for_day, job_daily.py); see the comment
+where that test used to live.
 """
 
 from __future__ import annotations
@@ -126,123 +129,16 @@ def _insert_attributions(
     )
 
 
-async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
-    """Fix 1: write extraction twice, read once — counts must be rerun-stable."""
-    from dev_health_ops.api.queries.client import get_global_client
-    from dev_health_ops.metrics.job_daily import _extract_ai_workflow_for_day
-    from dev_health_ops.work_graph.ai_workflow import load_ai_workflow_graph_for_pr
-
-    sink = _sink()
-    org = uuid.uuid4()
-    repo = uuid.uuid4()
-    day_start = datetime.combine(
-        date.today() - timedelta(days=1), time.min, tzinfo=timezone.utc
-    )
-    day_end = day_start + timedelta(days=1)
-    created = day_start + timedelta(hours=3)
-
-    _insert_prs(
-        sink,
-        str(org),
-        repo,
-        [
-            {
-                "number": 7,
-                "title": "Add caching",
-                "body": "Generated with Claude Code",
-                "created_at": created,
-                "merged_at": created + timedelta(hours=2),
-            }
-        ],
-    )
-    sink.client.insert(
-        "git_pull_request_reviews",
-        [
-            [
-                repo,
-                7,
-                "rev_7_0",
-                "bob@example.com",
-                "APPROVED",
-                created,
-                created,
-                str(org),
-            ]
-        ],
-        column_names=[
-            "repo_id",
-            "number",
-            "review_id",
-            "reviewer",
-            "state",
-            "submitted_at",
-            "last_synced",
-            "org_id",
-        ],
-    )
-    sink.client.insert(
-        "work_graph_issue_pr",
-        [[repo, "jira:ABC-1", 7, 1.0, "native", "test", created, str(org)]],
-        column_names=[
-            "repo_id",
-            "work_item_id",
-            "pr_number",
-            "confidence",
-            "provenance",
-            "evidence",
-            "last_synced",
-            "org_id",
-        ],
-    )
-
-    def _run_once() -> None:
-        # CHAOS-5242: this used to ALSO destructure runs/artifacts/issues and
-        # write them via write_ai_workflow_runs/_artifact_edges/_issue_edges
-        # -- _extract_ai_workflow_for_day no longer produces those (deleted
-        # alongside extract_ai_workflow_from_pull_requests; AIWorkflowExecutor,
-        # native Go, is the only writer of those three tables now, with its
-        # own rerun-idempotency coverage on the Go side). What remains here
-        # is work_graph_edges' own review/deployment/incident extraction
-        # (CHAOS-4286, still Python) -- the part of this test's original
-        # "no reader-visible duplicate edges on rerun" claim that is still
-        # this file's responsibility to prove.
-        (
-            reviews,
-            pr_deploys,
-            deploy_incidents,
-        ) = _extract_ai_workflow_for_day(
-            primary_sink=sink,
-            org_id=str(org),
-            start=day_start,
-            end=day_end,
-            repo_id=None,
-            repo_provider_by_id={str(repo): "github"},
-        )
-        assert reviews
-        sink.write_work_graph_pr_review_outcome_edges(reviews)
-        if pr_deploys:
-            sink.write_work_graph_pr_deployment_edges(pr_deploys)
-        if deploy_incidents:
-            sink.write_work_graph_deployment_incident_edges(deploy_incidents)
-
-    assert CLICKHOUSE_URI is not None  # skipif guard guarantees it
-    client = await get_global_client(CLICKHOUSE_URI)
-    pr_root = f"{repo}:7"
-
-    _run_once()
-    first = await load_ai_workflow_graph_for_pr(client, str(org), pr_root)
-    assert len(first.edges) == 1  # has_review_outcome only (CHAOS-5242: no
-    # more ai_workflow-owned generates/has_ai_workflow edges from this path)
-    assert not first.partial
-
-    _run_once()  # rerun the same day — same deterministic ids, new computed_at
-    second = await load_ai_workflow_graph_for_pr(client, str(org), pr_root)
-    assert len(second.edges) == len(first.edges)
-    assert sorted(e.edge_id for e in second.edges) == sorted(
-        e.edge_id for e in first.edges
-    )
-    assert len(second.nodes) == len(first.nodes)
-    assert not second.partial
+# CHAOS-5216/CHAOS-5234/CHAOS-3092/CHAOS-5242:
+# test_daily_job_rerun_has_no_reader_visible_duplicate_edges is DELETED.
+# It exercised _extract_ai_workflow_for_day (job_daily.py), which no
+# longer exists: both of its halves are gone (ai_workflow's runs/
+# artifact_edges/issue_edges, deleted by #2307/CHAOS-5242; work_graph_
+# edges' review/deployment/incident edges, deleted in this PR). The
+# rerun-dedup claim this test made is now each native Go executor's own
+# responsibility (AIWorkflowExecutor, WorkGraphEdgesExecutor), proven by
+# their own Go-side idempotency tests, not this Python live-ClickHouse
+# path.
 
 
 async def test_dep_update_anti_join_is_tenant_isolated() -> None:

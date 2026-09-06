@@ -287,7 +287,6 @@ async def test_skip_families_none_is_a_noop(monkeypatch: Any) -> None:
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -308,7 +307,6 @@ async def test_skip_families_empty_set_is_a_noop(monkeypatch: Any) -> None:
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=set(),
     )
 
@@ -337,7 +335,6 @@ async def test_team_wellbeing_in_skip_families_writes_nothing(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"team_wellbeing"},
     )
 
@@ -361,7 +358,6 @@ async def test_team_wellbeing_skip_does_not_affect_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"team_wellbeing"},
     )
 
@@ -393,7 +389,6 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"file_hotspots"},
     )
 
@@ -440,7 +435,6 @@ async def test_repo_user_commit_in_skip_families_writes_nothing_but_still_comput
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"repo_user_commit"},
     )
 
@@ -465,7 +459,6 @@ async def test_repo_user_commit_skip_does_not_affect_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"repo_user_commit"},
     )
 
@@ -500,7 +493,6 @@ async def test_deploy_in_skip_families_writes_nothing_but_still_computes(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"deploy"},
     )
 
@@ -523,7 +515,6 @@ async def test_deploy_skip_does_not_affect_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"deploy"},
     )
 
@@ -547,7 +538,6 @@ async def test_deploy_not_skipped_writes_unconditionally(monkeypatch: Any) -> No
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=set(),
     )
 
@@ -579,7 +569,6 @@ async def test_cicd_not_skipped_computes_and_writes_real_rows(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -628,7 +617,6 @@ async def test_cicd_in_skip_families_computes_nothing_and_notes_no_false_zero_ro
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"cicd"},
     )
 
@@ -649,7 +637,6 @@ async def test_cicd_skip_does_not_affect_other_families(monkeypatch: Any) -> Non
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"cicd"},
     )
 
@@ -693,7 +680,6 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
             backfill_days=1,
             provider="auto",
             org_id=ORG_ID,
-            skip_finalize=True,
             skip_families=skip_families,
         )
 
@@ -730,7 +716,6 @@ async def test_file_risk_hotspots_in_skip_families_skips_write_but_still_compute
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"file_risk_hotspots"},
     )
 
@@ -761,7 +746,6 @@ async def test_file_risk_hotspots_skip_families_none_writes_it(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -798,7 +782,6 @@ async def test_testops_risk_in_skip_families_writes_nothing_but_still_computes(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"testops_risk"},
     )
 
@@ -825,7 +808,6 @@ async def test_testops_risk_skip_does_not_affect_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"testops_risk"},
     )
 
@@ -849,7 +831,6 @@ async def test_testops_risk_not_skipped_writes_rows(monkeypatch: Any) -> None:
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -895,7 +876,6 @@ async def test_testops_family_in_skip_families_suppresses_only_its_own_write(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={family},
     )
 
@@ -936,7 +916,6 @@ async def test_testops_families_not_skipped_write_all_three(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=set(),
     )
 
@@ -972,7 +951,6 @@ async def test_compounding_risk_not_skipped_writes_repo_rows(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -1019,7 +997,6 @@ async def test_compounding_risk_in_skip_families_writes_nothing(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"compounding_risk"},
     )
 
@@ -1045,7 +1022,6 @@ async def test_compounding_risk_skip_does_not_perturb_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"compounding_risk"},
     )
 
@@ -1077,7 +1053,6 @@ async def test_review_edges_not_skipped_computes_and_writes(monkeypatch: Any) ->
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -1113,7 +1088,6 @@ async def test_review_edges_in_skip_families_computes_nothing(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"review_edges"},
     )
 
@@ -1136,7 +1110,6 @@ async def test_review_edges_skip_does_not_perturb_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"review_edges"},
     )
 
@@ -1197,7 +1170,6 @@ async def test_work_item_attribution_compute_and_write_are_deleted_from_job_dail
             backfill_days=1,
             provider="auto",
             org_id=ORG_ID,
-            skip_finalize=True,
             skip_families=skip_families,
         )
         assert "write_work_item_team_attributions" not in sink.write_calls
@@ -1236,7 +1208,6 @@ async def test_ai_governance_compute_and_write_are_deleted_from_job_daily(
             backfill_days=1,
             provider="auto",
             org_id=ORG_ID,
-            skip_finalize=True,
             skip_families=skip_families,
         )
         assert "write_ai_policy_events" not in sink.write_calls
@@ -1281,7 +1252,6 @@ async def test_ai_impact_compute_and_write_are_deleted_from_job_daily(
             backfill_days=1,
             provider="auto",
             org_id=ORG_ID,
-            skip_finalize=True,
             skip_families=skip_families,
         )
         assert "write_ai_impact_metrics" not in sink.write_calls

@@ -1001,7 +1001,6 @@ async def run_daily_metrics_job(
     sink: str = "auto",
     provider: str = "auto",
     org_id: str,
-    skip_finalize: bool = False,
     on_write_starting: Callable[[], None] | None = None,
     skip_families: set[str] | None = None,
 ) -> dict[date, list[str]]:
@@ -2028,24 +2027,6 @@ async def run_daily_metrics_job(
         # existing fail-open-to-Python contract every other native family
         # already has.
 
-        if not skip_finalize:
-            ic_metrics = compute_ic_metrics_daily(
-                git_metrics=result.user_metrics,
-                wi_metrics=wi_user_metrics,
-                team_map=load_team_map(),
-            )
-            for s in sinks:
-                s.write_user_metrics(ic_metrics)
-
-            rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=d)
-            ic_landscape = compute_ic_landscape_rolling(
-                as_of_day=d,
-                rolling_stats=rolling_stats,
-                team_map=load_team_map(),
-            )
-            for s in sinks:
-                s.write_ic_landscape_rolling(ic_landscape)
-
         if len(days) > 1:
             # CHAOS-4264: a backfill_days > 1 call holds this day's source
             # rows (commit/PR/CI/testops/incident/work-item lists, complexity
@@ -2402,14 +2383,13 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             sink=ns.sink,
             provider=ns.provider,
             org_id=org_id,
-            # CHAOS-4365 codex R3 (P2): the standalone finalizer below
-            # already recomputes IC metrics/landscape for the whole org --
-            # skip_finalize=True here avoids running that same inline logic
-            # TWICE per day (matches _cmd_metrics_rebuild's existing
-            # skip_finalize=True + explicit run_daily_metrics_finalize
-            # pattern, which this bare-CLI path now also follows).
-            skip_finalize=True,
         )
+        # CHAOS-5254: run_daily_metrics_job no longer has an inline IC
+        # metrics/landscape finalize path to opt out of (that dead branch,
+        # only ever exercised by the now-deleted Celery run_daily_metrics
+        # task, was removed along with the task itself) -- the standalone
+        # finalizer below is the only place IC metrics/landscape compute now.
+        #
         # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
         # written from run_daily_metrics_finalize, not from
         # run_daily_metrics_job itself -- this bare `dev-hops metrics daily`
@@ -2460,7 +2440,6 @@ async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
                         sink=ns.sink,
                         provider=ns.provider,
                         org_id=org_id,
-                        skip_finalize=True,
                     )
             else:
                 logger.info("Rebuild batch: day=%s (all repos)", d)
@@ -2471,7 +2450,6 @@ async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
                     sink=ns.sink,
                     provider=ns.provider,
                     org_id=org_id,
-                    skip_finalize=True,
                 )
 
             logger.info("Rebuild finalize: day=%s", d)

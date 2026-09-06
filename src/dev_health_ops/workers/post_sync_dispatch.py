@@ -172,28 +172,25 @@ def _dispatch_post_sync_tasks(
         if metrics_backfill_days is None:
             metrics_backfill_days = (metrics_window_end - metrics_window_start).days + 1
 
-    daily_metrics_kwargs: dict[str, Any] = {"org_id": org_id}
-    if metrics_day is not None:
-        daily_metrics_kwargs["day"] = metrics_day
-    if metrics_backfill_days is not None:
-        daily_metrics_kwargs["backfill_days"] = metrics_backfill_days
-
-    if has_git or has_work_items:
-        dispatched.append("run_daily_metrics")
-
-    # run_complexity_job writes file_complexity_snapshots, which run_daily_metrics
-    # reads (job_daily._load_complexity_map_for_repo). Chaining complexity ->
-    # daily guarantees the daily risk/hotspot rows reflect the just-synced file
-    # contents instead of the previous cycle's snapshot — important for a newly
-    # onboarded org's first daily run, which would otherwise show zero complexity.
+    # run_complexity_job writes file_complexity_snapshots. This used to feed a
+    # chained run_daily_metrics (job_daily._load_complexity_map_for_repo) so the
+    # daily risk/hotspot rows reflected the just-synced file contents instead of
+    # the previous cycle's snapshot. CHAOS-5254: run_daily_metrics's Celery task
+    # (and the prod Celery workers/Beat that would have consumed it, CHAOS-4026)
+    # is gone -- daily metrics execution now runs entirely off this post-sync
+    # fan-out, via the Go scheduler/reconciler's own cadence + the HTTP bridge
+    # (api/internal/worker_metrics.py) into run_daily_metrics_job. The
+    # complexity -> daily freshness ordering this comment used to guarantee is
+    # therefore no longer this function's concern; complexity is still chained
+    # ahead of build/materialize below for the same reason it always was
+    # (fresh-or-nothing on a terminal failure, see the trade-off note next).
     #
     # Trade-off (CHAOS review #1078): as the chain head, a *terminal* complexity
     # failure (after its 3 internal retries) aborts the rest of the chain
-    # (daily/build/materialize), so the /investment refresh is skipped for that
+    # (build/materialize), so the /investment refresh is skipped for that
     # sync. This is accepted as fresh-or-nothing: terminal complexity failures are
     # rare and usually stem from ClickHouse being unavailable, in which case the
-    # downstream steps would fail anyway; daily also degrades gracefully on a
-    # missing snapshot, so the next cycle recovers. If hard isolation is ever
+    # downstream steps would fail anyway. If hard isolation is ever
     # needed, decouple via a non-raising wrapper task rather than link_error.
     # Historical backfills must not enqueue complexity implicitly: run_complexity_db_job
     # scans CURRENT persisted file contents/blame, so writing it across a
@@ -259,13 +256,7 @@ def _dispatch_post_sync_tasks(
             queue="default",
             immutable=True,
         )
-        daily_metrics_sig = celery_app.signature(
-            "dev_health_ops.workers.tasks.run_daily_metrics",
-            kwargs=daily_metrics_kwargs,
-            queue="metrics",
-            immutable=True,
-        )
-        chain_sigs = [daily_metrics_sig, build_sig, materialize_sig]
+        chain_sigs = [build_sig, materialize_sig]
         if complexity_sig is not None:
             chain_sigs.insert(0, complexity_sig)
         chain(*chain_sigs).apply_async()

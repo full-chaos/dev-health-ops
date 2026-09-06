@@ -1447,23 +1447,15 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             backfill_days=ns.days,
             provider="auto",
             org_id=org_id,
-            # CHAOS-4365 item 3 codex R1 (P2): without this, run_daily_
-            # metrics_job's own per-repo loop ALSO runs its older inline
-            # finalize block (IC metrics/landscape writes, job_daily.py's
-            # `if not skip_finalize:` branch) once per day -- then the
-            # explicit run_daily_metrics_finalize call below runs the SAME
-            # IC metrics/landscape writes again, so append-only tables would
-            # receive two generations per day from one fixtures run.
-            # skip_finalize=True matches _cmd_metrics_daily's own CLI
-            # pattern exactly (job_daily.py's _cmd_metrics_daily comment:
-            # "the standalone finalizer below already recomputes IC
-            # metrics/landscape for the whole org -- skip_finalize=True here
-            # avoids running that same inline logic TWICE per day").
-            skip_finalize=True,
         )
-
+        # CHAOS-5254: run_daily_metrics_job's older inline finalize block
+        # (IC metrics/landscape writes, job_daily.py's former
+        # `if not skip_finalize:` branch) is deleted -- it was only ever
+        # exercised by the now-deleted Celery run_daily_metrics task, so
+        # there is no longer a double-write to guard against here.
+        #
         # CHAOS-4365 item 3 finding: run_daily_metrics_job's own per-repo
-        # loop only ever ran an OLDER inline finalize block (IC metrics/
+        # loop used to ALSO run an OLDER inline finalize block (IC metrics/
         # landscape only) -- it never called the standalone
         # run_daily_metrics_finalize that items 1-3's team-scope tables
         # (compounding_risk_daily scope=team, team_cognitive_load_daily,

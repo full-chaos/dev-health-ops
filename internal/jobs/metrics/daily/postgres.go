@@ -1220,6 +1220,18 @@ var dailyMetricsPartitionFailureReasons = map[string]struct{}{
 	// dropping the reason on the generic releasePartition path.
 	"resource_exhausted": {},
 	"process_signaled":   {},
+	// CHAOS-5190 (astra scale review F1, codex round 1 P2): a post_bridge
+	// native family failure releases the partition with this reason
+	// (jobruntime.ReasonPostBridgeFamilyIncomplete.String()) -- omitting it
+	// here meant ReleasePartitionWithReason rejected every real call with
+	// ErrInvalidState (this map is a closed vocabulary, an unrecognized
+	// reason is refused, not persisted), which Work's caller silently
+	// discards (`_ = releasePartitionWithReason(...)`) -- so the partition
+	// would never actually transition to 'failed' against real Postgres,
+	// staying stuck 'running' under its old lease instead of becoming
+	// safely re-dispatchable. The fake store used by this package's own
+	// tests accepts any string, which is why this gap was invisible there.
+	"post_bridge_family_incomplete": {},
 	// pre_bridge_family_incomplete (CHAOS-5078 codex round 3, astra scale
 	// review F1's pre_bridge twin -- see lane-ci-required-to-arc's
 	// CHAOS-5190/#2276 for the post_bridge sibling, "post_bridge_family_
@@ -1348,6 +1360,28 @@ RETURNING run.id::text, run.org_id::text, run.generation, run.status, run.finali
 	}
 	claim.LeaseDuration = store.lease
 	return &claim, nil
+}
+
+// PartitionCompletionCounts is the SAME partition-completion fact
+// ClaimFinalize's own `NOT EXISTS (... status <> 'succeeded')` subquery
+// already checks (CHAOS-5194), but returned as counts rather than collapsed
+// into a boolean -- so a finalize-scope executor can verify the barrier for
+// ITSELF and log what it actually saw (total vs succeeded), rather than
+// trusting that ClaimFinalize's gate held, silently, forever.
+func (store *PostgresStore) PartitionCompletionCounts(ctx context.Context, runID string) (int, int, error) {
+	if !store.valid() || !validUUID(runID) {
+		return 0, 0, ErrUnavailable
+	}
+	var total, succeeded int
+	err := store.pool.QueryRow(ctx, `
+SELECT count(*), count(*) FILTER (WHERE status = 'succeeded')
+FROM public.daily_metrics_partitions
+WHERE run_id = $1::uuid`, runID,
+	).Scan(&total, &succeeded)
+	if err != nil {
+		return 0, 0, ErrUnavailable
+	}
+	return total, succeeded, nil
 }
 
 func (store *PostgresStore) RenewFinalize(ctx context.Context, claim FinalizeClaim) error {

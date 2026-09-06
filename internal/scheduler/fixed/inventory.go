@@ -498,9 +498,11 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 			Cadence: DailyAt(1, 30),
 			Reason: "Go's release_impact_daily_fanout fixed schedule owns this cadence; the " +
 				"Python dispatch_release_impact and run_release_impact_job Celery tasks were only " +
-				"ever reachable via this Beat entry (the underlying job_release_impact.py compute " +
-				"function is not dead -- it stays live via the CLI and worker_metrics.py's bridge).",
-			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+				"ever reachable via this Beat entry, and job_release_impact.py itself (the CLI " +
+				"verb and worker_metrics.py's HTTP-bridge handler it fed) is now fully DELETED " +
+				"(CHAOS-4296 native Go executor + CHAOS-5234/CHAOS-5244 cleanup) -- there is no " +
+				"remaining live path for it at all.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED); CHAOS-5244 (deletion).",
 		},
 		{
 			Name:    "run-recommendations",

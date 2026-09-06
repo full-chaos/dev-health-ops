@@ -5,7 +5,6 @@
     "ai_governance": "native",
     "ai_impact": "native",
     "ai_workflow": "native",
-    "benchmarking": "post_bridge",
     "cicd": "native",
     "compounding_risk": "post_bridge",
     "deploy": "native",
@@ -26,7 +25,9 @@
     "work_item_state": "native"
   },
   "finalize": {
-    "ic_finalize": "finalize"
+    "benchmarking": "finalize",
+    "ic_finalize": "finalize",
+    "team_cognitive_load": "finalize"
   },
   "remaining": {
     "capacity": "native",

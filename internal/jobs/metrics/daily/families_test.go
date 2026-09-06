@@ -72,7 +72,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 		seen[family.Name] = true
 	}
 	expected := []string{
-		"repo_user_commit", "team_wellbeing", "file_hotspots", "file_risk_hotspots", "work_item", "work_item_estimate", "work_item_attribution", "work_item_state", "review_edges", "cicd", "testops_pipeline", "testops_test", "testops_coverage", "deploy", "incident", "ai_governance", "ai_impact", "ai_workflow", "work_graph_edges", "compounding_risk", "testops_risk", "benchmarking", "ic_finalize",
+		"repo_user_commit", "team_wellbeing", "file_hotspots", "file_risk_hotspots", "work_item", "work_item_estimate", "work_item_attribution", "work_item_state", "review_edges", "cicd", "testops_pipeline", "testops_test", "testops_coverage", "deploy", "incident", "ai_governance", "ai_impact", "ai_workflow", "work_graph_edges", "compounding_risk", "testops_risk", "benchmarking", "ic_finalize", "team_cognitive_load",
 	}
 	for _, core := range expected {
 		if !seen[core] {
@@ -114,6 +114,19 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// WorkItemStateExecutor exactly as team_wellbeing/repo_user_commit did.
 	if got := byName["work_item_state"]; got != "go" {
 		t.Fatalf("work_item_state must be port=go, got %q", got)
+	}
+	// team_cognitive_load (CHAOS-5141): registers TeamCognitiveLoadExecutor,
+	// finalize-scope, co-registered with ic_finalize. CHAOS-5141, #2255 r3
+	// finding 2: the `expected` membership check above (and the exact-count
+	// guard) both pass even if this flag were flipped back to "pending" --
+	// neither asserts the PORT of a specific family, only that its NAME
+	// exists somewhere in the registry. This direct assertion, matching the
+	// pattern every other Wave-1+ cutover above already has, closes that:
+	// a families.json edit that reverts this family to Python without also
+	// removing its Go registration would silently resurrect the
+	// double-write/two-writer hazard this port exists to prevent.
+	if got := byName["team_cognitive_load"]; got != "go" {
+		t.Fatalf("team_cognitive_load must be port=go, got %q", got)
 	}
 	byPhase := make(map[string]string, len(registry.Families))
 	for _, family := range registry.Families {
@@ -168,14 +181,17 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["compounding_risk"]; got != "post_bridge" {
 		t.Fatalf("compounding_risk must be phase=post_bridge (CHAOS-4287), got %q", got)
 	}
-	// benchmarking is the THIRD family in this class (CHAOS-4288, codex r1 on
-	// #2235). Its metric window ends on the TARGET DAY -- asOfDay =
-	// run.TargetDay, fetches are Fetch(startDay, asOfDay) -- so day D's own rows
-	// are inside it, and Python writes those rows (job_daily.py:1919) before
-	// calling the family (:2091). It also sorts FIRST of all native families,
-	// so pre_bridge ran it ahead of every Go writer too.
-	if got := byPhase["benchmarking"]; got != "post_bridge" {
-		t.Fatalf("benchmarking must be phase=post_bridge (CHAOS-4288), got %q", got)
+	// benchmarking (CHAOS-4288, then CHAOS-5194) used to be a THIRD post_bridge
+	// family in this class -- its metric window ends on the TARGET DAY, so a
+	// pre_bridge registration would benchmark day D against a window missing
+	// day D. CHAOS-5194 (astra F3) relocated it to finalize scope entirely: the
+	// post_bridge anchor-partition mechanism fixed cross-partition duplication
+	// but not the race between the anchor partition finishing and every OTHER
+	// partition for the same org/day having written its own inputs. Finalize
+	// scope's ClaimFinalize barrier (every partition succeeded) closes that
+	// race by construction.
+	if got := byPhase["benchmarking"]; got != "finalize" {
+		t.Fatalf("benchmarking must be phase=finalize (CHAOS-5194), got %q", got)
 	}
 	// The allow-list is kept EXPLICIT rather than relaxed to "any known phase":
 	// a new non-default phase should force whoever adds it to come here and say
@@ -186,13 +202,16 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// ic_finalize is "finalize", not just another post_bridge family, and
 	// would otherwise silently accept ic_finalize declaring post_bridge.
 	// CHAOS-5078 retired work_item_state/work_item/work_item_estimate from
-	// this map -- they are pre_bridge now (asserted in their own loop above),
-	// leaving compounding_risk/benchmarking/ic_finalize as the only three
-	// families with a deliberate non-default phase.
+	// this map -- they are pre_bridge now (asserted in their own loop above).
+	// CHAOS-5194 moved benchmarking from post_bridge to finalize (see
+	// BenchmarkingFinalizeExecutor). compounding_risk/ic_finalize/
+	// benchmarking/team_cognitive_load are the families left with a
+	// deliberate non-default phase.
 	nonDefaultPhase := map[string]string{
-		"compounding_risk": "post_bridge",
-		"benchmarking":     "post_bridge",
-		"ic_finalize":      "finalize",
+		"compounding_risk":    "post_bridge",
+		"benchmarking":        "finalize",
+		"ic_finalize":         "finalize",
+		"team_cognitive_load": "finalize",
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

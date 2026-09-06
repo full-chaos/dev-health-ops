@@ -157,11 +157,25 @@ func (executor *WorkItemAttributionExecutor) ComputeFamily(
 		if len(rows) == 0 {
 			continue
 		}
+		// #2276 confirmation-pass sweep (found independently, same class
+		// this pass's other 6 fixes close): WriteAttributions' own
+		// batch.Send() branch already reports its TRUE row count on an
+		// ambiguous network error -- `total` must be updated with that
+		// count BEFORE the error check, not only after a confirmed
+		// success, or the failing write's own truthful count is discarded
+		// a second time. Mirrors work_graph_edges_native_executor.go's
+		// established idiom.
+		//
+		// codex confirmation-pass P1 (2nd round): the count alone is not
+		// enough -- the error must ALSO be wrapped in ErrPartialWrite when
+		// total > 0, or computeNativeFamilies' dispatcher treats this as an
+		// ordinary refusal and fails OPEN to the Python bridge despite rows
+		// already landing, risking a duplicate write.
 		written, err := executor.writer.WriteAttributions(ctx, rows)
-		if err != nil {
-			return total, err
-		}
 		total += written
+		if err != nil {
+			return wrapWorkItemAttributionPartialWrite(total, err)
+		}
 	}
 	return total, nil
 }
@@ -196,6 +210,28 @@ WHERE org_id = ? AND repo_id = ?
 		return nil, fmt.Errorf("load work_item_attribution subjects: %w", err)
 	}
 	return subjects, nil
+}
+
+// wrapWorkItemAttributionPartialWrite mirrors every other fixed site's wrap
+// helper in this PR: total==0 returns the error unwrapped (ordinary
+// refusal, nothing landed, the daily dispatcher's existing fail-open path
+// for pre_bridge families is still correct); total>0 wraps ErrPartialWrite
+// naming the true row count already durable on work_item_team_attributions.
+//
+// Codex confirmation-pass P1 (#2276): the 7th-site fix propagated
+// WriteAttributions' own true count correctly, but returned the RAW error
+// unwrapped -- computeNativeFamilies' dispatcher only excludes a family
+// from the Python compatibility bridge's recompute when the error wraps
+// ErrPartialWrite, so a plain error here reached the ordinary fail-open
+// path despite rows possibly already landing, risking a duplicate bridge
+// write for those same rows.
+func wrapWorkItemAttributionPartialWrite(total int, err error) (int, error) {
+	if total == 0 {
+		return 0, err
+	}
+	return total, fmt.Errorf(
+		"%w: work_item_attribution failed after %d row(s) already landed on work_item_team_attributions: %w",
+		ErrPartialWrite, total, err)
 }
 
 var _ NativeFamilyExecutor = (*WorkItemAttributionExecutor)(nil)

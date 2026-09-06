@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuepredges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/prcommit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -171,6 +172,32 @@ func workgraphBuildPreSteps(
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 
+	issuePREdgesLoader, issuePREdgesLoaderErr := issuepredges.NewLoader(connection)
+	if issuePREdgesLoaderErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	issuePREdgesLinksWriter, issuePREdgesLinksWriterErr := issueprlinks.NewWriter(connection)
+	if issuePREdgesLinksWriterErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	issuePREdgesService, issuePREdgesServiceErr := issuepredges.NewService(issuePREdgesLoader, connection, issuePREdgesLinksWriter, logger)
+	if issuePREdgesServiceErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	issuePREdgesSharedWindow := newSharedIssuePREdgesWindow()
+	issuePREdgesFastPathStep, issuePREdgesFastPathStepErr := newIssuePREdgesFastPathPreStep(issuePREdgesService, issuePREdgesSharedWindow)
+	if issuePREdgesFastPathStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	issuePREdgesTextParseStep, issuePREdgesTextParseStepErr := newIssuePREdgesTextParsePreStep(issuePREdgesService, issuePREdgesSharedWindow)
+	if issuePREdgesTextParseStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	issuePREdgesHeuristicStep, issuePREdgesHeuristicStepErr := newIssuePREdgesHeuristicPreStep(issuePREdgesService, issuePREdgesSharedWindow)
+	if issuePREdgesHeuristicStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
 	prCommitLoader, prCommitLoaderErr := prcommit.NewLoader(connection)
 	if prCommitLoaderErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
@@ -218,7 +245,8 @@ func workgraphBuildPreSteps(
 	}
 
 	steps := []workgraph.NativePreStep{
-		step, prCommitLinksStep, prCommitEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
+		step, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issuePREdgesHeuristicStep,
+		prCommitLinksStep, prCommitEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
 	}
 
 	// The constructed steps must match the DECLARED order exactly. Without
@@ -269,23 +297,35 @@ func buildPostStepOrder() []string {
 // the actual dispatch" split daily_native_family_registration_test.go uses.
 //
 // Appending here is a real decision, not a formality: see the ordering
-// invariant on workgraph.NativePreStep. "pr_commit_edges" (CHAOS-5264) is the
-// realized case that invariant was written for: it READS work_graph_pr_commit,
-// which "pr_commit_links" WRITES, so it must register strictly after it --
-// unlike issue_pr_links' still-Python fast-path half, both halves of the
-// PR<->commit straddle are native here, registered back to back.
-// "flag_guards_edges" and "operational_incident_edges" (CHAOS-4924) read
-// neither work_graph_issue_pr nor any table another pre-step writes, so
-// their position relative to the other four is free -- placed last,
-// preserving Python's own relative order between the two of them
-// (builder.py:468/470). "issue_issue_edges" (CHAOS-4924, moved here from
-// buildPostStepOrder once its Python producer was deleted -- see
-// issueIssueEdgesPreStep's own doc comment) reads only
+// invariant on workgraph.NativePreStep. "issue_pr_edges_fast_path"
+// (CHAOS-4924) READS work_graph_issue_pr, which "issue_pr_links" WRITES, so
+// it must register strictly after it; "issue_pr_edges_text_parse" has no such
+// table dependency on the fast-path step, but registers immediately after it
+// anyway to match Python's own call order (builder.py:434-443) for a PR that
+// satisfies both derivations in one build, and because all three issue_pr_edges
+// steps share ONE computed window (sharedIssuePREdgesWindow) the same way
+// pr_commit_links/pr_commit_edges do. "issue_pr_edges_heuristic" READS
+// work_graph_issue_pr fresh (see issuepredges.ExplicitLink's doc comment for
+// why: it needs to see every row the native issue_pr_links step AND the two
+// steps ahead of it here have already committed), so it must register after
+// all three of those. "pr_commit_edges" (CHAOS-5264) is the realized case the
+// ordering invariant was written for: it READS work_graph_pr_commit, which
+// "pr_commit_links" WRITES, so it must register strictly after it -- unlike
+// issue_pr_links' still-Python fast-path half, both halves of the PR<->commit
+// straddle are native here, registered back to back. "flag_guards_edges" and
+// "operational_incident_edges" (CHAOS-4924) read neither work_graph_issue_pr
+// nor any table another pre-step writes, so their position relative to the
+// other six is free -- placed last, preserving Python's own relative order
+// between the two of them (builder.py:468/470). "issue_issue_edges"
+// (CHAOS-4924, moved here from buildPostStepOrder once its Python producer
+// was deleted -- see issueIssueEdgesPreStep's own doc comment) reads only
 // work_item_dependencies, which no other pre-step writes, so its position is
-// equally free; placed last, after the other position-free pair.
+// equally free; placed last of all.
 func buildPreStepOrder() []string {
 	return []string{
-		"issue_pr_links", "pr_commit_links", "pr_commit_edges",
+		"issue_pr_links",
+		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_pr_edges_heuristic",
+		"pr_commit_links", "pr_commit_edges",
 		"flag_guards_edges", "operational_incident_edges", "issue_issue_edges",
 	}
 }

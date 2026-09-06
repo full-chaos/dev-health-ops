@@ -657,29 +657,14 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/metrics/daily/reviewedges (frozen review_edges golden vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestReviewEdgesGoldenMatchesLivePython$' \
-        ./internal/jobs/metrics/daily/reviewedges
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, for the same reason as cicd-golden above (CHAOS-4279).
-  proof_file="${proof_dir}/review-edges-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: review_edges golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # internal/jobs/metrics/daily/reviewedges' live-Python rot guard
+  # (TestReviewEdgesGoldenMatchesLivePython, CHAOS-4279) was retired here:
+  # its producer, compute_review_edges_daily (src/dev_health_ops/metrics/
+  # reviews.py), was DELETED, not merely un-called -- ReviewEdgesExecutor is
+  # the sole computer now. The frozen golden (tests/fixtures/
+  # daily_review_edges_python_golden.json) stays; Go's own
+  # TestComputeMatchesFrozenPythonGolden is the regression guard going
+  # forward.
 
   # internal/jobs/metrics/daily/benchmarking's live-Python rot guard
   # (TestBenchmarkingGoldenMatchesLivePython, CHAOS-4288) was retired here:

@@ -203,8 +203,8 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4278 (Done)",
     },
     "review_edges": {
-        "citation": "Python: `reviews.py:22 compute_review_edges_daily`",
-        "ticket": "CHAOS-4279",
+        "citation": "Go: `internal/jobs/metrics/daily/review_edges_native_executor.go` (pre_bridge). CHAOS-4279 deleted the Python compute (`reviews.py compute_review_edges_daily`) entirely -- no fallback left.",
+        "ticket": "CHAOS-4279 (Done)",
     },
     "cicd": {
         # CHAOS-5312/CHAOS-5234/CHAOS-3092: this citation was already

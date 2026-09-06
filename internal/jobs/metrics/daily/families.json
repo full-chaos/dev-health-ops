@@ -11,7 +11,7 @@
     {"name":"work_item_estimate","python":"compute_estimate_coverage_metrics_daily","writes":["estimate_coverage_metrics_daily"],"port":"go","golden":"required","after":["work_item_attribution"]},
     {"name":"work_item_attribution","python":"compute_work_item_team_attributions","writes":["work_item_team_attributions"],"port":"go","golden":"required"},
     {"name":"work_item_state","python":"compute_work_item_state_durations_daily","writes":["work_item_state_durations_daily"],"port":"go","golden":"required","after":["work_item_attribution"]},
-    {"name":"review_edges","python":"compute_review_edges_daily","writes":["review_edges_daily"],"port":"go","golden":"required"},
+    {"name":"review_edges","python":"DELETED (CHAOS-4279) -- was compute_review_edges_daily (src/dev_health_ops/metrics/reviews.py); native Go executor has no Python fallback","writes":["review_edges_daily"],"port":"go","golden":"required"},
     {"name":"cicd","python":"DELETED (CHAOS-5312) -- was compute_cicd_metrics_daily; native Go executor has no Python fallback","writes":["cicd_metrics_daily"],"port":"go","golden":"required"},
     {"name":"testops_pipeline","python":"DELETED (CHAOS-5245) -- was compute_pipeline_metrics_daily; native Go executor has no Python fallback","writes":["testops_pipeline_metrics_daily"],"port":"go","golden":"required"},
     {"name":"testops_test","python":"DELETED (CHAOS-5245) -- was compute_test_metrics_daily; native Go executor has no Python fallback","writes":["testops_test_metrics_daily"],"port":"go","golden":"required"},

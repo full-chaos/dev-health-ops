@@ -209,7 +209,7 @@ which had been unreachable dead code (never wired into `cli.py`'s argparse tree)
 | ic_finalize | NATIVE | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done), CHAOS-5313 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
-| review_edges | NATIVE | Python: `reviews.py:22 compute_review_edges_daily` | CHAOS-4279 |
+| review_edges | NATIVE | Go: `internal/jobs/metrics/daily/review_edges_native_executor.go` (pre_bridge). CHAOS-4279 deleted the Python compute (`reviews.py compute_review_edges_daily`) entirely -- no fallback left. | CHAOS-4279 (Done) |
 | team_cognitive_load | NATIVE | Go: `internal/jobs/metrics/daily/team_cognitive_load_native_executor.go` (finalize scope, co-registered with ic_finalize) + `team_cognitive_load_clickhouse.go`. No Python remainder. | CHAOS-5141 |
 | team_complexity | NATIVE | Go: `internal/jobs/metrics/daily/team_complexity_native_executor.go` (finalize scope, no co-registration dependency) + `team_complexity_clickhouse.go`. No Python remainder. | CHAOS-5051 |
 | team_wellbeing | NATIVE | Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go` | CHAOS-4276 (Done), CHAOS-5311 (Done) |

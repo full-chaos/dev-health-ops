@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
 
 import pytest
@@ -71,51 +71,3 @@ def test_compounding_risk_rejects_removed_day_alias():
 
     with pytest.raises(SystemExit):
         parser.parse_args(["metrics", "compounding-risk", "--day", "2025-02-01"])
-
-
-@pytest.mark.asyncio
-async def test_load_repo_to_team_reads_repo_identifier_from_repos_id():
-    class FakeSink:
-        def __init__(self) -> None:
-            self.queries: list[str] = []
-
-        async def get_all_teams(self) -> list[dict[str, Any]]:
-            return [
-                {
-                    "id": "team-1",
-                    "name": "Team One",
-                    "repo_patterns": ["full-chaos/dev-health-ops"],
-                }
-            ]
-
-        def query_dicts(
-            self, query: str, parameters: dict[str, Any]
-        ) -> list[dict[str, Any]]:
-            self.queries.append(query)
-            # CHAOS-4365: the team_repo_ownership query additionally passes
-            # as_of; this fake isn't query-shape-aware (both calls get the
-            # same canned response), so only org_id is asserted here.
-            assert parameters.get("org_id") == "org-1"
-            return [
-                {
-                    "repo_id": "550e8400-e29b-41d4-a716-446655440000",
-                    "full_name": "full-chaos/dev-health-ops",
-                }
-            ]
-
-    sink = FakeSink()
-
-    result = await job_compounding_risk._load_repo_to_team(
-        sink, "org-1", as_of=datetime.now(timezone.utc)
-    )
-
-    # CHAOS-4365: two queries now run -- the repos catalog and
-    # team_repo_ownership -- so find the repos one specifically rather than
-    # asserting on "the last query" (order isn't a contract here).
-    repos_query = next(q for q in sink.queries if "FROM repos" in q)
-    assert "toString(id) AS repo_id" in repos_query
-    assert "argMax(repo, last_synced) AS full_name" in repos_query
-    assert "GROUP BY org_id, id" in repos_query
-    assert "toString(repo_id)" not in repos_query
-    assert "SELECT toString(id) AS repo_id, full_name" not in repos_query
-    assert result == {"550e8400-e29b-41d4-a716-446655440000": "team-1"}

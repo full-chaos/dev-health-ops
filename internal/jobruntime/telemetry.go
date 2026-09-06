@@ -689,7 +689,15 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // "team_complexity" (CHAOS-5051) is finalize-scope like team_cognitive_load
 // and ic_finalize, but with no co-registration dependency on either --
 // added itself the same way as every other native family in this list.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow", "ic_finalize", "team_cognitive_load", "team_complexity"}
+//
+// "compounding_risk_team" (CHAOS-5084) is compounding_risk's own
+// FINALIZE-scope sibling to "compounding_risk" above -- a DIFFERENT family
+// name for the SAME underlying table (compounding_risk_daily), because it
+// runs once per org/day from the finalize step rather than once per
+// partition, and carries the same "ic_finalize"-class consequence: a native
+// finalize failure redrives the run, so an unregistered name would make that
+// redrive loop invisible.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow", "ic_finalize", "team_cognitive_load", "team_complexity", "compounding_risk_team"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

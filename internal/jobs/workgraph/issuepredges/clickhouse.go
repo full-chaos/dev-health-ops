@@ -385,12 +385,21 @@ WHERE org_id = {org_id:String}`
 	return out, rows.Err()
 }
 
-// loadExplicitLinks reads the SAME (work_item_id, pr_number) pairs Python
-// used to hold in memory as `explicit_links` -- see ExplicitLink's doc
-// comment. No date window: work_graph_issue_pr carries no window semantics
-// of its own, and Python's original in-memory set was never date-filtered
-// either (it was every link either upstream sub-builder produced in the
-// build, not a windowed subset of them).
+// loadExplicitLinks reads (work_item_id, pr_number) pairs from
+// work_graph_issue_pr -- see ExplicitLink's doc comment.
+//
+// KNOWN DEVIATION FROM PYTHON (CHAOS-5341): Python's `explicit_links` set was
+// built from `_build_issue_pr_edges`'s OWN window/repo-scoped PR read
+// (builder.py:436-458) -- an explicit link established outside that run's
+// `from_date`/`to_date`/`repo_id` window was invisible to it. This read is
+// deliberately broader: org-scoped only, no window/repo filter, so it
+// excludes a work item from heuristic matching on ANY known explicit link,
+// not just one from the current run's window. This is an intentional
+// improvement, not a bug -- it avoids a heuristic false-positive edge on a
+// work item that already has a real link established outside the window --
+// but it is a real behavioral divergence from the deleted Python, flagged
+// here rather than silently inherited. See CHAOS-5341 for the live repro and
+// the product ruling to keep this behavior.
 func (loader *Loader) loadExplicitLinks(ctx context.Context, orgID string) ([]ExplicitLink, error) {
 	query := `SELECT work_item_id, pr_number FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String}`
 	rows, err := loader.conn.Query(ctx, query, clickhouse.Named("org_id", orgID))

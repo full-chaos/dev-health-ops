@@ -272,9 +272,12 @@ deleted, the frozen file and this one test survive.
 
 ## INVESTMENT / WORK-GRAPH
 
+`dev-hops work-graph build` (`work_graph/runner.py run_work_graph_build`) is DELETED under
+CHAOS-4924 -- `WorkGraphBuilder.build()` had shrunk to a 0-stats no-op by then; use
+`dev-health-workerctl workgraph trigger` instead (table below).
+
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops work-graph build` | COMPAT-Python | `work_graph/runner.py run_work_graph_build`, wired through the SAME `workgraph.build` bridge as the worker path (table below) | CHAOS-4441 |
 | `dev-hops investment materialize` | COMPAT-Python | `work_graph/runner.py run_investment_materialization`. NOTE: the CLI verb is a SEPARATE entry point from the `investment.materialize` River kind, which is NATIVE (table below) -- the CLI still runs the Python implementation directly, and re-pointing it is CHAOS-4767's follow-up. | CHAOS-4767 |
 
 No `families.json` equivalent exists for these 5 River kinds (`internal/jobs/families.json` does not exist)
@@ -289,7 +292,7 @@ Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather th
 | cognitive load (team_cognitive_load) | NATIVE | see §2 | river, native -- finalize scope, co-registered with ic_finalize | CHAOS-5141 |
 | investment.materialize | NATIVE | Go: `internal/jobs/investment/nativeexecutor.go` (implements the same `workgraph.CompatibilityExecutor` seam the bridge did) -> `materialize.go` orchestrator -> `chquery` fetch + `materializecomponent.go` assembly + `categorize` LLM plane + `chwrite` write. Python `materialize.py:1169-1854 materialize_investments()` is retained but no longer reached from the worker path (removal is CHAOS-4767) | river, native -- `addWorkgraphWorker`'s `KindInvestmentMaterialize` case takes `nativeInvestment` | CHAOS-4441 (cutover landed) |
 | recommendations | NATIVE | see §3 | river, native | CHAOS-4281/CHAOS-3092 (Done) |
-| workgraph.build | COMPAT-Python (narrow native pre/post-step) | Go: `internal/jobs/workgraph/prestep.go` (issue-PR edge mapping, runs BEFORE the bridge) + one `poststep.go` edge type (runs AFTER); Python: `worker_workgraph.py:367 execute` (LLM categorization -- "Python owns 100% of the compute" per prestep.go's own doc comment) | bridge -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case still takes the HTTP `executor` | CHAOS-4924 (six remaining sub-builders + cutover) |
+| workgraph.build | NATIVE | Go: `internal/jobs/workgraph/handler.go`'s `buildHandler` runs the full `buildPreStepOrder()` sequence (issue<->PR/issue<->commit/PR<->commit edges, flag-guards, operational-incident, issue<->issue edges) natively, no bridge call at all. Python's `WorkGraphBuilder.build()` (`src/dev_health_ops/work_graph/builder.py`) is DELETED -- every stage it used to run was already a 0-stats no-op by the time of this cutover | river, native -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case takes no executor at all | CHAOS-4924 (cutover landed) |
 <!-- END GENERATED WORKGRAPH INVESTMENT MATRIX -->
 
 ~~**Built but unwired:** `internal/jobs/investment/materializecomponent.go` ... has **zero non-test

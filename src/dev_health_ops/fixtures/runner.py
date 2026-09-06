@@ -1793,7 +1793,9 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         )
         builder = WorkGraphBuilder(config)
         try:
-            builder.build()
+            # builder.build() used to run here -- deleted under CHAOS-4924
+            # (every stage it drove was already ported natively; the call
+            # was a vestigial 0-stats no-op by the time of this deletion).
             if all_ff_flags:
                 for flag in all_ff_flags:
                     builder.add_feature_flag_node(

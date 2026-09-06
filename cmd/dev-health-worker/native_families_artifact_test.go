@@ -718,17 +718,28 @@ func extractWorkgraphExecutors(t *testing.T, repoRoot string) map[string]string 
 			t.Fatalf("addWorkgraphWorker switches on jobcontract.%s, which is not a kind constant", selector.Sel.Name)
 		}
 
-		// Find the New*Handler call inside this case and read its SECOND
-		// argument -- the executor. Every handler constructor in this switch
-		// takes (store, executor, ...), so the position is uniform.
+		// Find the New*Handler call inside this case. NewBuildHandler
+		// (CHAOS-4924) takes NO executor argument at all -- workgraph.build
+		// is unconditionally native, a structural fact this parse can read
+		// directly off the constructor name rather than an argument
+		// position. Every OTHER handler constructor in this switch still
+		// takes (store, executor, ...), so that shape's SECOND argument is
+		// still read as the executor for everything but Build.
 		executor := ""
 		ast.Inspect(clause, func(inner ast.Node) bool {
 			call, ok := inner.(*ast.CallExpr)
-			if !ok || len(call.Args) < 2 {
+			if !ok {
 				return true
 			}
 			function, ok := call.Fun.(*ast.SelectorExpr)
 			if !ok || !handlerConstructorPattern.MatchString(function.Sel.Name) {
+				return true
+			}
+			if function.Sel.Name == "NewBuildHandler" {
+				executor = "native"
+				return false
+			}
+			if len(call.Args) < 2 {
 				return true
 			}
 			ident, ok := call.Args[1].(*ast.Ident)
@@ -800,13 +811,14 @@ func parseJobContractKindValues(t *testing.T, repoRoot string) map[string]string
 //
 // investment.dispatch/chunk/finalize were deleted entirely under CHAOS-4438
 // (dead Go shells, zero producers ever created a request row for them) --
-// they no longer appear in the artifact at all. workgraph.build stays compat
-// until CHAOS-4924's six remaining sub-builders land.
+// they no longer appear in the artifact at all. workgraph.build flipped to
+// native under CHAOS-4924: its six remaining sub-builders landed and the
+// Python bridge call was removed from NewBuildHandler entirely.
 func TestWorkgraphArtifactRecordsTheInvestmentCutover(t *testing.T) {
 	artifact := buildNativeFamiliesArtifact(t)
 
 	want := map[string]string{
-		"workgraph.build":        "compat",
+		"workgraph.build":        "native",
 		"investment.materialize": "native",
 	}
 	if len(artifact.Workgraph) != len(want) {

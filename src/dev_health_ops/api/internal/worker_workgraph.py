@@ -72,13 +72,6 @@ def _scope_arguments(kind: str, scope: object, row: Any) -> dict[str, Any]:
     if not isinstance(scope, dict):
         raise ValueError("request scope must be an object")
     allowed: dict[str, set[str]] = {
-        "workgraph.build": {
-            "from_date",
-            "to_date",
-            "repo_id",
-            "heuristic_window",
-            "heuristic_confidence",
-        },
         "investment.materialize": {
             "from_date",
             "to_date",
@@ -97,7 +90,9 @@ def _scope_arguments(kind: str, scope: object, row: Any) -> dict[str, Any]:
         # CHAOS-4438 -- removed from this table, so a request naming one of
         # them fails closed here with "unsupported fields" (the existing
         # unknown-kind rejection path) rather than being scoped and
-        # dispatched.
+        # dispatched. workgraph.build removed under CHAOS-4924: the Go
+        # handler no longer calls this bridge at all, so a request naming it
+        # fails closed the same way.
     }
     if kind not in allowed or set(scope) - allowed[kind]:
         raise ValueError("request scope contains unsupported fields")
@@ -113,11 +108,11 @@ def _run_sync(kind: str, arguments: dict[str, Any]) -> dict[str, Any]:
     from dev_health_ops.workers import work_graph_tasks
 
     operations = {
-        "workgraph.build": work_graph_tasks.run_work_graph_build.run,
         "investment.materialize": work_graph_tasks.run_investment_materialize.run,
         # investment.dispatch/chunk/finalize retired outright under
         # CHAOS-4438 (r2 finding F1) -- removed from this table, same
-        # reasoning as _scope_arguments' allowed table above.
+        # reasoning as _scope_arguments' allowed table above. workgraph.build
+        # removed under CHAOS-4924 -- see that table's own comment.
     }
     try:
         operation = operations[kind]

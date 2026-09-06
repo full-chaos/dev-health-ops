@@ -43,8 +43,16 @@ func promotedContractRoot(t *testing.T, kinds ...string) (*jobruntime.Registry, 
 	for _, job := range document.Jobs {
 		kind, _ := job["kind"].(string)
 		if slices.Contains(kinds, kind) {
+			// CHAOS-5320: the real checked-in rollback_route for report/
+			// daily-metrics kinds is "none" now (celery is no longer
+			// resolvable fleet-wide), but this fixture deliberately promotes
+			// to the plain go_default/river shape, which requires
+			// rollback=celery per validateMigrationPolicy's state table --
+			// set it explicitly rather than relying on the base document's
+			// real value.
 			job["state"] = "go_default"
 			job["route"] = "river"
+			job["rollback_route"] = "celery"
 		}
 	}
 	encoded, err := json.Marshal(document)

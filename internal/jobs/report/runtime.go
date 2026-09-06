@@ -144,7 +144,12 @@ func RouteCapabilities(registry *jobruntime.Registry) ([]RouteCapability, error)
 		jobcontract.KindReportExecuteScheduled,
 	} {
 		descriptor, ok := registry.Descriptor(kind)
-		if !ok || descriptor.RollbackRoute != "celery" {
+		// CHAOS-5320: celery is no longer a resolvable rollback route
+		// fleet-wide (the Celery dispatch plane is gone), so this pin now
+		// accepts "none" too -- both report kinds moved to
+		// celery_removed/river in the same PR that retired
+		// resolve_worker_job_route's celery acceptance.
+		if !ok || (descriptor.RollbackRoute != "celery" && descriptor.RollbackRoute != "none") {
 			return nil, ErrContractMismatch
 		}
 		result = append(result, RouteCapability{

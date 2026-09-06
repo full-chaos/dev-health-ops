@@ -1737,7 +1737,22 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # "<provider>/work-items/estimate-coverage" compareRowsAgainstPythonOracle
     # call from an existing multi-case test, not a whole top-level test, so
     # they contribute no further count change.
-    assert len(expected_provider_tests) == 1322
+    #
+    # CHAOS-5316 (Jira relates_to relationship-type normalisation, landed
+    # independently on delete-work-item-estimate-python-compute on top of the
+    # above, 2026-09-06): +2 top-level (1323 -> 1325) on THAT branch,
+    # integration-tagged UNCHANGED at 152. TestJiraRelationshipCanonicalizes
+    # RelatesTo and TestNormalizeJiraDependenciesRelatesTo pin the
+    # raw-"relates"-to-canonical-"relates_to" vocabulary fix in
+    # jira_work_items_rows.go; both parse/build in-memory rows only, so the
+    # integration-tagged count stays 152.
+    #
+    # Reconciled on merge into delete-work-item-families-python (2026-09-06):
+    # the CHAOS-5310/CHAOS-5321 multiday deletion (1323 -> 1322, see the
+    # R6/work-item block above) and CHAOS-5316's +2 (1323 -> 1325) are
+    # independent deltas off the same 1323 base -- combined total
+    # 1323 - 1 + 2 = 1324.
+    assert len(expected_provider_tests) == 1324
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1754,7 +1769,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1322
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1324
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1849,7 +1864,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1322
+    assert len(selected_tests) == len(set(selected_tests)) == 1324
     assert set(selected_tests) == expected_tests
 
 

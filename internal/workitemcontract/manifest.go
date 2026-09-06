@@ -32,7 +32,14 @@ type Destination struct {
 
 var destinationManifest = [...]Destination{
 	{Name: "ai_attribution", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
-	{Name: "estimate_coverage_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	// CHAOS-5323: estimate_coverage_metrics_daily's Python compute is deleted
+	// entirely (WorkItemEstimateExecutor, native Go, is the only writer now) --
+	// no provider's Python route produces it and no Linear expired-lease retry
+	// safety proof exists for a surface Python no longer writes. Same
+	// falseness-is-the-claim shape as project_membership_transitions/projects
+	// below, one field: GitHubEffect/FamilyRoute are unchanged (out of scope
+	// for this deletion, a separate Go-route question).
+	{Name: "estimate_coverage_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: true},
 	{Name: "investment_classifications_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "investment_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "issue_type_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
@@ -63,15 +70,28 @@ var destinationManifest = [...]Destination{
 	{Name: "project_membership_transitions", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: false},
 	{Name: "projects", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: false},
 	{Name: "sprints", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
-	{Name: "work_item_cycle_times", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	// CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): work_item_cycle_times/work_item_
+	// metrics_daily/work_item_user_metrics_daily (compute_work_item_metrics_
+	// daily), work_item_state_durations_daily (compute_work_item_state_
+	// durations_daily), and work_item_team_attributions (compute_work_item_
+	// team_attributions) all left the Linear expired-lease retry policy the
+	// same way estimate_coverage_metrics_daily did above: their Python
+	// compute is deleted entirely (native Go executors -- WorkItemExecutor/
+	// WorkItemStateExecutor/WorkItemAttributionExecutor -- plus providersync's
+	// own ingest-time derivation are the only writers now), so no provider's
+	// Python route produces them and no Linear expired-lease retry safety
+	// proof exists for a surface Python no longer writes. GitHubEffect/
+	// FamilyRoute are unchanged -- providersync's Go derivation still
+	// produces these surfaces at ingest time, unrelated to this deletion.
+	{Name: "work_item_cycle_times", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: true},
 	{Name: "work_item_dependencies", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "work_item_interactions", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
-	{Name: "work_item_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: true},
 	{Name: "work_item_reopen_events", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
-	{Name: "work_item_state_durations_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
-	{Name: "work_item_team_attributions", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_state_durations_daily", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: true},
+	{Name: "work_item_team_attributions", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: true},
 	{Name: "work_item_transitions", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
-	{Name: "work_item_user_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
+	{Name: "work_item_user_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: true},
 	{Name: "work_items", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 }
 

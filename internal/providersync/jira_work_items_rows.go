@@ -573,7 +573,7 @@ func jiraRelationship(value string) string {
 		return "blocks"
 	}
 	if strings.Contains(normalized, "relate") {
-		return "relates"
+		return "relates_to"
 	}
 	if strings.Contains(normalized, "duplicate") {
 		return "duplicates"

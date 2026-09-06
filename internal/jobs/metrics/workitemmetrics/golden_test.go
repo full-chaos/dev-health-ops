@@ -11,12 +11,15 @@ import (
 )
 
 // goldenFixture decodes tests/fixtures/daily_work_item_python_golden.json,
-// produced by tests/fixtures/generate_daily_work_item_python_golden.py from
-// REAL production Python (compute_work_item_metrics_daily,
-// compute_work_item_team_attributions). It used to also carry
-// compute_estimate_coverage_metrics_daily's rows until CHAOS-5323/CHAOS-3092
-// deleted that function -- see estimateCoverageGoldenFixture below for where
-// those 14 cases live now.
+// captured from REAL production Python (compute_work_item_metrics_daily,
+// compute_work_item_team_attributions) via its now-deleted generator
+// (tests/fixtures/generate_daily_work_item_python_golden.py) before
+// CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6) deleted both functions -- native Go
+// executor + providersync ingest derivation are the only producers now, so
+// this file is a permanently frozen golden with no live-regeneration
+// capability. It used to also carry compute_estimate_coverage_metrics_
+// daily's rows until CHAOS-5323/CHAOS-3092 deleted that function -- see
+// estimateCoverageGoldenFixture below for where those 14 cases live now.
 type goldenFixture struct {
 	Day        string `json:"day"`
 	ComputedAt string `json:"computed_at"`

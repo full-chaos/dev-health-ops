@@ -24,10 +24,6 @@ from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
-from dev_health_ops.metrics.compute_ic import (
-    compute_ic_landscape_rolling,
-    compute_ic_metrics_daily,
-)
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
 )
@@ -40,7 +36,6 @@ from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.identity import (
     get_team_resolver,
     init_team_resolver,
-    load_team_map,
 )
 from dev_health_ops.metrics.job_compounding_risk import _fetch_repo_metrics_for_day
 from dev_health_ops.metrics.knowledge import (
@@ -611,7 +606,6 @@ async def run_daily_metrics_job(
     sink: str = "auto",
     provider: str = "auto",
     org_id: str,
-    skip_finalize: bool = False,
     on_write_starting: Callable[[], None] | None = None,
     skip_families: set[str] | None = None,
 ) -> dict[date, list[str]]:
@@ -1228,12 +1222,13 @@ async def run_daily_metrics_job(
         # repo_user_commit shape, NOT the team_wellbeing shape -- skip ONLY
         # the writes, never the computes:
         #
-        #   * `wi_user_metrics` is a live in-process input to
-        #     `compute_ic_metrics_daily` further down (the `ic_finalize`
-        #     family, still Python), which has no other source for it. If the
-        #     compute were skipped, ic_finalize would silently start seeing an
-        #     empty work-item contribution for every user on every partition
-        #     the Go executor handled -- a wrong number, not a missing one.
+        #   * `wi_user_metrics` feeds its OWN write a few lines down
+        #     (`s.write_work_item_user_metrics`, gated separately by
+        #     `skip_work_item_write`), so the compute that populates it must
+        #     stay unconditional regardless of that gate. (It used to ALSO
+        #     feed ic_finalize's now-deleted Python compute -- CHAOS-4290
+        #     PR3 -- but that was never the reason this compute had to stay
+        #     unconditional; this write is.)
         #   * `estimate_coverage_metrics` feeds nothing else here, so its
         #     compute COULD be skipped, but is left unconditional to keep this
         #     diff minimal (work_item_estimate is its own separate deletion
@@ -1444,23 +1439,16 @@ async def run_daily_metrics_job(
         # existing fail-open-to-Python contract every other native family
         # already has.
 
-        if not skip_finalize:
-            ic_metrics = compute_ic_metrics_daily(
-                git_metrics=result.user_metrics,
-                wi_metrics=wi_user_metrics,
-                team_map=load_team_map(),
-            )
-            for s in sinks:
-                s.write_user_metrics(ic_metrics)
-
-            rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=d)
-            ic_landscape = compute_ic_landscape_rolling(
-                as_of_day=d,
-                rolling_stats=rolling_stats,
-                team_map=load_team_map(),
-            )
-            for s in sinks:
-                s.write_ic_landscape_rolling(ic_landscape)
+        # ic_finalize's Python compute (compute_ic_metrics_daily /
+        # compute_ic_landscape_rolling) was deleted here (CHAOS-4290 PR3,
+        # CHAOS-3092 no-straddle): the native Go executor has been the SOLE
+        # writer for this family since #2241's finalize policy landed --
+        # FinalizeHandler.computeNativeFinalizeFamilies never falls open to
+        # this bridge on a native error (daily.go, "The bridge is NOT
+        # called" -- see PR3's body for the exact citation), so this call
+        # was already dead weight, never a live fallback, before its
+        # deletion. `skip_finalize` (this function's own parameter) existed
+        # only to gate this block and is removed with it.
 
         if len(days) > 1:
             # CHAOS-4264: a backfill_days > 1 call holds this day's source
@@ -1539,14 +1527,20 @@ async def run_daily_metrics_finalize(
 
     await init_team_resolver(primary_sink)
 
-    loader = await _get_loader(db_url, backend, org_id=org_id)
+    # _get_loader(db_url, backend, org_id=org_id) used to be called here to
+    # feed ic_finalize's now-deleted compute_ic_landscape_rolling call
+    # (loader.load_user_metrics_rolling_30d) -- removed with it (CHAOS-4290
+    # PR3). Nothing else in this function needs a DataLoader.
 
     import dataclasses as _dc
 
     deps = get_metrics_dependencies()
 
+    # wi_user_metrics (work_item_user_metrics_daily) was loaded here ONLY to
+    # feed ic_finalize's now-deleted compute_ic_metrics_daily call -- removed
+    # with it (CHAOS-4290 PR3). git_metrics stays: _write_team_cognitive_load_for_day
+    # further down still reads it (user_metrics_rows=git_metrics).
     git_metrics: list[Any] = []
-    wi_user_metrics: list[Any] = []
     # CodeQL (py/uninitialized-local-variable): ch_client is only assigned
     # inside the `backend == "clickhouse"` branch below, but the
     # team_metrics_daily readback further down (CHAOS-4365) references it
@@ -1559,9 +1553,6 @@ async def run_daily_metrics_finalize(
     if backend == "clickhouse":
         ch_client = await deps.get_global_client(db_url)
         um_field_names = {f.name for f in _dc.fields(deps.user_metrics_daily_record)}
-        wi_field_names = {
-            f.name for f in _dc.fields(deps.work_item_user_metrics_daily_record)
-        }
 
         um_query = (
             f"SELECT * FROM {dedup_from('user_metrics_daily')} WHERE day = {{day:Date}}"
@@ -1584,64 +1575,26 @@ async def run_daily_metrics_finalize(
                 )
             except Exception:
                 logger.debug("Skipping malformed user_metrics row: %s", row)
-
-        wi_query = (
-            "SELECT * FROM work_item_user_metrics_daily FINAL WHERE day = {day:Date}"
-        )
-        wi_params: dict[str, Any] = {"day": day}
-        if org_id:
-            wi_query += " AND org_id = {org_id:String}"
-            wi_params["org_id"] = org_id
-        wi_rows = deps.clickhouse_query_dicts(
-            ch_client,
-            wi_query,
-            wi_params,
-        )
-        for row in wi_rows:
-            try:
-                wi_user_metrics.append(
-                    deps.work_item_user_metrics_daily_record(
-                        **{k: v for k, v in row.items() if k in wi_field_names}
-                    )
-                )
-            except Exception:
-                logger.debug("Skipping malformed wi_user_metrics row: %s", row)
     else:
         logger.warning(
             "Finalize currently optimised for ClickHouse; "
-            "backend=%s may produce empty IC metrics.",
+            "backend=%s may produce empty finalize-scope metrics.",
             backend,
         )
 
-    # CHAOS-4290: same gate shape as run_daily_metrics_job's families
-    # (`"deploy" in skip_families` a few hundred lines up, and its
-    # siblings). When a
-    # native Go executor already computed and wrote ic_finalize for this run,
-    # recomputing here would append a SECOND generation of the same rows --
-    # and user_metrics_daily is append-only, deduped
-    # `ORDER BY computed_at DESC LIMIT 1 BY (org_id, repo_id, author_email, day)`,
-    # so the later writer wins silently and the native rows would vanish with
-    # nothing failing.
-    skip_families = skip_families or set()
-    if "ic_finalize" not in skip_families:
-        ic_metrics = compute_ic_metrics_daily(
-            git_metrics=git_metrics,
-            wi_metrics=wi_user_metrics,
-            team_map=load_team_map(),
-        )
-        for s in sinks_list:
-            s.write_user_metrics(ic_metrics)
-
-        rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=day)
-        ic_landscape = compute_ic_landscape_rolling(
-            as_of_day=day,
-            rolling_stats=rolling_stats,
-            team_map=load_team_map(),
-        )
-        for s in sinks_list:
-            s.write_ic_landscape_rolling(ic_landscape)
+    # CHAOS-4290: ic_finalize's Python compute (compute_ic_metrics_daily /
+    # compute_ic_landscape_rolling) was deleted here (PR3, CHAOS-3092
+    # no-straddle) -- the native Go executor has been the SOLE writer for
+    # this family since #2241's finalize policy landed, so this call was
+    # already dead weight, never a live fallback, before its deletion (see
+    # PR3's body for the no-fail-open citation). `skip_families` stays a
+    # parameter of this function: it now gates `benchmarking` below
+    # (CHAOS-5194), and worker_metrics.py's finalize call site still passes
+    # it through from the Go dispatcher's real skip list for whichever
+    # finalize-scope family needs it next.
 
     computed_at = datetime.now(timezone.utc)
+    skip_families = skip_families or set()
 
     # CHAOS-5194 (astra F3): benchmarking, relocated here from
     # run_daily_metrics_job -- see this function's sibling comment at the old
@@ -1804,13 +1757,6 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             sink=ns.sink,
             provider=ns.provider,
             org_id=org_id,
-            # CHAOS-4365 codex R3 (P2): the standalone finalizer below
-            # already recomputes IC metrics/landscape for the whole org --
-            # skip_finalize=True here avoids running that same inline logic
-            # TWICE per day (matches _cmd_metrics_rebuild's existing
-            # skip_finalize=True + explicit run_daily_metrics_finalize
-            # pattern, which this bare-CLI path now also follows).
-            skip_finalize=True,
         )
         # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
         # written from run_daily_metrics_finalize, not from
@@ -1862,7 +1808,6 @@ async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
                         sink=ns.sink,
                         provider=ns.provider,
                         org_id=org_id,
-                        skip_finalize=True,
                     )
             else:
                 logger.info("Rebuild batch: day=%s (all repos)", d)
@@ -1873,7 +1818,6 @@ async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
                     sink=ns.sink,
                     provider=ns.provider,
                     org_id=org_id,
-                    skip_finalize=True,
                 )
 
             logger.info("Rebuild finalize: day=%s", d)

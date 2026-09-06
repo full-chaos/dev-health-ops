@@ -713,7 +713,34 @@ echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from th
 # this gate's own FATAL fail-open check -- the one CHAOS-4288 made mandatory
 # specifically because a passing readback does not prove the Go executor
 # produced it -- never actually ran against ic_finalize.
-NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk ic_finalize"
+#
+# team_cognitive_load added (CHAOS-5281, same gap class as ic_finalize
+# above): it was in the readback --families list, so a green readback
+# existed, but this telemetry check never ran against it. Safe to add --
+# team_cognitive_load shares ic_finalize's exact finalize-scope observer
+# wiring (FinalizeHandler.SetNativeFinalizeFamilyObserver records every
+# family SetNativeFinalizeFamilies registers, not per-family plumbing), and
+# ic_finalize's own presence here already proves that observer emits
+# worker_daily_metrics_native_family_outcome_total{outcome="computed"} for
+# finalize-scope families, not just partition-scope ones.
+#
+# team_complexity is DELIBERATELY NOT added here: it is not even in the
+# readback --families list above, because this script's own E2E seed loop
+# cannot causally satisfy it (no complexity-scan seed step, so
+# repo_complexity_daily -- team_complexity's only input -- never populates;
+# see tests/test_executed_proof_family_coverage.py's KNOWN_UNCOVERED entry,
+# CHAOS-5283). Adding it here would wait NATIVE_TELEMETRY_WAIT_SECS every
+# run for a sample that can never arrive.
+#
+# compounding_risk's TEAM scope has no entry to add: it is still fully
+# Python (families.json's own phase_note -- "TEAM scope rows are still
+# Python... FinalizeHandler.Work hands the whole finalize step to the
+# bridge as one opaque call with no per-family registration and no
+# skip-list. CHAOS-4287 stays open until that finalize-side hook exists").
+# There is no native registration for compounding_risk's team scope for
+# this telemetry check to prove either way; the existing `compounding_risk`
+# entry above only ever asserted its REPO scope, which is unaffected.
+NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk ic_finalize team_cognitive_load"
 # Bounded, and bounded deliberately: long enough that a slow family is not
 # reported as a failure, short enough that a genuine fail-open is not paid for
 # in minutes on every run.

@@ -95,16 +95,6 @@ var outputPathPatterns = []*regexp.Regexp{
 // TestExplicitCorpusPathsAreStillNeeded below deletes the excuse when the
 // generator starts declaring its own path.
 var explicitCorpusPaths = map[string]string{
-	// Its corpus is a GO PACKAGE's testdata, so it lives beside the package that
-	// loads it rather than in tests/fixtures/ -- ordinary Go layout, and not
-	// something to bend for this guard. No Path(__file__)-relative declaration can
-	// name it, because the file is not beside the generator.
-	//
-	// Naming it here makes it GUARDED rather than excused: the ratchet's surface
-	// shrinks by one instead of the corpus being permitted to rot. The generator
-	// runs fine and takes --stdout, so excludedGenerators would be the wrong map
-	// (its self-check demands a missingModule).
-	"generate_scope_grammar_corpus.py": "../../internal/pythonparity/scopeparity/testdata/corpus_seed1.json",
 	// Declares its output as a bare `REPO_ROOT / "tests" / "fixtures" / "..."`
 	// path built inside main(), not a module-level Path(__file__)-relative
 	// constant -- so no pattern matches, but it takes --stdout (CHAOS-5084's
@@ -258,6 +248,21 @@ var liveDataGenerators = map[string]struct {
 	// workgraph_scope_parity_test.go's TestBuildScopeMatchesTheBridgeAdmission
 	// still diffs the (already-native) issue-pr-links pre-step's window
 	// parser against it, which needs no live Python.
+	//
+	// A FOURTH CHAOS-4924 generator, tests/fixtures/generate_scope_grammar_
+	// corpus.py, was ALSO DELETED for the identical reason: its own docstring
+	// says the corpus exists to measure "the workgraph.build scope gate", and
+	// its `_admit` reference (line ~339) called the same now-retired
+	// `worker_workgraph._scope_arguments("workgraph.build", ...)`. It was
+	// routed through explicitCorpusPaths (removed above), not this map. Its
+	// frozen corpus (internal/pythonparity/scopeparity/testdata/corpus_seed1.
+	// json) stays: scopeparity_test.go's own tests only exercise the
+	// package's Compare() comparator logic against synthetic adapters, using
+	// the corpus purely as realistic-shaped sample data -- no production
+	// adapter is wired through it (confirmed: nothing outside this package
+	// and this guard imports internal/pythonparity/scopeparity), so those
+	// tests need no live Python and are unaffected by the frozen file no
+	// longer being regenerated.
 }
 
 // TestLiveDataGeneratorsGenuinelyNeedClickHouse deletes the excuse the moment

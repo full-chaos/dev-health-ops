@@ -31,7 +31,8 @@ def _run_cli_help(*args: str) -> subprocess.CompletedProcess[str]:
         ("api", "--help"),
         ("billing", "--help"),
         ("admin", "--help"),
-        ("work-graph", "--help"),
+        # work-graph deleted under CHAOS-4924 (dev-hops work-graph build was
+        # its only subcommand, itself deleted).
         ("backfill", "--help"),
         ("push", "--help"),
         ("push", "validate", "--help"),

@@ -1161,33 +1161,17 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: cmd/dev-health-worker (build-scope parity table vs the live bridge, CHAOS-4837)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestBuildScopeParityTableMatchesLivePython$' \
-        ./cmd/dev-health-worker
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Registering the guard here is the LOAD-BEARING half of CHAOS-4837, not
-  # bookkeeping. The issue/PR golden's rot guard was written first and did not
-  # run AT ALL until its dispatcher entry existed -- a guard nothing invokes is
-  # indistinguishable from a guard that passes. The proof marker is what makes
-  # "it ran" checkable rather than assumed.
-  proof_file="${proof_dir}/build-scope-parity-table"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the build-scope parity table was not re-measured against the live bridge\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # cmd/dev-health-worker's live-Python rot guard
+  # (TestBuildScopeParityTableMatchesLivePython, CHAOS-4837) was retired here:
+  # its generator's producer, run_work_graph_build, was DELETED (CHAOS-4924),
+  # not merely un-called, and its _admit() reference kind (workgraph.build)
+  # was removed from _scope_arguments' allowed set in the same PR -- so the
+  # comparison would measure dead ground rather than reference drift. The
+  # frozen table (tests/fixtures/build_scope_parity_table.json) stays;
+  # TestBuildScopeMatchesTheBridgeAdmission's exhaustive frozen-table
+  # comparison is the regression guard going forward. Proving "Python still
+  # agrees with itself" stops being the protection that matters once Python
+  # is no longer in the loop.
 
   printf 'go test -count=1: internal/pythonparity (float round/repr/format mirrors vs the live interpreter)\n'
   if ! (

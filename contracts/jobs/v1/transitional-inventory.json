@@ -1589,7 +1589,7 @@
         "line": 172
       },
       "queue_or_cadence": "metrics / heavy",
-      "dispatches": "run_complexity_job",
+      "dispatches": "ComplexityExecutor.ComputePartition",
       "dispatch_mechanism": "job_registry_descriptor",
       "owner_role": "primary",
       "target_owner": {
@@ -1597,12 +1597,12 @@
         "value": "metrics.remaining.complexity"
       },
       "target_kind_id": "kind:metrics.remaining.complexity",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `metrics.remaining.complexity` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None -- CHAOS-4291 ported the daily compute to internal/jobs/metrics/remaining/complexity_native.go with no Python fallback in daily.go's worker registration; the former HTTP compatibility bridge runner (job_complexity_db.py, worker_metrics.py's _run_complexity) was deleted in the same PR once nothing dispatched to it anymore.",
+      "deletion_evidence_requirement": "Met: registry.json kind `metrics.remaining.complexity` passes Registry.ValidateStartup with the concrete native handler, the former compatibility runner import is removed from the Python API, and the Testcontainers parity test (TestComplexityExecutorMatchesPythonAgainstClickHouse) compared the native executor's write against the real Python job before its deletion, frozen as a golden.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": ""
+      "notes": "CORRECTION (CHAOS-4291): this row previously read python_compatibility / dispatches=run_complexity_job, stale since this PR ported the family to native Go and deleted job_complexity_db.py entirely. No per-day helper survives as a fixtures/runner.py dependency, unlike release_impact -- fixtures/runner.py now seeds file_complexity_snapshots/repo_complexity_daily from the frozen parity golden JSON instead (a plain load, no Python compute left to call)."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:204",

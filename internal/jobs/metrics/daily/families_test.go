@@ -27,7 +27,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if err := json.Unmarshal(data, &registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.SchemaVersion != 1 || len(registry.Families) != 24 {
+	if registry.SchemaVersion != 1 || len(registry.Families) != 25 {
 		t.Fatalf("invalid family registry: %#v", registry)
 	}
 	// The port enum is closed: "pending" (still Python-only), "next_core"
@@ -205,13 +205,16 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// this map -- they are pre_bridge now (asserted in their own loop above).
 	// CHAOS-5194 moved benchmarking from post_bridge to finalize (see
 	// BenchmarkingFinalizeExecutor). compounding_risk/ic_finalize/
-	// benchmarking/team_cognitive_load are the families left with a
-	// deliberate non-default phase.
+	// benchmarking/team_cognitive_load/team_complexity are the families left
+	// with a deliberate non-default phase. team_complexity (CHAOS-5051) is
+	// finalize-scope like team_cognitive_load and ic_finalize -- see its own
+	// families.json phase_note.
 	nonDefaultPhase := map[string]string{
 		"compounding_risk":    "post_bridge",
 		"benchmarking":        "finalize",
 		"ic_finalize":         "finalize",
 		"team_cognitive_load": "finalize",
+		"team_complexity":     "finalize",
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

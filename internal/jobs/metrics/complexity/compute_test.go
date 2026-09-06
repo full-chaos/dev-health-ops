@@ -418,12 +418,481 @@ func TestLanguageForRoutesEveryJVMSwiftExtensionToItsAnalyzer(t *testing.T) {
 	}
 }
 
+// TestLanguageForRoutesEveryJSTSExtensionToItsAnalyzer proves every
+// extension CHAOS-4291 registers for javascript/typescript reaches the
+// right analyzer under the right language string -- .js/.jsx/.mjs/.cjs all
+// route to "javascript" (lizardcc.AnalyzeJavaScript), .ts/.tsx to
+// "typescript" (lizardcc.AnalyzeTypeScript), matching Python's
+// JavaScriptReader/TypeScriptReader ext lists (javascript.py:11,
+// typescript.py:51) exactly.
+func TestLanguageForRoutesEveryJSTSExtensionToItsAnalyzer(t *testing.T) {
+	cases := []struct {
+		path string
+		lang string
+	}{
+		{"a.js", "javascript"}, {"a.jsx", "javascript"},
+		{"a.mjs", "javascript"}, {"a.cjs", "javascript"},
+		{"a.ts", "typescript"}, {"a.tsx", "typescript"},
+	}
+	analyzers := DefaultAnalyzers()
+	for _, c := range cases {
+		lang, known := LanguageFor(c.path)
+		if !known || lang != c.lang {
+			t.Fatalf("%s: LanguageFor got (%q, %v), want (%q, true)", c.path, lang, known, c.lang)
+		}
+		if _, ok := analyzers[lang]; !ok {
+			t.Fatalf("%s: no analyzer registered for language %q", c.path, lang)
+		}
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForJSTS is this PR's contract test
+// against PR1's seam for the javascript/typescript analyzer, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForJava.
+func TestAnalyzeFileMatchesLizardAggregatesForJSTS(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_js_ts")
+	entries, err := os.ReadDir(corpus)
+	if err != nil {
+		t.Fatalf("read corpus: %v", err)
+	}
+	seen := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".txt")
+		src, err := os.ReadFile(filepath.Join(corpus, entry.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		seen++
+		t.Run(entry.Name(), func(t *testing.T) {
+			result, err := AnalyzeFile(name, string(src), DefaultThresholds())
+			if err != nil {
+				t.Fatalf("AnalyzeFile(%s): %v", name, err)
+			}
+			if result == nil {
+				t.Fatalf("AnalyzeFile(%s): expected a row, got nil", name)
+			}
+			wantLang := "typescript"
+			if strings.HasSuffix(name, ".js") {
+				wantLang = "javascript"
+			}
+			if result.Language != wantLang {
+				t.Errorf("%s: language = %q, want %q", name, result.Language, wantLang)
+			}
+		})
+	}
+	if seen == 0 {
+		t.Fatalf("no corpus files found; this test proved nothing")
+	}
+}
+
 // TestAnalyzeFileMatchesLizardAggregatesForJava is this PR's contract test
 // against PR1's seam for the java analyzer, mirroring
 // TestAnalyzeFileMatchesLizardAggregatesForCFamily.
 func TestAnalyzeFileMatchesLizardAggregatesForJava(t *testing.T) {
 	corpus := filepath.Join("lizardcc", "testdata", "corpus_java")
 	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_java.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesRubyExtensionToItsAnalyzer proves .rb reaches a
+// registered analyzer under the right language string, matching Python's
+// RubyReader.ext (ruby.py:22).
+func TestLanguageForRoutesRubyExtensionToItsAnalyzer(t *testing.T) {
+	lang, known := LanguageFor("a.rb")
+	if !known || lang != "ruby" {
+		t.Fatalf("a.rb: LanguageFor got (%q, %v), want (\"ruby\", true)", lang, known)
+	}
+	if _, ok := DefaultAnalyzers()[lang]; !ok {
+		t.Fatalf("a.rb: no analyzer registered for language %q", lang)
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForRuby is this PR's contract test
+// against PR1's seam for the Ruby analyzer, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForJava.
+func TestAnalyzeFileMatchesLizardAggregatesForRuby(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_ruby")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_ruby.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesPHPExtensionToItsAnalyzer proves .php reaches a
+// registered analyzer under the right language string, matching Python's
+// PHPReader.ext (php.py:190).
+func TestLanguageForRoutesPHPExtensionToItsAnalyzer(t *testing.T) {
+	lang, known := LanguageFor("a.php")
+	if !known || lang != "php" {
+		t.Fatalf("a.php: LanguageFor got (%q, %v), want (\"php\", true)", lang, known)
+	}
+	if _, ok := DefaultAnalyzers()[lang]; !ok {
+		t.Fatalf("a.php: no analyzer registered for language %q", lang)
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForPHP is this PR's contract test
+// against PR1's seam for the PHP analyzer, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForJava.
+func TestAnalyzeFileMatchesLizardAggregatesForPHP(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_php")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_php.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesObjCExtensionsToItsAnalyzer proves .m/.mm both
+// reach a registered analyzer under the "objective-c" language string,
+// matching Python's ObjCReader.ext (objc.py:8).
+func TestLanguageForRoutesObjCExtensionsToItsAnalyzer(t *testing.T) {
+	for _, path := range []string{"a.m", "a.mm"} {
+		lang, known := LanguageFor(path)
+		if !known || lang != "objective-c" {
+			t.Fatalf("%s: LanguageFor got (%q, %v), want (\"objective-c\", true)", path, lang, known)
+		}
+		if _, ok := DefaultAnalyzers()[lang]; !ok {
+			t.Fatalf("%s: no analyzer registered for language %q", path, lang)
+		}
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForObjC is this PR's contract test
+// against PR1's seam for the Objective-C analyzer, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForJava.
+func TestAnalyzeFileMatchesLizardAggregatesForObjC(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_objc")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_objc.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesLuaExtensionToItsAnalyzer proves .lua reaches a
+// registered analyzer under the right language string, matching Python's
+// LuaReader.ext (lua.py:9).
+func TestLanguageForRoutesLuaExtensionToItsAnalyzer(t *testing.T) {
+	lang, known := LanguageFor("a.lua")
+	if !known || lang != "lua" {
+		t.Fatalf("a.lua: LanguageFor got (%q, %v), want (\"lua\", true)", lang, known)
+	}
+	if _, ok := DefaultAnalyzers()[lang]; !ok {
+		t.Fatalf("a.lua: no analyzer registered for language %q", lang)
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForLua is this PR's contract test
+// against PR1's seam for the Lua analyzer, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForJava.
+func TestAnalyzeFileMatchesLizardAggregatesForLua(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_lua")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_lua.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
+// TestLanguageForRoutesVueExtensionToItsAnalyzer proves .vue reaches a
+// registered analyzer under the right language string, matching Python's
+// VueReader.ext (vue.py:11) -- this is CHAOS-4291's LAST language, closing
+// out every LANGUAGE_BY_EXTENSION key (see
+// TestEveryLanguageByExtensionKeyHasARegisteredAnalyzer above).
+func TestLanguageForRoutesVueExtensionToItsAnalyzer(t *testing.T) {
+	lang, known := LanguageFor("a.vue")
+	if !known || lang != "vue" {
+		t.Fatalf("a.vue: LanguageFor got (%q, %v), want (\"vue\", true)", lang, known)
+	}
+	if _, ok := DefaultAnalyzers()[lang]; !ok {
+		t.Fatalf("a.vue: no analyzer registered for language %q", lang)
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForVue is this PR's contract test
+// against PR1's seam for the Vue analyzer, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForJava.
+func TestAnalyzeFileMatchesLizardAggregatesForVue(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_vue")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_vue.json"))
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
 	}
@@ -510,22 +979,51 @@ func TestAnalyzeFileSkipsUnanalysedExtensions(t *testing.T) {
 	}
 }
 
-func TestAnalyzeFileFailsClosedOnLizardLanguages(t *testing.T) {
-	// Every extension NOT yet registered in DefaultAnalyzers must ERROR
-	// rather than skip: a skip would emit a plausible, badly-undercounted
-	// row for a repo in that language, and would let this executor be
-	// routed before the port lands. "b.go" moved out of this list when
-	// go-rust registered `go` (TestLanguageForRoutesEveryGoRustExtension
-	// ToItsAnalyzer proves its own now-ported assertion); "c.java" moved
-	// out when this PR registered `java`.
-	for _, path := range []string{"a.ts", "d.rb", "e.vue"} {
-		got, err := AnalyzeFile(path, "function f() { if (a && b) return 1; }", DefaultThresholds())
-		if !errors.Is(err, ErrLanguageNotPorted) {
-			t.Errorf("%s: expected ErrLanguageNotPorted, got err=%v", path, err)
+// TestEveryLanguageByExtensionKeyHasARegisteredAnalyzer closes out
+// CHAOS-4291: every LANGUAGE_BY_EXTENSION language now has a native Go
+// analyzer, so this package can never again silently route a real,
+// recognised extension through ErrLanguageNotPorted. This replaces the
+// former TestAnalyzeFileFailsClosedOnLizardLanguages, which asserted the
+// OPPOSITE fact (a specific list of not-yet-ported extensions) one
+// language at a time as each PR landed -- "b.go" moved out when go-rust
+// registered `go`, "c.java" when a later PR registered `java`, "a.ts" when
+// CHAOS-4291 registered `javascript`/`typescript`, "d.rb" when it
+// registered `ruby`, and "e.vue" -- the last entry -- when it registered
+// `vue` here. An empty not-yet-ported list would have made that test
+// silently vacuous (a for loop over nothing asserts nothing), so this
+// test takes over as the PERMANENT fail-closed invariant: any future
+// language ever added to languageByExtension without ALSO registering an
+// analyzer fails HERE, immediately, rather than only being caught by
+// chance if some other test happens to exercise that specific extension.
+func TestEveryLanguageByExtensionKeyHasARegisteredAnalyzer(t *testing.T) {
+	analyzers := DefaultAnalyzers()
+	if len(languageByExtension) == 0 {
+		t.Fatalf("languageByExtension is empty; this test would prove nothing")
+	}
+	for ext, lang := range languageByExtension {
+		if _, ok := analyzers[lang]; !ok {
+			t.Errorf("%s -> %q: no analyzer registered in DefaultAnalyzers", ext, lang)
 		}
-		if got != nil {
-			t.Errorf("%s: expected no row alongside the error, got %+v", path, got)
-		}
+	}
+}
+
+// TestAnalyzeFileFailsClosedOnAnUnregisteredLanguage proves the
+// ErrLanguageNotPorted contract itself still works, now that no REAL
+// languageByExtension entry can exercise it: DefaultAnalyzers with one
+// entry deliberately removed must still fail closed (error, not a skip,
+// not a zero row) for a file whose language maps to that removed entry --
+// see AnalyzeFileWith's own contract and this file's
+// TestAnalyzeFileWithAcceptsAnAdditionalLanguageAnalyzer for the
+// complementary "adding one works" proof.
+func TestAnalyzeFileFailsClosedOnAnUnregisteredLanguage(t *testing.T) {
+	analyzers := DefaultAnalyzers()
+	delete(analyzers, "vue")
+	got, err := AnalyzeFileWith("a.vue", "function f() { if (a && b) return 1; }", DefaultThresholds(), analyzers)
+	if !errors.Is(err, ErrLanguageNotPorted) {
+		t.Fatalf("expected ErrLanguageNotPorted, got err=%v", err)
+	}
+	if got != nil {
+		t.Errorf("expected no row alongside the error, got %+v", got)
 	}
 }
 

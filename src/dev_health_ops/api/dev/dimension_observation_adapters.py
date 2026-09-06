@@ -304,8 +304,10 @@ def change_failure_rate_observation(
 # genuinely measured result (Codex-confirmed finding, round 2, 2026-08-02,
 # corrects this module's earlier claim that ``investment_allocation_shift_
 # observation`` was exempt): ``user_metrics_daily``/``team_metrics_daily``
-# writers (``compute.py``, ``compute_wellbeing.py``) use a legacy repo-
-# pattern/identity-map resolver that never consults canonical attribution
+# writers (``compute.py``; ``team_metrics_daily``'s own writer,
+# ``compute_wellbeing.py``, was deleted outright by CHAOS-5234/CHAOS-3092 --
+# TeamWellbeingExecutor, native Go, ported the same resolver faithfully) use
+# a legacy repo-pattern/identity-map resolver that never consults canonical attribution
 # at all; ``investment_metrics_daily``'s writer (``job_work_items.py``)
 # resolves via the canonical ``resolve_team_attribution`` +
 # ``attribution_context`` path in the common case, but that path's

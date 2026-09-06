@@ -1,0 +1,28 @@
+module Shapes
+  WORDS = %w(circle square triangle)
+  PATTERN = %r{^[a-z]+$}
+
+  def self.safe_divide(a, b)
+    begin
+      a / b
+    rescue ZeroDivisionError
+      0
+    ensure
+      log_call
+    end
+  end
+
+  def self.log_call
+    puts %q{called}
+  end
+end
+
+def with_block
+  [1, 2, 3].each do |n|
+    puts n
+  end
+end
+
+def with_brace_block
+  [1, 2, 3].each { |n| puts n }
+end

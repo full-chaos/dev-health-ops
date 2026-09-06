@@ -27,7 +27,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if err := json.Unmarshal(data, &registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.SchemaVersion != 1 || len(registry.Families) != 24 {
+	if registry.SchemaVersion != 1 || len(registry.Families) != 25 {
 		t.Fatalf("invalid family registry: %#v", registry)
 	}
 	// The port enum is closed: "pending" (still Python-only), "next_core"
@@ -193,6 +193,12 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if got := byPhase["benchmarking"]; got != "finalize" {
 		t.Fatalf("benchmarking must be phase=finalize (CHAOS-5194), got %q", got)
 	}
+	// compounding_risk_team (CHAOS-5084) is the finalize-side family
+	// families.json's compounding_risk phase_note now points to instead of
+	// promising "someday": same table, different scope, different gate.
+	if got := byPhase["compounding_risk_team"]; got != "finalize" {
+		t.Fatalf("compounding_risk_team must be phase=finalize (CHAOS-5084), got %q", got)
+	}
 	// The allow-list is kept EXPLICIT rather than relaxed to "any known phase":
 	// a new non-default phase should force whoever adds it to come here and say
 	// which family it belongs to and why. Widening it to accept anything in
@@ -208,10 +214,11 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// benchmarking/team_cognitive_load are the families left with a
 	// deliberate non-default phase.
 	nonDefaultPhase := map[string]string{
-		"compounding_risk":    "post_bridge",
-		"benchmarking":        "finalize",
-		"ic_finalize":         "finalize",
-		"team_cognitive_load": "finalize",
+		"compounding_risk":      "post_bridge",
+		"benchmarking":          "finalize",
+		"ic_finalize":           "finalize",
+		"team_cognitive_load":   "finalize",
+		"compounding_risk_team": "finalize",
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

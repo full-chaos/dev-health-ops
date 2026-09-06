@@ -881,6 +881,21 @@ func dailyNativeFamilyRegistrations(
 			"error", benchmarkingFinalizeErr,
 		)
 	}
+	// CHAOS-5084: compounding_risk_team has no co-registration dependency --
+	// unlike team_cognitive_load it reads repo_metrics_daily, written by the
+	// PARTITION-scope compounding_risk/repo_user_commit families earlier in
+	// this same run, not by ic_finalize -- so it registers unconditionally on
+	// a healthy connection, the same policy ic_finalize itself uses above.
+	if compoundingRiskTeamExecutor, compoundingRiskTeamErr := daily.NewCompoundingRiskTeamExecutor(clickhouseConnection); compoundingRiskTeamErr == nil {
+		finalize[daily.CompoundingRiskTeamFamilyName] = compoundingRiskTeamExecutor
+	} else {
+		logger.Error(
+			"compounding_risk_team native finalize family refused; the "+
+				"family stays on the Python compatibility bridge for "+
+				"every run. Every other daily-metrics family is unaffected.",
+			"error", compoundingRiskTeamErr,
+		)
+	}
 	if teamWellbeingExecutor, teamWellbeingErr := daily.NewTeamWellbeingExecutor(clickhouseConnection); teamWellbeingErr == nil {
 		native["team_wellbeing"] = teamWellbeingExecutor
 		// CHAOS-4329: per-team repo fan-out telemetry -- optional,

@@ -271,12 +271,19 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
     "compounding_risk": {
         # CHAOS-4287: the ticket and this citation both said :502, which is
         # inside _repo_to_team_map_for_compounding_risk, not the writer. The
-        # writer is :568. The TEAM-scope half lives at :613
-        # (_write_compounding_risk_team_rows_for_day, called from
-        # run_daily_metrics_finalize) and is still Python -- see the family's
-        # phase_note in internal/jobs/metrics/daily/families.json.
-        "citation": "Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python)",
+        # writer is :568 (REPO scope, post_bridge). TEAM scope is now its own
+        # entry below, "compounding_risk_team" (CHAOS-5084) -- see that row
+        # and internal/jobs/metrics/daily/families.json's phase_notes for both.
+        "citation": "Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, native)",
         "ticket": "CHAOS-4287",
+    },
+    "compounding_risk_team": {
+        # CHAOS-5084: the TEAM-scope half of compounding_risk, split into its
+        # own family entry because it is a SEPARATE finalize-scope writer to
+        # the SAME table (compounding_risk_daily) -- see the "compounding_risk"
+        # row above and families.json's phase_notes for both.
+        "citation": "Python: `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, now native, finalize scope)",
+        "ticket": "CHAOS-5084",
     },
     "team_cognitive_load": {
         # CHAOS-5141: fully native, no Python remainder at all. The

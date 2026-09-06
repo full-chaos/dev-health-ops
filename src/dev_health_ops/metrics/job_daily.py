@@ -596,7 +596,6 @@ def _write_compounding_risk_for_day(
         org_id=org_id,
         repo_metrics_rows=rows_for_compounding,
         computed_at=computed_at,
-        repo_to_team=None,
     )
     if not compounding_rows:
         return 0
@@ -604,70 +603,6 @@ def _write_compounding_risk_for_day(
         s.write_compounding_risk_daily(compounding_rows)
     return len(compounding_rows)
 
-
-def _write_compounding_risk_team_rows_for_day(
-    *,
-    sinks: list[Any],
-    primary_sink: Any,
-    day: date,
-    org_id: str,
-    repo_names_by_id: dict[uuid.UUID, str],
-    repo_team_resolver: Any,
-    computed_at: datetime,
-) -> int:
-    """Write TEAM-scope compounding-risk rows for the WHOLE org/day.
-
-    CHAOS-4365 finalize-step fix (moved out of the per-repo path -- see
-    ``_write_compounding_risk_for_day``'s docstring). Reads back every
-    repo's ``repo_metrics_daily`` row for this org/day from ClickHouse
-    (``_fetch_repo_metrics_for_day``, already argMax-deduped) rather than
-    accumulating in-process across partitions, so it is correct regardless
-    of how many separate per-repo calls already landed. Must run AFTER all
-    of this day's per-repo partitions have written their repo-scope rows.
-    """
-    org_repo_metrics = _fetch_repo_metrics_for_day(primary_sink, org_id, day)
-    if not org_repo_metrics:
-        return 0
-
-    try:
-        as_of = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
-        team_repo_ownership_map = load_team_repo_ownership_map(
-            primary_sink, org_id, as_of=as_of
-        )
-        repo_to_team_map = _repo_to_team_map_for_compounding_risk(
-            repo_metrics_rows=org_repo_metrics,
-            repo_names_by_id=repo_names_by_id,
-            repo_team_resolver=repo_team_resolver,
-            team_repo_ownership_map=team_repo_ownership_map,
-            org_id=org_id,
-            day=day,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(
-            "repo_team_resolver failed for compounding risk (finalize): "
-            "org_id=%s day=%s %s",
-            org_id,
-            day.isoformat(),
-            exc,
-        )
-        repo_to_team_map = {}
-    if not repo_to_team_map:
-        return 0
-
-    all_rows = build_compounding_risk_rows_for_day(
-        sink=primary_sink,
-        day=day,
-        org_id=org_id,
-        repo_metrics_rows=org_repo_metrics,
-        computed_at=computed_at,
-        repo_to_team=repo_to_team_map,
-    )
-    team_rows = [r for r in all_rows if r.scope == "team"]
-    if not team_rows:
-        return 0
-    for s in sinks:
-        s.write_compounding_risk_daily(team_rows)
-    return len(team_rows)
 
 
 def _fetch_repo_complexity_for_day(sink: Any, org_id: str, day: date) -> list[Any]:
@@ -754,12 +689,13 @@ def _write_team_complexity_for_day(
 
     Reads back this org/day's ``repo_complexity_daily`` rows from ClickHouse
     (``_fetch_repo_complexity_for_day``, already ``argMax``-deduped) rather
-    than accumulating in-process, the same finalize-step discipline
-    ``_write_compounding_risk_team_rows_for_day`` follows -- correct
-    regardless of how many separate per-repo ``metrics complexity`` runs
-    already landed for this day, and never written per-repo (the CHAOS-4399
-    bug class: a per-repo write lets ``argMax(computed_at)`` dedup silently
-    keep only the last-processed repo's numbers for a multi-repo team).
+    than accumulating in-process, the same finalize-step read-back-not-
+    accumulate discipline ``_write_team_cognitive_load_for_day`` follows --
+    correct regardless of how many separate per-repo ``metrics complexity``
+    runs already landed for this day, and never written per-repo (the
+    CHAOS-4399 bug class: a per-repo write lets ``argMax(computed_at)``
+    dedup silently keep only the last-processed repo's numbers for a
+    multi-repo team).
     """
     repo_complexity_rows = _fetch_repo_complexity_for_day(primary_sink, org_id, day)
     if not repo_complexity_rows:
@@ -1906,13 +1842,14 @@ async def run_daily_metrics_job(
         # had one, and adding it under a skip would be a false zero-rows signal
         # exactly as it would have been for cicd.
         #
-        # TEAM-scope rows are NOT covered by this gate. They are written once
-        # per org/day from run_daily_metrics_finalize
-        # (_write_compounding_risk_team_rows_for_day), which the Go side still
-        # reaches through the opaque compatibility.Finalize bridge call -- there
-        # is no per-family registration or skip-list at finalize to carve them
-        # out with. They stay Python until that hook exists; CHAOS-4287 stays
-        # open until then.
+        # TEAM-scope rows are NOT covered by this gate -- CHAOS-5084/
+        # no-straddle (#2275 v2): CompoundingRiskTeamExecutor (Go) is the
+        # SOLE writer for team scope now, with no Python compute or
+        # skip_families gate for it anywhere in this module at all (the old
+        # run_daily_metrics_finalize call site, _write_compounding_risk_team_rows_for_day,
+        # is deleted, not merely gated) -- same no-fail-open posture
+        # ic_finalize/team_cognitive_load's own finalize-scope families
+        # already have.
         if "compounding_risk" not in skip_families:
             _write_compounding_risk_for_day(
                 sinks=sinks,
@@ -2247,15 +2184,19 @@ async def run_daily_metrics_finalize(
             except Exception as exc:
                 logger.warning("Benchmarking run failed for day=%s: %s", day, exc)
 
-    # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily is
-    # written exactly ONCE here, per org/day, after every repo's own
-    # partition has landed -- never in-process inside a single per-repo
-    # run_daily_metrics_job call (see _write_compounding_risk_for_day's
-    # docstring for why that was wrong). team_cognitive_load_daily used to
-    # be written from this same finalize step too; CHAOS-5141 deleted that
-    # Python compute entirely once it was confirmed unreachable in
-    # production -- it is now written ONLY by the Go worker's native
-    # FinalizeHandler, never from this Python path.
+    # CHAOS-4365 finalize-step fix: this used to be where team-scope
+    # compounding_risk_daily AND team_cognitive_load_daily were both written,
+    # exactly once here per org/day, after every repo's own partition had
+    # landed -- never in-process inside a single per-repo run_daily_metrics_job
+    # call (see _write_compounding_risk_for_day's docstring for why that was
+    # wrong). Both Python computes are now DELETED entirely, not merely
+    # skip-gated: team_cognitive_load's (CHAOS-5141, #2294) and
+    # compounding_risk_team's (CHAOS-5084/no-straddle, #2275 v2) are each the
+    # SOLE writer for their scope now via a native Go FinalizeHandler
+    # registration, with no Python compat-bridge fallback path at all (same
+    # no-fail-open posture: a native failure retries via River, it never
+    # falls open to a Python recompute). repo_team_resolver/repo_names_by_id
+    # below are still needed by _write_team_complexity_for_day further down.
     teams_data = await primary_sink.get_all_teams()
     repo_team_resolver = build_repo_pattern_resolver(teams_data)
     discovered_repos = discover_repos(
@@ -2267,36 +2208,11 @@ async def run_daily_metrics_finalize(
     )
     repo_names_by_id = {r.repo_id: r.full_name for r in discovered_repos}
 
-    compounding_risk_team_count = _write_compounding_risk_team_rows_for_day(
-        sinks=sinks_list,
-        primary_sink=primary_sink,
-        day=day,
-        org_id=org_id,
-        repo_names_by_id=repo_names_by_id,
-        repo_team_resolver=repo_team_resolver,
-        computed_at=computed_at,
-    )
-    if not compounding_risk_team_count:
-        # CHAOS-4365 codex R1: a resolver failure (or an org with no
-        # ownership-resolvable repos) degrades to zero rows here, never
-        # raises (same CHAOS-4246 contract run_daily_metrics_job's own
-        # families follow) -- log it so a transient CH/resolver failure
-        # doesn't look identical to "no repos to attribute" in the logs.
-        logger.warning(
-            "metrics.daily.finalize family produced zero rows",
-            extra={
-                "family": "compounding_risk_team",
-                "day": day.isoformat(),
-                "org_id": org_id,
-                "cause": "no_rows_computed",
-            },
-        )
-
     # CHAOS-5141: team_cognitive_load's Python compute (the team_metrics_daily
     # aggregation query + _write_team_cognitive_load_for_day) was DELETED
-    # here, not merely skip-gated. Reachability analysis at deletion time:
-    # buildDailyWorker (cmd/dev-health-worker/daily.go) refuses the WHOLE
-    # daily worker if the ClickHouse connection fails to open, before
+    # here, not merely skip-gated (#2294). Reachability analysis at deletion
+    # time: buildDailyWorker (cmd/dev-health-worker/daily.go) refuses the
+    # WHOLE daily worker if the ClickHouse connection fails to open, before
     # dailyNativeFamilyRegistrations is ever called -- so team_cognitive_load
     # (and ic_finalize, its co-registration dependency) are guaranteed to
     # register natively in every real deployment; a construction-time
@@ -2305,6 +2221,15 @@ async def run_daily_metrics_finalize(
     # error path explicitly never calls the Python bridge either (daily.go's
     # own comment: "The bridge is NOT called"). No straddle, no live fallback
     # path -- safe to delete outright rather than leave skip_families-gated.
+    #
+    # CHAOS-5084/no-straddle (#2275 v2): compounding_risk_team's Python
+    # compute (_write_compounding_risk_team_rows_for_day, job_daily.py:613
+    # as of this executor's introduction) is deleted the same way, for the
+    # same reason -- CompoundingRiskTeamExecutor is its own sole writer with
+    # no live Python fallback path either. See
+    # finalize_family_gate_agreement_test.go's pythonGatedFinalizeFamilies
+    # (which excludes both families now) for the Go-side proof this stays
+    # true.
     team_complexity_count = _write_team_complexity_for_day(
         sinks=sinks_list,
         primary_sink=primary_sink,

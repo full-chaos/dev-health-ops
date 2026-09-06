@@ -129,6 +129,47 @@ KNOWN_UNCOVERED = {
     # "ai-attribution" seed step and a "prs" seed step added to the loop, out
     # of scope for a port PR.
     "ai_impact",
+    # REMOVED 2026-09-05 (rebuild onto internal-teamresolve-v2, #2275 v2):
+    # ic_finalize/team_cognitive_load were pinned here when this branch's
+    # base first made them natively golden-required (merging
+    # port-ic-finalize-native-v2 / team-cognitive-load-native forward) and
+    # this lane had no evidence of their executed-proof coverage. Rebuilding
+    # onto current main shows both are now named in BOTH executed-proof
+    # gates -- the coverage gap was closed by other work that landed since,
+    # not by this PR. The positive control at the bottom of the test below
+    # (now_covered) would fail loudly if they stayed pinned here while
+    # actually covered, so they are removed rather than left as a stale,
+    # no-longer-true gap.
+    #
+    # MINE (CHAOS-5084): compounding_risk_team is this PR's own family.
+    #
+    # CORRECTED (codex r3, P2, confirmed): an earlier version of this comment
+    # claimed the executed-proof seed's org/day needed "at least two teams,
+    # each owning a repo" to produce a row -- that is FALSE.
+    # CompoundingRiskTeamExecutor.ComputeFinalizeFamily
+    # (compounding_risk_team_native_executor.go:101-136) loads ALL org repo
+    # metrics, resolves EVERY repo to a team via teamresolve, and writes one
+    # row PER RESOLVED TEAM -- a single team owning a single repo produces
+    # exactly one row. The executed-proof seed's existing --repo-count 1
+    # --team-count 1 shape (ci/run_metrics_executed_proof.sh:605-608), with
+    # repo_patterns populated (fixtures/runner.py), already resolves via
+    # teamresolve's pattern fallback -- no seed change needed for BASIC
+    # native-execution coverage. The real-ClickHouse integration test in this
+    # PR proves the two-team/shared-repo AGGREGATION scenario specifically
+    # (that a shared repo lands under exactly one team, never both), which
+    # the existing seed's single team cannot exercise -- that is the one
+    # thing still genuinely uncovered here, not whether the family runs and
+    # writes at all with the existing seed.
+    #
+    # Pinned rather than fixed in this PR: closing it means adding
+    # compounding_risk_team to ci/assert_metrics_executed_proof.py's
+    # TEAM_DAY_FAMILIES or SCOPE_ID_REPO_FAMILIES map (a scope decision --
+    # team-shaped readback vs repo-shaped, see that file's own docstrings for
+    # why the choice matters) and to both --families lists, verified against
+    # a live run of ci/run_metrics_executed_proof.sh -- infra this lane did
+    # not have readily available to prove safely in the time this PR's gate
+    # allows. Ticketed as CHAOS-5258 rather than guessed at.
+    "compounding_risk_team",
 }
 
 

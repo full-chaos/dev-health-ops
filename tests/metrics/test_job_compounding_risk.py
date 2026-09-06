@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Any
 
 from dev_health_ops.metrics import job_compounding_risk
@@ -236,109 +236,3 @@ def test_backfill_day_with_no_repo_metrics_rows_is_named_in_final_summary(
     for reason in MISSING_INPUT_REASONS:
         assert f"'{reason}': 0" in done_message
 
-
-def test_load_repo_to_team_resolves_via_team_repo_ownership_when_patterns_are_empty() -> (
-    None
-):
-    """CHAOS-4365: a real org's native-imported teams (GitHub/GitLab/Jira/
-    Linear auto-import) always carry ``repo_patterns=[]`` -- CHAOS-4321 bars
-    inferring ownership from membership instead, so the glob-pattern
-    resolver alone can never resolve such an org's repos to a team. Ownership
-    for these teams instead lands in ``team_repo_ownership``
-    (``team_autoimport_github.populate`` et al.), so ``_load_repo_to_team``
-    must fall through to it.
-    """
-    repo_id = uuid.uuid4()
-    sink = _FakeSink(
-        repo_metrics_by_day={},
-        teams=[{"id": "gh:platform", "name": "Platform", "repo_patterns": []}],
-        repo_rows=[{"repo_id": str(repo_id), "full_name": "acme/backend"}],
-        team_repo_ownership_rows=[
-            {
-                "repo_id": str(repo_id),
-                "team_id": "gh:platform",
-                "is_primary": 1,
-                "specificity": 100,
-            }
-        ],
-    )
-
-    mapping = asyncio.run(
-        job_compounding_risk._load_repo_to_team(
-            sink, "acme", as_of=datetime.now(timezone.utc)
-        )
-    )
-
-    assert mapping == {str(repo_id): "gh:platform"}
-
-
-def test_load_repo_to_team_prefers_ownership_row_over_conflicting_pattern() -> None:
-    """When both sources resolve the same repo, ``team_repo_ownership`` (the
-    explicit, repo_id-keyed grant) wins over the glob-pattern resolver.
-    """
-    repo_id = uuid.uuid4()
-    sink = _FakeSink(
-        repo_metrics_by_day={},
-        teams=[
-            {"id": "team-legacy", "name": "Legacy", "repo_patterns": ["acme/backend"]}
-        ],
-        repo_rows=[{"repo_id": str(repo_id), "full_name": "acme/backend"}],
-        team_repo_ownership_rows=[
-            {
-                "repo_id": str(repo_id),
-                "team_id": "gh:platform",
-                "is_primary": 1,
-                "specificity": 100,
-            }
-        ],
-    )
-
-    mapping = asyncio.run(
-        job_compounding_risk._load_repo_to_team(
-            sink, "acme", as_of=datetime.now(timezone.utc)
-        )
-    )
-
-    assert mapping == {str(repo_id): "gh:platform"}
-
-
-def test_repos_catalog_failure_does_not_abort_an_all_empty_days_backfill(
-    monkeypatch: Any,
-) -> None:
-    """CHAOS-4365 confirmation-pass finding (P2, reproduced by codex):
-    moving the repos-catalog load to run ONCE, unconditionally, before the
-    day loop (round 3's per-day-catalog-waste fix) meant a transient repos
-    query failure now aborted the WHOLE job -- even for a backfill range
-    where every day is empty and, before that change, would never have
-    touched the repos query at all (it only ran inside the loop, after the
-    per-day "no repo_metrics_daily rows" guard). The catalog load must fail
-    closed to an empty catalog instead, matching
-    load_team_repo_ownership_map's own graceful-degradation contract.
-    """
-
-    class _RepoQueryFailsSink(_FakeSink):
-        def query_dicts(
-            self, query: str, parameters: dict[str, Any]
-        ) -> list[dict[str, Any]]:
-            if "FROM repos" in query:
-                raise RuntimeError("simulated transient ClickHouse failure")
-            return super().query_dicts(query, parameters)
-
-    sink = _RepoQueryFailsSink(repo_metrics_by_day={})  # every backfilled day is empty
-    monkeypatch.setattr(
-        job_compounding_risk, "ClickHouseMetricsSink", lambda db_url: sink
-    )
-
-    rows_written = asyncio.run(
-        run_compounding_risk_job(
-            db_url="clickhouse://localhost:8123/default",
-            day=DAY,
-            backfill_days=3,
-            org_id="acme",
-        )
-    )
-
-    # Must complete as a clean no-op (matching the pre-round-3 behavior for
-    # an all-empty-days range), not raise.
-    assert rows_written == 0
-    assert sink.written == []

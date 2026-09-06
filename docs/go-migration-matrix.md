@@ -23,13 +23,12 @@ drift-gated tables nested under them (chris, 2026-09-04). Every generated table'
 "who runs this today":
 
 **Read this first: worker kind status is NOT CLI verb status.** A `metrics.remaining.*` or
-`metrics.daily_partition` family reading NATIVE below describes the WORKER's own dispatch path only.
-Several `dev-hops metrics ...`/`dev-hops recommendations compute` CLI verbs call the Python compute function
-**directly**, bypassing the Go worker's native executor entirely, even for families the worker itself now
-runs natively (`dev-hops metrics dora`/`capacity`/`recommendations` are the clearest examples -- see METRICS
-and RECOMMENDATIONS below). Read a row's CLI-verb sub-table and its generated-table row as two independent
-claims, never one implying the other. Tickets to reconcile this split are being filed by the scribe; cited
-here once numbered.
+`metrics.daily_partition` family reading NATIVE below describes the WORKER's own dispatch path only, and
+is a separate claim from what any CLI verb of the same name does -- read a row's CLI-verb sub-table and its
+generated-table row independently, never one implying the other (CHAOS-5055/#2232 repointed the live
+`dev-hops metrics daily`/`rebuild`/`complexity`/`dora`/`capacity` verbs to dispatch through the Go worker;
+CHAOS-5307 then deleted their orphaned direct-Python-compute predecessors and the `recommendations compute`
+preview verb entirely -- see METRICS and RECOMMENDATIONS below).
 
 **Executor legend**
 
@@ -259,9 +258,10 @@ deleted, the frozen file and this one test survive.
 
 ## RECOMMENDATIONS
 
+`dev-hops recommendations compute` (the direct-Python-compute preview verb, `cli.py` `_cmd_recommendations_compute` -> `RuleEngine` directly) was deleted (CHAOS-5307) -- the whole `dev-hops recommendations` command group had exactly this one verb, so the group is gone entirely, not left as a dead, always-invalid-choice subparser. A Go-native `workerctl recommendations preview` verb is tracked as a follow-up so the read-only preview capability itself is not lost.
+
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops recommendations compute` | COMPAT-Python (direct call) | `cli.py:260-287 _register_recommendations_commands` -> `_cmd_recommendations_compute` -> `RuleEngine` directly -- **bypasses** the now-native `metrics.remaining.recommendations` worker kind | -- |
 | `metrics.remaining.recommendations` (worker kind) | NATIVE | see METRICS' remaining-families table above | CHAOS-4281/CHAOS-3092 (Done) |
 
 ## AI

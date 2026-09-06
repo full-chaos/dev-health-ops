@@ -1943,28 +1943,7 @@ dev-hops investment materialize --window-days 30 --llm-provider none
 
 ## Recommendations
 
-### `recommendations compute`
-
-> **CHAOS-5055:** this command is now **preview-only** — it evaluates rules and prints the result, but never writes to ClickHouse. It used to persist to the same `recommendations_daily` table the Go worker's NATIVE `metrics.remaining.recommendations` kind writes, on an independent per-team/arbitrary-window schedule with no dedup between the two writers. For a persisted, generation-deduped compute, use `dev-health-workerctl metrics remaining trigger-backstop --family recommendations --team <team-uuid>` (or `--all-teams`) `--window <days> --review-evidence <why>` directly — **not** `metrics remaining start`, which only accepts `complexity`/`dora`/`release_impact` and rejects `recommendations` outright. There is no `dev-hops` wrapper verb for this (unlike `metrics capacity`); recommendations is dispatched via the raw workerctl binary only.
-
-Preview rule-based recommendations for a team — evaluates both fired recommendations and explicit `fired=False` tombstones, and prints them. Uses `CLICKHOUSE_URI` for input reads only.
-
-```bash
-dev-hops recommendations compute --team <team-uuid> --window 7d
-
-# Override the window with an explicit date range and print JSON
-dev-hops recommendations compute --team <team-uuid> \
-  --since 2025-01-01 --until 2025-01-31 --output-json
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--team` | Team ID to evaluate (required) |
-| `--window` | Evaluation window, e.g. `7d` or `14d` (default: `7d`) |
-| `--since` | Override window start (exclusive end = `--until`) |
-| `--until` | Override window end (inclusive). Requires `--since` |
-| `--output-json` | Print fired recommendations as JSON to stdout |
+> **CHAOS-5307:** the `dev-hops recommendations compute` preview verb was deleted — a Python CLI running `RuleEngine` directly is Python compute executing in production tooling, read-only or not (team-lead ruling). There is no `dev-hops` wrapper verb for recommendations. For the persisted, generation-deduped compute, use `dev-health-workerctl metrics remaining trigger-backstop --family recommendations --team <team-uuid>` (or `--all-teams`) `--window <days> --review-evidence <why>` directly — **not** `metrics remaining start`, which only accepts `complexity`/`dora`/`release_impact` and rejects `recommendations` outright. A Go-native `workerctl recommendations preview` verb is tracked as a follow-up so the read-only preview capability itself is not lost.
 
 ---
 

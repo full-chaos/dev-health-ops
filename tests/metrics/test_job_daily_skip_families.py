@@ -64,7 +64,11 @@ compute+write call sites -- see
 test_file_hotspots_compute_and_write_are_deleted_from_job_daily and
 test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily below,
 the runtime counterparts of the structural guard in
-tests/metrics/test_job_daily_skip_families_structural_guard.py.
+tests/metrics/test_job_daily_skip_families_structural_guard.py. CHAOS-5233
+(work_item_attribution) and CHAOS-5272 (work_item_estimate) apply the same
+rule to two more families -- see
+test_work_item_attribution_compute_and_write_are_deleted_from_job_daily and
+test_work_item_estimate_compute_and_write_are_deleted_from_job_daily below.
 """
 
 from __future__ import annotations
@@ -995,12 +999,59 @@ async def test_work_item_attribution_compute_and_write_are_deleted_from_job_dail
             skip_families=skip_families,
         )
         assert "write_work_item_team_attributions" not in sink.write_calls
-        # work_item/work_item_estimate must be entirely unaffected by the
+        # work_item must be entirely unaffected by the deletion -- it shares
+        # the same `if work_items:` block and the same attribution_context,
+        # but neither reads work_item_attribution's output. (work_item_estimate
+        # used to be asserted here too, but CHAOS-5272 deleted its own
+        # compute+write from this same block -- see the dedicated test
+        # below.)
+        assert "write_work_item_metrics" in sink.write_calls
+        assert "write_estimate_coverage_metrics" not in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_work_item_estimate_compute_and_write_are_deleted_from_job_daily(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-5272/CHAOS-3092 close condition 3.
+
+    Same rule and same shape as CHAOS-5233's work_item_attribution (see the
+    test above): work_item_estimate gets NO skip_families handling at all --
+    its daily compute+write call is gone from run_daily_metrics_job entirely,
+    in every mode.
+
+    compute_estimate_coverage_metrics_daily itself is NOT deleted from the
+    codebase -- job_work_items.py's run_work_items_sync_job (the same
+    full-backfill sync job cited above) still calls it directly, as do its
+    own dedicated unit tests, the fixture golden generator, and the
+    live-Python oracle comparator. Only run_daily_metrics_job's own call is
+    gone.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
+
+    assert not hasattr(job_daily, "compute_estimate_coverage_metrics_daily"), (
+        "compute_estimate_coverage_metrics_daily must not be imported into "
+        "job_daily.py's module namespace at all"
+    )
+
+    for skip_families in (None, {"work_item_estimate"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_finalize=True,
+            skip_families=skip_families,
+        )
+        assert "write_estimate_coverage_metrics" not in sink.write_calls
+        # work_item/work_item_attribution must be entirely unaffected by the
         # deletion -- they share the same `if work_items:` block and the
-        # same attribution_context, but neither reads work_item_attribution's
+        # same attribution_context, but neither reads work_item_estimate's
         # output.
         assert "write_work_item_metrics" in sink.write_calls
-        assert "write_estimate_coverage_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio

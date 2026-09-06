@@ -150,6 +150,29 @@ func TestPRCommitWindowForDefaultsToThirtyDaysEndingNow(t *testing.T) {
 	}
 }
 
+// TestPRCommitWindowForExplicitFromDateAvoidsDefaultUnderflow pins
+// CHAOS-5297: the derived-bound overflow guard must run ONLY when from_date
+// is absent from scope, matching Python's if/else (work_graph_tasks.py
+// never evaluates `to - 30d` when from_date is supplied). An explicit
+// from_date/to_date pair that is each individually valid must not be
+// rejected over a derived value Python would never have computed. Same bug
+// shape and repro as #2301's operationalEdgesWindowFor
+// (chaos-4924-pr-d-r1-confirm, P1, EXECUTED).
+func TestPRCommitWindowForExplicitFromDateAvoidsDefaultUnderflow(t *testing.T) {
+	window, err := prCommitWindowFor(
+		[]byte(`{"from_date":"0001-01-01","to_date":"0001-01-01"}`), time.Now)
+	if err != nil {
+		t.Fatalf("prCommitWindowFor with explicit year-0001 bounds should not error, got: %v", err)
+	}
+	want := time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
+	if window.From == nil || !window.From.Equal(want) {
+		t.Errorf("from = %v, want %v", window.From, want)
+	}
+	if window.To == nil || !window.To.Equal(want) {
+		t.Errorf("to = %v, want %v", window.To, want)
+	}
+}
+
 func TestPRCommitWindowForParsesExplicitRepoID(t *testing.T) {
 	now := func() time.Time { return time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC) }
 	repo := uuid.New()

@@ -880,11 +880,16 @@ async def run_daily_metrics_job(
     ticket, had its Python compute+write deleted outright rather than
     gated -- CHAOS-5234/CHAOS-3092 -- so it no longer checks this set at
     all),
-    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
-    ``benchmarking`` CHAOS-4288 (``ai_impact`` CHAOS-4280 had the same
-    write-only-skip shape as file_hotspots above until CHAOS-5234/CHAOS-3092
-    -- its Python compute+write was deleted outright, so it no longer checks
-    this set at all); naming any other family here has no effect. CHAOS-5245
+    ``compounding_risk`` CHAOS-4287, and ``review_edges`` CHAOS-4279
+    (``ai_impact`` CHAOS-4280 had the same write-only-skip shape as
+    file_hotspots above until CHAOS-5234/CHAOS-3092 -- its Python
+    compute+write was deleted outright, so it no longer checks this set at
+    all); naming any other family here has no effect. ``benchmarking``
+    CHAOS-4288 was NEVER checked in this set within THIS function -- it was
+    moved to ``run_daily_metrics_finalize``'s own skip_families gate by
+    CHAOS-5194 before this docstring paragraph was last touched, and that
+    gate is itself now gone too (CHAOS-4288 deleted the Python compute
+    entirely; see the comment at the old call site below). CHAOS-5245
     deleted testops_pipeline/testops_test/testops_coverage/testops_risk's
     Python compute entirely (their native Go executors, CHAOS-4284/
     CHAOS-4294, have no Python fallback left) -- those four names no longer

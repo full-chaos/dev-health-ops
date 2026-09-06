@@ -61,14 +61,6 @@ from dev_health_ops.metrics.schemas import (
     WorkUnitRepoEffortRecord,
     WorkUnitScopedMembershipRunRecord,
 )
-from dev_health_ops.metrics.testops_schemas import (
-    BenchmarkAnomalyRecord,
-    BenchmarkBaselineRecord,
-    BenchmarkInsightRecord,
-    MaturityBandRecord,
-    MetricCorrelationRecord,
-    PeriodComparisonRecord,
-)
 from dev_health_ops.models.work_items import (
     Sprint,
     WorkItem,
@@ -247,28 +239,12 @@ class BaseMetricsSink(ABC):
     # write_pipeline_stability -- testops_pipeline/testops_test/testops_coverage/
     # testops_risk's Python compute+write is gone entirely (CHAOS-4284/CHAOS-4294
     # native Go executors have no fallback left to feed these).
-
-    def write_period_comparisons(self, rows: Sequence[PeriodComparisonRecord]) -> None:
-        pass
-
-    def write_benchmark_baselines(
-        self, rows: Sequence[BenchmarkBaselineRecord]
-    ) -> None:
-        pass
-
-    def write_maturity_bands(self, rows: Sequence[MaturityBandRecord]) -> None:
-        pass
-
-    def write_benchmark_anomalies(self, rows: Sequence[BenchmarkAnomalyRecord]) -> None:
-        pass
-
-    def write_metric_correlations(
-        self, rows: Sequence[MetricCorrelationRecord]
-    ) -> None:
-        pass
-
-    def write_benchmark_insights(self, rows: Sequence[BenchmarkInsightRecord]) -> None:
-        pass
+    #
+    # CHAOS-4288 deleted write_period_comparisons/write_benchmark_baselines/
+    # write_maturity_bands/write_benchmark_anomalies/write_metric_correlations/
+    # write_benchmark_insights the same way -- benchmarking's Python compute
+    # (src/dev_health_ops/metrics/benchmarking/) is gone entirely, the native
+    # BenchmarkingFinalizeExecutor has no fallback left to feed these.
 
     # -------------------------------------------------------------------------
     # Complexity / hotspot metrics

@@ -1,0 +1,67 @@
+function add(a: number, b: number): number {
+  return a + b;
+}
+
+function classify(n: number): string {
+  if (n < 0) {
+    return "negative";
+  } else if (n === 0) {
+    return "zero";
+  } else {
+    return "positive";
+  }
+}
+
+function loopSum(items: number[]): number {
+  let total = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i] % 2 === 0) {
+      total += items[i];
+    }
+  }
+  let j = 0;
+  while (j < items.length) {
+    total += 1;
+    j++;
+  }
+  return total;
+}
+
+function describe(kind: string): string {
+  switch (kind) {
+    case "a":
+      return "alpha";
+    case "b":
+      return "beta";
+    default:
+      return "unknown";
+  }
+}
+
+function safeDivide(a: number, b: number): number {
+  if (a && b) {
+    return a / b;
+  }
+  return 0;
+}
+
+function pick(flag: boolean, x: number, y: number): number {
+  return flag ? x : y;
+}
+
+function tryCatch(): number {
+  try {
+    return 1;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function elseifKeyword(n: number): string {
+  if (n < 0) {
+    return "negative";
+  } elseif (n === 0) {
+    return "zero";
+  }
+  return "positive";
+}

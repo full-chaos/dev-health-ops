@@ -23,7 +23,6 @@ from dev_health_ops.metrics.active_incidents import (
     active_incidents_query,
 )
 from dev_health_ops.metrics.compute_dora import compute_dora_metrics_daily
-from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
 from dev_health_ops.metrics.schemas import IncidentRow
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.models.operational import (
@@ -297,7 +296,7 @@ def test_pagerduty_operational_rows_round_trip_and_deduplicate(
         client.close()
 
 
-def test_mapped_canonical_pagerduty_incident_drives_incident_metrics(
+def test_mapped_canonical_pagerduty_incident_drives_dora_restore_time(
     pagerduty_scratch_dsn: str,
 ) -> None:
     # Given: a resolved PagerDuty incident and an explicit mapping from its
@@ -381,8 +380,15 @@ def test_mapped_canonical_pagerduty_incident_drives_incident_metrics(
             ],
         )
 
-        # When: the real canonical projection and both incident metric
-        # computations consume the persisted ClickHouse rows.
+        # When: the real canonical projection and the DORA metric
+        # computation consume the persisted ClickHouse rows.
+        # CHAOS-5234/CHAOS-3092: compute_incident_metrics_daily's own
+        # computation+assertions used to also run here -- that family's
+        # Python compute is deleted outright now (IncidentExecutor, native
+        # Go, is the only writer of incident_metrics_daily), so only the
+        # DORA half (a separate, still-live function) remains. incident_rows
+        # itself is still built and still fed to compute_dora_metrics_daily
+        # below -- it is NOT incident_metrics_daily's exclusive input.
         projected = sink.query_dicts(
             active_incidents_query(
                 window=IncidentWindow.RESOLVED,
@@ -397,11 +403,6 @@ def test_mapped_canonical_pagerduty_incident_drives_incident_metrics(
             },
         )
         incident_rows = cast(list[IncidentRow], projected)
-        incident_metrics = compute_incident_metrics_daily(
-            day=SOURCE_TIME.date(),
-            incidents=incident_rows,
-            computed_at=resolved_at,
-        )
         dora_metrics = compute_dora_metrics_daily(
             day=SOURCE_TIME.date(),
             deployments=[],
@@ -410,13 +411,10 @@ def test_mapped_canonical_pagerduty_incident_drives_incident_metrics(
         )
 
         # Then: one mapped canonical incident contributes to repository-scoped
-        # counts, MTTR, and DORA restoration time without a legacy-table write.
+        # counts and DORA restoration time without a legacy-table write.
         assert len(projected) == 1
         assert projected[0]["repo_id"] == METRIC_REPO_ID
         assert projected[0]["incident_id"] == resolved_incident.id
-        assert len(incident_metrics) == 1
-        assert incident_metrics[0].incidents_count == 1
-        assert incident_metrics[0].mttr_p50_hours == pytest.approx(4.0)
         assert [(metric.metric_name, metric.value) for metric in dora_metrics] == [
             ("time_to_restore_service", pytest.approx(4 * 60 * 60))
         ]

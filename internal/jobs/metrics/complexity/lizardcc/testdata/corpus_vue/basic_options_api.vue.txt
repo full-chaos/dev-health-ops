@@ -1,0 +1,37 @@
+<template>
+  <div class="greeter" v-if="visible">
+    <p>{{ message }}</p>
+    <button @click="increment">+1</button>
+  </div>
+</template>
+
+<script>
+export default {
+  name: "Greeter",
+  data() {
+    return {
+      visible: true,
+      count: 0,
+    };
+  },
+  methods: {
+    increment() {
+      this.count += 1;
+    },
+    classify(n) {
+      if (n < 0) {
+        return "negative";
+      } else if (n === 0) {
+        return "zero";
+      }
+      return "positive";
+    },
+  },
+};
+</script>
+
+<style scoped>
+.greeter {
+  color: red;
+}
+</style>

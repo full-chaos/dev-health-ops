@@ -1,0 +1,262 @@
+{
+  "fast_path_count_returned": 3,
+  "fast_path_edges": [
+    {
+      "confidence": 1.0,
+      "day": "2026-07-01",
+      "discovered_at": "2026-08-02T12:00:00+00:00",
+      "edge_id": "3534090dc846aa34faf3fcb2eda1d06f7d7f77a278469402b1af528912d30b82",
+      "edge_type": "implements",
+      "event_ts": "2026-07-01T09:00:00+00:00",
+      "evidence": "closing_reference",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "provenance": "native",
+      "provider": null,
+      "repo_id": "00000000-0000-4000-8000-0000000000a1",
+      "source_id": "00000000-0000-4000-8000-0000000000a1#pr100",
+      "source_type": "pr",
+      "target_id": "jira:FAST-1",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 1.0,
+      "day": "2026-07-02",
+      "discovered_at": "2026-08-02T12:00:00+00:00",
+      "edge_id": "9bf3d27813ca0b001c368473b2c6d5b72fbbd8c1aee45143730ee2a57990a688",
+      "edge_type": "implements",
+      "event_ts": "2026-07-02T09:00:00+00:00",
+      "evidence": "issue_pr_fast_path",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "provenance": "native",
+      "provider": null,
+      "repo_id": "00000000-0000-4000-8000-0000000000a1",
+      "source_id": "00000000-0000-4000-8000-0000000000a1#pr101",
+      "source_type": "pr",
+      "target_id": "jira:FAST-2",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 1.0,
+      "day": "2026-08-02",
+      "discovered_at": "2026-08-02T12:00:00+00:00",
+      "edge_id": "c39484159a833af3bcf340bfa2dd45ef1af329d9cee0f32db12338fc60de0c0c",
+      "edge_type": "implements",
+      "event_ts": "2026-08-02T12:00:00+00:00",
+      "evidence": "weird",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "provenance": "native",
+      "provider": null,
+      "repo_id": "00000000-0000-4000-8000-0000000000a1",
+      "source_id": "00000000-0000-4000-8000-0000000000a1#pr102",
+      "source_type": "pr",
+      "target_id": "jira:FAST-3",
+      "target_type": "issue"
+    }
+  ],
+  "fast_path_input_rows": [
+    {
+      "confidence": 1.0,
+      "evidence": "closing_reference",
+      "pr_created_at": "2026-07-01T09:00:00+00:00",
+      "pr_number": 100,
+      "provenance": "native",
+      "repo_id": "00000000-0000-4000-8000-0000000000a1",
+      "work_item_id": "jira:FAST-1"
+    },
+    {
+      "confidence": 0.0,
+      "evidence": "",
+      "pr_created_at": "2026-07-02T09:00:00+00:00",
+      "pr_number": 101,
+      "provenance": "native",
+      "repo_id": "00000000-0000-4000-8000-0000000000a1",
+      "work_item_id": "jira:FAST-2"
+    },
+    {
+      "confidence": 1.0,
+      "evidence": "weird",
+      "pr_created_at": null,
+      "pr_number": 102,
+      "provenance": "some_unrecognized_value",
+      "repo_id": "00000000-0000-4000-8000-0000000000a1",
+      "work_item_id": "jira:FAST-3"
+    }
+  ],
+  "fast_path_links_returned": [
+    [
+      "jira:FAST-1",
+      100
+    ],
+    [
+      "jira:FAST-2",
+      101
+    ],
+    [
+      "jira:FAST-3",
+      102
+    ]
+  ],
+  "frozen_now": "2026-08-02T12:00:00+00:00",
+  "org_id": "org-issue-pr-edges-golden",
+  "text_parse_count_returned": 3,
+  "text_parse_edges": [
+    {
+      "confidence": 0.9,
+      "day": "2026-07-10",
+      "discovered_at": "2026-08-02T12:00:00+00:00",
+      "edge_id": "0907610a1ffbe0a1705a0e107c3cc87f41bd3550383cf0108b0416ac691a7124",
+      "edge_type": "references",
+      "event_ts": "2026-07-10T10:00:00+00:00",
+      "evidence": "TEXT-123",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "provenance": "explicit_text",
+      "provider": "jira",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "source_id": "00000000-0000-4000-8000-0000000000a2#pr7",
+      "source_type": "pr",
+      "target_id": "jira:TEXT-123",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 0.9,
+      "day": "2026-07-11",
+      "discovered_at": "2026-08-02T12:00:00+00:00",
+      "edge_id": "ad57f93120dc9be0172bbb6bb14f6ae68647adb0e13c9a024fcd32e28ca81aab",
+      "edge_type": "implements",
+      "event_ts": "2026-07-11T10:00:00+00:00",
+      "evidence": "Closes #55",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "provenance": "explicit_text",
+      "provider": "github",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "source_id": "00000000-0000-4000-8000-0000000000a2#pr8",
+      "source_type": "pr",
+      "target_id": "gh:owner/repo#55",
+      "target_type": "issue"
+    },
+    {
+      "confidence": 0.9,
+      "day": "2026-07-12",
+      "discovered_at": "2026-08-02T12:00:00+00:00",
+      "edge_id": "2d9393ea53aecec06b505f42929a73be01190d114adbb92b5e3f3e0d6e9221bb",
+      "edge_type": "references",
+      "event_ts": "2026-07-12T10:00:00+00:00",
+      "evidence": "#42",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "provenance": "explicit_text",
+      "provider": "gitlab",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "source_id": "00000000-0000-4000-8000-0000000000a2#pr9",
+      "source_type": "pr",
+      "target_id": "gl:group/project#42",
+      "target_type": "issue"
+    }
+  ],
+  "text_parse_explicit_links_returned": [
+    [
+      "gh:owner/repo#55",
+      8
+    ],
+    [
+      "gl:group/project#42",
+      9
+    ],
+    [
+      "jira:TEXT-123",
+      7
+    ]
+  ],
+  "text_parse_links_written": [
+    {
+      "confidence": 0.9,
+      "evidence": "TEXT-123",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "pr_number": 7,
+      "provenance": "explicit_text",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "work_item_id": "jira:TEXT-123"
+    },
+    {
+      "confidence": 0.9,
+      "evidence": "Closes #55",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "pr_number": 8,
+      "provenance": "explicit_text",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "work_item_id": "gh:owner/repo#55"
+    },
+    {
+      "confidence": 0.9,
+      "evidence": "#42",
+      "last_synced": "2026-08-02T12:00:00+00:00",
+      "pr_number": 9,
+      "provenance": "explicit_text",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "work_item_id": "gl:group/project#42"
+    }
+  ],
+  "text_parse_pull_requests": [
+    {
+      "body": null,
+      "created_at": "2026-07-10T10:00:00+00:00",
+      "head_branch": null,
+      "number": 7,
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "title": "Fix TEXT-123 crash"
+    },
+    {
+      "body": "Closes #55",
+      "created_at": "2026-07-11T10:00:00+00:00",
+      "head_branch": null,
+      "number": 8,
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "title": null
+    },
+    {
+      "body": "See #42 for details",
+      "created_at": "2026-07-12T10:00:00+00:00",
+      "head_branch": null,
+      "number": 9,
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "title": null
+    },
+    {
+      "body": null,
+      "created_at": "2026-07-13T10:00:00+00:00",
+      "head_branch": null,
+      "number": 10,
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "title": null
+    },
+    {
+      "body": null,
+      "created_at": "2026-07-14T10:00:00+00:00",
+      "head_branch": null,
+      "number": 11,
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "title": "Fix LINEAR-999"
+    }
+  ],
+  "text_parse_work_items": [
+    {
+      "provider": "jira",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "work_item_id": "jira:TEXT-123"
+    },
+    {
+      "provider": "github",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "work_item_id": "gh:owner/repo#55"
+    },
+    {
+      "provider": "gitlab",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "work_item_id": "gl:group/project#42"
+    },
+    {
+      "provider": "linear",
+      "repo_id": "00000000-0000-4000-8000-0000000000a2",
+      "work_item_id": "linear:LINEAR-999"
+    }
+  ]
+}

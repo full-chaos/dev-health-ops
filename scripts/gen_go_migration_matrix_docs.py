@@ -169,8 +169,14 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4275 (Done)",
     },
     "team_wellbeing": {
+        # CHAOS-5311/CHAOS-5234/CHAOS-3092: this citation was already
+        # accurate (TeamWellbeingExecutor has been the sole writer since
+        # CHAOS-4276), but this PR ALSO deletes
+        # compute_team_wellbeing_metrics_daily itself (the whole
+        # metrics/compute_wellbeing.py module) -- there is no more Python
+        # fallback at all, not even a skip-gated one.
         "citation": "Go: `internal/jobs/metrics/daily/wellbeing_native_executor.go`",
-        "ticket": "CHAOS-4276 (Done)",
+        "ticket": "CHAOS-4276 (Done), CHAOS-5311 (Done)",
     },
     "file_hotspots": {
         "citation": "Go: `internal/jobs/metrics/daily/file_hotspots_native_executor.go`",
@@ -201,8 +207,14 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4279 (Done)",
     },
     "cicd": {
+        # CHAOS-5312/CHAOS-5234/CHAOS-3092: this citation was already
+        # accurate (CICDExecutor has been the sole writer since CHAOS-4292),
+        # but this PR ALSO deletes compute_cicd_metrics_daily itself (the
+        # whole metrics/compute_cicd.py module) plus its Go live-Python rot
+        # guard (TestCICDGoldenMatchesLivePython) -- there is no more Python
+        # fallback at all, not even a skip-gated one.
         "citation": "Go: `internal/jobs/metrics/daily/cicd/`",
-        "ticket": "CHAOS-4292 (Done)",
+        "ticket": "CHAOS-4292 (Done), CHAOS-5312 (Done)",
     },
     "testops_pipeline": {
         "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute. CHAOS-5245 deleted the Python compute (`compute_testops.py`) entirely -- no fallback left.",
@@ -221,8 +233,15 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4293 (Done)",
     },
     "incident": {
+        # CHAOS-5313/CHAOS-5234/CHAOS-3092: this citation was already
+        # accurate (IncidentExecutor has been the sole writer since
+        # CHAOS-4269/CHAOS-4295, with the NULL-guard fix), but this PR ALSO
+        # deletes compute_incident_metrics_daily itself (the whole
+        # metrics/compute_incidents.py module) -- there is no more Python
+        # fallback at all, not even a skip-gated one (incident never had a
+        # skip_families gate to begin with).
         "citation": "Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269)",
-        "ticket": "CHAOS-4295 (Done)",
+        "ticket": "CHAOS-4295 (Done), CHAOS-5313 (Done)",
     },
     "ai_governance": {
         # CHAOS-5234/CHAOS-3092: this citation was already stale before this
@@ -334,8 +353,8 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4294 (Done)",
     },
     "benchmarking": {
-        "citation": "Python: `benchmarking/runner.py:259 run_benchmarking_for_day`",
-        "ticket": "CHAOS-4288",
+        "citation": "Go: `internal/jobs/metrics/daily/benchmarking_finalize_native_executor.go` (finalize scope). CHAOS-4288 deleted the Python compute (`src/dev_health_ops/metrics/benchmarking/`) entirely -- no fallback left.",
+        "ticket": "CHAOS-4288 (Done)",
     },
     "ic_finalize": {
         "citation": "Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope)",

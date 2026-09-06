@@ -515,7 +515,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestRemainingMetricsGoldenMatchesLivePython|TestCapacityForecastGoldenMatchesLivePython|TestTeamWellbeingGoldenMatchesLivePython|TestFMAGoldenMatchesLivePython)$' \
+        -run '^(TestRemainingMetricsGoldenMatchesLivePython|TestCapacityForecastGoldenMatchesLivePython|TestFMAGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/numerical
   ); then
     rm -rf -- "${proof_dir}"
@@ -539,14 +539,16 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  # Same reasoning as capacity-forecast-golden above: team_wellbeing (CHAOS-4276)
-  # is a distinct golden/producer and gets its own proof marker.
-  proof_file="${proof_dir}/daily-wellbeing-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: team_wellbeing golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # team_wellbeing (CHAOS-4276) used to have its own live-Python rot guard
+  # here (TestTeamWellbeingGoldenMatchesLivePython, proof marker
+  # daily-wellbeing-golden) -- retired (CHAOS-5234/CHAOS-3092:
+  # compute_team_wellbeing_metrics_daily deleted outright, the whole
+  # metrics/compute_wellbeing.py module gone): TeamWellbeingExecutor
+  # (native Go) is the sole producer now. The frozen golden
+  # (tests/fixtures/daily_wellbeing_python_golden.json) stays; Go's own
+  # TestComputeMatchesFrozenPythonGolden-family bit-exact tests
+  # (wellbeing_parity_test.go) are the regression guard going forward --
+  # same shape as the file_hotspots/issueprlinks retirements below.
   # Same reasoning again: the CHAOS-4818 FMA golden (release_impact
   # ._compute_confidence, compute._percentile, compute_capacity._percentile)
   # is a fourth distinct golden/producer in this same package and gets its
@@ -620,30 +622,16 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/metrics/daily/cicd (frozen cicd golden vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestCICDGoldenMatchesLivePython$' \
-        ./internal/jobs/metrics/daily/cicd
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Checked SEPARATELY from repo-user-commit-golden above -- see that block's
-  # comment on capacity-forecast-golden for why two goldens need two markers.
-  proof_file="${proof_dir}/cicd-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: cicd golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # cicd (CHAOS-4292) used to have its own live-Python rot guard here
+  # (TestCICDGoldenMatchesLivePython, proof marker cicd-golden) -- retired
+  # (CHAOS-5234/CHAOS-3092: compute_cicd_metrics_daily deleted outright, the
+  # whole metrics/compute_cicd.py module gone): CICDExecutor (native Go) is
+  # the sole producer now. The frozen golden
+  # (tests/fixtures/daily_cicd_python_golden.json) stays; Go's own
+  # TestComputeMatchesFrozenPythonGolden-family bit-exact tests
+  # (internal/jobs/metrics/daily/cicd/compute_test.go) are the regression
+  # guard going forward -- same shape as the team_wellbeing/file_hotspots/
+  # issueprlinks retirements in this same function.
 
   printf 'go test -count=1: internal/jobs/metrics/daily/compoundingrisk (frozen compounding_risk golden vs live Python)\n'
   if ! (
@@ -678,29 +666,14 @@ check_live_python_oracles() {
   # TestComputeMatchesFrozenPythonGolden is the regression guard going
   # forward.
 
-  printf 'go test -count=1: internal/jobs/metrics/daily/benchmarking (frozen benchmarking golden vs live Python)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestBenchmarkingGoldenMatchesLivePython$' \
-        ./internal/jobs/metrics/daily/benchmarking
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Its own marker, for the same reason as cicd-golden above (CHAOS-4288).
-  proof_file="${proof_dir}/benchmarking-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: benchmarking golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # internal/jobs/metrics/daily/benchmarking's live-Python rot guard
+  # (TestBenchmarkingGoldenMatchesLivePython, CHAOS-4288) was retired here:
+  # its producer, compute_benchmarking_for_day (and the rest of
+  # src/dev_health_ops/metrics/benchmarking/), was DELETED, not merely
+  # un-called -- BenchmarkingFinalizeExecutor is the sole computer now. The
+  # frozen golden (tests/fixtures/daily_benchmarking_python_golden.json)
+  # stays; Go's own TestComputeMatchesFrozenPythonGolden is the regression
+  # guard going forward.
 
   printf 'go test -count=1: internal/jobs/metrics/remaining (DORA incident projection vs the live Python builder)\n'
   if ! (
@@ -974,7 +947,7 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestWorkgraphIssueEdgesGoldenMatchesLivePython|TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$' \
+        -run '^(TestNumericTypeDigitTableMatchesLivePython|TestPythonLowerMatchesLivePython|TestIntMaxStrDigitsMatchesLivePython|TestPythonDecimalBlocksMatchLivePython|TestEveryRuneLowercasesLikeLivePython)$' \
         ./internal/jobs/workgraph/edges
   ); then
     rm -rf -- "${proof_dir}"
@@ -1000,16 +973,15 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  # Its own marker, for the reason spelled out at capacity-forecast-golden: the
-  # edge golden has a different producer from every guard above it, so sharing a
-  # proof file would let this one be renamed or filtered out of the -run pattern
-  # while another guard's success stood in for it.
-  proof_file="${proof_dir}/workgraph-issue-edges-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: workgraph issue-edge golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # internal/jobs/workgraph/edges' live-Python rot guard
+  # (TestWorkgraphIssueEdgesGoldenMatchesLivePython, CHAOS-4766) was retired
+  # here: its producer, _build_issue_issue_edges, was DELETED, not merely
+  # un-called -- the Go native pre-step is the sole producer now. The frozen
+  # golden (tests/fixtures/workgraph_issue_edges_python_golden.json) stays;
+  # Go's own exhaustive frozen-golden comparison in golden_full_test.go is the
+  # regression guard going forward. Proving "Python still agrees with itself"
+  # stops being the protection that matters once Python is no longer in the
+  # loop.
   # Its own marker again, per the capacity-forecast reasoning: this guard derives
   # a Unicode property table from the live interpreter, a different producer from
   # the edge golden above it, and it is the only thing standing between a Python

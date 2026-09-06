@@ -44,55 +44,50 @@ func gateLineFor(family string) string {
 	return `if "` + family + `" not in skip_families:`
 }
 
-// finalizeFamiliesWithPythonComputeDeleted names every pythonRecognisedFinalizeFamilies
-// entry whose Python compute has been fully DELETED (CHAOS-3092 no-straddle),
-// not merely gated -- there is no bridge call left to prevent a double-write
-// against, so requiring a gate line for it would demand dead code. ic_finalize
-// is the first (CHAOS-4290 PR3: compute_ic.py deleted, parity proved by
-// icfinalize's TestICFinalizeMatchesTheFrozenPythonGolden instead of a live
-// Python fallback). A family newly ADDED to pythonRecognisedFinalizeFamilies
-// still gets the full "must have a gate line" check below unless it is also
-// listed here, so this stays an explicit, reasoned exemption rather than a
-// silent hole in the guard.
-var finalizeFamiliesWithPythonComputeDeleted = map[string]struct{}{
-	"ic_finalize": {},
-}
-
 func TestEveryRecognisedFinalizeFamilyHasAPythonGate(t *testing.T) {
 	source := pythonFinalizeSource(t)
-	if len(pythonRecognisedFinalizeFamilies) == 0 {
-		t.Fatal("pythonRecognisedFinalizeFamilies is empty -- the guard would admit " +
+	if len(pythonGatedFinalizeFamilies) == 0 {
+		t.Fatal("pythonGatedFinalizeFamilies is empty -- the guard would admit " +
 			"nothing and this test would assert nothing")
 	}
-	for _, family := range pythonRecognisedFinalizeFamilies {
-		if _, deleted := finalizeFamiliesWithPythonComputeDeleted[family]; deleted {
-			continue
-		}
+	for _, family := range pythonGatedFinalizeFamilies {
 		if !strings.Contains(source, gateLineFor(family)) {
-			t.Errorf("Go recognises finalize family %q, but job_daily.py has no gate line %q. "+
-				"Registering it would send a skip entry Python ignores, so the native family "+
-				"and the bridge would BOTH write.", family, gateLineFor(family))
+			t.Errorf("Go believes finalize family %q still has a live Python gate, but "+
+				"job_daily.py has no gate line %q. Either the Python compute for it was "+
+				"deleted (remove it from pythonGatedFinalizeFamilies too, CHAOS-5141-style) "+
+				"or the gate line was lost by accident (registering it natively would then "+
+				"send a skip entry Python ignores, so the native family and the bridge would "+
+				"BOTH write).", family, gateLineFor(family))
 		}
 	}
 }
 
-// TestFinalizeFamiliesWithPythonComputeDeletedReallyHaveNoGate is the mirror
-// of the loop above's skip: a family stays exempt only while its Python gate
-// line genuinely does not exist. If Python's compute were ever reintroduced
-// for an exempted family without also removing it from
-// finalizeFamiliesWithPythonComputeDeleted, the two-writer risk the main
-// test exists to catch would be silently unchecked for exactly that family --
-// this fails loudly instead, the same "stale exemption" shape this fleet
-// checks for elsewhere (e.g. the shard-manifest and orphan-definition guards).
-func TestFinalizeFamiliesWithPythonComputeDeletedReallyHaveNoGate(t *testing.T) {
+// CHAOS-5141 (team_cognitive_load) and CHAOS-4290 PR3 (ic_finalize) both
+// deleted a registerable-native family's Python compute entirely rather than
+// merely gating it -- each must NOT have a live gate line for the test above
+// to ever find, or a future accidental re-add of the Python compute would
+// silently re-introduce the two-writer hazard this whole file exists to
+// prevent. This loop covers BOTH (and any future family in the same shape)
+// by construction: it is every pythonRecognisedFinalizeFamilies entry that
+// is NOT in pythonGatedFinalizeFamilies, not a hand-maintained list of names.
+func TestDeletedPythonComputeFamilyHasNoGateLine(t *testing.T) {
 	source := pythonFinalizeSource(t)
-	for family := range finalizeFamiliesWithPythonComputeDeleted {
+	for _, family := range pythonRecognisedFinalizeFamilies {
+		gated := false
+		for _, g := range pythonGatedFinalizeFamilies {
+			if g == family {
+				gated = true
+				break
+			}
+		}
+		if gated {
+			continue
+		}
 		if strings.Contains(source, gateLineFor(family)) {
-			t.Errorf("finalizeFamiliesWithPythonComputeDeleted lists %q as Python-compute-deleted, "+
-				"but job_daily.py DOES contain its gate line %q -- the exemption is stale "+
-				"(Python's compute for this family exists again, or never left), remove it "+
-				"from the exemption so the main test actually checks this family.",
-				family, gateLineFor(family))
+			t.Errorf("family %q is NOT in pythonGatedFinalizeFamilies (its Python compute is "+
+				"supposed to be deleted), but job_daily.py still has gate line %q -- either "+
+				"add it back to pythonGatedFinalizeFamilies, or finish deleting the Python "+
+				"compute behind that gate.", family, gateLineFor(family))
 		}
 	}
 }

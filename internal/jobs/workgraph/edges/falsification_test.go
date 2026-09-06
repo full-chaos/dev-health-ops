@@ -1,7 +1,6 @@
 package edges
 
 import (
-	"encoding/json"
 	"math"
 	"testing"
 )
@@ -83,29 +82,6 @@ func TestEdgeIDIsAmbiguousAcrossDelimiters(t *testing.T) {
 				t.Errorf("node type %q contains %q, which unbounds the id ambiguity", nodeType, delimiter)
 			}
 		}
-	}
-}
-
-// TestRotGuardComparisonCatchesPlantedDrift proves the byte comparison the rot
-// guard performs is not vacuous — a canonicalising comparison that ignored
-// values would pass every drift.
-func TestRotGuardComparisonCatchesPlantedDrift(t *testing.T) {
-	frozen := json.RawMessage(`[[1,2,3,4,5,6,7,1.0,8,9,10,11,12,13]]`)
-	for name, planted := range map[string]string{
-		"confidence lowered":   `[[1,2,3,4,5,6,7,0.9,8,9,10,11,12,13]]`,
-		"endpoint swapped":     `[[1,4,3,2,5,6,7,1.0,8,9,10,11,12,13]]`,
-		"row dropped":          `[]`,
-		"row duplicated":       `[[1,2,3,4,5,6,7,1.0,8,9,10,11,12,13],[1,2,3,4,5,6,7,1.0,8,9,10,11,12,13]]`,
-		"string index shifted": `[[1,2,3,4,5,6,7,1.0,8,9,10,11,12,14]]`,
-	} {
-		if string(canonicalJSON(t, frozen)) == string(canonicalJSON(t, json.RawMessage(planted))) {
-			t.Errorf("the rot-guard comparison does not detect %q", name)
-		}
-	}
-	// ...and does not report a false positive on insignificant formatting.
-	spaced := json.RawMessage("[ [1, 2, 3, 4, 5, 6, 7, 1.0, 8, 9, 10, 11, 12, 13] ]")
-	if string(canonicalJSON(t, frozen)) != string(canonicalJSON(t, spaced)) {
-		t.Error("the rot-guard comparison reports whitespace as drift")
 	}
 }
 

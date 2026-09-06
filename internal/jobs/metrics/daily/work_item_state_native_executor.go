@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
@@ -109,7 +110,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	for _, repoID := range repoIDs {
 		items, err := LoadWorkItemStateWorkItems(ctx, executor.conn, run.OrganizationID, repoID, start, end)
 		if err != nil {
-			return total, err
+			return wrapWorkItemStatePartialWrite(total, repoID, err)
 		}
 		if len(items) == 0 {
 			continue
@@ -117,7 +118,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 
 		transitions, err := LoadWorkItemStateTransitions(ctx, executor.conn, run.OrganizationID, repoID, end)
 		if err != nil {
-			return total, err
+			return wrapWorkItemStatePartialWrite(total, repoID, err)
 		}
 		if len(transitions) == 0 {
 			// Mirrors Python's `if not item_transitions: continue` per
@@ -129,7 +130,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 
 		attributions, err := LoadWorkItemPrimaryTeamAttributions(ctx, executor.conn, run.OrganizationID, repoID)
 		if err != nil {
-			return total, err
+			return wrapWorkItemStatePartialWrite(total, repoID, err)
 		}
 
 		// One honest, real-wall-clock timestamp per repo group -- see
@@ -160,13 +161,46 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		if len(rows) == 0 {
 			continue
 		}
+		// #2276 confirmation-pass P1: WriteWorkItemStateDurationsDaily's own
+		// batch.Send() branch already reports its TRUE row count on an
+		// ambiguous network error (the F1 sweep) -- `total` must be updated
+		// with that count BEFORE the error check, not only after a
+		// confirmed success, or the failing write's own truthful count is
+		// discarded a second time.
 		written, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computedAt)
-		if err != nil {
-			return total, err
-		}
 		total += written
+		if err != nil {
+			return wrapWorkItemStatePartialWrite(total, repoID, err)
+		}
 	}
 	return total, nil
+}
+
+// wrapWorkItemStatePartialWrite is the codex round 2 F3 fix (astra scale
+// review's post_bridge sibling, folded into CHAOS-5190 per team-lead's
+// ruling since it's adjacent to that PR's own repo_ids telemetry work): a
+// LATER repository in ComputeFamily's per-repo loop can fail (a read step or
+// the write step) AFTER an EARLIER repository's rows already landed --
+// `total` carries that count. Before this fix, `return total, err` returned
+// the raw, unwrapped error regardless of whether total was 0 or nonzero, so
+// daily.go's dispatcher (which only distinguishes ErrPartialWrite from every
+// other error) always classified this as a full Refused/0-rows outcome even
+// when real rows were already on disk -- telling an operator the OPPOSITE of
+// what a re-drive would create (duplicate rows on a plain MergeTree, not a
+// clean recompute). Mirrors wrapWorkGraphEdgesPartialWrite's exact shape:
+// `total == 0` is a genuine refusal (nothing landed, wrap nothing); `total >
+// 0` wraps ErrPartialWrite naming the repo and the true row count. The
+// PARTITION-level disposition CHAOS-5190 actually contracts on
+// (computePostBridgeNativeFamilies appends to `incomplete` either way) is
+// unaffected either way -- this only corrects the FAMILY-level telemetry
+// (CHAOS-5139's refused-vs-partial distinction) an operator reads to judge
+// re-drive risk.
+func wrapWorkItemStatePartialWrite(total int, repoID uuid.UUID, err error) (int, error) {
+	if total == 0 {
+		return 0, err
+	}
+	return total, fmt.Errorf("%w: work_item_state failed on repo %s after %d row(s) already landed: %w",
+		ErrPartialWrite, repoID, total, err)
 }
 
 // workItemStateSegment is one (status, start, end) span in a work item's

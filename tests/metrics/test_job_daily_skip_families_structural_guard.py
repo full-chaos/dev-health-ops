@@ -16,10 +16,26 @@ through the rest of the native family list -- this is NOT yet a blanket
 because most families have not been migrated from skip-gating to deletion
 yet. Widen this set as each subsequent deletion PR lands; do not remove
 entries once added.
+
+AST-BASED, not line/substring-based (fix for codex r1 Finding 2 on #2283,
+CHAOS-5240): the original guard stripped only WHOLE-LINE comments
+(`line.strip().startswith("#")`) before a plain substring search, which has
+two independent holes codex constructed directly: (1) an INLINE trailing
+comment (`sentinel = 1  # build_governance_rows_for_day`) is not a
+whole-line comment, so its text survives the strip and can false-positive
+the guard; (2) a real DYNAMIC reference split across adjacent string
+literals (`getattr(job_daily, "build_" "governance_rows_for_day")`) does
+not contain the function name as a contiguous substring in the source text,
+so it can slip past a substring search entirely -- a false negative on an
+actual live reference. Parsing with `ast` instead of scanning text closes
+both: comments never appear in the AST at all (whole-line or inline, no
+difference), and adjacent string literals are folded into a single
+`ast.Constant` by the parser itself before this test ever sees them.
 """
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +52,14 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # run_work_items_sync_job still calls it for an unrelated full-backfill
     # sync job), only job_daily.py's own reference to it.
     "work_item_attribution": "compute_work_item_team_attributions",
+    # CHAOS-5234: ai_governance's daily compute deleted from job_daily.py --
+    # the native Go executor (AIGovernanceExecutor, CHAOS-4285) is the only
+    # writer of ai_policy_events/ai_governance_coverage_daily for a daily
+    # partition now. Unlike work_item_attribution, build_governance_rows_
+    # for_day itself was ALSO deleted (from audit/ai_governance/loaders.py)
+    # -- codegraph_explore + rg confirmed job_daily.py was its only real
+    # caller.
+    "ai_governance": "build_governance_rows_for_day",
     # CHAOS-5234: file_hotspots's daily compute deleted from job_daily.py --
     # the native Go executor (FileHotspotsExecutor, CHAOS-4277) is the only
     # writer of file_metrics_daily for a daily partition now.
@@ -47,6 +71,40 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
 }
 
 
+def _referenced_names(source: str, source_path: str) -> set[str]:
+    """Every identifier/string-literal that could name a real reference to a
+    deleted compute function, found via the AST rather than a text scan.
+
+    Comments never appear in the AST at all -- Python's own parser discards
+    them before producing it -- so this cannot be fooled by an explanatory
+    comment (inline or whole-line) naming the deleted function to describe
+    the deletion. Three node shapes cover every real-reference form: a bare
+    name (`compute_x`), an attribute access (`module.compute_x`), and a
+    string constant (covers `getattr(module, "compute_x")` -- and adjacent
+    string literals like `"compute_" "x"` are folded into ONE `ast.Constant`
+    by the parser itself before this function ever sees them, so a
+    dynamic reference split across literals is detected exactly like a
+    plain one, no manual concatenation-handling needed), and an import
+    alias's ORIGINAL name (`ast.alias.name` -- codex r2 Finding 1 on #2283:
+    `from package import compute_x as y` binds the local name `y`, which is
+    all a bare `ast.Name`/`ast.Attribute` walk would ever see; the deleted
+    function's REAL name is `ast.alias.name`, not the local alias it's bound
+    to, so it must be collected explicitly).
+    """
+    tree = ast.parse(source, filename=source_path)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            names.add(node.value)
+        elif isinstance(node, ast.alias):
+            names.add(node.name)
+    return names
+
+
 def test_deleted_native_families_have_no_compute_reference_in_job_daily() -> None:
     assert JOB_DAILY_SOURCE.is_file(), f"missing source: {JOB_DAILY_SOURCE}"
     assert DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS, (
@@ -56,19 +114,11 @@ def test_deleted_native_families_have_no_compute_reference_in_job_daily() -> Non
     )
 
     source = JOB_DAILY_SOURCE.read_text(encoding="utf-8")
-    # Code lines only -- job_daily.py's OWN explanatory comments deliberately
-    # name the deleted function (to explain the deletion), and a naive
-    # substring search over the whole file would flag those comments the
-    # same way it would flag a real reference. A real reference is an
-    # import or a call, never inside a `#...` comment.
-    code_lines = [
-        line for line in source.splitlines() if not line.strip().startswith("#")
-    ]
-    code_only = "\n".join(code_lines)
+    referenced = _referenced_names(source, str(JOB_DAILY_SOURCE))
     still_referenced = sorted(
         f"{family} ({function})"
         for family, function in DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS.items()
-        if function in code_only
+        if function in referenced
     )
     assert not still_referenced, (
         f"job_daily.py still references a compute function CHAOS-3092's "
@@ -79,3 +129,40 @@ def test_deleted_native_families_have_no_compute_reference_in_job_daily() -> Non
         "second case, remove the ledger entry and explain why in this "
         "file's docstring, do not just widen the check to tolerate it."
     )
+
+
+def test_guard_ignores_comment_only_mentions() -> None:
+    """Regression for codex r1 Finding 2 on #2283 (CHAOS-5240): an INLINE
+    trailing comment naming a deleted function is not a real reference and
+    must not be flagged -- this is exactly the construction codex used to
+    show the old line-based guard's false positive
+    (`sentinel = 1  # build_governance_rows_for_day` survived the old
+    whole-line-only comment strip)."""
+    source = "sentinel = 1  # build_governance_rows_for_day\n"
+    assert "build_governance_rows_for_day" not in _referenced_names(source, "<test>")
+
+
+def test_guard_detects_adjacent_string_literal_split_reference() -> None:
+    """Regression for codex r1 Finding 2 on #2283 (CHAOS-5240): a dynamic
+    getattr() call whose target name is written as two adjacent string
+    literals must still be detected as a real reference -- this is exactly
+    the construction codex used to show the old substring-search guard's
+    false negative (the literal text never contains the function name as one
+    contiguous substring, so a plain `in` check missed it)."""
+    source = 'getattr(job_daily, "build_" "governance_rows_for_day")()\n'
+    assert "build_governance_rows_for_day" in _referenced_names(source, "<test>")
+
+
+def test_guard_detects_aliased_import_reference() -> None:
+    """Regression for codex r2 Finding 1 on #2283 (CHAOS-5240): a deleted
+    function imported under a local alias (`from package import
+    build_governance_rows_for_day as daily_compute`) must still be detected
+    by its REAL (pre-alias) name -- a bare Name/Attribute walk only ever
+    sees the local alias (`daily_compute`), never the original name being
+    imported, so the alias binding itself (`ast.alias.name`) has to be
+    collected explicitly."""
+    source = (
+        "from package import build_governance_rows_for_day as daily_compute\n"
+        "daily_compute()\n"
+    )
+    assert "build_governance_rows_for_day" in _referenced_names(source, "<test>")

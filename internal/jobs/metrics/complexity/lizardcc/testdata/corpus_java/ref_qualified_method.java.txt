@@ -1,0 +1,23 @@
+// CHAOS-5156: closes a gap codex round r1 on #2292 found (independently
+// confirmed against real lizard 1.23.0 before fixing). stateDecToImp was
+// missing the "const"/"&"/"&&" no-op branch clikeStates.stateDecToImp
+// has (clike.go) -- Java has no C++11 ref-qualified member functions,
+// but JavaStates inherits _state_dec_to_imp UNCHANGED (confirmed from
+// source: no override exists), so lizard's tolerant tokenizer still
+// parses this token shape. Covers both the "&" and "&&" ref-qualifier
+// forms in one fixture. Measured directly against real lizard 1.23.0:
+// complexity 2 each (base 1 + if).
+class C {
+    int f() & {
+        if (x > 0) {
+            return 1;
+        }
+        return 0;
+    }
+    int g() && {
+        if (x > 0) {
+            return 1;
+        }
+        return 0;
+    }
+}

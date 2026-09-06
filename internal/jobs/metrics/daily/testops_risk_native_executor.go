@@ -180,9 +180,32 @@ func (executor *TestopsRiskExecutor) ComputeFamily(
 
 	written, err := writeTestopsRisk(ctx, executor.conn, run.OrganizationID, releaseConfidence, qualityDrag, pipelineStability)
 	if err != nil {
-		return 0, err
+		// codex sweep (CHAOS-5190 r3 follow-up, team-lead-requested):
+		// writeTestopsRisk's OWN return value already correctly threads the
+		// true partial count through all three of its sequential-table
+		// failure paths (testops_release_confidence, testops_quality_drag,
+		// testops_pipeline_stability) -- but this call site used to discard
+		// it with a bare `return 0, err`, exactly the class already fixed in
+		// work_item_state/work_item/work_item_estimate/work_graph_edges/
+		// ai_governance/repo_user_commit. A later table's failure after an
+		// earlier one already landed rows must not read as a full refusal.
+		return wrapTestopsRiskPartialWrite(written, err)
 	}
 	return written, nil
+}
+
+// wrapTestopsRiskPartialWrite mirrors the sibling wrap helpers' exact
+// shape: written == 0 returns the error unwrapped (nothing landed);
+// written > 0 wraps ErrPartialWrite naming the true row count already
+// durable across testops_release_confidence/testops_quality_drag/
+// testops_pipeline_stability.
+func wrapTestopsRiskPartialWrite(written int, err error) (int, error) {
+	if written == 0 {
+		return 0, err
+	}
+	return written, fmt.Errorf(
+		"%w: testops_risk failed after %d row(s) already landed across testops_release_confidence/testops_quality_drag/testops_pipeline_stability: %w",
+		ErrPartialWrite, written, err)
 }
 
 var _ NativeFamilyExecutor = (*TestopsRiskExecutor)(nil)

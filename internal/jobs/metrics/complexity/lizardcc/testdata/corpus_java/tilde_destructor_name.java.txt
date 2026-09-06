@@ -1,0 +1,18 @@
+// CHAOS-5156: closes a gap codex round r1 on #2292 found (independently
+// confirmed against real lizard 1.23.0 before fixing). clikeStateGlobal
+// used to accept only `_`/alpha as a function-start first byte, but
+// clikeStates.stateGlobal (clike.go, the canonical port) also accepts
+// '~' -- the shared preprocessor already glues a bare "~" onto the next
+// token ("~" + "Foo" -> "~Foo") for every reader, so the merged token
+// was arriving here correctly, just never recognized as a function
+// start. Java has no destructor syntax, but lizard's tolerant tokenizer
+// (matching this whole package's design) still parses this token shape
+// the same way it would for C++. Measured directly against real lizard
+// 1.23.0: complexity 2 (base 1 + if).
+class C {
+    ~Foo() {
+        if (x > 0) {
+            x = x;
+        }
+    }
+}

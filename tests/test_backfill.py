@@ -605,41 +605,6 @@ def test_run_backfill_raises_on_org_mismatch(
         )
 
 
-def test_run_backfill_forwards_jira_query_scope(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_org = "55555555-5555-5555-5555-555555555555"
-    _patch_session_with_config(
-        monkeypatch,
-        _FakeConfig(
-            config_org,
-            provider="jira",
-            sync_options={"project_keys": ["OPS"], "jql": "project = OPS"},
-        ),
-    )
-    captured: dict[str, object] = {}
-
-    def _fake_sync_job(*args, **kwargs):
-        captured.update(kwargs)
-
-    monkeypatch.setattr(
-        "dev_health_ops.backfill.runner.run_work_items_sync_job",
-        _fake_sync_job,
-    )
-
-    run_backfill_for_config(
-        db_url="clickhouse://local",
-        sync_config_id="66666666-6666-6666-6666-666666666666",
-        org_id=None,
-        since=date(2026, 1, 1),
-        before=date(2026, 1, 3),
-    )
-
-    assert captured["provider"] == "jira"
-    assert captured["jira_project_keys"] == ["OPS"]
-    assert captured["jira_jql"] == "project = OPS"
-
-
 def test_run_backfill_github_includes_prs_when_prs_target_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

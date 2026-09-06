@@ -4,7 +4,7 @@ Provider registry for resolving provider instances by name.
 Usage:
     from dev_health_ops.providers.registry import get_provider, register_provider
 
-    provider = get_provider("jira")
+    provider = get_provider("github")
     batch = provider.ingest(ctx)
 """
 
@@ -76,14 +76,6 @@ def _register_builtins() -> None:
     This is called at module load time. Providers that require optional
     dependencies are registered with lazy factories that import on demand.
     """
-
-    # Jira provider (lazy import to avoid requiring jira package at startup)
-    def _jira_factory() -> Provider:
-        from dev_health_ops.providers.jira.provider import JiraProvider
-
-        return JiraProvider()
-
-    register_provider("jira", _jira_factory)
 
     # GitLab provider (lazy import to avoid requiring python-gitlab at startup)
     def _gitlab_factory() -> Provider:

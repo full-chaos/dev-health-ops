@@ -287,8 +287,6 @@ def _work_item_kwargs(context: SyncTaskContext) -> dict[str, Any]:
             repo_name = None
             kwargs["require_source"] = False
         kwargs["repo_name"] = repo_name
-    if context.provider == "jira":
-        kwargs["jira_project_keys"] = [context.source_external_id]
     if context.provider == "gitlab" and kwargs["credentials"]:
         token, gitlab_url = _gitlab_credentials(context)
         kwargs["credentials"] = {

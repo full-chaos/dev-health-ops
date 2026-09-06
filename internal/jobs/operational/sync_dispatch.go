@@ -18,8 +18,9 @@ import (
 // ErrWebhookSyncUnroutable is wrapped into the Permanent error Work returns
 // when a recognised github/gitlab webhook event cannot be resolved to a
 // native, tenant-scoped SyncConfiguration -- see SyncDispatchResult.Reason
-// for the specific cause (a webhook_sync_unroutable:<cause> value, also
-// used as-is for the telemetry counter this path increments).
+// for the specific cause (a webhook_sync_unroutable:<cause> value). No
+// telemetry counter increments for this path yet (CHAOS-5320 adds one for
+// the separate recognised-but-unhandled-event path only).
 var ErrWebhookSyncUnroutable = errors.New("webhook event has no routable native sync configuration")
 
 // githubSyncEventTypes/gitlabSyncEventTypes are the EXACT event-type sets
@@ -116,12 +117,13 @@ func scheduledSyncOccurrenceIdentity(configID string, scheduledFor time.Time) st
 	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
 }
 
-// TriggerScopedSync resolves the tenant-scoped child SyncConfiguration this
+// TriggerScopedSync resolves the tenant-scoped SyncConfiguration this
 // webhook event belongs to and mints its native "Sync Now" occurrence --
-// see this file's package doc comment for the full design. It never calls
-// into Python and never falls back to a parent-config broad sync or a
-// global token (team-lead ruling, CHAOS-5319): a repo with no matching
-// child config fails loud via SyncDispatchResult.Reason instead.
+// see this file's package doc comment for the full design, including
+// lookupSyncConfig's child-then-parent-config resolution order. It never
+// calls into Python and never falls back to a global token (team-lead
+// ruling, CHAOS-5319): a repo with no matching child OR active parent
+// config fails loud via SyncDispatchResult.Reason instead.
 func (store *PostgresStore) TriggerScopedSync(
 	ctx context.Context, provider, eventType string, rawPayload []byte, deliveredAt time.Time,
 ) (SyncDispatchResult, error) {

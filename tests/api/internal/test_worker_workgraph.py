@@ -66,32 +66,22 @@ def _runner_command(source: str, *arguments: str) -> tuple[str, ...]:
     return (sys.executable, "-c", source, *arguments)
 
 
-def test_scope_arguments_reloads_only_allowlisted_workgraph_fields() -> None:
-    row = {
-        "org_id": "00000000-0000-4000-8000-000000000009",
-        "model_ref": "gpt-test",
-        "llm_concurrency": 2,
-    }
-    assert _scope_arguments(
-        "workgraph.build",
-        {"from_date": "2026-07-01", "heuristic_window": 7},
-        row,
-    ) == {
-        "from_date": "2026-07-01",
-        "heuristic_window": 7,
-        "org_id": "00000000-0000-4000-8000-000000000009",
-    }
-
-
 @pytest.mark.parametrize(
-    "kind", ["investment.dispatch", "investment.chunk", "investment.finalize"]
+    "kind",
+    [
+        "investment.dispatch",
+        "investment.chunk",
+        "investment.finalize",
+        # CHAOS-4924: the Go handler no longer calls this bridge at all.
+        "workgraph.build",
+    ],
 )
 def test_scope_arguments_rejects_retired_kinds(kind: str) -> None:
-    # CHAOS-4438: these 3 kinds were removed from the allowed-fields table
-    # outright, so a request naming one of them fails closed here with
+    # CHAOS-4438: these first 3 kinds were removed from the allowed-fields
+    # table outright, so a request naming one of them fails closed here with
     # "unsupported fields" -- the mechanism the existing unknown-kind
     # rejection path in execute() relies on -- rather than being scoped
-    # and dispatched.
+    # and dispatched. workgraph.build (CHAOS-4924) fails closed the same way.
     row = {
         "org_id": "00000000-0000-4000-8000-000000000009",
         "model_ref": "gpt-test",
@@ -140,15 +130,23 @@ def test_compatibility_runner_preserves_canonical_datetime_and_uuid_output() -> 
 
 
 @pytest.mark.parametrize(
-    "kind", ["investment.dispatch", "investment.chunk", "investment.finalize"]
+    "kind",
+    [
+        "investment.dispatch",
+        "investment.chunk",
+        "investment.finalize",
+        # CHAOS-4924: the Go handler no longer calls this bridge at all.
+        "workgraph.build",
+    ],
 )
 def test_run_sync_rejects_retired_kinds(kind: str) -> None:
-    # CHAOS-4438: these 3 kinds were removed from the operations dispatch
+    # CHAOS-4438: the first 3 kinds were removed from the operations dispatch
     # table outright -- the multi-step build + materialize + membership
     # orchestration investment.dispatch used to perform (and
     # investment.chunk/finalize's own partitioned-materialize operations)
-    # no longer exists at all. A request naming one of them fails closed
-    # here, same mechanism as _scope_arguments above.
+    # no longer exists at all. workgraph.build (CHAOS-4924) fails closed the
+    # same way. A request naming one of them fails closed here, same
+    # mechanism as _scope_arguments above.
     with pytest.raises(ValueError, match="unsupported"):
         _run_sync(kind, {"org_id": "00000000-0000-4000-8000-000000000009"})
 
@@ -207,7 +205,14 @@ async def test_execute_releases_read_transaction_before_long_running_work(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "kind", ["investment.dispatch", "investment.chunk", "investment.finalize"]
+    "kind",
+    [
+        "investment.dispatch",
+        "investment.chunk",
+        "investment.finalize",
+        # CHAOS-4924: the Go handler no longer calls this bridge at all.
+        "workgraph.build",
+    ],
 )
 async def test_execute_rejects_a_retired_kind_via_the_existing_unknown_kind_path(
     monkeypatch: pytest.MonkeyPatch,
@@ -217,8 +222,8 @@ async def test_execute_rejects_a_retired_kind_via_the_existing_unknown_kind_path
     # Python rejection path in execute() -- that was itself disallowed new
     # Python (chris's standing rule: Python rejection code for a retired
     # kind is disallowed, deletion of the kind's handler entries is the
-    # fix). _scope_arguments' `allowed` table has no entry for these 3
-    # kinds (see test_scope_arguments_rejects_retired_kinds), so a request
+    # fix). _scope_arguments' `allowed` table has no entry for these kinds
+    # (see test_scope_arguments_rejects_retired_kinds), so a request
     # naming one of them raises the same ValueError any other unsupported
     # kind would, caught by execute()'s existing broad `except Exception`,
     # which marks the request ambiguous and raises a 503. This test proves
@@ -326,7 +331,13 @@ async def test_execute_marks_ambiguous_when_compatibility_process_fails(
     result.mappings.return_value.first.return_value = {
         "id": uuid.UUID("00000000-0000-4000-8000-000000000121"),
         "org_id": uuid.UUID("00000000-0000-4000-8000-000000000009"),
-        "kind": "workgraph.build",
+        # workgraph.build is retired (CHAOS-4924) and would now be rejected by
+        # _scope_arguments before this test's actual target (the
+        # compatibility-process failure handling) is ever reached -- any live
+        # kind exercises the same path, so investment.materialize stands in
+        # for it here (same substitution as CHAOS-4438's read-transaction
+        # test above).
+        "kind": "investment.materialize",
         "scope": {},
         "model_ref": None,
         "prompt_ref": None,
@@ -372,7 +383,11 @@ async def test_execute_marks_ambiguous_and_preserves_task_cancellation(
     result.mappings.return_value.first.return_value = {
         "id": uuid.UUID("00000000-0000-4000-8000-000000000131"),
         "org_id": uuid.UUID("00000000-0000-4000-8000-000000000009"),
-        "kind": "workgraph.build",
+        # workgraph.build is retired (CHAOS-4924); see the identical
+        # substitution note above -- investment.materialize stands in so this
+        # test still reaches the compatibility-process cancellation path
+        # rather than being rejected earlier by _scope_arguments.
+        "kind": "investment.materialize",
         "scope": {},
         "model_ref": None,
         "prompt_ref": None,

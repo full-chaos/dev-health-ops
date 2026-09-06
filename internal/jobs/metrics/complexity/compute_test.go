@@ -633,6 +633,85 @@ func TestAnalyzeFileMatchesLizardAggregatesForRuby(t *testing.T) {
 	}
 }
 
+// TestLanguageForRoutesPHPExtensionToItsAnalyzer proves .php reaches a
+// registered analyzer under the right language string, matching Python's
+// PHPReader.ext (php.py:190).
+func TestLanguageForRoutesPHPExtensionToItsAnalyzer(t *testing.T) {
+	lang, known := LanguageFor("a.php")
+	if !known || lang != "php" {
+		t.Fatalf("a.php: LanguageFor got (%q, %v), want (\"php\", true)", lang, known)
+	}
+	if _, ok := DefaultAnalyzers()[lang]; !ok {
+		t.Fatalf("a.php: no analyzer registered for language %q", lang)
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForPHP is this PR's contract test
+// against PR1's seam for the PHP analyzer, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForJava.
+func TestAnalyzeFileMatchesLizardAggregatesForPHP(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_php")
+	raw, err := os.ReadFile(filepath.Join("lizardcc", "testdata", "lizard_cc_golden_php.json"))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	var doc lizardGoldenDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse golden: %v", err)
+	}
+	if len(doc.Files) == 0 {
+		t.Fatalf("golden describes no files; every assertion below would be vacuous")
+	}
+
+	thresholds := DefaultThresholds()
+	checked := 0
+	for name, want := range doc.Files {
+		realName := strings.TrimSuffix(name, ".txt")
+		lang, known := LanguageFor(realName)
+		if !known {
+			t.Fatalf("%s: extension not registered in languageByExtension", realName)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(corpus, name))
+			if err != nil {
+				t.Fatalf("read corpus file: %v", err)
+			}
+			got, err := AnalyzeFile(realName, string(source), thresholds)
+			if err != nil {
+				t.Fatalf("AnalyzeFile: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("AnalyzeFile skipped %s, but lizard analysed it", realName)
+			}
+			if got.Language != lang {
+				t.Errorf("language: got %q, want %q", got.Language, lang)
+			}
+			if got.FunctionsCount != want.FunctionsCount {
+				t.Errorf("functions_count: got %d, lizard %d", got.FunctionsCount, want.FunctionsCount)
+			}
+			if got.CyclomaticTotal != want.CyclomaticTotal {
+				t.Errorf("cyclomatic_total: got %d, lizard %d", got.CyclomaticTotal, want.CyclomaticTotal)
+			}
+			if got.CyclomaticAvg != want.CyclomaticAvg {
+				t.Errorf("cyclomatic_avg: got %v, lizard %v", got.CyclomaticAvg, want.CyclomaticAvg)
+			}
+			if got.HighComplexityFunctions != want.HighComplexityFunctions {
+				t.Errorf("high_complexity_functions: got %d, lizard %d",
+					got.HighComplexityFunctions, want.HighComplexityFunctions)
+			}
+			if got.VeryHighComplexityFunctions != want.VeryHighComplexityFunction {
+				t.Errorf("very_high_complexity_functions: got %d, lizard %d",
+					got.VeryHighComplexityFunctions, want.VeryHighComplexityFunction)
+			}
+		})
+		checked++
+	}
+	if checked == 0 {
+		t.Fatalf("no corpus files checked; this test proved nothing")
+	}
+}
+
 // TestLanguageForRoutesJavaExtensionToItsAnalyzer proves .java reaches a
 // registered analyzer under the right language string.
 func TestLanguageForRoutesJavaExtensionToItsAnalyzer(t *testing.T) {

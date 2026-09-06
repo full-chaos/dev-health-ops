@@ -1,0 +1,76 @@
+<html>
+<body>
+<?php
+
+use App\Helpers\Formatter;
+
+function loopFor($items) {
+    $total = 0;
+    for ($i = 0; $i < count($items); $i++) {
+        $total += $items[$i];
+    }
+    return $total;
+}
+
+function loopForeach($items) {
+    $total = 0;
+    foreach ($items as $k => $v) {
+        $total += $v;
+    }
+    return $total;
+}
+
+function loopWhile($n) {
+    $i = 0;
+    while ($i < $n) {
+        $i++;
+    }
+    return $i;
+}
+
+function safeDivide($a, $b) {
+    try {
+        return $a / $b;
+    } catch (DivisionByZeroError $e) {
+        return 0;
+    }
+}
+
+function classifyLetter($ch) {
+    switch ($ch) {
+        case 'a':
+            return 1;
+        case 'b':
+            return 2;
+        default:
+            return 0;
+    }
+}
+
+function checkBoth($a, $b) {
+    if ($a && $b) {
+        return true;
+    }
+    return $a || $b;
+}
+
+function pick($flag, $x, $y) {
+    return $flag ? $x : $y;
+}
+
+# this comment mentions if and while but must not be counted
+function withHashComment($x) {
+    return $x;
+}
+
+function withHeredoc($name) {
+    $text = <<<EOT
+Hello, $name!
+This is a heredoc.
+EOT;
+    return $text;
+}
+
+?>
+</body>
+</html>

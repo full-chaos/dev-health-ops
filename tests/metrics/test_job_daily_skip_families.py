@@ -838,95 +838,15 @@ async def test_compounding_risk_skip_does_not_perturb_other_families(
     assert "write_cicd_metrics" in sink.write_calls
 
 
-@pytest.mark.asyncio
-async def test_review_edges_not_skipped_computes_and_writes(monkeypatch: Any) -> None:
-    """Baseline for the skip test below: WITHOUT review_edges in
-    skip_families, compute_review_edges_daily runs, so the "never called"
-    assertion below is because of the gate rather than because the fixture
-    never reaches that call site."""
-    compute_calls: list[Any] = []
-    original_compute = job_daily.compute_review_edges_daily
-
-    def _spy_compute(*args: Any, **kwargs: Any) -> Any:
-        compute_calls.append((args, kwargs))
-        return original_compute(*args, **kwargs)
-
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-    monkeypatch.setattr(job_daily, "compute_review_edges_daily", _spy_compute)
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families=None,
-    )
-
-    assert len(compute_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_review_edges_in_skip_families_computes_nothing(
-    monkeypatch: Any,
-) -> None:
-    """CHAOS-4279: when the Go dispatcher reports review_edges already computed
-    and wrote this scope, this job must neither call compute_review_edges_daily
-    nor write the family.
-
-    Compute is skipped outright, not merely the write: nothing else in
-    run_daily_metrics_job reads review_edges between the compute and the write
-    block, which makes this the cicd/team_wellbeing shape rather than
-    repo_user_commit's write-only skip."""
-    compute_calls: list[Any] = []
-
-    def _spy_compute(*args: Any, **kwargs: Any) -> Any:
-        compute_calls.append((args, kwargs))
-        return []
-
-    sink = _RecordingSink("clickhouse://test")
-    # AFTER _neutralize_daily_job, so the helper cannot overwrite the spy.
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-    monkeypatch.setattr(job_daily, "compute_review_edges_daily", _spy_compute)
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families={"review_edges"},
-    )
-
-    assert compute_calls == []
-    assert "write_review_edges" not in sink.write_calls
-
-
-@pytest.mark.asyncio
-async def test_review_edges_skip_does_not_perturb_other_families(
-    monkeypatch: Any,
-) -> None:
-    """Naming review_edges in skip_families must not change any other family's
-    writes -- the gate is one conditional around one compute and one write."""
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families={"review_edges"},
-    )
-
-    assert "repo_metrics" in sink.write_calls
-    assert "team_metrics" in sink.write_calls
-    assert "write_cicd_metrics" in sink.write_calls
+# CHAOS-4279 deleted review_edges' Python compute entirely
+# (compute_review_edges_daily, src/dev_health_ops/metrics/reviews.py) --
+# job_daily.py no longer calls it or names "review_edges" in skip_families at
+# all, so the three tests that used to pin this gate here
+# (test_review_edges_not_skipped_computes_and_writes,
+# test_review_edges_in_skip_families_computes_nothing,
+# test_review_edges_skip_does_not_perturb_other_families) have no gate left
+# to test. See cicd/team_wellbeing's own tests above for the shape this used
+# to share.
 
 
 # CHAOS-5194 (astra F3, #2277): the two benchmarking skip_families tests that

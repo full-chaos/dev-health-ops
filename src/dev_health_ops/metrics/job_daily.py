@@ -65,7 +65,6 @@ from dev_health_ops.metrics.quality import (
     compute_rework_churn_ratio,
     compute_single_owner_file_ratio,
 )
-from dev_health_ops.metrics.reviews import compute_review_edges_daily
 from dev_health_ops.metrics.schemas import (
     FileComplexitySnapshot,
 )
@@ -881,12 +880,14 @@ async def run_daily_metrics_job(
     ticket, had its Python compute+write deleted outright rather than
     gated -- CHAOS-5234/CHAOS-3092 -- so it no longer checks this set at
     all),
-    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
+    ``compounding_risk`` CHAOS-4287, and
     ``benchmarking`` CHAOS-4288 (``ai_impact`` CHAOS-4280 had the same
     write-only-skip shape as file_hotspots above until CHAOS-5234/CHAOS-3092
     -- its Python compute+write was deleted outright, so it no longer checks
-    this set at all); naming any other family here has no effect. CHAOS-5245
-    deleted testops_pipeline/testops_test/testops_coverage/testops_risk's
+    this set at all); naming any other family here has no effect. CHAOS-4279
+    deleted review_edges' Python compute+write outright too (same shape as
+    file_hotspots/ai_impact above), so it no longer checks this set either.
+    CHAOS-5245 deleted testops_pipeline/testops_test/testops_coverage/testops_risk's
     Python compute entirely (their native Go executors, CHAOS-4284/
     CHAOS-4294, have no Python fallback left) -- those four names no longer
     appear here at all, not even as a no-op.
@@ -1332,24 +1333,14 @@ async def run_daily_metrics_job(
                 )
             )
 
-        # CHAOS-4279: review_edges has a native Go executor
-        # (ReviewEdgesExecutor), registered pre_bridge. When the Go dispatcher
-        # names it in skip_families it has already computed and written this
-        # scope, so skip compute entirely rather than only the write --
-        # nothing else in this function reads review_edges before the write
-        # block, which makes this the cicd/team_wellbeing shape rather than
-        # repo_user_commit's write-only skip.
-        skip_review_edges = "review_edges" in skip_families
-        review_edges = (
-            []
-            if skip_review_edges
-            else compute_review_edges_daily(
-                day=d,
-                pull_request_rows=pr_rows,
-                pull_request_review_rows=review_rows,
-                computed_at=computed_at,
-            )
-        )
+        # CHAOS-4279: this job no longer calls compute_review_edges_daily
+        # (src/dev_health_ops/metrics/reviews.py) or names "review_edges" in
+        # skip_families at all -- ReviewEdgesExecutor is unconditionally
+        # registered whenever the daily worker starts (same reachability
+        # analysis as team_cognitive_load/team_complexity/benchmarking,
+        # CHAOS-5141/CHAOS-5051/CHAOS-4288), so a construction-time fallback
+        # to Python was never actually reachable from this call site in
+        # production.
         # CHAOS-4292: cicd has a native Go executor (CICDExecutor). When the
         # Go dispatcher reports it already computed and wrote this scope,
         # skip compute here -- unlike repo_user_commit, cicd_metrics has no
@@ -1578,8 +1569,8 @@ async def run_daily_metrics_job(
             # native Go executor is the only writer now.
             if wi_state_durations:
                 s.write_work_item_state_durations(wi_state_durations)
-            if not skip_review_edges:
-                s.write_review_edges(review_edges)
+            # CHAOS-4279: no write_review_edges call here anymore -- see the
+            # compute-block comment above.
             s.write_cicd_metrics(cicd_metrics)
             # CHAOS-5245 deleted testops_pipeline/testops_test/testops_coverage's
             # Python compute+write entirely (their native Go executors,

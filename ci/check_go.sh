@@ -454,7 +454,19 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/jobs/metrics/aiimpact (ai_impact port vs live Python, CHAOS-4280)\n'
+  # internal/jobs/metrics/aiimpact's ROW-METRICS live-Python rot guard
+  # (TestAIImpactMatchesLivePythonProduction, CHAOS-4280) was retired here
+  # (CHAOS-5234/CHAOS-3092), same shape as issueprlinks' CHAOS-5249
+  # retirement above: its producer, compute_ai_impact_metrics_daily, was
+  # DELETED, not merely un-called -- AIImpactExecutor is the sole computer
+  # now. The frozen golden (tests/fixtures/ai_impact_python_golden.json)
+  # stays; Go's own TestAIImpactMatchesFrozenPythonGolden is the regression
+  # guard going forward. TestRepoPatternResolverMatchesLivePython is a
+  # SEPARATE, still-live concern -- ci/check_go.sh's own prior comment here
+  # called it "not optional -- it is the sole source of ai_impact's team
+  # dimension" -- so it keeps running alone below, unaffected by this
+  # retirement.
+  printf 'go test -count=1: internal/jobs/metrics/aiimpact (repo-team pattern resolver vs live Python, CHAOS-4280)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -464,25 +476,18 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestAIImpactMatchesLivePythonProduction|TestRepoPatternResolverMatchesLivePython)$' \
+        -run '^TestRepoPatternResolverMatchesLivePython$' \
         ./internal/jobs/metrics/aiimpact
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  # Checked SEPARATELY, per the sibling goldens' reasoning: one shared marker
-  # would be satisfied by whichever guard happened to run, letting the other be
-  # skipped, renamed, or filtered out of the -run pattern unnoticed. The
-  # resolver oracle is not optional -- it is the sole source of ai_impact's
-  # team dimension.
-  for marker in ai-impact-golden ai-impact-repo-teams-golden; do
-    proof_file="${proof_dir}/${marker}"
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: ai_impact live Python oracle measurement did not occur (%s)\n' "${marker}" >&2
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done
+  proof_file="${proof_dir}/ai-impact-repo-teams-golden"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: ai_impact repo-team pattern resolver live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
 
   printf 'go test -count=1: internal/jobs/metrics/workgraphedges (work_graph_edges port vs live Python, CHAOS-4286)\n'
   if ! (

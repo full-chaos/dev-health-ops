@@ -242,8 +242,19 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4285 (Done)",
     },
     "ai_impact": {
-        "citation": "Python: `ai_impact.py:312 compute_ai_impact_metrics_daily`",
-        "ticket": "CHAOS-4280",
+        # CHAOS-5234/CHAOS-3092: this citation was already stale before this
+        # PR -- AIImpactExecutor (native Go) has computed this family since
+        # CHAOS-4280, but the citation here still described the old Python
+        # compute path. This PR deletes job_daily.py's own reference to
+        # compute_ai_impact_metrics_daily AND the function itself (from
+        # metrics/ai_impact.py), along with its Go bit-exact oracle rot
+        # guard (TestAIImpactMatchesLivePythonProduction +
+        # testdata/python_ai_impact_oracle.py) and its own dedicated tests
+        # -- codegraph_explore + rg confirmed those were its only real
+        # callers once job_daily.py's own reference was removed, so the old
+        # citation would now point at code that no longer exists.
+        "citation": "Go: `internal/jobs/metrics/daily/ai_impact_native_executor.go` (`AIImpactExecutor`)",
+        "ticket": "CHAOS-4280 (Done)",
     },
     "ai_workflow": {
         # CHAOS-5153's citation fix (job_daily.py:258, not ai_workflow.py:212

@@ -12,24 +12,18 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// The CHAOS-4290 two-writer reachability proof, against a real ClickHouse.
-//
-// The mechanism's unit tests show the skip list REACHES the bridge. They
-// cannot show why that matters, because the consequence is a property of the
-// STORE: user_metrics_daily is append-only and read back through
-// `ORDER BY computed_at DESC LIMIT 1 BY (org_id, repo_id, author_email, day)`.
-// Two writers therefore never collide or error -- the later one simply wins,
-// silently. A natively computed family that the bridge then recomputed would
-// be correct, green, and invisibly superseded in production.
-//
-// So this test asserts the property that actually protects the feature: after
-// a finalize where a native family ran, the row a reader gets back is the
-// NATIVE one. The mutation leg (documented at the bottom) removes the skip so
-// the bridge writes too, and the read flips to the bridge's row -- which is
-// the failure this whole PR exists to prevent.
-//
-// A fake ClickHouse cannot show this: the collapse is performed by the engine
-// at read time, not by any code under test.
+// The CHAOS-4290 two-writer reachability proof, against a real ClickHouse --
+// HISTORY, kept for context. It used to prove that a natively-computed
+// finalize family survived a SECOND write from the Python compatibility
+// bridge on the same append-only, computed_at-deduped table
+// (user_metrics_daily). CHAOS-3092 (PR-A') deleted that bridge call entirely
+// -- there is no second writer left AT ALL, so the race this test defended
+// against is now closed by construction rather than by a skip list reaching
+// a still-live bridge. What remains worth proving against a real ClickHouse
+// is narrower: the native family's own write actually lands and reads back
+// correctly through Work's real lease/claim/complete path -- a fake
+// ClickHouse cannot show that a real MergeTree/ORDER BY/dedup read behaves
+// as expected, even with only one writer.
 
 const twoWriterDDL = `CREATE TABLE user_metrics_daily (
     repo_id UUID, day Date, author_email String, identity_id String,
@@ -79,33 +73,19 @@ func (family *chWritingFinalizeFamily) ComputeFinalizeFamily(ctx context.Context
 	return 1, nil
 }
 
-// chWritingBridge stands in for the Python compatibility bridge. It honours
-// skipFamilies exactly as the real bridge now does (worker_metrics.py's
-// validator plus run_daily_metrics_finalize's gate) and, when NOT skipped,
-// writes its own row with a LATER computed_at -- which is what a real Python
-// finalize running after the native family would produce.
-type chWritingBridge struct {
-	fakeCompatibility
-	conn  driver.Conn
-	orgID string
-	when  time.Time
-	wrote bool
-}
+// CHAOS-3092 (PR-A'): TestNativeFinalizeFamilySurvivesTheBridgeReadback used
+// to live here, proving a native family's row survived a second, later
+// write from chWritingBridge (a Python-compatibility-bridge stand-in). That
+// bridge call is deleted -- FinalizeHandler no longer takes a compatibility
+// executor at all -- so there is no second writer to prove survival
+// against. TestNativeFinalizeFamilyWriteIsReadable below proves the
+// narrower, still-real thing: Work's real lease/claim/complete path
+// actually persists the native family's row through a real ClickHouse
+// MergeTree/dedup read, with the sole writer being the native executor.
+func TestNativeFinalizeFamilyWriteIsReadable(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
 
-func (bridge *chWritingBridge) Finalize(ctx context.Context, _ Run, skipFamilies []string) error {
-	for _, name := range skipFamilies {
-		if name == "ic_finalize" {
-			return nil
-		}
-	}
-	bridge.wrote = true
-	return bridge.conn.Exec(ctx, `INSERT INTO user_metrics_daily
-        (repo_id, day, author_email, identity_id, team_id, loc_touched, delivery_units, computed_at, org_id)
-        VALUES (toUUID(?), '2026-09-04', 'ic@example.com', 'BRIDGE', 't', 9, 9, ?, ?)`,
-		twoWriterRepoID, bridge.when, bridge.orgID)
-}
-
-func TestNativeFinalizeFamilySurvivesTheBridgeReadback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -125,13 +105,9 @@ func TestNativeFinalizeFamilySurvivesTheBridgeReadback(t *testing.T) {
 
 	const orgID = "00000000-0000-4000-8000-000000000900"
 	native := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
-	// The bridge writes LATER, which is the whole hazard: on this table a
-	// later computed_at wins the readback outright.
-	bridgeAt := native.Add(time.Minute)
 
 	store := finalizeStoreWithClaim()
-	bridge := &chWritingBridge{conn: conn, orgID: orgID, when: bridgeAt}
-	handler, err := NewFinalizeHandler(store, bridge)
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,50 +121,13 @@ func TestNativeFinalizeFamilySurvivesTheBridgeReadback(t *testing.T) {
 		t.Fatalf("Work = %v, want success", err)
 	}
 
-	if bridge.wrote {
-		t.Fatal("the bridge wrote despite ic_finalize being skipped -- its row " +
-			"would supersede the native one on the next read")
-	}
-
 	var winner string
 	if err := conn.QueryRow(ctx, dedupRead, orgID, "ic@example.com").Scan(&winner); err != nil {
 		t.Fatal(err)
 	}
 	if winner != "NATIVE" {
-		t.Fatalf("dedup readback returned %q, want NATIVE -- the natively "+
-			"computed row was superseded, which is exactly the silent failure "+
-			"this mechanism exists to prevent", winner)
-	}
-
-	// Control: prove the readback FLIPS. The bridge's row shares the native
-	// row's dedup key and carries a later computed_at, so LIMIT 1 BY has to
-	// resolve the two into one and return the newer -- which is precisely the
-	// supersession the main assertion claims did not happen.
-	//
-	// This is what the control has to establish, and what the previous version
-	// did not: with a random repo_id per insert the two rows sat on different
-	// keys, both survived, and the read returned one of them by arbitrary
-	// ordering. It reported "BRIDGE" and looked like a passing control while
-	// never once demonstrating that a row can supersede another.
-	if err := conn.Exec(ctx, `INSERT INTO user_metrics_daily
-        (repo_id, day, author_email, identity_id, team_id, loc_touched, delivery_units, computed_at, org_id)
-        VALUES (toUUID(?), '2026-09-04', 'ic@example.com', 'BRIDGE', 't', 9, 9, ?, ?)`,
-		twoWriterRepoID, bridgeAt, orgID); err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.QueryRow(ctx, dedupRead, orgID, "ic@example.com").Scan(&winner); err != nil {
-		t.Fatal(err)
-	}
-	if winner != "BRIDGE" {
-		t.Fatalf("control: a later-computed_at row did NOT win the readback (got %q) -- "+
-			"the dedup form under test is not behaving as the production reader does, "+
-			"so the main assertion proves nothing", winner)
+		t.Fatalf("dedup readback returned %q, want NATIVE -- Work's real "+
+			"lease/claim/complete path did not persist the native family's row",
+			winner)
 	}
 }
-
-// MUTATION M22 (run on bigboy, not committed): in
-// computeNativeFinalizeFamilies, drop the append so the skip list is always
-// empty. The bridge then writes its later row, bridge.wrote becomes true, and
-// the readback returns BRIDGE -- the test fails on the first assertion. That
-// is the production failure reproduced: a correct native family, silently
-// overwritten, with nothing erroring.

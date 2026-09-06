@@ -58,17 +58,6 @@ async def _clickhouse_query_dicts(
     return await query_dicts(client, query, params)
 
 
-# CHAOS-4350: this constant is referenced only by TestopsRowCapExceeded's own
-# message below (the override-with-this-env-var hint) -- CHAOS-5245 deleted
-# the loader methods, _enforce_row_cap, and _testops_loader_max_rows that used
-# to read it and raise that exception. TestopsRowCapExceeded ITSELF stays:
-# src/dev_health_ops/api/internal/worker_metrics_runner.py:227-229 imports it
-# into a tuple of exception types main() classifies as EXIT_RESOURCE_EXHAUSTED
-# -- a real, live, non-testops-loader caller, per the "a helper with a live
-# caller stays" rule. Nothing will ever raise it again in practice, but the
-# import site is real, not speculative.
-_TESTOPS_LOADER_MAX_ROWS_ENV = "DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS"
-
 # CHAOS-4361: caps how many rows clickhouse_connect buffers into a single
 # `read_str_col` call for the `load_work_items` reads (see that method).
 # ClickHouse's own default (65536) is tuned for narrow numeric-heavy tables;
@@ -126,8 +115,7 @@ class TestopsRowCapExceeded(MemoryError):
         super().__init__(
             f"{self.TOKEN}: table={table!r} org_id={org_id!r} "
             f"max_rows={max_rows} fetched>={fetched} -- refusing to compute "
-            "testops metrics on a partial/truncated result "
-            f"(override with {_TESTOPS_LOADER_MAX_ROWS_ENV})"
+            "testops metrics on a partial/truncated result"
         )
 
 

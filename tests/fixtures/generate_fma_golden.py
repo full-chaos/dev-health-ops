@@ -13,7 +13,7 @@ CPython's own IEEE-754 bit pattern for each input, not a hand-derived guess.
 asserts bit-for-bit equality, never "fused != unfused" (which is a no-op
 assertion on amd64, where the fusion this ticket is about does not happen).
 
-Four families, one per fixed Go site (CHAOS-4818 RISK-NOTES table):
+Three families, one per fixed Go site (CHAOS-4818 RISK-NOTES table):
   - release_confidence: dev_health_ops.metrics.release_impact._compute_confidence
     vs internal/jobs/metrics/numerical.ReleaseImpactConfidence. Grid matches
     the ticket's own 28,987-input sweep shape (coverage x sessions x
@@ -28,9 +28,22 @@ Four families, one per fixed Go site (CHAOS-4818 RISK-NOTES table):
     internal/jobs/metrics/numerical.IntegerPercentiles. Int-truncating, so the
     assertion is exact int equality (a truncation boundary can still flip on
     one ULP), not a bit pattern.
-  - hotspot_score: dev_health_ops.metrics.hotspots.compute_file_hotspots vs
-    internal/jobs/metrics/daily/filehotspots.ComputeFileHotspots's inline
-    weighted sum.
+
+A fourth family, hotspot_score (dev_health_ops.metrics.hotspots.
+compute_file_hotspots vs internal/jobs/metrics/daily/filehotspots.
+ComputeFileHotspots), was REMOVED (CHAOS-5234/CHAOS-3092: compute_file_hotspots
+itself is deleted now that file_hotspots is fully native, no straddle). Its
+frozen cases were extracted VERBATIM (byte-identical payload, nothing
+recomputed) out of this file's own fma_golden.json into a standalone
+tests/fixtures/fma_hotspot_score_golden.json with no generator -- leaving a
+dead "hotspot_score" key in THIS file that this generator could no longer
+reproduce broke internal/jobs/workgraph/units's generic
+TestEveryDiscoverableCorpusStillMatchesLivePython (a whole-document
+byte-for-byte auto-discovery guard with no per-key exception mechanism).
+internal/jobs/metrics/daily/filehotspots/fma_golden_test.go now reads the
+split-out file directly; this generator's own render()/--check output
+matches fma_golden.json exactly (release_confidence/percentile_float/
+percentile_int only).
 """
 
 from __future__ import annotations
@@ -44,9 +57,7 @@ from typing import Any
 
 from dev_health_ops.metrics.compute import _percentile as _percentile_float
 from dev_health_ops.metrics.compute_capacity import _percentile as _percentile_int
-from dev_health_ops.metrics.hotspots import compute_file_hotspots
 from dev_health_ops.metrics.release_impact import _compute_confidence
-from dev_health_ops.metrics.schemas import CommitStatRow
 
 OUTPUT = Path(__file__).with_name("fma_golden.json")
 REPO_ID = uuid.UUID("00000000-0000-4000-8000-00000000000a")
@@ -147,82 +158,12 @@ def _percentile_int_cases() -> list[dict[str, Any]]:
     return rows
 
 
-def _hotspot_score_cases() -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    # Deliberately excludes churn values where Go's math.Log1p disagrees with
-    # CPython's math.log1p by one ULP on its OWN (e.g. log1p(2): Go bits
-    # ...030a vs CPython ...030b) -- measured over 0..1999, 35/2000 (1.75%)
-    # diverge, sparse and unrelated to CHAOS-4818's FMA fusion (confirmed via
-    # `go tool objdump`: ComputeFileHotspots emits no FMA instruction at all,
-    # so every failure this corpus could produce would be this OTHER,
-    # library-level divergence). Filed separately (CHAOS-4829) rather than
-    # conflated here. Every value below was checked against a live Go/Python
-    # cross-check and agrees exactly.
-    churns = [0, 1, 3, 5, 7, 10, 23, 99, 250, 1000, 1999]
-    contributor_counts = [1, 2, 3, 5, 8, 13, 21]
-    commit_counts = [1, 2, 3, 5, 8, 13]
-    for churn in churns:
-        for contributors in contributor_counts:
-            for commits_count in commit_counts:
-                window_stats = _synthetic_window_stats(
-                    churn, contributors, commits_count
-                )
-                records = compute_file_hotspots(
-                    repo_id=REPO_ID,
-                    day=__import__("datetime").date(2026, 9, 2),
-                    window_stats=window_stats,
-                    computed_at=__import__("datetime").datetime(
-                        2026, 9, 2, tzinfo=__import__("datetime").timezone.utc
-                    ),
-                )
-                assert len(records) == 1, (churn, contributors, commits_count, records)
-                record = records[0]
-                assert record.churn == churn
-                assert record.contributors == contributors
-                assert record.commits_count == commits_count
-                rows.append(
-                    {
-                        "churn": churn,
-                        "contributors": contributors,
-                        "commits_count": commits_count,
-                        "expected_bits": bits_hex(record.hotspot_score),
-                    }
-                )
-    return rows
-
-
-def _synthetic_window_stats(
-    churn: int, contributors: int, commits_count: int
-) -> list[CommitStatRow]:
-    """One file, exactly `contributors` distinct authors and `commits_count`
-    distinct commits, total additions+deletions == churn (all on row 0)."""
-    n = max(contributors, commits_count, 1)
-    rows: list[CommitStatRow] = []
-    for i in range(n):
-        rows.append(
-            {
-                "repo_id": REPO_ID,
-                "commit_hash": f"c{i % commits_count}",
-                "author_email": f"a{i % contributors}@example.com",
-                "author_name": None,
-                "committer_when": __import__("datetime").datetime(
-                    2026, 9, 1, tzinfo=__import__("datetime").timezone.utc
-                ),
-                "file_path": "src/hot.py",
-                "additions": churn if i == 0 else 0,
-                "deletions": 0,
-            }
-        )
-    return rows
-
-
 def render() -> str:
     value = {
         "schema_version": 1,
         "release_confidence": _release_confidence(),
         "percentile_float": _percentile_float_cases(),
         "percentile_int": _percentile_int_cases(),
-        "hotspot_score": _hotspot_score_cases(),
     }
     return (
         json.dumps(value, sort_keys=True, allow_nan=False, separators=(",", ":")) + "\n"

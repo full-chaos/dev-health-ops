@@ -44,30 +44,35 @@ func gateLineFor(family string) string {
 	return `if "` + family + `" not in skip_families:`
 }
 
-func TestEveryRecognisedFinalizeFamilyHasAPythonGate(t *testing.T) {
-	source := pythonFinalizeSource(t)
-	if len(pythonGatedFinalizeFamilies) == 0 {
-		t.Fatal("pythonGatedFinalizeFamilies is empty -- the guard would admit " +
-			"nothing and this test would assert nothing")
-	}
-	for _, family := range pythonGatedFinalizeFamilies {
-		if !strings.Contains(source, gateLineFor(family)) {
-			t.Errorf("Go believes finalize family %q still has a live Python gate, but "+
-				"job_daily.py has no gate line %q. Either the Python compute for it was "+
-				"deleted (remove it from pythonGatedFinalizeFamilies too, CHAOS-5141-style) "+
-				"or the gate line was lost by accident (registering it natively would then "+
-				"send a skip entry Python ignores, so the native family and the bridge would "+
-				"BOTH write).", family, gateLineFor(family))
-		}
-	}
-}
+// TestEveryRecognisedFinalizeFamilyHasAPythonGate (the positive-claim half
+// of this file's original pair, CHAOS-4290 #2241 r1 Finding 2) is RETIRED:
+// pythonGatedFinalizeFamilies -- the strict subset it iterated -- is now
+// permanently empty (CHAOS-4288 deleted benchmarking's Python compute, the
+// last family that still had a live gate line; see that var's own doc,
+// daily.go). A test that asserts something about every member of an
+// intentionally-empty list is vacuous by construction, not merely
+// coincidentally empty today -- keeping it around (even passing) would be
+// exactly the "asserts nothing" trap its own former guard clause existed to
+// catch, just silenced instead of fixed. TestDeletedPythonComputeFamilyHasNoGateLine
+// below already provides STRICTLY MORE coverage now that the list is
+// empty: every pythonRecognisedFinalizeFamilies entry (not just some) is
+// checked to have NO live gate line, by construction, with no special
+// casing needed. If a future family is ever added back with a genuine live
+// Python gate, pythonGatedFinalizeFamilies stops being empty and this
+// positive-claim test would need to be re-added at that point -- there is
+// nothing to regress in the meantime.
 
-// CHAOS-5141/CHAOS-5051: team_cognitive_load and team_complexity are both
-// registerable as native (still live in pythonRecognisedFinalizeFamilies)
-// but their Python compute was deleted entirely -- neither must have a live
-// gate line for the test above to ever find, or a future accidental re-add
-// of either family's Python compute would silently re-introduce the
-// two-writer hazard this whole file exists to prevent.
+// CHAOS-5141 (team_cognitive_load), CHAOS-4290 PR3 (ic_finalize),
+// CHAOS-5051 (team_complexity), and CHAOS-4288 (benchmarking) all deleted a
+// registerable-native family's Python compute entirely rather than merely
+// gating it -- each must NOT have a live gate line for this test to ever
+// find, or a future accidental re-add of that family's Python compute
+// would silently re-introduce the two-writer hazard this whole file exists
+// to prevent. This loop covers ALL FOUR (and any future family in the same
+// shape) by construction: it is every pythonRecognisedFinalizeFamilies
+// entry that is NOT in pythonGatedFinalizeFamilies, not a hand-maintained
+// list of names -- with pythonGatedFinalizeFamilies now empty, that is
+// EVERY recognised family, checked unconditionally.
 func TestDeletedPythonComputeFamilyHasNoGateLine(t *testing.T) {
 	source := pythonFinalizeSource(t)
 	for _, family := range pythonRecognisedFinalizeFamilies {

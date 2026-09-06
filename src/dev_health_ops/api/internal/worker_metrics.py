@@ -1765,7 +1765,6 @@ async def _run_daily_direct(
             day=target_day,
             backfill_days=1,
             repo_id=repo_id,
-            skip_finalize=True,
             sink="clickhouse",
             provider="auto",
             org_id=execution.organization_id,

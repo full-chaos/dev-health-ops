@@ -1624,18 +1624,20 @@ func NewFinalizeHandler(store Store, compatibility CompatibilityExecutor) (*Fina
 	return &FinalizeHandler{store: store, compatibility: compatibility}, nil
 }
 
-// pythonRecognisedFinalizeFamilies is the set of finalize-family names the
-// Python compatibility bridge actually gates on, in
-// src/dev_health_ops/metrics/job_daily.py's run_daily_metrics_finalize:
+// pythonRecognisedFinalizeFamilies is the set of ALL registerable
+// finalize-family names -- not only the ones still gated by a live line in
+// src/dev_health_ops/metrics/job_daily.py's run_daily_metrics_finalize (see
+// pythonGatedFinalizeFamilies below for that narrower question). The shape a
+// still-gated family's line takes there:
 //
-//	if "ic_finalize" not in skip_families:
+//	if "benchmarking" not in skip_families:
 //
 // It is duplicated here because the Go and Python processes cannot share a
 // value, and duplicated deliberately rather than inferred: the alternative is
 // trusting that whatever string a caller registers happens to be one Python
 // understands. finalizeFamilyGateAgreementTest pins this slice against the
 // Python source, with a negative control, so the copy cannot drift silently.
-var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, TeamComplexityFamilyName, BenchmarkingFamilyName}
+var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, TeamComplexityFamilyName, BenchmarkingFamilyName, CompoundingRiskTeamFamilyName}
 
 // pythonGatedFinalizeFamilies is the STRICT SUBSET of
 // pythonRecognisedFinalizeFamilies whose Python compute still exists behind a
@@ -1644,24 +1646,48 @@ var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoad
 // TestEveryRecognisedFinalizeFamilyHasAPythonGate source-scans job_daily.py
 // for -- pythonRecognisedFinalizeFamilies itself stays the (unchanged)
 // registration-validation and declared-iteration-order authority for ALL
-// four families above; only the "does Python still gate on this name"
-// question narrows. ic_finalize is the only one left with a live gate line.
+// five families above; the "does Python still gate on this name" question
+// now narrows to NONE of them.
 //
-// team_cognitive_load (CHAOS-5141), team_complexity (CHAOS-5051), and now
-// benchmarking (CHAOS-4288) all deleted their Python compute entirely (not
-// just skip-gated it), same reachability analysis for all three:
-// buildDailyWorker refuses the WHOLE daily worker if the ClickHouse
-// connection fails to open, before dailyNativeFamilyRegistrations is ever
-// called -- so a construction-time fallback to Python was never actually
-// reachable in production for any of them (team_cognitive_load's own
-// construction-time nil-conn check and its co-registration-with-ic_finalize
-// check are both unreachable for the same reason; team_complexity and
-// benchmarking have no co-registration dependency of their own to begin
-// with). All three stay in pythonRecognisedFinalizeFamilies (each is still a
-// fully valid, always-registerable native finalize family) but drop out of
-// THIS list, since none of them has a Python gate line left for the
-// source-scan to find.
-var pythonGatedFinalizeFamilies = []string{"ic_finalize"}
+// team_cognitive_load (CHAOS-5141), team_complexity (CHAOS-5051),
+// compounding_risk_team (CHAOS-5084), and benchmarking (CHAOS-4288) all
+// deleted their Python compute entirely (not just skip-gated it), same
+// reachability analysis for each: buildDailyWorker refuses the WHOLE daily
+// worker if the ClickHouse connection fails to open, before
+// dailyNativeFamilyRegistrations is ever called -- so a construction-time
+// fallback to Python was never actually reachable in production for any of
+// them (team_cognitive_load's own construction-time nil-conn check and its
+// co-registration-with-ic_finalize check are both unreachable for the same
+// reason; team_complexity, compounding_risk_team, and benchmarking have no
+// co-registration dependency of their own to begin with).
+//
+// CHAOS-4290 (PR3, CHAOS-3092 no-straddle) deleted ic_finalize's Python
+// compute (compute_ic_metrics_daily / compute_ic_landscape_rolling) the same
+// way, for the same reason -- the native executor has been the sole writer
+// since #2241's finalize policy landed, so a still-present Python gate line
+// would have been dead code agreeing with dead code too. Parity is proved by
+// icfinalize's TestICFinalizeMatchesTheFrozenPythonGolden instead of a live
+// Python fallback.
+//
+// All five (team_cognitive_load, team_complexity, compounding_risk_team,
+// benchmarking, ic_finalize) stay in pythonRecognisedFinalizeFamilies (each
+// is still a fully valid, always-registerable native finalize family) but
+// this list -- the STRICT SUBSET with a live Python gate line -- is now
+// EMPTY: TestDeletedPythonComputeFamilyHasNoGateLine generalizes over the
+// set-difference automatically, so an empty slice here is a valid, already
+// correctly-handled state, not a special case.
+//
+// An empty pythonGatedFinalizeFamilies means FinalizeHandler.Work's own
+// bridge call (handler.compatibility.Finalize, still present and still
+// invoked every run below) now has ZERO Python families left to fall open
+// to -- run_daily_metrics_finalize's own body reads none of the
+// `skip_families` it's handed anymore (see its own comment for the
+// per-family accounting). Removing the bridge call/interface itself, the
+// HTTP executor's Finalize method, and the Python finalize half of
+// /internal/worker/daily-metrics/v1/execute is separate follow-up cleanup,
+// NOT done by this change -- this PR only deletes benchmarking's Python
+// compute, the last family that still read the list.
+var pythonGatedFinalizeFamilies = []string{}
 
 // ErrUnknownFinalizeFamily is returned when a registered finalize family is
 // not one the Python bridge gates on.

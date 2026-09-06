@@ -75,6 +75,29 @@ func TestBuildWindowUsesToDateForTheFromDefault(t *testing.T) {
 	}
 }
 
+// TestBuildWindowExplicitFromDateAvoidsDefaultUnderflow pins CHAOS-5297: the
+// derived-bound overflow guard must run ONLY when from_date is absent from
+// scope, matching Python's if/else (work_graph_tasks.py never evaluates
+// `to - 30d` when from_date is supplied -- only_derives_when_absent). An
+// explicit from_date/to_date pair that is each individually valid must not
+// be rejected over a derived value Python would never have computed. Same
+// bug shape and repro as #2301's operationalEdgesWindowFor
+// (chaos-4924-pr-d-r1-confirm, P1, EXECUTED).
+func TestBuildWindowExplicitFromDateAvoidsDefaultUnderflow(t *testing.T) {
+	step := frozenPreStep()
+	window, err := step.windowFor([]byte(`{"from_date":"0001-01-01","to_date":"0001-01-01"}`))
+	if err != nil {
+		t.Fatalf("windowFor with explicit year-0001 bounds should not error, got: %v", err)
+	}
+	want := time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
+	if window.From == nil || !window.From.Equal(want) {
+		t.Errorf("from = %v, want %v", window.From, want)
+	}
+	if window.To == nil || !window.To.Equal(want) {
+		t.Errorf("to = %v, want %v", window.To, want)
+	}
+}
+
 // TestBuildWindowAcceptsAZeroOffsetBound keeps the refusal from being
 // over-strict, and keeps the two layers consistent: "Z" and "+00:00" denote the
 // same wall clock either reading would produce, and
@@ -152,7 +175,10 @@ func TestPreStepNameIsStable(t *testing.T) {
 // it — but only one of its halves lands in THIS list; see the note below and
 // buildPostStepOrder for why the other went to the post-step seam.
 func TestBuildPreStepOrderIsPinned(t *testing.T) {
-	want := []string{"issue_pr_links", "pr_commit_links", "pr_commit_edges"}
+	want := []string{
+		"issue_pr_links", "pr_commit_links", "pr_commit_edges",
+		"flag_guards_edges", "operational_incident_edges",
+	}
 	got := buildPreStepOrder()
 
 	if len(got) != len(want) {

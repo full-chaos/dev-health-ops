@@ -58,13 +58,13 @@ the native Go executor and this unconditional write would otherwise both
 fire for every partition, doubling every row in both append-only tables.
 
 CHAOS-5234/CHAOS-3092 (chris's ruling: "once go is in main that does the
-same thing, skip flags are pointless") superseded file_hotspots's own
-write-only gate with outright DELETION of its compute+write call sites --
-see test_file_hotspots_compute_and_write_are_deleted_from_job_daily below,
-the runtime counterpart of the structural guard in
+same thing, skip flags are pointless") superseded BOTH file_hotspots' and
+file_risk_hotspots' write-only gates with outright DELETION of their
+compute+write call sites -- see
+test_file_hotspots_compute_and_write_are_deleted_from_job_daily and
+test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily below,
+the runtime counterparts of the structural guard in
 tests/metrics/test_job_daily_skip_families_structural_guard.py.
-file_risk_hotspots is UNCHANGED by that ticket so far and keeps the
-write-only gate shape described above.
 """
 
 from __future__ import annotations
@@ -225,9 +225,10 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     # CHAOS-5234/CHAOS-3092: no build_governance_rows_for_day to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
-    monkeypatch.setattr(
-        job_daily, "_extract_ai_workflow_for_day", lambda **k: ([], [], [], [], [], [])
-    )
+    # CHAOS-5216/CHAOS-5242: no _extract_ai_workflow_for_day to neutralize
+    # either anymore -- both of its halves (ai_workflow, work_graph_edges)
+    # are deleted, so the function itself no longer exists on job_daily at
+    # all (monkeypatch.setattr on a nonexistent attribute raises).
     # CHAOS-5234/CHAOS-3092: no compute_ai_impact_metrics_daily to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
@@ -249,7 +250,6 @@ async def test_skip_families_none_is_a_noop(monkeypatch: Any) -> None:
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -270,7 +270,6 @@ async def test_skip_families_empty_set_is_a_noop(monkeypatch: Any) -> None:
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=set(),
     )
 
@@ -299,7 +298,6 @@ async def test_team_wellbeing_in_skip_families_writes_nothing(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"team_wellbeing"},
     )
 
@@ -323,7 +321,6 @@ async def test_team_wellbeing_skip_does_not_affect_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"team_wellbeing"},
     )
 
@@ -357,7 +354,6 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"file_hotspots"},
     )
 
@@ -404,7 +400,6 @@ async def test_repo_user_commit_in_skip_families_writes_nothing_but_still_comput
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"repo_user_commit"},
     )
 
@@ -429,7 +424,6 @@ async def test_repo_user_commit_skip_does_not_affect_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"repo_user_commit"},
     )
 
@@ -464,7 +458,6 @@ async def test_deploy_in_skip_families_writes_nothing_but_still_computes(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"deploy"},
     )
 
@@ -487,7 +480,6 @@ async def test_deploy_skip_does_not_affect_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"deploy"},
     )
 
@@ -511,7 +503,6 @@ async def test_deploy_not_skipped_writes_unconditionally(monkeypatch: Any) -> No
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=set(),
     )
 
@@ -543,7 +534,6 @@ async def test_cicd_not_skipped_computes_and_writes_real_rows(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -592,7 +582,6 @@ async def test_cicd_in_skip_families_computes_nothing_and_notes_no_false_zero_ro
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"cicd"},
     )
 
@@ -613,7 +602,6 @@ async def test_cicd_skip_does_not_affect_other_families(monkeypatch: Any) -> Non
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"cicd"},
     )
 
@@ -637,10 +625,14 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
     RUNTIME counterpart to the structural guard in
     tests/metrics/test_job_daily_skip_families_structural_guard.py.
 
-    compute_file_hotspots itself is NOT deleted from the codebase -- golden-
-    fixture generators and the live-Python oracle comparator still call it
-    directly, as do its own dedicated unit tests. Only run_daily_metrics_job's
-    own call is gone.
+    compute_file_hotspots itself IS ALSO deleted from the codebase now
+    (src/dev_health_ops/metrics/hotspots.py, removed whole-file) -- a
+    correction to an earlier pass on this same family, which left the
+    module in place on the (wrong) premise that its fixture-generator/test
+    callers counted as a real production caller. See
+    test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily
+    below for the module-existence assertion (checked once there rather
+    than duplicated here) and this PR's own body for the writeup.
     """
     assert not hasattr(job_daily, "compute_file_hotspots"), (
         "compute_file_hotspots must not be imported into job_daily.py's "
@@ -657,7 +649,6 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
             backfill_days=1,
             provider="auto",
             org_id=ORG_ID,
-            skip_finalize=True,
             skip_families=skip_families,
         )
 
@@ -668,68 +659,63 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
 
 
 @pytest.mark.asyncio
-async def test_file_risk_hotspots_in_skip_families_skips_write_but_still_computes(
+async def test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily(
     monkeypatch: Any,
 ) -> None:
-    """file_risk_hotspots has a native Go executor (FileRiskHotspotsExecutor).
-    Same write-only-skip shape as repo_user_commit above. (file_hotspots
-    itself used to share this shape too, but CHAOS-5234/CHAOS-3092 deleted
-    its compute+write entirely -- see
-    test_file_hotspots_compute_and_write_are_deleted_from_job_daily above.)"""
-    compute_calls: list[Any] = []
-    original = job_daily.compute_file_risk_hotspots
+    """CHAOS-5234/CHAOS-3092.
 
-    def _spy(*args: Any, **kwargs: Any) -> Any:
-        compute_calls.append((args, kwargs))
-        return original(*args, **kwargs)
+    Chris's ruling (verbatim, twice): "work_item_attribution python doesn't
+    need a skip, it just needs to be deleted" / "once go is in main that
+    does the same thing, skip flags are pointless." file_risk_hotspots's
+    native Go executor (FileRiskHotspotsExecutor, CHAOS-4277) is the only
+    writer of file_hotspot_daily now, so -- unlike the write-only-skip shape
+    it used to have (see this module's docstring) -- its daily compute+write
+    call is gone from run_daily_metrics_job entirely, in every mode. This is
+    the RUNTIME counterpart to the structural guard in
+    tests/metrics/test_job_daily_skip_families_structural_guard.py.
 
-    monkeypatch.setattr(job_daily, "compute_file_risk_hotspots", _spy)
+    compute_file_risk_hotspots itself IS ALSO deleted from the codebase now
+    (src/dev_health_ops/metrics/hotspots.py, removed whole-file, alongside
+    compute_file_hotspots and the private job_daily.py helpers
+    _hotspot_repo_ids/_load_complexity_map_for_repo/_load_blame_map_for_repo)
+    -- a correction to an earlier pass on this same family, which left the
+    module in place on the (wrong) premise that its fixture-generator/test
+    callers counted as a real production caller the way
+    compute_work_item_team_attributions' actual sync-job caller does. See
+    this PR's own body for the writeup.
+    """
+    assert not hasattr(job_daily, "compute_file_risk_hotspots"), (
+        "compute_file_risk_hotspots must not be imported into job_daily.py's "
+        "module namespace at all"
+    )
+    import importlib.util
 
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families={"file_risk_hotspots"},
+    assert importlib.util.find_spec("dev_health_ops.metrics.hotspots") is None, (
+        "dev_health_ops.metrics.hotspots must not exist at all -- "
+        "compute_file_hotspots/compute_file_risk_hotspots and their shared "
+        "dataclasses have no caller left anywhere once this family's "
+        "job_daily.py call site (and its sibling file_hotspots) are both "
+        "deleted; if a new, deliberate caller has reappeared, this assertion "
+        "should be removed and explained, not silently loosened"
     )
 
-    assert len(compute_calls) == 1
-    assert "write_file_hotspot_daily" not in sink.write_calls
-    assert "team_metrics" in sink.write_calls
-    assert "repo_metrics" in sink.write_calls
+    for skip_families in (None, {"file_risk_hotspots"}):
+        sink = _RecordingSink("clickhouse://test")
+        _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
 
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_families=skip_families,
+        )
 
-@pytest.mark.asyncio
-async def test_file_risk_hotspots_skip_families_none_writes_it(
-    monkeypatch: Any,
-) -> None:
-    """Red-on-baseline counterpart for file_risk_hotspots: without the gate,
-    write_file_hotspot_daily fires every time regardless of skip_families --
-    this pins that it FIRES when file_risk_hotspots is NOT skipped, so the
-    skip test above is meaningful (not merely a family that never writes in
-    this fixture). (file_hotspots's own equivalent pairing was replaced by
-    test_file_hotspots_compute_and_write_are_deleted_from_job_daily above,
-    which exercises both skip_families states directly since there is no
-    write-only gate left to pin a "red" counterpart against.)"""
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families=None,
-    )
-
-    assert "write_file_hotspot_daily" in sink.write_calls
+        assert "write_file_hotspot_daily" not in sink.write_calls
+        # Unrelated families/writes are unaffected by the deletion.
+        assert "team_metrics" in sink.write_calls
+        assert "repo_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -759,7 +745,6 @@ async def test_compounding_risk_not_skipped_writes_repo_rows(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -806,7 +791,6 @@ async def test_compounding_risk_in_skip_families_writes_nothing(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"compounding_risk"},
     )
 
@@ -832,7 +816,6 @@ async def test_compounding_risk_skip_does_not_perturb_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"compounding_risk"},
     )
 
@@ -864,7 +847,6 @@ async def test_review_edges_not_skipped_computes_and_writes(monkeypatch: Any) ->
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families=None,
     )
 
@@ -900,7 +882,6 @@ async def test_review_edges_in_skip_families_computes_nothing(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"review_edges"},
     )
 
@@ -923,7 +904,6 @@ async def test_review_edges_skip_does_not_perturb_other_families(
         backfill_days=1,
         provider="auto",
         org_id=ORG_ID,
-        skip_finalize=True,
         skip_families={"review_edges"},
     )
 
@@ -985,7 +965,6 @@ async def test_work_item_attribution_compute_and_write_are_deleted_from_job_dail
             backfill_days=1,
             provider="auto",
             org_id=ORG_ID,
-            skip_finalize=True,
             skip_families=skip_families,
         )
         assert "write_work_item_team_attributions" not in sink.write_calls
@@ -1024,7 +1003,6 @@ async def test_ai_governance_compute_and_write_are_deleted_from_job_daily(
             backfill_days=1,
             provider="auto",
             org_id=ORG_ID,
-            skip_finalize=True,
             skip_families=skip_families,
         )
         assert "write_ai_policy_events" not in sink.write_calls
@@ -1069,10 +1047,68 @@ async def test_ai_impact_compute_and_write_are_deleted_from_job_daily(
             backfill_days=1,
             provider="auto",
             org_id=ORG_ID,
-            skip_finalize=True,
             skip_families=skip_families,
         )
         assert "write_ai_impact_metrics" not in sink.write_calls
+        # cicd (unrelated family, same partition) must be entirely
+        # unaffected by the deletion.
+        assert "write_cicd_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_work_graph_edges_compute_and_write_are_deleted_from_job_daily(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-5234/CHAOS-3092 close condition 3 (closes CHAOS-5216 too).
+
+    work_graph_edges's daily compute is DELETED from job_daily.py, not
+    skip-gated -- same rule as CHAOS-5233's work_item_attribution. Same
+    shape as ai_impact: extract_review_deployment_incident_edges itself is
+    ALSO deleted (from work_graph/extractors/ai_workflow.py) -- rg confirmed
+    its only real callers, once job_daily.py's own reference was removed,
+    were its Go bit-exact oracle rot guard
+    (TestWorkGraphEdgesMatchLivePythonProduction +
+    testdata/python_work_graph_edges_oracle.py, both also deleted in this
+    PR) and its own dedicated test (trimmed, not deleted --
+    tests/work_graph/test_ai_workflow.py's traversal tests survive).
+    WorkGraphEdgesExecutor (native Go) is now the only writer of
+    work_graph_pr_review_outcome_edges/work_graph_pr_deployment_edges/
+    work_graph_deployment_incident_edges, closing CHAOS-5216 by construction
+    (single native reader).
+
+    Merge note (CHAOS-5242, #2307 landed first): that PR deleted this same
+    function's OTHER half (ai_workflow's runs/artifact_edges/issue_edges,
+    via extract_ai_workflow_from_pull_requests). With both halves gone in
+    the merge, _extract_ai_workflow_for_day itself, its module
+    (work_graph/extractors/ai_workflow.py), and the now-fully-obsolete
+    tests/metrics/test_job_daily_ai_workflow.py are all deleted too -- rg
+    confirmed zero remaining callers of any of them.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    assert not hasattr(job_daily, "extract_review_deployment_incident_edges"), (
+        "extract_review_deployment_incident_edges must not be imported into "
+        "job_daily.py's module namespace at all"
+    )
+    assert not hasattr(job_daily, "_extract_ai_workflow_for_day"), (
+        "_extract_ai_workflow_for_day must not exist in job_daily.py at all "
+        "-- both of its halves (ai_workflow, work_graph_edges) are deleted"
+    )
+
+    for skip_families in (None, {"work_graph_edges"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_families=skip_families,
+        )
+        assert "write_work_graph_pr_review_outcome_edges" not in sink.write_calls
+        assert "write_work_graph_pr_deployment_edges" not in sink.write_calls
+        assert "write_work_graph_deployment_incident_edges" not in sink.write_calls
         # cicd (unrelated family, same partition) must be entirely
         # unaffected by the deletion.
         assert "write_cicd_metrics" in sink.write_calls

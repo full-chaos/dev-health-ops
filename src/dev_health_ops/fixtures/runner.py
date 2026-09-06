@@ -1447,23 +1447,22 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
             backfill_days=ns.days,
             provider="auto",
             org_id=org_id,
-            # CHAOS-4365 item 3 codex R1 (P2): without this, run_daily_
-            # metrics_job's own per-repo loop ALSO runs its older inline
-            # finalize block (IC metrics/landscape writes, job_daily.py's
-            # `if not skip_finalize:` branch) once per day -- then the
-            # explicit run_daily_metrics_finalize call below runs the SAME
-            # IC metrics/landscape writes again, so append-only tables would
-            # receive two generations per day from one fixtures run.
-            # skip_finalize=True matches _cmd_metrics_daily's own CLI
-            # pattern exactly (job_daily.py's _cmd_metrics_daily comment:
-            # "the standalone finalizer below already recomputes IC
-            # metrics/landscape for the whole org -- skip_finalize=True here
-            # avoids running that same inline logic TWICE per day").
-            skip_finalize=True,
+            # CHAOS-4365 item 3 codex R1 (P2): run_daily_metrics_job's own
+            # per-repo loop used to ALSO run an older inline IC finalize
+            # block, which the explicit run_daily_metrics_finalize call
+            # below would then duplicate -- both blocks are gone now
+            # (CHAOS-4290 PR3, CHAOS-3092 no-straddle: the native Go
+            # executor is the sole ic_finalize writer), so there is nothing
+            # left here to double-run.
         )
-
+        # CHAOS-5254: the Celery run_daily_metrics task that used to reach
+        # the now-deleted inline finalize block (above) via its default
+        # skip_finalize=False call is itself NOT deleted -- workers/
+        # metrics_daily.py keeps it live for external_ingest/recompute.py,
+        # CHAOS-5296 -- it just has no branch left to reach.
+        #
         # CHAOS-4365 item 3 finding: run_daily_metrics_job's own per-repo
-        # loop only ever ran an OLDER inline finalize block (IC metrics/
+        # loop used to ALSO run an OLDER inline finalize block (IC metrics/
         # landscape only) -- it never called the standalone
         # run_daily_metrics_finalize that items 1-3's team-scope tables
         # (compounding_risk_daily scope=team, team_cognitive_load_daily,

@@ -176,8 +176,8 @@ func TestLoadFastPathRefusesEmptyOrganizationID(t *testing.T) {
 // pointer dereference, and a non-null one must arrive verbatim.
 func TestLoadReadsPullRequestsThenCommits(t *testing.T) {
 	conn := &stubConn{responses: [][][]any{
-		{{testOrg, testRepoID, uint32(42)}},                                     // pull requests
-		{{testOrg, testRepoID, "abc123", "Merge pull request #42 from x"}},      // commits
+		{{testOrg, testRepoID, uint32(42)}},                                // pull requests
+		{{testOrg, testRepoID, "abc123", "Merge pull request #42 from x"}}, // commits
 	}}
 	loader, err := NewLoader(conn)
 	if err != nil {

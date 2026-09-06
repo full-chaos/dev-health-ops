@@ -196,10 +196,17 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
     )
 
     def _run_once() -> None:
+        # CHAOS-5242: this used to ALSO destructure runs/artifacts/issues and
+        # write them via write_ai_workflow_runs/_artifact_edges/_issue_edges
+        # -- _extract_ai_workflow_for_day no longer produces those (deleted
+        # alongside extract_ai_workflow_from_pull_requests; AIWorkflowExecutor,
+        # native Go, is the only writer of those three tables now, with its
+        # own rerun-idempotency coverage on the Go side). What remains here
+        # is work_graph_edges' own review/deployment/incident extraction
+        # (CHAOS-4286, still Python) -- the part of this test's original
+        # "no reader-visible duplicate edges on rerun" claim that is still
+        # this file's responsibility to prove.
         (
-            runs,
-            artifacts,
-            issues,
             reviews,
             pr_deploys,
             deploy_incidents,
@@ -211,10 +218,7 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
             repo_id=None,
             repo_provider_by_id={str(repo): "github"},
         )
-        assert runs and artifacts and issues and reviews
-        sink.write_ai_workflow_runs(runs)
-        sink.write_ai_workflow_artifact_edges(artifacts)
-        sink.write_ai_workflow_issue_edges(issues)
+        assert reviews
         sink.write_work_graph_pr_review_outcome_edges(reviews)
         if pr_deploys:
             sink.write_work_graph_pr_deployment_edges(pr_deploys)
@@ -227,7 +231,8 @@ async def test_daily_job_rerun_has_no_reader_visible_duplicate_edges() -> None:
 
     _run_once()
     first = await load_ai_workflow_graph_for_pr(client, str(org), pr_root)
-    assert len(first.edges) == 3  # generates, has_ai_workflow, has_review_outcome
+    assert len(first.edges) == 1  # has_review_outcome only (CHAOS-5242: no
+    # more ai_workflow-owned generates/has_ai_workflow edges from this path)
     assert not first.partial
 
     _run_once()  # rerun the same day — same deterministic ids, new computed_at

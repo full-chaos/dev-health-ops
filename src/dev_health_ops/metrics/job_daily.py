@@ -1782,12 +1782,13 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             org_id=org_id,
         )
         # CHAOS-5254: run_daily_metrics_job no longer has an inline IC
-        # metrics/landscape finalize path to opt out of (that dead branch,
-        # only ever exercised by the Celery run_daily_metrics task's default
-        # skip_finalize=False call -- the task itself is NOT deleted, see
-        # workers/metrics_daily.py's own doc -- was removed since it no
-        # longer had this call site to reach it) -- the standalone
-        # finalizer below is the only place IC metrics/landscape compute now.
+        # metrics/landscape finalize path to opt out of (that dead branch's
+        # only two callers that ever hit its default skip_finalize=False
+        # were the Celery run_daily_metrics task -- NOT deleted, see
+        # workers/metrics_daily.py's own doc -- and the now-DELETED
+        # scripts/compute_metrics_daily.py, which never passed the kwarg
+        # either) -- the standalone finalizer below is the only place IC
+        # metrics/landscape compute now.
         #
         # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
         # written from run_daily_metrics_finalize, not from

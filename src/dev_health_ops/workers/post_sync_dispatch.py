@@ -183,13 +183,14 @@ def _dispatch_post_sync_tasks(
     # onboarded org's first daily run, which would otherwise show zero complexity.
     # CHAOS-5254: run_daily_metrics no longer participates in THIS chain --
     # the prod Celery workers/Beat that would have consumed it are stopped
-    # (CHAOS-4026), so daily metrics execution now runs entirely off the Go
-    # scheduler/reconciler's own cadence + the HTTP bridge
+    # (CHAOS-4026), so the only currently-CONSUMED daily metrics execution
+    # path is the Go scheduler/reconciler's own cadence + the HTTP bridge
     # (api/internal/worker_metrics.py) into run_daily_metrics_job. (The
     # Celery task itself, workers/metrics_daily.py, is NOT deleted -- it
-    # keeps a second live caller, external_ingest/recompute.py's webhook-
-    # triggered dispatch; see CHAOS-5296.) Complexity is still chained ahead
-    # of build/materialize below for the same freshness reason as always.
+    # still has a second SOURCE, external_ingest/recompute.py's webhook-
+    # triggered dispatch, but that dispatch currently goes nowhere too, same
+    # root cause; see CHAOS-5296.) Complexity is still chained ahead of
+    # build/materialize below for the same freshness reason as always.
     #
     # Trade-off (CHAOS review #1078): as the chain head, a *terminal* complexity
     # failure (after its 3 internal retries) aborts the rest of the chain

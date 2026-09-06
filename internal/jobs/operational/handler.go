@@ -100,15 +100,17 @@ func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.E
 			return nil
 		}
 	}
-	// CHAOS-5319 PR2: the same recognised event types Python's
-	// _process_github_event/_process_gitlab_event already route to a repo-
-	// or project-scoped sync (see isRepoScopedSyncEvent's doc comment for the
-	// exact list) are, when the store supports it, triggered natively via
-	// the scheduled_sync_occurrences/sync_manual_triggers "Sync Now"
-	// mechanism instead of the HTTP bridge -- no Python sync entrypoint is
-	// ever called from this branch. jira and every other event type are
-	// unaffected and keep dispatching over HTTP below.
-	if isRepoScopedSyncEvent(delivery.Provider, delivery.EventType) {
+	// CHAOS-5319/CHAOS-5320: the same recognised event types Python's
+	// _process_github_event/_process_gitlab_event/_process_jira_event
+	// already route to a sync (see isNativeSyncDispatchEvent's doc comment
+	// for the exact list, per provider) are, when the store supports it,
+	// triggered natively via the scheduled_sync_occurrences/
+	// sync_manual_triggers "Sync Now" mechanism instead of the HTTP bridge
+	// -- no Python sync entrypoint is ever called from this branch. Every
+	// OTHER event type (deployment/workflow_run's sibling events not in the
+	// native set, pagerduty, etc.) is unaffected and keeps dispatching over
+	// HTTP below.
+	if isNativeSyncDispatchEvent(delivery.Provider, delivery.EventType) {
 		if writer, ok := handler.store.(SyncDispatchWriter); ok {
 			result, err := writer.TriggerScopedSync(ctx, delivery.Provider, delivery.EventType, delivery.Payload, delivery.CreatedAt)
 			if err != nil {

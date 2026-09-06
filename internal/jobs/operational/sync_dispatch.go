@@ -46,20 +46,36 @@ var gitlabSyncEventTypes = map[string]bool{
 	"pipeline":      true,
 }
 
-// isRepoScopedSyncEvent reports whether (provider, eventType) is routed by
-// this PR into a native, tenant-scoped incremental sync via the
+// jiraSyncEventTypes -- the EXACT event-type set Python's
+// _process_jira_event (system_webhooks.py) already routes to a work-items
+// sync -- ported verbatim (CHAOS-5320): every canonical jira event type
+// JIRA_EVENT_MAP produces (issue_created/issue_updated/issue_deleted)
+// unconditionally triggers a sync in Python today, with no per-type
+// filtering inside _process_jira_event itself, so all three are native here
+// too.
+var jiraSyncEventTypes = map[string]bool{
+	"issue_created": true,
+	"issue_updated": true,
+	"issue_deleted": true,
+}
+
+// isNativeSyncDispatchEvent reports whether (provider, eventType) is routed
+// by this PR family into a native, tenant-scoped incremental sync via the
 // scheduled_sync_occurrences/sync_manual_triggers "Sync Now" mechanism
-// (CHAOS-5319) instead of the unchanged HTTP dispatch to the Python bridge.
-// jira is deliberately excluded: no native work-items manual-trigger path
-// exists yet (CHAOS-5319 scoping report), so every jira event keeps
-// dispatching over HTTP exactly as before -- ticketed as follow-up scope,
-// not silently broken here.
-func isRepoScopedSyncEvent(provider, eventType string) bool {
+// (CHAOS-5319/CHAOS-5320) instead of the HTTP dispatch to the Python bridge.
+// Renamed from isRepoScopedSyncEvent (CHAOS-5320): jira issues are not
+// "repo-scoped" in any git sense, and jira is no longer excluded -- every
+// provider/eventType pair this family covers is now native, so the old name
+// (and its doc comment's "jira is deliberately excluded" framing) no longer
+// described reality.
+func isNativeSyncDispatchEvent(provider, eventType string) bool {
 	switch provider {
 	case "github":
 		return githubSyncEventTypes[eventType]
 	case "gitlab":
 		return gitlabSyncEventTypes[eventType]
+	case "jira":
+		return jiraSyncEventTypes[eventType]
 	default:
 		return false
 	}
@@ -179,11 +195,16 @@ func (store *PostgresStore) TriggerScopedSync(
 // event's repo/project belongs to. github identity is resolved via the
 // installation -- PR1's github_app_installations.org_id linkage -- rather
 // than the raw org_ref string on webhook_deliveries (team-lead ruling: never
-// trust org_ref for tenant scoping). gitlab has no installation concept, so
-// its identity is resolved directly off the payload's project id, and MUST
-// match exactly one integration_sources row org-wide or it is unroutable
-// (an ambiguous match across two orgs owning the same external project id
-// is a correctness hazard, not a "pick one" situation).
+// trust org_ref for tenant scoping). gitlab and jira have no installation
+// concept, so their identity is resolved directly off the payload (gitlab:
+// the project id; jira: the issue's project key/name -- CHAOS-5320, ported
+// from the router's own `org_id = project_key` extraction,
+// src/dev_health_ops/api/webhooks/router.py:304 -- that field is a RAW,
+// UNTRUSTED hint here too, resolved the same way gitlab's is, never taken at
+// face value), and MUST match exactly one integration_sources row org-wide
+// or it is unroutable (an ambiguous match across two orgs owning the same
+// external project id/key is a correctness hazard, not a "pick one"
+// situation -- e.g. two customer Jira sites both naming a project "OPS").
 func resolveWebhookSyncSource(
 	ctx context.Context, pool *pgxpool.Pool, provider string, payload map[string]any,
 ) (orgID, sourceID, cause string, err error) {
@@ -249,6 +270,26 @@ func resolveWebhookSyncSource(
 			return "", "", "ambiguous_integration_source", nil
 		}
 		return orgID, sourceID, "", nil
+	case "jira":
+		issue, _ := payload["issue"].(map[string]any)
+		fields, _ := issue["fields"].(map[string]any)
+		project, _ := fields["project"].(map[string]any)
+		externalID, _ := project["key"].(string)
+		fullName, _ := project["name"].(string)
+		if externalID == "" && fullName == "" {
+			return "", "", "missing_repo_identity", nil
+		}
+		sourceID, orgID, matches, err := lookupIntegrationSourceUnscoped(ctx, pool, provider, externalID, fullName)
+		if err != nil {
+			return "", "", "", err
+		}
+		if matches == 0 {
+			return "", "", "no_integration_source", nil
+		}
+		if matches > 1 {
+			return "", "", "ambiguous_integration_source", nil
+		}
+		return orgID, sourceID, "", nil
 	default:
 		return "", "", "unsupported_provider", nil
 	}
@@ -295,9 +336,9 @@ SELECT id::text FROM public.integration_sources
 WHERE provider = $1 AND org_id = $2 AND full_name = $3 LIMIT 2`, provider, *orgID, fullName)
 }
 
-// lookupIntegrationSourceUnscoped matches org-wide (gitlab has no
-// installation-derived org hint) -- see resolveWebhookSyncSource's doc
-// comment on why >1 match must fail loud rather than pick one.
+// lookupIntegrationSourceUnscoped matches org-wide (neither gitlab nor jira
+// has an installation-derived org hint) -- see resolveWebhookSyncSource's
+// doc comment on why >1 match must fail loud rather than pick one.
 func lookupIntegrationSourceUnscoped(
 	ctx context.Context, pool *pgxpool.Pool, provider, externalID, fullName string,
 ) (sourceID, orgID string, matches int, err error) {

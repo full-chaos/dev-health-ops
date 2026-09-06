@@ -42,7 +42,7 @@ func webhookDeliveryFor(provider, eventType string, payload []byte) WebhookDeliv
 	}
 }
 
-func TestIsRepoScopedSyncEvent(t *testing.T) {
+func TestIsNativeSyncDispatchEvent(t *testing.T) {
 	cases := []struct {
 		provider, eventType string
 		want                bool
@@ -63,12 +63,21 @@ func TestIsRepoScopedSyncEvent(t *testing.T) {
 		{"gitlab", "issue_created", true},
 		{"gitlab", "pipeline", true},
 		{"gitlab", "tag_push", false},
-		{"jira", "issue_updated", false},
+		// CHAOS-5320: jira is no longer excluded -- issue_created/updated/
+		// deleted are the exact set _process_jira_event handles today
+		// (JIRA_EVENT_MAP's three canonical values). The raw provider
+		// webhookEvent string ("jira:issue_created") is never what reaches
+		// this function -- delivery.EventType is the already-canonicalised
+		// value (map_jira_event's output), same as github/gitlab.
+		{"jira", "issue_created", true},
+		{"jira", "issue_updated", true},
+		{"jira", "issue_deleted", true},
 		{"jira", "jira:issue_created", false},
+		{"jira", "unknown", false},
 	}
 	for _, testCase := range cases {
-		if got := isRepoScopedSyncEvent(testCase.provider, testCase.eventType); got != testCase.want {
-			t.Errorf("isRepoScopedSyncEvent(%q, %q) = %v, want %v", testCase.provider, testCase.eventType, got, testCase.want)
+		if got := isNativeSyncDispatchEvent(testCase.provider, testCase.eventType); got != testCase.want {
+			t.Errorf("isNativeSyncDispatchEvent(%q, %q) = %v, want %v", testCase.provider, testCase.eventType, got, testCase.want)
 		}
 	}
 }
@@ -165,7 +174,17 @@ func TestWebhookHandlerFallsBackToHTTPDispatchWithoutSyncDispatchWriter(t *testi
 	}
 }
 
-func TestWebhookHandlerJiraEventsStillDispatchOverHTTP(t *testing.T) {
+// TestWebhookHandlerUnrecognisedJiraEventStillDispatchesOverHTTP covers a
+// jira delivery.EventType that isn't one of jiraSyncEventTypes' three
+// canonical values -- the raw, un-canonicalised webhookEvent string
+// ("jira:issue_updated") never actually reaches this function in production
+// (delivery.EventType is already map_jira_event's OUTPUT by the time a
+// webhook_deliveries row exists, same as github/gitlab), but the fallback
+// path this exercises (an unmatched jira event type still dispatches over
+// HTTP, never silently drops the event) is real regardless of how it's
+// reached. See TestWebhookHandlerRoutesRecognisedJiraEventsNativelyWithoutHTTPDispatch
+// for the CHAOS-5320 native path this PR adds.
+func TestWebhookHandlerUnrecognisedJiraEventStillDispatchesOverHTTP(t *testing.T) {
 	payload := []byte(`{"issue":{"key":"CHAOS-1"}}`)
 	store := &fakeSyncDispatchStore{
 		fakeStore: fakeStore{webhook: webhookDeliveryFor("jira", "jira:issue_updated", payload)},
@@ -176,10 +195,30 @@ func TestWebhookHandlerJiraEventsStillDispatchOverHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	if store.calls != 0 {
-		t.Fatalf("jira must never reach SyncDispatchWriter (no native work-items manual-trigger path), got %d calls", store.calls)
+		t.Fatalf("an unrecognised jira event type must never reach SyncDispatchWriter, got %d calls", store.calls)
 	}
 	if dispatcher.webhook.ID != webhookID {
 		t.Fatalf("expected jira to dispatch over HTTP, got %#v", dispatcher.webhook)
+	}
+}
+
+// TestWebhookHandlerRoutesRecognisedJiraEventsNativelyWithoutHTTPDispatch is
+// jira's twin of the existing github/gitlab "routes natively" tests
+// (CHAOS-5320): a recognised, already-canonicalised jira event type is
+// routed to SyncDispatchWriter, never the HTTP dispatcher.
+func TestWebhookHandlerRoutesRecognisedJiraEventsNativelyWithoutHTTPDispatch(t *testing.T) {
+	payload := []byte(`{"issue":{"key":"CHAOS-1","fields":{"project":{"key":"CHAOS","name":"Full Chaos"}}}}`)
+	store := &fakeSyncDispatchStore{
+		fakeStore: fakeStore{webhook: webhookDeliveryFor("jira", "issue_updated", payload)},
+		result:    SyncDispatchResult{Processed: true, OccurrenceID: "sha256:jira1"},
+	}
+	dispatcher := &fakeDispatcher{}
+	handler, _ := NewWebhookHandler(store, dispatcher)
+	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
+		t.Fatal(err)
+	}
+	if store.calls != 1 || dispatcher.calls != 0 {
+		t.Fatalf("dispatch calls=%d dispatcher calls=%d", store.calls, dispatcher.calls)
 	}
 }
 

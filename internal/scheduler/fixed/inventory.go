@@ -497,10 +497,14 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 			Name:    "run-complexity-daily",
 			Cadence: DailyAt(0, 45),
 			Reason: "Go's complexity_daily_fanout fixed schedule owns this cadence; the Python " +
-				"dispatch_complexity_job Celery task was only ever reachable via this Beat entry " +
-				"(run_complexity_job, the per-org worker it fanned out to, is not dead -- it stays " +
-				"live via post_sync_dispatch.py's event-driven chain).",
-			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+				"dispatch_complexity_job Celery task was only ever reachable via this Beat entry, " +
+				"and job_complexity_db.py itself (the CLI verb and worker_metrics.py's HTTP-bridge " +
+				"handler it fed) is now fully DELETED (CHAOS-4291 native Go executor + cleanup) -- " +
+				"there is no remaining live path for it at all. post_sync_dispatch.py's own " +
+				"run_complexity_job Celery signature was already a reference to a task that does " +
+				"not exist in workers/tasks.py before this PR (Celery itself has been fully retired " +
+				"since 2026-08-21, CHAOS-4026) -- not a live caller this deletion had to account for.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED); CHAOS-4291 (deletion).",
 		},
 		{
 			Name:    "run-release-impact-daily",

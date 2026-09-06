@@ -299,35 +299,6 @@ func IntegerPercentiles(values []int, percentiles []float64) []int {
 	return result
 }
 
-type ComplexityFile struct {
-	LOC                int
-	CyclomaticTotal    int
-	HighComplexity     int
-	VeryHighComplexity int
-}
-
-type ComplexitySummary struct {
-	LOCTotal           int
-	CyclomaticTotal    int
-	CyclomaticPerKLOC  float64
-	HighComplexity     int
-	VeryHighComplexity int
-}
-
-func AggregateComplexity(files []ComplexityFile) ComplexitySummary {
-	var result ComplexitySummary
-	for _, file := range files {
-		result.LOCTotal += file.LOC
-		result.CyclomaticTotal += file.CyclomaticTotal
-		result.HighComplexity += file.HighComplexity
-		result.VeryHighComplexity += file.VeryHighComplexity
-	}
-	if result.LOCTotal > 0 {
-		result.CyclomaticPerKLOC = float64(result.CyclomaticTotal) / (float64(result.LOCTotal) / 1000)
-	}
-	return result
-}
-
 func ReleaseImpactConfidence(coverageRatio float64, totalSessions, concurrentDeploys, minimumSessions int) float64 {
 	sampleScore := 1.0
 	if minimumSessions > 0 {

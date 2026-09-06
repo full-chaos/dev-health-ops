@@ -152,7 +152,9 @@ func CFamilyAnalyzer(path, source string) ([]int, bool, error) {
 // infra). CHAOS-4291 adds `javascript` and `typescript` (TypeScriptReader's
 // own state machine, lizardcc/typescript.go -- JavaScriptReader is
 // TypeScriptReader unchanged in Python, so both keys share one Go
-// analyzer). `ruby`, `php`, `objective-c`, `lua` and `vue` remain for a
+// analyzer). CHAOS-4291 also adds `ruby` (RubylikeReader's own state
+// machine, lizardcc/ruby.go -- NOT a GoLikeStates subclass, see that
+// file's package doc). `php`, `objective-c`, `lua` and `vue` remain for a
 // follow-up stack in this same PR -- no other function, the dispatch, the
 // result type, or the extension map needs to change for any of them.
 func DefaultAnalyzers() map[string]AnalyzerFunc {
@@ -169,6 +171,7 @@ func DefaultAnalyzers() map[string]AnalyzerFunc {
 		"swift":      lizardcc.AnalyzeSwift,
 		"javascript": lizardcc.AnalyzeJavaScript,
 		"typescript": lizardcc.AnalyzeTypeScript,
+		"ruby":       lizardcc.AnalyzeRuby,
 	}
 }
 

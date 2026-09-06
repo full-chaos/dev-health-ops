@@ -51,23 +51,34 @@ func TestFamilyNameMatchesFamiliesJSON(t *testing.T) {
 		"Go constant have drifted", FamilyName)
 }
 
-// pythonGateLine is the exact line run_daily_metrics_finalize gates on. Pinned
-// as a whole line rather than a substring so that a change to the CONDITION
-// (say, inverting it) is caught too, not merely a change to the name.
+// pythonGateLine is the shape run_daily_metrics_finalize USED to gate on,
+// before compute_ic.py's deletion (CHAOS-4290 PR3, CHAOS-3092 no-straddle).
+// Kept as a named constant so both tests below (and their comments) stay
+// anchored to the exact literal, not a restated copy of it.
 const pythonGateLine = `if "` + FamilyName + `" not in skip_families:`
 
-func TestPythonFinalizeGateUsesTheSameLiteral(t *testing.T) {
+// TestPythonFinalizeGateNoLongerExists is TestPythonFinalizeGateUsesTheSameLiteral's
+// replacement (PR3): compute_ic_metrics_daily/compute_ic_landscape_rolling
+// are deleted from job_daily.py entirely, not merely gated, so there is no
+// bridge call left for a skip_families entry to prevent -- a gate line here
+// would be dead code asserting protection against a write path that no
+// longer exists. This is the INVERSE of the old assertion, checked here
+// rather than deleted outright so a Python compute path silently
+// reintroduced for this family (without updating this test) fails loudly:
+// TestICFinalizeMatchesTheFrozenPythonGolden is what actually proves parity
+// now, and a live gate line would mean the parity proof and the runtime
+// behaviour have drifted apart again.
+func TestPythonFinalizeGateNoLongerExists(t *testing.T) {
 	path := filepath.Join(repoRoot(t), "src", "dev_health_ops", "metrics", "job_daily.py")
 	source, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read job_daily.py: %v", err)
 	}
-	if !strings.Contains(string(source), pythonGateLine) {
-		t.Fatalf("job_daily.py does not contain the gate line %q.\n"+
-			"Go registers the family under %q; if Python gates on a different "+
-			"literal it will RECOMPUTE and its rows supersede the native ones "+
-			"silently, because user_metrics_daily is append-only and the later "+
-			"writer wins.", pythonGateLine, FamilyName)
+	if strings.Contains(string(source), pythonGateLine) {
+		t.Fatalf("job_daily.py still contains the gate line %q, but compute_ic.py "+
+			"(and the compute it would have gated) was deleted in this PR -- "+
+			"either the deletion is incomplete, or this family's Python compute "+
+			"was reintroduced without updating this test.", pythonGateLine)
 	}
 }
 
@@ -86,13 +97,10 @@ func TestTheAgreementAssertionsActuallyDiscriminate(t *testing.T) {
 			"above could pass for the wrong reason", wrong)
 	}
 
-	path := filepath.Join(repoRoot(t), "src", "dev_health_ops", "metrics", "job_daily.py")
-	source, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wrongGate := `if "` + wrong + `" not in skip_families:`
-	if strings.Contains(string(source), wrongGate) {
-		t.Fatalf("job_daily.py unexpectedly contains %q", wrongGate)
-	}
+	// The job_daily.py half of this control (a typo'd gate line must not be
+	// present either) was retired with TestPythonFinalizeGateUsesTheSameLiteral
+	// (PR3): job_daily.py never contains ANY ic_finalize gate line now, typo'd
+	// or not, so checking for the typo'd one specifically would no longer
+	// discriminate anything -- TestPythonFinalizeGateNoLongerExists (above)
+	// is the assertion that actually exercises this file's contents now.
 }

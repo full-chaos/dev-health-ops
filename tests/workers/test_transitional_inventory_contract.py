@@ -115,8 +115,21 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # registry, so their rows are removed rather than re-anchored. Every
     # other registry_kind row was re-anchored -96 lines to match
     # registry.json's own entries shifting up after the deletion.
-    # = 96.
-    assert inventory["row_count"] == 96
+    # = 96, - 1 removed under CHAOS-5254: the
+    # call_site_literal:post_sync_dispatch.py row for
+    # dispatch_daily_metrics_partitioned (the daily-metrics signature built
+    # for the post-sync celery chain) -- run_daily_metrics's Celery task has
+    # zero live producer via THIS specific chain (Celery workers/Beat
+    # stopped, CHAOS-4026); the task itself is kept (workers/metrics_daily.py
+    # unchanged, external_ingest/recompute.py still references it, see
+    # CHAOS-5296), so no row for the task definition itself moves or is
+    # removed -- only this one dispatch-site row, whose surface no longer
+    # exists at all. The 6 other call_site_literal rows for
+    # post_sync_dispatch.py (complexity/build/materialize signatures, the
+    # chain(...).apply_async() call, and the 2 send_task calls) were
+    # re-anchored to their new lines after the deletion shifted them up.
+    # = 95.
+    assert inventory["row_count"] == 95
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

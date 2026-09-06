@@ -564,10 +564,13 @@ func githubDerivedOracleCases() []oracleCase {
 // TestLinearWorkItemDerivedOracleInputsExerciseEveryImplementedDestination
 // still exercises it directly (surfaces.EstimateCoverage, not this helper).
 
-func TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+func TestGitHubWorkItemTeamAttributionsMatchFrozenPythonGolden(t *testing.T) {
+	// CHAOS-5321/CHAOS-3092 (R6): compute_work_item_team_attributions is
+	// deleted (native Go executor + providersync own work_item_team_
+	// attributions now) -- frozen, see testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(
 		t,
-		"github/work-items/team-attributions",
+		"github_work-items_team-attributions",
 		githubDerivedOracleCases(),
 		func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
 			t.Helper()
@@ -578,10 +581,13 @@ func TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction(t *testing.T) {
 	)
 }
 
-func TestGitHubWorkItemStateDurationsMatchLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+func TestGitHubWorkItemStateDurationsMatchFrozenPythonGolden(t *testing.T) {
+	// CHAOS-5321/CHAOS-3092 (R6): compute_work_item_state_durations_daily is
+	// deleted (native Go executor + providersync own work_item_state_
+	// durations_daily now) -- frozen, see testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(
 		t,
-		"github/work-items/state-durations",
+		"github_work-items_state-durations",
 		githubDerivedOracleCases(),
 		func(t *testing.T, input map[string]any) githubStateDurationColumns {
 			t.Helper()

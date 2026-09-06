@@ -476,34 +476,18 @@ check_live_python_oracles() {
   # `go test ./...` / `check` verb, same as any other Go test -- it needs no
   # DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker any more.
 
-  printf 'go test -count=1: internal/jobs/metrics/workitemmetrics (work_item golden vs live compute_work_items.py, CHAOS-4283)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHON="${PYTHON:-python3}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 \
-        -run '^TestWorkItemGoldenMatchesLivePython$' \
-        ./internal/jobs/metrics/workitemmetrics
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # This guard used to ALSO cover work_item_estimate (a second marker,
-  # checked separately -- see this file's own history), until
-  # CHAOS-5323/CHAOS-3092 deleted compute_estimate_coverage_metrics_daily
-  # entirely (fully native, no remaining Python caller): its frozen cases
-  # were extracted into their own file with no generator, so there is no
-  # more live Python for that family to check.
-  proof_file="${proof_dir}/work-item-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: work_item golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): no live-oracle block here for
+  # internal/jobs/metrics/workitemmetrics any more -- compute_work_item_
+  # metrics_daily and compute_work_item_team_attributions are deleted
+  # entirely (native Go executors + providersync ingest derivation are the
+  # only producers now), so there is no live Python left to run.
+  # TestComputeDailyTripletMatchesPythonGolden (golden_test.go) already
+  # compares Go against the frozen tests/fixtures/daily_work_item_python_
+  # golden.json unconditionally as part of the plain `go test ./...` /
+  # `check` verb -- same shape as ai_workflow above. The live-comparison
+  # guard (TestWorkItemGoldenMatchesLivePython) and its generator
+  # (tests/fixtures/generate_daily_work_item_python_golden.py) are deleted;
+  # no DEV_HEALTH_LIVE_PYTHON_ORACLES gate or proof marker needed any more.
 
   printf 'go test -count=1: internal/jobs/metrics/numerical (frozen numerical golden vs live Python)\n'
   if ! (

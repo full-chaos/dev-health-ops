@@ -15,14 +15,9 @@ from typing import Any
 
 from dev_health_ops.analytics.investment import InvestmentClassifier
 from dev_health_ops.db import resolve_sink_uri
-from dev_health_ops.metrics.compute_work_item_state_durations import (
-    compute_work_item_state_durations_daily,
-)
 from dev_health_ops.metrics.compute_work_items import (
     _INHERITABLE_RELATIONSHIP_TYPES,
     build_linked_issue_team_resolver,
-    compute_work_item_metrics_daily,
-    compute_work_item_team_attributions,
 )
 from dev_health_ops.metrics.job_daily import (
     REPO_ROOT,
@@ -32,7 +27,6 @@ from dev_health_ops.metrics.loaders.base import to_dataclass
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.metrics.team_attribution_telemetry import (
-    ATTRIBUTION_DOWNGRADES_TOTAL,
     STORED_EDGE_LOAD_FAILURES_TOTAL,
 )
 from dev_health_ops.metrics.work_item_engine_destinations import (
@@ -103,12 +97,6 @@ def _ensure_unit_lease_for_write(surface: str) -> None:
     check = _WORK_ITEMS_SYNC_LEASE_CHECK.get()
     if check is not None and not check(surface):
         raise WorkItemsSyncLeaseLost(surface)
-
-
-# CHAOS-4112: sources that mean "this item has no owning team". Anything else
-# that carries a team_id is a real attribution, so falling from it to one of
-# these across a recompute is a data loss, not a precedence change.
-_TEAMLESS_ATTRIBUTION_SOURCES = frozenset({"unassigned", ""})
 
 
 def _merge_stored_inheritable_edges(
@@ -291,104 +279,16 @@ def _merge_stored_inheritable_edges(
     return added
 
 
-def _load_prior_primary_attributions(
-    primary_sink: Any, org_id: str, work_item_ids: list[str]
-) -> dict[str, tuple[str, str]]:
-    """Primary (source, provider) per work item as stored BEFORE this run.
-
-    Read before the recompute writes, so it is the state a downgrade would
-    supersede. Bounded to the items being recomputed. Same latest-primary
-    fence as every other reader of this table (FINAL + is_primary + the
-    (work_item_id, max(computed_at)) tuple filter): without it an older
-    candidate row can masquerade as the current attribution and manufacture a
-    phantom downgrade.
-    """
-    if not org_id or not work_item_ids:
-        return {}
-    if not hasattr(primary_sink, "query_dicts"):
-        return {}
-    prior: dict[str, tuple[str, str]] = {}
-    try:
-        for row in primary_sink.query_dicts(
-            "SELECT work_item_id, source, provider, team_id "
-            "FROM work_item_team_attributions FINAL "
-            "WHERE org_id = {org_id:String} "
-            "  AND work_item_id IN {ids:Array(String)} "
-            "  AND is_primary = 1 "
-            "  AND (work_item_id, computed_at) IN ("
-            "      SELECT work_item_id, max(computed_at) "
-            "      FROM work_item_team_attributions "
-            "      WHERE org_id = {org_id:String} "
-            "        AND work_item_id IN {ids:Array(String)} "
-            "      GROUP BY work_item_id)",
-            {"org_id": org_id, "ids": sorted(set(work_item_ids))},
-        ):
-            work_item_id = str(row.get("work_item_id") or "")
-            if not work_item_id:
-                continue
-            source = str(row.get("source") or "")
-            team_id = str(row.get("team_id") or "").strip()
-            # Only a row that actually carried a team can be downgraded FROM.
-            if source in _TEAMLESS_ATTRIBUTION_SOURCES or not team_id:
-                continue
-            prior[work_item_id] = (source, str(row.get("provider") or ""))
-    except Exception:
-        # Telemetry must never fail the run it observes.
-        logger.warning(
-            "Prior attribution load failed; team-attribution downgrade "
-            "telemetry is unavailable for this run",
-            exc_info=True,
-        )
-        return {}
-    return prior
-
-
-def _report_attribution_downgrades(
-    prior_primary: dict[str, tuple[str, str]],
-    new_attributions: Sequence[Any],
-) -> int:
-    """Count and log items that lost a real team on this recompute.
-
-    The decay CHAOS-4112 describes is silent by construction -- the rebuilt
-    row simply supersedes the good one -- so this is the only place the
-    transition is observable. Recoveries (unassigned -> teamed) and moves
-    between two teamed sources are deliberately NOT counted; neither loses
-    data.
-    """
-    downgraded = 0
-    for record in new_attributions:
-        if int(getattr(record, "is_primary", 0) or 0) != 1:
-            continue
-        work_item_id = str(getattr(record, "work_item_id", "") or "")
-        previous = prior_primary.get(work_item_id)
-        if previous is None:
-            continue
-        source = str(getattr(record, "source", "") or "")
-        team_id = str(getattr(record, "team_id", "") or "").strip()
-        if source not in _TEAMLESS_ATTRIBUTION_SOURCES and team_id:
-            continue
-        previous_source, previous_provider = previous
-        downgraded += 1
-        logger.warning(
-            "Team attribution DOWNGRADED to unassigned on recompute: "
-            "work_item_id=%s previous_source=%s new_source=%s. A stored "
-            "inheritable edge or donor attribution that previously resolved "
-            "this item no longer does (CHAOS-4112).",
-            work_item_id,
-            previous_source,
-            source or "unassigned",
-        )
-        ATTRIBUTION_DOWNGRADES_TOTAL.labels(
-            provider=str(getattr(record, "provider", "") or previous_provider or ""),
-            previous_source=previous_source,
-        ).inc()
-    if downgraded:
-        logger.warning(
-            "%d work item(s) lost a previously-attributed team on this "
-            "recompute (CHAOS-4112 decay signature)",
-            downgraded,
-        )
-    return downgraded
+# CHAOS-5321/CHAOS-3092 (R6): _load_prior_primary_attributions and
+# _report_attribution_downgrades (CHAOS-4112 team-attribution downgrade
+# telemetry) are DELETED -- their only caller was this function's own
+# compute_work_item_team_attributions call, deleted alongside them (native
+# Go executor + providersync ingest derivation are the only writers of
+# work_item_team_attributions now; see the deletion comment above the sync
+# loop below). ATTRIBUTION_DOWNGRADES_TOTAL (team_attribution_telemetry.py) and
+# _TEAMLESS_ATTRIBUTION_SOURCES are deleted with them -- both had no other
+# caller. Their dedicated tests (test_team_inheritance_decay.py's downgrade-
+# specific cases) are deleted too.
 
 
 def _date_range(end_day: date, backfill_days: int) -> list[date]:
@@ -1537,64 +1437,30 @@ def run_work_items_sync_job(
             attribution_context=team_attribution_context,
         )
 
-        # CHAOS-4112 telemetry: snapshot the stored primary attributions
-        # BEFORE this run overwrites them, so a teamed -> unassigned
-        # transition can be detected. Loaded once per run, not per day: the
-        # attribution compute below does not vary with the day, so reporting
-        # inside the loop would multiply every downgrade by the backfill
-        # window.
-        prior_primary_attributions = _load_prior_primary_attributions(
-            primary_sink, org_id, [wi.work_item_id for wi in work_items]
-        )
-        attribution_downgrades_reported = False
-
+        # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): compute_work_item_metrics_
+        # daily, compute_work_item_team_attributions, and compute_work_item_
+        # state_durations_daily -- and the calls to them that used to live
+        # here -- are DELETED entirely. Team-lead's ruling (R6): this
+        # function is reachable (dataset_adapters.py/backfill/runner.py/
+        # system_webhooks.py) but not a production WRITER for these three
+        # families -- prod Celery has been stopped since 2026-08-19, so the
+        # only two Celery-dispatched paths (run_sync_unit ->
+        # run_dataset_unit -> _run_work_item_dataset, and
+        # process_webhook_event -> _process_jira_event) never execute in
+        # production; backfill/runner.py is a manual CLI-only path (no
+        # scheduled dispatch). WorkItemExecutor/WorkItemAttributionExecutor/
+        # WorkItemStateExecutor (native Go, daily partition path) plus
+        # internal/providersync's own ingest-time Go derivation
+        # (work_item_team_attributions/work_item_state_durations_daily) are
+        # the only production writers of these tables today. The attribution
+        # -downgrade telemetry (_load_prior_primary_attributions/
+        # _report_attribution_downgrades) existed solely to report on
+        # wi_team_attributions here and is deleted with it. This function
+        # itself, and its three Python callers, are NOT deleted in this PR
+        # (see the follow-up ticket for that) -- run_work_items_sync_job
+        # still owns compute_work_item_engine_destinations_daily below,
+        # which is unrelated to these three families.
         for d in days:
-            wi_metrics, wi_user_metrics, wi_cycle_times = (
-                compute_work_item_metrics_daily(
-                    day=d,
-                    work_items=work_items,
-                    transitions=transitions,
-                    computed_at=computed_at,
-                    team_resolver=team_resolver,
-                    project_key_resolver=pk_resolver,
-                    linked_issue_resolver=linked_issue_resolver,
-                    attribution_context=team_attribution_context,
-                )
-            )
-            # CHAOS-3092/CHAOS-5234 (work_item_estimate): compute_estimate_
-            # coverage_metrics_daily is DELETED, not called here anymore --
-            # this was its only remaining production caller (job_daily.py's
-            # own call was already deleted). The native Go executor
-            # (WorkItemEstimateExecutor, CHAOS-4283) owns the daily partition
-            # path; this function's own scope (a full-backfill sync job) had
-            # no other consumer for estimate_coverage_metrics_daily rows once
-            # this call is gone -- rg confirmed job_daily.py and this call
-            # site were the only two Python callers.
-            wi_team_attributions = compute_work_item_team_attributions(
-                work_items=work_items,
-                computed_at=computed_at,
-                team_resolver=team_resolver,
-                project_key_resolver=pk_resolver,
-                linked_issue_resolver=linked_issue_resolver,
-                attribution_context=team_attribution_context,
-            )
-            if not attribution_downgrades_reported:
-                attribution_downgrades_reported = True
-                _report_attribution_downgrades(
-                    prior_primary_attributions, wi_team_attributions
-                )
-
-            wi_state_durations = compute_work_item_state_durations_daily(
-                day=d,
-                work_items=work_items,
-                transitions=transitions,
-                computed_at=computed_at,
-                team_resolver=team_resolver,
-                project_key_resolver=pk_resolver,
-                linked_issue_resolver=linked_issue_resolver,
-                attribution_context=team_attribution_context,
-            )
-
             (
                 issue_type_metrics_rows,
                 investment_classifications,
@@ -1613,26 +1479,6 @@ def run_work_items_sync_job(
             )
 
             for s in sinks:
-                if wi_metrics:
-                    _ensure_unit_lease_for_write("work_item_metrics_daily")
-                    s.write_work_item_metrics(wi_metrics)
-                # CHAOS-3092/CHAOS-5234: no write_estimate_coverage_metrics
-                # call here -- deleted alongside the compute call above.
-                if wi_user_metrics:
-                    _ensure_unit_lease_for_write("work_item_user_metrics_daily")
-                    s.write_work_item_user_metrics(wi_user_metrics)
-                if wi_cycle_times:
-                    _ensure_unit_lease_for_write("work_item_cycle_times")
-                    s.write_work_item_cycle_times(wi_cycle_times)
-                if wi_team_attributions and hasattr(
-                    s, "write_work_item_team_attributions"
-                ):
-                    _ensure_unit_lease_for_write("work_item_team_attributions")
-                    s.write_work_item_team_attributions(wi_team_attributions)
-                if wi_state_durations:
-                    _ensure_unit_lease_for_write("work_item_state_durations_daily")
-                    s.write_work_item_state_durations(wi_state_durations)
-
                 if hasattr(s, "write_issue_type_metrics") and issue_type_metrics_rows:
                     _ensure_unit_lease_for_write("issue_type_metrics_daily")
                     s.write_issue_type_metrics(issue_type_metrics_rows)

@@ -648,11 +648,13 @@ check_live_python_oracles() {
   # ._compute_confidence, compute._percentile, compute_capacity._percentile)
   # is a fourth distinct golden/producer in this same package and gets its
   # own proof marker. hotspot_score (Go's ComputeFileHotspots) used to be a
-  # fourth Python producer feeding this same fma_golden.json -- retired below
-  # alongside the rest of file_hotspots'/file_risk_hotspots' live-Python rot
-  # guards (CHAOS-5234/CHAOS-3092); this marker now covers only the three
-  # keys TestFMAGoldenMatchesLivePython still compares
-  # (fmaLiveComparedKeys).
+  # fourth Python producer feeding this same fma_golden.json -- retired
+  # (CHAOS-5234/CHAOS-3092: compute_file_hotspots deleted) by splitting its
+  # frozen cases VERBATIM into their own file with no generator
+  # (tests/fixtures/fma_hotspot_score_golden.json,
+  # filehotspots/fma_golden_test.go now reads it directly), rather than
+  # leaving fma_golden.json a key this generator can no longer reproduce.
+  # This marker and TestFMAGoldenMatchesLivePython are otherwise unchanged.
   proof_file="${proof_dir}/fma-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: FMA golden rot guard did not compare against live Python\n' >&2

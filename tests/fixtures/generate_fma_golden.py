@@ -32,10 +32,18 @@ Three families, one per fixed Go site (CHAOS-4818 RISK-NOTES table):
 A fourth family, hotspot_score (dev_health_ops.metrics.hotspots.
 compute_file_hotspots vs internal/jobs/metrics/daily/filehotspots.
 ComputeFileHotspots), was REMOVED (CHAOS-5234/CHAOS-3092: compute_file_hotspots
-itself is deleted now that file_hotspots is fully native, no straddle). The
-frozen "hotspot_score" key in the committed fma_golden.json is left as-is --
-Go's own frozen-golden test still reads it -- this generator just no longer
-regenerates that key if rerun.
+itself is deleted now that file_hotspots is fully native, no straddle). Its
+frozen cases were extracted VERBATIM (byte-identical payload, nothing
+recomputed) out of this file's own fma_golden.json into a standalone
+tests/fixtures/fma_hotspot_score_golden.json with no generator -- leaving a
+dead "hotspot_score" key in THIS file that this generator could no longer
+reproduce broke internal/jobs/workgraph/units's generic
+TestEveryDiscoverableCorpusStillMatchesLivePython (a whole-document
+byte-for-byte auto-discovery guard with no per-key exception mechanism).
+internal/jobs/metrics/daily/filehotspots/fma_golden_test.go now reads the
+split-out file directly; this generator's own render()/--check output
+matches fma_golden.json exactly (release_confidence/percentile_float/
+percentile_int only).
 """
 
 from __future__ import annotations

@@ -474,9 +474,8 @@ def build_compounding_risk_rows_for_day(
     computed_at: datetime,
     weights: CompoundingWeights = DEFAULT_WEIGHTS,
     thresholds: CompoundingThresholds = DEFAULT_THRESHOLDS,
-    repo_to_team: dict[str, str] | None = None,
 ) -> list[CompoundingRiskDailyRecord]:
-    """Compose Compounding Risk rows for every repo (and optionally team).
+    """Compose Compounding Risk rows for every repo.
 
     Args:
         sink: ClickHouse sink (read-only for the complexity delta).
@@ -486,15 +485,19 @@ def build_compounding_risk_rows_for_day(
         computed_at: UTC compute moment, passed explicitly for determinism.
         weights: Composite weights.
         thresholds: Severity bucket boundaries.
-        repo_to_team: Optional mapping ``{repo_id_str: team_id}``. When
-            provided, the function emits both ``scope='repo'`` rows and
-            ``scope='team'`` rows (one per team) by aggregating the per-repo
-            inputs. Without this map only repo rows are emitted.
+
+    CHAOS-5084/no-straddle (#2275 v2): this function used to ALSO emit
+    ``scope='team'`` rows when given an optional ``repo_to_team`` map
+    (aggregating the per-repo inputs via the now-deleted ``_build_team_rows``
+    helper). CompoundingRiskTeamExecutor (Go) is now the SOLE writer for
+    team-scope compounding_risk_daily rows, with no Python compute or
+    fallback for that scope anywhere in this codebase -- team.lead ruling:
+    keeping a second, still-callable Python producer of a family that
+    becomes native in this PR is exactly the straddle this port forbids,
+    even where the two would agree. This function now emits repo-scope rows
+    only; team-scope manual backfill is the Go worker's job.
     """
     repo_rows: list[CompoundingRiskDailyRecord] = []
-    # Capture the raw inputs alongside the persisted row so we can compose
-    # team aggregations without re-querying ClickHouse.
-    repo_inputs_for_team: dict[str, CompoundingInputs] = {}
     for row in repo_metrics_rows:
         repo_id = getattr(row, "repo_id", None)
         if repo_id is None:
@@ -515,7 +518,6 @@ def build_compounding_risk_rows_for_day(
             ownership_gini=_nullable_float(getattr(row, "code_ownership_gini", None)),
             bus_factor=_nullable_float(getattr(row, "bus_factor", None)),
         )
-        repo_inputs_for_team[repo_id_str] = inputs
         repo_rows.append(
             compute_compounding_risk(
                 day=day,
@@ -529,79 +531,7 @@ def build_compounding_risk_rows_for_day(
             )
         )
 
-    if not repo_to_team:
-        return repo_rows
-
-    team_rows = _build_team_rows(
-        day=day,
-        org_id=org_id,
-        repo_inputs=repo_inputs_for_team,
-        repo_to_team=repo_to_team,
-        computed_at=computed_at,
-        weights=weights,
-        thresholds=thresholds,
-    )
-    return repo_rows + team_rows
-
-
-def _mean_or_none(values: list[float | None]) -> float | None:
-    nums = [v for v in values if v is not None]
-    if not nums:
-        return None
-    return sum(nums) / len(nums)
-
-
-def _build_team_rows(
-    *,
-    day: date,
-    org_id: str,
-    repo_inputs: dict[str, CompoundingInputs],
-    repo_to_team: dict[str, str],
-    computed_at: datetime,
-    weights: CompoundingWeights,
-    thresholds: CompoundingThresholds,
-) -> list[CompoundingRiskDailyRecord]:
-    """Aggregate per-repo inputs into one row per team.
-
-    Strategy: unweighted mean of each *raw input* across the team's repos,
-    then feed the means into the same ``compute_compounding_risk`` so the
-    score is computed under the same formula as the repo rows. This keeps
-    the team score auditable in the same way as repo rows.
-    """
-    by_team: dict[str, list[CompoundingInputs]] = {}
-    for repo_id, inputs in repo_inputs.items():
-        team_id = repo_to_team.get(repo_id)
-        if not team_id:
-            continue
-        by_team.setdefault(team_id, []).append(inputs)
-
-    out: list[CompoundingRiskDailyRecord] = []
-    for team_id, all_inputs in by_team.items():
-        team_inputs = CompoundingInputs(
-            rework_churn=_mean_or_none([i.rework_churn for i in all_inputs]),
-            complexity_delta=_mean_or_none([i.complexity_delta for i in all_inputs]),
-            review_latency_p90h=_mean_or_none(
-                [i.review_latency_p90h for i in all_inputs]
-            ),
-            single_owner_ratio=_mean_or_none(
-                [i.single_owner_ratio for i in all_inputs]
-            ),
-            ownership_gini=_mean_or_none([i.ownership_gini for i in all_inputs]),
-            bus_factor=_mean_or_none([i.bus_factor for i in all_inputs]),
-        )
-        out.append(
-            compute_compounding_risk(
-                day=day,
-                scope="team",
-                scope_id=team_id,
-                org_id=org_id,
-                inputs=team_inputs,
-                computed_at=computed_at,
-                weights=weights,
-                thresholds=thresholds,
-            )
-        )
-    return out
+    return repo_rows
 
 
 def _nullable_float(value: Any) -> float | None:

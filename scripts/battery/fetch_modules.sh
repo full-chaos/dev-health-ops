@@ -30,11 +30,20 @@ cd "$ROOT" || { echo "fetch_modules.sh: cannot cd $ROOT" >&2; exit 2; }
 attempt=1
 while : ; do
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] go mod download: attempt $attempt/$TRIES in $ROOT"
-  if go mod download all; then
+  # rc MUST be captured on the line immediately after the command it measures.
+  # `if go mod download all; then ...; fi; rc=$?` looks equivalent but is not:
+  # per the bash manual, an `if` whose condition is false and has no matching
+  # branch executed exits with status ZERO, not the condition's own exit
+  # status -- so a failed download was captured as rc=0, and this step
+  # reported "FAILED: go mod download rc=0" and still exited 0, warming a
+  # cold cache into every downstream arm. Found by codex (CHAOS-5295 PR
+  # #2330 r1), executed repro: a stubbed `go` exiting 17 produced rc=0 here.
+  go mod download all
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
     echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] ok modules: cache warm after $attempt attempt(s)"
     exit 0
   fi
-  rc=$?
   if [ "$attempt" -ge "$TRIES" ]; then
     # FAIL LOUDLY AND EARLY. Better a red step named "could not fetch modules"
     # before any mutation than a battery whose arms each rediscover it and

@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuecommitedges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issuepredges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/prcommit"
@@ -198,6 +199,19 @@ func workgraphBuildPreSteps(
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 
+	issueCommitLoader, issueCommitLoaderErr := issuecommitedges.NewLoader(connection)
+	if issueCommitLoaderErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	issueCommitService, issueCommitServiceErr := issuecommitedges.NewService(issueCommitLoader, connection, logger)
+	if issueCommitServiceErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	issueCommitStep, issueCommitStepErr := newIssueCommitEdgesPreStep(issueCommitService)
+	if issueCommitStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
 	prCommitLoader, prCommitLoaderErr := prcommit.NewLoader(connection)
 	if prCommitLoaderErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
@@ -217,6 +231,11 @@ func workgraphBuildPreSteps(
 	}
 	prCommitEdgesStep, prCommitEdgesStepErr := newPRCommitEdgesPreStep(prCommitService, prCommitSharedWindow)
 	if prCommitEdgesStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
+	commitFileEdgesStep, commitFileEdgesStepErr := newCommitFileEdgesPreStep(connection)
+	if commitFileEdgesStepErr != nil {
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 
@@ -245,8 +264,8 @@ func workgraphBuildPreSteps(
 	}
 
 	steps := []workgraph.NativePreStep{
-		step, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issuePREdgesHeuristicStep,
-		prCommitLinksStep, prCommitEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
+		step, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issueCommitStep, issuePREdgesHeuristicStep,
+		prCommitLinksStep, prCommitEdgesStep, commitFileEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
 	}
 
 	// The constructed steps must match the DECLARED order exactly. Without
@@ -320,12 +339,20 @@ func buildPostStepOrder() []string {
 // (CHAOS-4924, moved here from buildPostStepOrder once its Python producer
 // was deleted -- see issueIssueEdgesPreStep's own doc comment) reads only
 // work_item_dependencies, which no other pre-step writes, so its position is
-// equally free; placed last of all.
+// equally free; placed last of all. "issue_commit_edges" and
+// "commit_file_edges" (CHAOS-5304/CHAOS-5306) are the same free-position
+// case: issue_commit_edges reads git_commits/work_items and writes only
+// COMMIT->ISSUE edges no other step reads; commit_file_edges writes nothing
+// at all (a pure readback over git_commit_stats). Both placed to preserve
+// Python's own relative stage order (builder.py's issue->commit stage "3b"
+// sat between the text-parse and heuristic issue-PR stages, "3" and "4";
+// commit_file_edges' stage "6" sat before flag_guards'/operational_incident's
+// "7"/"8") rather than for any dependency reason.
 func buildPreStepOrder() []string {
 	return []string{
 		"issue_pr_links",
-		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_pr_edges_heuristic",
-		"pr_commit_links", "pr_commit_edges",
+		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_commit_edges", "issue_pr_edges_heuristic",
+		"pr_commit_links", "pr_commit_edges", "commit_file_edges",
 		"flag_guards_edges", "operational_incident_edges", "issue_issue_edges",
 	}
 }

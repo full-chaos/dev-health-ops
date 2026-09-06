@@ -175,8 +175,8 @@ func loadGolden(t *testing.T) goldenDocument {
 	)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read benchmarking golden: %v (regenerate with: PYTHONPATH=src python "+
-			"tests/fixtures/generate_daily_benchmarking_python_golden.py)", err)
+		t.Fatalf("read benchmarking golden: %v (this fixture is frozen -- "+
+			"CHAOS-4288 deleted the Python generator, do not recreate it)", err)
 	}
 	var document goldenDocument
 	if err := json.Unmarshal(raw, &document); err != nil {

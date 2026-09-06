@@ -62,12 +62,24 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     "ai_governance": "build_governance_rows_for_day",
     # CHAOS-5234: file_hotspots's daily compute deleted from job_daily.py --
     # the native Go executor (FileHotspotsExecutor, CHAOS-4277) is the only
-    # writer of file_metrics_daily for a daily partition now.
-    # compute_file_hotspots itself is NOT deleted from the codebase (golden-
-    # fixture generators and the live-Python oracle comparator still call it
-    # directly, as do its own dedicated unit tests), only job_daily.py's own
-    # reference to it.
+    # writer of file_metrics_daily for a daily partition now. Unlike
+    # work_item_attribution above, compute_file_hotspots itself IS ALSO
+    # deleted from the codebase (src/dev_health_ops/metrics/hotspots.py,
+    # removed whole-file): its only other callers were golden-fixture
+    # generators and unit tests, never a real production caller -- a
+    # correction to an earlier pass on this same family, which left the
+    # function in place on that flawed premise (see this PR's own body).
     "file_hotspots": "compute_file_hotspots",
+    # CHAOS-5234: file_risk_hotspots's daily compute deleted from
+    # job_daily.py -- the native Go executor (FileRiskHotspotsExecutor,
+    # CHAOS-4277) is the only writer of file_hotspot_daily for a daily
+    # partition now. compute_file_risk_hotspots itself is ALSO deleted from
+    # the codebase (same file, same reasoning as file_hotspots above), along
+    # with the three private job_daily.py helpers it used
+    # (_hotspot_repo_ids/_load_complexity_map_for_repo/
+    # _load_blame_map_for_repo) and every golden-fixture generator/unit test
+    # that existed only to exercise these two families.
+    "file_risk_hotspots": "compute_file_risk_hotspots",
     # CHAOS-5234: ai_impact's daily compute deleted from job_daily.py -- the
     # native Go executor (AIImpactExecutor, CHAOS-4280) is the only writer
     # of ai_impact_metrics_daily for a daily partition now. Unlike

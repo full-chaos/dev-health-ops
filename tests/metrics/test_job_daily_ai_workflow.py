@@ -1,11 +1,17 @@
-"""CHAOS-2187 + CHAOS-2367: daily-job AI workflow extraction wiring.
+"""CHAOS-2367: daily-job Work Graph review/deployment/incident edge wiring.
 
 Covers ``job_daily._extract_ai_workflow_for_day`` — the helper that turns the
-day's PR/review/deployment/incident rows into AI workflow runs and Work
-Graph edges. These edge tables were previously never populated because the
-extractor had no production call site (CHAOS-2187 for issue/artifact/review
-edges; CHAOS-2367 for pr_deployment and deployment_incident edges, where the
-extractor existed but was called without deployments/incidents rows).
+day's review/deployment/incident rows into work_graph_edges' PR-review,
+PR-deployment, and deployment-incident edges (the extractor existed but was
+called without deployments/incidents rows before CHAOS-2367).
+
+CHAOS-5242: this function used to ALSO turn the day's PR rows into
+ai_workflow_runs/_artifact_edges/_issue_edges (CHAOS-2187) via
+extract_ai_workflow_from_pull_requests — deleted alongside that function's
+own native Go port (AIWorkflowExecutor, #2280); this test file's PR-row
+fixtures and assertions on runs/artifact_edges/issue_edges were deleted with
+it. The three edge kinds below still belong to the SEPARATE, still-Python
+work_graph_edges family (CHAOS-4286) and are unaffected.
 """
 
 from __future__ import annotations
@@ -32,40 +38,6 @@ class _Sink:
         self, query: str, parameters: dict[str, Any]
     ) -> list[dict[str, Any]]:
         self.queries.append(query)
-        if "FROM git_pull_requests" in query:
-            return [
-                {
-                    "repo_id": REPO_ID,
-                    "number": 7,
-                    "title": "Add caching",
-                    # PR body carries an explicit AI assistance declaration so
-                    # the extractor's body signal fires deterministically.
-                    "body": "Generated with Claude Code",
-                    "head_branch": "feature/cache",
-                    "author_name": "dev-a",
-                    "author_email": "dev-a@example.com",
-                    "created_at": START,
-                    "merged_at": START,
-                    "closed_at": None,
-                    "last_synced": START,
-                },
-                {
-                    # No AI signal: must not produce a run.
-                    "repo_id": REPO_ID,
-                    "number": 8,
-                    "title": "Fix typo",
-                    "body": "",
-                    "head_branch": "fix/typo",
-                    "author_name": "dev-b",
-                    "author_email": "dev-b@example.com",
-                    "created_at": START,
-                    "merged_at": None,
-                    "closed_at": None,
-                    "last_synced": START,
-                },
-            ]
-        if "FROM work_graph_issue_pr" in query:
-            return [{"repo_id": REPO_ID, "pr_number": 7, "work_item_id": "jira:ABC-1"}]
         if "FROM git_pull_request_reviews" in query:
             return [
                 {
@@ -102,12 +74,9 @@ class _Sink:
         return []
 
 
-def test_extracts_runs_and_all_edge_kinds() -> None:
+def test_extracts_all_edge_kinds() -> None:
     sink = _Sink()
     (
-        runs,
-        artifact_edges,
-        issue_edges,
         review_edges,
         pr_deploy_edges,
         deploy_incident_edges,
@@ -119,16 +88,6 @@ def test_extracts_runs_and_all_edge_kinds() -> None:
         repo_id=None,
         repo_provider_by_id={str(REPO_ID): "github"},
     )
-
-    assert len(runs) == 1
-    assert str(runs[0].org_id) == ORG_ID
-    assert runs[0].provider == "github"
-
-    assert len(artifact_edges) == 1
-    assert artifact_edges[0].artifact_id == f"{REPO_ID}:7"
-
-    assert len(issue_edges) == 1
-    assert issue_edges[0].issue_id == "jira:ABC-1"
 
     assert len(review_edges) == 1
     assert review_edges[0].pr_id == f"{REPO_ID}:7"
@@ -193,25 +152,23 @@ def test_non_uuid_org_skips_extraction_without_queries() -> None:
         repo_provider_by_id={},
     )
 
-    assert result == ([], [], [], [], [], [])
+    assert result == ([], [], [])
     assert sink.queries == []
 
 
 def test_unknown_repo_provider_falls_back_to_unknown() -> None:
     sink = _Sink()
-    runs, _artifacts, _issues, _reviews, _deploys, _incidents = (
-        _extract_ai_workflow_for_day(
-            primary_sink=sink,
-            org_id=ORG_ID,
-            start=START,
-            end=END,
-            repo_id=REPO_ID,
-            repo_provider_by_id={},
-        )
+    review_edges, _deploys, _incidents = _extract_ai_workflow_for_day(
+        primary_sink=sink,
+        org_id=ORG_ID,
+        start=START,
+        end=END,
+        repo_id=REPO_ID,
+        repo_provider_by_id={},
     )
 
-    assert len(runs) == 1
-    assert runs[0].provider == "unknown"
+    assert len(review_edges) == 1
+    assert review_edges[0].provider == "unknown"
 
 
 def test_infrastructure_errors_propagate() -> None:
@@ -243,11 +200,6 @@ def test_malformed_rows_are_dropped_row_locally() -> None:
             self, query: str, parameters: dict[str, Any]
         ) -> list[dict[str, Any]]:
             rows = super().query_dicts(query, parameters)
-            if "FROM git_pull_requests" in query:
-                rows = rows + [
-                    {"repo_id": "not-a-uuid", "number": 9, "title": "bad"},
-                    {"repo_id": REPO_ID, "number": None, "title": "bad"},
-                ]
             if "FROM git_pull_request_reviews" in query:
                 rows = rows + [{"repo_id": object(), "number": 3}]
             if "FROM deployments" in query:
@@ -259,7 +211,7 @@ def test_malformed_rows_are_dropped_row_locally() -> None:
                 rows = rows + [{"repo_id": REPO_ID, "incident_id": None}]
             return rows
 
-    runs, artifacts, issues, reviews, deploys, incidents = _extract_ai_workflow_for_day(
+    reviews, deploys, incidents = _extract_ai_workflow_for_day(
         primary_sink=_MalformedRowSink(),
         org_id=ORG_ID,
         start=START,
@@ -269,9 +221,6 @@ def test_malformed_rows_are_dropped_row_locally() -> None:
     )
 
     # The well-formed rows still extract exactly as in the happy-path test.
-    assert len(runs) == 1
-    assert len(artifacts) == 1
-    assert len(issues) == 1
     assert len(reviews) == 1
     assert len(deploys) == 1
     assert len(incidents) == 1

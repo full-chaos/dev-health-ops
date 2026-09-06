@@ -181,9 +181,13 @@ def _dispatch_post_sync_tasks(
     if has_git or has_work_items:
         dispatched.append("run_daily_metrics")
 
-    # run_complexity_job writes file_complexity_snapshots, which run_daily_metrics
-    # reads (job_daily._load_complexity_map_for_repo). Chaining complexity ->
-    # daily guarantees the daily risk/hotspot rows reflect the just-synced file
+    # run_complexity_job writes file_complexity_snapshots, which the native Go
+    # daily worker's FileRiskHotspotsExecutor reads
+    # (internal/jobs/metrics/daily/filehotspots) -- CHAOS-5234/CHAOS-3092
+    # deleted job_daily.py's own Python reader (_load_complexity_map_for_repo)
+    # once the family went fully native, but the freshness dependency itself
+    # is unchanged, just on the Go side now. Chaining complexity -> daily
+    # guarantees the daily risk/hotspot rows reflect the just-synced file
     # contents instead of the previous cycle's snapshot — important for a newly
     # onboarded org's first daily run, which would otherwise show zero complexity.
     #

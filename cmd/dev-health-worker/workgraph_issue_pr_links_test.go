@@ -75,6 +75,29 @@ func TestBuildWindowUsesToDateForTheFromDefault(t *testing.T) {
 	}
 }
 
+// TestBuildWindowExplicitFromDateAvoidsDefaultUnderflow pins CHAOS-5297: the
+// derived-bound overflow guard must run ONLY when from_date is absent from
+// scope, matching Python's if/else (work_graph_tasks.py never evaluates
+// `to - 30d` when from_date is supplied -- only_derives_when_absent). An
+// explicit from_date/to_date pair that is each individually valid must not
+// be rejected over a derived value Python would never have computed. Same
+// bug shape and repro as #2301's operationalEdgesWindowFor
+// (chaos-4924-pr-d-r1-confirm, P1, EXECUTED).
+func TestBuildWindowExplicitFromDateAvoidsDefaultUnderflow(t *testing.T) {
+	step := frozenPreStep()
+	window, err := step.windowFor([]byte(`{"from_date":"0001-01-01","to_date":"0001-01-01"}`))
+	if err != nil {
+		t.Fatalf("windowFor with explicit year-0001 bounds should not error, got: %v", err)
+	}
+	want := time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
+	if window.From == nil || !window.From.Equal(want) {
+		t.Errorf("from = %v, want %v", window.From, want)
+	}
+	if window.To == nil || !window.To.Equal(want) {
+		t.Errorf("to = %v, want %v", window.To, want)
+	}
+}
+
 // TestBuildWindowAcceptsAZeroOffsetBound keeps the refusal from being
 // over-strict, and keeps the two layers consistent: "Z" and "+00:00" denote the
 // same wall clock either reading would produce, and
@@ -156,7 +179,7 @@ func TestBuildPreStepOrderIsPinned(t *testing.T) {
 		"issue_pr_links",
 		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_pr_edges_heuristic",
 		"pr_commit_links", "pr_commit_edges",
-		"flag_guards_edges", "operational_incident_edges",
+		"flag_guards_edges", "operational_incident_edges", "issue_issue_edges",
 	}
 	got := buildPreStepOrder()
 
@@ -166,14 +189,13 @@ func TestBuildPreStepOrderIsPinned(t *testing.T) {
 				"If you are ADDING a step, read the ordering invariant on workgraph.NativePreStep "+
 				"first, then place it by this rule: a step that READS a table an earlier step WRITES "+
 				"goes after it.\n"+
-				"NOTE (CHAOS-4766, lane-4766-go): `issue_issue_edges` does NOT appear here. It "+
-				"was expected to register before `issue_pr_links`, and it does not read the "+
-				"mapping, so that placement was correct by this rule — but Python's build() "+
-				"OVERWRITES what it writes (confidence=1.0 at builder.py:905, and "+
-				"work_graph_edges is ReplacingMergeTree(last_synced)), so it runs as a POST-step "+
-				"instead; see buildPostStepOrder. A later PR of that lane ports "+
-				"`_build_issue_pr_edges_from_fast_path`, which DOES read work_graph_issue_pr and "+
-				"therefore registers HERE, after `issue_pr_links`.",
+				"NOTE (CHAOS-4924): `issue_issue_edges` moved HERE from buildPostStepOrder once its "+
+				"Python producer (`_build_issue_issue_edges`) was deleted -- it was a post-step only "+
+				"because Python's build() used to OVERWRITE what it writes (confidence=1.0 at "+
+				"builder.py:905, work_graph_edges being ReplacingMergeTree(last_synced)); with "+
+				"nothing left to overwrite it registers as an ordinary pre-step. It reads only "+
+				"work_item_dependencies, which no other pre-step writes, so its position is free -- "+
+				"see issueIssueEdgesPreStep's own doc comment.",
 			got, want,
 		)
 	}

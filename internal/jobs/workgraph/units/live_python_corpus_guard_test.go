@@ -224,13 +224,17 @@ var excludedGenerators = map[string]struct {
 var liveDataGenerators = map[string]struct {
 	reason string
 }{
-	// CHAOS-4766: queries operational_incidents/issues/... over a live org via
-	// CLICKHOUSE_URI (see its own --replay flag, which replays a FROZEN
-	// golden's own recorded reads instead -- that mode is what a future
-	// wiring of this guard would use, not the live-query default path).
-	"generate_workgraph_issue_edges_python_golden.py": {
-		reason: "queries live ClickHouse via CLICKHOUSE_URI; no --replay wiring into this guard yet",
-	},
+	// CHAOS-4766's entry (generate_workgraph_issue_edges_python_golden.py) was
+	// DELETED, not reclassified, same as its sibling below: the Python
+	// producer it existed to freeze a golden from (builder.py::_build_issue_
+	// issue_edges) was itself deleted the same PR, ported to Go
+	// (internal/jobs/workgraph/edges, wired as a native pre-step). The frozen
+	// golden it once generated (tests/fixtures/workgraph_issue_edges_python_
+	// golden.json) stays -- Go's own exhaustive frozen-golden comparison in
+	// golden_full_test.go is the regression guard going forward, no live
+	// Python needed. Same precedent as CHAOS-5249's issue_pr_links generator
+	// retirement.
+	//
 	// CHAOS-4924's sibling entry (generate_workgraph_operational_edges_python_
 	// golden.py) was DELETED, not reclassified: the Python producer it existed
 	// to freeze a golden from (operational_edges.py::build_operational_incident_

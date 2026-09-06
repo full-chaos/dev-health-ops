@@ -12,45 +12,46 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/edges"
 )
 
-// issueIssueEdgesPostStep is the native port of `_build_issue_issue_edges`,
-// registered as a POST-step.
+// issueIssueEdgesPreStep is the native port of `_build_issue_issue_edges`
+// (CHAOS-4924).
 //
-// # Why after the bridge rather than before
+// # Why a pre-step now, and why it was a post-step before
 //
-// Python's `build()` runs every stage unconditionally, and its issue-issue
-// stage writes `confidence=1.0` (builder.py:905) where this port writes 0.9.
+// Python's `build()` used to run its issue-issue stage unconditionally,
+// writing `confidence=1.0` (builder.py:905) where this port writes 0.9.
 // `work_graph_edges` is `ReplacingMergeTree(last_synced)` and its ORDER BY
-// excludes `confidence`, so the two are THE SAME ROW to the engine and collapse
-// by `last_synced` -- the divergence is erased because the dedup key excludes
-// the column that diverges. Registered as a
-// pre-step, this producer would write variant-C's 0.9 for the associative
-// family and Python would replace it with 1.0 microseconds later, on every
-// build, with every count reconciling and no error raised.
+// excludes `confidence`, so the two writes addressed the SAME row and
+// collapsed by `last_synced` -- registered as a pre-step, this producer would
+// have written variant-C's 0.9 for the associative family and Python would
+// have replaced it with 1.0 microseconds later, on every build, with every
+// count reconciling and no error raised. Running last was therefore not a
+// preference, it was the only ordering under which the divergence this port
+// applies survived while the Python stage still ran.
 //
-// Running last is therefore not a preference, it is the only ordering under
-// which the divergence this port exists to apply survives while the Python
-// stage still runs. It is a bridge-era arrangement: when
-// `_build_issue_issue_edges` retires, this step should move ahead of the bridge
-// or stop being a step at all.
-type issueIssueEdgesPostStep struct {
+// CHAOS-4924 deleted `_build_issue_issue_edges` (and its `build()` call site)
+// outright, making this the sole producer of `issue_issue_edges`. There is no
+// longer anything for a later-running Python stage to overwrite, so this step
+// moved ahead of the bridge into the ordinary pre-step order -- exactly the
+// resolution this doc comment used to name as the eventual follow-up.
+type issueIssueEdgesPreStep struct {
 	connection driver.Conn
 	observer   jobruntime.WorkGraphIssueEdgesObserver
 	now        func() time.Time
 }
 
-func newIssueIssueEdgesPostStep(
+func newIssueIssueEdgesPreStep(
 	connection driver.Conn, observer jobruntime.WorkGraphIssueEdgesObserver,
-) (*issueIssueEdgesPostStep, error) {
+) (*issueIssueEdgesPreStep, error) {
 	if connection == nil || observer == nil {
 		// An observer is required rather than optional: this step's counters are
 		// the only way to see that variant-C is still being applied, and a step
 		// running without them is the failure they exist to detect.
 		return nil, errWorkerDependencyUnavailable
 	}
-	return &issueIssueEdgesPostStep{connection: connection, observer: observer, now: time.Now}, nil
+	return &issueIssueEdgesPreStep{connection: connection, observer: observer, now: time.Now}, nil
 }
 
-func (step *issueIssueEdgesPostStep) Name() string { return "issue_issue_edges" }
+func (step *issueIssueEdgesPreStep) Name() string { return "issue_issue_edges" }
 
 // Run reads dependencies, derives the edge set and writes it, then publishes
 // the per-row tally.
@@ -59,7 +60,7 @@ func (step *issueIssueEdgesPostStep) Name() string { return "issue_issue_edges" 
 // window-independent: PR1 pinned that structurally, and two live captures with
 // and without a window produced an identical edge-id set. So there is no scope
 // parsing here and no dependency on the three date shapes the bridge accepts.
-func (step *issueIssueEdgesPostStep) Run(
+func (step *issueIssueEdgesPreStep) Run(
 	ctx context.Context, claim workgraph.Claim,
 ) (map[string]any, error) {
 	started := step.now()

@@ -229,9 +229,24 @@ func workgraphBuildPreSteps(
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 
+	// CHAOS-4924: issueIssueEdgesPreStep used to be registered as a POST-step
+	// (it had to run after Python's own bridge-invoked issue-issue stage, to
+	// overwrite Python's rows via ReplacingMergeTree collapse -- see its own
+	// doc comment). Python's `_build_issue_issue_edges` is now DELETED, so
+	// there is nothing left to overwrite; it registers as an ordinary
+	// pre-step like every other native producer here.
+	edgeObserver, hasObserver := observer.(jobruntime.WorkGraphIssueEdgesObserver)
+	if !hasObserver {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	edgeStep, edgeStepErr := newIssueIssueEdgesPreStep(connection, edgeObserver)
+	if edgeStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
 	steps := []workgraph.NativePreStep{
 		step, issuePREdgesFastPathStep, issuePREdgesTextParseStep, issuePREdgesHeuristicStep,
-		prCommitLinksStep, prCommitEdgesStep, flagGuardsStep, operationalIncidentStep,
+		prCommitLinksStep, prCommitEdgesStep, flagGuardsStep, operationalIncidentStep, edgeStep,
 	}
 
 	// The constructed steps must match the DECLARED order exactly. Without
@@ -247,28 +262,14 @@ func workgraphBuildPreSteps(
 		}
 	}
 
-	// The post-step seam, on the SAME connection. It carries the identical
-	// constructed-vs-declared refusal, because a post-step that is constructed
-	// but not declared -- or declared and silently missing -- fails in the way
-	// this whole arrangement exists to prevent: the build succeeds and the rows
-	// carry Python's values.
-	edgeObserver, hasObserver := observer.(jobruntime.WorkGraphIssueEdgesObserver)
-	if !hasObserver {
-		return nil, nil, errWorkerDependencyUnavailable
-	}
-	edgeStep, edgeStepErr := newIssueIssueEdgesPostStep(connection, edgeObserver)
-	if edgeStepErr != nil {
-		return nil, nil, errWorkerDependencyUnavailable
-	}
-	postSteps := []workgraph.NativePostStep{edgeStep}
+	// No post-steps remain (CHAOS-4924 retired the last one). Still asserted
+	// against buildPostStepOrder() rather than hardcoded to nil, so a future
+	// post-step declared there and never constructed here fails loud instead
+	// of silently running as a no-op pre-step-only build.
+	var postSteps []workgraph.NativePostStep
 	declaredPost := buildPostStepOrder()
 	if len(postSteps) != len(declaredPost) {
 		return nil, nil, errWorkerDependencyUnavailable
-	}
-	for index, name := range declaredPost {
-		if postSteps[index].Name() != name {
-			return nil, nil, errWorkerDependencyUnavailable
-		}
 	}
 	return steps, postSteps, nil
 }
@@ -277,15 +278,15 @@ func workgraphBuildPreSteps(
 // single place that order is decided. Same split as buildPreStepOrder: a pure
 // function a test can assert without a ClickHouse connection.
 //
-// `issue_issue_edges` is here rather than in buildPreStepOrder because Python's
-// stage OVERWRITES it -- see NativePostStep and the step's own doc. Its sibling
-// half, `issue_pr_edges_from_fast_path`, READS what issue_pr_links writes and
-// so belongs in the PRE-step order after it. That is the straddle
-// buildPreStepOrder's comment refers to: this lane's producer sits on both
-// sides of the mapping, and the two halves land in different seams for
-// different reasons.
+// Empty since CHAOS-4924 moved `issue_issue_edges` (the last remaining
+// post-step) into buildPreStepOrder -- see issueIssueEdgesPreStep's own doc
+// comment for why a post-step was ever needed and why it no longer is. Kept
+// as a function, not deleted, so a FUTURE step that genuinely needs to run
+// after the bridge (Python's build() still runs for every other family on
+// this endpoint) has a declared home to register in without reintroducing
+// this seam from scratch.
 func buildPostStepOrder() []string {
-	return []string{"issue_issue_edges"}
+	return []string{}
 }
 
 // buildPreStepOrder is the DECLARED order of the native pre-steps that run
@@ -315,13 +316,17 @@ func buildPostStepOrder() []string {
 // "operational_incident_edges" (CHAOS-4924) read neither work_graph_issue_pr
 // nor any table another pre-step writes, so their position relative to the
 // other six is free -- placed last, preserving Python's own relative order
-// between the two of them (builder.py:468/470).
+// between the two of them (builder.py:468/470). "issue_issue_edges"
+// (CHAOS-4924, moved here from buildPostStepOrder once its Python producer
+// was deleted -- see issueIssueEdgesPreStep's own doc comment) reads only
+// work_item_dependencies, which no other pre-step writes, so its position is
+// equally free; placed last of all.
 func buildPreStepOrder() []string {
 	return []string{
 		"issue_pr_links",
 		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_pr_edges_heuristic",
 		"pr_commit_links", "pr_commit_edges",
-		"flag_guards_edges", "operational_incident_edges",
+		"flag_guards_edges", "operational_incident_edges", "issue_issue_edges",
 	}
 }
 

@@ -10,7 +10,6 @@ from dev_health_ops.work_graph.ai_workflow import (
     load_ai_workflow_graph_for_pr,
 )
 from dev_health_ops.work_graph.extractors.ai_workflow import (
-    extract_ai_workflow_from_pull_requests,
     extract_review_deployment_incident_edges,
 )
 from dev_health_ops.work_graph.models import (
@@ -23,37 +22,6 @@ from dev_health_ops.work_graph.models import (
 ORG = uuid4()
 REPO = uuid4()
 NOW = datetime(2026, 5, 18, 12, 0, 0, tzinfo=timezone.utc)
-
-
-def test_extracts_ai_workflow_from_pr_without_raw_prompt_fields() -> None:
-    result = extract_ai_workflow_from_pull_requests(
-        [
-            {
-                "repo_id": REPO,
-                "number": 42,
-                "labels": ["agent-created"],
-                "author_name": "claude[bot]",
-                "author_user_type": "Bot",
-                "head_branch": "claude/chaos-1583",
-                "created_at": NOW,
-                "merged_at": NOW,
-            }
-        ],
-        org_id=ORG,
-        provider="github",
-        issue_ids_by_pr={f"{REPO}:42": ["CHAOS-1583"]},
-    )
-
-    assert len(result.runs) == 1
-    assert len(result.issue_edges) == 1
-    assert len(result.artifact_edges) == 1
-    run = result.runs[0]
-    assert run.prompts_redacted is True
-    serialized_run = str(run)
-    assert "transcript" not in serialized_run
-    assert "keystroke" not in serialized_run
-    assert result.issue_edges[0].issue_id == "CHAOS-1583"
-    assert result.artifact_edges[0].artifact_id == f"{REPO}:42"
 
 
 def test_extracts_pr_review_deployment_incident_edges_with_partial_links() -> None:

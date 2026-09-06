@@ -52,7 +52,6 @@ from dev_health_ops.metrics.prometheus import (
 )
 from dev_health_ops.metrics.remaining_scope_contract import (
     CapacityScope,
-    ComplexityScope,
     DoraScope,
     MembershipBackfillScope,
     RecommendationsScope,
@@ -1807,28 +1806,6 @@ async def _run_capacity(execution: _Execution, scope: CapacityScope) -> dict[str
     return {"family": execution.family, "forecast_count": len(results)}
 
 
-async def _run_complexity(
-    execution: _Execution, scope: ComplexityScope
-) -> dict[str, Any]:
-    from dev_health_ops.metrics.job_complexity_db import run_complexity_db_job
-
-    result = await run_in_threadpool(
-        run_complexity_db_job,
-        repo_id=uuid.UUID(scope.repo_id) if scope.repo_id else None,
-        db_url=require_clickhouse_uri(),
-        date=date.fromisoformat(scope.day),
-        backfill_days=scope.backfill_days,
-        language_globs=scope.language_globs or None,
-        max_files=scope.max_files,
-        search_pattern=scope.search_pattern,
-        exclude_globs=scope.exclude_globs or None,
-        org_id=execution.organization_id,
-    )
-    if result not in {0}:
-        raise RuntimeError("complexity executor returned a non-success status")
-    return {"family": execution.family, "exit_code": result}
-
-
 async def _run_dora(execution: _Execution, scope: DoraScope) -> dict[str, Any]:
     from dev_health_ops.metrics.job_dora import run_dora_metrics_job
 
@@ -1903,7 +1880,6 @@ async def _run_membership(
 _RemainingRunner = Callable[[_Execution, Any], Awaitable[dict[str, Any]]]
 _REMAINING_RUNNERS: dict[str, _RemainingRunner] = {
     "capacity": _run_capacity,
-    "complexity": _run_complexity,
     "dora": _run_dora,
     "recommendations": _run_recommendations,
     "membership_backfill": _run_membership,
@@ -2756,24 +2732,20 @@ async def _run_until_client_disconnect(
         await asyncio.gather(process_task, disconnect_task, return_exceptions=True)
 
 
-# CHAOS-4243: the Go compatibility bridge (internal/jobs/metrics/remaining/
-# compatibility_http.go) parses an optional rows_written field so a
-# zero-row completion is never stored identically to a real write. This maps
-# each remaining-metrics family to the evidence key (see the runners in
-# _REMAINING_RUNNERS below) that carries a genuine row count. A family absent
-# here, or whose evidence value isn't a plain int, gets no rows_written key
-# at all -- "not applicable", never coerced to a false 0.
+# CHAOS-4243: the (now-deleted, CHAOS-4291) Go compatibility bridge parsed
+# an optional rows_written field so a zero-row completion was never stored
+# identically to a real write. This maps each remaining-metrics family still
+# reachable through _REMAINING_RUNNERS to the evidence key that carries a
+# genuine row count. A family absent here, or whose evidence value isn't a
+# plain int, gets no rows_written key at all -- "not applicable", never
+# coerced to a false 0.
 #
 # dora and capacity's native Go executors report their own rows_written
 # through CompatibilityOutcome directly (dora_native.go/capacity_native.go)
-# and never call this HTTP bridge, so they are not listed here.
-#
-# complexity is a DELIBERATE GAP, not an oversight: run_complexity_db_job
-# (job_complexity_db.py) returns a process exit code, not a row count, which
-# would need a return-contract change to the underlying compute function
-# itself, a larger and riskier change than this ticket's wire-contract fix.
-# It stays silently "success" with no rows_written signal until that
-# follow-up lands.
+# and never call this HTTP bridge, so they are not listed here. complexity
+# is gone from _REMAINING_RUNNERS entirely (CHAOS-4291: the native
+# ComplexityExecutor has no Python fallback), so its old "deliberate gap"
+# entry here is moot rather than fixed.
 #
 # extra_metrics and team_metrics no longer exist: both were registered
 # handlers with zero producer anywhere (CHAOS-4243), retired (removed, not

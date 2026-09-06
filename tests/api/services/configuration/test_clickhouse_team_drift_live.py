@@ -30,9 +30,36 @@ pytestmark = [
     pytest.mark.clickhouse,
     pytest.mark.skipif(
         not CLICKHOUSE_URI,
-        reason="Requires CLICKHOUSE_URI (e.g. clickhouse://ch:ch@localhost:8123/ci_local_validate)",
+        reason="Requires CLICKHOUSE_URI pointed at a SCRATCH database "
+        "(e.g. clickhouse://ch:ch@localhost:8123/ci_local_validate_xxx) "
+        "-- never /default, which holds real dev data.",
     ),
 ]
+
+
+def _resolves_to_default_database(uri: str) -> bool:
+    """True if *uri* would have the ClickHouse client connect to "default".
+
+    Mirrors how the client itself resolves the database name from a DSN:
+    the URL path component, percent-decoded, with an EMPTY path (no
+    trailing "/xxx" at all, e.g. "clickhouse://ch:ch@localhost:8123")
+    also meaning "default" -- a naive literal "/default" string match
+    misses both that empty-path case and any percent-encoded form
+    (e.g. "%64efault").
+    """
+    from urllib.parse import unquote, urlsplit
+
+    path = urlsplit(uri).path.lstrip("/")
+    return unquote(path) in ("", "default")
+
+
+if CLICKHOUSE_URI and _resolves_to_default_database(CLICKHOUSE_URI):
+    pytest.skip(
+        "refusing to run against CLICKHOUSE_URI's /default database -- "
+        "point this at a scratch db (see ops-local-validate skill / "
+        "ops/AGENTS.md 'Safety rule')",
+        allow_module_level=True,
+    )
 
 _NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
@@ -50,45 +77,65 @@ async def test_get_pending_changes_executes_against_live_engine() -> None:
 
     async with ClickHouseStore(CLICKHOUSE_URI) as store:
         store.org_id = org_id
-        # Seed the catalog team so the LEFT JOIN ... FINAL leg actually matches
-        # (exercises coalesce(t.name, c.entity_id) -> the joined name).
-        await store.insert_teams(
-            [
-                {
-                    "id": team_id,
-                    "name": "Platform",
-                    "org_id": org_id,
-                    "provider": "linear",
-                    "is_active": 1,
-                    "updated_at": _NOW,
-                }
-            ]
-        )
-        await store.insert_team_drift_changes(
-            [
-                {
-                    "org_id": org_id,
-                    "change_id": "chg-name",
-                    "entity_type": "team",
-                    "entity_id": team_id,
-                    "provider": "linear",
-                    "native_team_key": "PLATFORM",
-                    "change_type": "field_changed",
-                    "field": "name",
-                    "old_value_json": '"Old"',
-                    "new_value_json": '"Platform"',
-                    "status": "pending",
-                    "first_seen_at": _NOW,
-                    "last_seen_at": _NOW,
-                }
-            ]
-        )
+        try:
+            # Seed the catalog team so the LEFT JOIN ... FINAL leg actually
+            # matches (exercises coalesce(t.name, c.entity_id) -> the joined
+            # name).
+            await store.insert_teams(
+                [
+                    {
+                        "id": team_id,
+                        "name": "Platform",
+                        "org_id": org_id,
+                        "provider": "linear",
+                        "is_active": 1,
+                        "updated_at": _NOW,
+                    }
+                ]
+            )
+            await store.insert_team_drift_changes(
+                [
+                    {
+                        "org_id": org_id,
+                        "change_id": "chg-name",
+                        "entity_type": "team",
+                        "entity_id": team_id,
+                        "provider": "linear",
+                        "native_team_key": "PLATFORM",
+                        "change_type": "field_changed",
+                        "field": "name",
+                        "old_value_json": '"Old"',
+                        "new_value_json": '"Platform"',
+                        "status": "pending",
+                        "first_seen_at": _NOW,
+                        "last_seen_at": _NOW,
+                    }
+                ]
+            )
 
-        service = ClickHouseTeamDriftService(store, org_id)
-        # Real engine parses + executes the FROM ... AS c FINAL / LEFT JOIN ... AS
-        # t FINAL query here; a FINAL/alias ordering regression raises
-        # clickhouse_connect.driver.exceptions.DatabaseError (SYNTAX_ERROR).
-        changes = await service.get_pending_changes()
+            service = ClickHouseTeamDriftService(store, org_id)
+            # Real engine parses + executes the FROM ... AS c FINAL / LEFT
+            # JOIN ... AS t FINAL query here; a FINAL/alias ordering
+            # regression raises clickhouse_connect.driver.exceptions.
+            # DatabaseError (SYNTAX_ERROR).
+            changes = await service.get_pending_changes()
+        finally:
+            # CHAOS-5367: this test previously left a permanent orphaned
+            # `teams`/`team_drift_changes` row behind on every run -- a
+            # fresh random org_id each time means ReplacingMergeTree never
+            # collapses them, so they accumulate forever on whatever
+            # database CLICKHOUSE_URI points at.
+            assert store.client is not None
+            store.client.command(
+                "ALTER TABLE teams DELETE WHERE org_id = {org_id:String} "
+                "SETTINGS mutations_sync=2",
+                parameters={"org_id": org_id},
+            )
+            store.client.command(
+                "ALTER TABLE team_drift_changes DELETE WHERE org_id = {org_id:String} "
+                "SETTINGS mutations_sync=2",
+                parameters={"org_id": org_id},
+            )
 
     matching = [c for c in changes if c.change_id == "chg-name"]
     assert len(matching) == 1

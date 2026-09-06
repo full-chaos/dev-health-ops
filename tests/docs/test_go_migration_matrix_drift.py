@@ -182,7 +182,7 @@ def test_provider_sync_rejects_an_unmapped_go_executor_value() -> None:
 
 
 def test_remaining_families_executor_matches_the_daily_go_worker_wiring() -> None:
-    """Pin the 6-native/1-compat split this page exists to correct (chris, 09-04:
+    """Pin the all-native split this page exists to correct (chris, 09-04:
 
     "we haven't finished the port as I was led to believe again" -- but in
     the OTHER direction here: the 09-01 snapshot undercounted native
@@ -192,7 +192,9 @@ def test_remaining_families_executor_matches_the_daily_go_worker_wiring() -> Non
     artifact, not a curated Python dict (REMAINING_EXECUTOR_LEDGER no longer
     carries an executor value at all, only citation/route/ticket prose).
 
-    CHAOS-4296 moved release_impact from compat to native.
+    CHAOS-4296 moved release_impact from compat to native. CHAOS-4291 moved
+    complexity from compat to native -- the last remaining-metrics family on
+    the compat bridge, so compats is now empty.
     """
     gen = _load_gen_module()
     artifact_remaining = gen.load_native_families_artifact()["remaining"]
@@ -205,12 +207,13 @@ def test_remaining_families_executor_matches_the_daily_go_worker_wiring() -> Non
     assert natives == {
         "dora",
         "capacity",
+        "complexity",
         "recommendations",
         "membership_backfill",
         "work_item_attribution",
         "release_impact",
     }
-    assert compats == {"complexity"}
+    assert compats == set()
 
 
 def test_daily_finalize_compat_families_matches_known_calls() -> None:

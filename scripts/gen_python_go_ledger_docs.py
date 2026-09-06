@@ -174,12 +174,12 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "metrics.remaining.complexity": {
         "producer": "`internal/scheduler/fixed/inventory.go:58` (complexity_daily_fanout)",
         "trigger": "schedule (DailyAt 00:45 UTC)",
-        "gate": "none (always bridge)",
-        "writer": "Python `run_complexity_db_job` `src/dev_health_ops/metrics/job_complexity_db.py:238`",
+        "gate": "ClickHouse schema check in `NewComplexityExecutor` (`internal/jobs/metrics/remaining/complexity_native_clickhouse.go:44`, `verifyComplexitySchema`)",
+        "writer": "Go `internal/jobs/metrics/remaining/complexity_native_clickhouse.go` (`writeFileComplexitySnapshots`, `writeRepoComplexityDaily`)",
         "tables": "`file_complexity_snapshots`, `repo_complexity_daily`",
-        "evidence": "argued — code read",
-        "state": "bridge",
-        "ticket": "CHAOS-3092 (metrics families)",
+        "evidence": "argued — wired `daily.go:486-527`",
+        "state": "native",
+        "ticket": "n/a — Python `run_complexity_db_job`/`job_complexity_db.py` DELETED entirely (CHAOS-4291); no per-day helper survives as a fixtures/runner.py dependency, unlike release_impact -- fixtures/runner.py now seeds file_complexity_snapshots/repo_complexity_daily from the frozen Go-executor parity golden JSON instead (a plain load, no Python compute left to call)",
     },
     "metrics.remaining.dora": {
         "producer": "`internal/scheduler/fixed/inventory.go:147` (dora_daily_fanout)",

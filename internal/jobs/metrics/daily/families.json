@@ -16,7 +16,7 @@
     {"name":"testops_pipeline","python":"DELETED (CHAOS-5245) -- was compute_pipeline_metrics_daily; native Go executor has no Python fallback","writes":["testops_pipeline_metrics_daily"],"port":"go","golden":"required"},
     {"name":"testops_test","python":"DELETED (CHAOS-5245) -- was compute_test_metrics_daily; native Go executor has no Python fallback","writes":["testops_test_metrics_daily"],"port":"go","golden":"required"},
     {"name":"testops_coverage","python":"DELETED (CHAOS-5245) -- was compute_coverage_metrics_daily; native Go executor has no Python fallback","writes":["testops_coverage_metrics_daily"],"port":"go","golden":"required"},
-    {"name":"deploy","python":"compute_deploy_metrics_daily","writes":["deploy_metrics_daily"],"port":"go","golden":"required"},
+    {"name":"deploy","python":"DELETED (CHAOS-5309) -- was compute_deploy_metrics_daily; native Go executor has no Python fallback","writes":["deploy_metrics_daily"],"port":"go","golden":"required"},
     {"name":"incident","python":"compute_incident_metrics_daily","writes":["incident_metrics_daily"],"port":"go","golden":"required"},
     {"name":"ai_governance","python":"build_governance_rows_for_day","writes":["ai_policy_events","ai_governance_coverage_daily"],"port":"go","golden":"required"},
     {"name":"ai_impact","python":"compute_ai_impact_metrics_daily","writes":["ai_impact_metrics_daily"],"port":"go","golden":"required"},

@@ -12,7 +12,11 @@ succeeded normally (the real-world incident: 4 of these tables went stale for
 testops_risk (``compute_release_confidence``/``compute_quality_drag``/
 ``compute_pipeline_stability``) used to be covered here too, until
 CHAOS-5245 deleted its Python compute entirely -- there is no more
-degrade-signal path for it to test.
+degrade-signal path for it to test. ``deploy`` (``compute_deploy_metrics_
+daily``) used to be a THIRD member of the original CHAOS-4246 trio, until
+CHAOS-5234/CHAOS-3092 (CHAOS-5309) deleted its Python compute+write+
+zero-rows-note entirely for the same reason -- deploy is fully native
+(DeployExecutor, CHAOS-4293) with no remaining Python fallback to observe.
 
 These tests pin: (1) an empty family is recorded in the job's returned
 ``families_zero_rows`` map and via the
@@ -113,7 +117,6 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
 
 _ALL_ZERO_ROW_FAMILIES = {
     "cicd",
-    "deploy",
     "incident",
 }
 
@@ -181,7 +184,10 @@ async def test_cicd_not_recorded_when_pipeline_data_present(
     )
 
     # cicd produced a row this run -- it must NOT be flagged zero, but
-    # deploy/incident (still empty) must still be.
+    # incident (still empty) must still be. deploy is no longer part of this
+    # map at all (CHAOS-5234/CHAOS-3092/CHAOS-5309 deleted its compute+write+
+    # note outright), so it must never appear regardless of row data.
     assert "cicd" not in result[DAY]
     assert "cicd" not in recorded
-    assert {"deploy", "incident"} <= set(result[DAY])
+    assert "deploy" not in result[DAY]
+    assert {"incident"} <= set(result[DAY])

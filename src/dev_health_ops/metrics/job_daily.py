@@ -1781,12 +1781,18 @@ async def run_daily_metrics_job(
         # git_commits join, CHAOS-2183) and the ai_attribution_rows load
         # above -- both existed SOLELY to feed compute_ai_impact_metrics_
         # daily's own parameters (verified via rg: neither name is read
-        # anywhere else in this function). Like CHAOS-5233's
+        # anywhere else in this function). Unlike CHAOS-5233's
         # work_item_attribution, compute_ai_impact_metrics_daily ITSELF is
-        # NOT deleted from the codebase -- it has real, separate callers:
-        # the Go oracle comparator
-        # (internal/jobs/metrics/aiimpact/testdata/python_ai_impact_oracle.py)
-        # and its own dedicated tests (tests/metrics/test_ai_impact.py).
+        # ALSO deleted (from metrics/ai_impact.py), along with its Go
+        # bit-exact oracle rot guard (TestAIImpactMatchesLivePythonProduction
+        # + testdata/python_ai_impact_oracle.py) and its own dedicated tests
+        # (tests/metrics/test_ai_impact.py) -- codegraph_explore + rg
+        # confirmed the oracle and those tests were its only real callers
+        # once job_daily.py's own reference was removed, so deleting the
+        # oracle alongside the compute function leaves nothing to keep it
+        # alive for. AttributionBucket/AI_BUCKETS (the same module) are NOT
+        # touched -- they have real, separate callers (the GraphQL API
+        # resolver and the opportunities detector).
         # pr_rows/review_rows/incident_rows/commit_rows themselves are NOT
         # touched -- they are shared inputs other, still-Python
         # computations in this function also read.

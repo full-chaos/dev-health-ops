@@ -246,10 +246,14 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         # PR -- AIImpactExecutor (native Go) has computed this family since
         # CHAOS-4280, but the citation here still described the old Python
         # compute path. This PR deletes job_daily.py's own reference to
-        # compute_ai_impact_metrics_daily (not the function itself, which
-        # keeps real other callers -- the Go oracle comparator and its own
-        # dedicated tests), same shape as CHAOS-5233's work_item_attribution.
-        "citation": "Go: `internal/jobs/metrics/daily/ai_impact_native_executor.go` (`AIImpactExecutor`) -- pre_bridge; ports `ai_impact.py:312 compute_ai_impact_metrics_daily`, still called by the Go oracle comparator and its own dedicated tests, just no longer by job_daily.py",
+        # compute_ai_impact_metrics_daily AND the function itself (from
+        # metrics/ai_impact.py), along with its Go bit-exact oracle rot
+        # guard (TestAIImpactMatchesLivePythonProduction +
+        # testdata/python_ai_impact_oracle.py) and its own dedicated tests
+        # -- codegraph_explore + rg confirmed those were its only real
+        # callers once job_daily.py's own reference was removed, so the old
+        # citation would now point at code that no longer exists.
+        "citation": "Go: `internal/jobs/metrics/daily/ai_impact_native_executor.go` (`AIImpactExecutor`)",
         "ticket": "CHAOS-4280 (Done)",
     },
     "ai_workflow": {

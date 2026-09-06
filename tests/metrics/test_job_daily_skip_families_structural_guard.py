@@ -70,13 +70,16 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     "file_hotspots": "compute_file_hotspots",
     # CHAOS-5234: ai_impact's daily compute deleted from job_daily.py -- the
     # native Go executor (AIImpactExecutor, CHAOS-4280) is the only writer
-    # of ai_impact_metrics_daily for a daily partition now. Same shape as
-    # work_item_attribution: compute_ai_impact_metrics_daily itself is NOT
-    # deleted from the codebase (the Go oracle comparator at
-    # internal/jobs/metrics/aiimpact/testdata/python_ai_impact_oracle.py and
-    # its own dedicated tests still call it directly), only job_daily.py's
-    # own reference to it -- along with the pr_commit_stats build and
-    # ai_attribution_rows load that existed solely to feed it.
+    # of ai_impact_metrics_daily for a daily partition now. Unlike
+    # work_item_attribution, compute_ai_impact_metrics_daily itself is ALSO
+    # deleted (from metrics/ai_impact.py) -- codegraph_explore + rg confirmed
+    # its only real callers, once job_daily.py's own reference was removed,
+    # were its Go bit-exact oracle rot guard
+    # (TestAIImpactMatchesLivePythonProduction +
+    # testdata/python_ai_impact_oracle.py, both also deleted in this PR) and
+    # its own dedicated tests (also deleted). AttributionBucket/AI_BUCKETS
+    # (the same module) are NOT touched -- they have real, separate callers
+    # (the GraphQL API resolver and the opportunities detector).
     "ai_impact": "compute_ai_impact_metrics_daily",
 }
 

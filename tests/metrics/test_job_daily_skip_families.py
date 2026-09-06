@@ -1253,14 +1253,17 @@ async def test_ai_impact_compute_and_write_are_deleted_from_job_daily(
     """CHAOS-5234/CHAOS-3092 close condition 3.
 
     ai_impact's daily compute is DELETED from job_daily.py, not skip-gated --
-    same rule as CHAOS-5233's work_item_attribution. Same shape as that case
-    (not ai_governance's): compute_ai_impact_metrics_daily itself is NOT
-    deleted from the codebase -- the Go oracle comparator
-    (internal/jobs/metrics/aiimpact/testdata/python_ai_impact_oracle.py) and
-    its own dedicated tests (tests/metrics/test_ai_impact.py) still call it
-    directly. Only run_daily_metrics_job's own call is gone, along with the
-    pr_commit_stats build and ai_attribution_rows load that existed solely
-    to feed it.
+    same rule as CHAOS-5233's work_item_attribution. Unlike that case,
+    compute_ai_impact_metrics_daily itself is ALSO deleted (from
+    metrics/ai_impact.py) -- codegraph_explore + rg confirmed its only real
+    callers, once job_daily.py's own reference was removed, were its Go
+    bit-exact oracle rot guard (TestAIImpactMatchesLivePythonProduction +
+    testdata/python_ai_impact_oracle.py, both also deleted in this PR) and
+    its own dedicated tests (tests/metrics/test_ai_impact.py, also deleted
+    except for its one sink-write test, moved to construct a record
+    directly instead of going through the now-deleted compute function).
+    Also removes the pr_commit_stats build and ai_attribution_rows load
+    that existed solely to feed it.
     """
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())

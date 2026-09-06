@@ -938,16 +938,16 @@ async def test_ai_governance_compute_and_write_are_deleted_from_job_daily(
         )
         assert "write_ai_policy_events" not in sink.write_calls
         assert "write_ai_governance_coverage_daily" not in sink.write_calls
-        # repo_user_commit (unrelated family, same partition) must be
-        # entirely unaffected by the deletion. (Was cicd, then deploy, then
-        # review_edges, then work_item -- all four had their own
-        # compute+write deleted in this same PR/sibling PRs, so none can
-        # serve as this control any more; compounding_risk can't either, the
-        # fixture has no PR/review data for it to compute from, so its own
-        # write is never reached. repo_user_commit, fed by _FakeLoader's real
-        # commit row and NOT itself in skip_families here, is the only
-        # family left in this file with an unconditional write.)
-        assert "repo_metrics" in sink.write_calls
+        # Unrelated-family control: was cicd, then deploy, then review_edges,
+        # then work_item, then repo_user_commit itself -- this same PR
+        # (CHAOS-5308) deletes repo_user_commit's own compute+write, so
+        # "repo_metrics" is gone too now, alongside every other family this
+        # comment previously tried; compounding_risk can't stand in either,
+        # the fixture has no PR/review data for it to compute from. Nothing
+        # in this fixture writes anything unconditional any more -- "nothing
+        # else was written" is itself the proof the ai_governance deletion
+        # didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -988,16 +988,16 @@ async def test_ai_impact_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_ai_impact_metrics" not in sink.write_calls
-        # repo_user_commit (unrelated family, same partition) must be
-        # entirely unaffected by the deletion. (Was cicd, then deploy, then
-        # review_edges, then work_item -- all four had their own
-        # compute+write deleted in this same PR/sibling PRs, so none can
-        # serve as this control any more; compounding_risk can't either, the
-        # fixture has no PR/review data for it to compute from, so its own
-        # write is never reached. repo_user_commit, fed by _FakeLoader's real
-        # commit row and NOT itself in skip_families here, is the only
-        # family left in this file with an unconditional write.)
-        assert "repo_metrics" in sink.write_calls
+        # Unrelated-family control: was cicd, then deploy, then review_edges,
+        # then work_item, then repo_user_commit itself -- this same PR
+        # (CHAOS-5308) deletes repo_user_commit's own compute+write, so
+        # "repo_metrics" is gone too now, alongside every other family this
+        # comment previously tried; compounding_risk can't stand in either,
+        # the fixture has no PR/review data for it to compute from. Nothing
+        # in this fixture writes anything unconditional any more -- "nothing
+        # else was written" is itself the proof the ai_impact deletion didn't
+        # perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio

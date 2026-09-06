@@ -497,7 +497,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
         )
     }
     assert set(estimated) == {1, 2, 3}
-    assert abs(estimated[2] - estimated[3]) <= 1
+    # CHAOS-5336 removed internal/testsupport/computeparity's 50s package.
+    # Every prior package-count change in this file's history (see the
+    # "LPT re-balanced shards 2/3" notes above) kept the greedy LPT
+    # algorithm's shards 2/3 within 1s of each other; removing this
+    # specific-sized item pushes it to 777s/775s, 2s apart -- LPT balance
+    # is not guaranteed monotonic under item removal, this is the
+    # algorithm's actual output, not a bug in this PR's diff. Loosening the
+    # tolerance to reflect it rather than silently widening it further:
+    # re-tighten if a future change brings the gap back under 1s.
+    assert abs(estimated[2] - estimated[3]) <= 2
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()

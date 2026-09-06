@@ -25,10 +25,6 @@ from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
-from dev_health_ops.metrics.compute_ic import (
-    compute_ic_landscape_rolling,
-    compute_ic_metrics_daily,
-)
 from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
 from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
@@ -44,7 +40,6 @@ from dev_health_ops.metrics.dependencies import get_metrics_dependencies
 from dev_health_ops.metrics.identity import (
     get_team_resolver,
     init_team_resolver,
-    load_team_map,
 )
 from dev_health_ops.metrics.job_compounding_risk import _fetch_repo_metrics_for_day
 from dev_health_ops.metrics.knowledge import (
@@ -78,7 +73,6 @@ from dev_health_ops.utils.cli import (
     validate_sink,
 )
 from dev_health_ops.work_graph.extractors.ai_workflow import (
-    extract_ai_workflow_from_pull_requests,
     extract_review_deployment_incident_edges,
 )
 
@@ -236,12 +230,13 @@ def _extract_ai_workflow_for_day(
     end: datetime,
     repo_id: uuid.UUID | None,
     repo_provider_by_id: dict[str, str],
-) -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any], list[Any]]:
-    """Extract AI workflow runs and Work Graph edges for one UTC day window.
+) -> tuple[list[Any], list[Any], list[Any]]:
+    """Extract work_graph_edges' review/deployment/incident edges for one UTC
+    day window (CHAOS-4286).
 
-    Returns ``(runs, artifact_edges, issue_edges, review_outcome_edges,
-    pr_deployment_edges, deployment_incident_edges)``.
-    Returns six empty lists when ``org_id`` is not a UUID — AIWorkflowRun
+    Returns ``(review_outcome_edges, pr_deployment_edges,
+    deployment_incident_edges)``.
+    Returns three empty lists when ``org_id`` is not a UUID — the extractor
     requires a tenant UUID by contract, so extraction without one would
     fabricate attribution (CHAOS-2187).
 
@@ -249,6 +244,16 @@ def _extract_ai_workflow_for_day(
     links natively when the deployment row carries its PR number, and
     heuristically (confidence 0.3) to same-repo deployments within the same
     UTC day otherwise.
+
+    CHAOS-5242: this function used to ALSO load git_pull_requests +
+    work_graph_issue_pr and call extract_ai_workflow_from_pull_requests to
+    produce ai_workflow_runs/_artifact_edges/_issue_edges -- deleted
+    alongside that function's own native Go port (AIWorkflowExecutor, #2280,
+    families.json's "ai_workflow"). Everything below now serves ONLY
+    work_graph_edges (still Python, write-only skip-gated), which never read
+    the PR/issue-link rows this function used to also load for the deleted
+    family -- verified via rg that wf_pr_rows/issue_ids_by_pr were read
+    nowhere but the deleted extraction loop.
     """
     org_uuid: uuid.UUID | None = None
     if org_id:
@@ -258,7 +263,7 @@ def _extract_ai_workflow_for_day(
             org_uuid = None
     if org_uuid is None:
         logger.debug("AI workflow extraction skipped: org_id %r is not a UUID", org_id)
-        return [], [], [], [], [], []
+        return [], [], []
 
     wf_params: dict[str, Any] = {
         "org_id": org_id,
@@ -270,21 +275,6 @@ def _extract_ai_workflow_for_day(
     if repo_id is not None:
         wf_params["repo_id"] = str(repo_id)
         wf_repo_filter = " AND repo_id = {repo_id:UUID}"
-
-    wf_pr_rows = primary_sink.query_dicts(
-        "SELECT repo_id, number, title, body, head_branch,"
-        " author_name, author_email, created_at, merged_at,"
-        " closed_at, last_synced"
-        " FROM git_pull_requests"
-        " WHERE org_id = {org_id:String}"
-        "   AND ((created_at >= {start:DateTime64(3, 'UTC')}"
-        "         AND created_at < {end:DateTime64(3, 'UTC')})"
-        "    OR (merged_at IS NOT NULL"
-        "        AND merged_at >= {start:DateTime64(3, 'UTC')}"
-        "        AND merged_at < {end:DateTime64(3, 'UTC')}))"
-        f"{wf_repo_filter}",
-        wf_params,
-    )
 
     # Row-local hygiene: drop rows whose repo_id/number cannot parse instead
     # of letting one malformed row abort the whole day (the extractor calls
@@ -310,37 +300,6 @@ def _extract_ai_workflow_for_day(
                 source,
             )
         return valid
-
-    wf_pr_rows = _valid_rows(wf_pr_rows, "git_pull_requests")
-
-    issue_ids_by_pr: dict[str, list[str]] = {}
-    wf_pr_numbers = sorted({int(row["number"]) for row in wf_pr_rows})
-    if wf_pr_numbers:
-        link_params: dict[str, Any] = {
-            "org_id": org_id,
-            "pr_numbers": wf_pr_numbers,
-        }
-        link_repo_filter = ""
-        if repo_id is not None:
-            link_params["repo_id"] = str(repo_id)
-            link_repo_filter = " AND repo_id = {repo_id:UUID}"
-        link_rows = primary_sink.query_dicts(
-            "SELECT repo_id, pr_number, work_item_id"
-            " FROM work_graph_issue_pr"
-            " WHERE org_id = {org_id:String}"
-            "   AND pr_number IN {pr_numbers:Array(UInt32)}"
-            f"{link_repo_filter}",
-            link_params,
-        )
-        for link in link_rows:
-            wi_id = str(link.get("work_item_id") or "")
-            link_repo = str(link.get("repo_id") or "")
-            link_number = link.get("pr_number")
-            if not wi_id or not link_repo or link_number is None:
-                continue
-            issue_ids_by_pr.setdefault(f"{link_repo}:{int(link_number)}", []).append(
-                wi_id
-            )
 
     wf_review_rows = primary_sink.query_dicts(
         "SELECT repo_id, number, review_id, state, submitted_at, last_synced"
@@ -423,27 +382,13 @@ def _extract_ai_workflow_for_day(
             grouped.setdefault(row_provider, []).append(row)
         return grouped
 
-    prs_by_provider = _by_provider(wf_pr_rows)
     reviews_by_provider = _by_provider(wf_review_rows)
     deployments_by_provider = _by_provider(wf_deployment_rows)
     incidents_by_provider = _by_provider(wf_incident_rows)
 
-    runs: list[Any] = []
-    artifact_edges: list[Any] = []
-    issue_edges: list[Any] = []
     review_outcome_edges: list[Any] = []
     pr_deployment_edges: list[Any] = []
     deployment_incident_edges: list[Any] = []
-    for wf_provider, provider_prs in prs_by_provider.items():
-        extraction = extract_ai_workflow_from_pull_requests(
-            provider_prs,
-            org_id=org_uuid,
-            provider=wf_provider,
-            issue_ids_by_pr=issue_ids_by_pr,
-        )
-        runs.extend(extraction.runs)
-        artifact_edges.extend(extraction.artifact_edges)
-        issue_edges.extend(extraction.issue_edges)
     edge_providers = (
         set(reviews_by_provider)
         | set(deployments_by_provider)
@@ -461,9 +406,6 @@ def _extract_ai_workflow_for_day(
         pr_deployment_edges.extend(review_extraction.pr_deployment_edges)
         deployment_incident_edges.extend(review_extraction.deployment_incident_edges)
     return (
-        runs,
-        artifact_edges,
-        issue_edges,
         review_outcome_edges,
         pr_deployment_edges,
         deployment_incident_edges,
@@ -669,7 +611,6 @@ async def run_daily_metrics_job(
     sink: str = "auto",
     provider: str = "auto",
     org_id: str,
-    skip_finalize: bool = False,
     on_write_starting: Callable[[], None] | None = None,
     skip_families: set[str] | None = None,
 ) -> dict[date, list[str]]:
@@ -1201,22 +1142,19 @@ async def run_daily_metrics_job(
         # ai_attribution_rows was never read by anything else in this
         # function.
 
-        # CHAOS-2187: extract AI workflow runs + Work Graph edges from today's
-        # PRs/reviews so ai_workflow_issue_edges, ai_workflow_artifact_edges,
-        # and work_graph_pr_review_outcome_edges are populated by ingestion.
-        # Infrastructure failures (ClickHouse query errors) propagate and fail
-        # the job: there is no persisted job-health table to record a partial
-        # day, and empty edge tables are indistinguishable from "no AI
-        # activity today" — swallowing here would be silent partial data.
-        # Row-local issues (malformed repo ids) are skipped inside the helper
-        # (CHAOS-5234/CHAOS-3092: this comment used to say "below" -- the
-        # pr_commit_stats build it referred to, built solely for ai_impact,
-        # is deleted; _valid_rows above is now the only sibling of this
-        # pattern in this file).
+        # CHAOS-2367 (CHAOS-2187's ai_workflow half DELETED under CHAOS-5242,
+        # see _extract_ai_workflow_for_day's own docstring): extract
+        # work_graph_edges' review/deployment/incident edges from today's
+        # PRs/reviews/deployments/incidents. Infrastructure failures
+        # (ClickHouse query errors) propagate and fail the job: there is no
+        # persisted job-health table to record a partial day, and empty edge
+        # tables are indistinguishable from "no activity today" — swallowing
+        # here would be silent partial data. Row-local issues (malformed
+        # repo ids) are skipped inside the helper (CHAOS-5234/CHAOS-3092:
+        # this comment used to say "below" -- the pr_commit_stats build it
+        # referred to, built solely for ai_impact, is deleted; _valid_rows
+        # above is now the only sibling of this pattern in this file).
         (
-            ai_workflow_runs,
-            ai_workflow_artifact_edges,
-            ai_workflow_issue_edges,
             ai_review_outcome_edges,
             ai_pr_deployment_edges,
             ai_deployment_incident_edges,
@@ -1302,28 +1240,30 @@ async def run_daily_metrics_job(
         # This is the repo_user_commit shape, NOT the team_wellbeing shape --
         # skip ONLY the write, never the compute:
         #
-        #   * `wi_user_metrics` is a live in-process input to
-        #     `compute_ic_metrics_daily` further down (the `ic_finalize`
-        #     family, still Python), which has no other source for it. If the
-        #     compute were skipped, ic_finalize would silently start seeing an
-        #     empty work-item contribution for every user on every partition
-        #     the Go executor handled -- a wrong number, not a missing one.
+        #   * `wi_user_metrics` feeds its OWN write a few lines down
+        #     (`s.write_work_item_user_metrics`, gated separately by
+        #     `skip_work_item_write`), so the compute that populates it must
+        #     stay unconditional regardless of that gate. (It used to ALSO
+        #     feed ic_finalize's now-deleted Python compute -- CHAOS-4290
+        #     PR3 -- but that was never the reason this compute had to stay
+        #     unconditional; this write is.)
         #
         # work_item_estimate (WorkItemEstimateExecutor, also CHAOS-4283) no
-        # longer has a skip flag here at all -- CHAOS-5272/CHAOS-3092 deleted
+        # longer has a skip flag here at all -- CHAOS-3092/CHAOS-5234 deleted
         # its compute+write outright, same shape as work_item_attribution
         # above (see that call site's comment): there is no Python fallback
-        # to keep alive for the daily partition anymore, only an unrelated
-        # caller in job_work_items.py that this deletion does not touch.
+        # to keep alive for the daily partition anymore.
         #
         # CHAOS-4286: work_graph_edges has a native Go executor
         # (WorkGraphEdgesExecutor). WRITE-ONLY skip, like repo_user_commit:
-        # the compute that produces these three lists is the SAME
-        # _extract_ai_workflow_for_day call that produces ai_workflow_runs /
-        # _artifact_edges / _issue_edges, and THOSE are still Python-owned
-        # (ai_workflow is CHAOS-4286's other half, not yet ported). So the
-        # extraction must stay unconditional; only the three edge writes below
-        # are gated.
+        # _extract_ai_workflow_for_day's own compute (review/deployment/
+        # incident extraction) stays unconditional -- this family has no
+        # other source for it -- and only the three edge writes below are
+        # gated. (CHAOS-5242: this function used to ALSO produce
+        # ai_workflow_runs/_artifact_edges/_issue_edges for the separate
+        # ai_workflow family; that half is deleted now that ai_workflow has
+        # its own native Go executor with no Python fallback, so this
+        # function's only remaining output is these three edge lists.)
         #
         # Safe because each of ai_review_outcome_edges, ai_pr_deployment_edges
         # and ai_deployment_incident_edges is assigned once (:1696-1698) and
@@ -1381,14 +1321,10 @@ async def run_daily_metrics_job(
             # CHAOS-5234/CHAOS-3092: no write_ai_impact_metrics call here
             # either -- deleted alongside the compute call above;
             # AIImpactExecutor (native Go) is the only writer now.
-            if ai_workflow_runs and hasattr(s, "write_ai_workflow_runs"):
-                s.write_ai_workflow_runs(ai_workflow_runs)
-            if ai_workflow_artifact_edges and hasattr(
-                s, "write_ai_workflow_artifact_edges"
-            ):
-                s.write_ai_workflow_artifact_edges(ai_workflow_artifact_edges)
-            if ai_workflow_issue_edges and hasattr(s, "write_ai_workflow_issue_edges"):
-                s.write_ai_workflow_issue_edges(ai_workflow_issue_edges)
+            # CHAOS-5242: no write_ai_workflow_runs/_artifact_edges/
+            # _issue_edges calls here either -- deleted, not skip-gated,
+            # alongside extract_ai_workflow_from_pull_requests above;
+            # AIWorkflowExecutor (native Go) is the only writer now.
             if (
                 ai_review_outcome_edges
                 and not skip_work_graph_edges_write
@@ -1520,23 +1456,16 @@ async def run_daily_metrics_job(
         # existing fail-open-to-Python contract every other native family
         # already has.
 
-        if not skip_finalize:
-            ic_metrics = compute_ic_metrics_daily(
-                git_metrics=result.user_metrics,
-                wi_metrics=wi_user_metrics,
-                team_map=load_team_map(),
-            )
-            for s in sinks:
-                s.write_user_metrics(ic_metrics)
-
-            rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=d)
-            ic_landscape = compute_ic_landscape_rolling(
-                as_of_day=d,
-                rolling_stats=rolling_stats,
-                team_map=load_team_map(),
-            )
-            for s in sinks:
-                s.write_ic_landscape_rolling(ic_landscape)
+        # ic_finalize's Python compute (compute_ic_metrics_daily /
+        # compute_ic_landscape_rolling) was deleted here (CHAOS-4290 PR3,
+        # CHAOS-3092 no-straddle): the native Go executor has been the SOLE
+        # writer for this family since #2241's finalize policy landed --
+        # FinalizeHandler.computeNativeFinalizeFamilies never falls open to
+        # this bridge on a native error (daily.go, "The bridge is NOT
+        # called" -- see PR3's body for the exact citation), so this call
+        # was already dead weight, never a live fallback, before its
+        # deletion. `skip_finalize` (this function's own parameter) existed
+        # only to gate this block and is removed with it.
 
         if len(days) > 1:
             # CHAOS-4264: a backfill_days > 1 call holds this day's source
@@ -1615,14 +1544,20 @@ async def run_daily_metrics_finalize(
 
     await init_team_resolver(primary_sink)
 
-    loader = await _get_loader(db_url, backend, org_id=org_id)
+    # _get_loader(db_url, backend, org_id=org_id) used to be called here to
+    # feed ic_finalize's now-deleted compute_ic_landscape_rolling call
+    # (loader.load_user_metrics_rolling_30d) -- removed with it (CHAOS-4290
+    # PR3). Nothing else in this function needs a DataLoader.
 
     import dataclasses as _dc
 
     deps = get_metrics_dependencies()
 
+    # wi_user_metrics (work_item_user_metrics_daily) was loaded here ONLY to
+    # feed ic_finalize's now-deleted compute_ic_metrics_daily call -- removed
+    # with it (CHAOS-4290 PR3). git_metrics stays: _write_team_cognitive_load_for_day
+    # further down still reads it (user_metrics_rows=git_metrics).
     git_metrics: list[Any] = []
-    wi_user_metrics: list[Any] = []
     # CodeQL (py/uninitialized-local-variable): ch_client is only assigned
     # inside the `backend == "clickhouse"` branch below, but the
     # team_metrics_daily readback further down (CHAOS-4365) references it
@@ -1635,9 +1570,6 @@ async def run_daily_metrics_finalize(
     if backend == "clickhouse":
         ch_client = await deps.get_global_client(db_url)
         um_field_names = {f.name for f in _dc.fields(deps.user_metrics_daily_record)}
-        wi_field_names = {
-            f.name for f in _dc.fields(deps.work_item_user_metrics_daily_record)
-        }
 
         um_query = (
             f"SELECT * FROM {dedup_from('user_metrics_daily')} WHERE day = {{day:Date}}"
@@ -1660,64 +1592,26 @@ async def run_daily_metrics_finalize(
                 )
             except Exception:
                 logger.debug("Skipping malformed user_metrics row: %s", row)
-
-        wi_query = (
-            "SELECT * FROM work_item_user_metrics_daily FINAL WHERE day = {day:Date}"
-        )
-        wi_params: dict[str, Any] = {"day": day}
-        if org_id:
-            wi_query += " AND org_id = {org_id:String}"
-            wi_params["org_id"] = org_id
-        wi_rows = deps.clickhouse_query_dicts(
-            ch_client,
-            wi_query,
-            wi_params,
-        )
-        for row in wi_rows:
-            try:
-                wi_user_metrics.append(
-                    deps.work_item_user_metrics_daily_record(
-                        **{k: v for k, v in row.items() if k in wi_field_names}
-                    )
-                )
-            except Exception:
-                logger.debug("Skipping malformed wi_user_metrics row: %s", row)
     else:
         logger.warning(
             "Finalize currently optimised for ClickHouse; "
-            "backend=%s may produce empty IC metrics.",
+            "backend=%s may produce empty finalize-scope metrics.",
             backend,
         )
 
-    # CHAOS-4290: same gate shape as run_daily_metrics_job's families
-    # (`"deploy" in skip_families` a few hundred lines up, and its
-    # siblings). When a
-    # native Go executor already computed and wrote ic_finalize for this run,
-    # recomputing here would append a SECOND generation of the same rows --
-    # and user_metrics_daily is append-only, deduped
-    # `ORDER BY computed_at DESC LIMIT 1 BY (org_id, repo_id, author_email, day)`,
-    # so the later writer wins silently and the native rows would vanish with
-    # nothing failing.
-    skip_families = skip_families or set()
-    if "ic_finalize" not in skip_families:
-        ic_metrics = compute_ic_metrics_daily(
-            git_metrics=git_metrics,
-            wi_metrics=wi_user_metrics,
-            team_map=load_team_map(),
-        )
-        for s in sinks_list:
-            s.write_user_metrics(ic_metrics)
-
-        rolling_stats = await loader.load_user_metrics_rolling_30d(as_of=day)
-        ic_landscape = compute_ic_landscape_rolling(
-            as_of_day=day,
-            rolling_stats=rolling_stats,
-            team_map=load_team_map(),
-        )
-        for s in sinks_list:
-            s.write_ic_landscape_rolling(ic_landscape)
+    # CHAOS-4290: ic_finalize's Python compute (compute_ic_metrics_daily /
+    # compute_ic_landscape_rolling) was deleted here (PR3, CHAOS-3092
+    # no-straddle) -- the native Go executor has been the SOLE writer for
+    # this family since #2241's finalize policy landed, so this call was
+    # already dead weight, never a live fallback, before its deletion (see
+    # PR3's body for the no-fail-open citation). `skip_families` stays a
+    # parameter of this function: it now gates `benchmarking` below
+    # (CHAOS-5194), and worker_metrics.py's finalize call site still passes
+    # it through from the Go dispatcher's real skip list for whichever
+    # finalize-scope family needs it next.
 
     computed_at = datetime.now(timezone.utc)
+    skip_families = skip_families or set()
 
     # CHAOS-5194 (astra F3): benchmarking, relocated here from
     # run_daily_metrics_job -- see this function's sibling comment at the old
@@ -1880,13 +1774,6 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             sink=ns.sink,
             provider=ns.provider,
             org_id=org_id,
-            # CHAOS-4365 codex R3 (P2): the standalone finalizer below
-            # already recomputes IC metrics/landscape for the whole org --
-            # skip_finalize=True here avoids running that same inline logic
-            # TWICE per day (matches _cmd_metrics_rebuild's existing
-            # skip_finalize=True + explicit run_daily_metrics_finalize
-            # pattern, which this bare-CLI path now also follows).
-            skip_finalize=True,
         )
         # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
         # written from run_daily_metrics_finalize, not from
@@ -1938,7 +1825,6 @@ async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
                         sink=ns.sink,
                         provider=ns.provider,
                         org_id=org_id,
-                        skip_finalize=True,
                     )
             else:
                 logger.info("Rebuild batch: day=%s (all repos)", d)
@@ -1949,7 +1835,6 @@ async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
                     sink=ns.sink,
                     provider=ns.provider,
                     org_id=org_id,
-                    skip_finalize=True,
                 )
 
             logger.info("Rebuild finalize: day=%s", d)

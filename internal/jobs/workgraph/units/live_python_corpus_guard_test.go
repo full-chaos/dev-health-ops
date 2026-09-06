@@ -109,6 +109,12 @@ var explicitCorpusPaths = map[string]string{
 	// runs fine and takes --stdout, so excludedGenerators would be the wrong map
 	// (its self-check demands a missingModule).
 	"generate_scope_grammar_corpus.py": "../../internal/pythonparity/scopeparity/testdata/corpus_seed1.json",
+	// Declares its output as a bare `REPO_ROOT / "tests" / "fixtures" / "..."`
+	// path built inside main(), not a module-level Path(__file__)-relative
+	// constant -- so no pattern matches, but it takes --stdout (CHAOS-5084's
+	// oracle: internal/teamresolve vs the real _repo_to_team_map_for_
+	// compounding_risk) and its corpus is committed beside it.
+	"generate_teamresolve_python_golden.py": "teamresolve_python_golden.json",
 }
 
 func declaredOutputPath(source []byte) (string, bool) {

@@ -86,6 +86,28 @@ func TestOperationalEdgesWindowForParsesExplicitHeuristics(t *testing.T) {
 	}
 }
 
+// TestOperationalEdgesWindowForExplicitFromDateAvoidsDefaultUnderflow pins
+// codex round chaos-4924-pr-d-r1-confirm's P1: the derived-bound overflow
+// guard must run ONLY when from_date is absent from scope, matching
+// Python's if/else (work_graph_tasks.py never evaluates `to - 30d` when
+// from_date is supplied). An explicit from_date/to_date pair that is each
+// individually valid must not be rejected over a derived value Python would
+// never have computed.
+func TestOperationalEdgesWindowForExplicitFromDateAvoidsDefaultUnderflow(t *testing.T) {
+	window, err := operationalEdgesWindowFor(
+		[]byte(`{"from_date":"0001-01-01","to_date":"0001-01-01"}`), time.Now)
+	if err != nil {
+		t.Fatalf("operationalEdgesWindowFor with explicit year-0001 bounds should not error, got: %v", err)
+	}
+	want := time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
+	if !window.fromDate.Equal(want) {
+		t.Errorf("fromDate = %v, want %v", window.fromDate, want)
+	}
+	if !window.toDate.Equal(want) {
+		t.Errorf("toDate = %v, want %v", window.toDate, want)
+	}
+}
+
 func TestOperationalEdgesWindowForRefusesNullScope(t *testing.T) {
 	if _, err := operationalEdgesWindowFor([]byte(`null`), time.Now); err == nil {
 		t.Fatal("a null scope must be refused, matching the bridge's own rejection")

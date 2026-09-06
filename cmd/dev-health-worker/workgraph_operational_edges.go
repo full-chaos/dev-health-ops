@@ -176,12 +176,13 @@ func operationalEdgesWindowFor(rawScope []byte, now func() time.Time) (operation
 		}
 		window.toDate = parsed
 	}
-	window.fromDate = window.toDate.AddDate(0, 0, -30)
-	if _, rangeErr := withPythonYearRange("derived from_date", window.fromDate); rangeErr != nil {
-		return operationalEdgesWindow{}, fmt.Errorf(
-			"build scope to_date %s: the default 30-day lower bound falls outside the "+
-				"reference's 1..9999 year range, where it raises OverflowError", window.toDate.Format(time.RFC3339))
-	}
+	// CORRECTED (codex round chaos-4924-pr-d-r1-confirm, P1, EXECUTED repro):
+	// the derived-bound overflow guard must run ONLY when from_date is
+	// absent. Python's own resolution (work_graph_tasks.py) is an if/else --
+	// `parsed_to - timedelta(days=30)` is never evaluated at all when
+	// from_date is supplied, so an explicit from_date/to_date pair that is
+	// individually valid (e.g. both "0001-01-01") must not be rejected over
+	// a derived value Python would never have computed.
 	if text, present, err := scopeString(scope["from_date"]); err != nil {
 		return operationalEdgesWindow{}, fmt.Errorf("build scope from_date: %w", err)
 	} else if present {
@@ -190,6 +191,13 @@ func operationalEdgesWindowFor(rawScope []byte, now func() time.Time) (operation
 			return operationalEdgesWindow{}, fmt.Errorf("build scope from_date: %w", parseErr)
 		}
 		window.fromDate = parsed
+	} else {
+		window.fromDate = window.toDate.AddDate(0, 0, -30)
+		if _, rangeErr := withPythonYearRange("derived from_date", window.fromDate); rangeErr != nil {
+			return operationalEdgesWindow{}, fmt.Errorf(
+				"build scope to_date %s: the default 30-day lower bound falls outside the "+
+					"reference's 1..9999 year range, where it raises OverflowError", window.toDate.Format(time.RFC3339))
+		}
 	}
 	if text, present, err := scopeString(scope["repo_id"]); err != nil {
 		return operationalEdgesWindow{}, fmt.Errorf("build scope repo_id: %w", err)

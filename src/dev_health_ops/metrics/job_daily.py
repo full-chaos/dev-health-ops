@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import gc
 import json
 import logging
@@ -14,8 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from dev_health_ops.clickhouse_dedup import dedup_from
-from dev_health_ops.db import resolve_sink_uri
-from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_work_item_state_durations import (
@@ -54,12 +51,6 @@ from dev_health_ops.providers.teams import (
     build_repo_pattern_resolver,
 )
 from dev_health_ops.storage import detect_db_type
-from dev_health_ops.utils.cli import (
-    add_date_range_args,
-    add_sink_arg,
-    resolve_date_range,
-    validate_sink,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -384,9 +375,14 @@ async def run_daily_metrics_job(
     set is a no-op: every family computes and writes exactly as it did
     before this parameter existed. Only families with a Go native executor
     AND a live Python fallback still check this set (``repo_user_commit``
-    CHAOS-4275, ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279,
-    and ``benchmarking`` CHAOS-4288); naming any other family here has no
-    effect. ``file_hotspots``/``file_risk_hotspots`` (CHAOS-4277) and
+    CHAOS-4275, ``compounding_risk`` CHAOS-4287, and ``review_edges``
+    CHAOS-4279); naming any other family here has no effect.
+    ``benchmarking`` CHAOS-4288 was NEVER checked in this set within THIS
+    function -- it was moved to ``run_daily_metrics_finalize``'s own
+    skip_families gate by CHAOS-5194 before this docstring paragraph was
+    last touched, and that gate is itself now gone too (CHAOS-4288 deleted
+    the Python compute entirely; see the comment at the old call site
+    below). ``file_hotspots``/``file_risk_hotspots`` (CHAOS-4277) and
     ``ai_impact`` (CHAOS-4280) had their Python compute+write deleted
     outright rather than gated (CHAOS-5234/CHAOS-3092); ``team_wellbeing``
     (CHAOS-4276), ``incident`` (CHAOS-4269/CHAOS-4295), ``cicd``
@@ -1125,40 +1121,20 @@ async def run_daily_metrics_job(
         # either now that CHAOS-4284's Python compute is also gone).
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
-        # correlations, insights) MOVED to run_daily_metrics_finalize
-        # (CHAOS-5194, astra design-review finding F3), skip_families gate and
-        # all -- necessary PLUMBING, not a compute fix. It used to run HERE,
-        # once per partition (run_benchmarking_for_day takes no repo_id, so an
-        # org with N repos appended N identical row sets to six append-only
-        # tables), deduplicated on the Go side by an anchor-partition trick
-        # (fixed duplication, not the race F3 found: the anchor partition's
-        # own post_bridge phase could complete before every OTHER partition
-        # for the org/day had written its own inputs).
-        #
-        # The move is required for the skip_families MECHANISM to keep
-        # working, not optional: partition-scope skip_families (built by
-        # computeNativeFamilies/computePostBridgeNativeFamilies) and
-        # finalize-scope skip_families (built by
-        # computeNativeFinalizeFamilies) are TWO INDEPENDENT lists sent to
-        # TWO INDEPENDENT bridge calls. Once the Go executor registers
-        # "benchmarking" as a FINALIZE family instead of a post_bridge one,
-        # the partition-scope skip_families sent here would never contain it
-        # again -- leaving the OLD gate at this call site permanently open
-        # and duplicating Python's own compute on top of the native
-        # executor's correct one, a WORSE bug than before. Moving the call to
-        # where the matching skip_families list actually lives is what keeps
-        # "the Go executor computed it, so Python must not" true.
-        #
-        # This move does NOT fix Python's own compute logic (no ordering
-        # change, no query change) -- team-lead ruling, CHAOS-5194: Python's
-        # race stays exactly as buggy as it always was WHEN THIS CODE PATH
-        # ACTUALLY RUNS. In practice it incidentally runs behind the same
-        # partition barrier as the Go executor now (both live in
-        # run_daily_metrics_finalize, which only runs once every partition
-        # for the day has succeeded), and it runs at all only when the
-        # native executor is absent (skip_families gate below), which is the
-        # existing fail-open-to-Python contract every other native family
-        # already has.
+        # correlations, insights) used to run HERE, then CHAOS-5194 (astra
+        # design-review finding F3) moved it to run_daily_metrics_finalize so
+        # its skip_families gate would line up with the native executor's own
+        # finalize-scope registration. CHAOS-4288 has now deleted its Python
+        # compute (and the moved-to call site) entirely: the native
+        # BenchmarkingFinalizeExecutor (internal/jobs/metrics/daily/
+        # benchmarking_finalize_native_executor.go) is unconditionally
+        # registered whenever the daily worker starts -- same reachability
+        # analysis as team_cognitive_load/team_complexity (CHAOS-5141/
+        # CHAOS-5051): buildDailyWorker refuses the whole daily worker before
+        # dailyNativeFamilyRegistrations is ever called if ClickHouse/Postgres
+        # fail to open, so a construction-time fallback to Python was never
+        # actually reachable in production. There is no gate line and no
+        # fallback left to find here or in run_daily_metrics_finalize.
 
         # ic_finalize's Python compute (compute_ic_metrics_daily /
         # compute_ic_landscape_rolling) was deleted here (CHAOS-4290 PR3,
@@ -1314,34 +1290,24 @@ async def run_daily_metrics_finalize(
     # no-straddle) -- the native Go executor has been the SOLE writer for
     # this family since #2241's finalize policy landed, so this call was
     # already dead weight, never a live fallback, before its deletion (see
-    # PR3's body for the no-fail-open citation). `skip_families` stays a
-    # parameter of this function: it now gates `benchmarking` below
-    # (CHAOS-5194), and worker_metrics.py's finalize call site still passes
-    # it through from the Go dispatcher's real skip list for whichever
-    # finalize-scope family needs it next.
+    # PR3's body for the no-fail-open citation).
 
-    computed_at = datetime.now(timezone.utc)
-    skip_families = skip_families or set()
-
-    # CHAOS-5194 (astra F3): benchmarking, relocated here from
-    # run_daily_metrics_job -- see this function's sibling comment at the old
-    # call site for why the move is required plumbing, not a compute fix.
-    # Same skip_families gate shape as ic_finalize above: when the Go
-    # dispatcher names "benchmarking" in skip_families, the native
-    # BenchmarkingFinalizeExecutor already computed and wrote this org/day,
-    # so skip the whole call -- nothing else in this function consumes its
-    # output.
-    if "benchmarking" not in skip_families:
-        for s in sinks_list:
-            try:
-                run_benchmarking_for_day(
-                    s,
-                    as_of_day=day,
-                    computed_at=computed_at,
-                    org_id=org_id,
-                )
-            except Exception as exc:
-                logger.warning("Benchmarking run failed for day=%s: %s", day, exc)
+    # CHAOS-4288 deleted benchmarking's Python compute (baselines, maturity,
+    # anomalies, period comparisons, correlations, insights) entirely -- see
+    # the sibling comment in run_daily_metrics_job (this function's old call
+    # site, CHAOS-5194) for the reachability analysis. The native
+    # BenchmarkingFinalizeExecutor has no Python fallback left; this
+    # function no longer names "benchmarking" in skip_families at all.
+    # `computed_at`/the `skip_families` normalisation that used to feed that
+    # call are gone too. Benchmarking was the LAST body-level consumer of
+    # `skip_families` here (ic_finalize/team_cognitive_load/
+    # compounding_risk_team/team_complexity had each already lost theirs to
+    # earlier PRs, per the reachability analysis two paragraphs down) --
+    # `skip_families` stays on this function's SIGNATURE regardless, purely
+    # for calling-convention parity with worker_metrics.py's generic
+    # finalize dispatch (it passes the same Go-sourced skip set to every
+    # finalize-scope Python entry point uniformly), but nothing in this
+    # function's BODY reads it anymore.
 
     # CHAOS-4365 finalize-step fix: this used to be where team-scope
     # compounding_risk_daily, team_cognitive_load_daily, AND
@@ -1381,151 +1347,21 @@ async def run_daily_metrics_finalize(
     logger.info("IC finalize complete for day=%s", day.isoformat())
 
 
-def register_commands(subparsers: argparse._SubParsersAction) -> None:
-    daily = subparsers.add_parser("daily", help="Compute daily metrics.")
-    add_date_range_args(daily)
-    daily.add_argument(
-        "--repo-id", type=uuid.UUID, help="Filter to a specific repository UUID."
-    )
-    daily.add_argument("--repo-name", help="Filter to a specific repository by name.")
-    daily.add_argument(
-        "--no-commits",
-        dest="commit_metrics",
-        action="store_false",
-        help="Skip per-commit metrics; compute work-item and derived metrics only.",
-    )
-    daily.set_defaults(commit_metrics=True)
-    add_sink_arg(daily)
-    daily.add_argument(
-        "--provider",
-        default="auto",
-        help="Restrict to a single provider (default: auto = all providers).",
-    )
-    daily.set_defaults(func=_cmd_metrics_daily)
-
-    rebuild = subparsers.add_parser(
-        "rebuild",
-        help=(
-            "Recompute daily metrics for one or more repos (or all repos) over a "
-            "date range, then run a single partitioned finalize per day. Use after "
-            "correcting or re-syncing source data for specific repositories."
-        ),
-    )
-    add_date_range_args(rebuild)
-    rebuild.add_argument(
-        "--repo-id",
-        type=uuid.UUID,
-        action="append",
-        dest="repo_ids",
-        default=[],
-        help="Repo UUID to rebuild; repeatable. Omit to rebuild all repos.",
-    )
-    add_sink_arg(rebuild)
-    rebuild.add_argument(
-        "--provider",
-        default="auto",
-        help="Restrict to a single provider (default: auto = all providers).",
-    )
-    rebuild.set_defaults(func=_cmd_metrics_rebuild)
-
-
-async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
-    try:
-        validate_sink(ns)
-        end_day, backfill_days = resolve_date_range(ns)
-        db_url = resolve_sink_uri(ns)
-        org_id = getattr(ns, "org", None) or ""
-        await run_daily_metrics_job(
-            db_url=db_url,
-            day=end_day,
-            backfill_days=backfill_days,
-            repo_id=ns.repo_id,
-            repo_name=ns.repo_name,
-            include_commit_metrics=ns.commit_metrics,
-            sink=ns.sink,
-            provider=ns.provider,
-            org_id=org_id,
-        )
-        # CHAOS-5254: run_daily_metrics_job no longer has an inline IC
-        # metrics/landscape finalize path to opt out of (that dead branch's
-        # only two callers that ever hit its default skip_finalize=False
-        # were the Celery run_daily_metrics task -- NOT deleted, see
-        # workers/metrics_daily.py's own doc -- and the now-DELETED
-        # scripts/compute_metrics_daily.py, which never passed the kwarg
-        # either) -- the standalone finalizer below is the only place IC
-        # metrics/landscape compute now.
-        #
-        # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
-        # written from run_daily_metrics_finalize, not from
-        # run_daily_metrics_job itself -- this bare `dev-hops metrics daily`
-        # path (AGENTS.md's documented usage) is the ONLY caller that did not
-        # already invoke the standalone finalizer (_cmd_metrics_rebuild
-        # always has; the worker partition loop triggers a separate
-        # "finalize" operation after all repos land). Without this, the
-        # command exits 0 having silently produced no compounding_risk_team
-        # rows. (team_cognitive_load_daily USED to be produced here too;
-        # CHAOS-5141 deleted its Python compute -- this bare CLI path no
-        # longer produces it at all, only the Go worker's finalize handler
-        # does now.) Idempotent to call even for a single-repo run
-        # (--repo-id): finalize reads the WHOLE org's
-        # repo_metrics_daily/user_metrics_daily/team_metrics_daily back from
-        # ClickHouse, so it reflects every repo's already-persisted state,
-        # not just this run's repo_id scope.
-        for d in _date_range(end_day, backfill_days):
-            await run_daily_metrics_finalize(
-                db_url=db_url,
-                day=d,
-                org_id=org_id,
-                sink=ns.sink,
-            )
-        return 0
-    except Exception as e:
-        logger.error(f"Daily metrics job failed: {e}")
-        return 1
-
-
-async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
-    try:
-        validate_sink(ns)
-        end_day, backfill_days = resolve_date_range(ns)
-        db_url = resolve_sink_uri(ns)
-        org_id = getattr(ns, "org", None) or ""
-        repo_ids: list[uuid.UUID] = ns.repo_ids or []
-        days = _date_range(end_day, backfill_days)
-
-        for d in days:
-            if repo_ids:
-                for rid in repo_ids:
-                    logger.info("Rebuild batch: day=%s repo_id=%s", d, rid)
-                    await run_daily_metrics_job(
-                        db_url=db_url,
-                        day=d,
-                        backfill_days=1,
-                        repo_id=rid,
-                        sink=ns.sink,
-                        provider=ns.provider,
-                        org_id=org_id,
-                    )
-            else:
-                logger.info("Rebuild batch: day=%s (all repos)", d)
-                await run_daily_metrics_job(
-                    db_url=db_url,
-                    day=d,
-                    backfill_days=1,
-                    sink=ns.sink,
-                    provider=ns.provider,
-                    org_id=org_id,
-                )
-
-            logger.info("Rebuild finalize: day=%s", d)
-            await run_daily_metrics_finalize(
-                db_url=db_url,
-                day=d,
-                org_id=org_id,
-                sink=ns.sink,
-            )
-
-        return 0
-    except Exception as e:
-        logger.error("Metrics rebuild failed: %s", e)
-        return 1
+# CHAOS-5307: `register_commands`/`_cmd_metrics_daily`/`_cmd_metrics_rebuild`
+# (the direct-Python-compute `dev-hops metrics daily`/`rebuild` CLI verbs)
+# were deleted here. They were already 100% orphaned before this change --
+# CHAOS-5055/#2232 repointed `cli.py` to register
+# `workerctl_dispatch.register_commands` instead (which dispatches through
+# `dev-health-workerctl metrics daily-start`, see that module's own
+# docstring), and nothing anywhere in the repo still called these functions
+# or `job_daily.register_commands` by name (verified by repo-wide search
+# before deletion). `run_daily_metrics_job`/`run_daily_metrics_finalize`
+# above are NOT dead -- they still have live callers (the worker bridge,
+# fixtures, tests) -- only the unwired CLI wrapper functions were removed.
+# (Merge-forward notes: #2293/CHAOS-5263 separately removed
+# `run_daily_metrics_job`'s `skip_finalize` parameter entirely while this
+# dead code still called it with `skip_finalize=True`; #2306/CHAOS-5254
+# later deleted `scripts/compute_metrics_daily.py` outright, one of this
+# dead code's own comment's cited "live callers" -- both further confirm
+# these two functions were unreachable and rotting, not a live code path
+# anyone was maintaining.)

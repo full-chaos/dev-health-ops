@@ -1026,15 +1026,19 @@ def test_stale_direct_job_modules_are_not_wired_into_cli() -> None:
     are actually imported by `cli.py` -- CHAOS-5055 moved all six verbs
     to dispatch through `workerctl_dispatch.py` instead (the same
     coordinator the automatic post-sync/fixed-schedule pipeline uses).
-    Each of these five modules still DEFINES its own `register_commands`
-    function (dead code today, not this ticket's concern to remove), so
-    "the function exists" cannot be trusted as "it's wired in" -- only
-    checking `cli.py`'s own import list proves reachability, which is
-    exactly what let the stale "bypasses" prose survive undetected for
-    as long as it did.
 
-    This does not mechanize the whole CLI-verb section (flagged as a
-    real, non-cheap follow-up in the same commit) -- it only prevents
+    UPDATE (CHAOS-5307): four of these five modules' own `register_commands`
+    functions (the actual dead code this docstring used to flag as "not this
+    ticket's concern to remove") have now been deleted -- `job_daily.py`,
+    `job_complexity_db.py`, `job_dora.py`, `job_capacity.py` no longer define
+    `register_commands`/their `_cmd_metrics_*` CLI wrappers at all (their
+    underlying compute functions are untouched; only the unreachable argparse
+    wiring was removed). `job_release_impact.py` no longer exists as a file.
+    This guard still holds regardless: checking `cli.py`'s own import list is
+    what proves reachability, independent of whether the dead functions still
+    exist in their source files or have since been deleted.
+
+    This does not mechanize the whole CLI-verb section -- it only prevents
     the SPECIFIC regression this fix corrects from silently recurring:
     if one of these five modules is ever wired back into `cli.py`'s
     dispatch tree, this guard fails loudly, rather than the doc quietly

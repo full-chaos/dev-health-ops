@@ -14,20 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
-// recordingFinalizeCompatibility captures the skip list the bridge was handed,
-// which is the whole observable output of the mechanism at this level.
-type recordingFinalizeCompatibility struct {
-	fakeCompatibility
-	sawSkip   []string
-	callCount int
-}
-
-func (compatibility *recordingFinalizeCompatibility) Finalize(_ context.Context, _ Run, skipFamilies []string) error {
-	compatibility.callCount++
-	compatibility.sawSkip = skipFamilies
-	return nil
-}
-
 type stubFinalizeFamily struct {
 	rows  int
 	err   error
@@ -67,13 +53,24 @@ func finalizeStoreWithClaim() *fakeStore {
 	}
 }
 
-// A registered finalize family that SUCCEEDS must appear in the skip list the
-// bridge receives -- that skip is the only thing stopping Python recomputing
-// and silently superseding the rows Go just wrote.
-func TestSucceedingNativeFinalizeFamilyIsSkippedByTheBridge(t *testing.T) {
+// restoreRecognisedFinalizeFamilies puts the production set back. Taken as an
+// argument rather than read inside, so the deferred call captures the value at
+// defer time and a test cannot accidentally restore a set another test left
+// behind.
+func restoreRecognisedFinalizeFamilies(original []string) {
+	pythonRecognisedFinalizeFamilies = original
+}
+
+// A registered finalize family that SUCCEEDS runs exactly once, and every
+// recognised family must be registered for Work to succeed at all (CHAOS-3092
+// PR-A': no bridge left to cover an unregistered one) -- narrowed to just this
+// one name for the test's duration, the same pattern every test below uses.
+func TestSucceedingNativeFinalizeFamilyRunsExactlyOnce(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	store := finalizeStoreWithClaim()
-	compatibility := &recordingFinalizeCompatibility{}
-	handler, err := NewFinalizeHandler(store, compatibility)
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,28 +85,18 @@ func TestSucceedingNativeFinalizeFamilyIsSkippedByTheBridge(t *testing.T) {
 	if family.calls != 1 {
 		t.Fatalf("family calls = %d, want 1", family.calls)
 	}
-	if len(compatibility.sawSkip) != 1 || compatibility.sawSkip[0] != "ic_finalize" {
-		t.Fatalf("bridge saw skip=%v, want [ic_finalize] -- without it Python "+
-			"recomputes the family and its rows supersede the native ones", compatibility.sawSkip)
-	}
 }
 
-// FAIL-OPEN, carried unchanged from CHAOS-4276's partition-side ruling: a
-// family that errors is LEFT OUT of the skip list, so the bridge computes it
-// exactly as before. The finalize itself must still succeed -- one family
-// degrading to Python must not fail the run.
-// REPLACES TestFailingNativeFinalizeFamilyFallsBackToTheBridge, which asserted
-// the OPPOSITE and was correct only under the fail-open policy #2241 r2
-// Findings 1 and 2 removed. Its reasoning -- "a failed family must not be
-// skipped, or its rows are written by nobody" -- is answered by the redrive:
-// the rows are written by the NEXT attempt, not by Python.
-//
-// Letting the bridge cover it was the hazard, because a family that failed on
-// this attempt may have succeeded on a previous one.
-func TestFailingNativeFinalizeFamilyFailsTheAttemptInsteadOfFallingBack(t *testing.T) {
+// NO FAIL-OPEN, AT ALL (#2241 r2 Findings 1 and 2; team-lead's ruling). A
+// family that errors fails the WHOLE attempt -- there is no bridge left to
+// cover it even if one existed, and CHAOS-3092 PR-A' removed the bridge call
+// entirely regardless.
+func TestFailingNativeFinalizeFamilyFailsTheAttempt(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	store := finalizeStoreWithClaim()
-	compatibility := &recordingFinalizeCompatibility{}
-	handler, err := NewFinalizeHandler(store, compatibility)
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,27 +113,30 @@ func TestFailingNativeFinalizeFamilyFailsTheAttemptInsteadOfFallingBack(t *testi
 	if !errors.Is(workErr, ErrNativeFinalizeFamilyFailed) {
 		t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed", workErr)
 	}
-	if compatibility.callCount != 0 {
-		t.Fatalf("bridge calls = %d, want 0 -- Python must never compute a family "+
-			"registered as native, or a retry can reintroduce it as a second writer",
-			compatibility.callCount)
-	}
 }
 
-// The default is inert: no registered families means the bridge is called
-// exactly as it was before this capability existed.
-func TestFinalizeWithoutNativeFamiliesIsUnchanged(t *testing.T) {
+// CHAOS-3092 PR-A': with the compatibility bridge deleted, a recognised
+// finalize family with NO registered executor at all is no longer an inert
+// no-op (there is nothing left to fall open to) -- it must fail the attempt
+// loudly, the same as a family that ran and failed. This REPLACES
+// TestFinalizeWithoutNativeFamiliesIsUnchanged, which asserted the OPPOSITE
+// (the bridge quietly covering everything) under the now-deleted bridge.
+func TestFinalizeWithoutNativeFamiliesFailsLoud(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	store := finalizeStoreWithClaim()
-	compatibility := &recordingFinalizeCompatibility{}
-	handler, err := NewFinalizeHandler(store, compatibility)
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
-		t.Fatal(err)
+	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
+	if workErr == nil {
+		t.Fatal("Work succeeded with zero registered finalize families -- with no " +
+			"compatibility bridge left, nothing would ever write ic_finalize's rows")
 	}
-	if compatibility.callCount != 1 || len(compatibility.sawSkip) != 0 {
-		t.Fatalf("calls=%d skip=%v, want 1 and empty", compatibility.callCount, compatibility.sawSkip)
+	if !errors.Is(workErr, ErrFinalizeFamilyIncomplete) {
+		t.Fatalf("err = %v, want it to wrap ErrFinalizeFamilyIncomplete", workErr)
 	}
 }
 
@@ -159,25 +149,27 @@ func TestFinalizeWithoutNativeFamiliesIsUnchanged(t *testing.T) {
 // Why it has to be declared order, not just A deterministic one:
 // computeNativeFinalizeFamilies marks every name from the current loop INDEX
 // onward as refused when the run's context is cancelled mid-loop
-// (nativeFinalizeFamilyNames[index:]) -- so which family runs first, and
-// which families are still ahead of it when a cancellation lands, is a real
-// operational decision, not an implementation detail a name's spelling should
-// get to make.
+// (pythonRecognisedFinalizeFamilies[index:]) -- so which family runs first,
+// and which families are still ahead of it when a cancellation lands, is a
+// real operational decision, not an implementation detail a name's spelling
+// should get to make. Order is observed via the recording observer's call
+// sequence now that there is no bridge skip-list to inspect.
 func TestFinalizeFamiliesIterateInDeclaredOrderNotSortedName(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	// The registration guard only admits recognised names, and deterministic
+	// ordering needs more than one name to be observable at all. Widening the
+	// recognised set for the duration of this test is the honest way to get
+	// there: inventing three production family names would make the guard's
+	// own test lie about what is actually recognised.
+	pythonRecognisedFinalizeFamilies = []string{"zeta", "alpha", "mid"}
+
 	store := finalizeStoreWithClaim()
-	compatibility := &recordingFinalizeCompatibility{}
-	handler, err := NewFinalizeHandler(store, compatibility)
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The registration guard only admits names the Python bridge gates on, and
-	// deterministic ordering needs more than one name to be observable at all.
-	// Widening the recognised set for the duration of this test is the honest
-	// way to get there: inventing three production family names would make the
-	// guard's own test lie about what Python understands.
-	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
-	pythonRecognisedFinalizeFamilies = []string{"zeta", "alpha", "mid"}
-
+	observer := &recordingFinalizeObserver{}
+	handler.SetNativeFinalizeFamilyObserver(observer)
 	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
 		"alpha": &stubFinalizeFamily{}, "mid": &stubFinalizeFamily{}, "zeta": &stubFinalizeFamily{},
 	}); err != nil {
@@ -186,13 +178,13 @@ func TestFinalizeFamiliesIterateInDeclaredOrderNotSortedName(t *testing.T) {
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"zeta", "alpha", "mid"} // declared order -- sorted would be alpha, mid, zeta
-	if len(compatibility.sawSkip) != len(want) {
-		t.Fatalf("skip=%v, want %v", compatibility.sawSkip, want)
+	want := []string{"zeta:computed", "alpha:computed", "mid:computed"} // declared order -- sorted would be alpha, mid, zeta
+	if len(observer.calls) != len(want) {
+		t.Fatalf("observed=%v, want %v", observer.calls, want)
 	}
-	for i, name := range want {
-		if compatibility.sawSkip[i] != name {
-			t.Fatalf("skip=%v, want %v (declared order, not sorted)", compatibility.sawSkip, want)
+	for i, call := range want {
+		if observer.calls[i] != call {
+			t.Fatalf("observed=%v, want %v (declared order, not sorted)", observer.calls, want)
 		}
 	}
 }
@@ -250,11 +242,14 @@ func (observer *recordingFinalizeObserver) ObserveDailyMetricsNativeFamily(
 // CHAOS-4290 shipped the mechanism with fail-open and NO counter, which its own
 // RISK-NOTES admitted meant a family failing every run degraded to Python
 // invisibly. This is that gap closed: a REFUSED outcome must be reported even
-// though the finalize still succeeds.
+// though the run itself now fails (CHAOS-3092 PR-A' removed the bridge
+// entirely, so there is no "still succeeds" half left to assert).
 func TestFailingNativeFinalizeFamilyIsReportedRefused(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	store := finalizeStoreWithClaim()
-	compatibility := &recordingFinalizeCompatibility{}
-	handler, err := NewFinalizeHandler(store, compatibility)
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,9 +261,6 @@ func TestFailingNativeFinalizeFamilyIsReportedRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The attempt FAILS now (#2241 r2 Findings 1 and 2) instead of degrading to
-	// Python. This test survived the forward-merge textually while asserting the
-	// opposite semantics -- a clean auto-merge is not a semantic merge.
 	workErr := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
 	if workErr == nil {
 		t.Fatal("Work succeeded after a native family failed -- the run completes " +
@@ -283,17 +275,16 @@ func TestFailingNativeFinalizeFamilyIsReportedRefused(t *testing.T) {
 	if len(observer.calls) != 1 || observer.calls[0] != "ic_finalize:refused" {
 		t.Fatalf("observed %v, want [ic_finalize:refused]", observer.calls)
 	}
-	if compatibility.callCount != 0 {
-		t.Fatalf("bridge calls = %d, want 0 -- Python must never compute a family "+
-			"registered as native", compatibility.callCount)
-	}
 }
 
 // A succeeding family reports computed WITH its row count, so the series can
 // distinguish "ran and wrote nothing" from "did not run".
 func TestSucceedingNativeFinalizeFamilyIsReportedComputedWithRows(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	store := finalizeStoreWithClaim()
-	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,13 +320,16 @@ func TestSucceedingNativeFinalizeFamilyIsReportedComputedWithRows(t *testing.T) 
 // test to assert the underlying error and identifiers actually land somewhere
 // an operator can read.
 func TestFinalizeSucceedsWhenTheObserverFails(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	var captured bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
 	defer slog.SetDefault(previous)
 
 	store := finalizeStoreWithClaim()
-	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,25 +362,21 @@ func TestFinalizeSucceedsWhenTheObserverFails(t *testing.T) {
 	}
 }
 
-// restoreRecognisedFinalizeFamilies puts the production set back. Taken as an
-// argument rather than read inside, so the deferred call captures the value at
-// defer time and a test cannot accidentally restore a set another test left
-// behind.
-func restoreRecognisedFinalizeFamilies(original []string) {
-	pythonRecognisedFinalizeFamilies = original
-}
-
 // CHAOS-5151. SetNativeFinalizeFamilies validated only the NAME, not the
-// executor value -- a nil executor for a recognised name was accepted,
-// registered into nativeFinalizeFamilyNames, and would then vanish silently
-// in computeNativeFinalizeFamilies's `if executor == nil { continue }`
-// WITHOUT being added to skipFamilies. Python's bridge would compute that
-// family too: the exact two-writer hazard the name-validation a few lines up
-// exists to prevent, reached through a nil value instead of a typo'd string.
+// executor value -- a nil executor for a recognised name was accepted and
+// registered, then would vanish silently in computeNativeFinalizeFamilies's
+// old `if executor == nil { continue }` shape. This is the FIRST of two
+// defenses against that class now: registration itself refuses a nil value
+// outright (this test); computeNativeFinalizeFamilies's own
+// ErrFinalizeFamilyIncomplete check (TestFinalizeWithoutNativeFamiliesFailsLoud)
+// is the second, for a name that was never registered at all rather than
+// registered with nil.
 func TestSetNativeFinalizeFamiliesRejectsNilExecutor(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	store := finalizeStoreWithClaim()
-	compatibility := &recordingFinalizeCompatibility{}
-	handler, err := NewFinalizeHandler(store, compatibility)
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,6 +398,32 @@ func TestSetNativeFinalizeFamiliesRejectsNilExecutor(t *testing.T) {
 	}
 }
 
+// TestRegisteringAnUnrecognisedFinalizeFamilyIsRefused moved here from the
+// now-deleted finalize_family_gate_agreement_test.go (CHAOS-3092 PR-A': that
+// file's other three tests were the Python-source-scan agreement checks,
+// which have nothing left to agree with once the bridge is gone; this one
+// tests SetNativeFinalizeFamilies's own name-validation, unrelated to the
+// bridge, and stays valid unchanged). The guard has to REFUSE, not merely
+// warn: a dropped-but-registered family would be the same two-writer bug
+// wearing a different hat (now: the same "nobody writes this family" bug).
+func TestRegisteringAnUnrecognisedFinalizeFamilyIsRefused(t *testing.T) {
+	handler, err := NewFinalizeHandler(finalizeStoreWithClaim())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalise": &stubFinalizeFamily{},
+	})
+	if err == nil {
+		t.Fatal("registering the typo'd name succeeded; nothing recognises it as a real family")
+	}
+	// Registration is all-or-nothing: a refused call must leave NOTHING behind,
+	// or the caller believes a family is native when it is not.
+	if len(handler.nativeFinalizeFamilyNames) != 0 {
+		t.Fatalf("refused registration still recorded %v", handler.nativeFinalizeFamilyNames)
+	}
+}
+
 // The three tests below close the coverage gap the r3 class-sweep found
 // (CHAOS-4290): releaseFinalize's error was discarded at three call sites in
 // Work, all fixed to log via finalizeExecutionLogger/finalizeLogger, but none
@@ -426,7 +442,7 @@ func TestFinalizeLogsAReleaseFailureFromTheMismatchGuard(t *testing.T) {
 
 	store := finalizeStoreWithClaim()
 	store.releaseFinalizeErr = errors.New("release down")
-	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,6 +470,9 @@ func TestFinalizeLogsAReleaseFailureFromTheMismatchGuard(t *testing.T) {
 // call site: a native family fails on an attempt that is NOT the final one,
 // so Work releases (rather than terminalizes) the claim for a future retry.
 func TestFinalizeLogsAReleaseFailureAfterANativeFamilyFailure(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	var captured bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
@@ -461,7 +480,7 @@ func TestFinalizeLogsAReleaseFailureAfterANativeFamilyFailure(t *testing.T) {
 
 	store := finalizeStoreWithClaim()
 	store.releaseFinalizeErr = errors.New("release down")
-	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,10 +508,17 @@ func TestFinalizeLogsAReleaseFailureAfterANativeFamilyFailure(t *testing.T) {
 }
 
 // TestFinalizeLogsAReleaseFailureAfterACompleteFinalizeFailure hits the third
-// call site: every native family and the bridge call succeed, but
-// CompleteFinalize itself fails, so Work releases the claim it can no longer
-// mark complete.
+// call site: every native family succeeds, but CompleteFinalize itself
+// fails, so Work releases the claim it can no longer mark complete. No
+// finalize family is registered here on purpose -- CHAOS-3092 PR-A' widens
+// the recognised set to EMPTY for this test specifically, so
+// computeNativeFinalizeFamilies has nothing to iterate and succeeds
+// trivially, keeping this test's actual subject (CompleteFinalize's own
+// failure path) isolated from the unrelated ErrFinalizeFamilyIncomplete gate.
 func TestFinalizeLogsAReleaseFailureAfterACompleteFinalizeFailure(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{}
+
 	var captured bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
@@ -501,7 +527,7 @@ func TestFinalizeLogsAReleaseFailureAfterACompleteFinalizeFailure(t *testing.T) 
 	store := finalizeStoreWithClaim()
 	store.releaseFinalizeErr = errors.New("release down")
 	store.completionErr = errors.New("completion down")
-	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,8 +549,12 @@ func TestFinalizeLogsAReleaseFailureAfterACompleteFinalizeFailure(t *testing.T) 
 // succeeds) left no log at all naming why completion failed. Isolated from
 // the test above, which always failed both calls and so could not tell
 // completion's own log line apart from coincidentally passing because
-// release's failure was logged instead.
+// release's failure was logged instead. Same empty-recognised-set shape as
+// the test above, for the same reason.
 func TestFinalizeLogsACompleteFinalizeFailureEvenWhenReleaseSucceeds(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{}
+
 	var captured bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError})))
@@ -532,7 +562,7 @@ func TestFinalizeLogsACompleteFinalizeFailureEvenWhenReleaseSucceeds(t *testing.
 
 	store := finalizeStoreWithClaim()
 	store.completionErr = errors.New("completion down")
-	handler, err := NewFinalizeHandler(store, &recordingFinalizeCompatibility{})
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}

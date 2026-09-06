@@ -231,7 +231,10 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     # CHAOS-5234/CHAOS-3092: no compute_ai_impact_metrics_daily to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
-    monkeypatch.setattr(job_daily, "run_benchmarking_for_day", lambda *a, **k: None)
+    # CHAOS-4288: no run_benchmarking_for_day to neutralize here either --
+    # its Python compute is deleted entirely (it was already unreachable
+    # from this function since CHAOS-5194 relocated the call site to
+    # run_daily_metrics_finalize).
     monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", lambda **k: 0)
 
 
@@ -856,10 +859,11 @@ async def test_review_edges_skip_does_not_perturb_other_families(
 # run_daily_metrics_job (partition scope, this file) to
 # run_daily_metrics_finalize (finalize scope), for the same "runs once per
 # org/day, not once per partition" reason compounding_risk_team and
-# team_cognitive_load already live there. Their red/green replacements are
-# test_benchmarking_in_skip_families_runs_nothing /
+# team_cognitive_load already live there. Their red/green replacements
+# (test_benchmarking_in_skip_families_runs_nothing /
 # test_without_the_skip_benchmarking_still_runs in
-# test_job_daily_finalize_skip_families.py.
+# test_job_daily_finalize_skip_families.py) are themselves gone now too --
+# CHAOS-4288 deleted benchmarking's Python compute entirely.
 
 
 @pytest.mark.asyncio

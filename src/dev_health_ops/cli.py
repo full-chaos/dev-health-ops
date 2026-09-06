@@ -188,135 +188,14 @@ def _cmd_maintenance_scrub_error_text(ns: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # Recommendations commands
 # ---------------------------------------------------------------------------
-
-
-def _cmd_recommendations_compute(ns: argparse.Namespace) -> int:
-    """Preview rule-based recommendations for a team (CHAOS-5055: read-only).
-
-    This used to persist its results via ``sink.write_recommendations`` --
-    the same table the Go worker's NATIVE `metrics.remaining.recommendations`
-    kind writes, on an independent per-team/arbitrary-window schedule with no
-    dedup between the two writers. It is now a preview-only diagnostic: it
-    evaluates and prints, but never writes. The persisted, generation-deduped
-    recommendations compute is `dev-health-workerctl metrics remaining
-    trigger-backstop --family recommendations --team <id>` (or
-    `--all-teams`) `--window <days> --review-evidence <why>` -- NOT `metrics
-    remaining start`, which rejects recommendations outright (it only
-    accepts complexity/dora/release_impact; codex adversarial review round
-    1, P1: this docstring pointed operators at a command guaranteed to
-    return invalid_request).
-    """
-    import json
-    from datetime import date, datetime, timezone
-
-    from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
-    from dev_health_ops.recommendations import registry as recommendations_registry
-    from dev_health_ops.recommendations.engine import RuleEngine
-    from dev_health_ops.recommendations.loader import ClickHouseMetricsLoader
-
-    analytics_db = getattr(ns, "analytics_db", None) or os.getenv("CLICKHOUSE_URI", "")
-    if not analytics_db:
-        logging.getLogger(__name__).error(
-            "--analytics-db / CLICKHOUSE_URI is required for recommendations compute"
-        )
-        return 1
-
-    team_id: str = ns.team
-    window: str = ns.window
-    org_id: str = getattr(ns, "org", None) or ""
-    now = datetime.now(timezone.utc)
-
-    # Override window bounds if --since / --until supplied
-    if getattr(ns, "since", None) and getattr(ns, "until", None):
-        since_date = date.fromisoformat(ns.since)
-        until_date = date.fromisoformat(ns.until)
-        window_days = (until_date - since_date).days
-        now = datetime(
-            until_date.year, until_date.month, until_date.day, tzinfo=timezone.utc
-        )
-        window = str(window_days)
-
-    # Read-only client: this command must never reach write_recommendations.
-    sink = ClickHouseMetricsSink(dsn=analytics_db)
-    loader = ClickHouseMetricsLoader(client=sink.client, org_id=org_id)
-    engine = RuleEngine(registry=recommendations_registry, loader=loader, now=now)
-
-    try:
-        # Full state: fired recommendations AND explicit fired=False tombstones
-        # so a recovered signal is cleared, not left lingering (CHAOS-2373) --
-        # kept for parity with the persisted path's own semantics even though
-        # this command no longer writes either kind.
-        records = engine.evaluate_state(team_id=team_id, window=window, org_id=org_id)
-    except Exception as exc:
-        logging.getLogger(__name__).error(
-            "Recommendations evaluation failed for team=%r: %s", team_id, exc
-        )
-        return 1
-    finally:
-        sink.close()
-
-    fired = [r for r in records if r.fired]
-    log = logging.getLogger(__name__)
-    log.info(
-        "recommendations preview (not persisted): team=%r window=%s fired=%d rows=%d",
-        team_id,
-        window,
-        len(fired),
-        len(records),
-    )
-    if getattr(ns, "output_json", False):
-        from dataclasses import asdict
-
-        print(
-            json.dumps([asdict(r) for r in fired], default=str),
-            file=sys.stdout,
-        )
-    else:
-        for record in fired:
-            print(
-                f"[fired] {record.team_id} {record.rule_id} "
-                f"({record.severity}): {record.title} -- {record.rationale}"
-            )
-        if not fired:
-            print(f"no recommendations fired for team={team_id!r} window={window}")
-    return 0
-
-
-def _register_recommendations_commands(subparsers: argparse._SubParsersAction) -> None:
-    compute = subparsers.add_parser(
-        "compute",
-        help=(
-            "Preview recommendation rules for a team (CHAOS-5055: read-only, "
-            "writes nothing). For the persisted, deduped compute, use "
-            "`dev-health-workerctl metrics remaining trigger-backstop "
-            "--family recommendations --team <id>|--all-teams --window "
-            "<days> --review-evidence <why>`."
-        ),
-    )
-    compute.add_argument("--team", required=True, help="Team ID to evaluate.")
-    compute.add_argument(
-        "--window",
-        default="7d",
-        help="Evaluation window, e.g. '7d' or '14d'. Default: 7d.",
-    )
-    compute.add_argument(
-        "--since",
-        default=None,
-        metavar="YYYY-MM-DD",
-        help="Override window start (exclusive end = --until).",
-    )
-    compute.add_argument(
-        "--until",
-        default=None,
-        metavar="YYYY-MM-DD",
-        help="Override window end (inclusive). Requires --since.",
-    )
-    compute.add_argument(
-        "--output-json",
-        action="store_true",
-        help="Print fired recommendations as JSON to stdout.",
-    )
-    compute.set_defaults(func=_cmd_recommendations_compute)
+#
+# CHAOS-5307: `_cmd_recommendations_compute`/`_register_recommendations_commands`
+# (the direct-Python-compute `dev-hops recommendations compute` preview) were
+# deleted here -- see the removal note at the `recommendations` group's old
+# registration site in `main()` above for the full rationale. The Go worker's
+# NATIVE `metrics.remaining.recommendations` kind (persisted, generation-
+# deduped) is unaffected; dispatch it via `dev-health-workerctl metrics
+# remaining trigger-backstop --family recommendations`.
 
 
 _GLOBAL_FLAG_SPECS: tuple[tuple[tuple[str, ...], dict[str, object]], ...] = (
@@ -556,7 +435,6 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("audit", "schema"): frozenset({_REQ_CLICKHOUSE}),
     ("audit", "planner-configs"): frozenset({_REQ_POSTGRES}),
     # --- other ClickHouse-backed commands ---
-    ("recommendations", "compute"): frozenset({_REQ_CLICKHOUSE}),
     ("investment", "materialize"): frozenset({_REQ_CLICKHOUSE}),
     ("ai", "allowlist", "list"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
     ("ai", "allowlist", "set"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
@@ -848,13 +726,17 @@ def build_parser() -> argparse.ArgumentParser:
     push_cli.register_commands(sub)
 
     # ---- recommendations ----
-    rec_parser = sub.add_parser(
-        "recommendations", help="Compute and persist rule-based recommendations."
-    )
-    rec_subparsers = rec_parser.add_subparsers(
-        dest="recommendations_command", required=True
-    )
-    _register_recommendations_commands(rec_subparsers)
+    # CHAOS-5307: the `dev-hops recommendations` group used to register
+    # exactly one subcommand, `compute` -- a direct Python-compute preview
+    # of RuleEngine, deleted below along with this registration (team-lead
+    # ruling: "a Python CLI that runs RuleEngine directly is Python compute
+    # executing in production tooling, read-only or not -- the native path
+    # is `metrics.remaining.recommendations` + `workerctl metrics remaining
+    # trigger`"). With `compute` gone the group has zero verbs left, so the
+    # whole top-level `recommendations` command is removed rather than left
+    # as a dead, always-invalid-choice subparser. A Go-native preview verb
+    # (`dev-health-workerctl recommendations preview`) is tracked as a
+    # follow-up so the preview capability itself is not lost.
 
     # ---- migrate ----
     migrate_mod.register_commands(sub)

@@ -1581,6 +1581,12 @@ func TestPartitionAmbiguousRefusedTransientCollisionStaysRetryable(t *testing.T)
 }
 
 func TestFinalizeCompletionFailureReleasesTheClaim(t *testing.T) {
+	// CHAOS-3092 PR-A': no finalize family registered, so the recognised set
+	// is narrowed to empty for this test -- its own subject is
+	// CompleteFinalize's failure path, not family registration.
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{}
+
 	store := &fakeStore{
 		finalizeClaim: &FinalizeClaim{
 			Run:           Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
@@ -1589,7 +1595,7 @@ func TestFinalizeCompletionFailureReleasesTheClaim(t *testing.T) {
 		},
 		completionErr: ErrUnavailable,
 	}
-	handler, err := NewFinalizeHandler(store, fakeCompatibility{})
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1602,7 +1608,14 @@ func TestFinalizeCompletionFailureReleasesTheClaim(t *testing.T) {
 	}
 }
 
-func TestFinalizerRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
+// CHAOS-3092 (PR-A'): this test used to drive lease renewal by blocking the
+// compatibility bridge's Finalize call for a controlled duration
+// (blockingCompatibility{finalizeDelay: ...}) -- there is no bridge call
+// left, so a native finalize family plays that same blocking role now.
+func TestFinalizerRenewsLeaseUntilTheNativeFamilyCompletes(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	store := &fakeStore{
 		finalizeClaim: &FinalizeClaim{
 			Run:           Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
@@ -1610,9 +1623,13 @@ func TestFinalizerRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
 			LeaseDuration: 30 * time.Millisecond,
 		},
 	}
-	compatibility := &blockingCompatibility{finalizeDelay: 80 * time.Millisecond}
-	handler, err := NewFinalizeHandler(store, compatibility)
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": &blockingFinalizeFamily{delay: 80 * time.Millisecond},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := handler.Work(context.Background(), finalizeExecution()); err != nil {
@@ -1623,7 +1640,14 @@ func TestFinalizerRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
 	}
 }
 
-func TestFinalizerLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
+// CHAOS-3092 (PR-A'): this test used to assert the compatibility bridge's
+// Finalize call was cancelled on lease loss (blockingCompatibility{
+// waitForCancellation: true}) -- there is no bridge call left, so a native
+// finalize family that waits for ctx cancellation plays that role now.
+func TestFinalizerLeaseLossCancelsTheNativeFamilyAndCannotComplete(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	store := &fakeStore{
 		finalizeClaim: &FinalizeClaim{
 			Run:           Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
@@ -1632,21 +1656,63 @@ func TestFinalizerLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 		},
 		finalizeRenewalFailureAt: 1,
 	}
-	compatibility := &blockingCompatibility{waitForCancellation: true}
-	handler, err := NewFinalizeHandler(store, compatibility)
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
+		t.Fatal(err)
+	}
+	family := &blockingFinalizeFamily{waitForCancellation: true}
+	if err := handler.SetNativeFinalizeFamilies(map[string]NativeFinalizeFamilyExecutor{
+		"ic_finalize": family,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	err = handler.Work(context.Background(), finalizeExecution())
 	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) ||
-		!compatibility.finalizeCanceled || store.finalizeCompletions != 0 {
+		!family.canceled() || store.finalizeCompletions != 0 {
 		t.Fatalf(
 			"lease loss = %v canceled=%t completions=%d",
 			err,
-			compatibility.finalizeCanceled,
+			family.canceled(),
 			store.finalizeCompletions,
 		)
 	}
+}
+
+// blockingFinalizeFamily plays the same role for FinalizeHandler tests that
+// blockingCompatibility plays for PartitionHandler tests (CHAOS-3092 PR-A':
+// there is no compatibility bridge left on the finalize side to block
+// instead). Either delay a fixed duration, or wait for the passed ctx to be
+// cancelled and record that it was -- never both, matching
+// blockingCompatibility's own two mutually exclusive modes.
+type blockingFinalizeFamily struct {
+	mu                  sync.Mutex
+	delay               time.Duration
+	waitForCancellation bool
+	wasCanceled         bool
+}
+
+func (family *blockingFinalizeFamily) ComputeFinalizeFamily(ctx context.Context, _ Run) (int, error) {
+	if family.waitForCancellation {
+		<-ctx.Done()
+		family.mu.Lock()
+		family.wasCanceled = true
+		family.mu.Unlock()
+		return 0, ctx.Err()
+	}
+	timer := time.NewTimer(family.delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-timer.C:
+		return 0, nil
+	}
+}
+
+func (family *blockingFinalizeFamily) canceled() bool {
+	family.mu.Lock()
+	defer family.mu.Unlock()
+	return family.wasCanceled
 }
 
 // TestDailyContractsPreserveMetricsQueueAsRiverDefault guards the metrics
@@ -1934,7 +2000,6 @@ type fakeCompatibility struct{}
 func (fakeCompatibility) ComputePartition(context.Context, Run, Partition, []string) error {
 	return nil
 }
-func (fakeCompatibility) Finalize(context.Context, Run, []string) error { return nil }
 
 // failingCompatibility always fails with a fixed, caller-chosen error --
 // used to prove the classified compatibility bridge sentinels (CHAOS-4264)
@@ -1942,10 +2007,6 @@ func (fakeCompatibility) Finalize(context.Context, Run, []string) error { return
 type failingCompatibility struct{ err error }
 
 func (compatibility failingCompatibility) ComputePartition(context.Context, Run, Partition, []string) error {
-	return compatibility.err
-}
-
-func (compatibility failingCompatibility) Finalize(context.Context, Run, []string) error {
 	return compatibility.err
 }
 
@@ -1963,7 +2024,6 @@ func (compatibility *recordingCompatibility) ComputePartition(_ context.Context,
 	compatibility.skipFamilies = append(compatibility.skipFamilies, skipFamilies)
 	return nil
 }
-func (*recordingCompatibility) Finalize(context.Context, Run, []string) error { return nil }
 
 func (compatibility *recordingCompatibility) lastSkipFamilies() []string {
 	compatibility.mu.Lock()

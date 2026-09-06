@@ -44,6 +44,13 @@ var (
 // what deletes the job, and the job is the only thing that can reclaim the lease
 // after it expires. The retry has to stay alive across the expiry instead.
 func TestFinalizeRetryInsideOrphanedLeaseKeepsTheJobAlive(t *testing.T) {
+	// CHAOS-3092 PR-A': this test's subject is lease/lock/retry mechanics,
+	// not finalize-family correctness -- no native family is registered, so
+	// the recognised set is narrowed to empty for its duration (no bridge
+	// left to make an empty registration inert the old way).
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	pool, store, leases := startStrandedRunFixture(t, ctx)
@@ -61,7 +68,7 @@ func TestFinalizeRetryInsideOrphanedLeaseKeepsTheJobAlive(t *testing.T) {
 	// Attempt 2: fires 17s later, exactly as River job 1282 did in production.
 	// The lease is orphaned but still live for another ~9m43s.
 	store.now = func() time.Time { return prodFinalizeRetry }
-	handler, err := NewFinalizeHandler(store, fakeCompatibility{})
+	handler, err := NewFinalizeHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}

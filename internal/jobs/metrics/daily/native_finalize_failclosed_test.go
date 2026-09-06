@@ -12,39 +12,21 @@ import (
 // CHAOS-4290, #2241 r1 Findings 1 and 3.
 //
 // The policy under test is that rowsWritten -- not merely err -- decides
-// whether the compatibility bridge is allowed to recompute a family. The old
-// code ignored rowsWritten entirely, so any error handed the family back to the
-// bridge even when the native executor had already written rows.
-
-// skipRecordingCompatibility records what the bridge was told to skip and
-// whether it would have written. `wrote` is the assertion that matters: the
-// bridge writing over a partial native result is the actual defect, and a test
-// that only inspected the skip list would pass on a bridge that ignored it.
-type skipRecordingCompatibility struct {
-	fakeCompatibility
-	sawSkip []string
-	called  bool
-	wrote   bool
-}
-
-func (bridge *skipRecordingCompatibility) Finalize(_ context.Context, _ Run, skip []string) error {
-	bridge.called = true
-	bridge.sawSkip = append([]string(nil), skip...)
-	for _, name := range skip {
-		if name == "ic_finalize" {
-			return nil
-		}
-	}
-	bridge.wrote = true
-	return nil
-}
+// whether a partial native write still fails the attempt. The old code
+// ignored rowsWritten entirely, so any error was treated identically whether
+// or not the native executor had already written rows.
+//
+// CHAOS-3092 PR-A' removed the compatibility bridge these tests used to also
+// assert stayed OUT after a failure (there is no bridge left to call at
+// all), so every test below narrows to the single behaviour that still
+// applies without it: does the attempt fail, and is the right outcome
+// reported.
 
 func finalizeHandlerWithFamily(
 	t *testing.T, family NativeFinalizeFamilyExecutor,
-) (*FinalizeHandler, *skipRecordingCompatibility, *recordingNativeFamilyObserver) {
+) (*FinalizeHandler, *recordingNativeFamilyObserver) {
 	t.Helper()
-	bridge := &skipRecordingCompatibility{}
-	handler, err := NewFinalizeHandler(finalizeStoreWithClaim(), bridge)
+	handler, err := NewFinalizeHandler(finalizeStoreWithClaim())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,14 +37,18 @@ func finalizeHandlerWithFamily(
 	); err != nil {
 		t.Fatal(err)
 	}
-	return handler, bridge, observer
+	return handler, observer
 }
 
-// THE FINDING ITSELF. An executor that fails after writing rows must keep the
-// bridge out, because a ClickHouse insert can commit and the call still fail.
-func TestAPartialNativeWriteFailsTheAttemptAndKeepsTheBridgeOut(t *testing.T) {
+// THE FINDING ITSELF. An executor that fails after writing rows must still
+// fail the attempt, because a ClickHouse insert can commit and the call
+// still fail -- a redrive is what repairs the run, not a second writer.
+func TestAPartialNativeWriteFailsTheAttempt(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	family := &stubFinalizeFamily{rows: 3, err: errors.New("failed after a durable insert")}
-	handler, bridge, observer := finalizeHandlerWithFamily(t, family)
+	handler, observer := finalizeHandlerWithFamily(t, family)
 
 	err := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
 	if err == nil {
@@ -72,20 +58,18 @@ func TestAPartialNativeWriteFailsTheAttemptAndKeepsTheBridgeOut(t *testing.T) {
 	if !errors.Is(err, ErrNativeFinalizeFamilyFailed) {
 		t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed", err)
 	}
-	if bridge.called {
-		t.Fatal("the bridge ran after a partial native write -- two writers on an " +
-			"append-only table, the later one winning silently")
-	}
 	assertObserved(t, observer, jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite, 3)
 }
 
 // There is NO fail-open half any more (#2241 r2 Findings 1 and 2). A family
-// that wrote nothing on THIS attempt may still have written on a previous one,
-// so handing it to the bridge is unsafe regardless of the current row count.
-// The attempt fails and River redrives it.
+// that wrote nothing on THIS attempt may still have written on a previous
+// one, so the attempt fails and River redrives it regardless.
 func TestAFailingFamilyThatWroteNothingAlsoFailsTheAttempt(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	family := &stubFinalizeFamily{rows: 0, err: errors.New("failed before writing anything")}
-	handler, bridge, observer := finalizeHandlerWithFamily(t, family)
+	handler, observer := finalizeHandlerWithFamily(t, family)
 
 	err := handler.Work(context.Background(), finalizeExecutionFor(testRunID))
 	if err == nil {
@@ -95,24 +79,20 @@ func TestAFailingFamilyThatWroteNothingAlsoFailsTheAttempt(t *testing.T) {
 	if !errors.Is(err, ErrNativeFinalizeFamilyFailed) {
 		t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed", err)
 	}
-	if bridge.called {
-		t.Fatal("the bridge ran after a native failure -- that is the fail-open " +
-			"this ruling removed, and it lets Python write a family registered native")
-	}
 	// Refused, not partial_write: nothing landed. The distinction still matters
 	// to an operator even though both outcomes now redrive.
 	assertObserved(t, observer, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0)
 }
 
 func TestASucceedingFamilyIsReportedComputedWithItsRowCount(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	family := &stubFinalizeFamily{rows: 7}
-	handler, bridge, observer := finalizeHandlerWithFamily(t, family)
+	handler, observer := finalizeHandlerWithFamily(t, family)
 
 	if err := handler.Work(context.Background(), finalizeExecutionFor(testRunID)); err != nil {
 		t.Fatalf("Work = %v, want success", err)
-	}
-	if bridge.wrote {
-		t.Fatal("the bridge recomputed a family that succeeded natively")
 	}
 	assertObserved(t, observer, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, 7)
 }
@@ -125,8 +105,7 @@ func TestACancelledContextStopsRemainingFamilies(t *testing.T) {
 	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
 	pythonRecognisedFinalizeFamilies = []string{"alpha", "zeta"}
 
-	bridge := &skipRecordingCompatibility{}
-	handler, err := NewFinalizeHandler(finalizeStoreWithClaim(), bridge)
+	handler, err := NewFinalizeHandler(finalizeStoreWithClaim())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,27 +123,30 @@ func TestACancelledContextStopsRemainingFamilies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	done := make(chan []string, 1)
+	done := make(chan error, 1)
 	go func() {
-		skip, _ := handler.computeNativeFinalizeFamilies(ctx, Run{})
-		done <- skip
+		done <- handler.computeNativeFinalizeFamilies(ctx, Run{})
 	}()
 
 	select {
-	case skip := <-done:
+	case err := <-done:
 		if zeta.calls != 0 {
 			t.Fatalf("zeta ran %d time(s) after the lease context was cancelled -- "+
 				"another worker may already be computing it", zeta.calls)
 		}
-		if len(skip) != 1 || skip[0] != "alpha" {
-			t.Fatalf("skip=%v, want [alpha] -- the family that completed before cancellation", skip)
+		if alpha.calls != 1 {
+			t.Fatalf("alpha ran %d time(s), want 1", alpha.calls)
+		}
+		if !errors.Is(err, ErrNativeFinalizeFamilyFailed) {
+			t.Fatalf("err = %v, want it to wrap ErrNativeFinalizeFamilyFailed (the cancellation)", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("computeNativeFinalizeFamilies did not return after cancellation")
 	}
 
-	// zeta never ran, so it provably wrote nothing and is REFUSED: the bridge
-	// on whichever worker owns the run next is expected to cover it.
+	// zeta never ran, so it provably wrote nothing and is REFUSED -- with no
+	// bridge left at all (CHAOS-3092 PR-A'), this run must be redriven for
+	// zeta to ever be written.
 	var sawZetaRefused bool
 	for _, call := range observer.calls {
 		if call.family == "zeta" && call.outcome == jobruntime.DailyMetricsNativeFamilyOutcomeRefused {

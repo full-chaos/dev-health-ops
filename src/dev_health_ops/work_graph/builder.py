@@ -16,14 +16,7 @@ from dev_health_ops.metrics.schemas import (
     WorkGraphEdgeRecord,
 )
 from dev_health_ops.metrics.sinks.factory import create_sink
-from dev_health_ops.work_graph.extractors.text_parser import (
-    RefType,
-    extract_github_issue_refs,
-    extract_gitlab_issue_refs,
-    extract_jira_keys,
-)
 from dev_health_ops.work_graph.ids import (
-    generate_commit_id,
     generate_edge_id,
     generate_feature_flag_id,
     generate_release_id,
@@ -346,8 +339,13 @@ class WorkGraphBuilder:
         # it have already committed their rows there) -- see
         # issuepredges.ExplicitLink's doc comment.
 
-        # 3b. Build issue->commit edges from commit message parsing
-        stats["issue_commit_edges"] = self._build_issue_commit_edges_from_text_parsing()
+        # 3b. Build issue->commit edges from commit message parsing:
+        # CHAOS-5304 ported to Go (internal/jobs/workgraph/issuecommitedges),
+        # wired as a native pre-step ahead of this bridge call, not here. stats
+        # stays at its 0 default (see the dict literal above) -- the native
+        # pre-step reports its own count through the ledger, same as
+        # issue_pr_links (CHAOS-5249) and pr_commit_links/pr_commit_edges
+        # (CHAOS-5264).
 
         # 4b/5. PR->commit link derivation and fast-path edges: CHAOS-5264
         # ported both to Go (internal/jobs/workgraph/prcommit), wired as
@@ -355,8 +353,11 @@ class WorkGraphBuilder:
         # its 0 default (line 441) -- the native pre-steps report their own
         # counts through the ledger, same as issue_pr_links (CHAOS-5249).
 
-        # 6. Commit->file edges are handled by view over git_commit_stats
-        stats["commit_file_edges"] = self._count_commit_file_edges()
+        # 6. Commit->file edges are handled by view over git_commit_stats:
+        # CHAOS-5306 ported to Go (issuecommitedges.CountCommitFileEdges),
+        # wired as a native pre-step ahead of this bridge call, not here. stats
+        # stays at its 0 default (see the dict literal above) -- the native
+        # pre-step reports its own count through the ledger.
 
         # 7/8. Feature-flag GUARDS edges and operational-incident edges:
         # CHAOS-4924 ported both to Go (internal/jobs/workgraph/operationaledges),
@@ -398,261 +399,6 @@ class WorkGraphBuilder:
             + " SETTINGS mutations_sync=2",
             parameters=params or None,
         )
-
-    def _build_issue_commit_edges_from_text_parsing(self) -> int:
-        """Build issue->commit edges by parsing commit messages for issue refs."""
-        logger.info("Building issue->commit edges from commit message parsing...")
-
-        commit_query = """
-        SELECT
-            repo_id,
-            hash,
-            message,
-            author_when
-        FROM git_commits
-        WHERE message IS NOT NULL AND message != ''
-        """
-        where_clauses = []
-        if self.config.from_date:
-            where_clauses.append(
-                f"author_when >= '{_format_datetime_for_clickhouse(self.config.from_date)}'"
-            )
-        if self.config.to_date:
-            where_clauses.append(
-                f"author_when <= '{_format_datetime_for_clickhouse(self.config.to_date)}'"
-            )
-        if self.config.repo_id:
-            where_clauses.append(f"repo_id = '{self.config.repo_id}'")
-        if self.config.org_id:
-            where_clauses.append(f"org_id = '{self.config.org_id}'")
-
-        if where_clauses:
-            commit_query += " AND " + " AND ".join(where_clauses)
-
-        commit_rows = self.sink.query_dicts(commit_query, {})
-        logger.info("Found %d commits to process for issue refs", len(commit_rows))
-
-        if not commit_rows:
-            return 0
-
-        wi_query = """
-        SELECT
-            repo_id,
-            work_item_id,
-            provider,
-            project_key,
-            project_id
-        FROM work_items FINAL
-        """
-        if self.config.org_id:
-            wi_query += f" WHERE org_id = '{self.config.org_id}'"
-        wi_rows = self.sink.query_dicts(wi_query, {})
-
-        jira_key_lookup: dict[str, str] = {}
-        gh_issue_lookup: dict[tuple[str, str], str] = {}
-        gl_issue_lookup: dict[tuple[str, str], str] = {}
-
-        for wi_row in wi_rows:
-            repo_id = wi_row.get("repo_id")
-            work_item_id = wi_row.get("work_item_id")
-            provider = wi_row.get("provider")
-
-            if provider == "jira" and work_item_id:
-                if str(work_item_id).startswith("jira:"):
-                    jira_key = str(work_item_id)[5:]
-                    jira_key_lookup[jira_key.upper()] = str(work_item_id)
-            elif provider == "github" and repo_id and work_item_id:
-                if "#" in str(work_item_id):
-                    issue_num = str(work_item_id).split("#")[-1]
-                    gh_issue_lookup[(str(repo_id), issue_num)] = str(work_item_id)
-            elif provider == "gitlab" and repo_id and work_item_id:
-                if "#" in str(work_item_id):
-                    issue_num = str(work_item_id).split("#")[-1]
-                    gl_issue_lookup[(str(repo_id), issue_num)] = str(work_item_id)
-
-        logger.info(
-            "Built lookups for commits: jira=%d, github=%d, gitlab=%d",
-            len(jira_key_lookup),
-            len(gh_issue_lookup),
-            len(gl_issue_lookup),
-        )
-
-        edges: list[WorkGraphEdge] = []
-        jira_refs_found = 0
-        gh_refs_found = 0
-        gl_refs_found = 0
-        seen_edges: set[str] = set()
-
-        for commit_row in commit_rows:
-            repo_id = commit_row.get("repo_id")
-            commit_hash = commit_row.get("hash")
-            message = commit_row.get("message") or ""
-            author_when = commit_row.get("author_when")
-
-            if not message or not commit_hash:
-                continue
-
-            repo_id_str = str(repo_id)
-            repo_uuid = uuid.UUID(repo_id_str)
-            commit_id = generate_commit_id(repo_uuid, str(commit_hash))
-
-            event_ts = author_when
-            if isinstance(event_ts, str):
-                try:
-                    event_ts = datetime.fromisoformat(event_ts.replace("Z", "+00:00"))
-                except ValueError:
-                    event_ts = self._now
-            if event_ts and event_ts.tzinfo is None:
-                event_ts = event_ts.replace(tzinfo=timezone.utc)
-            if not event_ts:
-                event_ts = self._now
-
-            jira_refs = extract_jira_keys(message)
-            jira_refs_found += len(jira_refs)
-            for ref in jira_refs:
-                work_item_id = jira_key_lookup.get(ref.issue_key.upper())
-                if work_item_id:
-                    edge_type = (
-                        EdgeType.IMPLEMENTS
-                        if ref.ref_type == RefType.CLOSES
-                        else EdgeType.REFERENCES
-                    )
-                    edge_id = generate_edge_id(
-                        NodeType.COMMIT,
-                        commit_id,
-                        edge_type,
-                        NodeType.ISSUE,
-                        work_item_id,
-                    )
-                    if edge_id in seen_edges:
-                        continue
-                    seen_edges.add(edge_id)
-
-                    edges.append(
-                        WorkGraphEdge(
-                            edge_id=edge_id,
-                            source_type=NodeType.COMMIT,
-                            source_id=commit_id,
-                            target_type=NodeType.ISSUE,
-                            target_id=work_item_id,
-                            edge_type=edge_type,
-                            repo_id=repo_uuid,
-                            provider="jira",
-                            provenance=Provenance.EXPLICIT_TEXT,
-                            confidence=0.85,
-                            evidence=ref.raw_match,
-                            discovered_at=self._now,
-                            last_synced=self._now,
-                            event_ts=event_ts,
-                        )
-                    )
-
-            gh_refs = extract_github_issue_refs(message)
-            gh_refs_found += len(gh_refs)
-            for ref in gh_refs:
-                work_item_id = gh_issue_lookup.get((repo_id_str, ref.issue_key))
-                if work_item_id:
-                    edge_type = (
-                        EdgeType.IMPLEMENTS
-                        if ref.ref_type == RefType.CLOSES
-                        else EdgeType.REFERENCES
-                    )
-                    edge_id = generate_edge_id(
-                        NodeType.COMMIT,
-                        commit_id,
-                        edge_type,
-                        NodeType.ISSUE,
-                        work_item_id,
-                    )
-                    if edge_id in seen_edges:
-                        continue
-                    seen_edges.add(edge_id)
-
-                    edges.append(
-                        WorkGraphEdge(
-                            edge_id=edge_id,
-                            source_type=NodeType.COMMIT,
-                            source_id=commit_id,
-                            target_type=NodeType.ISSUE,
-                            target_id=work_item_id,
-                            edge_type=edge_type,
-                            repo_id=repo_uuid,
-                            provider="github",
-                            provenance=Provenance.EXPLICIT_TEXT,
-                            confidence=0.85,
-                            evidence=ref.raw_match,
-                            discovered_at=self._now,
-                            last_synced=self._now,
-                            event_ts=event_ts,
-                        )
-                    )
-
-            gl_refs = extract_gitlab_issue_refs(message)
-            gl_refs_found += len(gl_refs)
-            for ref in gl_refs:
-                work_item_id = gl_issue_lookup.get((repo_id_str, ref.issue_key))
-                if work_item_id:
-                    edge_type = (
-                        EdgeType.IMPLEMENTS
-                        if ref.ref_type == RefType.CLOSES
-                        else EdgeType.REFERENCES
-                    )
-                    edge_id = generate_edge_id(
-                        NodeType.COMMIT,
-                        commit_id,
-                        edge_type,
-                        NodeType.ISSUE,
-                        work_item_id,
-                    )
-                    if edge_id in seen_edges:
-                        continue
-                    seen_edges.add(edge_id)
-
-                    edges.append(
-                        WorkGraphEdge(
-                            edge_id=edge_id,
-                            source_type=NodeType.COMMIT,
-                            source_id=commit_id,
-                            target_type=NodeType.ISSUE,
-                            target_id=work_item_id,
-                            edge_type=edge_type,
-                            repo_id=repo_uuid,
-                            provider="gitlab",
-                            provenance=Provenance.EXPLICIT_TEXT,
-                            confidence=0.85,
-                            evidence=ref.raw_match,
-                            discovered_at=self._now,
-                            last_synced=self._now,
-                            event_ts=event_ts,
-                        )
-                    )
-
-        edge_count = self._write_edges(edges)
-        logger.info(
-            "Commit message refs: jira=%d, github=%d, gitlab=%d",
-            jira_refs_found,
-            gh_refs_found,
-            gl_refs_found,
-        )
-        logger.info("Created %d issue->commit edges from commit messages", edge_count)
-        return edge_count
-
-    def _count_commit_file_edges(self) -> int:
-        """Count commit->file edges."""
-        # View work_graph_commit_file is specific to ClickHouse.
-        # For others, we count git_commit_stats rows.
-        query = "SELECT count(*) AS total FROM git_commit_stats"
-        org_id_clause = self._org_id_clause()
-        if org_id_clause:
-            query += f" WHERE 1=1 {org_id_clause}"
-        try:
-            rows = self.sink.query_dicts(query, {})
-            count = rows[0].get("total") if rows else 0
-            logger.info("Found %d commit->file edges", count)
-            return int(count or 0)
-        except Exception as e:
-            logger.warning("Could not count commit->file edges: %s", e)
-            return 0
 
 
 # CHAOS-5303 r1 P2: this module used to end with its own standalone

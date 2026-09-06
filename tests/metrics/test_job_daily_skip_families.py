@@ -340,10 +340,14 @@ async def test_team_wellbeing_skip_does_not_affect_other_families(
     )
 
     # CHAOS-5308: repo_metrics is no longer written at all (repo_user_commit's
-    # compute+write is deleted) -- team_metrics is the unconditional write
-    # this test uses instead to prove team_wellbeing being skipped didn't
-    # perturb an unrelated family.
-    assert "team_metrics" in sink.write_calls
+    # compute+write is deleted). team_metrics is NOT a safe substitute here
+    # either -- write_team_metrics no-ops on an empty list, and skipping
+    # team_wellbeing is exactly what empties it in this fixture. Use
+    # write_cicd_metrics/write_incident_metrics instead: both are
+    # unconditional in _FakeLoader's fixture and unaffected by either
+    # team_wellbeing or repo_user_commit being skipped/deleted.
+    assert "write_cicd_metrics" in sink.write_calls
+    assert "write_incident_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio

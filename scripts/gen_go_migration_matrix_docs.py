@@ -300,6 +300,24 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         ),
         "ticket": "CHAOS-5141",
     },
+    "team_complexity": {
+        # CHAOS-5051: finalize scope like team_cognitive_load and ic_finalize,
+        # but with NO co-registration dependency on either -- its only input
+        # is repo_complexity_daily, written by the complexity scan job on its
+        # own cadence, never by another finalize family in this run. Python
+        # compute deleted outright (not skip-gated) in the same PR: same
+        # reachability analysis CHAOS-5141 established for team_cognitive_load
+        # -- buildDailyWorker refuses the whole daily worker before any native
+        # family construction is attempted if the ClickHouse connection fails
+        # to open, so a construction-time fallback to Python was never
+        # actually reachable in production.
+        "citation": (
+            "Go: `internal/jobs/metrics/daily/team_complexity_native_executor.go` "
+            "(finalize scope, no co-registration dependency) + "
+            "`team_complexity_clickhouse.go`. No Python remainder."
+        ),
+        "ticket": "CHAOS-5051",
+    },
     "testops_risk": {
         "citation": "Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute. CHAOS-5245 deleted the Python compute (`compute_testops_risk.py`) entirely -- no fallback left.",
         "ticket": "CHAOS-4294 (Done)",
@@ -514,12 +532,12 @@ DAILY_FINALIZE_FN = "run_daily_metrics_finalize"
 # compute_ic_metrics_daily/compute_ic_landscape_rolling are DELIBERATELY
 # ABSENT here (CHAOS-4290, removed once ic_finalize went native). They used
 # to map to ("daily", "ic_finalize") back when ic_finalize was port=pending,
-# which is a DIFFERENT shape from complexity/compounding_risk's entries
-# above: those two are a family whose PRIMARY registration is partition/repo-
-# scoped (SetNativeFamilies) with a genuinely separate, unconditionally-
-# executing TEAM-scope Python remainder -- no skip_families gate exists for
-# that remainder at all (see compounding_risk's phase_note). ic_finalize has
-# no such split: its ENTIRE scope is finalize (registered only via
+# which is a DIFFERENT shape from compounding_risk's entry above: that one is
+# a family whose PRIMARY registration is partition/repo-scoped
+# (SetNativeFamilies) with a genuinely separate, unconditionally-executing
+# TEAM-scope Python remainder -- no skip_families gate exists for that
+# remainder at all (see compounding_risk's phase_note). ic_finalize has no
+# such split: its ENTIRE scope is finalize (registered only via
 # SetNativeFinalizeFamilies, never SetNativeFamilies), and both Python calls
 # are gated behind the identical `if "ic_finalize" not in skip_families`
 # check every other wholly-native family's dormant bridge fallback uses.
@@ -531,9 +549,24 @@ DAILY_FINALIZE_FN = "run_daily_metrics_finalize"
 # AST-present but skip_families-gated dormant call is exactly the
 # "infrastructure, not a live per-family write" case this function's own
 # docstring describes for every other native family).
-FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, tuple[str, str]] = {
-    "_write_team_complexity_for_day": ("remaining", "complexity"),
-}
+#
+# "_write_team_complexity_for_day" -> ("remaining", "complexity") is REMOVED
+# here (CHAOS-5051, kept for history): it was always a slight misattribution
+# -- the call computes team_complexity_daily (a TEAM-keyed rollup, its own
+# "daily" family since this same PR), not anything remaining/complexity
+# itself writes (repo_complexity_daily / file_complexity_snapshots) -- but it
+# was the only mechanical evidence available at the time that a
+# "complexity"-named finalize call existed at all, before team_complexity had
+# its own native registration to classify under instead. CHAOS-5051 deletes
+# the call (and its Python compute) entirely, same reachability analysis
+# CHAOS-5141 established for team_cognitive_load -- there is no longer any
+# finalize-scope Python call for the AST walk to find, mechanically or
+# irregularly, so no ledger entry is needed or possible for it anymore.
+# remaining/complexity's own repo-scope status (still port=compat today) is
+# unaffected; only its previously-misattributed finalize-scope label goes
+# away, which is CORRECT: that label was never really about
+# remaining/complexity's own compute to begin with.
+FINALIZE_CALL_IRREGULAR_FAMILY: dict[str, tuple[str, str]] = {}
 
 # CHAOS-5141 (historical): `_write_team_cognitive_load_for_day` was once the
 # FIRST call this generator saw that fit the `_write_<family>_..._for_day`

@@ -62,11 +62,12 @@ func TestEveryRecognisedFinalizeFamilyHasAPythonGate(t *testing.T) {
 	}
 }
 
-// CHAOS-5141: team_cognitive_load is registerable as native (still lives in
-// pythonRecognisedFinalizeFamilies) but its Python compute was deleted
-// entirely -- it must NOT have a live gate line for the test above to ever
-// find, or a future accidental re-add of the Python compute would silently
-// re-introduce the two-writer hazard this whole file exists to prevent.
+// CHAOS-5141/CHAOS-5051: team_cognitive_load and team_complexity are both
+// registerable as native (still live in pythonRecognisedFinalizeFamilies)
+// but their Python compute was deleted entirely -- neither must have a live
+// gate line for the test above to ever find, or a future accidental re-add
+// of either family's Python compute would silently re-introduce the
+// two-writer hazard this whole file exists to prevent.
 func TestDeletedPythonComputeFamilyHasNoGateLine(t *testing.T) {
 	source := pythonFinalizeSource(t)
 	for _, family := range pythonRecognisedFinalizeFamilies {

@@ -22,7 +22,21 @@ import (
 // afterward by splitTemplateLiterals, mirroring Python's two-step order:
 // CodeReader.generate_tokens produces ONE `...` token first, THEN
 // TypeScriptReader's own body splits it).
-const tsAddition = `|(?:#\w+)` + `|(?:\$\w+)` + `|(?:\w+\?)` + "|`.*?`"
+//
+// BUG FIXED HERE (CHAOS-5328 r1): all three `\w+` alternatives were still
+// RE2's ASCII-only `\w`, unlike tokenize.go's own shared identifier class
+// (`[\p{L}\p{N}_]+`) and every other reader's own addition in this
+// package (php.go's `$var`, ruby_tokenize.go's, swift.go's/kotlin.go's
+// three each -- all already carry this exact fix per their own comments).
+// A Unicode-named private field/optional-property glue split into ASCII
+// and non-ASCII halves here abandons the enclosing declaration the same
+// way the general identifier bug did (tokenize.go:150) -- confirmed
+// against real lizard 1.23.0: a Unicode-named private method
+// (`#é(x){...}`) vanished ENTIRELY (0 functions found, not merely
+// miscounted), and a Unicode-named optional property (`{ é?: number }`)
+// overcounted the enclosing function's complexity by one (the glue never
+// applied, so the lone `?` was double-read as a ternary condition).
+const tsAddition = `|(?:#[\p{L}\p{N}_]+)` + `|(?:\$[\p{L}\p{N}_]+)` + `|(?:[\p{L}\p{N}_]+\?)` + "|`.*?`"
 
 var tsTokenPattern = buildTokenPattern(tsAddition)
 

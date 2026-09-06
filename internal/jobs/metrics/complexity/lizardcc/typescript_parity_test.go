@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -203,5 +204,64 @@ func TestInterfaceAndTypeAliasContributeNoFunctions(t *testing.T) {
 	if len(complexities) != 4 {
 		t.Errorf("got %d functions, want 4 (interface/type-alias bodies must contribute none): %v",
 			len(complexities), complexities)
+	}
+}
+
+// TestUnicodeIdentifiersInTSAdditionAreNotSplit is CHAOS-5328 r1's F2
+// regression: tsAddition's three `\w+` alternatives (private-field,
+// dollar-prefixed identifier, optional-property/chaining glue) were still
+// RE2's ASCII-only `\w` -- the same class of bug tokenize.go's own shared
+// identifier class was already fixed for (CHAOS-5156), just missed in
+// this reader's own addition. Confirmed against real lizard 1.23.0:
+// a Unicode-named optional property overcounted the enclosing function's
+// complexity by one (the glue never applied, so the lone `?` doubled as a
+// ternary condition); a Unicode-named JS private method was DROPPED
+// entirely (0 functions found instead of 1) -- the more severe direction,
+// since a whole function's complexity silently vanished from the metric.
+// javascript/typescript/vue all share this one tokenizer (see this file's
+// own package doc), so all three are exercised here.
+func TestUnicodeIdentifiersInTSAdditionAreNotSplit(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func(string, string) ([]int, bool, error)
+		path string
+		src  string
+		want []int
+	}{
+		{
+			name: "typescript_unicode_optional_property",
+			fn:   AnalyzeTypeScript,
+			path: "regression_unicode.ts",
+			src:  "function f(x: { é?: number }) { return x; }\n",
+			want: []int{1},
+		},
+		{
+			name: "javascript_unicode_private_method",
+			fn:   AnalyzeJavaScript,
+			path: "regression_unicode.js",
+			src:  "class C { #é(x) { if (x) { return x; } } }\n",
+			want: []int{2},
+		},
+		{
+			name: "vue_unicode_optional_property",
+			fn:   AnalyzeVue,
+			path: "regression_unicode.vue",
+			src:  "<script setup lang=\"ts\">function f(x: { é?: number }) { return x; }</script>\n",
+			want: []int{1},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			complexities, skipped, err := c.fn(c.path, c.src)
+			if err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if skipped {
+				t.Fatalf("%s: expected the file to be analysed, got skipped", c.name)
+			}
+			if !reflect.DeepEqual(complexities, c.want) {
+				t.Fatalf("%s: got %v, want %v (lizard 1.23.0 reference)", c.name, complexities, c.want)
+			}
+		})
 	}
 }

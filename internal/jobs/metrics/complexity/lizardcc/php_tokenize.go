@@ -85,38 +85,67 @@ func phpTokenizeCodeBlock(code string) []string {
 	return accumulateMacros(mergeTemplateQuestionRuns(phpExtractHeredocs(code)))
 }
 
+// phpHeredocScanPattern finds whichever comes FIRST in the remaining text:
+// a block comment, a line comment, a double-quoted string, a single-quoted
+// string, or a bare "<<<". It exists ONLY to make phpExtractHeredocs
+// string/comment-aware: an ordinary string or comment matched here is
+// consumed whole (via leftmost-match precedence) BEFORE the scan ever
+// considers a "<<<" that happens to occur inside it -- fixing the
+// FORMERLY-KNOWN "cannot occur in practice" limitation this file used to
+// document. CHAOS-5328 r1 found a real trigger: `'<<<SQL if'` (an
+// ordinary string literal whose content happens to start with "<<<") was
+// split in half by the old raw `strings.Index(code, "<<<")` scan, which
+// ran on unstructured text with no notion of "inside a string" at all --
+// the opening quote and everything after "<<<" were tokenized as two
+// separate, now-desynchronized halves, corrupting every token for the
+// REST OF THE FILE and silently dropping every function that followed.
+// The four string/comment alternatives below are copied verbatim from
+// buildTokenPattern's own pattern (tokenize.go) -- phpAddition (the `$var`
+// addition) is deliberately NOT included, since it can never itself
+// contain "<<<" or a quote/comment delimiter.
+var phpHeredocScanPattern = regexp.MustCompile(
+	`(?s)(?:` +
+		`/\*.*?\*/` +
+		`|//(?:\\` + "\n" + `|[^` + "\n" + `])*` +
+		`|"(?:\\.|[^"\\])*"` +
+		`|'(?:\\.|[^'\\])*?'` +
+		`|<<<` +
+		`)`,
+)
+
 // phpExtractHeredocs scans code for PHP heredoc/nowdoc openers ("<<<"
-// followed immediately by an identifier), splicing each COMPLETE span
-// found (opener through the first later literal recurrence of that exact
-// identifier text) in as one opaque token, and running phpTokenPattern
-// over every other stretch of text normally.
-//
-// KNOWN, DELIBERATE LIMITATION (documented, not silently accepted): this
-// scan operates on the RAW code text, not token-boundary-aware the way a
-// single combined regex naturally is -- a literal "<<<LABEL...LABEL"
-// substring appearing INSIDE a comment or an ordinary string literal would
-// be spliced out here even though Python's real regex, reaching that
-// position only AFTER the comment/string alternative already consumed it
-// whole, never would. This cannot occur in any fixture this package
-// controls (see this package's corpus files), and "<<<" beginning a
-// genuine heredoc is definitionally never inside a string/comment in
-// working PHP, so the gap is real but has no practical trigger; flagged
-// here rather than left implicit, matching this package's convention for
-// every other RE2-forced deviation.
+// followed immediately by an identifier, and NOT already consumed as part
+// of an ordinary string or comment -- see phpHeredocScanPattern above),
+// splicing each COMPLETE span found (opener through the first later
+// literal recurrence of that exact identifier text) in as one opaque
+// token, and running phpTokenPattern over every other stretch of text
+// normally.
 func phpExtractHeredocs(code string) []string {
 	var out []string
 	pos := 0
 	for {
-		idx := strings.Index(code[pos:], "<<<")
-		if idx == -1 {
+		loc := phpHeredocScanPattern.FindStringIndex(code[pos:])
+		if loc == nil {
 			out = append(out, phpTokenPattern.FindAllString(code[pos:], -1)...)
 			return out
 		}
-		absIdx := pos + idx
-		out = append(out, phpTokenPattern.FindAllString(code[pos:absIdx], -1)...)
+		start, end := pos+loc[0], pos+loc[1]
+		if code[start:end] != "<<<" {
+			// A string literal or comment matched first (it starts before
+			// any "<<<" in the remaining text, if one even exists) --
+			// tokenize everything up to and including it normally (the
+			// plain tokenizer matches this exact same alternative as one
+			// token) and resume scanning right after it. Any "<<<" INSIDE
+			// this match is therefore never seen as a bare "<<<" at all.
+			out = append(out, phpTokenPattern.FindAllString(code[pos:end], -1)...)
+			pos = end
+			continue
+		}
+		// matched == "<<<", found outside any string/comment.
+		out = append(out, phpTokenPattern.FindAllString(code[pos:start], -1)...)
 
-		if closeEnd, ok := phpHeredocSpan(code, absIdx); ok {
-			out = append(out, code[absIdx:closeEnd])
+		if closeEnd, ok := phpHeredocSpan(code, start); ok {
+			out = append(out, code[start:closeEnd])
 			pos = closeEnd
 			continue
 		}
@@ -126,8 +155,8 @@ func phpExtractHeredocs(code string) []string {
 		// ordinary tokenization (one char at a time via the base
 		// pattern's catch-all, since PHP defines no "<<" combined
 		// symbol), and scanning resumes right after it.
-		out = append(out, phpTokenPattern.FindAllString(code[absIdx:absIdx+3], -1)...)
-		pos = absIdx + 3
+		out = append(out, phpTokenPattern.FindAllString(code[start:start+3], -1)...)
+		pos = start + 3
 	}
 }
 

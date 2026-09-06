@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -149,4 +150,47 @@ func TestLizardGoldenIsNotStalePHP(t *testing.T) {
 // silently.
 func TestEveryConditionIsExercisedByThePHPCorpus(t *testing.T) {
 	assertEveryConditionExercisedByCorpus(t, phpConditions, phpCorpusDir(t))
+}
+
+// TestPHPHeredocScanIgnoresLtLtLtInsideOrdinaryStrings is CHAOS-5328 r1's
+// F1 regression: an ordinary PHP string literal whose content happens to
+// start with "<<<" (a plausible real-world shape, e.g. building SQL/shell
+// text) must never be mistaken for a heredoc/nowdoc opener. Before the
+// fix, phpExtractHeredocs (php_tokenize.go) scanned RAW code text for a
+// bare "<<<" BEFORE tokenization, found it inside this string, and split
+// the string's raw text in half at that point -- the string's own closing
+// quote survived with no partner, corrupting every token for the REST OF
+// THE FILE and silently dropping every function that followed (0
+// functions found instead of 1). Confirmed against real lizard 1.23.0:
+// expected complexity [2] (function f, one `if`).
+func TestPHPHeredocScanIgnoresLtLtLtInsideOrdinaryStrings(t *testing.T) {
+	src := "<?php\n$s = '<<<SQL if';\nfunction f() { if (true) { return 1; } }\n"
+	complexities, skipped, err := AnalyzePHP("regression_string_lt3.php", src)
+	if err != nil {
+		t.Fatalf("AnalyzePHP: %v", err)
+	}
+	if skipped {
+		t.Fatalf("expected the file to be analysed, got skipped")
+	}
+	if want := []int{2}; !reflect.DeepEqual(complexities, want) {
+		t.Fatalf("got %v, want %v (lizard 1.23.0 reference)", complexities, want)
+	}
+}
+
+// TestPHPRealHeredocStillExtractedAfterTheStringAwareFix is the negative
+// control for the fix above: a GENUINE heredoc must still be spliced as
+// one opaque token by the now string/comment-aware scan, not broken by
+// making the scan too conservative in the other direction.
+func TestPHPRealHeredocStillExtractedAfterTheStringAwareFix(t *testing.T) {
+	src := "<?php\n$s = <<<EOT\nhello world\nEOT;\nfunction f() { if (true) { return 1; } }\n"
+	complexities, skipped, err := AnalyzePHP("regression_real_heredoc.php", src)
+	if err != nil {
+		t.Fatalf("AnalyzePHP: %v", err)
+	}
+	if skipped {
+		t.Fatalf("expected the file to be analysed, got skipped")
+	}
+	if want := []int{2}; !reflect.DeepEqual(complexities, want) {
+		t.Fatalf("got %v, want %v (lizard 1.23.0 reference)", complexities, want)
+	}
 }

@@ -363,22 +363,14 @@ func buildDailyWorker(
 		// only ever backs PartitionHandler's Claim/CompletePartition here,
 		// never StartRunTx -- see sync_dispatch.go's remainingStore, the
 		// store post-sync's dora coverage check actually runs through.
-		var compatibilityObserver remaining.CompatibilityObserver
-		if candidate, ok := observer.(remaining.CompatibilityObserver); ok {
-			compatibilityObserver = candidate
-		}
-		compatibility, compatibilityErr := remaining.NewHTTPCompatibilityExecutor(
-			metricCompatibilityHTTPClient(cfg.OperationalBridgeTimeout),
-			remaining.HTTPCompatibilityConfig{
-				Endpoint:              baseURL + "/internal/worker/remaining-metrics/v1/execute",
-				BearerToken:           cfg.OperationalBridgeToken.Reveal(),
-				AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
-				Logger:                logger,
-				Observer:              compatibilityObserver,
-			},
-		)
+		//
+		// CHAOS-4291 deleted the HTTP compatibility-bridge executor this
+		// block used to construct here: complexity was the last
+		// remaining-metrics kind still served through it (see
+		// remaining.ComplexityExecutor's own doc), and every kind below now
+		// constructs and refuses its own native executor independently.
 		budget, budgetErr := remaining.NewBudget(inventory)
-		if storeErr != nil || compatibilityErr != nil || budgetErr != nil {
+		if storeErr != nil || budgetErr != nil {
 			if metricsClickHouse != nil {
 				_ = metricsClickHouse.Close()
 			}
@@ -488,6 +480,49 @@ func buildDailyWorker(
 				}
 			} else {
 				capacityExecutor = executor
+			}
+		}
+
+		// CHAOS-4291: the complexity kind computes natively too -- the last
+		// remaining kind still served through the HTTP compatibility bridge
+		// (see remaining.ComplexityExecutor's own doc). Same per-kind
+		// discipline as dora/capacity above -- a refusal takes THIS KIND out
+		// of service and leaves its siblings registered, with a positive
+		// signal rather than a metric that merely stops moving.
+		var complexityExecutor *remaining.ComplexityExecutor
+		if slices.ContainsFunc(remainingSpecs, func(spec jobruntime.HandlerSpec) bool {
+			return spec.Kind == jobcontract.KindRemainingComplexity
+		}) {
+			if metricsClickHouse == nil {
+				connection, connectionErr := clickhousestore.Open(
+					context.Background(),
+					clickhousestore.DefaultConfig(cfg.ClickHouseURI.Reveal()),
+				)
+				if connectionErr != nil {
+					return workerFamily{}, errWorkerDependencyUnavailable
+				}
+				metricsClickHouse = connection
+			}
+			var complexityObserver remaining.ComplexityObserver
+			if candidate, ok := observer.(remaining.ComplexityObserver); ok {
+				complexityObserver = candidate
+			}
+			executor, executorErr := remaining.NewComplexityExecutor(
+				context.Background(), metricsClickHouse, cfg.WorkerRemainingComplexityConfigPath, complexityObserver,
+			)
+			if executorErr != nil {
+				logger.Error(
+					"complexity native executor refused; the complexity kind "+
+						"will not be served and its partitions will accumulate "+
+						"unclaimed. Every other remaining kind is unaffected.",
+					"error", executorErr,
+					"reason", complexityRefusalReason(executorErr),
+				)
+				if refusalObserver, ok := observer.(complexityRefusalObserver); ok {
+					_ = refusalObserver.ObserveComplexityRefused(complexityRefusalReason(executorErr))
+				}
+			} else {
+				complexityExecutor = executor
 			}
 		}
 
@@ -705,8 +740,16 @@ func buildDailyWorker(
 					workers, registry, spec, store, capacityExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingComplexity:
+				if complexityExecutor == nil {
+					// Refused above. Skip rather than register a handler
+					// around a nil executor, which would claim partitions
+					// and fail each one.
+					continue
+				}
+				// Native, not `compatibility` -- this is the CHAOS-4291
+				// cutover.
 				registeredSpec, registrationErr = addRemainingWorker[jobruntime.RemainingComplexityArgs](
-					workers, registry, spec, store, compatibility, dependencies, family.Name,
+					workers, registry, spec, store, complexityExecutor, dependencies, family.Name,
 				)
 			case jobcontract.KindRemainingDORA:
 				if doraExecutor == nil {
@@ -1435,6 +1478,25 @@ func capacityRefusalReason(err error) string {
 		return jobruntime.CapacityRefusedSchemaIncompatible
 	}
 	return jobruntime.CapacityRefusedInspectFailed
+}
+
+// complexityRefusalObserver is the narrow capability the complexity cutover
+// needs to make a refusal visible, kept local so a collector without it
+// degrades to log-only rather than failing the build.
+type complexityRefusalObserver interface {
+	ObserveComplexityRefused(reason string) error
+}
+
+// complexityRefusalReason maps a construction error onto the closed label
+// set. The two are distinguished because they call for different actions: an
+// unavailable ClickHouse connection (including an unreadable complexity.yaml)
+// is transient and self-heals, an incompatible schema means finish or roll
+// back a migration.
+func complexityRefusalReason(err error) string {
+	if errors.Is(err, remaining.ErrComplexitySchemaIncompatible) {
+		return jobruntime.ComplexityRefusedSchemaIncompatible
+	}
+	return jobruntime.ComplexityRefusedUnavailable
 }
 
 // workItemAttributionRefusalObserver is the narrow capability the

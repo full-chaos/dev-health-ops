@@ -35,7 +35,9 @@ def main():
 
     bad = 0
     cache = {}
-    for line in open(args.table, encoding="utf-8"):
+    with open(args.table, encoding="utf-8") as f:
+        table_lines = f.readlines()
+    for line in table_lines:
         if not line.strip():
             continue
         m = json.loads(line)
@@ -45,7 +47,8 @@ def main():
                 print("PREFLIGHT {}: file {} does not exist".format(m["id"], m["file"]))
                 bad += 1
                 continue
-            cache[path] = open(path, encoding="utf-8").read()
+            with open(path, encoding="utf-8") as pf:
+                cache[path] = pf.read()
         body = cache[path]
 
         n = body.count(m["needle"])

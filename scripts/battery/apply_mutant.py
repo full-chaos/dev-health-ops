@@ -36,9 +36,11 @@ def main():
     ap.add_argument("--spec", required=True, help="a single-mutant JSON file")
     args = ap.parse_args()
 
-    m = json.loads(open(args.spec, encoding="utf-8").read())
+    with open(args.spec, encoding="utf-8") as f:
+        m = json.loads(f.read())
     path = os.path.join(args.root, m["file"])
-    body = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as f:
+        body = f.read()
 
     n = body.count(m["needle"])
     if n == 0:
@@ -49,9 +51,8 @@ def main():
         return 0
 
     before = sha256_of(path)
-    open(path, "w", encoding="utf-8").write(
-        body.replace(m["needle"], m.get("replacement", ""), 1)
-    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(body.replace(m["needle"], m.get("replacement", ""), 1))
     after = sha256_of(path)
     if before == after:
         # Cannot happen for a non-empty change, which is exactly why it is

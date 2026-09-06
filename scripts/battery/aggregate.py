@@ -62,9 +62,10 @@ def main():
     args = ap.parse_args()
 
     table = []
-    for line in open(args.table, encoding="utf-8"):
-        if line.strip():
-            table.append(json.loads(line))
+    with open(args.table, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                table.append(json.loads(line))
     all_ids = [m["id"] for m in table]
     kinds = {m["id"]: m.get("kind", "delete") for m in table}
 
@@ -104,7 +105,8 @@ def main():
         glob.glob(os.path.join(args.arms_dir, "**", "*.json"), recursive=True)
     ):
         try:
-            v = json.loads(open(path, encoding="utf-8").read())
+            with open(path, encoding="utf-8") as f:
+                v = json.loads(f.read())
         except Exception as exc:  # noqa: BLE001
             print(f"skipping unreadable verdict {path}: {exc}", file=sys.stderr)
             continue
@@ -222,7 +224,8 @@ def main():
     if args.summary_out == "-":
         sys.stdout.write(text)
     else:
-        open(args.summary_out, "w", encoding="utf-8").write(text)
+        with open(args.summary_out, "w", encoding="utf-8") as f:
+            f.write(text)
         sys.stdout.write(text)
 
     return 1 if problems else 0

@@ -474,10 +474,10 @@ async def test_deploy_compute_and_write_are_deleted_from_job_daily(
     same rule as CHAOS-5233's work_item_attribution, but unlike that case,
     compute_deploy_metrics_daily itself is ALSO deleted (from
     compute_deployments.py): rg confirmed job_daily.py was its only real
-    caller. The sibling constant DEPLOYMENT_FAILURE_STATUSES in the same
-    module is NOT touched -- it has a real, separate caller
-    (compute_dora.py, still Python) plus its own dedicated test coverage in
-    test_job_dora.py.
+    caller. CHAOS-5336: the sibling constant DEPLOYMENT_FAILURE_STATUSES,
+    whose only other caller was compute_dora.py, is now genuinely orphaned --
+    compute_deployments.py (its defining module) is deleted outright along
+    with compute_dora.py, not left behind as a dead single-constant file.
     """
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())

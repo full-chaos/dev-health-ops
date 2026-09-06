@@ -129,7 +129,6 @@ EXPECTED_PACKAGES = {
     # ClickHouse container and reads system.tables directly, so a fake
     # connection cannot prove the population it asserts.
     "internal/testsupport/chschema",
-    "internal/testsupport/computeparity",
     "internal/testsupport/containers",
 }
 
@@ -418,10 +417,20 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 48 -> 51.
     # CHAOS-5359 added internal/jobs/investment's first //go:build
     # integration file: 51 -> 52.
-    # CURRENT TOTAL: 52 -- the one number to bump when a new
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely (52 ->
+    # 51): its two -tags=integration files
+    # (capacity_table_parity_integration_test.go,
+    # dora_table_parity_integration_test.go) were dora/capacity's
+    # Python-producer parity harness, deleted along with job_dora.py/
+    # job_capacity.py/compute_dora.py and scripts/worker/
+    # compute_parity_fixtures.py -- with both callers gone the package's
+    # own machinery (computeparity.go/computeparity_test.go, neither
+    # integration-tagged) had no importer left anywhere in the repo either,
+    # so the whole package was deleted, not just its two integration files.
+    # CURRENT TOTAL: 51 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "52 package(s) discovered, 0 denylisted, 52 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 52 package(s)" in result.stdout
+    assert "51 package(s) discovered, 0 denylisted, 51 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 51 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -474,8 +483,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5358 added THREE new packages in one PR: internal/jobs/workgraph/
     # issuecommitedges, issuepredges, and prcommit. 48 -> 51.
     # CHAOS-5359 added internal/jobs/investment: 51 -> 52.
-    # CURRENT TOTAL: 52 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 52
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely: 52 ->
+    # 51 (see the "package(s) discovered" comment above for why the whole
+    # package, not just its two integration files, was deleted). FLATTENED
+    # includes the providersync shard-1 package, same as every other count
+    # in this comment block.
+    # CURRENT TOTAL: 51 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 51
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -491,7 +505,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
         )
     }
     assert set(estimated) == {1, 2, 3}
-    assert abs(estimated[2] - estimated[3]) <= 1
+    # CHAOS-5336 removed internal/testsupport/computeparity's 50s package.
+    # Every prior package-count change in this file's history (see the
+    # "LPT re-balanced shards 2/3" notes above) kept the greedy LPT
+    # algorithm's shards 2/3 within 1s of each other; removing this
+    # specific-sized item pushes it to 777s/775s, 2s apart -- LPT balance
+    # is not guaranteed monotonic under item removal, this is the
+    # algorithm's actual output, not a bug in this PR's diff. Loosening the
+    # tolerance to reflect it rather than silently widening it further:
+    # re-tighten if a future change brings the gap back under 1s.
+    assert abs(estimated[2] - estimated[3]) <= 2
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()
@@ -1883,9 +1906,11 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # 1 for the providersync shard-1 package).
     # CHAOS-5359 added internal/jobs/investment: 50 -> 51 (52 discovered - 1
     # for the providersync shard-1 package).
-    # CURRENT TOTAL: 51 (== discovered-total-minus-one -- keep this in
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely: 51 ->
+    # 50 (51 discovered - 1 for the providersync shard-1 package).
+    # CURRENT TOTAL: 50 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 51
+    assert len(selected_packages) == len(set(selected_packages)) == 50
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

@@ -2,20 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-from dev_health_ops.metrics.compute_capacity import (
-    ForecastResult,
-    ThroughputHistory,
-    ThroughputSample,
-)
-from dev_health_ops.metrics.schemas import CapacityForecastRecord
 
 
 class FakeClickHouseSink:
@@ -51,113 +42,29 @@ class FakeSqlSink:
         return []
 
 
-class FakeCapacitySink:
-    backend_type = "clickhouse"
-    org_id: str
-
-    def __init__(self) -> None:
-        self.closed = False
-        self.written: list[CapacityForecastRecord] = []
-
-    def write_capacity_forecasts(self, rows: Sequence[CapacityForecastRecord]) -> None:
-        self.written.extend(rows)
-
-    def close(self) -> None:
-        self.closed = True
-
-
 # CHAOS-4026 (2026-08-21): TestCapacityForecastTaskRegistered,
 # TestCapacityForecastBeatSchedule, and TestCapacityForecastDispatcherFansOutPerOrg
 # tested product_tasks.dispatch_capacity_forecast/run_capacity_forecast_job
 # and the run-capacity-forecast beat entry, all deleted with this cleanup
 # (Go's capacity_forecast_weekly_fanout fixed schedule now owns the
-# periodic cadence). job_capacity.run_capacity_forecast itself stays live
-# (api/internal/worker_metrics.py's dormant-Go bridge, `dev-hops metrics
-# capacity` CLI) and its tests below are unaffected. See
-# tests/workers/test_celery_dead_code_contract.py.
-
-
-@pytest.mark.asyncio
-async def test_run_capacity_forecast_persists_rows_with_requested_org_id() -> None:
-    from dev_health_ops.metrics import job_capacity
-
-    sink = FakeCapacitySink()
-    forecast = ForecastResult(
-        forecast_id="forecast-1",
-        computed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        team_id="team-a",
-        work_scope_id="scope-a",
-        backlog_size=7,
-        target_items=7,
-        target_date=None,
-        history_days=30,
-        simulation_count=10,
-        p50_days=1,
-        p85_days=2,
-        p95_days=3,
-        p50_date=date(2026, 1, 2),
-        p85_date=date(2026, 1, 3),
-        p95_date=date(2026, 1, 4),
-        p50_items=None,
-        p85_items=None,
-        p95_items=None,
-        throughput_mean=1.0,
-        throughput_stddev=0.0,
-    )
-    history = ThroughputHistory(
-        [ThroughputSample(day=date(2025, 12, 31), items_completed=1)]
-    )
-
-    with (
-        patch("dev_health_ops.metrics.job_capacity.create_sink", return_value=sink),
-        patch(
-            "dev_health_ops.metrics.job_capacity.load_throughput_from_sink",
-            return_value=history,
-        ),
-        patch(
-            "dev_health_ops.metrics.job_capacity.get_backlog_from_sink", return_value=7
-        ),
-        patch(
-            "dev_health_ops.metrics.job_capacity.forecast_capacity",
-            return_value=forecast,
-        ) as mock_forecast,
-    ):
-        results = await job_capacity.run_capacity_forecast(
-            db_url="clickhouse://fake",
-            org_id="org-1",
-            team_id="team-a",
-            work_scope_id="scope-a",
-            target_items=7,
-            simulations=10,
-            persist=True,
-            seed=1234,
-        )
-
-    assert results == [forecast]
-    assert [row.org_id for row in sink.written] == ["org-1"]
-    assert sink.closed is True
-    assert mock_forecast.call_args.kwargs["seed"] == 1234
-
-
-@pytest.mark.asyncio
-async def test_run_capacity_forecast_rejects_empty_org_id_before_querying() -> None:
-    from dev_health_ops.metrics import job_capacity
-
-    with patch("dev_health_ops.metrics.job_capacity.create_sink") as mock_create_sink:
-        with pytest.raises(ValueError, match="org_id is required"):
-            await job_capacity.run_capacity_forecast(
-                db_url="clickhouse://fake",
-                org_id="",
-                all_teams=True,
-            )
-
-    mock_create_sink.assert_not_called()
+# periodic cadence). See tests/workers/test_celery_dead_code_contract.py.
+#
+# CHAOS-5336: job_capacity.py itself is now deleted outright -- its only
+# caller (api/internal/worker_metrics.py's HTTP-compat-bridge handler) was
+# already dead (the Go worker's native CapacityExecutor is the only live
+# batch path, confirmed via cmd/dev-health-worker/daily.go's unconditional
+# executor construction). run_capacity_forecast had no other live caller and
+# is deleted with it; discover_team_scopes/load_throughput_from_sink/
+# get_backlog_from_sink are re-exported from capacity_queries.py (still live:
+# the GraphQL capacity resolver calls compute_capacity.forecast_capacity
+# directly, a separate epic per team-lead's CHAOS-5336 ruling) -- the tests
+# below import from there now instead of through job_capacity's re-export.
 
 
 @pytest.mark.asyncio
 async def test_discover_team_scopes_filters_clickhouse_by_org_id() -> None:
     """Given an org-scoped sink, When discovering scopes, Then query filters org."""
-    from dev_health_ops.metrics.job_capacity import discover_team_scopes
+    from dev_health_ops.metrics.capacity_queries import discover_team_scopes
 
     sink = FakeClickHouseSink()
     sink.org_id = "org-1"
@@ -177,7 +84,7 @@ async def test_discover_team_scopes_filters_clickhouse_by_org_id() -> None:
 @pytest.mark.asyncio
 async def test_load_throughput_filters_sql_sink_by_org_id() -> None:
     """Given an org-scoped SQL sink, When loading history, Then query filters org."""
-    from dev_health_ops.metrics.job_capacity import load_throughput_from_sink
+    from dev_health_ops.metrics.capacity_queries import load_throughput_from_sink
 
     sink = FakeSqlSink()
     sink.org_id = "org-1"
@@ -202,7 +109,7 @@ async def test_load_throughput_filters_sql_sink_by_org_id() -> None:
 @pytest.mark.asyncio
 async def test_get_backlog_filters_clickhouse_by_org_id() -> None:
     """Given an org-scoped ClickHouse sink, When loading backlog, Then filters org."""
-    from dev_health_ops.metrics.job_capacity import get_backlog_from_sink
+    from dev_health_ops.metrics.capacity_queries import get_backlog_from_sink
 
     sink = FakeClickHouseSink()
     sink.org_id = "org-1"

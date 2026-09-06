@@ -28,7 +28,9 @@ import (
 // no-fail-open citation).
 //
 // This is a FROZEN-golden test, not a live dual-execution one (unlike
-// internal/testsupport/computeparity's capacity/dora pattern): there is no
+// internal/testsupport/computeparity's former capacity/dora pattern -- that
+// package is itself retired now, CHAOS-5336, along with the Python it
+// compared against): there is no
 // live Python left to execute at test time once this PR merges. The golden
 // file (testdata/parity_golden.json) was captured ONCE, via a throwaway
 // script run against the still-live compute_ic.py before its deletion in

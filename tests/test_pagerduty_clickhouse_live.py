@@ -11,19 +11,12 @@ import asyncio
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import cast
+from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 import pytest
 
-from dev_health_ops.metrics.active_incidents import (
-    IncidentWindow,
-    active_incidents_query,
-)
-from dev_health_ops.metrics.compute_dora import compute_dora_metrics_daily
-from dev_health_ops.metrics.schemas import IncidentRow
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.models.operational import (
     CanonicalOperationalEntity,
@@ -37,7 +30,6 @@ from dev_health_ops.models.operational import (
     OperationalService,
     OperationalTeam,
     OperationalUser,
-    ServiceRepositoryMapping,
     canonical_operational_id,
 )
 from dev_health_ops.models.operational_identity import operational_source_coordinates
@@ -294,134 +286,3 @@ def test_pagerduty_operational_rows_round_trip_and_deduplicate(
             assert count.result_rows == [(1,)]
     finally:
         client.close()
-
-
-def test_mapped_canonical_pagerduty_incident_drives_dora_restore_time(
-    pagerduty_scratch_dsn: str,
-) -> None:
-    # Given: a resolved PagerDuty incident and an explicit mapping from its
-    # canonical service to an organization-owned repository.
-    rows = _pagerduty_rows()
-    resolved_at = SOURCE_TIME + timedelta(hours=4)
-    normalizer = PagerDutyNormalizer(
-        org_id=ORG_ID,
-        provider_instance_id=PROVIDER_INSTANCE_ID,
-        observed_at=resolved_at,
-    )
-    resolved_incident = normalizer.incident(
-        Incident(
-            id="incident-1",
-            title="Payments latency",
-            status="resolved",
-            service=PagerDutyModel(id="service-1"),
-            created_at=SOURCE_TIME,
-            resolved_at=resolved_at,
-            last_status_change_at=resolved_at,
-            updated_at=resolved_at,
-        )
-    )
-    mapping = ServiceRepositoryMapping(
-        org_id=ORG_ID,
-        provider="pagerduty",
-        provider_instance_id=PROVIDER_INSTANCE_ID,
-        source_entity_type="service_repository_mapping",
-        external_id="service-1:github:full-chaos/payments-api",
-        source_version_at=resolved_at,
-        observed_at=resolved_at,
-        last_synced=resolved_at,
-        service_id=rows.service.id,
-        repo_id=METRIC_REPO_ID,
-        repo_provider="github",
-        repo_full_name="full-chaos/payments-api",
-        mapping_kind="admin",
-        rule_id="service_repository_mapping.admin.v1",
-        valid_from=SOURCE_TIME,
-        is_active=True,
-    )
-
-    async def persist_projection_inputs() -> None:
-        async with ClickHouseStore(pagerduty_scratch_dsn) as store:
-            store.org_id = ORG_ID
-            await store.insert_operational_services([rows.service])
-            await store.insert_operational_incidents([resolved_incident])
-            await store.insert_operational_service_repository_mappings([mapping])
-
-    asyncio.run(persist_projection_inputs())
-
-    sink = ClickHouseMetricsSink(pagerduty_scratch_dsn)
-    try:
-        sink.client.insert(
-            "repos",
-            [
-                [
-                    METRIC_REPO_ID,
-                    "full-chaos/payments-api",
-                    None,
-                    SOURCE_TIME,
-                    None,
-                    None,
-                    resolved_at,
-                    ORG_ID,
-                    "github",
-                    None,
-                ]
-            ],
-            column_names=[
-                "id",
-                "repo",
-                "ref",
-                "created_at",
-                "settings",
-                "tags",
-                "last_synced",
-                "org_id",
-                "provider",
-                "source_id",
-            ],
-        )
-
-        # When: the real canonical projection and the DORA metric
-        # computation consume the persisted ClickHouse rows.
-        # CHAOS-5234/CHAOS-3092: compute_incident_metrics_daily's own
-        # computation+assertions used to also run here -- that family's
-        # Python compute is deleted outright now (IncidentExecutor, native
-        # Go, is the only writer of incident_metrics_daily), so only the
-        # DORA half (a separate, still-live function) remains. incident_rows
-        # itself is still built and still fed to compute_dora_metrics_daily
-        # below -- it is NOT incident_metrics_daily's exclusive input.
-        projected = sink.query_dicts(
-            active_incidents_query(
-                window=IncidentWindow.RESOLVED,
-                org_id=ORG_ID,
-                repo_filter="",
-            ),
-            {
-                "org_id": ORG_ID,
-                "start": SOURCE_TIME,
-                "end": SOURCE_TIME + timedelta(days=1),
-                "as_of": resolved_at + timedelta(seconds=1),
-            },
-        )
-        incident_rows = cast(list[IncidentRow], projected)
-        dora_metrics = compute_dora_metrics_daily(
-            day=SOURCE_TIME.date(),
-            deployments=[],
-            incidents=incident_rows,
-            computed_at=resolved_at,
-        )
-
-        # Then: one mapped canonical incident contributes to repository-scoped
-        # counts and DORA restoration time without a legacy-table write.
-        assert len(projected) == 1
-        assert projected[0]["repo_id"] == METRIC_REPO_ID
-        assert projected[0]["incident_id"] == resolved_incident.id
-        assert [(metric.metric_name, metric.value) for metric in dora_metrics] == [
-            ("time_to_restore_service", pytest.approx(4 * 60 * 60))
-        ]
-        legacy_table_count = sink.query(
-            "SELECT count() FROM system.tables "
-            "WHERE database = currentDatabase() AND name = 'incidents'",
-        )
-        assert legacy_table_count.result_rows == [(0,)]
-    finally:
-        sink.close()

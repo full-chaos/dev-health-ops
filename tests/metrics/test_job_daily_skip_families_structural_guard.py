@@ -136,9 +136,11 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # the only writer of deploy_metrics_daily for a daily partition now.
     # compute_deploy_metrics_daily itself is ALSO deleted (from
     # compute_deployments.py) -- rg confirmed job_daily.py was its only real
-    # caller. The sibling constant DEPLOYMENT_FAILURE_STATUSES in the same
-    # module is NOT touched -- it has a real, separate caller
-    # (compute_dora.py, still Python).
+    # caller. CHAOS-5336: the sibling constant DEPLOYMENT_FAILURE_STATUSES,
+    # whose only other caller was compute_dora.py, is now genuinely
+    # orphaned -- compute_deployments.py (its defining module) is deleted
+    # outright along with compute_dora.py, not left behind as a dead
+    # single-constant file.
     "deploy": "compute_deploy_metrics_daily",
     # CHAOS-5323: work_item_estimate's daily compute deleted from
     # job_daily.py -- the native Go executor (WorkItemEstimateExecutor,

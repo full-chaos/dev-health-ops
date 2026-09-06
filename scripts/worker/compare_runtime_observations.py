@@ -5,9 +5,11 @@ This is the OPERATIONAL-HEALTH claim, and it is deliberately a separate tool
 from product-row parity (CHAOS-3092 P0). The two are not the same question and
 neither implies the other: a port can write byte-identical rows while burning
 four times the memory, and it can behave impeccably at runtime while computing
-the wrong numbers. Product rows are compared in Go by
-``internal/testsupport/computeparity`` on top of the one row-comparison
-vocabulary this repo has; nothing here ever looks at a product row.
+the wrong numbers. Product rows were compared in Go by
+``internal/testsupport/computeparity`` (retired, CHAOS-5336, with its two
+callers -- dora and capacity's Python-producer parity tests) on top of the one
+row-comparison vocabulary this repo has; nothing here ever looks at a product
+row.
 
 It stays in Python because it reuses ``canary_release_proof.py`` -- that module
 already owns how the v0 baseline and the v3 thresholds are pinned (path AND

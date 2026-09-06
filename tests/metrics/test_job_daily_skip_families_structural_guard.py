@@ -93,15 +93,15 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # (the same module) are NOT touched -- they have real, separate callers
     # (the GraphQL API resolver and the opportunities detector).
     "ai_impact": "compute_ai_impact_metrics_daily",
-    # CHAOS-5272: work_item_estimate's daily compute deleted from
+    # CHAOS-5323: work_item_estimate's daily compute deleted from
     # job_daily.py -- the native Go executor (WorkItemEstimateExecutor,
     # CHAOS-4283) is the only writer of estimate_coverage_metrics_daily for a
-    # daily partition now. Same shape as work_item_attribution above:
-    # compute_estimate_coverage_metrics_daily itself is NOT deleted from the
-    # codebase -- job_work_items.py's run_work_items_sync_job (the same
-    # unrelated full-backfill sync job) still calls it directly, as do its
-    # own unit tests, the fixture golden generator, and the live-Python
-    # oracle comparator. Only job_daily.py's own reference is gone.
+    # daily partition now. Unlike work_item_attribution above,
+    # compute_estimate_coverage_metrics_daily itself is ALSO deleted from the
+    # codebase (compute_work_items.py): job_work_items.py's
+    # run_work_items_sync_job call site is deleted too -- team-lead's
+    # ruling found that job, unlike the one work_item_attribution shares
+    # with it, is itself a legacy Python path with no live Go dispatcher.
     "work_item_estimate": "compute_estimate_coverage_metrics_daily",
 }
 

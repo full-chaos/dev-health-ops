@@ -14,13 +14,17 @@ const (
 	livePythonOraclesEnv     = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
 	livePythonOracleProofDir = "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"
 
-	// TWO markers, not one. A single shared marker would be satisfied by
-	// whichever family's guard happened to run, letting the other be skipped,
-	// renamed, or filtered out of ci/check_go.sh's -run pattern without anyone
-	// noticing -- the same reasoning ci/check_go.sh already applies to the
-	// testops-risk / pipeline-stability pair.
-	workItemGoldenProofFile         = "work-item-golden"
-	workItemEstimateGoldenProofFile = "work-item-estimate-golden"
+	// This guard used to also write a SECOND marker here
+	// ("work-item-estimate-golden"), checked separately so work_item_estimate
+	// stayed independently accountable to ci/check_go.sh even though both
+	// families shared one generator and one whole-document comparison.
+	// CHAOS-5323/CHAOS-3092 deleted compute_estimate_coverage_metrics_daily
+	// entirely (fully native, no remaining Python caller) and extracted its
+	// frozen cases into their own file with no generator -- there is no more
+	// live Python for that family to compare against, so its marker is
+	// retired along with the family. This one marker now covers exactly
+	// what this guard actually still checks.
+	workItemGoldenProofFile = "work-item-golden"
 )
 
 // TestWorkItemGoldenMatchesLivePython is the rot guard for
@@ -28,18 +32,19 @@ const (
 // TestTeamWellbeingGoldenMatchesLivePython established.
 //
 // The golden was generated from REAL production Python and FROZEN.
-// TestComputeDailyTripletMatchesPythonGolden and
-// TestComputeEstimateCoverageMatchesPythonGolden only prove Go matches that
+// TestComputeDailyTripletMatchesPythonGolden only proves Go matches that
 // FILE -- nothing proves PYTHON still matches it. Without this guard, the
-// moment compute_work_item_metrics_daily,
-// compute_estimate_coverage_metrics_daily or compute_work_item_team_attributions
+// moment compute_work_item_metrics_daily or compute_work_item_team_attributions
 // changes behaviour, the frozen golden keeps encoding the OLD behaviour, Go
-// keeps matching the frozen file, and both parity tests stay green while the
+// keeps matching the frozen file, and the parity test stays green while the
 // two implementations have actually diverged.
 //
-// It covers BOTH families because they share one generator and one corpus, so
-// a drift in either is one diff; the two proof markers keep them separately
-// accountable to ci/check_go.sh.
+// This used to also cover work_item_estimate (one shared generator, one
+// whole-document comparison, two proof markers for independent CI
+// accountability) until CHAOS-5323/CHAOS-3092 deleted
+// compute_estimate_coverage_metrics_daily entirely -- see
+// TestComputeEstimateCoverageMatchesPythonGolden in golden_test.go, now a
+// pure frozen-bits check with no live Python counterpart at all.
 func TestWorkItemGoldenMatchesLivePython(t *testing.T) {
 	if os.Getenv(livePythonOraclesEnv) != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -88,12 +93,10 @@ func TestWorkItemGoldenMatchesLivePython(t *testing.T) {
 		)
 	}
 
-	for _, marker := range []string{workItemGoldenProofFile, workItemEstimateGoldenProofFile} {
-		if err := os.WriteFile(
-			filepath.Join(proofDirectory, marker), []byte("executed\n"), 0o600,
-		); err != nil {
-			t.Fatalf("write live Python oracle proof %s: %v", marker, err)
-		}
+	if err := os.WriteFile(
+		filepath.Join(proofDirectory, workItemGoldenProofFile), []byte("executed\n"), 0o600,
+	); err != nil {
+		t.Fatalf("write live Python oracle proof %s: %v", workItemGoldenProofFile, err)
 	}
 }
 

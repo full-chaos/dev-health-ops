@@ -1,0 +1,88 @@
+package shapes;
+
+import java.util.List;
+
+interface Shape {
+    int area();
+}
+
+class Rectangle implements Shape {
+    private int width;
+    private int height;
+
+    public Rectangle(int width, int height) {
+        if (width > 0 && height > 0) {
+            this.width = width;
+            this.height = height;
+        } else {
+            this.width = 0;
+            this.height = 0;
+        }
+    }
+
+    @Override
+    public int area() {
+        return width * height;
+    }
+
+    public int classify(int score) {
+        if (score > 90) {
+            return 3;
+        } else if (score > 50) {
+            return 2;
+        }
+        return 1;
+    }
+
+    public int pick(int a, int b, int c) {
+        switch (a) {
+            case 1:
+                return b;
+            case 2:
+                return c;
+            default:
+                return a;
+        }
+    }
+
+    public int loop(int n) {
+        int total = 0;
+        for (int i = 0; i < n; i++) {
+            if (i % 2 == 0 || i % 3 == 0) {
+                total += i;
+            }
+        }
+        while (total > 100 && n > 0) {
+            total -= n;
+            n--;
+        }
+        return total;
+    }
+
+    public <T> T identity(T x) {
+        if (x == null) {
+            return null;
+        }
+        return x;
+    }
+
+    public void risky() throws Exception {
+        if (width < 0) {
+            throw new Exception("bad width");
+        }
+    }
+
+    public Runnable makeRunner() {
+        if (width > 0) {
+            return new Runnable() {
+                @Override
+                public void run() {
+                    if (height > 0) {
+                        System.out.println("ok");
+                    }
+                }
+            };
+        }
+        return null;
+    }
+}

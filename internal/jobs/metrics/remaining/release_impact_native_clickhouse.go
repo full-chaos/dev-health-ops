@@ -531,8 +531,18 @@ data_completeness, concurrent_deploy_count, computed_at)`)
 			return 0, err
 		}
 	}
+	// CHAOS-5190 sweep (#2276 pre-pass item 1, team-lead-requested, after
+	// #2262/CHAOS-4296 landed this writer on main): batch.Send() crosses the
+	// network -- a Send() error is AMBIGUOUS, ClickHouse may have already
+	// committed the insert server-side and only the acknowledgement was
+	// lost. Report the true attempted row count on THIS specific error path
+	// (never 0, which understates what may have landed), matching the
+	// established pattern at work_graph_edges_native_clickhouse.go:406-418
+	// and every other native writer's Send() branch this ticket already
+	// closed. PrepareBatch/Append failures above correctly keep returning 0
+	// -- they never cross the network, so nothing has landed yet.
 	if err := batch.Send(); err != nil {
-		return 0, err
+		return len(rows), err
 	}
 	return len(rows), nil
 }

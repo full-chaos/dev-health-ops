@@ -1025,7 +1025,14 @@ func writeTestopsRisk(
 			}
 		}
 		if err := batch.Send(); err != nil {
-			return written, fmt.Errorf("send testops_release_confidence batch: %w", err)
+			// Send crosses the network -- a Send error is AMBIGUOUS,
+			// ClickHouse may have committed this batch server-side and only
+			// the acknowledgement was lost (same reasoning as
+			// work_graph_edges_native_clickhouse.go:406-418). Report
+			// `written` PLUS this batch's own count, not just the prior
+			// batches' confirmed total, so the caller fails CLOSED on this
+			// batch's ambiguity too.
+			return written + len(releaseConfidence), fmt.Errorf("send testops_release_confidence batch: %w", err)
 		}
 		written += len(releaseConfidence)
 	}
@@ -1048,7 +1055,10 @@ func writeTestopsRisk(
 			}
 		}
 		if err := batch.Send(); err != nil {
-			return written, fmt.Errorf("send testops_quality_drag batch: %w", err)
+			// Same ambiguous-ack reasoning as the release_confidence batch
+			// above: report this batch's own count too, not just prior
+			// batches' confirmed total.
+			return written + len(qualityDrag), fmt.Errorf("send testops_quality_drag batch: %w", err)
 		}
 		written += len(qualityDrag)
 	}
@@ -1071,7 +1081,10 @@ func writeTestopsRisk(
 			}
 		}
 		if err := batch.Send(); err != nil {
-			return written, fmt.Errorf("send testops_pipeline_stability batch: %w", err)
+			// Same ambiguous-ack reasoning as the release_confidence batch
+			// above: report this batch's own count too, not just prior
+			// batches' confirmed total.
+			return written + len(pipelineStability), fmt.Errorf("send testops_pipeline_stability batch: %w", err)
 		}
 		written += len(pipelineStability)
 	}

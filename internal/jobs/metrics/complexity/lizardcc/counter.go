@@ -281,8 +281,8 @@ func (c *Context) PopNesting() {
 	// brace-nesting stack: an anonymous class's method defined inside
 	// another method's body is exactly this shape, and this line is what
 	// makes ctx.current go back to the OUTER method rather than file
-	// scope once the inner one closes. Every C/C++ fixture measured so
-	// far happened to avoid a function-within-a-function shape (C++
+	// scope once the inner one closes. Every C/C++/C# fixture measured
+	// so far happened to avoid a function-within-a-function shape (C++
 	// lambdas never create a nesting entry at all, so they never exposed
 	// this), so nothing caught it until Java's anonymous-class fixture
 	// did.

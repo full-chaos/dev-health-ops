@@ -693,6 +693,48 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 			seed.cycle, mustTimestamp(t, seed.computedAt), loaderOrgID)
 	}
 
+	// DISCOVERY-SAFE ROWS (CHAOS-5190 hotfix, "calendar-fragile fixture,
+	// exposed at 00:00Z"): every row above is pinned to the fixed
+	// [loaderWindowStart, loaderWindowEnd) = [2026-08-01, 2026-09-01) window
+	// the loader-parity/window-boundary tests query with an EXPLICIT asOf --
+	// those tests are not clock-dependent and must not be disturbed here.
+	//
+	// DiscoverTeamIDs (recommendations_native_clickhouse.go) and
+	// resolveScopes's all_teams branch (capacity_native_clickhouse.go) are
+	// DIFFERENT: they use ClickHouse's own `today()` (`WHERE day >=
+	// today() - 30`), not a caller-supplied asOf. Once real wall-clock time
+	// passed 2026-09-05, the fixed window above aged out of that rolling
+	// 30-day lookback entirely -- team-beta's newest fixed row (2026-08-06)
+	// was excluded from `today() - 30` for any run executing on or after
+	// 2026-09-06, discovery returned only team-alpha, and TWO tests
+	// (TestOneOrgSurvivesDiscoveryComputeAndWrite,
+	// TestCancellationAfterTheLastTeamStillPersistsOnAContainer -- both call
+	// this fixture) failed identically regardless of which commit's code was
+	// under test. Confirmed live: the fixed rows above are calendar-fragile
+	// FOREVER, not just today, since `loaderWindowEnd` never moves but
+	// `today() - 30` always does.
+	//
+	// Fixed by seeding ONE additional row per team, dated relative to
+	// time.Now() rather than a fixed calendar date, so `today() - 30`
+	// always includes both teams no matter when this test runs. "Yesterday"
+	// keeps a comfortable multi-week margin inside the 30-day window without
+	// landing back inside [loaderWindowStart, loaderWindowEnd) as long as
+	// this test runs after 2026-09-01, which it always will from here on.
+	// A distinct scope ("discovery-only") keeps these rows out of every
+	// window-scoped aggregate/argMax assertion, which all filter to
+	// [loaderWindowStart, loaderWindowEnd) explicitly and would otherwise
+	// need updating every time this row's date rolls forward.
+	discoveryDay := time.Now().UTC().AddDate(0, 0, -1)
+	for _, team := range []string{loaderTeamA, loaderTeamB} {
+		exec(`INSERT INTO work_item_metrics_daily
+			(day, provider, work_scope_id, team_id, team_name, items_started, items_completed,
+			 items_started_unassigned, items_completed_unassigned, wip_count_end_of_day,
+			 wip_unassigned_end_of_day, cycle_time_p50_hours, bug_completed_ratio,
+			 story_points_completed, computed_at, org_id)
+			VALUES (?, 'github', 'discovery-only', ?, '', 0, 1, 0, 0, 0, 0, 0, 0, 0, ?, ?)`,
+			discoveryDay, team, discoveryDay, loaderOrgID)
+	}
+
 	// The SAME team_id and days under a DIFFERENT org, with values chosen to be
 	// impossible to confuse with this tenant's.
 	//

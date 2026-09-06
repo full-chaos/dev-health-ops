@@ -190,11 +190,6 @@ class _FakeLoaderWithWorkItem(_FakeLoader):
         return [item], []
 
 
-class _NullResolver:
-    def resolve(self, *a: Any, **k: Any) -> tuple[None, None]:
-        return (None, None)
-
-
 def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     monkeypatch.setattr(job_daily, "ClickHouseMetricsSink", lambda db_url: sink)
 
@@ -207,7 +202,14 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
         return None
 
     monkeypatch.setattr(job_daily, "init_team_resolver", _noop_init_team_resolver)
-    monkeypatch.setattr(job_daily, "get_team_resolver", _NullResolver)
+    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-5310/CHAOS-5321: no
+    # get_team_resolver to neutralize here anymore -- job_daily.py no
+    # longer imports or calls it at all (its only local consumer,
+    # `team_resolver = get_team_resolver()`, is deleted: every family that
+    # used the local -- team_wellbeing, work_item and siblings -- has had
+    # its compute+write deleted outright now; monkeypatch.setattr on a
+    # nonexistent attribute raises). _NullResolver, this monkeypatch's own
+    # replacement value, is deleted with it -- it had no other caller.
     # CHAOS-5308/CHAOS-3092: no build_repo_pattern_resolver to neutralize
     # here anymore -- its only consumer was repo_team_resolver, deleted
     # alongside repo_user_commit's and team_wellbeing's compute+write
@@ -250,13 +252,17 @@ async def test_skip_families_none_is_a_noop(monkeypatch: Any) -> None:
         skip_families=None,
     )
 
-    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279: team_wellbeing's,
-    # repo_user_commit's, AND review_edges' compute+write are all deleted
-    # outright now (see their own test_*_compute_and_write_are_deleted_from_
-    # job_daily tests below), so none of "team_metrics"/"repo_metrics"/
-    # "write_review_edges" can serve as this test's no-op signal -- work_item,
-    # fed by _FakeLoaderWithWorkItem, takes their place.
-    assert "write_work_item_metrics" in sink.write_calls
+    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+    # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+    # compute+write are ALL deleted outright now (see their own
+    # test_*_compute_and_write_are_deleted_from_job_daily tests below), so
+    # none of "team_metrics"/"repo_metrics"/"write_review_edges"/
+    # "write_work_item_metrics" can serve as this test's no-op signal any
+    # more -- compounding_risk can't either (this fixture has no PR/review
+    # data for it to compute from). No family in this file's fixture writes
+    # anything unconditional any more; the no-op assertion is now genuinely
+    # "nothing was written".
+    assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -273,18 +279,18 @@ async def test_skip_families_empty_set_is_a_noop(monkeypatch: Any) -> None:
         skip_families=set(),
     )
 
-    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279: team_wellbeing's,
-    # repo_user_commit's, AND review_edges' compute+write are all deleted
-    # outright now (see their own test_*_compute_and_write_are_deleted_from_
-    # job_daily tests below) -- test_team_wellbeing_in_skip_families_writes_
-    # nothing and test_team_wellbeing_skip_does_not_affect_other_families
-    # (which used to follow here, pinning the now-superseded write-only-skip
-    # gate) are removed with it; "team_metrics"/"repo_metrics"/
-    # "write_review_edges" can no longer serve as write signals either.
-    # work_item, fed by _FakeLoaderWithWorkItem, is not named in this test's
-    # skip_families and its write is unconditional, so it is this test's
-    # surviving no-op control.
-    assert "write_work_item_metrics" in sink.write_calls
+    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+    # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+    # compute+write are ALL deleted outright now (see their own
+    # test_*_compute_and_write_are_deleted_from_job_daily tests below) --
+    # test_team_wellbeing_in_skip_families_writes_nothing and
+    # test_team_wellbeing_skip_does_not_affect_other_families (which used to
+    # follow here, pinning the now-superseded write-only-skip gate) are
+    # removed with it; "team_metrics"/"repo_metrics"/"write_review_edges"/
+    # "write_work_item_metrics" can no longer serve as write signals either.
+    # No family in this file's fixture writes anything unconditional any
+    # more; the no-op assertion is now genuinely "nothing was written".
+    assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -345,12 +351,13 @@ async def test_team_wellbeing_compute_and_write_are_deleted_from_job_daily(
         )
         assert "team_metrics" not in sink.write_calls
         assert "write_team_metrics" not in sink.write_calls
-        # CHAOS-5308/CHAOS-4279: repo_metrics and review_edges are also
-        # deleted now (repo_user_commit's compute+write, review_edges'
-        # compute+write) -- work_item, fed by _FakeLoaderWithWorkItem
-        # (unrelated family, unconditional write), proves the team_wellbeing
-        # deletion didn't perturb it.
-        assert "write_work_item_metrics" in sink.write_calls
+        # CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321: repo_metrics,
+        # review_edges, AND work_item are also deleted now (repo_user_
+        # commit's compute+write, review_edges' compute+write, work_item's
+        # compute+write) -- nothing in this fixture writes anything
+        # unconditional any more, so "nothing else was written" is itself
+        # the proof the team_wellbeing deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -383,19 +390,14 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
         skip_families={"file_hotspots"},
     )
 
-    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-5309/CHAOS-4279: team_wellbeing's,
-    # cicd's, deploy's, repo_user_commit's, AND review_edges' compute+write are
-    # ALL deleted outright now (see their own
-    # test_*_compute_and_write_are_deleted_from_job_daily tests below), so
-    # none of "team_metrics"/"write_cicd_metrics"/"repo_metrics"/
-    # "write_review_edges" can serve as the "unrelated write still happens"
-    # control the way the codex round-4 (CHAOS-4292) finding originally
-    # wanted -- compounding_risk cannot take their place either (the base
-    # _FakeLoader has no PR/review data for it to compute from, so it writes
-    # nothing regardless). work_item, fed by _FakeLoaderWithWorkItem, is the
-    # first still-live family in this file with real fixture data of its own
-    # -- switched loader accordingly.
-    assert "write_work_item_metrics" in sink.write_calls
+    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-5309/CHAOS-4279/CHAOS-5310/
+    # CHAOS-5321: team_wellbeing's, cicd's, deploy's, repo_user_commit's,
+    # review_edges', AND work_item's compute+write are ALL deleted outright
+    # now (see their own test_*_compute_and_write_are_deleted_from_job_daily
+    # tests below), so nothing in this fixture writes anything unconditional
+    # any more -- "nothing else was written" is itself the proof the
+    # file_hotspots skip didn't perturb anything.
+    assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -496,15 +498,15 @@ async def test_deploy_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_deploy_metrics" not in sink.write_calls
-        # Unrelated families/writes are unaffected by the deletion.
         # NOTE: this test originally also asserted "team_metrics"/
-        # "repo_metrics"/"write_review_edges" in sink.write_calls here --
+        # "repo_metrics"/"write_review_edges"/"write_work_item_metrics" in
+        # sink.write_calls here as unrelated-family controls --
         # team_wellbeing's (CHAOS-5311/CHAOS-3092), repo_user_commit's
-        # (CHAOS-5308), AND review_edges' (CHAOS-4279) writes are ALL deleted
-        # outright by this same merge, so all three assertions are dropped
-        # rather than merged in false; work_item, fed by
-        # _FakeLoaderWithWorkItem, is the surviving control.
-        assert "write_work_item_metrics" in sink.write_calls
+        # (CHAOS-5308), review_edges' (CHAOS-4279), AND work_item's
+        # (CHAOS-5310/CHAOS-5321) writes are ALL deleted outright now, so
+        # nothing else is left to write -- "nothing else was written" is
+        # itself the proof the deploy deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -574,12 +576,14 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_cicd_metrics" not in sink.write_calls
-        # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279: team_wellbeing's,
-        # repo_user_commit's, AND review_edges' writes are also deleted
-        # outright now, so none of "team_metrics"/"repo_metrics"/
-        # "write_review_edges" can serve as the unrelated-family control --
-        # work_item, fed by _FakeLoaderWithWorkItem, takes their place.
-        assert "write_work_item_metrics" in sink.write_calls
+        # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+        # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+        # writes are also deleted outright now, so none of "team_metrics"/
+        # "repo_metrics"/"write_review_edges"/"write_work_item_metrics" has a
+        # subject left to serve as the unrelated-family control -- "nothing
+        # else was written" is itself the proof the cicd deletion didn't
+        # perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -626,13 +630,14 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
         )
 
         assert "write_file_metrics" not in sink.write_calls
-        # Unrelated families/writes are unaffected by the deletion.
-        # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279: team_wellbeing's,
-        # repo_user_commit's, AND review_edges' writes are also deleted
-        # outright now, so none of "team_metrics"/"repo_metrics"/
-        # "write_review_edges" can serve as the unrelated-family control --
-        # work_item, fed by _FakeLoaderWithWorkItem, takes their place.
-        assert "write_work_item_metrics" in sink.write_calls
+        # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+        # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+        # writes are also deleted outright now, so none of "team_metrics"/
+        # "repo_metrics"/"write_review_edges"/"write_work_item_metrics" has a
+        # subject left to serve as the unrelated-family control -- "nothing
+        # else was written" is itself the proof the file_hotspots deletion
+        # didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -690,13 +695,14 @@ async def test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily(
         )
 
         assert "write_file_hotspot_daily" not in sink.write_calls
-        # Unrelated families/writes are unaffected by the deletion.
-        # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279: team_wellbeing's,
-        # repo_user_commit's, AND review_edges' writes are also deleted
-        # outright now, so none of "team_metrics"/"repo_metrics"/
-        # "write_review_edges" can serve as the unrelated-family control --
-        # work_item, fed by _FakeLoaderWithWorkItem, takes their place.
-        assert "write_work_item_metrics" in sink.write_calls
+        # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+        # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+        # writes are also deleted outright now, so none of "team_metrics"/
+        # "repo_metrics"/"write_review_edges"/"write_work_item_metrics" has a
+        # subject left to serve as the unrelated-family control -- "nothing
+        # else was written" is itself the proof the file_risk_hotspots
+        # deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -751,12 +757,14 @@ async def test_compounding_risk_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_compounding_risk_daily" not in sink.write_calls
-        # CHAOS-5234/CHAOS-3092/CHAOS-4279: team_wellbeing's, cicd's, AND
-        # review_edges' writes are also deleted outright now, so none of
-        # "team_metrics"/"write_cicd_metrics"/"write_review_edges" can serve
-        # as the unrelated-family control -- work_item, fed by
-        # _FakeLoaderWithWorkItem, takes their place.
-        assert "write_work_item_metrics" in sink.write_calls
+        # CHAOS-5234/CHAOS-3092/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+        # team_wellbeing's, cicd's, review_edges', AND work_item's writes are
+        # also deleted outright now, so none of "team_metrics"/
+        # "write_cicd_metrics"/"write_review_edges"/"write_work_item_metrics"
+        # has a subject left to serve as the unrelated-family control --
+        # "nothing else was written" is itself the proof the
+        # compounding_risk deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 # CHAOS-4279 deleted review_edges' Python compute entirely
@@ -1056,11 +1064,12 @@ async def test_incident_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_incident_metrics" not in sink.write_calls
-        # CHAOS-5308/CHAOS-4279: repo_user_commit's AND review_edges' writes
-        # are also deleted outright now (sibling PRs merged into this same
-        # tree), so neither can serve as this control any more -- work_item,
-        # fed by _FakeLoaderWithWorkItem, takes their place.
-        assert "write_work_item_metrics" in sink.write_calls
+        # CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321: repo_user_commit's,
+        # review_edges', AND work_item's writes are also deleted outright
+        # now (sibling PRs merged into this same tree), so none of them can
+        # serve as this control any more -- "nothing else was written" is
+        # itself the proof the incident deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -1118,11 +1127,11 @@ async def test_work_graph_edges_compute_and_write_are_deleted_from_job_daily(
         assert "write_work_graph_pr_deployment_edges" not in sink.write_calls
         assert "write_work_graph_deployment_incident_edges" not in sink.write_calls
         # Unrelated families/writes are unaffected by the deletion. (Was
-        # cicd, then repo_metrics, then review_edges -- CHAOS-5312/
-        # CHAOS-5234/CHAOS-3092 deleted cicd's own compute+write,
-        # CHAOS-5308 deleted repo_user_commit's, and CHAOS-4279 deleted
-        # review_edges', all in sibling PRs merged into this same tree, so
-        # none can serve as this control any more -- work_item, fed by
-        # _FakeLoaderWithWorkItem and not named in skip_families here, takes
-        # their place.)
-        assert "write_work_item_metrics" in sink.write_calls
+        # cicd, then repo_metrics, then review_edges, then work_item --
+        # CHAOS-5312/CHAOS-5234/CHAOS-3092 deleted cicd's own compute+write,
+        # CHAOS-5308 deleted repo_user_commit's, CHAOS-4279 deleted
+        # review_edges', and CHAOS-5310/CHAOS-5321 deleted work_item's, all
+        # in sibling PRs merged into this same tree, so none can serve as
+        # this control any more -- "nothing else was written" is itself the
+        # proof the work_graph_edges deletion didn't perturb anything.)
+        assert sink.write_calls == []

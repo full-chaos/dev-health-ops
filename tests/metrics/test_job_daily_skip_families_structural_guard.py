@@ -93,6 +93,40 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # (the same module) are NOT touched -- they have real, separate callers
     # (the GraphQL API resolver and the opportunities detector).
     "ai_impact": "compute_ai_impact_metrics_daily",
+    # CHAOS-5234/CHAOS-3092: team_wellbeing's daily compute deleted from
+    # job_daily.py -- the native Go executor (TeamWellbeingExecutor,
+    # CHAOS-4276) is the only writer of team_metrics_daily for a daily
+    # partition now. compute_team_wellbeing_metrics_daily itself is ALSO
+    # deleted (the whole metrics/compute_wellbeing.py module) -- its only
+    # other callers were its Go rot guard (TestTeamWellbeingGoldenMatches
+    # LivePython + generate_daily_wellbeing_python_golden.py, both also
+    # deleted in this PR) and its own dedicated test file (also deleted).
+    "team_wellbeing": "compute_team_wellbeing_metrics_daily",
+    # CHAOS-5234/CHAOS-3092: cicd's daily compute deleted from job_daily.py
+    # -- the native Go executor (CICDExecutor, CHAOS-4292) is the only
+    # writer of cicd_metrics_daily for a daily partition now.
+    # compute_cicd_metrics_daily itself is ALSO deleted (the whole
+    # metrics/compute_cicd.py module) -- its only other callers were its Go
+    # rot guard (TestCICDGoldenMatchesLivePython +
+    # generate_daily_cicd_python_golden.py, both also deleted in this PR)
+    # and its own dedicated/shared tests (deleted or surgically trimmed).
+    # pipeline_rows (loader.load_cicd_data) itself is NOT deleted -- it also
+    # feeds active_repos, an unrelated live reader.
+    "cicd": "compute_cicd_metrics_daily",
+    # CHAOS-5234/CHAOS-3092: incident's daily compute deleted from
+    # job_daily.py -- the native Go executor (IncidentExecutor,
+    # CHAOS-4269/CHAOS-4295, with the NULL-guard fix already included) is
+    # the only writer of incident_metrics_daily for a daily partition now.
+    # Unlike the other families in this ledger, incident never had a
+    # skip_families gate of its own here to begin with -- its Python
+    # compute went straight from "always runs" to "deleted outright."
+    # compute_incident_metrics_daily itself is ALSO deleted (the whole
+    # metrics/compute_incidents.py module) -- its only other callers were
+    # tests/metrics/test_compute_delivery_ops.py's incident test function
+    # (removed) and tests/test_pagerduty_clickhouse_live.py's mixed
+    # incident+dora test (surgically trimmed to drop only the incident
+    # half).
+    "incident": "compute_incident_metrics_daily",
 }
 
 

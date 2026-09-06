@@ -19,11 +19,17 @@ Three families, one per fixed Go site (CHAOS-4818 RISK-NOTES table):
     the ticket's own 28,987-input sweep shape (coverage x sessions x
     concurrent_deploys), so it necessarily contains representatives of the
     12.5% CHAOS-4818 measured as fused != unfused.
-  - percentile_float: dev_health_ops.metrics.compute._percentile (byte-identical
-    across compute.py / compute_cicd.py / compute_deployments.py /
-    compute_incidents.py / compute_work_items.py) vs the five duplicated Go
+  - percentile_float: dev_health_ops.metrics.compute._percentile (was
+    byte-identical across compute.py / compute_cicd.py /
+    compute_deployments.py / compute_incidents.py / compute_work_items.py;
+    compute_cicd.py and compute_incidents.py's own copies are gone now that
+    those two families' Python compute was deleted outright, CHAOS-5234/
+    CHAOS-3092 -- this generator only ever imported the canonical copy from
+    compute.py, so nothing here changes) vs the five duplicated Go
     percentile functions (deployPercentile, cicd.percentile,
-    incidentPercentile, repouser.percentile, testops.percentile).
+    incidentPercentile, repouser.percentile, testops.percentile) -- all
+    five Go copies stay; only the Python compute.py canonical copy is
+    exercised on this side either way.
   - percentile_int: dev_health_ops.metrics.compute_capacity._percentile vs
     internal/jobs/metrics/numerical.IntegerPercentiles. Int-truncating, so the
     assertion is exact int equality (a truncation boundary can still flip on

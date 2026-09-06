@@ -23,15 +23,10 @@ from dev_health_ops.metrics.active_incidents import (
 from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
-from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
 from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
 from dev_health_ops.metrics.compute_ic import (
     compute_ic_landscape_rolling,
     compute_ic_metrics_daily,
-)
-from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
-from dev_health_ops.metrics.compute_wellbeing import (
-    compute_team_wellbeing_metrics_daily,
 )
 from dev_health_ops.metrics.compute_work_item_state_durations import (
     compute_work_item_state_durations_daily,
@@ -56,7 +51,6 @@ from dev_health_ops.metrics.loaders import DataLoader, to_utc
 from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
 from dev_health_ops.metrics.prometheus import (
     record_metrics_family_zero_rows,
-    record_team_metrics_daily_repo_rows,
 )
 from dev_health_ops.metrics.quality import (
     compute_rework_churn_ratio,
@@ -624,8 +618,10 @@ async def run_daily_metrics_job(
     """Run the daily metrics compute+write pipeline.
 
     Returns a ``{day: [family, ...]}`` map of sub-families (currently
-    cicd/deploy/incident -- CHAOS-4246) that computed zero rows
-    for that day despite the rest of the run succeeding. This is a
+    deploy -- CHAOS-4246; cicd/incident were removed from this set by
+    CHAOS-5234/CHAOS-3092, which deleted their Python compute outright) that
+    computed zero rows for that day despite the rest of the run succeeding.
+    This is a
     DEGRADE signal, not a failure: zero rows is often legitimate (no CI
     activity, no deploys, no incidents that day), so an empty result for one
     family never raises or aborts the job. Callers that want the partition to
@@ -637,21 +633,23 @@ async def run_daily_metrics_job(
     this job must neither recompute nor rewrite them. ``None`` or an empty
     set is a no-op: every family computes and writes exactly as it did
     before this parameter existed. Only families with a Go native executor
-    check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
-    CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
-    ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292
-    (``file_hotspots``/``file_risk_hotspots``, CHAOS-4277, had their Python
-    compute+write deleted outright rather than gated --
-    CHAOS-5234/CHAOS-3092 -- so neither checks this set at all anymore),
-    ``compounding_risk`` CHAOS-4287, ``review_edges`` CHAOS-4279, and
-    ``benchmarking`` CHAOS-4288 (``ai_impact`` CHAOS-4280 had the same
-    write-only-skip shape as file_hotspots above until CHAOS-5234/CHAOS-3092
-    -- its Python compute+write was deleted outright, so it no longer checks
-    this set at all); naming any other family here has no effect. CHAOS-5245
-    deleted testops_pipeline/testops_test/testops_coverage/testops_risk's
-    Python compute entirely (their native Go executors, CHAOS-4284/
-    CHAOS-4294, have no Python fallback left) -- those four names no longer
-    appear here at all, not even as a no-op.
+    AND a live Python fallback still check this set (``repo_user_commit``
+    CHAOS-4275, ``deploy`` CHAOS-4293, ``compounding_risk`` CHAOS-4287,
+    ``review_edges`` CHAOS-4279, and ``benchmarking`` CHAOS-4288); naming
+    any other family here has no effect. ``file_hotspots``/
+    ``file_risk_hotspots`` (CHAOS-4277) and ``ai_impact`` (CHAOS-4280) had
+    their Python compute+write deleted outright rather than gated
+    (CHAOS-5234/CHAOS-3092); ``team_wellbeing`` (CHAOS-4276),
+    ``incident`` (CHAOS-4269/CHAOS-4295), ``cicd`` (CHAOS-4292) followed the
+    same outright-deletion path (CHAOS-5234/CHAOS-3092, this batch);
+    ``work_item_state`` (CHAOS-4278) and ``work_item_attribution`` still
+    skip-gate (BLOCKED from outright deletion: their compute functions have
+    a second live production caller, job_work_items.py's
+    run_work_items_sync_job) -- none of these check this set at all
+    anymore. CHAOS-5245 deleted testops_pipeline/testops_test/
+    testops_coverage/testops_risk's Python compute entirely (their native Go
+    executors, CHAOS-4284/CHAOS-4294, have no Python fallback left) -- those
+    four names no longer appear here at all, not even as a no-op.
 
     ``compounding_risk`` is REPO scope only: the native executor writes the
     per-partition repo rows, so this set gates the ``_write_compounding_risk_
@@ -728,9 +726,13 @@ async def run_daily_metrics_job(
     load_work_items_from_db = provider == "auto"
     load_work_items_enabled = provider != "none"
 
-    business_tz = os.getenv("BUSINESS_TIMEZONE", "UTC")
-    business_start = int(os.getenv("BUSINESS_HOURS_START", "9"))
-    business_end = int(os.getenv("BUSINESS_HOURS_END", "17"))
+    # CHAOS-5234/CHAOS-3092: BUSINESS_TIMEZONE/BUSINESS_HOURS_START/
+    # BUSINESS_HOURS_END used to be read here to feed
+    # compute_team_wellbeing_metrics_daily's business_timezone/
+    # business_hours_start/business_hours_end params -- that was their ONLY
+    # reader (verified via rg). team_wellbeing's compute is deleted outright
+    # now (TeamWellbeingExecutor, native Go, is the only writer), so these
+    # three env reads are gone too.
 
     daily_commit_cache: dict[date, list[Any]] = {}
 
@@ -876,9 +878,17 @@ async def run_daily_metrics_job(
         # consumed them) -- their native Go executors (CHAOS-4284) have no
         # Python fallback left to feed. h_start_date stays: h_commit_rows below
         # is unrelated (file/complexity history), not a testops fetch.
-        incident_rows = await loader.load_incidents(
-            start, end, repo_id=repo_id, repo_name=repo_name
-        )
+        # CHAOS-5234/CHAOS-3092: incident's daily compute is DELETED here,
+        # not skip-gated -- chris's standing rule (CHAOS-5233): once a
+        # family's Go executor is on main, its Python compute is deleted,
+        # never skip-gated. IncidentExecutor (native Go, CHAOS-4269/CHAOS-4295,
+        # WITH the NULL-guard fix this Python path never had -- port-with-fix
+        # standing order) is now the only writer of incident_metrics_daily
+        # for a daily partition. The loader.load_incidents call this
+        # replaces fed ONLY compute_incident_metrics_daily -- verified via
+        # rg that incident_rows was never read anywhere else in this
+        # function (mttr_by_repo/bug_times just below iterate work_items,
+        # unrelated).
 
         h_commit_rows = await _get_cached_commits_for_window(h_start_date, d)
 
@@ -982,27 +992,16 @@ async def run_daily_metrics_job(
             code_ownership_gini_by_repo=gini_by_repo,
         )
 
-        # CHAOS-4276: team_wellbeing has a native Go executor. When the Go
-        # dispatcher reports it already computed and wrote this scope,
-        # skip both compute and write here -- an empty list produces the
-        # same "nothing to write" shape write_team_metrics already handles
-        # for a legitimately quiet day, so no separate branch is needed
-        # below.
-        team_metrics = (
-            []
-            if "team_wellbeing" in skip_families
-            else compute_team_wellbeing_metrics_daily(
-                day=d,
-                commit_stat_rows=commit_rows,
-                team_resolver=team_resolver,
-                repo_team_resolver=repo_team_resolver,
-                repo_names_by_id=repo_names_by_id,
-                computed_at=computed_at,
-                business_timezone=business_tz,
-                business_hours_start=business_start,
-                business_hours_end=business_end,
-            )
-        )
+        # CHAOS-5234/CHAOS-3092: team_wellbeing's daily compute is DELETED
+        # here, not skip-gated -- the native Go executor (TeamWellbeing
+        # Executor, CHAOS-4276) is the only writer of team_metrics_daily
+        # for a daily partition now. No `team_metrics` local either -- it
+        # is never read anywhere else in this function (the write call and
+        # the zero-rows/repo-fan-out observer below are all deleted too, see
+        # their own comments). commit_rows/team_resolver/repo_team_resolver/
+        # repo_names_by_id are NOT touched -- they are shared inputs also
+        # used above/below for other families, verified via rg that this
+        # compute call was not their only reader.
 
         wi_metrics: list[Any] = []
         wi_user_metrics: list[Any] = []
@@ -1092,38 +1091,20 @@ async def run_daily_metrics_job(
                 computed_at=computed_at,
             )
         )
-        # CHAOS-4292: cicd has a native Go executor (CICDExecutor). When the
-        # Go dispatcher reports it already computed and wrote this scope,
-        # skip compute here -- unlike repo_user_commit, cicd_metrics has no
-        # downstream in-process consumer in this function (nothing else
-        # reads it before the write block), so skipping compute entirely
-        # (mirroring team_wellbeing, not repo_user_commit's write-only skip)
-        # is safe.
-        skip_cicd = "cicd" in skip_families
-        cicd_metrics = (
-            []
-            if skip_cicd
-            else compute_cicd_metrics_daily(
-                day=d, pipeline_runs=pipeline_rows, computed_at=computed_at
-            )
-        )
+        # CHAOS-5234/CHAOS-3092: cicd's daily compute is DELETED here, not
+        # skip-gated -- chris's standing rule (CHAOS-5233): once a family's
+        # Go executor is on main, its Python compute is deleted, never
+        # skip-gated. CICDExecutor (native Go, CHAOS-4292) is now the only
+        # writer of cicd_metrics_daily for a daily partition. pipeline_rows
+        # itself is NOT touched -- it also feeds active_repos above, verified
+        # via rg that this compute call was its only OTHER reader.
         deploy_metrics = compute_deploy_metrics_daily(
             day=d, deployments=deployment_rows, computed_at=computed_at
         )
-        # CHAOS-4269/CHAOS-4295: incident has a native Go executor, WITH the
-        # CHAOS-4269 NULL-guard fix (this Python path stays permanently
-        # zero-yield for repository-derived incident mappings -- port-with-fix
-        # standing order means the fix lands only in Go, never patched here).
-        # Same skip_families gate shape as team_wellbeing above: nothing else
-        # in this function reads `incident_metrics` besides the write and the
-        # zero-rows note just below, so both are skipped together.
-        incident_metrics = (
-            []
-            if "incident" in skip_families
-            else compute_incident_metrics_daily(
-                day=d, incidents=incident_rows, computed_at=computed_at
-            )
-        )
+        # CHAOS-5234/CHAOS-3092: incident's daily compute is DELETED here too
+        # (see the loader.load_incidents removal above) -- no
+        # write_incident_metrics call left either; IncidentExecutor (native
+        # Go) is the only writer now.
         # CHAOS-5234/CHAOS-3092: ai_governance's daily compute is DELETED
         # here, not skip-gated -- chris's standing rule (CHAOS-5233): once a
         # family's Go executor is on main, its Python compute is deleted,
@@ -1295,7 +1276,9 @@ async def run_daily_metrics_job(
                 s.write_user_metrics(result.user_metrics)
                 if include_commit_metrics:
                     s.write_commit_metrics(result.commit_metrics)
-            s.write_team_metrics(team_metrics)
+            # CHAOS-5234/CHAOS-3092: no write_team_metrics call here either --
+            # deleted alongside the compute call above; TeamWellbeingExecutor
+            # (native Go) is the only writer of team_metrics_daily now.
             if wi_metrics and not skip_work_item_write:
                 s.write_work_item_metrics(wi_metrics)
             if estimate_coverage_metrics and not skip_work_item_estimate_write:
@@ -1311,14 +1294,18 @@ async def run_daily_metrics_job(
                 s.write_work_item_state_durations(wi_state_durations)
             if not skip_review_edges:
                 s.write_review_edges(review_edges)
-            s.write_cicd_metrics(cicd_metrics)
+            # CHAOS-5234/CHAOS-3092: no write_cicd_metrics call here either --
+            # deleted alongside the compute call above; CICDExecutor (native
+            # Go) is the only writer now.
             # CHAOS-5245 deleted testops_pipeline/testops_test/testops_coverage's
             # Python compute+write entirely (their native Go executors,
             # CHAOS-4284, have no fallback left) -- there is nothing left here
             # to gate.
             if not skip_deploy_write:
                 s.write_deploy_metrics(deploy_metrics)
-            s.write_incident_metrics(incident_metrics)
+            # CHAOS-5234/CHAOS-3092: no write_incident_metrics call here
+            # either -- deleted alongside the compute call above;
+            # IncidentExecutor (native Go) is the only writer now.
             # CHAOS-5234/CHAOS-3092: no write_ai_policy_events/
             # write_ai_governance_coverage_daily call here -- deleted
             # alongside the compute call above; AIGovernanceExecutor (native
@@ -1357,21 +1344,16 @@ async def run_daily_metrics_job(
             # executors are the only writers of file_metrics_daily and
             # file_hotspot_daily now.
 
-        # CHAOS-4246: cicd/deploy/incident are written unconditionally above
-        # (write_*_metrics no-ops on an empty list) -- note it here so a run
-        # of zero rows is visible instead of indistinguishable from success.
-        # CHAOS-4292: when cicd was skipped (native Go already computed and
-        # wrote it), cicd_metrics is always [] here regardless of how many
-        # rows the Go side actually wrote -- noting it would be a FALSE zero-
-        # rows-computed signal, so skip the note entirely for this partition;
-        # the native executor's own anomaly detection is
-        # ClickHouseSourceDataChecker (Go), not this Python-side note. Same
-        # shape as incident's own gate just below (CHAOS-4269/CHAOS-4295).
-        if not skip_cicd:
-            _note_family_zero_rows("cicd", cicd_metrics, day=d)
+        # CHAOS-4246: deploy is written unconditionally above (write_*_metrics
+        # no-ops on an empty list) -- note it here so a run of zero rows is
+        # visible instead of indistinguishable from success.
+        # CHAOS-5234/CHAOS-3092: no _note_family_zero_rows("cicd", ...) or
+        # _note_family_zero_rows("incident", ...) here any more -- both
+        # families' Python compute is DELETED (see the compute-call removals
+        # above), so a permanent [] would always be a FALSE zero-rows-
+        # computed signal now; the native executors' own anomaly detection
+        # is ClickHouseSourceDataChecker (Go), not this Python-side note.
         _note_family_zero_rows("deploy", deploy_metrics, day=d)
-        if "incident" not in skip_families:
-            _note_family_zero_rows("incident", incident_metrics, day=d)
 
         # CHAOS-4287: compounding_risk has a native Go executor
         # (CompoundingRiskExecutor), registered post_bridge. When the Go
@@ -1412,12 +1394,13 @@ async def run_daily_metrics_job(
         # collapsed the redundant per-repo writes down to whichever repo's
         # partition ran last -- confirmed live before this fix.
 
-        # CHAOS-4329: observe distinct repo_id fan-out per team_id AFTER the
-        # write above durably lands (mirrors ObserveZeroUnitFinalization's
-        # post-commit rule) -- once per write, not once per sink (team_metrics
-        # is the exact same list every sink in a dual-sink write received, so
-        # observing inside that loop would double-count).
-        record_team_metrics_daily_repo_rows(team_metrics)
+        # CHAOS-5234/CHAOS-3092: no record_team_metrics_daily_repo_rows call
+        # here either -- deleted alongside the compute+write calls above.
+        # TeamWellbeingExecutor (native Go) already emits the same
+        # dev_health_team_metrics_daily_repo_count series independently
+        # (internal/jobruntime/telemetry.go's repoCountBuckets), so the
+        # series stays alive; only this now-callerless Python recorder and
+        # its instrument (metrics/prometheus.py) are gone.
 
         # CHAOS-5245 deleted testops_risk's Python compute+write entirely
         # (its native Go executor, TestopsRiskExecutor/CHAOS-4294, has no

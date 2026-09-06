@@ -22,8 +22,11 @@ the two tables this module reads disagree on which one they are:
   canonical primary attribution.
 * ``user_metrics_daily``/``team_metrics_daily`` (``cognitive_load``,
   ``active_contributor_count``) are written by ``metrics/compute.py``
-  (around lines 399-411) and ``metrics/compute_wellbeing.py`` (around lines
-  82-91) respectively, via ``repo_team_resolver.resolve(repo_name)`` then
+  (around lines 399-411) and TeamWellbeingExecutor (native Go --
+  ``metrics/compute_wellbeing.py``'s Python compute, formerly around lines
+  82-91, was deleted outright by CHAOS-5234/CHAOS-3092; the Go port kept the
+  same resolution order) respectively, via
+  ``repo_team_resolver.resolve(repo_name)`` then
   ``team_resolver.resolve(identity)`` -- a legacy repo-pattern/identity-map
   resolver that never consults ``attribution_context`` at all. This is
   CHAOS-3331 (filed 2026-08-02, disclose-and-defer ruling): migrating these

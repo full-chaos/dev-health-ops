@@ -18,12 +18,14 @@ import (
 // A family that fails every attempt on every run must not be that quiet, so
 // this pins the log line rather than the fix that will follow from reading it.
 func TestAFailedFinalizeLogsItsCause(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	const cause = "clickhouse: Unknown expression identifier `prs_authored`"
 	var captured bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	bridge := &skipRecordingCompatibility{}
-	handler, err := NewFinalizeHandler(finalizeStoreWithClaim(), bridge)
+	handler, err := NewFinalizeHandler(finalizeStoreWithClaim())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +78,11 @@ func TestAFailedFinalizeLogsItsCause(t *testing.T) {
 // "will retry" from "gave up", which is the distinction that decides whether
 // anyone needs to act now.
 func TestTheFinalFinalizeAttemptIsLoggedAsTerminal(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+
 	var captured bytes.Buffer
-	handler, err := NewFinalizeHandler(finalizeStoreWithClaim(), &skipRecordingCompatibility{})
+	handler, err := NewFinalizeHandler(finalizeStoreWithClaim())
 	if err != nil {
 		t.Fatal(err)
 	}

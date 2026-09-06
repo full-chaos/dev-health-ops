@@ -143,12 +143,19 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # internal/jobs/workgraph/issuecommitedges, issuepredges, and prcommit
     # (each gained its first integration-tagged test, the repo_id-as-string
     # bind fix's regression test). 48 -> 51.
-    # CURRENT TOTAL: 51. Adding one -tags=integration package bumps every
+    # CHAOS-5359 added internal/jobs/investment's first //go:build integration
+    # file (hierarchycascade_integration_test.go, one Materializer.Run
+    # end-to-end test against a real ClickHouse container): 51 -> 52. The
+    # package's chquery/chwrite/categorize subpackages were already counted
+    # separately; the package ROOT itself had no integration-tagged file
+    # before this.
+    # CURRENT TOTAL: 52. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "51 package(s) discovered, 0 denylisted, 51 will run" in result.stdout
+    assert "52 package(s) discovered, 0 denylisted, 52 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
+    assert "  RUN  internal/jobs/investment" in result.stdout
     assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
     assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

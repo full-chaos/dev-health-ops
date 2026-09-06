@@ -40,9 +40,13 @@ type jiraBatchTransitionRow struct {
 }
 
 func TestJiraProducerBatchMatchesLivePython(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	// CHAOS-5329/CHAOS-3092: fetch_jira_work_items_with_extras (the Python
+	// legacy-client Jira producer) is deleted -- providersync's
+	// JiraWorkItemsRouteHandler/JiraAtlassianRouteHandler own Jira work-items
+	// ingestion now. Frozen, see testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(
 		t,
-		"jira/work-items/batch",
+		"jira_work-items_batch",
 		jiraWorkItemsBatchOracleCases(),
 		buildJiraProducerBatchOracleRow,
 		nil,

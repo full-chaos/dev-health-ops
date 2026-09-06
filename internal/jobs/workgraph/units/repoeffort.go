@@ -13,6 +13,14 @@ const (
 	AllocationSourcePRChurn             = "pr_churn"
 	AllocationSourceActiveHoursUnassign = "active_hours_unassigned"
 	AllocationSourceEmpty               = "empty"
+	// AllocationSourceHierarchyCascade (CHAOS-5359) marks a repo-effort row
+	// whose repo_id was NOT derived from this unit's own commit/PR churn --
+	// there was none, the "empty" tier fired -- but the issue-hierarchy
+	// cascade (investment.computeRepoHierarchyCascade) found an ancestor or
+	// unanimous-children resolution instead. Only the caller (materialize.go)
+	// ever produces this value; AllocateRepoEffort itself never does, since it
+	// has no view of any component but its own.
+	AllocationSourceHierarchyCascade = "hierarchy_cascade"
 )
 
 // RepoAllocation is one row of _allocate_repo_effort's returned list --

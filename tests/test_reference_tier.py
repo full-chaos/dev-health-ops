@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
-from dev_health_ops.metrics.work_items import fetch_jira_work_items_with_extras
 from dev_health_ops.models.work_items import Sprint
 from dev_health_ops.providers.base import IngestionContext, IngestionWindow
 from dev_health_ops.providers.linear.provider import LinearProvider
@@ -227,89 +225,3 @@ def test_linear_unscoped_sprint_cache_does_not_skip_current_team_fetch() -> None
     assert [item.sprint_id for batch in batches for item in batch.sprints] == [
         "linear:cycle:cycle-1"
     ]
-
-
-class _JiraClient:
-    def __init__(self) -> None:
-        self.get_sprint_calls = 0
-        self.closed = False
-
-    def iter_issues(self, **_kwargs: Any) -> list[dict[str, Any]]:
-        return [
-            {
-                "key": "ENG-1",
-                "fields": {
-                    "summary": "Do work",
-                    "project": {"key": "ENG", "id": "100", "name": "Engineering"},
-                    "status": {"name": "To Do", "statusCategory": {"key": "new"}},
-                    "issuetype": {"name": "Task"},
-                    "labels": [],
-                    "created": "2024-01-01T00:00:00.000+0000",
-                    "updated": "2024-01-02T00:00:00.000+0000",
-                    "customfield_10020": [{"id": 7, "name": "Sprint 7"}],
-                },
-            }
-        ]
-
-    def iter_issue_comments(self, **_kwargs: Any) -> list[dict[str, Any]]:
-        return []
-
-    def get_sprint(self, *, sprint_id: str) -> dict[str, Any]:
-        self.get_sprint_calls += 1
-        return {"id": sprint_id, "name": f"Sprint {sprint_id}", "state": "active"}
-
-    def close(self) -> None:
-        self.closed = True
-
-
-def _jira_args(client: _JiraClient, **kwargs: Any) -> dict[str, Any]:
-    base = {
-        "since": datetime(2024, 1, 1, tzinfo=timezone.utc),
-        "until": datetime(2024, 1, 3, tzinfo=timezone.utc),
-        "status_mapping": _StatusMapping(),
-        "identity": _Identity(),
-        "project_keys": ["ENG"],
-        "client": client,
-        "use_env_query_options": False,
-    }
-    base.update(kwargs)
-    return base
-
-
-def test_jira_store_hit_avoids_per_sprint_api(monkeypatch: Any) -> None:
-    monkeypatch.setenv("JIRA_FETCH_COMMENTS", "0")
-    monkeypatch.setenv("JIRA_SPRINT_FIELD", "customfield_10020")
-    client = _JiraClient()
-    sprint = Sprint(
-        provider="jira",
-        sprint_id="7",
-        name="Sprint 7",
-        state="active",
-        started_at=None,
-        ended_at=None,
-        completed_at=None,
-        native_team_key=None,
-    )
-
-    *_, sprints = fetch_jira_work_items_with_extras(
-        **_jira_args(client, reference_sprints=[sprint])
-    )
-
-    assert client.get_sprint_calls == 0
-    assert [item.sprint_id for item in sprints] == ["7"]
-    assert [item.native_team_key for item in sprints] == [None]
-
-
-def test_jira_store_miss_fetches_and_persists_sprint_once(monkeypatch: Any) -> None:
-    monkeypatch.setenv("JIRA_FETCH_COMMENTS", "0")
-    monkeypatch.setenv("JIRA_SPRINT_FIELD", "customfield_10020")
-    client = _JiraClient()
-    sink = _ReferenceSink()
-
-    *_, sprints = fetch_jira_work_items_with_extras(
-        **_jira_args(client, reference_sprints=[], reference_sink=sink)
-    )
-
-    assert client.get_sprint_calls == 1
-    assert [item.sprint_id for item in sprints] == ["7"]
-    assert [item.sprint_id for item in sink.sprints] == ["7"]

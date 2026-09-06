@@ -4,7 +4,7 @@ Asserts that every provider normalizer populates the new WorkItem fields
 correctly:
 
 * ``native_team_key`` is the raw provider team key for Linear (``issue.team.key``)
-  and ``None`` for GitHub / GitLab / Jira (their work items have no native team).
+  and ``None`` for GitHub / GitLab (their work items have no native team; Jira is no longer covered here -- its Python normalizer was deleted, CHAOS-5329).
 * ``project_key`` / ``project_id`` / ``project_name`` are no longer conflated:
   for Linear ``project_key`` is no longer the team key and ``project_id`` is the
   real project id (not the project name).
@@ -25,7 +25,6 @@ from dev_health_ops.providers.gitlab.normalize import (
 )
 from dev_health_ops.providers.gitlab.normalize import gitlab_issue_to_work_item
 from dev_health_ops.providers.identity import IdentityResolver
-from dev_health_ops.providers.jira.normalize import jira_issue_to_work_item
 from dev_health_ops.providers.linear.normalize import linear_issue_to_work_item
 from dev_health_ops.providers.status_mapping import load_status_mapping
 
@@ -71,31 +70,6 @@ def test_linear_sets_native_team_key_and_splits_project() -> None:
     # Project id is the real id; the name moved to project_name.
     assert wi.project_id == "proj-uuid-123"
     assert wi.project_name == "Q1 Platform Revamp"
-
-
-def test_jira_sets_project_name_and_no_native_team() -> None:
-    status_mapping = load_status_mapping()
-    issue = {
-        "key": "ABC-1",
-        "fields": {
-            "project": {"key": "ABC", "id": "10001", "name": "Backend"},
-            "summary": "Jira issue",
-            "status": {"name": "Done", "statusCategory": {"key": "done"}},
-            "issuetype": {"name": "Task"},
-            "labels": [],
-            "created": "2025-12-01T10:00:00.000+0000",
-            "updated": "2025-12-02T10:00:00.000+0000",
-        },
-    }
-
-    wi, _ = jira_issue_to_work_item(
-        issue=issue, status_mapping=status_mapping, identity=_identity(), repo_id=None
-    )
-
-    assert wi.native_team_key is None
-    assert wi.project_key == "ABC"
-    assert wi.project_id == "10001"
-    assert wi.project_name == "Backend"
 
 
 def test_github_work_item_has_no_native_team() -> None:

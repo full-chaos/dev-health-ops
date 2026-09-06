@@ -14,7 +14,7 @@ from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.workers.reference_discovery import (
     await_reference_discovery_terminal,
 )
-from dev_health_ops.workers.task_utils import _get_db_url, _jira_query_options
+from dev_health_ops.workers.task_utils import _get_db_url
 
 from .chunker import chunk_date_range
 
@@ -270,7 +270,6 @@ def run_backfill_for_config(
             progress_cb(idx, len(windows), window_since, window_before)
 
         backfill_days = (window_before - window_since).days + 1
-        jira_project_keys, jira_jql, jira_fetch_all = _jira_query_options(sync_options)
         github_sync_targets = sync_targets or ["work-items"]
         run_work_items_sync_job(
             db_url=db_url,
@@ -282,9 +281,6 @@ def run_backfill_for_config(
             search_pattern=sync_options.get("search"),
             org_id=org_id,
             credentials=credentials,
-            jira_project_keys=jira_project_keys if provider == "jira" else None,
-            jira_jql=jira_jql if provider == "jira" else None,
-            jira_fetch_all=jira_fetch_all if provider == "jira" else None,
             # CHAOS-646: only ingest PRs as work items when the PRS target is
             # enabled (None would let the github provider fall back to the
             # GITHUB_INCLUDE_PRS env default, PRs ON). Mirrors the unitized path

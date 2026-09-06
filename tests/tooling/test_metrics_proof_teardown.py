@@ -1,4 +1,4 @@
-"""CHAOS-5025: regression coverage for the shared Go worker teardown mechanism.
+"""CHAOS-5025: regression coverage for ci/run_metrics_executed_proof.sh teardown.
 
 Why this file exists (codex round 2, P3): the other tests added for CHAOS-5025
 cover the PYTHON half of the fix, but every defect actually found in this work
@@ -14,22 +14,8 @@ for the previous one:
     the leader is already reaped and ``ps`` reports nothing, so the group was
     never swept and the descendant it existed to kill survived.
 
-These drive the SHIPPED functions, sliced out of the real sources by anchor, so
-they cannot drift from them.
-
-CHAOS-5362: ``service_pgid``/``stop_service`` moved out of
-``ci/run_metrics_executed_proof.sh`` into the shared library
-``ci/lib/go_worker_fixture.sh`` (same names, unprefixed -- a plain relocation,
-not a rename), alongside a new ``stop_worker_stack`` that orders the
-worker-then-reconciler ``stop_service`` calls (the api is stopped separately,
-directly, by the calling script, to preserve the full worker -> reconciler ->
-api kill order across the library boundary). ``cleanup()``/``on_signal()``/the
-three ``trap`` lines stayed in the calling script -- ``cleanup()``'s body now
-calls ``stop_worker_stack`` followed by a direct ``stop_service`` for the api,
-instead of three inline ``stop_service`` calls. Tests that only exercise the
-pgid/kill/watchdog mechanism now slice the LIBRARY; tests that exercise the
-script's own re-entrancy-safe trap wiring interacting with that mechanism
-source BOTH.
+These drive the SHIPPED functions, sliced out of the real script by anchor, so
+they cannot drift from it.
 """
 
 from __future__ import annotations
@@ -44,23 +30,19 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "ci" / "run_metrics_executed_proof.sh"
-LIB = REPO_ROOT / "ci" / "lib" / "go_worker_fixture.sh"
 
 # A module-level `pytest.skip(...)` call rather than a `pytestmark` assignment:
 # tests/tooling's orphan-definition guard parses the AST and cannot see pytest's
 # implicit consumption of `pytestmark`, so the assignment reads as a definition
 # that is never used. This is a call, so there is nothing to orphan.
-if shutil.which("bash") is None or not SCRIPT.is_file() or not LIB.is_file():
-    pytest.skip(
-        "needs bash, the proof script, and the shared worker-fixture lib",
-        allow_module_level=True,
-    )
+if shutil.which("bash") is None or not SCRIPT.is_file():
+    pytest.skip("needs bash and the proof script", allow_module_level=True)
 
 PRELUDE = "set -euo pipefail\nTEARDOWN_WAIT_SECS=1\n"
 
 
-def _slice_text(text: str, start_pattern: str, end_pattern: str) -> str:
-    """Slice ``text`` between two anchors, both required to be UNIQUE.
+def _slice(start_pattern: str, end_pattern: str) -> str:
+    """Slice the shipped source between two anchors, both required to be UNIQUE.
 
     Uniqueness is the whole guard (codex round 3, P2). With only "first match"
     semantics a script could carry a WORKING decoy definition before the anchor
@@ -69,6 +51,7 @@ def _slice_text(text: str, start_pattern: str, end_pattern: str) -> str:
     demonstrated -- 13 tests passed against a `stop_service()` that returned
     without signalling any real service.
     """
+    text = SCRIPT.read_text()
     starts = re.findall(start_pattern, text, re.M)
     ends = re.findall(end_pattern, text, re.M)
     assert len(starts) == 1, (
@@ -82,10 +65,6 @@ def _slice_text(text: str, start_pattern: str, end_pattern: str) -> str:
     return text[start.start() : end.start()]
 
 
-def _slice(path: Path, start_pattern: str, end_pattern: str) -> str:
-    return _slice_text(path.read_text(), start_pattern, end_pattern)
-
-
 #: Every spelling bash accepts for a function definition. The first version of
 #: the uniqueness guard below matched only ``name() {`` with exactly one space,
 #: so ``function stop_service { ... }`` -- the keyword form, equally valid and
@@ -96,30 +75,19 @@ def _definition_pattern(name: str) -> str:
     return rf"^(?:function\s+{name}\b|{name}\s*\(\)\s*\{{)"
 
 
-def _assert_defined_exactly_once(text: str, name: str, where: str) -> None:
-    found = re.findall(_definition_pattern(name), text, re.M)
-    assert len(found) == 1, (
-        f"{name} is defined {len(found)}x in {where} (counting both "
-        "`name() {` and `function name {`); a second definition would "
-        "shadow the one these tests slice out"
-    )
-
-
 def test_teardown_functions_are_defined_exactly_once():
     """codex round 3, P2: a duplicate definition makes the slice test a decoy.
 
     Covers both `name() {` (any spacing) and `function name {`.
-
-    CHAOS-5362: service_pgid/stop_service/stop_worker_stack now live in the
-    shared library; cleanup/on_signal stayed in the calling script.
     """
-    lib_text = LIB.read_text()
-    for name in ("service_pgid", "stop_service", "stop_worker_stack"):
-        _assert_defined_exactly_once(lib_text, name, str(LIB))
-
-    script_text = SCRIPT.read_text()
-    for name in ("cleanup", "on_signal"):
-        _assert_defined_exactly_once(script_text, name, str(SCRIPT))
+    text = SCRIPT.read_text()
+    for name in ("service_pgid", "stop_service", "cleanup", "on_signal"):
+        found = re.findall(_definition_pattern(name), text, re.M)
+        assert len(found) == 1, (
+            f"{name} is defined {len(found)}x in the script (counting both "
+            "`name() {` and `function name {`); a second definition would "
+            "shadow the one these tests slice out"
+        )
 
 
 @pytest.mark.parametrize(
@@ -137,23 +105,19 @@ def test_a_shadowing_redefinition_is_rejected_in_every_bash_spelling(
 ):
     """Red -> green for the decoy attack, in each form bash accepts.
 
-    Bash uses the LAST definition, so a second `stop_service` appended
-    after the real one silently replaces it while an anchor-sliced test keeps
-    exercising the first. The keyword form evaded the original guard entirely.
+    Bash uses the LAST definition, so a second `stop_service` appended after the
+    real one silently replaces it while an anchor-sliced test keeps exercising
+    the first. The keyword form evaded the original guard entirely.
     """
     shadowed = tmp_path / "shadowed.sh"
-    shadowed.write_text(LIB.read_text() + "\n" + decoy)
-    monkeypatch.setattr("tests.tooling.test_metrics_proof_teardown.LIB", shadowed)
+    shadowed.write_text(SCRIPT.read_text() + "\n" + decoy)
+    monkeypatch.setattr("tests.tooling.test_metrics_proof_teardown.SCRIPT", shadowed)
     with pytest.raises(AssertionError):
         test_teardown_functions_are_defined_exactly_once()
 
 
 def _teardown_source() -> str:
-    """service_pgid + stop_service + stop_worker_stack, sliced out of the
-    shared library."""
-    return _slice(
-        LIB, r"^service_pgid\(\) \{", r"^seed_and_finalize_sync_targets\(\) \{"
-    )
+    return _slice(r"^service_pgid\(\) \{", r"^cleanup\(\) \{")
 
 
 def _run(body: str, timeout: int = 60) -> subprocess.CompletedProcess:
@@ -259,26 +223,14 @@ echo REACHED_END
     )
 
 
-def _teardown_wait_secs_source() -> str:
-    """validate_teardown_wait_secs's body, sliced out of the shared library.
-
-    CHAOS-5362: the function only validates whatever TEARDOWN_WAIT_SECS already
-    holds -- the METRICS_PROOF_TEARDOWN_WAIT_SECS-to-TEARDOWN_WAIT_SECS mapping
-    is now the CALLER's job (ci/run_metrics_executed_proof.sh does it inline,
-    immediately before calling this function), not the function's own. Tests
-    below do that mapping themselves before sourcing/calling it.
-    """
-    return _slice(LIB, r"^validate_teardown_wait_secs\(\) \{", r"^service_pgid\(\) \{")
-
-
 @pytest.mark.parametrize("bad", ["abc", "12.5", "0", "-5", "999999", "60s"])
 def test_teardown_wait_secs_fails_closed_on_junk(bad):
     """codex r1 P2: an unvalidated value silently became an instant SIGKILL."""
+    block = _slice(r"^TEARDOWN_WAIT_SECS=", r"^service_pgid\(\) \{")
     result = _run(
         f'set -euo pipefail\nMETRICS_PROOF_TEARDOWN_WAIT_SECS="{bad}"\n'
-        f'TEARDOWN_WAIT_SECS="${{METRICS_PROOF_TEARDOWN_WAIT_SECS:-60}}"\n'
-        + _teardown_wait_secs_source()
-        + '\nvalidate_teardown_wait_secs\necho "resolved=${TEARDOWN_WAIT_SECS}"\n'
+        + block
+        + '\necho "resolved=${TEARDOWN_WAIT_SECS}"\n'
     )
     assert result.returncode == 0, result.stderr
     assert "resolved=60" in result.stdout, result.stdout
@@ -291,11 +243,11 @@ def test_empty_override_defaults_silently():
     Asserting a warning here was a wrong expectation on my part, not a defect --
     recorded so the distinction between "absent" and "invalid" stays explicit.
     """
+    block = _slice(r"^TEARDOWN_WAIT_SECS=", r"^service_pgid\(\) \{")
     result = _run(
         'set -euo pipefail\nMETRICS_PROOF_TEARDOWN_WAIT_SECS=""\n'
-        'TEARDOWN_WAIT_SECS="${METRICS_PROOF_TEARDOWN_WAIT_SECS:-60}"\n'
-        + _teardown_wait_secs_source()
-        + '\nvalidate_teardown_wait_secs\necho "resolved=${TEARDOWN_WAIT_SECS}"\n'
+        + block
+        + '\necho "resolved=${TEARDOWN_WAIT_SECS}"\n'
     )
     assert result.returncode == 0, result.stderr
     assert "resolved=60" in result.stdout, result.stdout
@@ -303,11 +255,11 @@ def test_empty_override_defaults_silently():
 
 
 def test_teardown_wait_secs_accepts_a_valid_override():
+    block = _slice(r"^TEARDOWN_WAIT_SECS=", r"^service_pgid\(\) \{")
     result = _run(
         'set -euo pipefail\nMETRICS_PROOF_TEARDOWN_WAIT_SECS="45"\n'
-        'TEARDOWN_WAIT_SECS="${METRICS_PROOF_TEARDOWN_WAIT_SECS:-60}"\n'
-        + _teardown_wait_secs_source()
-        + '\nvalidate_teardown_wait_secs\necho "resolved=${TEARDOWN_WAIT_SECS}"\n'
+        + block
+        + '\necho "resolved=${TEARDOWN_WAIT_SECS}"\n'
     )
     assert "resolved=45" in result.stdout, result.stdout
 
@@ -318,35 +270,12 @@ def test_worker_shutdown_timeout_stays_at_the_contract_minimum():
     Lowering this to 30s made the worker refuse to start, reported by the caller
     as the unrelated `queue_coverage_validation_failed` -- which is what broke
     #2212's CI. The value is a computed minimum, not a round number.
-
-    CHAOS-5362: the dev-health-worker invocation carrying this flag moved into
-    start_worker_stack() in the shared library.
     """
-    assert "--shutdown-timeout=7260s" in LIB.read_text(), (
-        "the shared worker fixture's shutdown-timeout must stay at the contract "
-        "minimum (7200s longest selected timeout + 60s workerFinalizationBuffer); "
-        "see cmd/dev-health-worker/dependencies.go"
+    assert "--shutdown-timeout=7260s" in SCRIPT.read_text(), (
+        "the proof's worker shutdown-timeout must stay at the contract minimum "
+        "(7200s longest selected timeout + 60s workerFinalizationBuffer); see "
+        "cmd/dev-health-worker/dependencies.go"
     )
-
-
-def _composed_teardown_and_trap_source() -> str:
-    """service_pgid/stop_service/stop_worker_stack (library) PLUS
-    cleanup()/on_signal()/the trap wiring (script), concatenated in the same
-    order the real scripts source/define them in.
-
-    CHAOS-5362 split what used to be one contiguous slice across two files:
-    the pgid/kill/watchdog mechanism moved to the shared library, while the
-    re-entrancy-safe trap wiring that calls it stayed in the script. Composing
-    both here keeps these two tests exercising the REAL interaction between
-    them, not a decoy reconstruction.
-    """
-    lib_part = _slice(
-        LIB, r"^service_pgid\(\) \{", r"^seed_and_finalize_sync_targets\(\) \{"
-    )
-    script_part = _slice(
-        SCRIPT, r"^CLEANUP_DONE=\"\"$", r"^trap 'on_signal TERM' TERM$"
-    )
-    return lib_part + script_part + "trap 'on_signal TERM' TERM\n"
 
 
 def test_a_cancelled_run_tears_down_and_exits_instead_of_resuming(tmp_path):
@@ -357,7 +286,8 @@ def test_a_cancelled_run_tears_down_and_exits_instead_of_resuming(tmp_path):
     exercises the REAL trap wiring -- `on_signal` and the `trap` lines, not just
     the helpers above -- which is the coverage gap round 3 named.
     """
-    full = _composed_teardown_and_trap_source()
+    full = _slice(r"^service_pgid\(\) \{", r"^trap 'on_signal TERM' TERM$")
+    full += "trap 'on_signal TERM' TERM\n"
     marker = tmp_path / "resumed"
     body = f"""set -euo pipefail
 TMP_DIR="$(mktemp -d)"
@@ -392,8 +322,8 @@ def test_teardown_is_fast_with_the_cleanup_signal_disposition_in_effect():
     watchdog wait, with no escalation warning because `elapsed` is measured
     around `wait "${pid}"`, which really was fast.
 
-    Every earlier test missed it by calling `stop_service` in ISOLATION,
-    where the disposition is never set -- the defect lives precisely in the
+    Every earlier test missed it by calling `stop_service` in ISOLATION, where
+    the disposition is never set -- the defect lives precisely in the
     interaction the isolation removed. So this one sets the disposition FIRST,
     exactly as cleanup() does, and asserts on elapsed WALL TIME.
     """

@@ -100,9 +100,9 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])
     )
-    # CHAOS-5323/CHAOS-3092: no compute_estimate_coverage_metrics_daily to
-    # patch here anymore -- job_work_items.py no longer imports it at all
-    # (deleted alongside its own compute function).
+    monkeypatch.setattr(
+        job, "compute_estimate_coverage_metrics_daily", lambda **_kwargs: []
+    )
     monkeypatch.setattr(
         job, "compute_work_item_team_attributions", lambda **_kwargs: []
     )

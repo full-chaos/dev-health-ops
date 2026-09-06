@@ -1,27 +1,20 @@
-"""Generate/verify the frozen work_item Python golden (CHAOS-4283).
+"""Generate/verify the frozen work_item + work_item_estimate Python golden (CHAOS-4283).
 
 Mirrors tests/fixtures/generate_daily_wellbeing_python_golden.py's shape for
-compute_work_item_metrics_daily (compute_work_items.py:1075), the production
-Python this repo is porting to Go (internal/jobs/metrics/workitemmetrics).
-This generator is the single source both the frozen golden and the live rot
-guard (internal/jobs/metrics/workitemmetrics/golden_rot_guard_test.go) render
-from, so those two can never independently drift from each other -- only the
-frozen file can drift from a CHANGED production Python, which the rot guard
-exists to catch.
+two families at once, because they share one input corpus exactly as
+job_daily.py does (it loads work items ONCE and calls both computes over the
+same list, :1550 and :1570):
 
-WORK_ITEM_ESTIMATE SPLIT (CHAOS-5323/CHAOS-3092)
--------------------------------------------------
-This generator used to ALSO call compute_estimate_coverage_metrics_daily and
-emit its rows under the "estimate_coverage_metrics_daily" key, since it shared
-this generator's input corpus with work_item exactly as job_daily.py's daily
-partition loaded work items once and called both computes over the same
-list. CHAOS-5323 deleted compute_estimate_coverage_metrics_daily entirely
-(work_item_estimate is fully native, WorkItemEstimateExecutor, with no
-remaining Python caller) -- its 14 frozen cases were extracted VERBATIM
-(byte-identical payload, diffed against the original file, nothing
-recomputed) into tests/fixtures/daily_work_item_estimate_coverage_golden.json
-with no generator, matching the CHAOS-5272/fma_golden.json precedent. This
-generator's own output no longer contains that key at all.
+  * compute_work_item_metrics_daily         (compute_work_items.py:1075)
+  * compute_estimate_coverage_metrics_daily (compute_work_items.py:1425)
+
+Both are the production Python this repo is porting to Go
+(internal/jobs/metrics/workitemmetrics). This generator is the single source
+both the frozen golden and the live rot guard
+(internal/jobs/metrics/workitemmetrics/golden_rot_guard_test.go) render from,
+so those two can never independently drift from each other -- only the frozen
+file can drift from a CHANGED production Python, which the rot guard exists to
+catch.
 
 WHY THE ATTRIBUTION ROWS ARE IN THE GOLDEN TOO
 ----------------------------------------------
@@ -50,6 +43,7 @@ from typing import Any
 
 from dev_health_ops.metrics.compute_work_items import (
     build_linked_issue_team_resolver,
+    compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
     compute_work_item_team_attributions,
 )
@@ -510,7 +504,7 @@ def _corpus() -> tuple[list[WorkItem], list[WorkItemStatusTransition]]:
         # (job_daily.py's `_load_donors`, distinct from the run's own
         # `run_items`), so this fixture mirrors that split rather than
         # folding the donor into the main corpus, which would also perturb
-        # metrics_daily for a scope unrelated to this
+        # metrics_daily/estimate_coverage for a scope unrelated to this
         # fixture's actual point). See render()'s resolver wiring. Before
         # this fixture existed, `linked_issue_resolver` was always None
         # here, so the frozen golden and the live rot guard both would have
@@ -603,8 +597,8 @@ def _linked_issue_fixture() -> tuple[WorkItem, WorkItemDependency]:
     Deliberately NOT part of _corpus()'s `items` list: production loads
     linked-issue donors via a SEPARATE query (job_daily.py's `_load_donors`),
     disjoint from the run's own `run_items` -- folding this donor into the
-    main corpus would also perturb metrics_daily output for the "PROJ"
-    scope, noise unrelated to this fixture's actual point.
+    main corpus would also perturb metrics_daily/estimate_coverage output
+    for the "PROJ" scope, noise unrelated to this fixture's actual point.
     The donor resolves to team-jira via PROJECT_TEAM_RESOLVER's "PROJ" entry
     (the issue_project source); gh:linked-only itself resolves to nothing
     by any other path, so it inherits team-jira ONLY if
@@ -721,6 +715,12 @@ def render() -> str:
         computed_at=COMPUTED_AT,
         **resolvers,
     )
+    coverage_rows = compute_estimate_coverage_metrics_daily(
+        day=DAY,
+        work_items=items,
+        computed_at=COMPUTED_AT,
+        **resolvers,
+    )
     attribution_rows = compute_work_item_team_attributions(
         work_items=items,
         computed_at=COMPUTED_AT,
@@ -760,6 +760,7 @@ def render() -> str:
         "work_item_metrics_daily": [_encode(row) for row in group_rows],
         "work_item_user_metrics_daily": [_encode(row) for row in user_rows],
         "work_item_cycle_times": [_encode(row) for row in cycle_rows],
+        "estimate_coverage_metrics_daily": [_encode(row) for row in coverage_rows],
     }
     return json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
 

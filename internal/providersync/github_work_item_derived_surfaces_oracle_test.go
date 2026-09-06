@@ -553,16 +553,19 @@ func githubDerivedOracleCases() []oracleCase {
 	}
 }
 
-// CHAOS-5323/CHAOS-3092: TestGitHubEstimateCoverageMatchesLivePythonProduction
-// used to live here -- deleted along with compute_estimate_coverage_metrics_
-// daily itself (work_item_estimate is fully native, no remaining Python
-// caller), its oracle_pairs script (github_work-items_estimate-coverage.py),
-// and the now-dead githubEstimateCoverageColumns/newGitHubEstimateCoverage
-// Columns helpers this test was their only caller of. The Go-native surfaces
-// builder's own EstimateCoverage field is untouched -- it is production Go
-// code (workitemmetrics.ComputeEstimateCoverage), unrelated to Python, and
-// TestLinearWorkItemDerivedOracleInputsExerciseEveryImplementedDestination
-// still exercises it directly (surfaces.EstimateCoverage, not this helper).
+func TestGitHubEstimateCoverageMatchesLivePythonProduction(t *testing.T) {
+	compareRowsAgainstPythonOracle(
+		t,
+		"github/work-items/estimate-coverage",
+		githubDerivedOracleCases(),
+		func(t *testing.T, input map[string]any) githubEstimateCoverageColumns {
+			t.Helper()
+			surfaces := buildGitHubDerivedOracleSurfaces(t, input)
+			return newGitHubEstimateCoverageColumns(surfaces.EstimateCoverage)
+		},
+		nil,
+	)
+}
 
 func TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction(t *testing.T) {
 	compareRowsAgainstPythonOracle(
@@ -603,6 +606,45 @@ func TestGitHubWorkItemStateDurationsMatchLivePythonProduction(t *testing.T) {
 // declares and this struct omits appears in the Python row and not in the Go
 // row, and the comparison fails on the missing key. The guarantee rests on the
 // Python-side reflection, not on the Go type.
+
+type githubEstimateCoverageColumns struct {
+	Day              []githubWorkItemDerivedDay `json:"day"`
+	Provider         []string                   `json:"provider"`
+	WorkScopeID      []string                   `json:"work_scope_id"`
+	TeamID           []*string                  `json:"team_id"`
+	TeamName         []*string                  `json:"team_name"`
+	EstimatedCount   []int                      `json:"estimated_count"`
+	UnestimatedCount []int                      `json:"unestimated_count"`
+	BacklogSize      []int                      `json:"backlog_size"`
+	Ratio            []*float64                 `json:"ratio"`
+	ComputedAt       []time.Time                `json:"computed_at"`
+	OrgID            []string                   `json:"org_id"`
+}
+
+func newGitHubEstimateCoverageColumns(
+	rows []githubEstimateCoverageMetricsDailyRow,
+) githubEstimateCoverageColumns {
+	columns := githubEstimateCoverageColumns{
+		Day: []githubWorkItemDerivedDay{}, Provider: []string{},
+		WorkScopeID: []string{}, TeamID: []*string{}, TeamName: []*string{},
+		EstimatedCount: []int{}, UnestimatedCount: []int{}, BacklogSize: []int{},
+		Ratio: []*float64{}, ComputedAt: []time.Time{}, OrgID: []string{},
+	}
+	for _, row := range rows {
+		columns.Day = append(columns.Day, row.Day)
+		columns.Provider = append(columns.Provider, row.Provider)
+		columns.WorkScopeID = append(columns.WorkScopeID, row.WorkScopeID)
+		columns.TeamID = append(columns.TeamID, row.TeamID)
+		columns.TeamName = append(columns.TeamName, row.TeamName)
+		columns.EstimatedCount = append(columns.EstimatedCount, row.EstimatedCount)
+		columns.UnestimatedCount = append(columns.UnestimatedCount, row.UnestimatedCount)
+		columns.BacklogSize = append(columns.BacklogSize, row.BacklogSize)
+		columns.Ratio = append(columns.Ratio, row.Ratio)
+		columns.ComputedAt = append(columns.ComputedAt, row.ComputedAt)
+		columns.OrgID = append(columns.OrgID, row.OrgID)
+	}
+	return columns
+}
 
 type githubTeamAttributionColumns struct {
 	WorkItemID []string     `json:"work_item_id"`

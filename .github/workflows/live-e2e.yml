@@ -112,13 +112,6 @@ jobs:
           CLICKHOUSE_PASSWORD: ch
         ports:
           - 8123:8123
-          # CHAOS-5362: native wire protocol -- the Go worker/reconciler this
-          # job now also starts connect here, not 8123 (that's Python's
-          # clickhouse-connect HTTP port). Pointed at 8123 the Go client fails
-          # immediately with "ClickHouse readiness check failed" -- verified
-          # by hand, and documented in deploy/go-workers/README.md. Mirrors
-          # the metrics-executed-proof job's clickhouse service below.
-          - 9000:9000
         options: >-
           --health-cmd "clickhouse-client --user ch --password ch --query 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 5
 
@@ -137,15 +130,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Go
-        # CHAOS-5362: this job now also builds/runs dev-health-worker/
-        # dev-health-worker-migrate/dev-health-reconciler (ci/lib/go_worker_
-        # fixture.sh), same as the metrics-executed-proof job below.
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: '**/go.sum'
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -168,8 +152,6 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           LIVE_E2E_FIXTURE_SEED: "20260219"
           LIVE_E2E_API_LOG_FILE: ./live-e2e-api.log
-          LIVE_E2E_WORKER_LOG_FILE: ./live-e2e-worker.log
-          LIVE_E2E_RECONCILER_LOG_FILE: ./live-e2e-reconciler.log
           ENVIRONMENT: test
           # No OTLP collector in CI; OTEL on floods logs with localhost:4317
           # export retries. We don't assert OTEL stats in CI.
@@ -178,15 +160,12 @@ jobs:
           chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh
           ./ci/run_tests.sh live-e2e
 
-      - name: Upload live-e2e logs
-        if: always()
+      - name: Upload live-e2e API logs
+        if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: live-e2e-api-logs
-          path: |
-            live-e2e-api.log
-            live-e2e-worker.log
-            live-e2e-reconciler.log
+          path: live-e2e-api.log
           if-no-files-found: ignore
 
   # CHAOS-4266: executed-proof gate for the metrics family. Deliberately a

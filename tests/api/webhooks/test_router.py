@@ -29,7 +29,10 @@ def gitlab_token(monkeypatch):
 
 
 @pytest.fixture
-def mock_celery(monkeypatch):
+def mock_dispatch(monkeypatch):
+    """Isolates the endpoint tests from real persistence/routing (CHAOS-5320:
+    there is no Celery dispatch left to mock -- _dispatch_webhook_task routes
+    every delivery through _route_webhook_delivery's outbox enqueue only)."""
     calls = []
     webhook_router = importlib.import_module("dev_health_ops.api.webhooks.router")
 
@@ -37,15 +40,9 @@ def mock_celery(monkeypatch):
         return event.id
 
     async def fake_route(event, delivery_id):
-        return "celery"
+        calls.append({"durable_delivery_id": str(delivery_id)})
+        return "river"
 
-    def fake_delay(**kwargs):
-        calls.append(kwargs)
-
-    class FakeTask:
-        delay = staticmethod(fake_delay)
-
-    monkeypatch.setattr(webhook_router, "process_webhook_event", FakeTask())
     monkeypatch.setattr(webhook_router, "_persist_webhook_delivery", fake_persist)
     monkeypatch.setattr(webhook_router, "_route_webhook_delivery", fake_route)
     return calls
@@ -90,7 +87,7 @@ class TestGitHubWebhook:
         )
         assert response.status_code == 401
 
-    def test_accepts_valid_push_event(self, client, github_secret, mock_celery):
+    def test_accepts_valid_push_event(self, client, github_secret, mock_dispatch):
         payload = {"ref": "refs/heads/main", "commits": [{"id": "abc"}]}
         body = json.dumps(payload).encode()
         signature = _sign_github_payload(body, github_secret)
@@ -108,9 +105,9 @@ class TestGitHubWebhook:
         data = response.json()
         assert data["status"] == "accepted"
         assert data["event_id"] is not None
-        assert mock_celery == [{"durable_delivery_id": data["event_id"]}]
+        assert mock_dispatch == [{"durable_delivery_id": data["event_id"]}]
 
-    def test_accepts_pull_request_event(self, client, github_secret, mock_celery):
+    def test_accepts_pull_request_event(self, client, github_secret, mock_dispatch):
         payload = {
             "action": "opened",
             "pull_request": {"number": 42},
@@ -132,7 +129,7 @@ class TestGitHubWebhook:
         assert response.json()["status"] == "accepted"
 
     def test_returns_message_for_unsupported_event(
-        self, client, github_secret, mock_celery
+        self, client, github_secret, mock_dispatch
     ):
         payload = {"action": "created"}
         body = json.dumps(payload).encode()
@@ -174,7 +171,7 @@ class TestGitLabWebhook:
         )
         assert response.status_code == 401
 
-    def test_accepts_valid_push_event(self, client, gitlab_token, mock_celery):
+    def test_accepts_valid_push_event(self, client, gitlab_token, mock_dispatch):
         payload = {
             "commits": [{"id": "abc123"}],
             "project": {"path_with_namespace": "group/project"},
@@ -192,7 +189,7 @@ class TestGitLabWebhook:
         assert response.status_code == 200
         assert response.json()["status"] == "accepted"
 
-    def test_accepts_merge_request_event(self, client, gitlab_token, mock_celery):
+    def test_accepts_merge_request_event(self, client, gitlab_token, mock_dispatch):
         payload = {
             "object_attributes": {"iid": 10, "action": "open"},
             "project": {"path_with_namespace": "org/repo"},
@@ -248,7 +245,7 @@ class TestJiraWebhook:
         )
         assert response.status_code == 401
 
-    def test_accepts_issue_created(self, client, jira_secret, mock_celery):
+    def test_accepts_issue_created(self, client, jira_secret, mock_dispatch):
         payload = {
             "webhookEvent": "jira:issue_created",
             "issue": {
@@ -267,7 +264,7 @@ class TestJiraWebhook:
         assert response.status_code == 200
         assert response.json()["status"] == "accepted"
 
-    def test_accepts_issue_updated(self, client, jira_secret, mock_celery):
+    def test_accepts_issue_updated(self, client, jira_secret, mock_dispatch):
         payload = {
             "webhookEvent": "jira:issue_updated",
             "issue": {"key": "PROJ-456", "fields": {"project": {"key": "PROJ"}}},
@@ -284,7 +281,7 @@ class TestJiraWebhook:
         assert response.status_code == 200
 
     def test_returns_message_for_unsupported_event(
-        self, client, jira_secret, mock_celery
+        self, client, jira_secret, mock_dispatch
     ):
         payload = {"webhookEvent": "jira:worklog_updated", "issue": {"key": "PROJ-789"}}
         body = json.dumps(payload).encode()

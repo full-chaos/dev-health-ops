@@ -42,21 +42,26 @@ def _billing_env():
 
 @pytest.fixture(autouse=True)
 def _billing_worker_route():
+    # CHAOS-5320: celery is no longer a resolvable route (job_routes.py
+    # rejects it as drift) -- river is the real checked-in policy route for
+    # operational.billing_notification today (migration-state.json), and the
+    # only routes resolve_worker_job_route can now return.
     with patch(
         "dev_health_ops.api.billing.router._route_billing_notification",
-        new=AsyncMock(return_value="celery"),
+        new=AsyncMock(return_value="river"),
     ):
         yield
 
 
-def _assert_durable_billing_dispatch(mock_task: MagicMock) -> None:
-    mock_task.delay.assert_called_once()
-    args, kwargs = mock_task.delay.call_args
-    assert args == ()
-    assert set(kwargs) == {"durable_notification_id"}
-    assert (
-        str(uuid.UUID(kwargs["durable_notification_id"]))
-        == kwargs["durable_notification_id"]
+def _assert_durable_billing_route_call(mock_route: AsyncMock) -> None:
+    """CHAOS-5320: billing notifications no longer dispatch to Celery -- the
+    only durable-dispatch signal is that _route_billing_notification (the
+    outbox-staging call) was invoked with the persisted notification's id."""
+    mock_route.assert_called_once()
+    _, kwargs = mock_route.call_args
+    assert set(kwargs) == {"notification_id", "org_id", "idempotency_key"}
+    assert str(kwargs["notification_id"]) == str(
+        uuid.UUID(str(kwargs["notification_id"]))
     )
 
 
@@ -524,8 +529,9 @@ async def test_webhook_invoice_paid_sends_receipt_email(client):
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
         patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
         patch(
-            "dev_health_ops.api.billing.router.send_billing_notification",
-        ) as mock_task,
+            "dev_health_ops.api.billing.router._route_billing_notification",
+            new=AsyncMock(return_value="river"),
+        ) as mock_route,
     ):
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
@@ -539,7 +545,7 @@ async def test_webhook_invoice_paid_sends_receipt_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        _assert_durable_billing_dispatch(mock_task)
+        _assert_durable_billing_route_call(mock_route)
 
 
 @pytest.mark.asyncio
@@ -585,8 +591,9 @@ async def test_webhook_invoice_payment_failed_sends_email(client):
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
         patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
         patch(
-            "dev_health_ops.api.billing.router.send_billing_notification",
-        ) as mock_task,
+            "dev_health_ops.api.billing.router._route_billing_notification",
+            new=AsyncMock(return_value="river"),
+        ) as mock_route,
     ):
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
@@ -600,7 +607,7 @@ async def test_webhook_invoice_payment_failed_sends_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        _assert_durable_billing_dispatch(mock_task)
+        _assert_durable_billing_route_call(mock_route)
 
 
 @pytest.mark.asyncio
@@ -640,8 +647,9 @@ async def test_webhook_subscription_deleted_sends_cancelled_email(client):
             "dev_health_ops.api.billing.router._revoke_license", new_callable=AsyncMock
         ),
         patch(
-            "dev_health_ops.api.billing.router.send_billing_notification",
-        ) as mock_task,
+            "dev_health_ops.api.billing.router._route_billing_notification",
+            new=AsyncMock(return_value="river"),
+        ) as mock_route,
     ):
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
@@ -655,7 +663,7 @@ async def test_webhook_subscription_deleted_sends_cancelled_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        _assert_durable_billing_dispatch(mock_task)
+        _assert_durable_billing_route_call(mock_route)
 
 
 @pytest.mark.asyncio
@@ -712,8 +720,9 @@ async def test_webhook_subscription_updated_sends_changed_email(client):
             return_value=LicenseTier.ENTERPRISE,
         ),
         patch(
-            "dev_health_ops.api.billing.router.send_billing_notification",
-        ) as mock_task,
+            "dev_health_ops.api.billing.router._route_billing_notification",
+            new=AsyncMock(return_value="river"),
+        ) as mock_route,
     ):
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event
@@ -727,7 +736,7 @@ async def test_webhook_subscription_updated_sends_changed_email(client):
 
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
-        _assert_durable_billing_dispatch(mock_task)
+        _assert_durable_billing_route_call(mock_route)
 
 
 @pytest.mark.asyncio
@@ -773,11 +782,15 @@ async def test_webhook_email_failure_does_not_break_webhook(client):
         patch("dev_health_ops.api.billing.router.get_postgres_session", mock_session),
         patch("dev_health_ops.api.billing.router.invoice_service", mock_inv_svc),
         patch(
-            "dev_health_ops.api.billing.router.send_billing_notification",
-        ) as mock_task,
+            "dev_health_ops.api.billing.router._route_billing_notification",
+            new=AsyncMock(
+                side_effect=RuntimeError("worker job route store is unavailable")
+            ),
+        ),
     ):
-        # Simulate Celery dispatch failure (e.g. Redis down)
-        mock_task.delay.side_effect = RuntimeError("broker unavailable")
+        # CHAOS-5320: the durable-dispatch failure surface is now route
+        # resolution/outbox staging (Celery dispatch no longer exists) --
+        # simulate that failing instead of a Celery broker outage.
 
         mock_client = MagicMock()
         mock_client.construct_event.return_value = event

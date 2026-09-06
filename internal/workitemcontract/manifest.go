@@ -32,14 +32,7 @@ type Destination struct {
 
 var destinationManifest = [...]Destination{
 	{Name: "ai_attribution", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
-	// CHAOS-5323: estimate_coverage_metrics_daily's Python compute is deleted
-	// entirely (WorkItemEstimateExecutor, native Go, is the only writer now) --
-	// no provider's Python route produces it and no Linear expired-lease retry
-	// safety proof exists for a surface Python no longer writes. Same
-	// falseness-is-the-claim shape as project_membership_transitions/projects
-	// below, one field: GitHubEffect/FamilyRoute are unchanged (out of scope
-	// for this deletion, a separate Go-route question).
-	{Name: "estimate_coverage_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: false, FamilyRoute: true},
+	{Name: "estimate_coverage_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "investment_classifications_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "investment_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},
 	{Name: "issue_type_metrics_daily", GitHubEffect: true, LinearExpiredLeaseRetry: true, FamilyRoute: true},

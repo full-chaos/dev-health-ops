@@ -21,6 +21,7 @@ from dev_health_ops.metrics.compute_work_item_state_durations import (
 from dev_health_ops.metrics.compute_work_items import (
     _INHERITABLE_RELATIONSHIP_TYPES,
     build_linked_issue_team_resolver,
+    compute_estimate_coverage_metrics_daily,
     compute_work_item_metrics_daily,
     compute_work_item_team_attributions,
 )
@@ -1561,15 +1562,15 @@ def run_work_items_sync_job(
                     attribution_context=team_attribution_context,
                 )
             )
-            # CHAOS-3092/CHAOS-5234 (work_item_estimate): compute_estimate_
-            # coverage_metrics_daily is DELETED, not called here anymore --
-            # this was its only remaining production caller (job_daily.py's
-            # own call was already deleted). The native Go executor
-            # (WorkItemEstimateExecutor, CHAOS-4283) owns the daily partition
-            # path; this function's own scope (a full-backfill sync job) had
-            # no other consumer for estimate_coverage_metrics_daily rows once
-            # this call is gone -- rg confirmed job_daily.py and this call
-            # site were the only two Python callers.
+            estimate_coverage_metrics = compute_estimate_coverage_metrics_daily(
+                day=d,
+                work_items=work_items,
+                computed_at=computed_at,
+                team_resolver=team_resolver,
+                project_key_resolver=pk_resolver,
+                linked_issue_resolver=linked_issue_resolver,
+                attribution_context=team_attribution_context,
+            )
             wi_team_attributions = compute_work_item_team_attributions(
                 work_items=work_items,
                 computed_at=computed_at,
@@ -1616,8 +1617,11 @@ def run_work_items_sync_job(
                 if wi_metrics:
                     _ensure_unit_lease_for_write("work_item_metrics_daily")
                     s.write_work_item_metrics(wi_metrics)
-                # CHAOS-3092/CHAOS-5234: no write_estimate_coverage_metrics
-                # call here -- deleted alongside the compute call above.
+                if estimate_coverage_metrics and hasattr(
+                    s, "write_estimate_coverage_metrics"
+                ):
+                    _ensure_unit_lease_for_write("estimate_coverage_metrics_daily")
+                    s.write_estimate_coverage_metrics(estimate_coverage_metrics)
                 if wi_user_metrics:
                     _ensure_unit_lease_for_write("work_item_user_metrics_daily")
                     s.write_work_item_user_metrics(wi_user_metrics)

@@ -56,24 +56,22 @@ type DeliveryStore interface {
 // durable references to the existing internal operational services; it never
 // sends provider bodies, billing attributes, or recipient addresses.
 type Dispatcher interface {
-	DispatchWebhook(context.Context, WebhookDelivery) error
 	DispatchBilling(context.Context, BillingNotification) error
 }
 
 type WebhookHandler struct {
-	store      DeliveryStore
-	dispatcher Dispatcher
+	store DeliveryStore
 }
 
-func NewWebhookHandler(store DeliveryStore, dispatcher Dispatcher) (*WebhookHandler, error) {
-	if store == nil || dispatcher == nil {
+func NewWebhookHandler(store DeliveryStore) (*WebhookHandler, error) {
+	if store == nil {
 		return nil, errors.New("complete webhook dependencies are required")
 	}
-	return &WebhookHandler{store: store, dispatcher: dispatcher}, nil
+	return &WebhookHandler{store: store}, nil
 }
 
 func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.WebhookDeliveryArgs]) error {
-	if handler == nil || handler.store == nil || handler.dispatcher == nil || execution == nil {
+	if handler == nil || handler.store == nil || execution == nil {
 		return jobruntime.Permanent(errors.New("webhook handler is not configured"))
 	}
 	id := execution.Args.Payload.DeliveryID
@@ -100,15 +98,14 @@ func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.E
 			return nil
 		}
 	}
-	// CHAOS-5319 PR2: the same recognised event types Python's
-	// _process_github_event/_process_gitlab_event already route to a repo-
-	// or project-scoped sync (see isRepoScopedSyncEvent's doc comment for the
-	// exact list) are, when the store supports it, triggered natively via
-	// the scheduled_sync_occurrences/sync_manual_triggers "Sync Now"
-	// mechanism instead of the HTTP bridge -- no Python sync entrypoint is
-	// ever called from this branch. jira and every other event type are
-	// unaffected and keep dispatching over HTTP below.
-	if isRepoScopedSyncEvent(delivery.Provider, delivery.EventType) {
+	// CHAOS-5319/CHAOS-5320: the same recognised event types Python's
+	// _process_github_event/_process_gitlab_event/_process_jira_event
+	// already route to a sync (see isNativeSyncDispatchEvent's doc comment
+	// for the exact list, per provider) are, when the store supports it,
+	// triggered natively via the scheduled_sync_occurrences/
+	// sync_manual_triggers "Sync Now" mechanism instead of the HTTP bridge
+	// -- no Python sync entrypoint is ever called from this branch.
+	if isNativeSyncDispatchEvent(delivery.Provider, delivery.EventType) {
 		if writer, ok := handler.store.(SyncDispatchWriter); ok {
 			result, err := writer.TriggerScopedSync(ctx, delivery.Provider, delivery.EventType, delivery.Payload, delivery.CreatedAt)
 			if err != nil {
@@ -120,12 +117,13 @@ func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.E
 			return nil
 		}
 	}
-	if err := handler.dispatcher.DispatchWebhook(ctx, delivery); err != nil {
-		if errors.Is(err, ErrDispatchPermanent) {
-			return jobruntime.Permanent(err)
-		}
-		return jobruntime.Retryable(err)
-	}
+	// CHAOS-5320: the Python HTTP bridge is gone -- there is no fallback
+	// path left. Every event type this handler can receive is now either
+	// routed natively above, or an EXPLICIT, counted, logged ignore here
+	// (never a silent drop): deployment_status/check_run/check_suite and any
+	// other recognised-but-not-yet-native event type, plus anything a future
+	// provider integration adds before its own native route lands.
+	recordIgnoredWebhookEvent(ctx, delivery.Provider, delivery.EventType, delivery.ID)
 	return nil
 }
 

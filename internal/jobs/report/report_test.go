@@ -215,7 +215,9 @@ func TestDecodeReportDefinitionAcceptsChartSpecsWithoutLeakingJobData(t *testing
 
 // TestReportRouteCapabilitiesRemainIndependentAndExecutable guards that the
 // two report kinds stay independently routed (distinct kinds, individually
-// reachable rollback) even though both are now checked in at go_default/river.
+// reachable rollback) -- both are checked in at celery_removed/river as of
+// CHAOS-5320 (celery is no longer a resolvable rollback route fleet-wide),
+// having moved from go_default/river.
 func TestReportRouteCapabilitiesRemainIndependentAndExecutable(t *testing.T) {
 	t.Chdir(filepath.Join("..", "..", ".."))
 	registry, err := jobruntime.Load("contracts/jobs/v1")
@@ -231,7 +233,7 @@ func TestReportRouteCapabilitiesRemainIndependentAndExecutable(t *testing.T) {
 	}
 	for _, capability := range capabilities {
 		if !capability.Compiled || capability.Route != "river" ||
-			capability.RollbackRoute != "celery" || !capability.Executable {
+			capability.RollbackRoute != "none" || !capability.Executable {
 			t.Fatalf("route unexpectedly inactive: %#v", capability)
 		}
 	}

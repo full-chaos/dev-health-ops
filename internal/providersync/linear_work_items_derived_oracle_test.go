@@ -41,11 +41,10 @@ func linearizeOracleProviders(value any) {
 
 func TestLinearWorkItemDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 	cases := linearizeWorkItemOracleCases(githubDerivedOracleCases())
-	// CHAOS-5323/CHAOS-3092: no "linear/work-items/estimate-coverage" oracle
-	// pair here anymore -- compute_estimate_coverage_metrics_daily is
-	// deleted entirely (work_item_estimate is fully native, no remaining
-	// Python caller), and its oracle_pairs script (linear_work-
-	// items_estimate-coverage.py) is deleted with it.
+	compareRowsAgainstPythonOracle(t, "linear/work-items/estimate-coverage", cases,
+		func(t *testing.T, input map[string]any) githubEstimateCoverageColumns {
+			return newGitHubEstimateCoverageColumns(buildGitHubDerivedOracleSurfaces(t, input).EstimateCoverage)
+		}, nil)
 	compareRowsAgainstPythonOracle(t, "linear/work-items/team-attributions", cases,
 		func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
 			return newGitHubTeamAttributionColumns(buildGitHubDerivedOracleSurfaces(t, input).TeamAttributions)

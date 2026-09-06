@@ -562,18 +562,53 @@ FROM work_item_cycle_times WHERE org_id = ?`, orgA,
 		}
 	})
 
-	// CHAOS-5323/CHAOS-3092: "estimate_coverage_metrics_daily matches the
-	// python golden" used to live here -- deleted, not fixed, because its
-	// data source is gone by this PR's own design: the shared golden
-	// generator (tests/fixtures/generate_daily_work_item_python_golden.py)
-	// no longer calls compute_estimate_coverage_metrics_daily (deleted
-	// entirely), so `golden.EstimateCoverage` is now permanently empty and
-	// this subtest could only ever fail the moment the native Go executor
-	// wrote a single real row. Go-vs-Python parity for this family still has
-	// dedicated, non-redundant coverage:
-	// TestComputeEstimateCoverageMatchesPythonGolden (workitemmetrics/
-	// golden_test.go), which compares against its OWN frozen golden, not
-	// this shared one.
+	t.Run("estimate_coverage_metrics_daily matches the python golden", func(t *testing.T) {
+		// Same sort key as the metrics readback above, and for the same reason;
+		// compute_work_items.py:1475 sorts identically.
+		rows, err := conn.Query(ctx, `
+SELECT work_scope_id, ifNull(team_id, ''), estimated_count, unestimated_count, backlog_size, ratio
+FROM estimate_coverage_metrics_daily FINAL WHERE org_id = ?
+ORDER BY provider, work_scope_id, ifNull(team_id, '')`, orgA)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		index := 0
+		for rows.Next() {
+			var (
+				scope, teamID                   string
+				estimated, unestimated, backlog uint32
+				ratio                           *float64
+			)
+			if err := rows.Scan(&scope, &teamID, &estimated, &unestimated, &backlog, &ratio); err != nil {
+				t.Fatal(err)
+			}
+			if index >= len(golden.EstimateCoverage) {
+				t.Fatalf("more rows than python produced (%d)", len(golden.EstimateCoverage))
+			}
+			want := golden.EstimateCoverage[index]
+			if scope != want.WorkScopeID || teamID != want.TeamID {
+				t.Errorf("row %d identity: got (%s,%s), want (%s,%s)",
+					index, scope, teamID, want.WorkScopeID, want.TeamID)
+			}
+			if int(estimated) != want.EstimatedCount || int(unestimated) != want.UnestimatedCount ||
+				int(backlog) != want.BacklogSize {
+				t.Errorf("row %d (%s) counts: got (%d,%d,%d), want (%d,%d,%d)", index, scope,
+					estimated, unestimated, backlog,
+					want.EstimatedCount, want.UnestimatedCount, want.BacklogSize)
+			}
+			if !sameIntegrationFloatPointer(ratio, want.Ratio) {
+				t.Errorf("row %d (%s) ratio: got %v, want %v", index, scope, ratio, want.Ratio)
+			}
+			index++
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if index != len(golden.EstimateCoverage) {
+			t.Fatalf("wrote %d rows, python produced %d", index, len(golden.EstimateCoverage))
+		}
+	})
 
 	t.Run("org B's rows are untouched", func(t *testing.T) {
 		var count uint64

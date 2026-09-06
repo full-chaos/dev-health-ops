@@ -13,10 +13,7 @@ import (
 // goldenFixture decodes tests/fixtures/daily_work_item_python_golden.json,
 // produced by tests/fixtures/generate_daily_work_item_python_golden.py from
 // REAL production Python (compute_work_item_metrics_daily,
-// compute_work_item_team_attributions). It used to also carry
-// compute_estimate_coverage_metrics_daily's rows until CHAOS-5323/CHAOS-3092
-// deleted that function -- see estimateCoverageGoldenFixture below for where
-// those 14 cases live now.
+// compute_estimate_coverage_metrics_daily, compute_work_item_team_attributions).
 type goldenFixture struct {
 	Day        string `json:"day"`
 	ComputedAt string `json:"computed_at"`
@@ -102,21 +99,6 @@ type goldenFixture struct {
 		WaitTimeHours   *float64 `json:"wait_time_hours"`
 		FlowEfficiency  *float64 `json:"flow_efficiency"`
 	} `json:"work_item_cycle_times"`
-}
-
-func goldenPath() string {
-	return filepath.Join("..", "..", "..", "..", "tests", "fixtures", "daily_work_item_python_golden.json")
-}
-
-// estimateCoverageGoldenFixture decodes tests/fixtures/
-// daily_work_item_estimate_coverage_golden.json (CHAOS-5323/CHAOS-3092):
-// work_item_estimate's 14 frozen cases, extracted VERBATIM from the shared
-// work_item golden above when compute_estimate_coverage_metrics_daily was
-// deleted (work_item_estimate is fully native, no remaining Python caller).
-// This file has NO generator -- the inputs it is checked against (items,
-// primary_attributions) still come from goldenFixture/goldenPath above,
-// unchanged; only the EXPECTED output rows for this one family moved here.
-type estimateCoverageGoldenFixture struct {
 	EstimateCoverage []struct {
 		Day              string   `json:"day"`
 		Provider         string   `json:"provider"`
@@ -130,24 +112,8 @@ type estimateCoverageGoldenFixture struct {
 	} `json:"estimate_coverage_metrics_daily"`
 }
 
-func estimateCoverageGoldenPath() string {
-	return filepath.Join(
-		"..", "..", "..", "..", "tests", "fixtures",
-		"daily_work_item_estimate_coverage_golden.json",
-	)
-}
-
-func loadEstimateCoverageGolden(t *testing.T) estimateCoverageGoldenFixture {
-	t.Helper()
-	raw, err := os.ReadFile(estimateCoverageGoldenPath())
-	if err != nil {
-		t.Fatalf("read frozen estimate-coverage golden: %v", err)
-	}
-	var fixture estimateCoverageGoldenFixture
-	if err := json.Unmarshal(raw, &fixture); err != nil {
-		t.Fatalf("decode frozen estimate-coverage golden: %v", err)
-	}
-	return fixture
+func goldenPath() string {
+	return filepath.Join("..", "..", "..", "..", "tests", "fixtures", "daily_work_item_python_golden.json")
 }
 
 func loadGolden(t *testing.T) goldenFixture {
@@ -372,27 +338,19 @@ func TestComputeDailyTripletMatchesPythonGolden(t *testing.T) {
 	}
 }
 
-// TestComputeEstimateCoverageMatchesPythonGolden is the frozen-bits contract
-// for the work_item_estimate family (CHAOS-5323/CHAOS-3092: compute_estimate_
-// coverage_metrics_daily itself is deleted -- there is no live Python left to
-// compare against, so despite this test's name it is now a pure Go-vs-frozen-
-// file check, same shape as internal/jobs/metrics/daily/filehotspots'
-// TestComputeFileHotspotsScoreMatchesLivePythonBitExact post-CHAOS-5272).
-// Inputs (items, primary_attributions) still come from the shared work_item
-// golden; only the expected rows moved to their own frozen file when the
-// live rot guard for them was retired (see golden_rot_guard_test.go).
+// TestComputeEstimateCoverageMatchesPythonGolden is the differential oracle for
+// the work_item_estimate family.
 func TestComputeEstimateCoverageMatchesPythonGolden(t *testing.T) {
 	fixture := loadGolden(t)
 	items, _, resolve := goldenInputs(t, fixture)
 	day := parseGoldenTime(t, fixture.Day+"T00:00:00Z")
-	estimateCoverageFixture := loadEstimateCoverageGolden(t)
 
 	rows := ComputeEstimateCoverage(day, items, resolve)
-	if len(rows) != len(estimateCoverageFixture.EstimateCoverage) {
-		t.Fatalf("estimate_coverage_metrics_daily row count: got %d, frozen golden has %d",
-			len(rows), len(estimateCoverageFixture.EstimateCoverage))
+	if len(rows) != len(fixture.EstimateCoverage) {
+		t.Fatalf("estimate_coverage_metrics_daily row count: got %d, python produced %d",
+			len(rows), len(fixture.EstimateCoverage))
 	}
-	for index, want := range estimateCoverageFixture.EstimateCoverage {
+	for index, want := range fixture.EstimateCoverage {
 		got := rows[index]
 		label := want.WorkScopeID + "/" + want.TeamID
 		if got.Day.Format("2006-01-02") != want.Day || got.Provider != want.Provider ||

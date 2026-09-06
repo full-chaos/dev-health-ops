@@ -19,7 +19,6 @@ from dev_health_ops.workers.sync_units import (
 from dev_health_ops.workers.system_tasks import (
     health_check,
     phone_home_heartbeat,
-    process_webhook_event,
     send_billing_notification,
 )
 from dev_health_ops.workers.task_utils import (
@@ -50,7 +49,6 @@ __all__ = [
     "health_check",
     "monitor_queue_depths",
     "phone_home_heartbeat",
-    "process_webhook_event",
     "prune_external_ingest_batches",
     "prune_rate_limit_observations",
     "reconcile_sync_dispatch",

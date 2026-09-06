@@ -28,10 +28,8 @@ from dev_health_ops.workers.job_contracts import WebhookDeliveryPayload
 from dev_health_ops.workers.job_outbox import enqueue_worker_job
 from dev_health_ops.workers.job_routes import (
     resolve_worker_job_route,
-    route_requires_celery,
     route_requires_outbox,
 )
-from dev_health_ops.workers.system_tasks import process_webhook_event
 
 from .auth import GitHubWebhookBody, GitLabWebhookBody, JiraWebhookBody
 from .models import (
@@ -93,14 +91,18 @@ async def _persist_webhook_delivery(event: WebhookEvent) -> uuid.UUID:
 
 
 async def _dispatch_webhook_task(event: WebhookEvent) -> uuid.UUID:
-    """Persist first, then send Celery only the durable delivery reference."""
+    """Persist first, then route the durable delivery reference to the
+    worker.
+
+    CHAOS-5320: the Celery dispatch this function used to fall back to
+    (``process_webhook_event.delay(...)``) is deleted along with the task
+    itself -- native Go handling (CHAOS-5318/5319/5320) plus its own
+    explicit-ignore path (WebhookHandler.Work) fully replaced it, so every
+    delivery now goes through _route_webhook_delivery's outbox enqueue only.
+    """
     delivery_id = await _persist_webhook_delivery(event)
-    route = await _route_webhook_delivery(event, delivery_id)
     try:
-        if route_requires_celery(route):
-            getattr(process_webhook_event, "delay")(
-                durable_delivery_id=str(delivery_id),
-            )
+        await _route_webhook_delivery(event, delivery_id)
         logger.info(
             "Dispatched webhook event: provider=%s type=%s delivery=%s",
             event.provider,
@@ -111,7 +113,7 @@ async def _dispatch_webhook_task(event: WebhookEvent) -> uuid.UUID:
         # Log but don't fail - webhook should still return 200
         # to prevent provider retries flooding the system
         logger.error(
-            "Failed to dispatch webhook to Celery: %s (event_id=%s)",
+            "Failed to dispatch webhook delivery: %s (event_id=%s)",
             e,
             delivery_id,
         )

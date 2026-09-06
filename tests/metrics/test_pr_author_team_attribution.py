@@ -15,10 +15,20 @@ nothing else matched (no native team key, no project key, no repo_patterns
 row for this project's own dogfooded repos, no linked issue) -- so it landed
 `unassigned`, exactly matching the 87 sampled units in the ticket.
 
-This module proves the fix at the producer (``resolve_team_attribution`` /
-``compute_work_item_team_attributions``), then proves the SAME fix is visible
-through the production read path -- ``build_unit_team_subquery`` -- against a
-live ClickHouse in ``test_pr_author_team_attribution_live.py``.
+This module proves the fix at the producer (``resolve_team_attribution``),
+then proves the SAME fix is visible through the production read path --
+``build_unit_team_subquery`` -- against a live ClickHouse in
+``test_pr_author_team_attribution_live.py``.
+
+CHAOS-5321/CHAOS-3092 (R6): ``compute_work_item_team_attributions`` itself
+(and its dedicated end-to-end record-shape test that used to live here,
+``test_compute_work_item_team_attributions_emits_ghpr_row_for_author_only_
+pr``) is deleted -- native Go executor + providersync ingest derivation are
+the only producers of ``work_item_team_attributions`` rows now, so the
+record-shape check has no subject left in Python. The root-cause fix this
+module exists to pin (``resolve_team_attribution`` resolving an author-only
+PR to a team) stays fully covered by the tests above that call
+``resolve_team_attribution`` directly.
 """
 
 from __future__ import annotations
@@ -31,7 +41,6 @@ from dev_health_ops.metrics.compute_work_items import (
     TeamAttributionCandidate,
     TeamAttributionContext,
     build_linked_issue_team_resolver,
-    compute_work_item_team_attributions,
     resolve_team_attribution,
 )
 from dev_health_ops.models.work_items import WorkItem, WorkItemDependency
@@ -292,43 +301,6 @@ def test_unambiguous_reporter_membership_still_resolves():
         attribution_context=context,
     )
     assert (team_id, team_name) == ("team-ops", "Ops Team")
-
-
-def test_compute_work_item_team_attributions_emits_ghpr_row_for_author_only_pr():
-    """End-to-end at the producer function CHAOS-4244 names
-    (compute_work_item_team_attributions, compute_work_items.py:1189):
-    the emitted record must carry the ghpr: work_item_id, provider='github',
-    and the resolved team -- the exact row `work_item_team_attributions` was
-    missing for provider='github' (checked full history, zero rows, per the
-    ticket)."""
-    item = _pr_work_item(reporter="alice", assignees=[])
-    context = TeamAttributionContext(
-        member_by_identity={
-            ("github", "alice"): [
-                TeamAttributionCandidate(
-                    source="assignee_membership",
-                    team_id="team-ops",
-                    team_name="Ops Team",
-                    confidence="medium",
-                    evidence="assignee_membership=alice",
-                    is_primary=1,
-                    specificity=50,
-                )
-            ]
-        }
-    )
-    records = compute_work_item_team_attributions(
-        work_items=[item],
-        computed_at=COMPUTED_AT,
-        attribution_context=context,
-    )
-    primary = [r for r in records if r.is_primary]
-    assert len(primary) == 1
-    assert primary[0].work_item_id == "ghpr:full-chaos/dev-health-ops#4244"
-    assert primary[0].provider == "github"
-    assert primary[0].team_id == "team-ops"
-    assert primary[0].source == "author_membership"
-    assert primary[0].evidence == "reporter=alice"
 
 
 def test_author_never_outranks_a_linked_issue_donor():
@@ -625,12 +597,14 @@ def test_bot_author_never_attributed():
             ]
         }
     )
-    records = compute_work_item_team_attributions(
-        work_items=[item],
-        computed_at=COMPUTED_AT,
+    team_id, _team_name, candidates = resolve_team_attribution(
+        item,
+        team_resolver=None,
+        project_key_resolver=None,
         attribution_context=context,
     )
-    primary = [r for r in records if r.is_primary]
+    primary = [c for c in candidates if c.is_primary]
+    assert team_id is None
     assert len(primary) == 1
     assert primary[0].team_id is None
     assert primary[0].source == "unassigned"
@@ -667,12 +641,13 @@ def test_ambiguous_reporter_evidence_tags_the_unassigned_row():
             ]
         }
     )
-    records = compute_work_item_team_attributions(
-        work_items=[item],
-        computed_at=COMPUTED_AT,
+    _team_id, _team_name, candidates = resolve_team_attribution(
+        item,
+        team_resolver=None,
+        project_key_resolver=None,
         attribution_context=context,
     )
-    primary = [r for r in records if r.is_primary]
+    primary = [c for c in candidates if c.is_primary]
     assert len(primary) == 1
     # CHAOS-4321: reason renamed to ambiguous_admin_membership (this is the
     # admin-mapping layer) and now carries the colliding team ids so an

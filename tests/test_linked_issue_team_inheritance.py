@@ -10,26 +10,20 @@ allocation-coverage and team-exchange views.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from dev_health_ops.metrics.compute_work_item_state_durations import (
-    compute_work_item_state_durations_daily,
-)
 from dev_health_ops.metrics.compute_work_items import (
     ManualFallbackRule,
     TeamAttributionCandidate,
     TeamAttributionContext,
     build_linked_issue_team_resolver,
-    compute_work_item_metrics_daily,
-    compute_work_item_team_attributions,
     resolve_base_team,
     resolve_team_attribution,
 )
 from dev_health_ops.models.work_items import (
     WorkItem,
     WorkItemDependency,
-    WorkItemStatusTransition,
 )
 from dev_health_ops.providers.github.normalize import extract_github_dependencies
 from dev_health_ops.providers.gitlab.normalize import extract_gitlab_dependencies
@@ -285,7 +279,6 @@ def test_donor_completed_outside_metrics_window_still_attributes() -> None:
 
 
 def test_compute_stamps_inherited_team_on_cycle_times() -> None:
-    day = date(2026, 6, 1)
     linear = _wi("linear:CHAOS-2400", "linear", project_key="CHAOS")
     pr = _wi("ghpr:full-chaos/ops#12", "github", type="pr", project_id="full-chaos/ops")
     deps = [
@@ -301,85 +294,41 @@ def test_compute_stamps_inherited_team_on_cycle_times() -> None:
         work_items=[linear, pr], dependencies=deps, project_key_resolver=pkr
     )
 
-    _, _, cycle_times = compute_work_item_metrics_daily(
-        day=day,
-        work_items=[linear, pr],
-        transitions=[],
-        computed_at=START,
-        project_key_resolver=pkr,
-        linked_issue_resolver=resolver,
+    # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): compute_work_item_metrics_daily
+    # is deleted (native Go executor + providersync own work_item_metrics_
+    # daily now) -- proved directly at resolve_team_attribution instead,
+    # the same producer compute_work_item_metrics_daily used to call
+    # per-item.
+    pr_team_id, pr_team_name, _ = resolve_team_attribution(
+        pr, None, pkr, linked_issue_resolver=resolver
     )
-    by_id = {c.work_item_id: c for c in cycle_times}
-    assert by_id[pr.work_item_id].team_id == "CHAOS"
-    assert by_id[pr.work_item_id].team_name == "Chaos Team"
-    assert by_id[linear.work_item_id].team_id == "CHAOS"
-
-
-def test_cycle_times_and_state_durations_agree_on_inherited_team() -> None:
-    # The same PR must read with the SAME team in both work_item_cycle_times
-    # and work_item_state_durations — otherwise BI rollups that join the two
-    # see contradictory team slices.
-    day = date(2026, 6, 1)
-    linear = _wi("linear:CHAOS-2400", "linear", project_key="CHAOS")
-    pr = _wi("ghpr:full-chaos/ops#12", "github", type="pr", project_id="full-chaos/ops")
-    deps = [WorkItemDependency(pr.work_item_id, "extkey:CHAOS-2400", "relates_to", "k")]
-    pkr = _chaos_resolver()
-    resolver = build_linked_issue_team_resolver(
-        work_items=[linear, pr], dependencies=deps, project_key_resolver=pkr
+    linear_team_id, _, _ = resolve_team_attribution(
+        linear, None, pkr, linked_issue_resolver=resolver
     )
-    # state-durations needs a transition to emit a row.
-    transitions = [
-        WorkItemStatusTransition(
-            work_item_id=pr.work_item_id,
-            provider="github",
-            occurred_at=START + timedelta(hours=1),
-            from_status_raw=None,
-            to_status_raw="closed",
-            from_status="in_progress",
-            to_status="done",
-        )
-    ]
-    _, _, cycle_times = compute_work_item_metrics_daily(
-        day=day,
-        work_items=[pr],
-        transitions=transitions,
-        computed_at=START,
-        project_key_resolver=pkr,
-        linked_issue_resolver=resolver,
-    )
-    state_rows = compute_work_item_state_durations_daily(
-        day=day,
-        work_items=[pr],
-        transitions=transitions,
-        computed_at=START + timedelta(hours=6),
-        project_key_resolver=pkr,
-        linked_issue_resolver=resolver,
-    )
-    assert cycle_times[0].team_id == "CHAOS"
-    assert state_rows, "expected at least one state-duration row"
-    assert {r.team_id for r in state_rows} == {"CHAOS"}
+    assert pr_team_id == "CHAOS"
+    assert pr_team_name == "Chaos Team"
+    assert linear_team_id == "CHAOS"
 
 
 def test_compute_without_resolver_leaves_pr_unassigned() -> None:
     # Regression guard: absent the resolver, the PR is still 'unassigned'
     # (proves the inheritance — not some other path — is what fixes it).
-    day = date(2026, 6, 1)
     pr = _wi("ghpr:full-chaos/ops#12", "github", type="pr", project_id="full-chaos/ops")
-    _, _, cycle_times = compute_work_item_metrics_daily(
-        day=day,
-        work_items=[pr],
-        transitions=[],
-        computed_at=START,
-        project_key_resolver=_chaos_resolver(),
-        linked_issue_resolver=None,
+    team_id, _, candidates = resolve_team_attribution(
+        pr, None, _chaos_resolver(), linked_issue_resolver=None
     )
-    assert cycle_times[0].team_id == "unassigned"
+    # compute_work_item_metrics_daily used to render a None team_id as the
+    # literal string "unassigned" on the persisted record -- a cosmetic
+    # transform that lived in the now-deleted wrapper, not in
+    # resolve_team_attribution itself. The signal this guard actually pins
+    # is the resolver returning no team and an `unassigned` candidate.
+    assert team_id is None
+    assert [c.source for c in candidates] == ["unassigned"]
 
 
 def test_assignee_membership_wins_over_linked_issue() -> None:
     # CHAOS-2600 CS2: linked_issue is now rank 5 (below assignee_membership rank 4),
     # so a PR's own assignee team wins over a team inherited from a linked issue.
-    day = date(2026, 6, 1)
     pr = _wi(
         "ghpr:full-chaos/ops#12",
         "github",
@@ -399,67 +348,18 @@ def test_assignee_membership_wins_over_linked_issue() -> None:
         team_resolver=team_resolver,
         project_key_resolver=pkr,
     )
-    _, _, cycle_times = compute_work_item_metrics_daily(
-        day=day,
-        work_items=[pr],
-        transitions=[],
-        computed_at=START,
-        team_resolver=team_resolver,
-        project_key_resolver=pkr,
-        linked_issue_resolver=resolver,
+    # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): compute_work_item_metrics_daily/
+    # compute_work_item_state_durations_daily are deleted (native Go
+    # executors + providersync own these tables now) -- both used to prove
+    # this SAME precedence rule via the SAME resolve_team_attribution call,
+    # so one direct proof covers both former wrappers.
+    team_id, _, _ = resolve_team_attribution(
+        pr, team_resolver, pkr, linked_issue_resolver=resolver
     )
-    assert cycle_times[0].team_id == "platform"
-
-
-def test_state_duration_assignee_membership_wins_over_linked_issue() -> None:
-    day = date(2026, 6, 1)
-    pr = _wi(
-        "ghpr:full-chaos/ops#12",
-        "github",
-        type="pr",
-        project_id="full-chaos/ops",
-        assignees=["bob@example.com"],
-    )
-    other = _wi("linear:OTHER-1", "linear", project_key="OTHER")
-    deps = [WorkItemDependency(pr.work_item_id, "extkey:OTHER-1", "relates_to", "k")]
-    transitions = [
-        WorkItemStatusTransition(
-            work_item_id=pr.work_item_id,
-            provider="github",
-            occurred_at=START + timedelta(hours=1),
-            from_status_raw=None,
-            to_status_raw="closed",
-            from_status="in_progress",
-            to_status="done",
-        )
-    ]
-    pkr = ProjectKeyTeamResolver(project_key_to_team={"OTHER": ("other", "Other")})
-    team_resolver = TeamResolver(
-        member_to_team={"bob@example.com": ("platform", "Platform")}
-    )
-    resolver = build_linked_issue_team_resolver(
-        work_items=[pr, other],
-        dependencies=deps,
-        team_resolver=team_resolver,
-        project_key_resolver=pkr,
-    )
-
-    state_rows = compute_work_item_state_durations_daily(
-        day=day,
-        work_items=[pr],
-        transitions=transitions,
-        computed_at=START + timedelta(hours=6),
-        team_resolver=team_resolver,
-        project_key_resolver=pkr,
-        linked_issue_resolver=resolver,
-    )
-
-    assert state_rows
-    assert {row.team_id for row in state_rows} == {"platform"}
+    assert team_id == "platform"
 
 
 def test_compute_emits_attribution_candidates_and_primary_cycle_team() -> None:
-    day = date(2026, 6, 1)
     linear = _wi("linear:CHAOS-2400", "linear", project_key="CHAOS")
     pr = _wi(
         "ghpr:full-chaos/ops#12",
@@ -480,27 +380,19 @@ def test_compute_emits_attribution_candidates_and_primary_cycle_team() -> None:
         project_key_resolver=pkr,
     )
 
-    _, _, cycle_times = compute_work_item_metrics_daily(
-        day=day,
-        work_items=[pr],
-        transitions=[],
-        computed_at=START,
-        team_resolver=team_resolver,
-        project_key_resolver=pkr,
-        linked_issue_resolver=resolver,
-    )
-    attributions = compute_work_item_team_attributions(
-        work_items=[pr],
-        computed_at=START,
-        team_resolver=team_resolver,
-        project_key_resolver=pkr,
-        linked_issue_resolver=resolver,
+    # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): compute_work_item_metrics_daily/
+    # compute_work_item_team_attributions are deleted (native Go executor +
+    # providersync own these tables now) -- both used to read this SAME
+    # resolve_team_attribution call's output (team_id + candidates), so one
+    # direct proof covers both former wrappers.
+    team_id, _, candidates = resolve_team_attribution(
+        pr, team_resolver, pkr, linked_issue_resolver=resolver
     )
 
     # CHAOS-2600 CS2: assignee_membership (rank 4) now wins over linked_issue (rank 5);
     # the linked_issue candidate is still emitted for provenance, just non-primary.
-    assert cycle_times[0].team_id == "platform"
-    by_source = {row.source: row for row in attributions}
+    assert team_id == "platform"
+    by_source = {c.source: c for c in candidates}
     assert by_source["assignee_membership"].is_primary == 1
     assert by_source["assignee_membership"].team_id == "platform"
     assert by_source["linked_issue"].is_primary == 0

@@ -1,0 +1,95 @@
+{
+  "files": {
+    "basic_options_api.vue.txt": {
+      "cyclomatic_avg": 1.6666666666666667,
+      "cyclomatic_total": 5,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 4,
+          "long_name": "data ( )",
+          "name": "data"
+        },
+        {
+          "complexity": 1,
+          "lineno": 11,
+          "long_name": "increment ( )",
+          "name": "increment"
+        },
+        {
+          "complexity": 3,
+          "lineno": 14,
+          "long_name": "classify ( n )",
+          "name": "classify"
+        }
+      ],
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 22,
+      "very_high_complexity_functions": 0
+    },
+    "script_setup_composition.vue.txt": {
+      "cyclomatic_avg": 2.4,
+      "cyclomatic_total": 12,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 6,
+          "long_name": "pick ( flag , x , y )",
+          "name": "pick"
+        },
+        {
+          "complexity": 3,
+          "lineno": 10,
+          "long_name": "loopSum ( items )",
+          "name": "loopSum"
+        },
+        {
+          "complexity": 2,
+          "lineno": 20,
+          "long_name": "describe ( kind )",
+          "name": "describe"
+        },
+        {
+          "complexity": 2,
+          "lineno": 29,
+          "long_name": "safeDivide ( a , b )",
+          "name": "safeDivide"
+        },
+        {
+          "complexity": 3,
+          "lineno": 37,
+          "long_name": "elseifKeyword ( n )",
+          "name": "elseifKeyword"
+        }
+      ],
+      "functions_count": 5,
+      "high_complexity_functions": 0,
+      "loc": 37,
+      "very_high_complexity_functions": 0
+    },
+    "two_script_blocks.vue.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 6,
+      "functions": [
+        {
+          "complexity": 4,
+          "lineno": 7,
+          "long_name": "checkBoth ( a , b )",
+          "name": "checkBoth"
+        },
+        {
+          "complexity": 2,
+          "lineno": 14,
+          "long_name": "loopWhile ( n )",
+          "name": "loopWhile"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 17,
+      "very_high_complexity_functions": 0
+    }
+  },
+  "lizard_version": "1.23.0"
+}

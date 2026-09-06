@@ -1,0 +1,68 @@
+def classify(n)
+  if n < 0
+    "negative"
+  elsif n == 0
+    "zero"
+  else
+    "positive"
+  end
+end
+
+def check(a, b)
+  unless a && b
+    return false
+  end
+  a || b
+end
+
+def check_word_form(a, b)
+  a and b
+  a or b
+end
+
+def loop_while(n)
+  i = 0
+  while i < n
+    i += 1
+  end
+  i
+end
+
+def loop_until(n)
+  i = 0
+  until i >= n
+    i += 1
+  end
+  i
+end
+
+def loop_for(items)
+  total = 0
+  for item in items
+    total += item
+  end
+  total
+end
+
+def pick(flag, x, y)
+  flag ? x : y
+end
+
+def modifier_forms(x)
+  return x if x.nil?
+  x += 1 while x < 10
+  x
+end
+
+def elseif_probe
+  elseif
+end
+
+case "a"
+when "a"
+  puts "alpha"
+when "b"
+  puts "beta"
+else
+  puts "unknown"
+end

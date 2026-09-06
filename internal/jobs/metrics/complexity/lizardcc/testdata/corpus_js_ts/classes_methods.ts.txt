@@ -1,0 +1,57 @@
+class Calculator {
+  private total: number;
+
+  constructor(start: number) {
+    this.total = start;
+  }
+
+  add(x: number): number {
+    if (x > 0) {
+      this.total += x;
+    } else if (x < 0) {
+      this.total -= -x;
+    }
+    return this.total;
+  }
+
+  static create(start: number): Calculator {
+    return new Calculator(start);
+  }
+
+  async fetchAndAdd(url: string): Promise<number> {
+    const value = await this.loadValue(url);
+    if (value && value > 0) {
+      return this.add(value);
+    }
+    return this.total;
+  }
+
+  private loadValue(url: string): number {
+    return url.length;
+  }
+
+  identity<T>(value: T): T {
+    return value;
+  }
+}
+
+abstract class Shape {
+  abstract area(): number;
+
+  describe(): string {
+    if (this.area() > 0) {
+      return "has area";
+    }
+    return "no area";
+  }
+}
+
+class Circle extends Shape {
+  constructor(private radius: number) {
+    super();
+  }
+
+  area(): number {
+    return this.radius * this.radius * 3;
+  }
+}

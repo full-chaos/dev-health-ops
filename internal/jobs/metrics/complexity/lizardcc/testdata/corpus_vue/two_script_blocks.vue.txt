@@ -1,0 +1,27 @@
+<template>
+  <div v-for="item in items" :key="item.id">{{ item.name }}</div>
+</template>
+
+<script>
+export default {
+  name: "TwoBlocks",
+  inheritAttrs: false,
+};
+</script>
+
+<script setup>
+function checkBoth(a, b) {
+  if (a && b) {
+    return true;
+  }
+  return a || b;
+}
+
+function loopWhile(n) {
+  let i = 0;
+  while (i < n) {
+    i++;
+  }
+  return i;
+}
+</script>

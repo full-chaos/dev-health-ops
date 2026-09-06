@@ -1,0 +1,119 @@
+{
+  "files": {
+    "basic_functions.lua.txt": {
+      "cyclomatic_avg": 1.6666666666666667,
+      "cyclomatic_total": 10,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "add a , b )",
+          "name": "add"
+        },
+        {
+          "complexity": 3,
+          "lineno": 5,
+          "long_name": "classify n )",
+          "name": "classify"
+        },
+        {
+          "complexity": 1,
+          "lineno": 15,
+          "long_name": "anon a , b )",
+          "name": "anon"
+        },
+        {
+          "complexity": 2,
+          "lineno": 19,
+          "long_name": "inner a )",
+          "name": "inner"
+        },
+        {
+          "complexity": 1,
+          "lineno": 29,
+          "long_name": "Counter.new start )",
+          "name": "Counter.new"
+        },
+        {
+          "complexity": 2,
+          "lineno": 35,
+          "long_name": "Counter",
+          "name": "Counter"
+        }
+      ],
+      "functions_count": 6,
+      "high_complexity_functions": 0,
+      "loc": 36,
+      "very_high_complexity_functions": 0
+    },
+    "comments_and_quirks.lua.txt": {
+      "cyclomatic_avg": 4.0,
+      "cyclomatic_total": 12,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 7,
+          "long_name": "withLineComment x )",
+          "name": "withLineComment"
+        },
+        {
+          "complexity": 2,
+          "lineno": 19,
+          "long_name": "withLengthOperator t )",
+          "name": "withLengthOperator"
+        },
+        {
+          "complexity": 9,
+          "lineno": 38,
+          "long_name": "conditionCoverageFiller a , b )",
+          "name": "conditionCoverageFiller"
+        }
+      ],
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 26,
+      "very_high_complexity_functions": 0
+    },
+    "control_flow.lua.txt": {
+      "cyclomatic_avg": 2.4,
+      "cyclomatic_total": 12,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "loopFor items )",
+          "name": "loopFor"
+        },
+        {
+          "complexity": 2,
+          "lineno": 9,
+          "long_name": "loopForIn items )",
+          "name": "loopForIn"
+        },
+        {
+          "complexity": 2,
+          "lineno": 17,
+          "long_name": "loopWhile n )",
+          "name": "loopWhile"
+        },
+        {
+          "complexity": 2,
+          "lineno": 25,
+          "long_name": "loopRepeat n )",
+          "name": "loopRepeat"
+        },
+        {
+          "complexity": 4,
+          "lineno": 33,
+          "long_name": "checkBoth a , b )",
+          "name": "checkBoth"
+        }
+      ],
+      "functions_count": 5,
+      "high_complexity_functions": 0,
+      "loc": 34,
+      "very_high_complexity_functions": 0
+    }
+  },
+  "lizard_version": "1.23.0"
+}

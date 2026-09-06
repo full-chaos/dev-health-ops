@@ -1,5 +1,4 @@
-"""CHAOS-4246: cicd/deploy/incident visibility when a family computes zero
-rows.
+"""CHAOS-4246: deploy visibility when a family computes zero rows.
 
 Before this fix, ``run_daily_metrics_job`` wrote whatever
 ``compute_cicd_metrics_daily``/``compute_deploy_metrics_daily``/
@@ -12,24 +11,26 @@ succeeded normally (the real-world incident: 4 of these tables went stale for
 testops_risk (``compute_release_confidence``/``compute_quality_drag``/
 ``compute_pipeline_stability``) used to be covered here too, until
 CHAOS-5245 deleted its Python compute entirely -- there is no more
-degrade-signal path for it to test. ``deploy`` (``compute_deploy_metrics_
-daily``) used to be a THIRD member of the original CHAOS-4246 trio, until
-CHAOS-5234/CHAOS-3092 (CHAOS-5309) deleted its Python compute+write+
-zero-rows-note entirely for the same reason -- deploy is fully native
-(DeployExecutor, CHAOS-4293) with no remaining Python fallback to observe.
+degrade-signal path for it to test. cicd, deploy, and incident used to be
+the original CHAOS-4246 trio covered here too, until CHAOS-5234/CHAOS-3092/
+CHAOS-5309 deleted all three families' Python compute (and their own
+``_note_family_zero_rows`` calls) entirely, the same rule CHAOS-5245
+applied to testops_risk -- there is no family left in this file with a
+degrade-signal path to test; all three are fully native (CICDExecutor
+CHAOS-4292, DeployExecutor CHAOS-4293, IncidentExecutor CHAOS-4269/
+CHAOS-4295) with no remaining Python fallback to observe.
 
 These tests pin: (1) an empty family is recorded in the job's returned
 ``families_zero_rows`` map and via the
 ``dev_health_metrics_family_failures_total`` counter, for EVERY day
-processed; (2) a family that produced rows is not recorded; (3) the job
-never raises for an empty family -- this is a degrade, not a failure
-(deliberate: a day with no CI/deploy/incident activity is legitimate).
+processed; (2) the job never raises for an empty family -- this is a
+degrade, not a failure (deliberate: a day with no deploy activity is
+legitimate).
 """
 
 from __future__ import annotations
 
-import uuid
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
 
 import pytest
@@ -61,16 +62,21 @@ class _RecordingSink:
 
 
 class _FakeLoader:
-    """All sources empty by default; `cicd_rows` overrides load_cicd_data."""
+    """All sources empty.
 
-    def __init__(self, cicd_rows: tuple[list, list] | None = None) -> None:
-        self._cicd_rows = cicd_rows or ([], [])
+    load_cicd_data still exists here (job_daily.py still calls it --
+    pipeline_rows feeds active_repos even though cicd's own compute+write is
+    deleted, CHAOS-5234/CHAOS-3092), but nothing in this file parameterizes
+    it any more -- the only test that used to (test_cicd_not_recorded_when_
+    pipeline_data_present) tested cicd's zero-rows-note behavior, which no
+    longer exists.
+    """
 
     async def load_git_rows(self, *a: Any, **k: Any) -> tuple[list, list, list]:
         return [], [], []
 
     async def load_cicd_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        return self._cicd_rows
+        return [], []
 
     async def load_incidents(self, *a: Any, **k: Any) -> list:
         return []
@@ -119,10 +125,7 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", lambda **k: 0)
 
 
-_ALL_ZERO_ROW_FAMILIES = {
-    "cicd",
-    "incident",
-}
+_ALL_ZERO_ROW_FAMILIES: set[str] = set()
 
 
 @pytest.mark.asyncio
@@ -148,48 +151,23 @@ async def test_empty_families_are_recorded_and_do_not_raise(
         org_id=ORG_ID,
     )
 
-    assert set(result[DAY]) == _ALL_ZERO_ROW_FAMILIES
+    # families_zero_rows.setdefault(day, []).append(family) in job_daily.py
+    # only ever adds `day` as a key when at least one family for that day
+    # was zero-rows -- with `_ALL_ZERO_ROW_FAMILIES` now empty (cicd, deploy,
+    # incident, and testops_risk all deleted their zero-rows-note call
+    # sites), `DAY` is never added to `result` at all, so `result[DAY]`
+    # raises KeyError. `.get(DAY, [])` handles both an absent day and a
+    # present-but-nonempty one.
+    assert set(result.get(DAY, [])) == _ALL_ZERO_ROW_FAMILIES
     assert {family for family, _cause in recorded} == _ALL_ZERO_ROW_FAMILIES
     assert all(cause == "no_rows_computed" for _family, cause in recorded)
 
-
-@pytest.mark.asyncio
-async def test_cicd_not_recorded_when_pipeline_data_present(
-    monkeypatch: Any,
-) -> None:
-    repo_id = uuid.uuid4()
-    pipeline_row = {
-        "repo_id": repo_id,
-        "run_id": "1",
-        "status": "success",
-        "started_at": datetime(2025, 12, 18, 10, 0, tzinfo=timezone.utc),
-        "finished_at": datetime(2025, 12, 18, 10, 5, tzinfo=timezone.utc),
-        "queued_at": None,
-    }
-    recorded: list[str] = []
-    monkeypatch.setattr(
-        job_daily,
-        "record_metrics_family_zero_rows",
-        lambda *, family, cause: recorded.append(family),
-    )
-
-    sink = _RecordingSink("clickhouse://test")
-    loader = _FakeLoader(cicd_rows=([pipeline_row], []))
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=loader)
-
-    result = await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-    )
-
-    # cicd produced a row this run -- it must NOT be flagged zero, but
-    # incident (still empty) must still be. deploy is no longer part of this
-    # map at all (CHAOS-5234/CHAOS-3092/CHAOS-5309 deleted its compute+write+
-    # note outright), so it must never appear regardless of row data.
-    assert "cicd" not in result[DAY]
-    assert "cicd" not in recorded
-    assert "deploy" not in result[DAY]
-    assert {"incident"} <= set(result[DAY])
+    # CHAOS-5234/CHAOS-3092/CHAOS-5309: test_cicd_not_recorded_when_pipeline_
+    # data_present used to live here, pinning that a non-empty cicd compute
+    # suppressed cicd's own zero-rows note while deploy/incident's (still
+    # empty) fired. cicd's, deploy's, and incident's compute+write+note call
+    # sites are all deleted outright now (see
+    # tests/metrics/test_job_daily_skip_families.py's
+    # test_cicd_compute_and_write_are_deleted_from_job_daily and siblings) --
+    # there is no more zero-rows-note path for any of the three families to
+    # test here at all.

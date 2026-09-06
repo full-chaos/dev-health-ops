@@ -33,11 +33,11 @@ func (store *PostgresStore) LoadWebhook(ctx context.Context, id string) (Webhook
 	var payload json.RawMessage
 	err = store.pool.QueryRow(ctx, `
 		SELECT id::text, provider, delivery_key, event_type,
-			COALESCE(org_ref, ''), COALESCE(repo_name, ''), payload, payload_sha256
+			COALESCE(org_ref, ''), COALESCE(repo_name, ''), payload, payload_sha256, created_at
 		FROM public.webhook_deliveries WHERE id = $1`, parsed,
 	).Scan(
 		&delivery.ID, &delivery.Provider, &delivery.DeliveryKey, &delivery.EventType,
-		&delivery.Organization, &delivery.Repository, &payload, &delivery.PayloadSHA256,
+		&delivery.Organization, &delivery.Repository, &payload, &delivery.PayloadSHA256, &delivery.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WebhookDelivery{}, ErrDeliveryNotFound

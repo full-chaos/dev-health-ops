@@ -312,7 +312,7 @@ func buildDailyWorker(
 				}
 				registered = append(registered, adapter.Spec())
 			case jobcontract.KindDailyMetricsFinalize:
-				handler, handlerErr := daily.NewFinalizeHandler(store, compatibility)
+				handler, handlerErr := daily.NewFinalizeHandler(store)
 				if handlerErr != nil {
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
@@ -837,22 +837,25 @@ func dailyNativeFamilyRegistrations(
 	// ic_finalize -- co-registration is asserted at construction:
 	// team_cognitive_load registers natively ONLY when ic_finalize is ALSO
 	// registered natively in this finalize map, never independently. Same
-	// fail-open construction policy as every native family below -- a
-	// refusal here simply leaves team_cognitive_load on the Python
-	// compatibility bridge for every run. Registration is separate from
+	// fail-open construction policy as every native family below -- CHAOS-3092
+	// PR-A' deleted the finalize compatibility bridge, so a refusal here no
+	// longer falls open to it: the family is left unregistered, and
+	// FinalizeHandler.Work fails the run loudly with ErrFinalizeFamilyIncomplete
+	// for every day this construction refuses. Registration is separate from
 	// construction: the caller's single SetNativeFinalizeFamilies call
-	// validates every name in this map against
-	// pythonRecognisedFinalizeFamilies and fails loudly (not silently) on a
-	// name Python does not gate on -- see that setter's doc comment.
+	// validates every name in this map against pythonRecognisedFinalizeFamilies
+	// and fails loudly (not silently) on an unrecognised name -- see that
+	// setter's doc comment.
 	if _, icFinalizeNative := finalize[daily.ICFinalizeFamilyName]; icFinalizeNative {
 		if teamCognitiveLoadExecutor, teamCognitiveLoadErr := daily.NewTeamCognitiveLoadExecutor(clickhouseConnection); teamCognitiveLoadErr == nil {
 			finalize[daily.TeamCognitiveLoadFamilyName] = teamCognitiveLoadExecutor
 		} else {
 			logger.Error(
 				"team_cognitive_load native finalize family refused; "+
-					"the family stays on the Python compatibility "+
-					"bridge for every run. Every other daily-metrics "+
-					"family is unaffected.",
+					"the family has no registered executor and every "+
+					"finalize run will fail loud "+
+					"(ErrFinalizeFamilyIncomplete) until this is fixed. "+
+					"Every other daily-metrics family is unaffected.",
 				"error", teamCognitiveLoadErr,
 			)
 		}
@@ -860,8 +863,9 @@ func dailyNativeFamilyRegistrations(
 		logger.Error(
 			"team_cognitive_load native finalize family refused: " +
 				"ic_finalize is not registered natively in this run " +
-				"(co-registration required); team_cognitive_load stays " +
-				"on the Python compatibility bridge.",
+				"(co-registration required); team_cognitive_load has no " +
+				"registered executor and every finalize run will fail " +
+				"loud (ErrFinalizeFamilyIncomplete) until this is fixed.",
 		)
 	}
 	// CHAOS-5051: team_complexity is also a finalize-scope native family
@@ -871,16 +875,18 @@ func dailyNativeFamilyRegistrations(
 	// its only input is repo_complexity_daily, populated by the complexity
 	// scan job on its own cadence, never by another finalize family in this
 	// same run. So it constructs independently. Same fail-open discipline as
-	// every other native family here: a refusal leaves team_complexity on
-	// the Python compatibility bridge for every run.
+	// every other native family here: CHAOS-3092 PR-A' deleted the finalize
+	// compatibility bridge, so a refusal leaves team_complexity unregistered
+	// and every finalize run fails loud (ErrFinalizeFamilyIncomplete).
 	if teamComplexityExecutor, teamComplexityErr := daily.NewTeamComplexityExecutor(clickhouseConnection); teamComplexityErr == nil {
 		finalize[daily.TeamComplexityFamilyName] = teamComplexityExecutor
 	} else {
 		logger.Error(
 			"team_complexity native finalize family refused; "+
-				"the family stays on the Python compatibility "+
-				"bridge for every run. Every other daily-metrics "+
-				"family is unaffected.",
+				"the family has no registered executor and every "+
+				"finalize run will fail loud "+
+				"(ErrFinalizeFamilyIncomplete) until this is fixed. "+
+				"Every other daily-metrics family is unaffected.",
 			"error", teamComplexityErr,
 		)
 	}
@@ -896,8 +902,9 @@ func dailyNativeFamilyRegistrations(
 	} else {
 		logger.Error(
 			"benchmarking finalize native executor refused; the family "+
-				"stays on the Python compatibility bridge for every "+
-				"partition. Every other daily-metrics family is unaffected.",
+				"has no registered executor and every finalize run will "+
+				"fail loud (ErrFinalizeFamilyIncomplete) until this is "+
+				"fixed. Every other daily-metrics family is unaffected.",
 			"error", benchmarkingFinalizeErr,
 		)
 	}
@@ -911,8 +918,10 @@ func dailyNativeFamilyRegistrations(
 	} else {
 		logger.Error(
 			"compounding_risk_team native finalize family refused; the "+
-				"family stays on the Python compatibility bridge for "+
-				"every run. Every other daily-metrics family is unaffected.",
+				"family has no registered executor and every finalize "+
+				"run will fail loud (ErrFinalizeFamilyIncomplete) until "+
+				"this is fixed. Every other daily-metrics family is "+
+				"unaffected.",
 			"error", compoundingRiskTeamErr,
 		)
 	}

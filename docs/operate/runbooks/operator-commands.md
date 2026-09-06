@@ -32,9 +32,9 @@ Auth: `WORKER_OPERATOR_TOKEN`/`WORKER_OPERATOR_TOKEN_FILE` for job-list/cancel/r
 sync-dispatch-outbox cleanups; `WORKER_METRIC_REPAIR_TOKEN` for every metrics/workgraph repair verb (one
 shared repair token across metrics execution repair, workgraph repair, and finalize repair, per chris's
 CHAOS-5042 ruling). `dev-hops` = the Python CLI (`src/dev_health_ops/cli.py`); every `dev-hops metrics ...`
-verb is marked **legacy** or **deleted** below -- several bypass the Go native executors entirely even where
-a native executor exists for that family (`docs/go-migration-matrix.md` METRICS section, "CLI verb layer
-largely bypasses" note).
+verb below is marked **no longer legacy** (dispatches through the Go worker, CHAOS-5055/#2232), **legacy**
+(still a standalone Python compute path), or **deleted** (CHAOS-5307) -- see the table below for which is
+which per verb.
 
 ## (a) Daily metrics backfill / redrive per org/day/family
 
@@ -46,9 +46,8 @@ largely bypasses" note).
 | `dev-health-workerctl metrics partition-recompute --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --family repo_user_commit [--dry-run] --review-evidence "<text>"` | `main.go:1623-1694` (CHAOS-4459) | Repair partitions where ALL partitions succeeded but were computed under a now-known-wrong writer (CHAOS-4341's `org_id=''` writer bug). Only recovery path for a "succeeded but wrong" partition. `--family` is restricted to `daily.SupportedPartitionRecomputeFamilies` (today: `repo_user_commit` only) -- it scopes audit intent, not the recompute blast radius: every family in the partition is recomputed, not just the named one. |
 | `dev-health-workerctl metrics remaining start --family <complexity\|dora\|release_impact\|work_item_attribution\|capacity\|recommendations> --org <uuid> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] --review-evidence "<text>"` | `main.go:1763-1931` (CHAOS-4254) | Dispatch a NEW remaining-metrics run for a historical (org, family, day) that was **never dispatched at all** -- outside what `daily-redrive`/`jobs retry` can recover. Bounded to 31 days per call; refuses today and the future (a day still open could race the automatic trigger and double-write). |
 | `dev-health-workerctl metrics remaining trigger-backstop --family <work_item_attribution\|complexity\|dora\|release_impact\|capacity\|recommendations> --org <uuid> [--day <YYYY-MM-DD>] [--today] --review-evidence "<text>" [--team <uuid>\|--all-teams] [--window <days>]` | `main.go:2148-2285` | Trigger a fixed-schedule backstop family NOW instead of waiting for its own occurrence (e.g. work_item_attribution's watermark-driven recompute). `--day` is a **dedup key for the run this becomes, not a compute window** -- work_item_attribution always recomputes from its live watermark regardless of `--day`. Defaults to yesterday UTC; `--today` is required to target today explicitly (coexists with, never suppresses, the schedule's own occurrence -- the two compete for the family's single worker slot, not correctness). `capacity`/`recommendations` require exactly one of `--team`/`--all-teams`; every other family ignores both. |
-| `dev-hops metrics daily` | `src/dev_health_ops/metrics/job_daily.py` `_cmd_metrics_daily` → `run_daily_metrics_job` | **Legacy.** Bypasses Go's native executors entirely -- do not use for a family already native (see `docs/go-migration-matrix.md` METRICS). |
-| `dev-hops metrics rebuild` | `job_daily.py` `_cmd_metrics_rebuild` | **Legacy.** Distinct mechanism from `partition-recompute`; also bypasses native executors. |
-| `dev-hops metrics complexity` / `dora` / `capacity` | `job_complexity_db.py`/`job_dora.py`/`job_capacity.py` | **Legacy** -- always bypasses native, even though `dora`/`capacity` are native worker kinds. Use `metrics remaining start --family dora` (etc.) instead. |
+| `dev-hops metrics daily` / `rebuild` | `workerctl_dispatch.py` -> `dev-health-workerctl metrics daily-start` | No longer legacy (CHAOS-5055/#2232): dispatches through the row above instead of computing in Python. The old direct-compute `job_daily.py` CLI wrappers were dead code (unwired, zero callers) and were deleted (CHAOS-5307). |
+| `dev-hops metrics complexity` / `dora` / `capacity` | `workerctl_dispatch.py` -> `metrics remaining trigger-backstop --family <name>` | No longer legacy (CHAOS-5055/#2232): dispatches through the row above instead of computing in Python. The old direct-compute `job_complexity_db.py`/`job_dora.py`/`job_capacity.py` CLI wrappers were dead code (unwired, zero callers) and were deleted (CHAOS-5307); their compute functions are unaffected. |
 | `dev-hops metrics compounding-risk` | `job_compounding_risk.py` | **Legacy**, duplicate coverage -- `job_daily.py`'s finalize already writes this nightly. |
 | `dev-hops metrics validate-flags` | `job_ff_validation.py` | Read-only diagnostic, no write. Safe to run any time. |
 

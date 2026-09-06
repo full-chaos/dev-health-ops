@@ -1,4 +1,4 @@
-"""Guard: every NATIVE golden-required family is named in the executed-proof gates.
+"""Guard: every NATIVE golden-required family is named in the executed-proof gate.
 
 Motivation (codex r2 on #2230, finding F2, confirmed by repro): the assertion
 map in ``ci/assert_metrics_executed_proof.py`` supported ``compounding_risk``,
@@ -7,14 +7,23 @@ could therefore pass without ever checking that the family ran natively or wrote
 a row -- a gate that does not name your family is indistinguishable, from its
 exit code, from a gate that checked it and found it healthy.
 
+CHAOS-5307: this test used to compare TWO gates -- CI's
+``ci/run_metrics_executed_proof.sh`` and the local ``metrics_readback`` stage in
+``ci/local_validate.sh``, requiring a family be named in BOTH. The local stage
+was retired (it exercised Python compute directly -- register_commands/_cmd_*
+wiring -- that CHAOS-5307 deleted; per standing rule, a gate stage that invokes
+Python compute retires with that compute, it is not kept alive as a second copy
+of this check). CI's executed-proof gate is now the ONLY executed-proof gate
+for these families, so this test checks it alone.
+
 WHY THIS IS AN ALLOWLIST AND NOT A BLANKET ASSERTION. The obvious form -- "every
-golden:required family must appear in both lists" -- fails on 19 of 24 families
+golden:required family must appear in the gate" -- fails on several families
 today, almost all belonging to other lanes. Shipping that from this lane would
 block this PR on other people's backlogs and would assert a fleet-wide policy
 this lane has no standing to set. So the gap is PINNED instead: the set of
-families missing from the gates is written down explicitly, and any change to
-it -- a family added to a list, a new native family, a family losing coverage --
-fails this test and has to be made deliberately.
+families missing from the gate is written down explicitly, and any change to
+it -- a family added to the list, a new native family, a family losing coverage
+-- fails this test and has to be made deliberately.
 
 That makes the gap visible and non-regressing rather than invisible, which is
 the actual defect r2 found.
@@ -29,7 +38,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAMILIES_JSON = REPO_ROOT / "internal/jobs/metrics/daily/families.json"
 PROOF_SH = REPO_ROOT / "ci/run_metrics_executed_proof.sh"
-LOCAL_VALIDATE_SH = REPO_ROOT / "ci/local_validate.sh"
 
 # Native golden-required families NOT yet named in both gates. Every entry is a
 # real coverage gap, not an exemption -- shrinking this set is the goal.
@@ -242,7 +250,7 @@ def _families_flag(path: Path) -> set[str]:
     return names
 
 
-def test_native_golden_required_families_are_named_in_both_gates() -> None:
+def test_native_golden_required_families_are_named_in_the_gate() -> None:
     native_required = {
         family["name"]
         for family in _families()
@@ -255,22 +263,18 @@ def test_native_golden_required_families_are_named_in_both_gates() -> None:
     )
 
     proof = _families_flag(PROOF_SH)
-    local = _families_flag(LOCAL_VALIDATE_SH)
     # Positive control on the parse: a regex that silently matched nothing would
     # make every family look uncovered, which reads as a real finding.
     assert proof, "parsed an EMPTY --families list from run_metrics_executed_proof.sh"
-    assert local, "parsed an EMPTY --families list from local_validate.sh"
 
-    uncovered = {
-        name for name in native_required if name not in proof or name not in local
-    }
+    uncovered = {name for name in native_required if name not in proof}
 
     newly_uncovered = uncovered - KNOWN_UNCOVERED
     assert not newly_uncovered, (
         f"native golden-required famil{'y' if len(newly_uncovered) == 1 else 'ies'} "
-        f"{sorted(newly_uncovered)} are not named in BOTH executed-proof gates. "
+        f"{sorted(newly_uncovered)} are not named in the executed-proof gate. "
         "The gate would pass without ever checking them. Add them to the --families "
-        "lists in ci/run_metrics_executed_proof.sh and ci/local_validate.sh."
+        "list in ci/run_metrics_executed_proof.sh."
     )
 
     # Intersect with native_required FIRST. `uncovered` is computed only over

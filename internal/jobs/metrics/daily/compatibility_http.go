@@ -179,17 +179,12 @@ func (executor *HTTPCompatibilityExecutor) ComputePartition(ctx context.Context,
 	})
 }
 
-func (executor *HTTPCompatibilityExecutor) Finalize(ctx context.Context, run Run, skipFamilies []string) error {
-	if run.ID == "" {
-		return ErrInvalidState
-	}
-	// SkipFamilies carries omitempty, so a finalize with no native family
-	// serialises BYTE-IDENTICALLY to before this field was sent -- which is
-	// what keeps this change inert for every org that has none.
-	return executor.post(ctx, compatibilityRequest{
-		Operation: "finalize", RunID: run.ID, SkipFamilies: skipFamilies,
-	})
-}
+// CHAOS-3092 (PR-A'): HTTPCompatibilityExecutor's own Finalize method (POSTed
+// operation="finalize") is deleted along with FinalizeHandler's call to it --
+// every finalize-scope family's Python compute is gone, so there is no more
+// bridge round-trip to make. worker_metrics.py's finalize branch of
+// /internal/worker/daily-metrics/v1/execute is deleted for the same reason;
+// only the partition operation below survives (PR-A's own scope).
 
 type compatibilityRequest struct {
 	Operation   string `json:"operation"`
@@ -198,8 +193,8 @@ type compatibilityRequest struct {
 	// SkipFamilies (CHAOS-4276) names families.json families a
 	// NativeFamilyExecutor already computed and wrote for this partition --
 	// the Python bridge's run_daily_metrics_job(skip_families=...) must not
-	// recompute or rewrite them. omitempty keeps every existing/finalize
-	// request byte-identical to before this field existed.
+	// recompute or rewrite them. omitempty keeps every existing request
+	// byte-identical to before this field existed.
 	SkipFamilies []string `json:"skip_families,omitempty"`
 }
 

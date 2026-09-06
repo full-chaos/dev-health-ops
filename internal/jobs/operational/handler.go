@@ -78,7 +78,7 @@ func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.E
 	if delivery.ID != id || !validWebhook(delivery) {
 		return jobruntime.Permanent(ErrDeliveryInvalid)
 	}
-	// CHAOS-5312 PR1: GitHub App installation/marketplace_purchase events are
+	// CHAOS-5318 PR1: GitHub App installation/marketplace_purchase events are
 	// handled entirely natively when the store supports it -- no HTTP
 	// dispatch to the Python bridge at all for these two event types. Every
 	// other event (all of gitlab/jira, and every other github event type)

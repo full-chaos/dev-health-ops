@@ -33,6 +33,27 @@ import (
 // longer anything for a later-running Python stage to overwrite, so this step
 // moved ahead of the bridge into the ordinary pre-step order -- exactly the
 // resolution this doc comment used to name as the eventual follow-up.
+//
+// # THE DELETED PYTHON DID MORE THAN WRITE EDGES (CHAOS-5303 r1, P1)
+//
+// `_build_issue_issue_edges` also called `_delete_dependency_edge_candidates`
+// (pruned stale native blocker-family edges under a superset of ids covering
+// every legacy orientation) and `_publish_blocker_projection` (advanced a
+// `work_graph_projection_runs` watermark row that `native_status_change.py`'s
+// blocker-status API still reads). The first cut of this port carried the
+// edge-derivation logic only and left both of those as dead, unwired Go code
+// (`edges.BuildCleanupPlan`/`BuildBlockerProjection` in cleanup.go, "computed
+// but not executed" by their own doc comments) -- a real regression, caught
+// by codex review before merge, not by design. Run() now performs the full
+// sequence Python did, in Python's own order: delete stale projection-run
+// rows for this org+rule, read the currently-live blocker-family edge ids,
+// compute and execute the cleanup plan, write the fresh edges, then publish
+// the new watermark. Delete-before-write matters: the ids this step is about
+// to re-create are exactly the ids the cleanup step may also name (a
+// still-current edge is BOTH an "existing id" input to the plan AND
+// re-inserted moments later), and Python performs the delete first for the
+// same reason -- a write ordered before the matching delete would be
+// immediately undone by it.
 type issueIssueEdgesPreStep struct {
 	connection driver.Conn
 	observer   jobruntime.WorkGraphIssueEdgesObserver
@@ -74,10 +95,36 @@ func (step *issueIssueEdgesPreStep) Run(
 	if err != nil {
 		return nil, fmt.Errorf("derive issue<->issue edges: %w", err)
 	}
+
+	// CHAOS-5303 r1 P1: delete-before-write, matching
+	// `_delete_dependency_edge_candidates`'s own ordering (see the type doc
+	// comment above for why). A failure at any step here aborts the whole
+	// Run() -- a partial cleanup (projection rows wiped but edges not
+	// re-pruned, or edges pruned but the fresh write never lands) is worse
+	// than refusing outright, since it leaves the next run's "existing ids"
+	// read describing a state this run half-produced.
+	if err := edges.DeleteProjectionRuns(ctx, step.connection, organizationID, edges.BlockerProjectionName, edges.BlockerProjectionRuleVersion()); err != nil {
+		return nil, fmt.Errorf("delete stale work_graph_projection_runs: %w", err)
+	}
+	existingBlockerEdgeIDs, err := edges.ReadExistingBlockerEdgeIDs(ctx, step.connection, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("read existing blocker edge ids: %w", err)
+	}
+	cleanupPlan := edges.BuildCleanupPlan(rows, existingBlockerEdgeIDs)
+	if err := edges.DeleteEdgesByID(ctx, step.connection, organizationID, cleanupPlan); err != nil {
+		return nil, fmt.Errorf("delete stale blocker-family work_graph_edges: %w", err)
+	}
+
 	written, err := edges.WriteEdges(ctx, step.connection, organizationID, result.Edges)
 	if err != nil {
 		return nil, fmt.Errorf("write work_graph_edges: %w", err)
 	}
+
+	projectionRun := edges.BuildBlockerProjection(organizationID, "", result.Edges, started)
+	if err := edges.WriteProjectionRun(ctx, step.connection, projectionRun); err != nil {
+		return nil, fmt.Errorf("publish work_graph_projection_runs watermark: %w", err)
+	}
+
 	if err := edges.ObserveDerivation(step.observer, result, len(rows), step.now().Sub(started)); err != nil {
 		// A tally that does not partition its input is refused rather than
 		// published, and that refusal fails the step: publishing a wrong

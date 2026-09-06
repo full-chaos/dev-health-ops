@@ -7,9 +7,7 @@ from raw data sources (work items, PRs, commits).
 
 from __future__ import annotations
 
-import argparse
 import logging
-import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -657,118 +655,19 @@ class WorkGraphBuilder:
             return 0
 
 
-def main() -> int:
-    """CLI entry point for work graph builder."""
-    parser = argparse.ArgumentParser(
-        description="Build work graph from raw data",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Full rebuild
-  python -m work_graph.builder --db clickhouse://localhost:8123/default
-
-  # Rebuild for date range
-  python -m work_graph.builder --from 2025-01-01 --to 2025-01-31 --db ...
-
-  # Rebuild for specific repo
-  python -m work_graph.builder --repo <uuid> --db ...
-        """,
-    )
-
-    parser.add_argument(
-        "--db",
-        required=True,
-        help="ClickHouse connection string",
-    )
-    parser.add_argument(
-        "--from",
-        dest="from_date",
-        type=str,
-        help="Start date (YYYY-MM-DD)",
-    )
-    parser.add_argument(
-        "--to",
-        dest="to_date",
-        type=str,
-        help="End date (YYYY-MM-DD)",
-    )
-    parser.add_argument(
-        "--repo",
-        dest="repo_id",
-        type=str,
-        help="Repository UUID to filter by",
-    )
-    parser.add_argument(
-        "--org-id",
-        dest="org_id",
-        type=str,
-        default="",
-        help="Organization ID to filter by",
-    )
-    parser.add_argument(
-        "--heuristic-window",
-        type=int,
-        default=7,
-        help="Days window for heuristic matching (default: 7)",
-    )
-    parser.add_argument(
-        "--heuristic-confidence",
-        type=float,
-        default=0.3,
-        help="Confidence score for heuristic matches (default: 0.3)",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging",
-    )
-
-    args = parser.parse_args()
-
-    # Setup logging
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-
-    # Parse dates
-    from_date = None
-    to_date = None
-    if args.from_date:
-        from_date = datetime.fromisoformat(args.from_date).replace(tzinfo=timezone.utc)
-    if args.to_date:
-        to_date = datetime.fromisoformat(args.to_date).replace(tzinfo=timezone.utc)
-
-    # Parse repo UUID
-    repo_uuid = None
-    if args.repo_id:
-        repo_uuid = uuid.UUID(args.repo_id)
-
-    config = BuildConfig(
-        dsn=args.db,
-        from_date=from_date,
-        to_date=to_date,
-        repo_id=repo_uuid,
-        heuristic_days_window=args.heuristic_window,
-        heuristic_confidence=args.heuristic_confidence,
-        org_id=args.org_id,
-    )
-
-    builder = WorkGraphBuilder(config)
-    try:
-        stats = builder.build()
-        total = sum(stats.values())
-        logger.info("Work graph build complete. Total edges: %d", total)
-        for key, value in stats.items():
-            logger.info("  %s: %s", key, value)
-        return 0
-    except Exception as e:
-        logger.exception("Work graph build failed: %s", e)
-        return 1
-    finally:
-        builder.close()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+# CHAOS-5303 r1 P2: this module used to end with its own standalone
+# `main()`/`argparse` CLI (`python -m work_graph.builder ...`), a SECOND,
+# undocumented legacy entry point distinct from the tracked, documented one
+# (`work_graph/runner.py`'s `run_work_graph_build`, wired to `dev-hops
+# work-graph build` -- see docs/operate/runbooks/operator-commands.md and
+# docs/go-migration-matrix.md, both of which already list it as legacy and
+# scheduled for retirement, CHAOS-4441). This one was reachable ONLY via a
+# direct `python -m` invocation, appeared in no `dev-hops` dispatch table and
+# no operator runbook, and (found by codex review, not by design) received no
+# Go pre-step coverage at all -- an org that ran the work graph exclusively
+# through this path got zero issue<->issue edges post-CHAOS-4924 with no
+# error, since `builder.build()`'s own stats dict silently reports 0 for a
+# retired stage. Deleted outright rather than ported: it duplicated
+# `runner.py`'s CLI with a strictly smaller flag set (no `--org` blank-scope
+# guard) and no live caller could be found for it beyond its own README
+# examples (README.md updated in the same commit).

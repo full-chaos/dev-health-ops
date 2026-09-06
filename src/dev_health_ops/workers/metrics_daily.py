@@ -77,6 +77,19 @@ def run_daily_metrics(
                         "day": target_day.isoformat(),
                     }
 
+        # CHAOS-5254: run_daily_metrics_job's inline IC-metrics/landscape
+        # finalize branch (the pre-CHAOS-5254 `if not skip_finalize:` block,
+        # which this call used to reach since it never passed
+        # skip_finalize=True) is deleted -- this task no longer produces IC
+        # metrics/landscape rows at all, and does not call
+        # run_daily_metrics_finalize as a replacement. Currently inert (no
+        # Celery worker consumes this task, CHAOS-4026), but if CHAOS-5296
+        # revives a live dispatcher for it, that work must ALSO add an
+        # explicit run_daily_metrics_finalize call here (mirroring
+        # job_daily.py's _cmd_metrics_daily/_cmd_metrics_rebuild pattern) or
+        # this task will silently under-produce relative to its old
+        # behavior.
+        #
         # Run the async job in a new event loop
         run_async(
             run_daily_metrics_job(

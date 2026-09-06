@@ -13,7 +13,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from dev_health_ops.metrics.job_daily import run_daily_metrics_job  # noqa: E402
+from dev_health_ops.metrics.job_daily import (  # noqa: E402
+    _date_range,
+    run_daily_metrics_finalize,
+    run_daily_metrics_job,
+)
 
 
 def _parse_date(value: str) -> date:
@@ -70,20 +74,36 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    backfill_days = max(1, int(args.backfill))
+
+    async def _run() -> None:
+        await run_daily_metrics_job(
+            db_url=args.db,
+            day=args.date,
+            backfill_days=backfill_days,
+            repo_id=args.repo_id,
+            include_commit_metrics=True,
+            sink=args.sink,
+            provider=args.provider,
+            org_id="",
+        )
+        # CHAOS-5254: run_daily_metrics_job's inline IC-metrics/landscape
+        # finalize branch (the old `if not skip_finalize:` block) was
+        # deleted -- this script's own call never passed skip_finalize=True
+        # by name, but got that inline finalize for free under the old
+        # default. Call the standalone finalizer explicitly per day,
+        # matching job_daily.py's own _cmd_metrics_daily/_cmd_metrics_rebuild
+        # pattern, so this script's output does not silently regress.
+        for target_day in _date_range(args.date, backfill_days):
+            await run_daily_metrics_finalize(
+                db_url=args.db,
+                day=target_day,
+                org_id="",
+                sink=args.sink,
+            )
 
     try:
-        asyncio.run(
-            run_daily_metrics_job(
-                db_url=args.db,
-                day=args.date,
-                backfill_days=max(1, int(args.backfill)),
-                repo_id=args.repo_id,
-                include_commit_metrics=True,
-                sink=args.sink,
-                provider=args.provider,
-                org_id="",
-            )
-        )
+        asyncio.run(_run())
         return 0
     except Exception as exc:
         print(f"Failed to compute daily metrics: {exc.__class__.__name__}: {exc}")

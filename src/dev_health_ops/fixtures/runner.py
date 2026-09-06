@@ -1450,9 +1450,12 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
         )
         # CHAOS-5254: run_daily_metrics_job's older inline finalize block
         # (IC metrics/landscape writes, job_daily.py's former
-        # `if not skip_finalize:` branch) is deleted -- it was only ever
-        # exercised by the now-deleted Celery run_daily_metrics task, so
-        # there is no longer a double-write to guard against here.
+        # `if not skip_finalize:` branch) is deleted entirely -- the Celery
+        # run_daily_metrics task that used to reach it via its default
+        # skip_finalize=False call is NOT deleted (workers/metrics_daily.py
+        # keeps it live for external_ingest/recompute.py, CHAOS-5296), but
+        # that call site no longer has this branch to reach either way.
+        # There is no longer a double-write to guard against here.
         #
         # CHAOS-4365 item 3 finding: run_daily_metrics_job's own per-repo
         # loop used to ALSO run an OLDER inline finalize block (IC metrics/

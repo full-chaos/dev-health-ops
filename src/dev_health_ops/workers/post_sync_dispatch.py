@@ -175,15 +175,18 @@ def _dispatch_post_sync_tasks(
     # run_complexity_job writes file_complexity_snapshots. This used to feed a
     # chained run_daily_metrics (job_daily._load_complexity_map_for_repo) so the
     # daily risk/hotspot rows reflected the just-synced file contents instead of
-    # the previous cycle's snapshot. CHAOS-5254: run_daily_metrics's Celery task
-    # (and the prod Celery workers/Beat that would have consumed it, CHAOS-4026)
-    # is gone -- daily metrics execution now runs entirely off this post-sync
-    # fan-out, via the Go scheduler/reconciler's own cadence + the HTTP bridge
-    # (api/internal/worker_metrics.py) into run_daily_metrics_job. The
-    # complexity -> daily freshness ordering this comment used to guarantee is
-    # therefore no longer this function's concern; complexity is still chained
-    # ahead of build/materialize below for the same reason it always was
-    # (fresh-or-nothing on a terminal failure, see the trade-off note next).
+    # the previous cycle's snapshot. CHAOS-5254: run_daily_metrics no longer
+    # participates in THIS chain -- the prod Celery workers/Beat that would
+    # have consumed it are stopped (CHAOS-4026), so daily metrics execution
+    # now runs entirely off the Go scheduler/reconciler's own cadence + the
+    # HTTP bridge (api/internal/worker_metrics.py) into run_daily_metrics_job.
+    # (The Celery task itself, workers/metrics_daily.py, is NOT deleted -- it
+    # keeps a second live caller, external_ingest/recompute.py's webhook-
+    # triggered dispatch; see CHAOS-5296.) The complexity -> daily freshness
+    # ordering this comment used to guarantee is therefore no longer this
+    # function's concern; complexity is still chained ahead of build/
+    # materialize below for the same reason it always was (fresh-or-nothing
+    # on a terminal failure, see the trade-off note next).
     #
     # Trade-off (CHAOS review #1078): as the chain head, a *terminal* complexity
     # failure (after its 3 internal retries) aborts the rest of the chain

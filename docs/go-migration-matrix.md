@@ -197,7 +197,7 @@ function directly, even for families whose worker kind is now native:
 | --- | --- | --- | --- |
 | ai_governance | NATIVE | Go: `internal/jobs/metrics/daily/ai_governance_native_executor.go` (`AIGovernanceExecutor`) | CHAOS-4285 (Done) |
 | ai_impact | NATIVE | Go: `internal/jobs/metrics/daily/ai_impact_native_executor.go` (`AIImpactExecutor`) | CHAOS-4280 (Done) |
-| ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`) | CHAOS-4286 |
+| ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`) -- ports the now-DELETED `work_graph/extractors/ai_workflow.py:extract_ai_workflow_from_pull_requests` (CHAOS-5242); no Python fallback | CHAOS-4286 |
 | benchmarking | NATIVE | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done) |
 | compounding_risk | NATIVE, post_bridge | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, native) | CHAOS-4287 |

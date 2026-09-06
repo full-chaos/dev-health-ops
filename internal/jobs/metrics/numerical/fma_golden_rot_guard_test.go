@@ -18,13 +18,23 @@ const (
 // established by TestRemainingMetricsGoldenMatchesLivePython
 // (golden_rot_guard_test.go): tests/fixtures/fma_golden.json was generated
 // from REAL production Python (release_impact._compute_confidence,
-// compute._percentile, compute_capacity._percentile, hotspots.compute_file_hotspots)
-// and then frozen. The bit-exact tests in fma_golden_test.go (and its
-// per-package copies) only prove Go matches the FILE -- nothing proves
-// Python still matches the file, so the moment any of those four functions'
-// numerics change, the frozen `expected_bits` values silently encode the OLD
-// Python behaviour and every bit-exact test stays green while the two
-// implementations have actually diverged.
+// compute._percentile, compute_capacity._percentile) and then frozen. The
+// bit-exact tests in fma_golden_test.go (and its per-package copies) only
+// prove Go matches the FILE -- nothing proves Python still matches the file,
+// so the moment any of those functions' numerics change, the frozen
+// `expected_bits` values silently encode the OLD Python behaviour and every
+// bit-exact test stays green while the two implementations have actually
+// diverged.
+//
+// CHAOS-5234/CHAOS-3092 (2026-09-06): fma_golden.json used to carry a fourth
+// family, hotspot_score (dev_health_ops.metrics.hotspots.compute_file_hotspots),
+// which this generator regenerated too -- deleted now that file_hotspots is
+// fully native (no straddle). Rather than special-case that one key out of
+// this comparison, its frozen cases were split VERBATIM into a standalone
+// tests/fixtures/fma_hotspot_score_golden.json with no generator (see
+// filehotspots/fma_golden_test.go, which reads it directly): this file's own
+// generator, frozen output, and this plain byte-equality check all stay in
+// their original, simpler shape.
 func TestFMAGoldenMatchesLivePython(t *testing.T) {
 	if os.Getenv(fmaLivePythonOraclesEnv) != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -69,8 +79,7 @@ func TestFMAGoldenMatchesLivePython(t *testing.T) {
 		"live Python no longer reproduces the frozen FMA golden.\n" +
 			"This is Python drift, not a Go bug: tests/fixtures/fma_golden.json was " +
 			"generated from production Python and frozen (release_impact._compute_confidence, " +
-			"compute._percentile, compute_capacity._percentile, hotspots.compute_file_hotspots). " +
-			"Regenerate with\n" +
+			"compute._percentile, compute_capacity._percentile). Regenerate with\n" +
 			"    python tests/fixtures/generate_fma_golden.py\n" +
 			"and review the diff as a real behaviour change -- if Go should follow, change Go " +
 			"too and re-verify every fma_golden_test.go bit-exact test; if it should not, the " +

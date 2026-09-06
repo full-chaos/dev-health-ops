@@ -1,10 +1,8 @@
 package aiworkflow
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,8 +12,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
-// oracleOrg/oracleRepoA/oracleRepoB/oracleProvider MUST match
-// testdata/python_ai_workflow_oracle.py's ORG/REPO_A/REPO_B/PROVIDER exactly.
+// oracleOrg/oracleRepoA/oracleRepoB/oracleProvider MUST match the deleted
+// testdata/python_ai_workflow_oracle.py's ORG/REPO_A/REPO_B/PROVIDER exactly
+// (CHAOS-5242: that script is gone, but tests/fixtures/ai_workflow_python_
+// golden.json was captured from its last live run and is the permanent
+// contract now -- these constants must keep matching IT).
 var (
 	oracleOrg      = uuid.MustParse("8f3f7b0a-1c2d-4e3f-9a5b-6c7d8e9f0a1b")
 	oracleRepoA    = uuid.MustParse("3a9c1e00-1111-4222-8333-944444445555")
@@ -27,7 +28,7 @@ func oracleDT(year int, month time.Month, day, hour, minute, second, microsecond
 	return time.Date(year, month, day, hour, minute, second, microsecond*1000, time.UTC)
 }
 
-// oraclePullRequests MUST match testdata/python_ai_workflow_oracle.py's
+// oraclePullRequests MUST match the deleted testdata/python_ai_workflow_oracle.py's
 // PULL_REQUESTS list row for row, field for field.
 func oraclePullRequests() []PullRequestRow {
 	merged1 := oracleDT(2026, 9, 1, 10, 0, 0, 0)
@@ -82,7 +83,7 @@ func oraclePullRequests() []PullRequestRow {
 	}
 }
 
-// oracleIssueIDsByPR MUST match testdata/python_ai_workflow_oracle.py's
+// oracleIssueIDsByPR MUST match the deleted testdata/python_ai_workflow_oracle.py's
 // ISSUE_IDS_BY_PR.
 func oracleIssueIDsByPR() map[string][]string {
 	return map[string][]string{
@@ -139,42 +140,44 @@ type pythonAIWorkflowResult struct {
 	IssueEdges    []pythonIssueEdge    `json:"issue_edges"`
 }
 
-func runPythonOracle(t *testing.T, markerName string) pythonAIWorkflowResult {
+// repositoryRootPath walks up from the working directory to find go.mod,
+// mirroring prcommit/golden_test.go's identical helper.
+func repositoryRootPath(t *testing.T) string {
 	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		t.Fatal("PYTHON is required for the live ai_workflow Python oracle")
-	}
-	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	working, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, filepath.Join("testdata", "python_ai_workflow_oracle.py"))
-	command.Dir = filepath.Join(root, "internal", "jobs", "metrics", "aiworkflow")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("execute production Python oracle: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	for directory := working; ; {
+		if _, statErr := os.Stat(filepath.Join(directory, "go.mod")); statErr == nil {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatal("could not find repository root (no go.mod found)")
+		}
+		directory = parent
 	}
-	output := bytes.TrimSpace(stdout.Bytes())
-	if lastLine := bytes.LastIndexByte(output, '\n'); lastLine >= 0 {
-		output = output[lastLine+1:]
+}
+
+// loadFrozenPythonGolden reads the frozen golden captured (CHAOS-5242) from
+// the last live run of extract_ai_workflow_from_pull_requests, before that
+// function was deleted alongside its own native Go port (AIWorkflowExecutor,
+// #2280). Unlike work_graph_edges' or PR-commit's own live/frozen oracles,
+// ai_workflow's Python producer is gone entirely -- there is no fallback to
+// re-run, so this file is the permanent contract, matching CHAOS-5264's
+// pr_commit_python_golden.json precedent (tests/fixtures/*_python_golden.json).
+func loadFrozenPythonGolden(t *testing.T) pythonAIWorkflowResult {
+	t.Helper()
+	root := repositoryRootPath(t)
+	path := filepath.Join(root, "tests", "fixtures", "ai_workflow_python_golden.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read frozen Python golden %s: %v", path, err)
 	}
 	var decoded pythonAIWorkflowResult
-	if err := json.Unmarshal(output, &decoded); err != nil {
-		t.Fatalf("decode production Python oracle output %q: %v", output, err)
-	}
-	if writeErr := os.WriteFile(filepath.Join(proofDirectory, markerName), []byte("executed"), 0o644); writeErr != nil {
-		t.Fatalf("write live-python-oracle proof: %v", writeErr)
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("decode frozen Python golden %s: %v", path, err)
 	}
 	return decoded
 }
@@ -214,18 +217,19 @@ func optionalStringsEqual(a, b *string) bool {
 	return *a == *b
 }
 
-// TestAIWorkflowMatchesLivePythonProduction is this family's L2 rot guard:
-// it runs the REAL extract_ai_workflow_from_pull_requests (via the Python
-// oracle subprocess) and Go's Compute over the byte-identical fixture, then
-// compares every persisted column of all three result lists, including
+// TestAIWorkflowMatchesFrozenPythonGolden is this family's identity test
+// (CHAOS-5242, replacing the former live-oracle rot guard now that
+// extract_ai_workflow_from_pull_requests is deleted): it compares Go's
+// Compute over the byte-identical fixture against a FROZEN JSON captured
+// from the real Python producer's last live run, field for field, including
 // run_id/edge_id and the compact-JSON metadata/evidence strings.
 //
 // Do not add a field to Run/ArtifactEdge/IssueEdge without adding it here --
 // see workgraphedges/compute_test.go's identical warning and the incident
 // that motivated it (#2240 round 1: an omitted-from-comparison field silently
 // carried a wrong value for a long time because nothing ever failed on it).
-func TestAIWorkflowMatchesLivePythonProduction(t *testing.T) {
-	expected := runPythonOracle(t, "ai-workflow-golden")
+func TestAIWorkflowMatchesFrozenPythonGolden(t *testing.T) {
+	expected := loadFrozenPythonGolden(t)
 
 	now := time.Now().UTC()
 	result := Compute(oraclePullRequests(), oracleOrg, oracleProvider, oracleIssueIDsByPR(), now)

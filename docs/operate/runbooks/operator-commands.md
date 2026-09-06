@@ -101,14 +101,13 @@ Diff it against the same query after step 5. This is a prerequisite, not an opti
 | `dev-hops sync work-items` / `dev-hops backfill run` | `docs/contribute/architecture/team-attribution.md` §5 -- Python CLI trigger shell over the native Go sync-dispatch path | Recompute `work_item_team_attributions` for an org; **must run for ALL providers** (Linear AND GitHub/GitLab) -- Linear-only recomputes nothing, since PR/MR rows and their edges come from the git providers. `--org` is optional (derived from the sync config). |
 | `dev-health-workerctl workgraph trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` | `trigger_workgraph.go:98-283` (CHAOS-5172) | Step 3: enqueue a fresh `workgraph.build` request through the same `workgraph.RequestWriter.WriteTx` path the automatic post-sync/scheduled producers use. |
 | `dev-health-workerctl investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` | `trigger_investment.go:73-222` (CHAOS-5173) | Step 4, native path: enqueue a fresh `investment.materialize` request through the native executor. Drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) -- only an org id and an optional `--from`/`--to` window exist on the request. |
-| `dev-hops investment materialize --force` | `work_graph/runner.py` `run_investment_materialization` | **Legacy** -- separate entry point from the native River kind (CHAOS-4767 tracks removing it). Still the only documented CLI path for step 4 in the team-attribution recovery runbook; `investment trigger` is newer and preferred but not yet confirmed as its drop-in replacement for every case `--force` covers. |
 | `dev-health-workerctl providersync retire-linear-pseudo-projects [--org <uuid>] [--dry-run]` | `main.go:1408-1466` (CHAOS-4530 follow-up) | One-time cleanup of `{org_id}:linear:{team_key}` pseudo-project rows in `projects`. Destructive (physical delete), authorized before any ClickHouse call is attempted. |
 | `dev-health-workerctl providersync retire-stale-linear-project-ownership [--org <uuid>] [--dry-run]` | `main.go:1486-1558` (CHAOS-4548) | One-time cleanup of stale `team_project_ownership` rows still stamped with the old team-key `project_key`. Destructive, same authorization gate as the pseudo-projects cleanup. |
 | Team membership resolution (admin override layer) | `docs/contribute/architecture/team-attribution.md` §CHAOS-4321 | Not a CLI command. Admin panel `/org/admin/identities` writes `identities.team_ids`; `teams.manual_members` is the admin-exclusive override roster. No CLI mutation path exists. |
 
 **Team-attribution recovery order** (`docs/contribute/architecture/team-attribution.md` §5): (1) merge +
-deploy the mechanism, (2) backfill ALL providers via sync/backfill, (3) work-graph build, (4) investment
-materialize `--force` (or `investment trigger`), (5) verify via the query-time join (coverage %, chord). The
+deploy the mechanism, (2) backfill ALL providers via sync/backfill, (3) work-graph build, (4) `investment
+trigger`, (5) verify via the query-time join (coverage %, chord). The
 backfill runner only re-runs the sync job -- it does **not** fan out to work-graph or investment
 automatically; both must be triggered explicitly.
 
@@ -124,7 +123,6 @@ resolution (admin override in `identities`/`teams.manual_members`, else provider
 | `dev-health-workerctl workgraph trigger ...` | `trigger_workgraph.go:98-283` (CHAOS-5172) | Enqueue a FRESH `workgraph.build` request through the same coordinator path the automatic producers use, instead of a second, unguarded Python compute. |
 | `dev-health-workerctl investment trigger ...` | `trigger_investment.go:73-222` (CHAOS-5173) | Enqueue a fresh `investment.materialize` request through the native executor (`internal/jobs/investment/nativeexecutor.go`). |
 | `dev-hops work-graph build` | `work_graph/runner.py` `run_work_graph_build` | **Legacy** -- direct Python compute, bypasses the worker's own dispatch/idempotency. Prefer `workgraph trigger`. |
-| `dev-hops investment materialize [--force]` | `work_graph/runner.py` `run_investment_materialization` | **Legacy**, separate entry point from the native River kind (CHAOS-4767 tracks removal). |
 
 See §(c) above for the full ordered recovery sequence these two commands participate in.
 
@@ -156,7 +154,7 @@ above, not a tested runbook. Dry-run it against a non-prod target first.
    raw ingestion, native.
 3. `metrics daily-start` (or the automatic post-sync fanout) per org/day-range -- daily metrics, mostly
    native.
-4. `workgraph trigger` then `investment trigger` (or `dev-hops investment materialize --force`) -- per
+4. `workgraph trigger` then `investment trigger` -- per
    §(c)'s ordering, with the snapshot-first step from §(c) taken before step 2.
 5. Team ownership/attribution falls out of steps 2-3 automatically (native `sync.team_repo_ownership_derivation`);
    admin overrides in `identities`/`teams.manual_members` are **not** re-derivable from providers and must

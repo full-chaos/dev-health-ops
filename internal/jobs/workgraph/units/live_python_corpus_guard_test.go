@@ -95,10 +95,6 @@ var outputPathPatterns = []*regexp.Regexp{
 // TestExplicitCorpusPathsAreStillNeeded below deletes the excuse when the
 // generator starts declaring its own path.
 var explicitCorpusPaths = map[string]string{
-	// Declares its output as an argparse `--out` default of
-	// /tmp/build_scope_parity_table.json, so no repo-relative constant exists to
-	// match -- but it takes --stdout and its corpus is committed beside it.
-	"generate_build_scope_parity_table.py": "build_scope_parity_table.json",
 	// Its corpus is a GO PACKAGE's testdata, so it lives beside the package that
 	// loads it rather than in tests/fixtures/ -- ordinary Go layout, and not
 	// something to bend for this guard. No Path(__file__)-relative declaration can
@@ -245,6 +241,23 @@ var liveDataGenerators = map[string]struct {
 	// integration test that already reads them is the regression guard going
 	// forward, no live Python needed. Same precedent as CHAOS-5249's issue_pr_
 	// links generator retirement.
+	//
+	// A third CHAOS-4924 generator, tests/fixtures/generate_build_scope_parity_
+	// table.py, is not listed here because it was never routed through this
+	// map -- it was fully discoverable via explicitCorpusPaths and ran fine.
+	// It was DELETED outright, along with its own dedicated rot guard
+	// (cmd/dev-health-worker/workgraph_scope_rot_guard_test.go), for the same
+	// reason: its `_production_window_digest` anchored on `def
+	// run_work_graph_build(`, which this PR deletes from work_graph_tasks.py,
+	// and its `_admit` reference called `worker_workgraph._scope_arguments(
+	// "workgraph.build", ...)`, a kind this PR also removes from that
+	// function's allowed set -- so every case would trivially become RAISES
+	// regardless of scope shape, collapsing the corpus's entire measurement
+	// axis rather than reporting reference drift. tests/fixtures/build_scope_
+	// parity_table.json stays as a frozen fixture: cmd/dev-health-worker/
+	// workgraph_scope_parity_test.go's TestBuildScopeMatchesTheBridgeAdmission
+	// still diffs the (already-native) issue-pr-links pre-step's window
+	// parser against it, which needs no live Python.
 }
 
 // TestLiveDataGeneratorsGenuinelyNeedClickHouse deletes the excuse the moment

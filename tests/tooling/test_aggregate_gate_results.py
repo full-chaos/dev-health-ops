@@ -900,9 +900,10 @@ def _filter_step(path: Path) -> dict[str, object]:
 def _typecheck_relevance_patterns() -> list[str]:
     """CHAOS-4843: typecheck.yml has no `changes`/`dorny/paths-filter` job to
     read a pattern list from -- `ci/typecheck_relevance.py` carries it
-    instead, loaded directly by path (it is not a package; same technique
-    tests/fixtures/generate_build_scope_parity_table.py already uses for the
-    identical "load one module without importing a whole package" problem).
+    instead, loaded directly by path (it is not a package; the same
+    `importlib.util.spec_from_file_location` technique other fixture
+    generators use for the identical "load one module without importing a
+    whole package" problem).
     """
     module_path = ROOT / "ci" / "typecheck_relevance.py"
     spec = importlib.util.spec_from_file_location("typecheck_relevance", module_path)

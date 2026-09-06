@@ -535,9 +535,6 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
     (tests/metrics/test_clickhouse_org_scope.py's dedicated test of it is
     also deleted in this PR).
     """
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-
     assert not hasattr(job_daily, "compute_cicd_metrics_daily"), (
         "compute_cicd_metrics_daily must not be imported into job_daily.py's "
         "module namespace at all"
@@ -551,20 +548,17 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
         "caller has reappeared, this assertion should be removed and "
         "explained, not silently loosened"
     )
-
-    zero_rows_calls: list[tuple[str, str]] = []
-
-    def _spy_record(*, family: str, cause: str) -> None:
-        zero_rows_calls.append((family, cause))
-
-    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
+    # CHAOS-5308/CHAOS-3092: no record_metrics_family_zero_rows spy here
+    # anymore -- job_daily.py no longer imports it at all (its only caller,
+    # the _note_family_zero_rows helper, is deleted: cicd/deploy/incident,
+    # every family that used to feed it, have all had their compute+write+
+    # zero-rows-note deleted outright now).
 
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
     for skip_families in (None, {"cicd"}):
         sink.write_calls = []
-        zero_rows_calls.clear()
         await job_daily.run_daily_metrics_job(
             db_url="clickhouse://test",
             day=DAY,
@@ -574,7 +568,6 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_cicd_metrics" not in sink.write_calls
-        assert not any(family == "cicd" for family, _cause in zero_rows_calls)
         # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279: team_wellbeing's,
         # repo_user_commit's, AND review_edges' writes are also deleted
         # outright now, so none of "team_metrics"/"repo_metrics"/
@@ -737,17 +730,12 @@ async def test_compounding_risk_compute_and_write_are_deleted_from_job_daily(
         "_write_compounding_risk_for_day must not be imported into "
         "job_daily.py's module namespace at all"
     )
-
-    zero_rows_calls: list[tuple[str, str]] = []
-
-    def _spy_record(*, family: str, cause: str) -> None:
-        zero_rows_calls.append((family, cause))
-
-    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
+    # CHAOS-5308/CHAOS-3092: no record_metrics_family_zero_rows spy here
+    # anymore -- job_daily.py no longer imports it at all (its only caller,
+    # the _note_family_zero_rows helper, is deleted).
 
     for skip_families in (None, {"compounding_risk"}):
         sink.write_calls = []
-        zero_rows_calls.clear()
         await job_daily.run_daily_metrics_job(
             db_url="clickhouse://test",
             day=DAY,
@@ -757,9 +745,6 @@ async def test_compounding_risk_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_compounding_risk_daily" not in sink.write_calls
-        assert not any(
-            family.startswith("compounding_risk") for family, _cause in zero_rows_calls
-        )
         # CHAOS-5234/CHAOS-3092/CHAOS-4279: team_wellbeing's, cicd's, AND
         # review_edges' writes are also deleted outright now, so none of
         # "team_metrics"/"write_cicd_metrics"/"write_review_edges" can serve
@@ -1038,17 +1023,12 @@ async def test_incident_compute_and_write_are_deleted_from_job_daily(
         "deliberate caller has reappeared, this assertion should be removed "
         "and explained, not silently loosened"
     )
-
-    zero_rows_calls: list[tuple[str, str]] = []
-
-    def _spy_record(*, family: str, cause: str) -> None:
-        zero_rows_calls.append((family, cause))
-
-    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
+    # CHAOS-5308/CHAOS-3092: no record_metrics_family_zero_rows spy here
+    # anymore -- job_daily.py no longer imports it at all (its only caller,
+    # the _note_family_zero_rows helper, is deleted).
 
     for skip_families in (None, {"incident"}):
         sink.write_calls = []
-        zero_rows_calls.clear()
         await job_daily.run_daily_metrics_job(
             db_url="clickhouse://test",
             day=DAY,
@@ -1058,7 +1038,6 @@ async def test_incident_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_incident_metrics" not in sink.write_calls
-        assert not any(family == "incident" for family, _cause in zero_rows_calls)
         # CHAOS-5308/CHAOS-4279: repo_user_commit's AND review_edges' writes
         # are also deleted outright now (sibling PRs merged into this same
         # tree), so neither can serve as this control any more -- work_item,

@@ -201,8 +201,8 @@ which had been unreachable dead code (never wired into `cli.py`'s argparse tree)
 | ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`) -- ports the now-DELETED `work_graph/extractors/ai_workflow.py:extract_ai_workflow_from_pull_requests` (CHAOS-5242); no Python fallback | CHAOS-4286 |
 | benchmarking | NATIVE | Go: `internal/jobs/metrics/daily/benchmarking_finalize_native_executor.go` (finalize scope). CHAOS-4288 deleted the Python compute (`src/dev_health_ops/metrics/benchmarking/`) entirely -- no fallback left. | CHAOS-4288 (Done) |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done), CHAOS-5312 (Done) |
-| compounding_risk | NATIVE, post_bridge | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, native) | CHAOS-4287 |
-| compounding_risk_team | NATIVE | Python: `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, now native, finalize scope) | CHAOS-5084 |
+| compounding_risk | NATIVE, post_bridge | Go: `internal/jobs/metrics/daily/compounding_risk_native_executor.go` (`CompoundingRiskExecutor`) | CHAOS-4287/CHAOS-5308 (Done) |
+| compounding_risk_team | NATIVE | Go: `internal/jobs/metrics/daily/compounding_risk_team_native_executor.go` (`CompoundingRiskTeamExecutor`) | CHAOS-5084 (Done) |
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
 | file_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/file_hotspots_native_executor.go` | CHAOS-4277 (Done) |
 | file_risk_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/` (`FileRiskHotspotsExecutor`, `daily.go`) | CHAOS-4277 (Done) |

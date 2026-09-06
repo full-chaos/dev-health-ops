@@ -20,7 +20,6 @@ from dev_health_ops.metrics.active_incidents import (
     active_incidents_query,
     deduplicate_active_incidents,
 )
-from dev_health_ops.metrics.benchmarking.runner import run_benchmarking_for_day
 from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
@@ -1704,40 +1703,20 @@ async def run_daily_metrics_job(
         # either now that CHAOS-4284's Python compute is also gone).
 
         # Benchmarking (baselines, maturity, anomalies, period comparisons,
-        # correlations, insights) MOVED to run_daily_metrics_finalize
-        # (CHAOS-5194, astra design-review finding F3), skip_families gate and
-        # all -- necessary PLUMBING, not a compute fix. It used to run HERE,
-        # once per partition (run_benchmarking_for_day takes no repo_id, so an
-        # org with N repos appended N identical row sets to six append-only
-        # tables), deduplicated on the Go side by an anchor-partition trick
-        # (fixed duplication, not the race F3 found: the anchor partition's
-        # own post_bridge phase could complete before every OTHER partition
-        # for the org/day had written its own inputs).
-        #
-        # The move is required for the skip_families MECHANISM to keep
-        # working, not optional: partition-scope skip_families (built by
-        # computeNativeFamilies/computePostBridgeNativeFamilies) and
-        # finalize-scope skip_families (built by
-        # computeNativeFinalizeFamilies) are TWO INDEPENDENT lists sent to
-        # TWO INDEPENDENT bridge calls. Once the Go executor registers
-        # "benchmarking" as a FINALIZE family instead of a post_bridge one,
-        # the partition-scope skip_families sent here would never contain it
-        # again -- leaving the OLD gate at this call site permanently open
-        # and duplicating Python's own compute on top of the native
-        # executor's correct one, a WORSE bug than before. Moving the call to
-        # where the matching skip_families list actually lives is what keeps
-        # "the Go executor computed it, so Python must not" true.
-        #
-        # This move does NOT fix Python's own compute logic (no ordering
-        # change, no query change) -- team-lead ruling, CHAOS-5194: Python's
-        # race stays exactly as buggy as it always was WHEN THIS CODE PATH
-        # ACTUALLY RUNS. In practice it incidentally runs behind the same
-        # partition barrier as the Go executor now (both live in
-        # run_daily_metrics_finalize, which only runs once every partition
-        # for the day has succeeded), and it runs at all only when the
-        # native executor is absent (skip_families gate below), which is the
-        # existing fail-open-to-Python contract every other native family
-        # already has.
+        # correlations, insights) used to run HERE, then CHAOS-5194 (astra
+        # design-review finding F3) moved it to run_daily_metrics_finalize so
+        # its skip_families gate would line up with the native executor's own
+        # finalize-scope registration. CHAOS-4288 has now deleted its Python
+        # compute (and the moved-to call site) entirely: the native
+        # BenchmarkingFinalizeExecutor (internal/jobs/metrics/daily/
+        # benchmarking_finalize_native_executor.go) is unconditionally
+        # registered whenever the daily worker starts -- same reachability
+        # analysis as team_cognitive_load/team_complexity (CHAOS-5141/
+        # CHAOS-5051): buildDailyWorker refuses the whole daily worker before
+        # dailyNativeFamilyRegistrations is ever called if ClickHouse/Postgres
+        # fail to open, so a construction-time fallback to Python was never
+        # actually reachable in production. There is no gate line and no
+        # fallback left to find here or in run_daily_metrics_finalize.
 
         if not skip_finalize:
             ic_metrics = compute_ic_metrics_daily(
@@ -1938,25 +1917,12 @@ async def run_daily_metrics_finalize(
 
     computed_at = datetime.now(timezone.utc)
 
-    # CHAOS-5194 (astra F3): benchmarking, relocated here from
-    # run_daily_metrics_job -- see this function's sibling comment at the old
-    # call site for why the move is required plumbing, not a compute fix.
-    # Same skip_families gate shape as ic_finalize above: when the Go
-    # dispatcher names "benchmarking" in skip_families, the native
-    # BenchmarkingFinalizeExecutor already computed and wrote this org/day,
-    # so skip the whole call -- nothing else in this function consumes its
-    # output.
-    if "benchmarking" not in skip_families:
-        for s in sinks_list:
-            try:
-                run_benchmarking_for_day(
-                    s,
-                    as_of_day=day,
-                    computed_at=computed_at,
-                    org_id=org_id,
-                )
-            except Exception as exc:
-                logger.warning("Benchmarking run failed for day=%s: %s", day, exc)
+    # CHAOS-4288 deleted benchmarking's Python compute (baselines, maturity,
+    # anomalies, period comparisons, correlations, insights) entirely -- see
+    # the sibling comment in run_daily_metrics_job (this function's old call
+    # site, CHAOS-5194) for the reachability analysis. The native
+    # BenchmarkingFinalizeExecutor has no Python fallback left; this
+    # function no longer names "benchmarking" in skip_families at all.
 
     # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily is
     # written exactly ONCE here, per org/day, after every repo's own

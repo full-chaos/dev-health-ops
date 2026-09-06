@@ -1645,24 +1645,23 @@ var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoad
 // for -- pythonRecognisedFinalizeFamilies itself stays the (unchanged)
 // registration-validation and declared-iteration-order authority for ALL
 // four families above; only the "does Python still gate on this name"
-// question narrows. ic_finalize and benchmarking (CHAOS-5194, moved to
-// finalize scope but its Python compute is still skip_families-gated) both
-// still have a live gate line.
+// question narrows. ic_finalize is the only one left with a live gate line.
 //
-// Both team_cognitive_load (CHAOS-5141) and team_complexity (CHAOS-5051)
-// deleted their Python compute entirely (not just skip-gated it), same
-// reachability analysis for both: buildDailyWorker refuses the WHOLE daily
-// worker if the ClickHouse connection fails to open, before
-// dailyNativeFamilyRegistrations is ever called -- so a construction-time
-// fallback to Python was never actually reachable in production for either
-// family (team_cognitive_load's own construction-time nil-conn check and its
-// co-registration-with-ic_finalize check are both unreachable for the same
-// reason; team_complexity has no co-registration dependency of its own to
-// begin with). Both families stay in pythonRecognisedFinalizeFamilies (each
-// is still a fully valid, always-registerable native finalize family) but
-// drop out of THIS list, since neither has a Python gate line left for the
+// team_cognitive_load (CHAOS-5141), team_complexity (CHAOS-5051), and now
+// benchmarking (CHAOS-4288) all deleted their Python compute entirely (not
+// just skip-gated it), same reachability analysis for all three:
+// buildDailyWorker refuses the WHOLE daily worker if the ClickHouse
+// connection fails to open, before dailyNativeFamilyRegistrations is ever
+// called -- so a construction-time fallback to Python was never actually
+// reachable in production for any of them (team_cognitive_load's own
+// construction-time nil-conn check and its co-registration-with-ic_finalize
+// check are both unreachable for the same reason; team_complexity and
+// benchmarking have no co-registration dependency of their own to begin
+// with). All three stay in pythonRecognisedFinalizeFamilies (each is still a
+// fully valid, always-registerable native finalize family) but drop out of
+// THIS list, since none of them has a Python gate line left for the
 // source-scan to find.
-var pythonGatedFinalizeFamilies = []string{"ic_finalize", BenchmarkingFamilyName}
+var pythonGatedFinalizeFamilies = []string{"ic_finalize"}
 
 // ErrUnknownFinalizeFamily is returned when a registered finalize family is
 // not one the Python bridge gates on.

@@ -1235,7 +1235,13 @@ async def run_daily_metrics_job(
         # called" -- see PR3's body for the exact citation), so this call
         # was already dead weight, never a live fallback, before its
         # deletion. `skip_finalize` (this function's own parameter) existed
-        # only to gate this block and is removed with it.
+        # only to gate this block and is removed with it (CHAOS-5254
+        # independently arrived at the same deletion for the same code, one
+        # commit earlier in this branch's history -- the two tickets'
+        # reasoning is complementary, not conflicting: CHAOS-5254 traced
+        # every live caller and found none still needed skip_finalize=False;
+        # CHAOS-4290 PR3 additionally confirms the Go executor made this
+        # block's OUTPUT itself redundant, not just its opt-out flag).
 
         if len(days) > 1:
             # CHAOS-4264: a backfill_days > 1 call holds this day's source
@@ -1490,9 +1496,11 @@ async def run_daily_metrics_finalize(
 # or `job_daily.register_commands` by name (verified by repo-wide search
 # before deletion). `run_daily_metrics_job`/`run_daily_metrics_finalize`
 # above are NOT dead -- they still have live callers (the worker bridge,
-# `scripts/compute_metrics_daily.py`, fixtures, tests) -- only the unwired
-# CLI wrapper functions were removed. (Merge-forward note: #2293/CHAOS-5263
-# separately removed `run_daily_metrics_job`'s `skip_finalize` parameter
-# entirely while this dead code still called it with `skip_finalize=True` --
-# further confirming these two functions were unreachable and rotting, not
-# a live code path anyone was maintaining.)
+# fixtures, tests) -- only the unwired CLI wrapper functions were removed.
+# (Merge-forward notes: #2293/CHAOS-5263 separately removed
+# `run_daily_metrics_job`'s `skip_finalize` parameter entirely while this
+# dead code still called it with `skip_finalize=True`; #2306/CHAOS-5254
+# later deleted `scripts/compute_metrics_daily.py` outright, one of this
+# dead code's own comment's cited "live callers" -- both further confirm
+# these two functions were unreachable and rotting, not a live code path
+# anyone was maintaining.)

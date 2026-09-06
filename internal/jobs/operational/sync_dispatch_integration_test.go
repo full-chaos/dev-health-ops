@@ -123,6 +123,22 @@ VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id::text`,
 	return id
 }
 
+func insertParentSyncConfig(
+	ctx context.Context, t *testing.T, pool *pgxpool.Pool, orgID, provider string, isActive bool,
+) string {
+	t.Helper()
+	var id string
+	err := pool.QueryRow(ctx, `
+INSERT INTO public.sync_configurations (org_id, name, provider, planner_managed, is_active, sync_options)
+VALUES ($1, $2, $3, TRUE, $4, '{}'::jsonb) RETURNING id::text`,
+		orgID, "planner-"+provider, provider, isActive,
+	).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert parent sync configuration: %v", err)
+	}
+	return id
+}
+
 func insertGithubInstallation(ctx context.Context, t *testing.T, pool *pgxpool.Pool, installationID int64, orgID string) {
 	t.Helper()
 	now := time.Now().UTC()
@@ -240,7 +256,13 @@ func TestTriggerScopedSyncGitlabCreatesOccurrenceAndManualTrigger(t *testing.T) 
 	}
 }
 
-func TestTriggerScopedSyncNoChildConfigIsUnroutable(t *testing.T) {
+// TestTriggerScopedSyncNoConfigAtAllIsUnroutable covers the source having
+// neither a child config NOR an org parent config -- genuinely nothing to
+// route to. See TestTriggerScopedSync{Github,Gitlab}RoutesViaParentConfig
+// below for the child-absent-but-parent-present case, which is the NORMAL
+// shape in production (verified live: 0/8 sampled real sources have a child
+// config, all resolve via their org's parent -- CHAOS-5319 r1 corrective).
+func TestTriggerScopedSyncNoConfigAtAllIsUnroutable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -258,8 +280,8 @@ func TestTriggerScopedSyncNoChildConfigIsUnroutable(t *testing.T) {
 
 	insertGithubInstallation(ctx, t, pool, 555, "org-1")
 	// An IntegrationSource exists (the repo is discovered) but NO
-	// SyncConfiguration is scoped to it -- the "org-level parent only, no
-	// child" gap team-lead's ruling explicitly calls out.
+	// SyncConfiguration at all -- neither a child scoped to it nor an org
+	// parent config for this provider.
 	insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
 
 	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
@@ -267,11 +289,179 @@ func TestTriggerScopedSyncNoChildConfigIsUnroutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Processed || result.Reason != "webhook_sync_unroutable:no_child_sync_config" {
+	if result.Processed || result.Reason != "webhook_sync_unroutable:no_sync_configuration" {
 		t.Fatalf("result = %+v", result)
 	}
 	if countRows(ctx, t, pool, "public.scheduled_sync_occurrences") != 0 {
 		t.Fatal("an unroutable event must never write an occurrence row")
+	}
+}
+
+// TestTriggerScopedSyncGithubRoutesViaParentConfig covers the PRODUCTION-
+// SHAPE fixture: a source with no child sync_configurations row at all,
+// routing via the org's planner-managed parent config instead. This is the
+// CHAOS-5319 r1 corrective's own repro shape (0/8 real sampled sources had a
+// child config).
+func TestTriggerScopedSyncGithubRoutesViaParentConfig(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applySyncDispatchSchema(ctx, t, pool)
+	store := &PostgresStore{pool: pool}
+
+	insertGithubInstallation(ctx, t, pool, 555, "org-1")
+	insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
+	parentConfigID := insertParentSyncConfig(ctx, t, pool, "org-1", "github", true)
+
+	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
+	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Processed || result.SyncConfigID != parentConfigID {
+		t.Fatalf("result = %+v, want processed against the parent config %q", result, parentConfigID)
+	}
+}
+
+// TestTriggerScopedSyncGitlabRoutesViaParentConfig is gitlab's twin of
+// TestTriggerScopedSyncGithubRoutesViaParentConfig.
+func TestTriggerScopedSyncGitlabRoutesViaParentConfig(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applySyncDispatchSchema(ctx, t, pool)
+	store := &PostgresStore{pool: pool}
+
+	insertIntegrationSource(ctx, t, pool, "org-2", "gitlab", "99", "group/project")
+	parentConfigID := insertParentSyncConfig(ctx, t, pool, "org-2", "gitlab", true)
+
+	payload := []byte(`{"project":{"id":99,"path_with_namespace":"group/project"}}`)
+	result, err := store.TriggerScopedSync(ctx, "gitlab", "merge_request", payload, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Processed || result.SyncConfigID != parentConfigID {
+		t.Fatalf("result = %+v, want processed against the parent config %q", result, parentConfigID)
+	}
+}
+
+// TestTriggerScopedSyncInactiveParentConfigIsUnroutable covers a source with
+// no child config whose org parent config exists but is_active=false -- the
+// exact shape found live for org 70d529e0's gitlab parent config during the
+// CHAOS-5319 r1 corrective's repro.
+func TestTriggerScopedSyncInactiveParentConfigIsUnroutable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applySyncDispatchSchema(ctx, t, pool)
+	store := &PostgresStore{pool: pool}
+
+	insertIntegrationSource(ctx, t, pool, "org-2", "gitlab", "99", "group/project")
+	insertParentSyncConfig(ctx, t, pool, "org-2", "gitlab", false)
+
+	payload := []byte(`{"project":{"id":99,"path_with_namespace":"group/project"}}`)
+	result, err := store.TriggerScopedSync(ctx, "gitlab", "merge_request", payload, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Processed || result.Reason != "webhook_sync_unroutable:no_sync_configuration" {
+		t.Fatalf("result = %+v, want unroutable (an inactive parent does not count as a match)", result)
+	}
+}
+
+// TestTriggerScopedSyncTwoActiveParentConfigsIsAmbiguous covers a data-
+// hygiene edge case (two active planner-managed configs for the same
+// org+provider) -- treated the same as the existing ambiguous-source cases:
+// fail loud rather than pick one.
+func TestTriggerScopedSyncTwoActiveParentConfigsIsAmbiguous(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applySyncDispatchSchema(ctx, t, pool)
+	store := &PostgresStore{pool: pool}
+
+	insertIntegrationSource(ctx, t, pool, "org-2", "gitlab", "99", "group/project")
+	insertParentSyncConfig(ctx, t, pool, "org-2", "gitlab", true)
+	insertParentSyncConfig(ctx, t, pool, "org-2", "gitlab", true)
+
+	payload := []byte(`{"project":{"id":99,"path_with_namespace":"group/project"}}`)
+	result, err := store.TriggerScopedSync(ctx, "gitlab", "merge_request", payload, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Processed || result.Reason != "webhook_sync_unroutable:ambiguous_sync_config" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+// TestTriggerScopedSyncChildConfigWinsOverParent covers the preference order
+// itself: when BOTH a child config and an org parent config exist, the child
+// wins (existing TestTriggerScopedSyncGithubCreatesOccurrenceAndManualTrigger
+// already exercises "child present, no parent"; this adds "both present").
+func TestTriggerScopedSyncChildConfigWinsOverParent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applySyncDispatchSchema(ctx, t, pool)
+	store := &PostgresStore{pool: pool}
+
+	insertGithubInstallation(ctx, t, pool, 555, "org-1")
+	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
+	childConfigID := insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
+	insertParentSyncConfig(ctx, t, pool, "org-1", "github", true)
+
+	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
+	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Processed || result.SyncConfigID != childConfigID {
+		t.Fatalf("result = %+v, want the CHILD config %q to win over the parent", result, childConfigID)
 	}
 }
 

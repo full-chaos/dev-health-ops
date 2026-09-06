@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -138,7 +139,7 @@ func (store *PostgresStore) TriggerScopedSync(
 		return SyncDispatchResult{Reason: "webhook_sync_unroutable:" + cause}, nil
 	}
 
-	configID, syncOptions, isActive, cause, err := lookupChildSyncConfig(ctx, store.pool, orgID, provider, sourceID)
+	configID, syncOptions, isActive, cause, err := lookupSyncConfig(ctx, store.pool, orgID, provider, sourceID)
 	if err != nil {
 		return SyncDispatchResult{}, err
 	}
@@ -166,6 +167,9 @@ func (store *PostgresStore) TriggerScopedSync(
 	if err := insertSyncManualTrigger(ctx, store.pool, occurrenceID, sourceID); err != nil {
 		return SyncDispatchResult{}, err
 	}
+	slog.InfoContext(ctx, "webhook sync dispatch: routed to native sync",
+		"org_id", orgID, "provider", provider, "source_id", sourceID,
+		"sync_config_id", configID, "occurrence_id", occurrenceID)
 	return SyncDispatchResult{
 		Processed: true, OrgID: orgID, SyncConfigID: configID, OccurrenceID: occurrenceID,
 	}, nil
@@ -350,21 +354,82 @@ func scanIntegrationSourceIDs(ctx context.Context, pool *pgxpool.Pool, query str
 	return id, count, rows.Err()
 }
 
-// lookupChildSyncConfig finds the (at most one) active child SyncConfiguration
-// scoped to sourceID -- the same shape plan_request_for_config's "Child
-// config (source_id set)" branch consumes (src/dev_health_ops/sync/
-// trigger_routing.py:101). More than one active child per source is a data
-// hygiene issue this PR treats the same as "none": fail loud rather than
-// guess which one the webhook meant.
-func lookupChildSyncConfig(
+// lookupSyncConfig resolves the (at most one) active SyncConfiguration this
+// webhook event's source should trigger. Preference order, ported from
+// plan_request_for_config's own precedence (src/dev_health_ops/sync/
+// trigger_routing.py:101): (1) a CHILD config scoped directly to sourceID
+// (sync_configurations.source_id = sourceID) when one exists; (2) otherwise
+// the org's single planner-managed PARENT config for this provider
+// (sync_configurations.planner_managed = true). More than one active match
+// at EITHER step is a data-hygiene issue this PR treats the same as none:
+// fail loud rather than guess which one the webhook meant.
+//
+// CHAOS-5319 r1 corrective (2026-09-06): the child branch is verified LIVE
+// against the local fixture stack to be the RARE case today -- 0 of 8
+// sampled real (org_id, provider) sources had one, all resolve only via
+// their org's parent config. Deliberately does NOT read
+// integration_sources.metadata->>'planner_managed_sync_config_id' as a
+// shortcut to the parent: verified live that this pointer is STALE for at
+// least one real org/provider (github, org 70d529e0 -- pointed at a
+// sync_configurations id that does not exist), while the direct
+// org_id+provider+planner_managed+is_active query below resolved correctly
+// for every sampled source. The pointer is a display/legacy convenience
+// column, not a reliable FK; querying sync_configurations directly is.
+//
+// The parent query also requires source_id IS NULL: a row can in principle
+// be BOTH planner_managed and scoped to one source (a data shape this PR
+// has not observed live but does not rule out), and such a row is a CHILD
+// config, not the org-wide parent -- the child branch above is where it
+// belongs, not silently matched here too.
+func lookupSyncConfig(
 	ctx context.Context, pool *pgxpool.Pool, orgID, provider, sourceID string,
 ) (configID string, syncOptions map[string]any, isActive bool, cause string, err error) {
-	rows, err := pool.Query(ctx, `
+	configID, syncOptions, isActive, matches, err := scanOneSyncConfig(ctx, pool, `
 SELECT id::text, sync_options, is_active FROM public.sync_configurations
 WHERE org_id = $1 AND provider = $2 AND source_id = $3 AND is_active = true
 LIMIT 2`, orgID, provider, sourceID)
 	if err != nil {
 		return "", nil, false, "", err
+	}
+	if matches == 1 {
+		return configID, syncOptions, isActive, "", nil
+	}
+	if matches > 1 {
+		return "", nil, false, "ambiguous_sync_config", nil
+	}
+	// No child config scoped to this source -- the NORMAL case today, not an
+	// error condition; logged at debug so an operator tracing a specific
+	// delivery can still see which branch was taken.
+	slog.DebugContext(ctx, "webhook sync dispatch: no child sync config for source, trying org parent config",
+		"org_id", orgID, "provider", provider, "source_id", sourceID)
+
+	configID, syncOptions, isActive, matches, err = scanOneSyncConfig(ctx, pool, `
+SELECT id::text, sync_options, is_active FROM public.sync_configurations
+WHERE org_id = $1 AND provider = $2 AND source_id IS NULL AND planner_managed = true AND is_active = true
+LIMIT 2`, orgID, provider)
+	if err != nil {
+		return "", nil, false, "", err
+	}
+	if matches == 0 {
+		return "", nil, false, "no_sync_configuration", nil
+	}
+	if matches > 1 {
+		return "", nil, false, "ambiguous_sync_config", nil
+	}
+	return configID, syncOptions, isActive, "", nil
+}
+
+// scanOneSyncConfig runs query (expected to select id::text, sync_options,
+// is_active, LIMIT 2) and reports how many rows matched -- 0/1/2+, never
+// picking one arbitrarily out of a 2+ result, so the caller can fail loud on
+// ambiguity instead of silently taking the first row Postgres happened to
+// return.
+func scanOneSyncConfig(
+	ctx context.Context, pool *pgxpool.Pool, query string, args ...any,
+) (configID string, syncOptions map[string]any, isActive bool, matches int, err error) {
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		return "", nil, false, 0, err
 	}
 	defer rows.Close()
 	var rawOptions []byte
@@ -373,24 +438,21 @@ LIMIT 2`, orgID, provider, sourceID)
 		count++
 		if count == 1 {
 			if scanErr := rows.Scan(&configID, &rawOptions, &isActive); scanErr != nil {
-				return "", nil, false, "", scanErr
+				return "", nil, false, 0, scanErr
 			}
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", nil, false, "", err
+		return "", nil, false, 0, err
 	}
-	if count == 0 {
-		return "", nil, false, "no_child_sync_config", nil
-	}
-	if count > 1 {
-		return "", nil, false, "ambiguous_sync_config", nil
+	if count != 1 {
+		return "", nil, false, count, nil
 	}
 	_ = json.Unmarshal(rawOptions, &syncOptions)
 	if syncOptions == nil {
 		syncOptions = map[string]any{}
 	}
-	return configID, syncOptions, isActive, "", nil
+	return configID, syncOptions, isActive, count, nil
 }
 
 // ensureScheduledJobForSyncConfig ports _ensure_scheduled_job_for_config

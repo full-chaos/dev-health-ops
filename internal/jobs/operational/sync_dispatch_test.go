@@ -115,7 +115,7 @@ func TestWebhookHandlerUnroutableSyncIsPermanentNotRetried(t *testing.T) {
 	payload := []byte(`{"repository":{"id":1,"full_name":"full-chaos/dev-health"}}`)
 	store := &fakeSyncDispatchStore{
 		fakeStore: fakeStore{webhook: webhookDeliveryFor("github", "push", payload)},
-		result:    SyncDispatchResult{Processed: false, Reason: "webhook_sync_unroutable:no_child_sync_config"},
+		result:    SyncDispatchResult{Processed: false, Reason: "webhook_sync_unroutable:no_sync_configuration"},
 	}
 	dispatcher := &fakeDispatcher{}
 	handler, _ := NewWebhookHandler(store, dispatcher)
@@ -127,7 +127,7 @@ func TestWebhookHandlerUnroutableSyncIsPermanentNotRetried(t *testing.T) {
 		t.Fatalf("Work error must wrap ErrWebhookSyncUnroutable: %v", err)
 	}
 	cause := errors.Unwrap(err)
-	if cause == nil || !strings.Contains(cause.Error(), "no_child_sync_config") {
+	if cause == nil || !strings.Contains(cause.Error(), "no_sync_configuration") {
 		t.Fatalf("Work error's unwrapped cause must name the unroutable reason: %v", cause)
 	}
 	if dispatcher.calls != 0 {

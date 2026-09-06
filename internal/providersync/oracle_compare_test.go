@@ -71,6 +71,43 @@ func compareRowsAgainstPythonOracle[T any](
 	// caseDivergencePrefix; anything that doesn't match any case's prefix
 	// is a batch-level finding, surfaced in its own subtest below.
 	all := oracleDivergences(t, pairID, cases, wrapped, goOnlyFields)
+	reportOracleDivergences(t, cases, all)
+}
+
+// compareRowsAgainstFrozenOracle is compareRowsAgainstPythonOracle's frozen-
+// golden twin, same field-by-field comparison and reporting shape, but reads
+// the Python side from a checked-in JSON snapshot
+// (testdata/oracle_frozen/<snapshotName>.json) instead of shelling out to
+// live Python. snapshotName is an explicit filename stem, not necessarily the
+// pair id: two call sites can share one pair id (same oracle_registry
+// registration) while using different case sets, which need different frozen
+// snapshots -- see work_item_attribution_backstop_oracle_test.go and
+// TestJiraWorkItemsRouteIncludesLivePythonMetricEffect, both of which reuse
+// another test's pair id with their own cases. Use this for a pair whose
+// Python producer has been deleted from the codebase (native Go executor +
+// providersync ingest derivation own the compared table now) -- see
+// testdata/oracle_frozen/README.md for the capture recipe and CHAOS-5310/
+// CHAOS-5321/CHAOS-3092 (R6) for why work_item/work_item_attribution/
+// work_item_state converted.
+func compareRowsAgainstFrozenOracle[T any](
+	t *testing.T,
+	snapshotName string,
+	cases []oracleCase,
+	goRowBuilder func(t *testing.T, input map[string]any) T,
+	goOnlyFields map[string]string,
+) {
+	t.Helper()
+	wrapped := func(t *testing.T, input map[string]any) any { return goRowBuilder(t, input) }
+	all := frozenOracleDivergences(t, snapshotName, cases, wrapped, goOnlyFields)
+	reportOracleDivergences(t, cases, all)
+}
+
+// reportOracleDivergences turns a flat divergence-message list (case-prefixed
+// by caseDivergencePrefix, or unattributed for a batch-level finding) into
+// per-case subtests plus one "exclusion integrity" subtest for anything left
+// over -- the reporting shape both the live and frozen comparators share.
+func reportOracleDivergences(t *testing.T, cases []oracleCase, all []string) {
+	t.Helper()
 	attributed := make(map[string]bool, len(all))
 	for _, testCase := range cases {
 		testCase := testCase
@@ -126,27 +163,7 @@ func oracleDivergences(
 ) []string {
 	t.Helper()
 	assertOracleSourcesUnchangedSinceBuild(t)
-	if len(cases) == 0 {
-		t.Fatalf("oracleDivergences: cases must be non-empty -- a comparison over " +
-			"zero cases proves nothing and must not be allowed to look like a pass")
-	}
-	seenIDs := make(map[string]struct{}, len(cases))
-	for _, testCase := range cases {
-		if testCase.ID == "" {
-			t.Fatalf("oracleDivergences: case has an empty id")
-		}
-		if _, duplicate := seenIDs[testCase.ID]; duplicate {
-			t.Fatalf("oracleDivergences: duplicate case id %q -- results are keyed by "+
-				"id, so a duplicate would let one case's Python result be compared "+
-				"against a different case's Go result unnoticed", testCase.ID)
-		}
-		seenIDs[testCase.ID] = struct{}{}
-	}
-	for name, reason := range goOnlyFields {
-		if reason == "" {
-			t.Fatalf("goOnlyFields[%q] needs a non-empty written reason", name)
-		}
-	}
+	validateOracleCasesAndFields(t, "oracleDivergences", cases, goOnlyFields)
 
 	python := pythonExecutable(t)
 	_, currentFile, _, _ := runtime.Caller(0)
@@ -185,7 +202,82 @@ func oracleDivergences(
 		t.Fatalf("execute Python generic row oracle for %s: %v: %s", pairID, err, output)
 	}
 	recordGenericOracleProof(t, packageDir, pairID)
+	pythonRows, excludedFields := decodeGenericRowOracleOutput(t, pairID, output)
+	return diffAgainstPythonRows(t, cases, pythonRows, excludedFields, goRowBuilder, goOnlyFields)
+}
 
+// frozenOracleDivergences is oracleDivergences' frozen-golden twin: same
+// validation and field-by-field diff, but the Python side comes from a
+// checked-in JSON snapshot (captured once via the same python_generic_row_
+// oracle.py CLI, back when the pair's Python producer still existed) instead
+// of a live shellout. See testdata/oracle_frozen/README.md.
+func frozenOracleDivergences(
+	t *testing.T,
+	snapshotName string,
+	cases []oracleCase,
+	goRowBuilder func(t *testing.T, input map[string]any) any,
+	goOnlyFields map[string]string,
+) []string {
+	t.Helper()
+	validateOracleCasesAndFields(t, "frozenOracleDivergences", cases, goOnlyFields)
+	_, currentFile, _, _ := runtime.Caller(0)
+	packageDir := filepath.Dir(currentFile)
+	if filepath.Base(snapshotName) != snapshotName {
+		t.Fatalf("snapshot name %q does not map to a safe frozen-oracle filename", snapshotName)
+	}
+	frozenPath := filepath.Join(packageDir, "testdata", "oracle_frozen", snapshotName+".json")
+	raw, err := os.ReadFile(frozenPath)
+	if err != nil {
+		t.Fatalf("read frozen oracle snapshot for %s: %v", snapshotName, err)
+	}
+	pythonRows, excludedFields := decodeGenericRowOracleOutput(t, snapshotName, raw)
+	return diffAgainstPythonRows(t, cases, pythonRows, excludedFields, goRowBuilder, goOnlyFields)
+}
+
+// validateOracleCasesAndFields is the setup-failure fence oracleDivergences
+// and frozenOracleDivergences share (codex findings #6/#7, second review): an
+// empty cases slice, a duplicate case id, or an undocumented goOnlyFields
+// entry would otherwise let a comparison "pass" without actually comparing
+// anything meaningful.
+func validateOracleCasesAndFields(
+	t *testing.T,
+	caller string,
+	cases []oracleCase,
+	goOnlyFields map[string]string,
+) {
+	t.Helper()
+	if len(cases) == 0 {
+		t.Fatalf("%s: cases must be non-empty -- a comparison over "+
+			"zero cases proves nothing and must not be allowed to look like a pass", caller)
+	}
+	seenIDs := make(map[string]struct{}, len(cases))
+	for _, testCase := range cases {
+		if testCase.ID == "" {
+			t.Fatalf("%s: case has an empty id", caller)
+		}
+		if _, duplicate := seenIDs[testCase.ID]; duplicate {
+			t.Fatalf("%s: duplicate case id %q -- results are keyed by "+
+				"id, so a duplicate would let one case's Python result be compared "+
+				"against a different case's Go result unnoticed", caller, testCase.ID)
+		}
+		seenIDs[testCase.ID] = struct{}{}
+	}
+	for name, reason := range goOnlyFields {
+		if reason == "" {
+			t.Fatalf("goOnlyFields[%q] needs a non-empty written reason", name)
+		}
+	}
+}
+
+// decodeGenericRowOracleOutput decodes python_generic_row_oracle.py's own
+// output shape -- shared by the live shellout and the frozen JSON snapshot,
+// since a snapshot is byte-for-byte that CLI's stdout from capture time.
+func decodeGenericRowOracleOutput(
+	t *testing.T,
+	pairID string,
+	output []byte,
+) (map[string]map[string]any, map[string]string) {
+	t.Helper()
 	// UseNumber, defensively: every leaf this oracle emits is type-tagged
 	// (codex finding #2) so no bare JSON number should reach this decode at
 	// all, but decoding any that slipped through (a malformed pair, a bug
@@ -210,7 +302,6 @@ func oracleDivergences(
 				"should have rejected this", pairID, name)
 		}
 	}
-
 	pythonRows := make(map[string]map[string]any, len(decoded.Cases))
 	for _, entry := range decoded.Cases {
 		if _, duplicate := pythonRows[entry.ID]; duplicate {
@@ -218,7 +309,21 @@ func oracleDivergences(
 		}
 		pythonRows[entry.ID] = entry.Row
 	}
+	return pythonRows, decoded.ExcludedFields
+}
 
+// diffAgainstPythonRows is the field-by-field comparison tail oracleDivergences
+// and frozenOracleDivergences share once each has its own pythonRows/
+// excludedFields, live or frozen.
+func diffAgainstPythonRows(
+	t *testing.T,
+	cases []oracleCase,
+	pythonRows map[string]map[string]any,
+	excludedFields map[string]string,
+	goRowBuilder func(t *testing.T, input map[string]any) any,
+	goOnlyFields map[string]string,
+) []string {
+	t.Helper()
 	pythonRowsByCase := make(map[string]map[string]any, len(cases))
 	goRowsByCase := make(map[string]map[string]any, len(cases))
 	var messages []string
@@ -235,11 +340,11 @@ func oracleDivergences(
 		pythonRowsByCase[testCase.ID] = pythonRow
 		goRowsByCase[testCase.ID] = goRow
 		messages = append(messages, diffRows(
-			testCase.ID, pythonRow, goRow, decoded.ExcludedFields, goOnlyFields,
+			testCase.ID, pythonRow, goRow, excludedFields, goOnlyFields,
 		)...)
 	}
 	messages = append(messages, checkExclusionIntegrity(
-		pythonRowsByCase, goRowsByCase, decoded.ExcludedFields, goOnlyFields,
+		pythonRowsByCase, goRowsByCase, excludedFields, goOnlyFields,
 	)...)
 	return messages
 }

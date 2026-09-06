@@ -23,9 +23,6 @@ from dev_health_ops.fixtures.generators.projects import (
 )
 from dev_health_ops.licensing.gating import LicenseManager
 from dev_health_ops.licensing.generator import TEST_KEYPAIR, generate_test_license
-from dev_health_ops.metrics.compute_work_item_state_durations import (
-    compute_work_item_state_durations_daily,
-)
 from dev_health_ops.metrics.job_daily import (
     run_daily_metrics_finalize,
     run_daily_metrics_job,
@@ -40,7 +37,6 @@ from dev_health_ops.providers.operational_migration import (
     map_issue_incidents,
     write_operational_batch,
 )
-from dev_health_ops.providers.teams import load_team_resolver
 from dev_health_ops.storage import (
     ClickHouseStore,
     SQLAlchemyStore,
@@ -1823,25 +1819,15 @@ async def run_fixtures_generation(ns: argparse.Namespace) -> int:
                     len(release_impact),
                 )
 
-                team_resolver = load_team_resolver()
-                computed_at = now
-                end_day = now.date()
-                start_day = end_day - timedelta(days=ns.days - 1)
-
-                for day_offset in range(ns.days):
-                    day = start_day + timedelta(days=day_offset)
-                    state_durations = compute_work_item_state_durations_daily(
-                        day=day,
-                        work_items=fixture_data["work_items"],
-                        transitions=fixture_data["transitions"],
-                        computed_at=computed_at,
-                        team_resolver=team_resolver,
-                    )
-                    if state_durations:
-                        sink.write_work_item_state_durations(state_durations)
-
+                # CHAOS-5321/CHAOS-3092 (R6): this used to seed work_item_
+                # state_durations_daily via compute_work_item_state_
+                # durations_daily -- deleted along with it. Standing ruling:
+                # fixture-generation tooling is not a production caller and
+                # does not keep Python compute alive (supersedes CHAOS-5250).
+                # No dependent test asserts on this table, so the seeder
+                # simply stops writing it -- the native Go executor +
+                # providersync ingest derivation are the only producers now.
                 sink.close()
-                logging.info("Wrote work_item_state_durations for %d days", ns.days)
 
     if ns.with_work_graph:
         from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder

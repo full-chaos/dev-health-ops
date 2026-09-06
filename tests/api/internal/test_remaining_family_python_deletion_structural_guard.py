@@ -21,14 +21,14 @@ inside one monolithic daily-compute function.
 
 DELETED_REMAINING_FAMILY_PYTHON_MODULES below is the deletion ledger: one
 entry per family whose ``metrics.remaining.*`` Python orchestrator module has
-already been removed (CHAOS-5244 is the first entry, release_impact). It is
-expected to GROW, one deletion PR at a time, as CHAOS-3092's audit
-(CHAOS-5234) works through the rest of the native remaining-family list --
-this is NOT yet a blanket "every native remaining family must have its
-Python deleted" check, because most remaining families (capacity, dora,
-complexity) have not been migrated from skip-gating/no-fallback to full
-deletion yet. Widen this set as each subsequent deletion PR lands; do not
-remove entries once added.
+already been removed (CHAOS-5244 is the first entry, release_impact;
+CHAOS-4291 the second, complexity). It is expected to GROW, one deletion PR
+at a time, as CHAOS-3092's audit (CHAOS-5234) works through the rest of the
+native remaining-family list -- this is NOT yet a blanket "every native
+remaining family must have its Python deleted" check, because most
+remaining families (capacity, dora) have not been migrated from
+skip-gating/no-fallback to full deletion yet. Widen this set as each
+subsequent deletion PR lands; do not remove entries once added.
 """
 
 from __future__ import annotations
@@ -59,6 +59,21 @@ DELETED_REMAINING_FAMILY_PYTHON_MODULES: dict[str, Path] = {
     / "dev_health_ops"
     / "metrics"
     / "job_release_impact.py",
+    # CHAOS-4291: complexity's native ComplexityExecutor (this same PR) has
+    # no Python fallback either -- daily.go's KindRemainingComplexity case
+    # dispatches to it directly, no `compatibility` bridge call. Unlike
+    # release_impact, job_complexity_db.py had THREE live non-production
+    # callers before this PR (fixtures/runner.py's fixture seeding,
+    # ci/local_validate.sh's own gate-tooling readback, and its own CLI
+    # registration that gate stage called) -- chris's 2026-09-05 standing
+    # ruling (superseding the earlier CHAOS-5244/CHAOS-5250 "keep it for
+    # fixtures" precedent) is that fixture/gate tooling does not keep
+    # Python compute alive either: fixtures/runner.py now seeds
+    # file_complexity_snapshots/repo_complexity_daily from the frozen
+    # golden JSON (a plain load, no compute) and local_validate.sh's
+    # readback stage dropped complexity entirely. The whole module is
+    # gone, not just its dispatch entry.
+    "complexity": ROOT / "src" / "dev_health_ops" / "metrics" / "job_complexity_db.py",
 }
 
 

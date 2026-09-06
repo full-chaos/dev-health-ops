@@ -404,6 +404,12 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 			cfg.WorkerGithubWorkItemsStatusMappingPath,
 			cfg.WorkerGithubWorkItemsInvestmentConfigPath)
 	}
+	// CHAOS-4291: same packaged-image-default reasoning as the work-item
+	// paths above.
+	if cfg.WorkerRemainingComplexityConfigPath != "/app/config/complexity.yaml" {
+		t.Fatalf("complexity config path = %q; want the packaged image default",
+			cfg.WorkerRemainingComplexityConfigPath)
+	}
 }
 
 func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
@@ -425,6 +431,7 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 		"DEV_HEALTH_STREAM_REPLICAS":                      "3",
 		"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH":    "/config/status.yaml",
 		"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH": "/config/investment.yaml",
+		"WORKER_REMAINING_COMPLEXITY_CONFIG_PATH":         "/config/complexity.yaml",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -453,6 +460,10 @@ func TestQueueControlAndRetentionOverridesAreBounded(t *testing.T) {
 	if cfg.WorkerGithubWorkItemsStatusMappingPath != "/config/status.yaml" ||
 		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "/config/investment.yaml" {
 		t.Fatal("expected the explicit work-item runtime artifact paths")
+	}
+	if cfg.WorkerRemainingComplexityConfigPath != "/config/complexity.yaml" {
+		t.Fatalf("complexity config path = %q; want the explicit override",
+			cfg.WorkerRemainingComplexityConfigPath)
 	}
 
 	for key, value := range map[string]string{

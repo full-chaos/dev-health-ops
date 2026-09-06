@@ -59,16 +59,18 @@ func TestEveryFamilyHasIndependentRollbackAndReviewedReplay(t *testing.T) {
 // port="go" families too (historical lineage, same convention
 // internal/jobs/metrics/daily/families.json already uses), so port -- not
 // python_sources -- is what says who actually runs each family today. This
-// regression-guards the exact 5-native/2-compat split found while auditing
-// this contract; a future accidental change is caught here even by a
-// reviewer who doesn't reread cmd/dev-health-worker/daily.go's wiring.
+// regression-guards the exact split found while auditing this contract (all
+// 7 families are native as of CHAOS-4291's complexity cutover, the last one
+// still on the compat bridge); a future accidental change is caught here
+// even by a reviewer who doesn't reread cmd/dev-health-worker/daily.go's
+// wiring.
 func TestFamilyPortMatchesKnownSplit(t *testing.T) {
 	inventory, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantGo := map[string]bool{
-		"capacity": true, "dora": true, "recommendations": true,
+		"capacity": true, "complexity": true, "dora": true, "recommendations": true,
 		"membership_backfill": true, "work_item_attribution": true,
 		"release_impact": true,
 	}

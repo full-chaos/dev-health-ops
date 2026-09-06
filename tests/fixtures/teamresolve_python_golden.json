@@ -1,0 +1,33 @@
+[
+  {
+    "case": "ownership_hit",
+    "result": {
+      "234388d1-a7f6-53f3-90a0-68b706167f8e": "team-ownership"
+    }
+  },
+  {
+    "case": "pattern_fallback",
+    "result": {
+      "812e3c39-82cc-542c-8835-fedc25e457ca": "team-pattern"
+    }
+  },
+  {
+    "case": "unresolved",
+    "result": {}
+  },
+  {
+    "case": "stale_ownership_absent_from_catalog",
+    "result": {}
+  },
+  {
+    "case": "pattern_hit_absent_from_catalog",
+    "result": {}
+  },
+  {
+    "case": "multi_repo_mixed",
+    "result": {
+      "a44ffcfa-8c0f-5b39-8b34-114fb6b28ea5": "team-a",
+      "eadd5ebc-33a8-5a92-8cc1-5d784b57f147": "team-b"
+    }
+  }
+]

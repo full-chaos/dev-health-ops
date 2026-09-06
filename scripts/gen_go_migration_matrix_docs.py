@@ -205,22 +205,16 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4292 (Done)",
     },
     "testops_pipeline": {
-        # CHAOS-5153's line-anchor fix (105 -> 114) is now moot: CHAOS-4284/
-        # #2226 ported this family to native Go after that fix landed.
-        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute",
-        "ticket": "CHAOS-4284",
+        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsPipelineExecutor`), reuses `internal/jobs/metrics/testops/compute.go`'s pure compute. CHAOS-5245 deleted the Python compute (`compute_testops.py`) entirely -- no fallback left.",
+        "ticket": "CHAOS-4284 (Done)",
     },
     "testops_test": {
-        # CHAOS-5153's line-anchor fix (207 -> 216) is now moot: CHAOS-4284/
-        # #2226 ported this family to native Go after that fix landed.
-        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsTestExecutor`); its ClickHouse reader reduces `test_case_results` per `case_name` in-database, so the 200k `DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS` cap has no native equivalent",
-        "ticket": "CHAOS-4284",
+        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsTestExecutor`); its ClickHouse reader reduces `test_case_results` per `case_name` in-database, so the 200k `DEV_HEALTH_TESTOPS_LOADER_MAX_ROWS` cap has no native equivalent. CHAOS-5245 deleted the Python compute entirely -- no fallback left.",
+        "ticket": "CHAOS-4284 (Done)",
     },
     "testops_coverage": {
-        # CHAOS-5153's line-anchor fix (355 -> 371) is now moot: CHAOS-4284/
-        # #2226 ported this family to native Go after that fix landed.
-        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse",
-        "ticket": "CHAOS-4284",
+        "citation": "Go: `internal/jobs/metrics/daily/testops_native_executor.go` (`TestopsCoverageExecutor`), latest snapshot picked in ClickHouse. CHAOS-5245 deleted the Python compute entirely -- no fallback left.",
+        "ticket": "CHAOS-4284 (Done)",
     },
     "deploy": {
         "citation": "Go: `internal/jobs/metrics/daily/deploy_native_executor.go`",
@@ -307,7 +301,7 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-5141",
     },
     "testops_risk": {
-        "citation": "Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute",
+        "citation": "Go: `internal/jobs/metrics/daily/testops_risk_native_executor.go`, reuses `internal/jobs/metrics/testops/compute.go`'s pure compute. CHAOS-5245 deleted the Python compute (`compute_testops_risk.py`) entirely -- no fallback left.",
         "ticket": "CHAOS-4294 (Done)",
     },
     "benchmarking": {

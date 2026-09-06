@@ -1,7 +1,11 @@
 """
-WellbeingMixin — user metrics, quality drag, and pipeline stability.
+WellbeingMixin — user metrics write methods.
 
-Tables: user_metrics_daily, testops_quality_drag, testops_pipeline_stability.
+Tables: user_metrics_daily.
+
+CHAOS-5245 deleted write_quality_drag/write_pipeline_stability (testops_risk's
+Python compute+write) -- the native Go executor (CHAOS-4294) has no fallback
+left.
 """
 
 from __future__ import annotations
@@ -11,10 +15,6 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from dev_health_ops.metrics.schemas import UserMetricsDailyRecord
-from dev_health_ops.metrics.testops_schemas import (
-    PipelineStabilityRecord,
-    QualityDragRecord,
-)
 
 if TYPE_CHECKING:
     from dev_health_ops.metrics.sinks.clickhouse._insert import _ClickHouseSinkBase
@@ -77,49 +77,6 @@ class WellbeingMixin(_ClickHouseSinkBase):
                 "cycle_p90_hours",
                 "computed_at",
                 "org_id",
-            ],
-            rows,
-        )
-
-    def write_quality_drag(self, rows: Sequence[QualityDragRecord]) -> None:
-        if not rows:
-            return
-        self._insert_rows(
-            "testops_quality_drag",
-            [
-                "repo_id",
-                "day",
-                "drag_hours",
-                "failure_rework_hours",
-                "flake_investigation_hours",
-                "queue_wait_hours",
-                "retry_overhead_hours",
-                "factors_json",
-                "team_id",
-                "service_id",
-                "org_id",
-                "computed_at",
-            ],
-            rows,
-        )
-
-    def write_pipeline_stability(self, rows: Sequence[PipelineStabilityRecord]) -> None:
-        if not rows:
-            return
-        self._insert_rows(
-            "testops_pipeline_stability",
-            [
-                "repo_id",
-                "day",
-                "stability_index",
-                "success_rate_7d",
-                "success_rate_trend",
-                "failure_clustering_score",
-                "median_recovery_time_seconds",
-                "team_id",
-                "service_id",
-                "org_id",
-                "computed_at",
             ],
             rows,
         )

@@ -229,10 +229,15 @@ def test_remaining_runner_is_a_closed_five_family_allowlist() -> None:
     # release_impact was removed by CHAOS-5234/CHAOS-5244: its native Go
     # executor (CHAOS-4296) has no Python fallback, so the compatibility
     # bridge handler and its dispatch entry were deleted entirely rather
-    # than skip-gated.
+    # than skip-gated. complexity was removed the same way by CHAOS-4291:
+    # its native ComplexityExecutor has no Python fallback either
+    # (daily.go's KindRemainingComplexity case), and job_complexity_db.py
+    # itself is NOT deleted -- src/dev_health_ops/fixtures/runner.py still
+    # imports run_complexity_db_job directly for local/CI fixture
+    # generation, a live non-production-job caller -- only this bridge
+    # handler and its dispatch entry were dead.
     assert set(worker_metrics._REMAINING_RUNNERS) == {
         "capacity",
-        "complexity",
         "dora",
         "membership_backfill",
         "recommendations",

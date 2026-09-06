@@ -193,7 +193,18 @@ func workgraphBuildPreSteps(
 		return nil, nil, errWorkerDependencyUnavailable
 	}
 
-	steps := []workgraph.NativePreStep{step, prCommitLinksStep, prCommitEdgesStep}
+	flagGuardsStep, flagGuardsStepErr := newFlagGuardsEdgesPreStep(connection)
+	if flagGuardsStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+	operationalIncidentStep, operationalIncidentStepErr := newOperationalIncidentEdgesPreStep(connection)
+	if operationalIncidentStepErr != nil {
+		return nil, nil, errWorkerDependencyUnavailable
+	}
+
+	steps := []workgraph.NativePreStep{
+		step, prCommitLinksStep, prCommitEdgesStep, flagGuardsStep, operationalIncidentStep,
+	}
 
 	// The constructed steps must match the DECLARED order exactly. Without
 	// this, the declaration would be a comment: a step could be added to the
@@ -262,8 +273,16 @@ func buildPostStepOrder() []string {
 // which "pr_commit_links" WRITES, so it must register strictly after it --
 // unlike issue_pr_links' still-Python fast-path half, both halves of the
 // PR<->commit straddle are native here, registered back to back.
+// "flag_guards_edges" and "operational_incident_edges" (CHAOS-4924) read
+// neither work_graph_issue_pr nor any table another pre-step writes, so
+// their position relative to the other four is free -- placed last,
+// preserving Python's own relative order between the two of them
+// (builder.py:468/470).
 func buildPreStepOrder() []string {
-	return []string{"issue_pr_links", "pr_commit_links", "pr_commit_edges"}
+	return []string{
+		"issue_pr_links", "pr_commit_links", "pr_commit_edges",
+		"flag_guards_edges", "operational_incident_edges",
+	}
 }
 
 // addWorkgraphWorker routes each kind to its executor. `executor` is the

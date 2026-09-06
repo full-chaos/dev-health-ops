@@ -197,6 +197,17 @@ start_worker_stack() {
     export CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
     export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
     export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN
+    # CHAOS-4291: the native ComplexityExecutor reads complexity.yaml from
+    # config.go's localComplexityConfigPath default ("/app/config/complexity.yaml"),
+    # which only exists inside the built container image (docker/go-worker.Dockerfile).
+    # Every caller of this fixture runs the go-built binary directly against the
+    # checked-out source tree, with no /app -- point the override at the real
+    # repo-relative file so construction doesn't refuse the whole "metrics"
+    # queue's coverage (ValidateStartup requires every selected-queue kind to
+    # have a registered handler; an unavailable config file is a refusal, not a
+    # skip, same as a missing ClickHouse schema). Reads the caller-set ROOT_DIR
+    # global, same as every other path in this file.
+    export WORKER_REMAINING_COMPLEXITY_CONFIG_PATH="${ROOT_DIR}/src/dev_health_ops/config/complexity.yaml"
     # --shutdown-timeout is 7260s BY CONTRACT -- do not "optimise" it down.
     # CHAOS-5025 tried 120s and then 30s on the theory that 2h1m was an
     # unbounded-teardown time bomb. It is not, and the worker REFUSES to

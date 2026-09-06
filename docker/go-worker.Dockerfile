@@ -28,6 +28,7 @@ COPY deploy/go-workers ./deploy/go-workers
 COPY internal ./internal
 COPY src/dev_health_ops/config/status_mapping.yaml ./src/dev_health_ops/config/status_mapping.yaml
 COPY src/dev_health_ops/config/investment_areas.yaml ./src/dev_health_ops/config/investment_areas.yaml
+COPY src/dev_health_ops/config/complexity.yaml ./src/dev_health_ops/config/complexity.yaml
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -85,6 +86,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /src/deploy/go-workers/deployment.json /runtime/worker/app/deploy/go-workers/deployment.json; \
     cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/worker/app/config/status_mapping.yaml; \
     cp /src/src/dev_health_ops/config/investment_areas.yaml /runtime/worker/app/config/investment_areas.yaml; \
+    cp /src/src/dev_health_ops/config/complexity.yaml /runtime/worker/app/config/complexity.yaml; \
     cp -R /src/contracts/jobs/v1 /runtime/operator/app/contracts/jobs/v1; \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/operator/app/contracts/sync-dispatch/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/operator/app/deploy/go-workers/deployment.json; \

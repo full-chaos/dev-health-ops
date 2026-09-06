@@ -200,7 +200,8 @@ function directly, even for families whose worker kind is now native:
 | ai_workflow | NATIVE | Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`) -- ports the now-DELETED `work_graph/extractors/ai_workflow.py:extract_ai_workflow_from_pull_requests` (CHAOS-5242); no Python fallback | CHAOS-4286 |
 | benchmarking | NATIVE | Python: `benchmarking/runner.py:259 run_benchmarking_for_day` | CHAOS-4288 |
 | cicd | NATIVE | Go: `internal/jobs/metrics/daily/cicd/` | CHAOS-4292 (Done), CHAOS-5312 (Done) |
-| compounding_risk | NATIVE, post_bridge (repo) / COMPAT-Python (finalize) | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, now native); `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, still Python) | CHAOS-4287 |
+| compounding_risk | NATIVE, post_bridge | Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, native) | CHAOS-4287 |
+| compounding_risk_team | NATIVE | Python: `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, now native, finalize scope) | CHAOS-5084 |
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
 | file_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/file_hotspots_native_executor.go` | CHAOS-4277 (Done) |
 | file_risk_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/` (`FileRiskHotspotsExecutor`, `daily.go`) | CHAOS-4277 (Done) |
@@ -267,7 +268,7 @@ deleted, the frozen file and this one test survive.
 | Area | Executor | Writer call site | Ticket |
 |---|---|---|---|
 | ai_governance / ai_impact / ai_workflow | NATIVE | see METRICS' daily-families table above (all three now native; this hand-authored row is not generator-checked and had drifted stale for all three, not just the family this row's own PR ported -- caught by codex round chaos-5220-r1) | CHAOS-4285/4280/4286 |
-| **ai attribution** | **PARTIAL** | WRITE path: NATIVE for github (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`, part of native work-items sync) and gitlab/linear (`gitlab_work_item_derived.go:423`, `linear_work_items_derived.go:51,283` -- both build/write the `ai_attribution` projection as part of native work-items sync); jira explicitly writes **zero** rows by design ("evaluated-empty effect", `jira_work_item_derived.go:16-21` -- no AI-attribution signal exists for jira, not a gap). READ path: Python still consumes `ai_attribution` as an input to ai_governance/ai_impact compute (`job_daily.py:1677 ai_loader.load_ai_pr_attributions`) -- that consumption stays COMPAT along with those two families. | none found |
+| **ai attribution** | **NATIVE** | WRITE path: NATIVE for github (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`, part of native work-items sync) and gitlab/linear (`gitlab_work_item_derived.go:423`, `linear_work_items_derived.go:51,283` -- both build/write the `ai_attribution` projection as part of native work-items sync); jira explicitly writes **zero** rows by design ("evaluated-empty effect", `jira_work_item_derived.go:16-21` -- no AI-attribution signal exists for jira, not a gap). READ: `api/graphql/resolvers/ai.py:1395` (`AIImpactClickHouseLoader.load_ai_pr_attributions`) is the query-api plane (Go query-api epic CHAOS-4352), out of CHAOS-3092 scope -- CHAOS-3092 is about worker compute families and the bridge, not the API read plane. | none found |
 
 ## INVESTMENT / WORK-GRAPH
 

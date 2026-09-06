@@ -214,6 +214,128 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 	return result, nil
 }
 
+// repoMetricsOrgWideQuery ports _fetch_repo_metrics_for_day
+// (src/dev_health_ops/metrics/job_daily.py:613-660's finalize-step caller,
+// via job_compounding_risk.py:49-83's CLI-job twin of the same query shape)
+// for CHAOS-5084's TEAM-scope finalize read: every repo's row for the
+// org/day, not one partition's repo_ids. This is the query
+// _write_compounding_risk_team_rows_for_day actually runs -- unlike
+// repoMetricsQuery above (deliberately narrower than its own Python
+// caller's primary path), there is no narrower Python path to prefer here:
+// team rows need every repo in the org to attribute correctly by team.
+//
+// Carries the SAME "one argMax(tuple(...))" fix as repoMetricsQuery, for the
+// SAME reason (Python's job_compounding_risk.py:75-86 has the same
+// tie-on-computed_at exposure repoMetricsQuery's doc comment describes; this
+// port does not inherit it here either) -- but NOT the same claim about its
+// ORDER BY repo_id being merely cosmetic.
+//
+// CORRECTION (codex round chaos-5084-2275-r1, P2, an overclaim this comment
+// used to make): for the REPO-scope query above, an explicit ORDER BY really
+// does "change ordering only, never a value" -- each repo's Compute() result
+// depends only on that repo's own inputs, so no ORDER BY choice can affect
+// what gets written. TEAM scope is different in kind, not degree:
+// BuildTeamRows' means are Neumaier-compensated sums (pythonparity.Sum),
+// which are NOT order-invariant at the bit level. Python's own production
+// query (job_daily.py:613-660's _fetch_repo_metrics_for_day, and this
+// query's CLI twin) has NO ORDER BY on its GROUP BY repo_id -- meaning
+// Python's OWN row order for this exact quantity is whatever ClickHouse's
+// query planner happens to return, not a single well-defined sequence this
+// port could target for guaranteed bit-exact parity. This query's ORDER BY
+// repo_id is therefore a DELIBERATE, DETERMINISTIC CANONICALIZATION -- a
+// defensible choice (repeatable, auditable, matches this package's own
+// golden fixture, which is itself repo_id-ordered by construction) -- but it
+// is NOT proven bit-identical to what a specific live Python run would
+// compute for a 3+-repo team with order-sensitive floats, because Python's
+// own answer for that case is not itself deterministic. See BuildTeamRows'
+// doc comment for the same correction on the aggregation side, and
+// CHAOS-5204 for the tracking ticket.
+const repoMetricsOrgWideQuery = `
+SELECT
+    repo_id,
+    tupleElement(latest, 1) AS rework_churn_ratio_30d,
+    tupleElement(latest, 2) AS single_owner_file_ratio_30d,
+    tupleElement(latest, 3) AS code_ownership_gini,
+    tupleElement(latest, 4) AS bus_factor,
+    tupleElement(latest, 5) AS pr_first_review_p90_hours
+FROM (
+    SELECT
+        repo_id,
+        argMax(
+            tuple(
+                rework_churn_ratio_30d,
+                single_owner_file_ratio_30d,
+                code_ownership_gini,
+                bus_factor,
+                pr_first_review_p90_hours
+            ),
+            computed_at
+        ) AS latest
+    FROM repo_metrics_daily
+    WHERE org_id = {org_id:String}
+      AND day = {day:Date}
+    GROUP BY org_id, repo_id
+)
+ORDER BY repo_id`
+
+// LoadRepoMetricsForOrgDay returns EVERY repo's argMax-deduplicated
+// repo_metrics_daily row for one org/day, ordered by repo_id -- the
+// finalize-step, TEAM-scope sibling of LoadRepoMetrics (which is scoped to a
+// partition's own repos). See repoMetricsOrgWideQuery's doc comment for why
+// this one is org-wide where the other is deliberately not.
+func (loader *ClickHouseLoader) LoadRepoMetricsForOrgDay(
+	ctx context.Context, orgID string, day time.Time,
+) ([]RepoMetricsRow, error) {
+	if loader == nil || loader.conn == nil {
+		return nil, fmt.Errorf("compoundingrisk: loader unavailable")
+	}
+	if orgID == "" {
+		return nil, fmt.Errorf("compoundingrisk: organization id is required")
+	}
+	rows, err := loader.conn.Query(ctx, repoMetricsOrgWideQuery,
+		clickhouse.Named("org_id", orgID),
+		// Bound as a string -- see the ANCHOR note in LoadRepoMetrics for why a
+		// time.Time cannot be bound directly to a {name:Date} parameter.
+		clickhouse.Named("day", day.Format(clickHouseDateLayout)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load org-wide repo metrics: %w", err)
+	}
+	defer rows.Close()
+
+	var result []RepoMetricsRow
+	for rows.Next() {
+		// Scan types follow the DDL, exactly as LoadRepoMetrics documents above
+		// -- same table, same columns, same nullability.
+		var (
+			repoID           uuid.UUID
+			reworkChurn      float64
+			singleOwnerRatio float64
+			ownershipGini    float64
+			busFactor        uint32
+			reviewP90        *float64
+		)
+		if err := rows.Scan(
+			&repoID, &reworkChurn, &singleOwnerRatio, &ownershipGini, &busFactor, &reviewP90,
+		); err != nil {
+			return nil, fmt.Errorf("scan org-wide repo metrics row: %w", err)
+		}
+		busFactorFloat := float64(busFactor)
+		result = append(result, RepoMetricsRow{
+			RepoID:                  repoID.String(),
+			ReworkChurnRatio30D:     &reworkChurn,
+			SingleOwnerFileRatio30D: &singleOwnerRatio,
+			CodeOwnershipGini:       &ownershipGini,
+			BusFactor:               &busFactorFloat,
+			PRFirstReviewP90Hours:   reviewP90,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // ComplexityWindowDays mirrors COMPLEXITY_WINDOW_DAYS (compounding_risk.py:410).
 const ComplexityWindowDays = 30
 

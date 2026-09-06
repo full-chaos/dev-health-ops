@@ -11,8 +11,13 @@ import (
 	"time"
 )
 
+// CHAOS-3092 (PR-A'): this test used to ALSO send a Finalize request and
+// assert its shape alongside ComputePartition's -- HTTPCompatibilityExecutor's
+// Finalize method is deleted along with FinalizeHandler's own call to it
+// (every finalize-scope family's Python compute is gone), so only the
+// partition operation survives here.
 func TestHTTPCompatibilityExecutorSendsOnlyAuthoritativeIDs(t *testing.T) {
-	requests := make([]map[string]string, 0, 2)
+	requests := make([]map[string]string, 0, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || request.URL.Path != "/internal/worker/daily-metrics/v1/execute" || request.Header.Get("Authorization") != "Bearer token" {
 			writer.WriteHeader(http.StatusForbidden)
@@ -35,12 +40,8 @@ func TestHTTPCompatibilityExecutorSendsOnlyAuthoritativeIDs(t *testing.T) {
 	if err := executor.ComputePartition(t.Context(), run, Partition{ID: testPartitionID, RunID: testRunID}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := executor.Finalize(t.Context(), run, nil); err != nil {
-		t.Fatal(err)
-	}
 	want := []map[string]string{
 		{"operation": "partition", "run_id": testRunID, "partition_id": testPartitionID},
-		{"operation": "finalize", "run_id": testRunID},
 	}
 	if len(requests) != len(want) {
 		t.Fatalf("requests = %#v", requests)
@@ -394,51 +395,9 @@ func TestHTTPCompatibilityExecutorAllowsExplicitInternalComposeService(t *testin
 	}
 }
 
-// CHAOS-4290. The finalize request gained a SkipFamilies field. This asserts
-// that a finalize with no native families serialises BYTE-IDENTICALLY to what
-// this executor sent before that field existed.
-//
-// It is not cosmetic. The Python bridge REFUSED skip_families on anything but
-// a partition until this change (worker_metrics.py's validate_operation_identity),
-// so a finalize that started sending the field to an older bridge would be
-// rejected outright. And the empty-but-NON-NIL case is the one that actually
-// bites: computeNativeFinalizeFamilies returns make([]string, 0, n), not nil,
-// when families are registered but every one of them fails fail-open. Testing
-// only the nil case would leave exactly the reachable case unproven.
-func TestFinalizeWireShapeIsUnchangedWithoutNativeFamilies(t *testing.T) {
-	const before = `{"operation":"finalize","run_id":"run-1"}`
-
-	for _, testCase := range []struct {
-		name string
-		skip []string
-	}{
-		{name: "nil, no families registered", skip: nil},
-		{name: "empty non-nil, every registered family failed", skip: []string{}},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			encoded, err := json.Marshal(compatibilityRequest{
-				Operation: "finalize", RunID: "run-1", SkipFamilies: testCase.skip,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(encoded) != before {
-				t.Fatalf("finalize wire bytes changed:\n got  %s\n want %s", encoded, before)
-			}
-		})
-	}
-
-	// Control: a NON-empty skip list DOES change the bytes. Without this the
-	// assertions above would also pass if the field were never serialised at
-	// all -- i.e. if the feature silently did nothing.
-	withFamily, err := json.Marshal(compatibilityRequest{
-		Operation: "finalize", RunID: "run-1", SkipFamilies: []string{"ic_finalize"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(withFamily) == before {
-		t.Fatal("a non-empty skip list produced the same bytes as none -- " +
-			"SkipFamilies is not reaching the finalize request at all")
-	}
-}
+// CHAOS-3092 (PR-A'): TestFinalizeWireShapeIsUnchangedWithoutNativeFamilies
+// used to live here, pinning the finalize request's SkipFamilies wire shape
+// (CHAOS-4290). HTTPCompatibilityExecutor's Finalize method -- the only thing
+// that ever sent a "finalize" operation -- is deleted along with
+// FinalizeHandler's own call to it, so there is no more finalize wire shape
+// to test at all.

@@ -10,7 +10,7 @@ each responsible for one table family:
   ClickHouseCore            — connection, schema, shared _insert_rows helper
   CIMixin                   — CI/CD, deploy, incident, testops pipeline/test/coverage,
                               release confidence, feature flags, telemetry, release impact
-  DoraMixin                 — DORA metrics, period comparisons, benchmarks
+  DoraMixin                 — DORA metrics
   WellbeingMixin            — user metrics, quality drag, pipeline stability
   InvestmentMixin           — investment classifications/metrics, work-unit investments
   WorkGraphMixin            — work graph edges, work items, git/repo/file metrics, forecasts
@@ -29,7 +29,7 @@ each responsible for one table family:
   ClickHouseCore        — connection, schema, shared _insert_rows helper
   CIMixin               — CI/CD, deploy, incident, testops pipeline/test/coverage,
                           release confidence, feature flags, telemetry, release impact
-  DoraMixin             — DORA metrics, period comparisons, benchmarks
+  DoraMixin             — DORA metrics
   WellbeingMixin        — user metrics, quality drag, pipeline stability
   InvestmentMixin       — investment classifications/metrics, work-unit investments
   WorkGraphMixin        — work graph edges, work items, git/repo/file metrics, forecasts

@@ -1646,22 +1646,20 @@ var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoad
 // TestEveryRecognisedFinalizeFamilyHasAPythonGate source-scans job_daily.py
 // for -- pythonRecognisedFinalizeFamilies itself stays the (unchanged)
 // registration-validation and declared-iteration-order authority for ALL
-// five families above; only the "does Python still gate on this name"
-// question narrows. benchmarking (CHAOS-5194, moved to finalize scope but its
-// Python compute is still skip_families-gated) is the only one that still has
-// a live gate line.
+// five families above; the "does Python still gate on this name" question
+// now narrows to NONE of them.
 //
-// team_cognitive_load (CHAOS-5141), team_complexity (CHAOS-5051), and
-// compounding_risk_team (CHAOS-5084) all deleted their Python compute
-// entirely (not just skip-gated it), same reachability analysis for each:
-// buildDailyWorker refuses the WHOLE daily worker if the ClickHouse
-// connection fails to open, before dailyNativeFamilyRegistrations is ever
-// called -- so a construction-time fallback to Python was never actually
-// reachable in production for any of them (team_cognitive_load's own
-// construction-time nil-conn check and its co-registration-with-ic_finalize
-// check are both unreachable for the same reason; team_complexity and
-// compounding_risk_team have no co-registration dependency of their own to
-// begin with).
+// team_cognitive_load (CHAOS-5141), team_complexity (CHAOS-5051),
+// compounding_risk_team (CHAOS-5084), and benchmarking (CHAOS-4288) all
+// deleted their Python compute entirely (not just skip-gated it), same
+// reachability analysis for each: buildDailyWorker refuses the WHOLE daily
+// worker if the ClickHouse connection fails to open, before
+// dailyNativeFamilyRegistrations is ever called -- so a construction-time
+// fallback to Python was never actually reachable in production for any of
+// them (team_cognitive_load's own construction-time nil-conn check and its
+// co-registration-with-ic_finalize check are both unreachable for the same
+// reason; team_complexity, compounding_risk_team, and benchmarking have no
+// co-registration dependency of their own to begin with).
 //
 // CHAOS-4290 (PR3, CHAOS-3092 no-straddle) deleted ic_finalize's Python
 // compute (compute_ic_metrics_daily / compute_ic_landscape_rolling) the same
@@ -1671,14 +1669,25 @@ var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoad
 // icfinalize's TestICFinalizeMatchesTheFrozenPythonGolden instead of a live
 // Python fallback.
 //
-// All four (team_cognitive_load, team_complexity, compounding_risk_team,
-// ic_finalize) stay in pythonRecognisedFinalizeFamilies (each is still a
-// fully valid, always-registerable native finalize family) but drop out of
-// THIS list, since none has a Python gate line left for the source-scan to
-// find -- TestDeletedPythonComputeFamilyHasNoGateLine generalizes over the
-// set-difference automatically, so no per-family exemption map is needed as
-// the set grows.
-var pythonGatedFinalizeFamilies = []string{BenchmarkingFamilyName}
+// All five (team_cognitive_load, team_complexity, compounding_risk_team,
+// benchmarking, ic_finalize) stay in pythonRecognisedFinalizeFamilies (each
+// is still a fully valid, always-registerable native finalize family) but
+// this list -- the STRICT SUBSET with a live Python gate line -- is now
+// EMPTY: TestDeletedPythonComputeFamilyHasNoGateLine generalizes over the
+// set-difference automatically, so an empty slice here is a valid, already
+// correctly-handled state, not a special case.
+//
+// An empty pythonGatedFinalizeFamilies means FinalizeHandler.Work's own
+// bridge call (handler.compatibility.Finalize, still present and still
+// invoked every run below) now has ZERO Python families left to fall open
+// to -- run_daily_metrics_finalize's own body reads none of the
+// `skip_families` it's handed anymore (see its own comment for the
+// per-family accounting). Removing the bridge call/interface itself, the
+// HTTP executor's Finalize method, and the Python finalize half of
+// /internal/worker/daily-metrics/v1/execute is separate follow-up cleanup,
+// NOT done by this change -- this PR only deletes benchmarking's Python
+// compute, the last family that still read the list.
+var pythonGatedFinalizeFamilies = []string{}
 
 // ErrUnknownFinalizeFamily is returned when a registered finalize family is
 // not one the Python bridge gates on.

@@ -5,7 +5,7 @@ package remaining
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,15 +24,17 @@ import (
 // suites) prove the per-file ARITHMETIC against real radon/lizard output.
 // This test proves the SQL and control flow this file adds on top of that:
 // the git_files/git_blame budget-and-fallback read logic, the ref/last_synced
-// derivation, and the two table writes -- by running the SHIPPED Python job
-// and the new Go executor against the SAME seeded rows in the SAME database
-// and comparing what each one wrote.
-//
-// Two repos, same org, IDENTICAL seeded content: repoGo is scanned by the Go
-// executor, repoPython by the real run_complexity_db_job (invoked via a
-// subprocess script, testdata/run_complexity_db_job_against_clickhouse.py).
-// Comparing across two repo ids rather than the same repo twice means each
-// side's write cannot be contaminated by the other's.
+// derivation, and the two table writes -- by running the Go executor against
+// a real ClickHouse and comparing what it wrote to a FROZEN golden captured
+// once from the real, shipped run_complexity_db_job against this exact
+// fixture (testdata/complexity_python_golden.json, captured on bigboy
+// 2026-09-06). This repo carries no committed tooling that invokes the
+// Python job at test time: PR (b) deletes run_complexity_db_job outright
+// once every language it needs is ported, and a live-Python oracle here
+// would be dead weight this port would have to delete again alongside it.
+// The golden only needs recapturing if seedComplexityFixture's content
+// changes -- run the real Python job against the same fixture once more and
+// overwrite the JSON file.
 func TestComplexityExecutorMatchesPythonAgainstClickHouse(t *testing.T) {
 	ctx := context.Background()
 
@@ -51,12 +53,10 @@ func TestComplexityExecutorMatchesPythonAgainstClickHouse(t *testing.T) {
 
 	const orgID = "33333333-3333-4333-8333-333333333333"
 	repoGo := uuid.MustParse("44444444-4444-4444-8444-444444444444")
-	repoPython := uuid.MustParse("55555555-5555-4555-8555-555555555555")
 	day := "2026-05-01"
 	lastSynced := mustParseComplexityTime(t, "2026-05-01T00:00:00Z")
 
 	seedComplexityFixture(t, ctx, conn, repoGo, orgID, lastSynced)
-	seedComplexityFixture(t, ctx, conn, repoPython, orgID, lastSynced)
 
 	executor, err := NewComplexityExecutor(ctx, conn, complexityTestConfigPath(t), nil)
 	if err != nil {
@@ -79,41 +79,38 @@ func TestComplexityExecutorMatchesPythonAgainstClickHouse(t *testing.T) {
 		t.Fatalf("go executor wrote no rows -- fixture is vacuous")
 	}
 
-	pythonResult := runPythonComplexityJob(t, dsn, repoPython.String(), orgID, day)
-	if pythonResult.ExitCode != 0 {
-		t.Fatalf("python job exit code %d, want 0", pythonResult.ExitCode)
-	}
-	if len(pythonResult.Snapshots) == 0 {
-		t.Fatalf("python wrote no snapshots -- fixture is vacuous")
+	golden := loadComplexityPythonGolden(t)
+	if len(golden.Snapshots) == 0 {
+		t.Fatalf("golden has no snapshots -- fixture is vacuous")
 	}
 
 	goSnapshots := readComplexitySnapshots(t, ctx, conn, repoGo, day, orgID)
-	if len(goSnapshots) != len(pythonResult.Snapshots) {
-		t.Fatalf("snapshot count: go=%d python=%d\ngo=%+v\npython=%+v",
-			len(goSnapshots), len(pythonResult.Snapshots), goSnapshots, pythonResult.Snapshots)
+	if len(goSnapshots) != len(golden.Snapshots) {
+		t.Fatalf("snapshot count: go=%d golden=%d\ngo=%+v\ngolden=%+v",
+			len(goSnapshots), len(golden.Snapshots), goSnapshots, golden.Snapshots)
 	}
 
-	pythonByPath := make(map[string]complexitySnapshotJSON, len(pythonResult.Snapshots))
-	for _, s := range pythonResult.Snapshots {
-		pythonByPath[s.FilePath] = s
+	goldenByPath := make(map[string]complexitySnapshotJSON, len(golden.Snapshots))
+	for _, s := range golden.Snapshots {
+		goldenByPath[s.FilePath] = s
 	}
 	for _, got := range goSnapshots {
-		want, ok := pythonByPath[got.FilePath]
+		want, ok := goldenByPath[got.FilePath]
 		if !ok {
-			t.Errorf("go produced a snapshot for %q that python did not", got.FilePath)
+			t.Errorf("go produced a snapshot for %q that the golden does not", got.FilePath)
 			continue
 		}
 		if got != want {
-			t.Errorf("snapshot mismatch for %q:\n  go=%+v\n  py=%+v", got.FilePath, got, want)
+			t.Errorf("snapshot mismatch for %q:\n  go=%+v\n  golden=%+v", got.FilePath, got, want)
 		}
 	}
 
 	goDaily := readComplexityDaily(t, ctx, conn, repoGo, day, orgID)
-	if pythonResult.RepoDaily == nil {
-		t.Fatalf("python wrote no repo_complexity_daily row -- fixture is vacuous")
+	if golden.RepoDaily == nil {
+		t.Fatalf("golden has no repo_complexity_daily row -- fixture is vacuous")
 	}
-	if goDaily != *pythonResult.RepoDaily {
-		t.Errorf("repo_complexity_daily mismatch:\n  go=%+v\n  py=%+v", goDaily, *pythonResult.RepoDaily)
+	if goDaily != *golden.RepoDaily {
+		t.Errorf("repo_complexity_daily mismatch:\n  go=%+v\n  golden=%+v", goDaily, *golden.RepoDaily)
 	}
 }
 
@@ -122,7 +119,11 @@ func TestComplexityExecutorMatchesPythonAgainstClickHouse(t *testing.T) {
 // own doc, point 2): a partition whose only repo has ZERO scannable content
 // (git_files present but every row empty, no git_blame at all) is a hard
 // failure on the Go side, matching run_complexity_db_job's exit code 1 ->
-// worker_metrics.py's raised RuntimeError today.
+// worker_metrics.py's raised RuntimeError today. Verified once against the
+// real Python job on this exact fixture during the 2026-09-06 golden capture
+// (exit code 1, "wrote no data") -- not re-verified live here for the same
+// reason TestComplexityExecutorMatchesPythonAgainstClickHouse no longer
+// shells out to Python; see that test's own doc.
 func TestComplexityExecutorNoDataProducedFailsLikePython(t *testing.T) {
 	ctx := context.Background()
 
@@ -165,13 +166,6 @@ func TestComplexityExecutorNoDataProducedFailsLikePython(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "complexity: none of the org's repos") {
 		t.Errorf("error should identify itself as ErrComplexityNoDataProduced, got: %v", err)
-	}
-
-	pythonResult := runPythonComplexityJob(t, dsn, repoID.String(), orgID, "2026-05-01")
-	if pythonResult.ExitCode == 0 {
-		t.Errorf("python job exit code %d, want non-zero (matches run_complexity_db_job's "+
-			"own 'wrote no data' failure) -- if this now passes, the fixture no longer "+
-			"reproduces the case this test exists to pin", pythonResult.ExitCode)
 	}
 }
 
@@ -314,36 +308,26 @@ type complexityDailyJSON struct {
 	VeryHighComplexityFunctions uint64  `json:"very_high_complexity_functions"`
 }
 
-type pythonComplexityResult struct {
+// complexityPythonGolden is the frozen shape run_complexity_db_job's real
+// output was captured into (see testdata/complexity_python_golden.json's own
+// generation note).
+type complexityPythonGolden struct {
 	ExitCode  int                      `json:"exit_code"`
 	Snapshots []complexitySnapshotJSON `json:"snapshots"`
 	RepoDaily *complexityDailyJSON     `json:"repo_daily"`
 }
 
-func runPythonComplexityJob(t *testing.T, dsn, repoID, orgID, day string) pythonComplexityResult {
+func loadComplexityPythonGolden(t *testing.T) complexityPythonGolden {
 	t.Helper()
-	root, err := filepath.Abs("../../../..")
+	data, err := os.ReadFile(filepath.Join("testdata", "complexity_python_golden.json"))
 	if err != nil {
-		t.Fatalf("resolve repo root: %v", err)
+		t.Fatalf("read golden: %v", err)
 	}
-	script := filepath.Join(root,
-		"internal/jobs/metrics/remaining/testdata/run_complexity_db_job_against_clickhouse.py")
-	python, err := chschema.Interpreter()
-	if err != nil {
-		t.Fatalf("no python interpreter: %v", err)
+	var golden complexityPythonGolden
+	if err := json.Unmarshal(data, &golden); err != nil {
+		t.Fatalf("decode golden: %v", err)
 	}
-	command := exec.Command(python, script,
-		"--dsn", dsn, "--repo-id", repoID, "--org", orgID, "--day", day)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("python complexity job failed: %v\n%s", err, output)
-	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	var result pythonComplexityResult
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &result); err != nil {
-		t.Fatalf("decode python result: %v\nfull output:\n%s", err, output)
-	}
-	return result
+	return golden
 }
 
 func readComplexitySnapshots(

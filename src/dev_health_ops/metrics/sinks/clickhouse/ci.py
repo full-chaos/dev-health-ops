@@ -24,12 +24,6 @@ from dev_health_ops.metrics.sinks.clickhouse._insert import (
     _chunked,
     _dt_to_clickhouse_datetime,
 )
-from dev_health_ops.metrics.testops_schemas import (
-    CoverageMetricsDailyRecord,
-    PipelineMetricsDailyRecord,
-    ReleaseConfidenceRecord,
-    TestMetricsDailyRecord,
-)
 
 if TYPE_CHECKING:
     from dev_health_ops.metrics.sinks.clickhouse._insert import _ClickHouseSinkBase
@@ -101,114 +95,10 @@ class CIMixin(_ClickHouseSinkBase):
             rows,
         )
 
-    def write_testops_pipeline_metrics(
-        self, rows: Sequence[PipelineMetricsDailyRecord]
-    ) -> None:
-        if not rows:
-            return
-        self._insert_rows(
-            "testops_pipeline_metrics_daily",
-            [
-                "repo_id",
-                "day",
-                "pipelines_count",
-                "success_count",
-                "failure_count",
-                "cancelled_count",
-                "success_rate",
-                "failure_rate",
-                "cancel_rate",
-                "rerun_rate",
-                "median_duration_seconds",
-                "p95_duration_seconds",
-                "avg_queue_seconds",
-                "p95_queue_seconds",
-                "team_id",
-                "service_id",
-                "org_id",
-                "computed_at",
-            ],
-            rows,
-        )
-
-    def write_testops_test_metrics(
-        self, rows: Sequence[TestMetricsDailyRecord]
-    ) -> None:
-        if not rows:
-            return
-        self._insert_rows(
-            "testops_test_metrics_daily",
-            [
-                "repo_id",
-                "day",
-                "total_cases",
-                "passed_count",
-                "failed_count",
-                "skipped_count",
-                "quarantined_count",
-                "pass_rate",
-                "failure_rate",
-                "flake_rate",
-                "retry_dependency_rate",
-                "total_suites",
-                "suite_duration_p50_seconds",
-                "suite_duration_p95_seconds",
-                "failure_recurrence_score",
-                "team_id",
-                "service_id",
-                "org_id",
-                "computed_at",
-            ],
-            rows,
-        )
-
-    def write_testops_coverage_metrics(
-        self, rows: Sequence[CoverageMetricsDailyRecord]
-    ) -> None:
-        if not rows:
-            return
-        self._insert_rows(
-            "testops_coverage_metrics_daily",
-            [
-                "repo_id",
-                "day",
-                "line_coverage_pct",
-                "branch_coverage_pct",
-                "lines_total",
-                "lines_covered",
-                "coverage_delta_pct",
-                "uncovered_files_count",
-                "coverage_regression_count",
-                "team_id",
-                "service_id",
-                "org_id",
-                "computed_at",
-            ],
-            rows,
-        )
-
-    def write_release_confidence(self, rows: Sequence[ReleaseConfidenceRecord]) -> None:
-        if not rows:
-            return
-        self._insert_rows(
-            "testops_release_confidence",
-            [
-                "repo_id",
-                "day",
-                "confidence_score",
-                "pipeline_success_factor",
-                "test_pass_factor",
-                "coverage_factor",
-                "flake_penalty",
-                "regression_penalty",
-                "factors_json",
-                "team_id",
-                "service_id",
-                "org_id",
-                "computed_at",
-            ],
-            rows,
-        )
+    # CHAOS-5245 deleted write_testops_pipeline_metrics/write_testops_test_metrics/
+    # write_testops_coverage_metrics/write_release_confidence -- their Python
+    # compute (compute_testops.py/compute_testops_risk.py) is gone entirely,
+    # the native Go executors (CHAOS-4284/CHAOS-4294) have no fallback left.
 
     def write_feature_flags(self, rows: Sequence[FeatureFlagRecord]) -> None:
         if not rows:

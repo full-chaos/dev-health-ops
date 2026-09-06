@@ -191,6 +191,15 @@ TEAM_DAY_FAMILIES: dict[str, str] = {
     # is no synthetic "unassigned" bucket here: an org with zero owned repos
     # for any team on a given day legitimately writes zero rows for it.
     "team_cognitive_load": "team_cognitive_load_daily",
+    # CHAOS-5051: team_complexity_daily is (org_id, team_id, day)-shaped
+    # identically to team_cognitive_load_daily above, and the SAME ownership-
+    # only resolution contract applies -- team_id comes from
+    # team_repo_ownership/teams.repo_patterns exclusively, never a synthetic
+    # "unassigned" fallback, so an org with zero owned repos for a team on a
+    # given day legitimately writes zero rows for it (see
+    # buildTeamComplexityRows' own "unowned repo contributes to no team"
+    # contract, proven by team_complexity_test.go).
+    "team_complexity": "team_complexity_daily",
     # CHAOS-4278: work_item_state_durations_daily has no repo_id column at
     # all (day, provider, work_scope_id, team_id, status) -- it is neither
     # REPO_DAY_FAMILIES- nor a repo-scoped TEAM_DAY_FAMILIES-shaped table,

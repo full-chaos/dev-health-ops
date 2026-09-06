@@ -257,56 +257,7 @@ class TestGeneratePipelineRunExtendedRows:
         for tid in team_ids:
             assert tid in valid_ids, f"Unexpected team_id: {tid}"
 
-    def test_compute_gives_nonzero_rerun_rate(self) -> None:
-        """CHAOS-2173: compute_pipeline_metrics_daily must report rerun_rate > 0."""
-        from datetime import date, datetime, timezone
-        from typing import cast
-
-        from dev_health_ops.metrics.compute_testops import (
-            compute_pipeline_metrics_daily,
-        )
-        from dev_health_ops.metrics.testops_schemas import PipelineRunExtendedRow
-        from dev_health_ops.models.teams import Team
-
-        teams = [Team(id="t-alpha", name="Alpha", members=[])]
-        gen = SyntheticDataGenerator(
-            repo_name="acme/metrics-test", seed=7, assigned_teams=teams
-        )
-        target_day = date(2025, 6, 15)
-        # Build synthetic PipelineRunExtendedRow dicts for a controlled single day.
-        rows = [
-            {
-                "repo_id": gen.repo_id,
-                "run_id": "r-001",
-                "provider": "github_actions",
-                "status": "success",
-                "queued_at": datetime(2025, 6, 15, 8, 0, tzinfo=timezone.utc),
-                "started_at": datetime(2025, 6, 15, 8, 5, tzinfo=timezone.utc),
-                "finished_at": datetime(2025, 6, 15, 8, 20, tzinfo=timezone.utc),
-                "retry_count": 0,
-                "team_id": "t-alpha",
-                "org_id": "org-test",
-            },
-            {
-                "repo_id": gen.repo_id,
-                "run_id": "r-002",
-                "provider": "github_actions",
-                "status": "success",
-                "queued_at": datetime(2025, 6, 15, 9, 0, tzinfo=timezone.utc),
-                "started_at": datetime(2025, 6, 15, 9, 5, tzinfo=timezone.utc),
-                "finished_at": datetime(2025, 6, 15, 9, 25, tzinfo=timezone.utc),
-                "retry_count": 2,  # This run was retried.
-                "team_id": "t-alpha",
-                "org_id": "org-test",
-            },
-        ]
-        records = compute_pipeline_metrics_daily(
-            day=target_day,
-            pipeline_runs=cast(list[PipelineRunExtendedRow], rows),
-            job_runs=[],
-            computed_at=datetime(2025, 6, 15, 12, 0, tzinfo=timezone.utc),
-        )
-        assert len(records) == 1
-        rec = records[0]
-        assert rec.rerun_rate == pytest.approx(0.5)  # 1 of 2 runs has retry_count > 0
-        assert rec.team_id == "t-alpha"  # non-NULL team attribution
+    # test_compute_gives_nonzero_rerun_rate (CHAOS-2173, unit-tested
+    # compute_pipeline_metrics_daily directly using this generator's synthetic
+    # rows) was deleted by CHAOS-5245 alongside compute_testops.py itself --
+    # its native Go executor (CHAOS-4284) has no Python fallback left.

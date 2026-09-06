@@ -33,8 +33,8 @@ func TestPRCommitStepNamesMatchDeclaredOrder(t *testing.T) {
 	}
 
 	want := buildPreStepOrder()
-	if len(want) != 7 || want[2] != "pr_commit_links" || want[3] != "pr_commit_edges" {
-		t.Fatalf("buildPreStepOrder() = %v, want [issue_pr_links issue_commit_edges pr_commit_links pr_commit_edges ...]", want)
+	if len(want) != 11 || want[5] != "pr_commit_links" || want[6] != "pr_commit_edges" {
+		t.Fatalf("buildPreStepOrder() = %v, want [... pr_commit_links pr_commit_edges ...]", want)
 	}
 }
 

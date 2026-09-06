@@ -176,8 +176,10 @@ func TestPreStepNameIsStable(t *testing.T) {
 // buildPostStepOrder for why the other went to the post-step seam.
 func TestBuildPreStepOrderIsPinned(t *testing.T) {
 	want := []string{
-		"issue_pr_links", "issue_commit_edges", "pr_commit_links", "pr_commit_edges",
-		"commit_file_edges", "flag_guards_edges", "operational_incident_edges",
+		"issue_pr_links",
+		"issue_pr_edges_fast_path", "issue_pr_edges_text_parse", "issue_commit_edges", "issue_pr_edges_heuristic",
+		"pr_commit_links", "pr_commit_edges", "commit_file_edges",
+		"flag_guards_edges", "operational_incident_edges", "issue_issue_edges",
 	}
 	got := buildPreStepOrder()
 
@@ -187,14 +189,13 @@ func TestBuildPreStepOrderIsPinned(t *testing.T) {
 				"If you are ADDING a step, read the ordering invariant on workgraph.NativePreStep "+
 				"first, then place it by this rule: a step that READS a table an earlier step WRITES "+
 				"goes after it.\n"+
-				"NOTE (CHAOS-4766, lane-4766-go): `issue_issue_edges` does NOT appear here. It "+
-				"was expected to register before `issue_pr_links`, and it does not read the "+
-				"mapping, so that placement was correct by this rule — but Python's build() "+
-				"OVERWRITES what it writes (confidence=1.0 at builder.py:905, and "+
-				"work_graph_edges is ReplacingMergeTree(last_synced)), so it runs as a POST-step "+
-				"instead; see buildPostStepOrder. A later PR of that lane ports "+
-				"`_build_issue_pr_edges_from_fast_path`, which DOES read work_graph_issue_pr and "+
-				"therefore registers HERE, after `issue_pr_links`.",
+				"NOTE (CHAOS-4924): `issue_issue_edges` moved HERE from buildPostStepOrder once its "+
+				"Python producer (`_build_issue_issue_edges`) was deleted -- it was a post-step only "+
+				"because Python's build() used to OVERWRITE what it writes (confidence=1.0 at "+
+				"builder.py:905, work_graph_edges being ReplacingMergeTree(last_synced)); with "+
+				"nothing left to overwrite it registers as an ordinary pre-step. It reads only "+
+				"work_item_dependencies, which no other pre-step writes, so its position is free -- "+
+				"see issueIssueEdgesPreStep's own doc comment.",
 			got, want,
 		)
 	}

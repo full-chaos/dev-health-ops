@@ -1,0 +1,134 @@
+{
+  "deployment_incident_edges": [
+    {
+      "confidence": 0.3,
+      "deployment_id": "dep-a1",
+      "edge_id": "a4b70fdfaf588d5db1a46a53860eee118843bd4b4f4061a690ef2ec30cf3624d",
+      "evidence": "{\"incident_id\":\"inc-heuristic\"}",
+      "incident_id": "inc-heuristic",
+      "observed_at": "2026-09-03T17:00:00+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "provider": "github",
+      "repo_id": "d4f322ad-2102-1fbf-8425-7400573194f7",
+      "source": "heuristic"
+    },
+    {
+      "confidence": 0.3,
+      "deployment_id": "dep-a2-no-pr",
+      "edge_id": "13a1b12bda804e03abcb25af0785e0691140bc538f07f6bbd16a3fb90d4dc32e",
+      "evidence": "{\"incident_id\":\"inc-heuristic\"}",
+      "incident_id": "inc-heuristic",
+      "observed_at": "2026-09-03T17:00:00+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "provider": "github",
+      "repo_id": "d4f322ad-2102-1fbf-8425-7400573194f7",
+      "source": "heuristic"
+    },
+    {
+      "confidence": 1.0,
+      "deployment_id": "dep-not-in-todays-list",
+      "edge_id": "0ffea730b6ac40a2620ccbf246fafee3cb30c159e93212593d6c529489d78ae3",
+      "evidence": "{\"incident_id\":\"inc-native\"}",
+      "incident_id": "inc-native",
+      "observed_at": "2026-09-03T18:00:00+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "provider": "github",
+      "repo_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "source": "native"
+    }
+  ],
+  "pr_deployment_edges": [
+    {
+      "confidence": 1.0,
+      "deployment_id": "dep-a1",
+      "edge_id": "aadfa37376a24de17deccee47a210a909f42319d9a413da55316b3a1b7227fe3",
+      "evidence": "{\"deployment_id\":\"dep-a1\"}",
+      "observed_at": "2026-09-03T14:10:00+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "pr_id": "d4f322ad-2102-1fbf-8425-7400573194f7:101",
+      "provider": "github",
+      "repo_id": "d4f322ad-2102-1fbf-8425-7400573194f7",
+      "source": "native"
+    },
+    {
+      "confidence": 1.0,
+      "deployment_id": "dep-b1",
+      "edge_id": "a69f1137bacf7601cb645fe942802de8e80b6f07d2fb2e5820d4507964b9cc1b",
+      "evidence": "{\"deployment_id\":\"dep-b1\"}",
+      "observed_at": "2026-09-03T16:00:00+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "pr_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d:201",
+      "provider": "github",
+      "repo_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "source": "native"
+    }
+  ],
+  "review_outcome_edges": [
+    {
+      "confidence": 1.0,
+      "edge_id": "c7565b212a9f06783936e7c2ba6bbd3fe082df0f2e8f14f6261fec2329e501b5",
+      "evidence": "{\"review_id\":\"r-approved\",\"state\":\"APPROVED\"}",
+      "observed_at": "2026-09-03T09:00:00+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "outcome": "APPROVED",
+      "pr_id": "d4f322ad-2102-1fbf-8425-7400573194f7:101",
+      "provider": "github",
+      "repo_id": "d4f322ad-2102-1fbf-8425-7400573194f7",
+      "review_outcome_id": "r-approved",
+      "source": "native"
+    },
+    {
+      "confidence": 1.0,
+      "edge_id": "d3ba406e925f76662d48d8ef44e26e18690b6b226de53f2eaa602fdc11df3ce5",
+      "evidence": "{\"review_id\":\"r-null-state\",\"state\":null}",
+      "observed_at": "2026-09-03T10:00:00+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "outcome": null,
+      "pr_id": "d4f322ad-2102-1fbf-8425-7400573194f7:102",
+      "provider": "github",
+      "repo_id": "d4f322ad-2102-1fbf-8425-7400573194f7",
+      "review_outcome_id": "r-null-state",
+      "source": "native"
+    },
+    {
+      "confidence": 1.0,
+      "edge_id": "47de3859143611046a92c7efda10172442daaf4c13bdd9cced4e14fda6e8209b",
+      "evidence": "{\"review_id\":\"r-empty-state\",\"state\":\"\"}",
+      "observed_at": "2026-09-03T11:00:00+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "outcome": null,
+      "pr_id": "d4f322ad-2102-1fbf-8425-7400573194f7:103",
+      "provider": "github",
+      "repo_id": "d4f322ad-2102-1fbf-8425-7400573194f7",
+      "review_outcome_id": "r-empty-state",
+      "source": "native"
+    },
+    {
+      "confidence": 1.0,
+      "edge_id": "1b11cd3f1d9d08e6c8f3c51f590b051221ef9a582e446c9f52df667005fdbde4",
+      "evidence": "{\"review_id\":\"r-no-submitted\",\"state\":\"COMMENTED\"}",
+      "observed_at": "2026-09-03T22:30:00+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "outcome": "COMMENTED",
+      "pr_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d:201",
+      "provider": "github",
+      "repo_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "review_outcome_id": "r-no-submitted",
+      "source": "native"
+    },
+    {
+      "confidence": 1.0,
+      "edge_id": "b0576b3923be91d3a0ffc3a0bcf6cd0f399600c066c0bf95e9960b7dee489322",
+      "evidence": "{\"review_id\":\"r-subsecond\",\"state\":\"CHANGES_REQUESTED\"}",
+      "observed_at": "2026-09-03T12:00:00.123000+00:00",
+      "org_id": "70d529e0-3c06-4597-8480-794fd02328b6",
+      "outcome": "CHANGES_REQUESTED",
+      "pr_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d:202",
+      "provider": "github",
+      "repo_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+      "review_outcome_id": "r-subsecond",
+      "source": "native"
+    }
+  ],
+  "schema": "work_graph_edges_python_golden.v1"
+}

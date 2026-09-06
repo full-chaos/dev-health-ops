@@ -225,9 +225,10 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     # CHAOS-5234/CHAOS-3092: no build_governance_rows_for_day to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
-    monkeypatch.setattr(
-        job_daily, "_extract_ai_workflow_for_day", lambda **k: ([], [], [])
-    )
+    # CHAOS-5216/CHAOS-5242: no _extract_ai_workflow_for_day to neutralize
+    # either anymore -- both of its halves (ai_workflow, work_graph_edges)
+    # are deleted, so the function itself no longer exists on job_daily at
+    # all (monkeypatch.setattr on a nonexistent attribute raises).
     # CHAOS-5234/CHAOS-3092: no compute_ai_impact_metrics_daily to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
@@ -1045,6 +1046,65 @@ async def test_ai_impact_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_ai_impact_metrics" not in sink.write_calls
+        # cicd (unrelated family, same partition) must be entirely
+        # unaffected by the deletion.
+        assert "write_cicd_metrics" in sink.write_calls
+
+
+@pytest.mark.asyncio
+async def test_work_graph_edges_compute_and_write_are_deleted_from_job_daily(
+    monkeypatch: Any,
+) -> None:
+    """CHAOS-5234/CHAOS-3092 close condition 3 (closes CHAOS-5216 too).
+
+    work_graph_edges's daily compute is DELETED from job_daily.py, not
+    skip-gated -- same rule as CHAOS-5233's work_item_attribution. Same
+    shape as ai_impact: extract_review_deployment_incident_edges itself is
+    ALSO deleted (from work_graph/extractors/ai_workflow.py) -- rg confirmed
+    its only real callers, once job_daily.py's own reference was removed,
+    were its Go bit-exact oracle rot guard
+    (TestWorkGraphEdgesMatchLivePythonProduction +
+    testdata/python_work_graph_edges_oracle.py, both also deleted in this
+    PR) and its own dedicated test (trimmed, not deleted --
+    tests/work_graph/test_ai_workflow.py's traversal tests survive).
+    WorkGraphEdgesExecutor (native Go) is now the only writer of
+    work_graph_pr_review_outcome_edges/work_graph_pr_deployment_edges/
+    work_graph_deployment_incident_edges, closing CHAOS-5216 by construction
+    (single native reader).
+
+    Merge note (CHAOS-5242, #2307 landed first): that PR deleted this same
+    function's OTHER half (ai_workflow's runs/artifact_edges/issue_edges,
+    via extract_ai_workflow_from_pull_requests). With both halves gone in
+    the merge, _extract_ai_workflow_for_day itself, its module
+    (work_graph/extractors/ai_workflow.py), and the now-fully-obsolete
+    tests/metrics/test_job_daily_ai_workflow.py are all deleted too -- rg
+    confirmed zero remaining callers of any of them.
+    """
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+    assert not hasattr(job_daily, "extract_review_deployment_incident_edges"), (
+        "extract_review_deployment_incident_edges must not be imported into "
+        "job_daily.py's module namespace at all"
+    )
+    assert not hasattr(job_daily, "_extract_ai_workflow_for_day"), (
+        "_extract_ai_workflow_for_day must not exist in job_daily.py at all "
+        "-- both of its halves (ai_workflow, work_graph_edges) are deleted"
+    )
+
+    for skip_families in (None, {"work_graph_edges"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_families=skip_families,
+        )
+        assert "write_work_graph_pr_review_outcome_edges" not in sink.write_calls
+        assert "write_work_graph_pr_deployment_edges" not in sink.write_calls
+        assert "write_work_graph_deployment_incident_edges" not in sink.write_calls
         # cicd (unrelated family, same partition) must be entirely
         # unaffected by the deletion.
         assert "write_cicd_metrics" in sink.write_calls

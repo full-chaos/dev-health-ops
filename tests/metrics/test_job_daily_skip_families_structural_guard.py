@@ -175,10 +175,12 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # (CompoundingRiskExecutor, CHAOS-4287) is the only writer of REPO-scope
     # compounding_risk_daily rows now. _write_compounding_risk_for_day
     # itself is ALSO deleted -- rg confirmed job_daily.py was its only real
-    # caller (build_compounding_risk_rows_for_day and
-    # _fetch_repo_metrics_for_day, its two helpers, are SHARED functions
-    # with a real other caller, job_compounding_risk.py's own standalone
-    # job, and are NOT touched). TEAM-scope compounding_risk_team
+    # caller. build_compounding_risk_rows_for_day (compounding_risk.py) is
+    # ALSO deleted: its other real caller, job_compounding_risk.py's own
+    # standalone `dev-hops metrics compounding-risk` CLI backfill job, is
+    # itself deleted whole (with its own private helper,
+    # _fetch_repo_metrics_for_day) -- no straddle, no remaining Python
+    # producer of this family at any scope. TEAM-scope compounding_risk_team
     # (CHAOS-5084) is a separate family, already deleted, unaffected.
     "compounding_risk": "_write_compounding_risk_for_day",
 }

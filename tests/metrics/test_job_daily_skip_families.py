@@ -709,10 +709,13 @@ async def test_compounding_risk_compute_and_write_are_deleted_from_job_daily(
     its output). CompoundingRiskExecutor being native (CHAOS-4287)
     superseded that: the call is deleted entirely now, not skip-gated.
     _write_compounding_risk_for_day itself is ALSO deleted -- rg confirmed
-    job_daily.py was its only real caller (build_compounding_risk_rows_
-    for_day and _fetch_repo_metrics_for_day, its two helpers, are SHARED
-    functions with a real other caller, job_compounding_risk.py's own
-    standalone job, and are NOT touched). This deletion rides alongside
+    job_daily.py was its only real caller. build_compounding_risk_rows_
+    for_day (compounding_risk.py) is ALSO deleted: its other real caller,
+    job_compounding_risk.py's own standalone `dev-hops metrics
+    compounding-risk` CLI backfill job, is itself deleted whole (with its
+    own private helper, _fetch_repo_metrics_for_day) -- no straddle, no
+    remaining Python producer of this family at any scope. This deletion
+    rides alongside
     repo_user_commit's own compute+write deletion in the same PR -- see
     test_repo_user_commit_compute_and_write_are_deleted_from_job_daily
     above -- since result.repo_metrics was compounding_risk's only

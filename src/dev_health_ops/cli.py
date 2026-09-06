@@ -623,7 +623,6 @@ def build_parser() -> argparse.ArgumentParser:
     from dev_health_ops.audit.ai_governance import cli as ai_governance_cli
     from dev_health_ops.fixtures import runner as fixtures_runner
     from dev_health_ops.metrics import (
-        job_compounding_risk,
         job_ff_validation,
         job_work_items,
         workerctl_dispatch,
@@ -691,7 +690,6 @@ def build_parser() -> argparse.ArgumentParser:
     workerctl_dispatch.register_trigger_backstop_commands(metrics_subparsers)
     workerctl_dispatch.register_capacity_trigger_command(metrics_subparsers)
     job_ff_validation.register_commands(metrics_subparsers)
-    job_compounding_risk.register_commands(metrics_subparsers)
 
     # ---- audit ----
     audit_parser = sub.add_parser("audit", help="Run diagnostic audits.")

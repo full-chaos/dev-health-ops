@@ -1,10 +1,8 @@
 package workgraphedges
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -167,44 +165,42 @@ type pythonEdges struct {
 	} `json:"deployment_incident_edges"`
 }
 
-func runPythonOracle(t *testing.T, markerName string) pythonEdges {
+// CHAOS-5234/CHAOS-3092: runPythonOracle (the live Python invocation) is
+// DELETED -- chris's standing rule (CHAOS-5233): once a family's Go
+// executor is on main, its Python compute is deleted, never kept alive
+// just to give a rot guard something to compare against.
+// extract_review_deployment_incident_edges (src/dev_health_ops/work_graph/
+// extractors/ai_workflow.py) and testdata/python_work_graph_edges_oracle.py
+// are both deleted; loadFrozenWorkGraphEdgesGolden below reads a FROZEN
+// snapshot of the oracle's last live run (tests/fixtures/
+// work_graph_edges_python_golden.json, captured on bigboy before deletion)
+// instead of shelling out to Python -- same shape as issueprlinks' CHAOS-5249
+// retirement.
+func loadFrozenWorkGraphEdgesGolden(t *testing.T) pythonEdges {
 	t.Helper()
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
-	}
-	proofDirectory := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDirectory == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	python := os.Getenv("PYTHON")
-	if python == "" {
-		t.Fatal("PYTHON is required for the live work_graph_edges Python oracle")
-	}
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(python, filepath.Join("testdata", "python_work_graph_edges_oracle.py"))
-	command.Dir = filepath.Join(root, "internal", "jobs", "metrics", "workgraphedges")
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf("execute production Python oracle: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	path := filepath.Join(root, "tests", "fixtures", "work_graph_edges_python_golden.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read frozen golden: %v", err)
 	}
-	output := bytes.TrimSpace(stdout.Bytes())
-	if lastLine := bytes.LastIndexByte(output, '\n'); lastLine >= 0 {
-		output = output[lastLine+1:]
+	var doc struct {
+		Schema string `json:"schema"`
+		pythonEdges
 	}
-	var decoded pythonEdges
-	if err := json.Unmarshal(output, &decoded); err != nil {
-		t.Fatalf("decode production Python oracle output %q: %v", output, err)
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode frozen golden: %v", err)
 	}
-	if writeErr := os.WriteFile(filepath.Join(proofDirectory, markerName), []byte("executed"), 0o644); writeErr != nil {
-		t.Fatalf("write live-python-oracle proof: %v", writeErr)
+	if doc.Schema != "work_graph_edges_python_golden.v1" {
+		t.Fatalf("unexpected golden schema %q -- regenerate or update the decoder", doc.Schema)
 	}
-	return decoded
+	if len(doc.ReviewOutcomeEdges) == 0 && len(doc.PRDeploymentEdges) == 0 && len(doc.DeploymentIncidentEdges) == 0 {
+		t.Fatal("frozen golden has zero rows across all three edge lists; regenerate it")
+	}
+	return doc.pythonEdges
 }
 
 // pythonISOFormat renders a UTC instant the way CPython's
@@ -239,9 +235,13 @@ func optionalString(value *string) string {
 	return *value
 }
 
-// TestWorkGraphEdgesMatchLivePythonProduction is this family's L2 rot guard:
-// it runs the REAL extract_review_deployment_incident_edges and compares every
-// persisted column of all three edge lists, including edge_id.
+// TestWorkGraphEdgesMatchFrozenPythonGolden is this family's L2 rot guard:
+// it runs the REAL ExtractReviewDeploymentIncidentEdges and compares every
+// persisted column of all three edge lists, including edge_id, against a
+// FROZEN snapshot (CHAOS-5234/CHAOS-3092) instead of a live Python run --
+// Python's extract_review_deployment_incident_edges is deleted, so "Python
+// still agrees with itself" stops being the protection that matters; this
+// frozen comparison is the regression contract going forward.
 //
 // # THAT SENTENCE WAS FALSE UNTIL #2240 ROUND 1
 //
@@ -264,8 +264,8 @@ func optionalString(value *string) string {
 // Python answer to assert against. That single difference is the whole of this
 // oracle's advantage over #2229's -- it is not broadly "stronger", and an
 // earlier version of this comment overstated it as such.
-func TestWorkGraphEdgesMatchLivePythonProduction(t *testing.T) {
-	expected := runPythonOracle(t, "work-graph-edges-golden")
+func TestWorkGraphEdgesMatchFrozenPythonGolden(t *testing.T) {
+	expected := loadFrozenWorkGraphEdgesGolden(t)
 
 	actual, err := ExtractReviewDeploymentIncidentEdges(oracleParams())
 	if err != nil {

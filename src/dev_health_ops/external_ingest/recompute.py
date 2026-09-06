@@ -24,8 +24,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
-from celery import chain
-
 from dev_health_ops.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -66,7 +64,6 @@ _RECOMPUTE_TRIGGER_KINDS = _GIT_KINDS | _WORK_ITEM_KINDS
 # so this comment itself must not name any of those four disqualified
 # task identifiers.
 _RUN_DAILY_METRICS_TASK = "dev_health_ops.workers.tasks.run_daily_metrics"
-_RUN_WORK_GRAPH_BUILD_TASK = "dev_health_ops.workers.tasks.run_work_graph_build"
 _DISPATCH_INVESTMENT_MATERIALIZE_TASK = (
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned"
 )
@@ -306,15 +303,6 @@ def _daily_metrics_kwargs(
     return kwargs
 
 
-def _work_graph_build_kwargs(plan: RecomputePlan, *, repo_id: str) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {"org_id": plan.org_id, "repo_id": repo_id}
-    if plan.from_date is not None:
-        kwargs["from_date"] = plan.from_date
-    if plan.to_date is not None:
-        kwargs["to_date"] = plan.to_date
-    return kwargs
-
-
 def _investment_kwargs(plan: RecomputePlan) -> dict[str, Any]:
     # D4/D5: never both repo_ids and team_ids empty -- caller only invokes
     # this when skip_investment_no_scope is False. force=False (same-day
@@ -348,40 +336,22 @@ def dispatch_recompute(plan: RecomputePlan) -> RecomputeDispatchResult:
 
         if plan.dispatch_daily:
             if plan.repo_ids:
-                # D5: run_daily_metrics/run_work_graph_build only accept a
-                # single repo_id -- fan out N independent chains, one per
-                # repo, via celery.chain (immutable links so a parent's
-                # return dict is never injected as the next task's arg).
+                # D5: run_daily_metrics only accepts a single repo_id --
+                # fan out N independent dispatches, one per repo.
+                # run_work_graph_build was chained after this per-repo (CHAOS-4924
+                # deleted the task entirely -- its compute was already a 0-stats
+                # no-op, and the Go worker's own post-sync writer creates
+                # workgraph.build requests independent of this Celery path
+                # anyway; see workers/post_sync_dispatch.py's identical fold).
                 for repo_id in plan.repo_ids:
-                    daily_sig = celery_app.signature(
+                    async_result = celery_app.send_task(
                         _RUN_DAILY_METRICS_TASK,
                         kwargs=_daily_metrics_kwargs(plan, repo_id=repo_id),
                         queue="metrics",
-                        immutable=True,
-                    )
-                    build_sig = celery_app.signature(
-                        _RUN_WORK_GRAPH_BUILD_TASK,
-                        kwargs=_work_graph_build_kwargs(plan, repo_id=repo_id),
-                        queue="metrics",
-                        immutable=True,
-                    )
-                    async_result = chain(daily_sig, build_sig).apply_async()
-                    daily_id = (
-                        async_result.parent.id
-                        if async_result.parent is not None
-                        else None
                     )
                     jobs.append(
                         RecomputeJobRecord(
                             task=_RUN_DAILY_METRICS_TASK,
-                            task_id=daily_id,
-                            queue="metrics",
-                            repo_id=repo_id,
-                        )
-                    )
-                    jobs.append(
-                        RecomputeJobRecord(
-                            task=_RUN_WORK_GRAPH_BUILD_TASK,
                             task_id=async_result.id,
                             queue="metrics",
                             repo_id=repo_id,
@@ -389,10 +359,10 @@ def dispatch_recompute(plan: RecomputePlan) -> RecomputeDispatchResult:
                     )
             elif plan.fallback_org_wide_daily:
                 # D8: day-bounded, all-repos fallback for repo-less
-                # work-item batches. run_work_graph_build is deliberately
-                # NOT dispatched here (repo_id=None there means "all
-                # repos, 30-day trailing window", ignoring the tighter
-                # batch window -- not useful in this fallback).
+                # work-item batches. run_work_graph_build was deliberately
+                # NOT dispatched here even before CHAOS-4924 (repo_id=None
+                # there means "all repos, 30-day trailing window", ignoring
+                # the tighter batch window -- not useful in this fallback).
                 async_result = celery_app.send_task(
                     _RUN_DAILY_METRICS_TASK,
                     kwargs=_daily_metrics_kwargs(plan, repo_id=None),

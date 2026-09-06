@@ -19,7 +19,8 @@ import (
 // seeded corpus captured from the deployed Python producer
 // (tests/fixtures/issue_pr_edges_python_golden.json, via a throwaway,
 // never-committed generator run against _build_issue_pr_edges_from_fast_path
-// + _build_issue_pr_edges) through this package's DeriveFastPathEdges and
+// + _build_issue_pr_edges -- golden frozen; both functions are deleted from
+// builder.py as of this PR) through this package's DeriveFastPathEdges and
 // DeriveTextParseEdges, and asserts field-for-field identity against what
 // Python actually wrote.
 //

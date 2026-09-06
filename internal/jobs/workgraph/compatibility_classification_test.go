@@ -407,12 +407,14 @@ func TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous(t *testing.T) 
 		{name: "refused", err: compatibilityFailure(ErrCompatibilityRefused, http.StatusUnauthorized, `{"detail":"bad token"}`)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			store := &fakeStore{claim: testClaim(time.Second)}
-			handler, err := NewBuildHandler(store, classifyingExecutor{err: testCase.err}, nil, nil, nil)
+			// Materialize, not Build: this classification lives entirely in
+			// the bridge path, and Build has no bridge since CHAOS-4924.
+			store := &fakeStore{claim: testMaterializeClaim(time.Second)}
+			handler, err := NewMaterializeHandler(store, classifyingExecutor{err: testCase.err}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			workErr := handler.Work(context.Background(), buildExecution())
+			workErr := handler.Work(context.Background(), materializeExecution())
 			if workErr == nil {
 				t.Fatal("Work succeeded, want a retryable failure")
 			}
@@ -436,12 +438,13 @@ func TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous(t *testing.T) 
 
 func TestHandlerReleasesUnknownAmbiguousWithTheClassifiedDetail(t *testing.T) {
 	executeErr := compatibilityFailure(ErrCompatibilityUnknown, http.StatusInternalServerError, `{"detail":"bridge exploded"}`)
-	store := &fakeStore{claim: testClaim(time.Second)}
-	handler, err := NewBuildHandler(store, classifyingExecutor{err: executeErr}, nil, nil, nil)
+	// Materialize, not Build: see TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous.
+	store := &fakeStore{claim: testMaterializeClaim(time.Second)}
+	handler, err := NewMaterializeHandler(store, classifyingExecutor{err: executeErr}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	workErr := handler.Work(context.Background(), buildExecution())
+	workErr := handler.Work(context.Background(), materializeExecution())
 	if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
 		t.Fatalf("Work = %v, want category %s", workErr, jobruntime.CategoryPermanent)
 	}

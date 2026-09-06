@@ -1,0 +1,182 @@
+{
+  "files": {
+    "basic_functions.php.txt": {
+      "cyclomatic_avg": 1.5714285714285714,
+      "cyclomatic_total": 11,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 3,
+          "long_name": "add $a $a $b $b",
+          "name": "add"
+        },
+        {
+          "complexity": 3,
+          "lineno": 7,
+          "long_name": "classify $n $n",
+          "name": "classify"
+        },
+        {
+          "complexity": 1,
+          "lineno": 17,
+          "long_name": "withReturnType $a $a $b $b",
+          "name": "withReturnType"
+        },
+        {
+          "complexity": 1,
+          "lineno": 22,
+          "long_name": "greet",
+          "name": "greet"
+        },
+        {
+          "complexity": 1,
+          "lineno": 25,
+          "long_name": "$adder $a $a $b $b",
+          "name": "$adder"
+        },
+        {
+          "complexity": 2,
+          "lineno": 29,
+          "long_name": "withClosureInCondition $items $items",
+          "name": "withClosureInCondition"
+        },
+        {
+          "complexity": 2,
+          "lineno": 36,
+          "long_name": "nestedClosure",
+          "name": "nestedClosure"
+        }
+      ],
+      "functions_count": 7,
+      "high_complexity_functions": 0,
+      "loc": 36,
+      "very_high_complexity_functions": 0
+    },
+    "classes_and_match.php.txt": {
+      "cyclomatic_avg": 1.2857142857142858,
+      "cyclomatic_total": 9,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 4,
+          "long_name": "Loggable::log $msg $msg",
+          "name": "Loggable::log"
+        },
+        {
+          "complexity": 1,
+          "lineno": 14,
+          "long_name": "Shape::__construct $sides $sides",
+          "name": "Shape::__construct"
+        },
+        {
+          "complexity": 1,
+          "lineno": 18,
+          "long_name": "Shape::make $sides $sides",
+          "name": "Shape::make"
+        },
+        {
+          "complexity": 2,
+          "lineno": 22,
+          "long_name": "Shape::describe",
+          "name": "Shape::describe"
+        },
+        {
+          "complexity": 1,
+          "lineno": 31,
+          "long_name": "Circle::area $radius $radius",
+          "name": "Circle::area"
+        },
+        {
+          "complexity": 2,
+          "lineno": 36,
+          "long_name": "classify_status $status $status",
+          "name": "classify_status"
+        },
+        {
+          "complexity": 1,
+          "lineno": 45,
+          "long_name": "makeAnonymous",
+          "name": "makeAnonymous"
+        }
+      ],
+      "functions_count": 7,
+      "high_complexity_functions": 0,
+      "loc": 41,
+      "very_high_complexity_functions": 0
+    },
+    "control_flow_and_literals.php.txt": {
+      "cyclomatic_avg": 2.111111111111111,
+      "cyclomatic_total": 19,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 7,
+          "long_name": "loopFor $items $items",
+          "name": "loopFor"
+        },
+        {
+          "complexity": 2,
+          "lineno": 15,
+          "long_name": "loopForeach $items $items",
+          "name": "loopForeach"
+        },
+        {
+          "complexity": 2,
+          "lineno": 23,
+          "long_name": "loopWhile $n $n",
+          "name": "loopWhile"
+        },
+        {
+          "complexity": 2,
+          "lineno": 31,
+          "long_name": "safeDivide $a $a $b $b",
+          "name": "safeDivide"
+        },
+        {
+          "complexity": 3,
+          "lineno": 39,
+          "long_name": "classifyLetter $ch $ch",
+          "name": "classifyLetter"
+        },
+        {
+          "complexity": 4,
+          "lineno": 50,
+          "long_name": "checkBoth $a $a $b $b",
+          "name": "checkBoth"
+        },
+        {
+          "complexity": 2,
+          "lineno": 57,
+          "long_name": "pick $flag $flag $x $x $y $y",
+          "name": "pick"
+        },
+        {
+          "complexity": 1,
+          "lineno": 62,
+          "long_name": "withHashComment $x $x",
+          "name": "withHashComment"
+        },
+        {
+          "complexity": 1,
+          "lineno": 66,
+          "long_name": "withHeredoc $name $name",
+          "name": "withHeredoc"
+        }
+      ],
+      "functions_count": 9,
+      "high_complexity_functions": 0,
+      "loc": 66,
+      "very_high_complexity_functions": 0
+    },
+    "interface_return_type_quirk.php.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 6,
+      "very_high_complexity_functions": 0
+    }
+  },
+  "lizard_version": "1.23.0"
+}

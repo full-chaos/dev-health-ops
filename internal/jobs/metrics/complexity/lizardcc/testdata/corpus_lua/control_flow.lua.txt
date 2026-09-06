@@ -1,0 +1,38 @@
+function loopFor(items)
+    local total = 0
+    for i = 1, #items do
+        total = total + items[i]
+    end
+    return total
+end
+
+function loopForIn(items)
+    local total = 0
+    for k, v in pairs(items) do
+        total = total + v
+    end
+    return total
+end
+
+function loopWhile(n)
+    local i = 0
+    while i < n do
+        i = i + 1
+    end
+    return i
+end
+
+function loopRepeat(n)
+    local i = 0
+    repeat
+        i = i + 1
+    until i >= n
+    return i
+end
+
+function checkBoth(a, b)
+    if a and b then
+        return true
+    end
+    return a or b
+end

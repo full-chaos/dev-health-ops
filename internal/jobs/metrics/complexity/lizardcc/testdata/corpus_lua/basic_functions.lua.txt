@@ -1,0 +1,42 @@
+local function add(a, b)
+    return a + b
+end
+
+function classify(n)
+    if n < 0 then
+        return "negative"
+    elseif n == 0 then
+        return "zero"
+    else
+        return "positive"
+    end
+end
+
+local anon = function(a, b)
+    return a + b
+end
+
+local named = function inner(a)
+    if a then
+        return 1
+    end
+    return 0
+end
+
+local Counter = {}
+Counter.__index = Counter
+
+function Counter.new(start)
+    local self = setmetatable({}, Counter)
+    self.value = start
+    return self
+end
+
+function Counter:increment(step)
+    if step then
+        self.value = self.value + step
+    else
+        self.value = self.value + 1
+    end
+    return self.value
+end

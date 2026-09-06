@@ -1,0 +1,107 @@
+{
+  "files": {
+    "basic_methods.m.txt": {
+      "cyclomatic_avg": 1.8,
+      "cyclomatic_total": 9,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 15,
+          "long_name": "shared",
+          "name": "shared"
+        },
+        {
+          "complexity": 2,
+          "lineno": 19,
+          "long_name": "greet:( NSString * )",
+          "name": "greet:"
+        },
+        {
+          "complexity": 3,
+          "lineno": 25,
+          "long_name": "classify:( NSInteger )",
+          "name": "classify:"
+        },
+        {
+          "complexity": 2,
+          "lineno": 34,
+          "long_name": "isValid:( NSString * ) withFlag:( BOOL )",
+          "name": "isValid: withFlag:"
+        },
+        {
+          "complexity": 1,
+          "lineno": 40,
+          "long_name": "plainAdd( int a , int b)",
+          "name": "plainAdd"
+        }
+      ],
+      "functions_count": 5,
+      "high_complexity_functions": 0,
+      "loc": 32,
+      "very_high_complexity_functions": 0
+    },
+    "const_qualifier_quirk.m.txt": {
+      "cyclomatic_avg": 1.0,
+      "cyclomatic_total": 1,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 8,
+          "long_name": "const",
+          "name": "const"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "control_flow.m.txt": {
+      "cyclomatic_avg": 2.1666666666666665,
+      "cyclomatic_total": 13,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "sumTo:( int )",
+          "name": "sumTo:"
+        },
+        {
+          "complexity": 2,
+          "lineno": 11,
+          "long_name": "countDown:( int )",
+          "name": "countDown:"
+        },
+        {
+          "complexity": 2,
+          "lineno": 20,
+          "long_name": "safeDivide:( int ) by:( int )",
+          "name": "safeDivide: by:"
+        },
+        {
+          "complexity": 3,
+          "lineno": 28,
+          "long_name": "classifySwitch:( int )",
+          "name": "classifySwitch:"
+        },
+        {
+          "complexity": 2,
+          "lineno": 39,
+          "long_name": "pick:( BOOL ) x:( int ) y:( int )",
+          "name": "pick: x: y:"
+        },
+        {
+          "complexity": 2,
+          "lineno": 43,
+          "long_name": "checkBoth:( BOOL ) and:( BOOL )",
+          "name": "checkBoth: and:"
+        }
+      ],
+      "functions_count": 6,
+      "high_complexity_functions": 0,
+      "loc": 40,
+      "very_high_complexity_functions": 0
+    }
+  },
+  "lizard_version": "1.23.0"
+}

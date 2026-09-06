@@ -1,0 +1,345 @@
+{
+  "files": {
+    "arrow_functions.ts.txt": {
+      "cyclomatic_avg": 1.7142857142857142,
+      "cyclomatic_total": 12,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "add ( a , b )",
+          "name": "add"
+        },
+        {
+          "complexity": 2,
+          "lineno": 5,
+          "long_name": "classify ( n )",
+          "name": "classify"
+        },
+        {
+          "complexity": 1,
+          "lineno": 12,
+          "long_name": "makeAdder ( base )",
+          "name": "makeAdder"
+        },
+        {
+          "complexity": 3,
+          "lineno": 13,
+          "long_name": "(anonymous)",
+          "name": "(anonymous)"
+        },
+        {
+          "complexity": 2,
+          "lineno": 21,
+          "long_name": "(anonymous)",
+          "name": "(anonymous)"
+        },
+        {
+          "complexity": 2,
+          "lineno": 28,
+          "long_name": "fetchThing ( url )",
+          "name": "fetchThing"
+        },
+        {
+          "complexity": 1,
+          "lineno": 36,
+          "long_name": "doFetch ( url )",
+          "name": "doFetch"
+        }
+      ],
+      "functions_count": 7,
+      "high_complexity_functions": 0,
+      "loc": 33,
+      "very_high_complexity_functions": 0
+    },
+    "basic_functions.ts.txt": {
+      "cyclomatic_avg": 2.625,
+      "cyclomatic_total": 21,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "add ( a , b )",
+          "name": "add"
+        },
+        {
+          "complexity": 3,
+          "lineno": 5,
+          "long_name": "classify ( n )",
+          "name": "classify"
+        },
+        {
+          "complexity": 4,
+          "lineno": 15,
+          "long_name": "loopSum ( items )",
+          "name": "loopSum"
+        },
+        {
+          "complexity": 3,
+          "lineno": 30,
+          "long_name": "describe ( kind )",
+          "name": "describe"
+        },
+        {
+          "complexity": 3,
+          "lineno": 41,
+          "long_name": "safeDivide ( a , b )",
+          "name": "safeDivide"
+        },
+        {
+          "complexity": 2,
+          "lineno": 48,
+          "long_name": "pick ( flag , x , y )",
+          "name": "pick"
+        },
+        {
+          "complexity": 2,
+          "lineno": 52,
+          "long_name": "tryCatch ( )",
+          "name": "tryCatch"
+        },
+        {
+          "complexity": 3,
+          "lineno": 60,
+          "long_name": "elseifKeyword ( n )",
+          "name": "elseifKeyword"
+        }
+      ],
+      "functions_count": 8,
+      "high_complexity_functions": 0,
+      "loc": 60,
+      "very_high_complexity_functions": 0
+    },
+    "classes_methods.ts.txt": {
+      "cyclomatic_avg": 1.5555555555555556,
+      "cyclomatic_total": 14,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 4,
+          "long_name": "constructor ( start )",
+          "name": "constructor"
+        },
+        {
+          "complexity": 3,
+          "lineno": 8,
+          "long_name": "add ( x )",
+          "name": "add"
+        },
+        {
+          "complexity": 1,
+          "lineno": 17,
+          "long_name": "create ( start )",
+          "name": "create"
+        },
+        {
+          "complexity": 3,
+          "lineno": 21,
+          "long_name": "fetchAndAdd ( url )",
+          "name": "fetchAndAdd"
+        },
+        {
+          "complexity": 1,
+          "lineno": 29,
+          "long_name": "loadValue ( url )",
+          "name": "loadValue"
+        },
+        {
+          "complexity": 1,
+          "lineno": 33,
+          "long_name": "identity ( value T )",
+          "name": "identity"
+        },
+        {
+          "complexity": 2,
+          "lineno": 41,
+          "long_name": "describe ( )",
+          "name": "describe"
+        },
+        {
+          "complexity": 1,
+          "lineno": 50,
+          "long_name": "constructor ( private radius )",
+          "name": "constructor"
+        },
+        {
+          "complexity": 1,
+          "lineno": 54,
+          "long_name": "area ( )",
+          "name": "area"
+        }
+      ],
+      "functions_count": 9,
+      "high_complexity_functions": 0,
+      "loc": 47,
+      "very_high_complexity_functions": 0
+    },
+    "javascript_basic.js.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 12,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "add ( a , b )",
+          "name": "add"
+        },
+        {
+          "complexity": 3,
+          "lineno": 5,
+          "long_name": "classify ( n )",
+          "name": "classify"
+        },
+        {
+          "complexity": 3,
+          "lineno": 15,
+          "long_name": "double ( x )",
+          "name": "double"
+        },
+        {
+          "complexity": 1,
+          "lineno": 23,
+          "long_name": "constructor ( start )",
+          "name": "constructor"
+        },
+        {
+          "complexity": 2,
+          "lineno": 27,
+          "long_name": "increment ( step )",
+          "name": "increment"
+        },
+        {
+          "complexity": 2,
+          "lineno": 37,
+          "long_name": "pick ( flag , a , b )",
+          "name": "pick"
+        }
+      ],
+      "functions_count": 6,
+      "high_complexity_functions": 0,
+      "loc": 35,
+      "very_high_complexity_functions": 0
+    },
+    "object_literals.ts.txt": {
+      "cyclomatic_avg": 1.8333333333333333,
+      "cyclomatic_total": 11,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 4,
+          "long_name": "compute ( x )",
+          "name": "compute"
+        },
+        {
+          "complexity": 1,
+          "lineno": 11,
+          "long_name": "get label ( )",
+          "name": "get label"
+        },
+        {
+          "complexity": 2,
+          "lineno": 15,
+          "long_name": "set label ( value )",
+          "name": "set label"
+        },
+        {
+          "complexity": 1,
+          "lineno": 21,
+          "long_name": "symbol.iterator ( )",
+          "name": "symbol.iterator"
+        },
+        {
+          "complexity": 3,
+          "lineno": 25,
+          "long_name": "onEvent ( evt )",
+          "name": "onEvent"
+        },
+        {
+          "complexity": 2,
+          "lineno": 35,
+          "long_name": "inner ( x )",
+          "name": "inner"
+        }
+      ],
+      "functions_count": 6,
+      "high_complexity_functions": 0,
+      "loc": 36,
+      "very_high_complexity_functions": 0
+    },
+    "template_literals_regex.ts.txt": {
+      "cyclomatic_avg": 1.6,
+      "cyclomatic_total": 8,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "greet ( name , count )",
+          "name": "greet"
+        },
+        {
+          "complexity": 2,
+          "lineno": 9,
+          "long_name": "matches ( input )",
+          "name": "matches"
+        },
+        {
+          "complexity": 2,
+          "lineno": 17,
+          "long_name": "halve ( total )",
+          "name": "halve"
+        },
+        {
+          "complexity": 1,
+          "lineno": 25,
+          "long_name": "buildPath ( segments )",
+          "name": "buildPath"
+        },
+        {
+          "complexity": 1,
+          "lineno": 26,
+          "long_name": "(anonymous)",
+          "name": "(anonymous)"
+        }
+      ],
+      "functions_count": 5,
+      "high_complexity_functions": 0,
+      "loc": 24,
+      "very_high_complexity_functions": 0
+    },
+    "types_interfaces.ts.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 6,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 15,
+          "long_name": "useHandler ( h Handler , value )",
+          "name": "useHandler"
+        },
+        {
+          "complexity": 1,
+          "lineno": 21,
+          "long_name": "makeGreeter ( )",
+          "name": "makeGreeter"
+        },
+        {
+          "complexity": 2,
+          "lineno": 23,
+          "long_name": "greet ( name )",
+          "name": "greet"
+        },
+        {
+          "complexity": 1,
+          "lineno": 29,
+          "long_name": "farewell ( name )",
+          "name": "farewell"
+        }
+      ],
+      "functions_count": 4,
+      "high_complexity_functions": 0,
+      "loc": 31,
+      "very_high_complexity_functions": 0
+    }
+  },
+  "lizard_version": "1.23.0"
+}

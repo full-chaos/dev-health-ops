@@ -307,8 +307,10 @@ class TeamMetricsDailyRecord:
     org_id: str = ""
     #: CHAOS-4329: which repo this row's commits came from. "" is the LEGACY
     #: sentinel (rows written before migration 080 -- see that file's
-    #: comment for the dedup contract). Never "" for a row written by
-    #: compute_team_wellbeing_metrics_daily after this field was added.
+    #: comment for the dedup contract). Never "" for a row written after
+    #: this field was added (compute_team_wellbeing_metrics_daily, since
+    #: deleted outright by CHAOS-5234/CHAOS-3092; TeamWellbeingExecutor,
+    #: native Go, is the only writer now).
     repo_id: str = ""
 
 

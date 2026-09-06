@@ -1,0 +1,149 @@
+{
+  "files": {
+    "basic_functions.rb.txt": {
+      "cyclomatic_avg": 1.1666666666666667,
+      "cyclomatic_total": 7,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "add a , b )",
+          "name": "add"
+        },
+        {
+          "complexity": 1,
+          "lineno": 5,
+          "long_name": "greet",
+          "name": "greet"
+        },
+        {
+          "complexity": 1,
+          "lineno": 10,
+          "long_name": "self.build",
+          "name": "self.build"
+        },
+        {
+          "complexity": 1,
+          "lineno": 14,
+          "long_name": "initialize name )",
+          "name": "initialize"
+        },
+        {
+          "complexity": 2,
+          "lineno": 18,
+          "long_name": "shout",
+          "name": "shout"
+        },
+        {
+          "complexity": 1,
+          "lineno": 27,
+          "long_name": "\"does something useful\"",
+          "name": "\"does something useful\""
+        }
+      ],
+      "functions_count": 6,
+      "high_complexity_functions": 0,
+      "loc": 24,
+      "very_high_complexity_functions": 0
+    },
+    "blocks_and_literals.rb.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 6,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 5,
+          "long_name": "self.safe_divide a , b )",
+          "name": "self.safe_divide"
+        },
+        {
+          "complexity": 1,
+          "lineno": 15,
+          "long_name": "self.log_call",
+          "name": "self.log_call"
+        },
+        {
+          "complexity": 1,
+          "lineno": 20,
+          "long_name": "with_block",
+          "name": "with_block"
+        },
+        {
+          "complexity": 1,
+          "lineno": 26,
+          "long_name": "with_brace_block",
+          "name": "with_brace_block"
+        }
+      ],
+      "functions_count": 4,
+      "high_complexity_functions": 0,
+      "loc": 24,
+      "very_high_complexity_functions": 0
+    },
+    "control_flow.rb.txt": {
+      "cyclomatic_avg": 2.4444444444444446,
+      "cyclomatic_total": 22,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 1,
+          "long_name": "classify n )",
+          "name": "classify"
+        },
+        {
+          "complexity": 3,
+          "lineno": 11,
+          "long_name": "check a , b )",
+          "name": "check"
+        },
+        {
+          "complexity": 3,
+          "lineno": 18,
+          "long_name": "check_word_form a , b )",
+          "name": "check_word_form"
+        },
+        {
+          "complexity": 2,
+          "lineno": 23,
+          "long_name": "loop_while n )",
+          "name": "loop_while"
+        },
+        {
+          "complexity": 2,
+          "lineno": 31,
+          "long_name": "loop_until n )",
+          "name": "loop_until"
+        },
+        {
+          "complexity": 2,
+          "lineno": 39,
+          "long_name": "loop_for items )",
+          "name": "loop_for"
+        },
+        {
+          "complexity": 2,
+          "lineno": 47,
+          "long_name": "pick flag , x , y )",
+          "name": "pick"
+        },
+        {
+          "complexity": 3,
+          "lineno": 51,
+          "long_name": "modifier_forms x )",
+          "name": "modifier_forms"
+        },
+        {
+          "complexity": 2,
+          "lineno": 57,
+          "long_name": "elseif_probe",
+          "name": "elseif_probe"
+        }
+      ],
+      "functions_count": 9,
+      "high_complexity_functions": 0,
+      "loc": 59,
+      "very_high_complexity_functions": 0
+    }
+  },
+  "lizard_version": "1.23.0"
+}

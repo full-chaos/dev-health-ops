@@ -102,17 +102,26 @@ func checkedInSchedules() []Schedule {
 		// write both families would have performed, via its existing Python
 		// compatibility bridge (daily.HTTPCompatibilityExecutor ->
 		// /internal/worker/daily-metrics/v1/execute -> _run_daily_direct ->
-		// run_daily_metrics_job, ops/src/dev_health_ops/metrics/job_daily.py:
-		// 729-1446). That single function unconditionally computes and writes,
-		// on every partition call:
-		//   - compute_team_wellbeing_metrics_daily -> team_metrics_daily (line 1057)
-		//   - _write_compounding_risk_for_day -> compounding_risk_daily (line 1371)
-		//   - compute_release_confidence/quality_drag/pipeline_stability ->
-		//     release_confidence_daily/quality_drag_daily/pipeline_stability_daily (lines 1383-1413)
-		//   - run_benchmarking_for_day -> benchmarking_rollups (line 1419)
-		// and, on the paired finalize call (skip_finalize=False, lines 1428-1444):
-		//   - compute_ic_metrics_daily -> user_metrics_daily (ic)
-		//   - compute_ic_landscape_rolling -> ic_landscape_rolling_30d
+		// run_daily_metrics_job, ops/src/dev_health_ops/metrics/job_daily.py).
+		// That single function unconditionally computes and writes, on every
+		// partition call:
+		//   - team_wellbeing -> team_metrics_daily: this call site is DELETED
+		//     now (CHAOS-5311/CHAOS-5234/CHAOS-3092) -- TeamWellbeingExecutor
+		//     (native Go) is the only writer.
+		//   - _write_compounding_risk_for_day -> compounding_risk_daily
+		//   - testops_risk (release_confidence/quality_drag/pipeline_stability)
+		//     -> release_confidence_daily/quality_drag_daily/
+		//     pipeline_stability_daily: this call site is ALSO DELETED now
+		//     (CHAOS-5245) -- TestopsRiskExecutor (native Go) is the only
+		//     writer.
+		//   - run_benchmarking_for_day -> benchmarking_rollups
+		// and, on the paired finalize call:
+		//   - ic_finalize (compute_ic_metrics_daily/compute_ic_landscape_rolling)
+		//     -> user_metrics_daily/ic_landscape_rolling_30d: this call site is
+		//     ALSO DELETED now (CHAOS-5263/CHAOS-4290 PR3) -- the native Go
+		//     executor is the only writer, and `skip_finalize` (the parameter
+		//     this comment used to cite) no longer exists on the function
+		//     signature at all.
 		// This was every table both families' families.json entries targeted --
 		// wiring a second schedule for either would have double-computed and
 		// double-written against the same ClickHouse tables every night, not

@@ -1,0 +1,27 @@
+function greet(name: string, count: number): string {
+  const message = `hello ${name}, you have ${count} items`;
+  if (count > 0) {
+    return message;
+  }
+  return `hello ${name}`;
+}
+
+function matches(input: string): boolean {
+  const pattern = /^[a-z]+$/;
+  if (pattern.test(input)) {
+    return true;
+  }
+  return false;
+}
+
+function halve(total: number): number {
+  const half = total / 2;
+  if (half > 0) {
+    return half;
+  }
+  return 0;
+}
+
+function buildPath(segments: string[]): string {
+  return segments.map((s) => `/${s}`).join("");
+}

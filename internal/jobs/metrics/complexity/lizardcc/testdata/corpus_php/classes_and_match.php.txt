@@ -1,0 +1,51 @@
+<?php
+
+trait Loggable {
+    public function log($msg) {
+        echo $msg;
+    }
+}
+
+class Shape {
+    use Loggable;
+
+    private $sides;
+
+    public function __construct($sides) {
+        $this->sides = $sides;
+    }
+
+    public static function make($sides) {
+        return new self($sides);
+    }
+
+    public function describe() {
+        if ($this->sides > 4) {
+            return "polygon";
+        }
+        return "shape";
+    }
+}
+
+class Circle extends Shape {
+    public function area($radius) {
+        return 3.14 * $radius * $radius;
+    }
+}
+
+function classify_status($status) {
+    return match ($status) {
+        'ok' => 1,
+        'warn' => 2,
+        'error' => 3,
+        default => 0,
+    };
+}
+
+function makeAnonymous() {
+    return new class {
+        public function run() {
+            return true;
+        }
+    };
+}

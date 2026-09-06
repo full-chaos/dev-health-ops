@@ -1,0 +1,20 @@
+<?php
+
+// PRESERVED, NOT FIXED (see php.go's stateFunctionBodyOrReturnType doc):
+// an interface method forward-declaration WITH a return-type hint
+// (`): string;`, no body) drives PHPLanguageStates into
+// _function_body_or_return_type, which has no ";" (or "}") case at all --
+// only "{" -- so the state machine gets stuck there, silently absorbing
+// every token (including the interface's own closing brace) until the
+// very next literal "{" anywhere later in the file, which it then
+// mistakes for THIS forward declaration's own body. This file is kept
+// deliberately isolated (nothing meaningful after the trigger) so the
+// quirk is provable without silently swallowing unrelated corpus
+// coverage the way it would if mixed into a larger fixture.
+interface Greets {
+    public function greet(): string;
+}
+
+function afterInterface($x) {
+    return $x;
+}

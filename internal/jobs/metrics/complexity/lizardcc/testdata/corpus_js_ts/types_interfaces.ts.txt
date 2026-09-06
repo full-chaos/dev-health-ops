@@ -1,0 +1,37 @@
+type Handler = (event: string) => void;
+
+type Shape = {
+  kind: string;
+  area: () => number;
+};
+
+interface Greeter {
+  greet(name: string): string;
+  farewell(name: string): string;
+}
+
+declare function externalHelper(x: number): number;
+
+function useHandler(h: Handler, value: string): void {
+  if (value.length > 0) {
+    h(value);
+  }
+}
+
+function makeGreeter(): Greeter {
+  return {
+    greet(name: string): string {
+      if (name) {
+        return "hello " + name;
+      }
+      return "hello";
+    },
+    farewell(name: string): string {
+      return "bye " + name;
+    },
+  };
+}
+
+function withGeneric<T, U>(a: T, b: U): boolean {
+  return a !== null && b !== null;
+}

@@ -146,24 +146,29 @@ func CFamilyAnalyzer(path, source string) ([]int, bool, error) {
 //
 // PR1 (CHAOS-4971a) registered `python` only. PR2a (CHAOS-5156) added `c`
 // and `cpp`. PR2253/go-rust added `go` and `rust` (the GoLikeStates clone-
-// based infra). This PR adds `csharp`, `kotlin`, `scala`, `swift` and
+// based infra). A later PR added `csharp`, `kotlin`, `scala`, `swift` and
 // `java` (csharp and java both reuse PR2a's CLikeReader-family
 // architecture via hooks; kotlin/scala/swift share go-rust's GoLikeStates
-// infra). The remaining lizard languages land in a later stack -- no
-// other function, the dispatch, the result type, or the extension map
-// needs to change for any of them.
+// infra). CHAOS-4291 adds `javascript` and `typescript` (TypeScriptReader's
+// own state machine, lizardcc/typescript.go -- JavaScriptReader is
+// TypeScriptReader unchanged in Python, so both keys share one Go
+// analyzer). `ruby`, `php`, `objective-c`, `lua` and `vue` remain for a
+// follow-up stack in this same PR -- no other function, the dispatch, the
+// result type, or the extension map needs to change for any of them.
 func DefaultAnalyzers() map[string]AnalyzerFunc {
 	return map[string]AnalyzerFunc{
-		"python": PythonAnalyzer,
-		"c":      CFamilyAnalyzer,
-		"cpp":    CFamilyAnalyzer,
-		"go":     lizardcc.AnalyzeGo,
-		"rust":   lizardcc.AnalyzeRust,
-		"csharp": lizardcc.AnalyzeCSharp,
-		"java":   lizardcc.AnalyzeJava,
-		"kotlin": lizardcc.AnalyzeKotlin,
-		"scala":  lizardcc.AnalyzeScala,
-		"swift":  lizardcc.AnalyzeSwift,
+		"python":     PythonAnalyzer,
+		"c":          CFamilyAnalyzer,
+		"cpp":        CFamilyAnalyzer,
+		"go":         lizardcc.AnalyzeGo,
+		"rust":       lizardcc.AnalyzeRust,
+		"csharp":     lizardcc.AnalyzeCSharp,
+		"java":       lizardcc.AnalyzeJava,
+		"kotlin":     lizardcc.AnalyzeKotlin,
+		"scala":      lizardcc.AnalyzeScala,
+		"swift":      lizardcc.AnalyzeSwift,
+		"javascript": lizardcc.AnalyzeJavaScript,
+		"typescript": lizardcc.AnalyzeTypeScript,
 	}
 }
 

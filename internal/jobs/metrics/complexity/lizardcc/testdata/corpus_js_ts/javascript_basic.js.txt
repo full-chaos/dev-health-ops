@@ -1,0 +1,41 @@
+function add(a, b) {
+  return a + b;
+}
+
+function classify(n) {
+  if (n < 0) {
+    return "negative";
+  } else if (n === 0) {
+    return "zero";
+  } else {
+    return "positive";
+  }
+}
+
+const double = (x) => {
+  if (x > 0 && x < 100) {
+    return x * 2;
+  }
+  return x;
+};
+
+class Counter {
+  constructor(start) {
+    this.value = start;
+  }
+
+  increment(step) {
+    if (step) {
+      this.value += step;
+    } else {
+      this.value += 1;
+    }
+    return this.value;
+  }
+}
+
+function pick(flag, a, b) {
+  return flag ? a : b;
+}
+
+module.exports = { add, classify, double, Counter, pick };

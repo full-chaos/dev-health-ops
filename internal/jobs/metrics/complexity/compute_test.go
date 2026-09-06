@@ -418,6 +418,76 @@ func TestLanguageForRoutesEveryJVMSwiftExtensionToItsAnalyzer(t *testing.T) {
 	}
 }
 
+// TestLanguageForRoutesEveryJSTSExtensionToItsAnalyzer proves every
+// extension CHAOS-4291 registers for javascript/typescript reaches the
+// right analyzer under the right language string -- .js/.jsx/.mjs/.cjs all
+// route to "javascript" (lizardcc.AnalyzeJavaScript), .ts/.tsx to
+// "typescript" (lizardcc.AnalyzeTypeScript), matching Python's
+// JavaScriptReader/TypeScriptReader ext lists (javascript.py:11,
+// typescript.py:51) exactly.
+func TestLanguageForRoutesEveryJSTSExtensionToItsAnalyzer(t *testing.T) {
+	cases := []struct {
+		path string
+		lang string
+	}{
+		{"a.js", "javascript"}, {"a.jsx", "javascript"},
+		{"a.mjs", "javascript"}, {"a.cjs", "javascript"},
+		{"a.ts", "typescript"}, {"a.tsx", "typescript"},
+	}
+	analyzers := DefaultAnalyzers()
+	for _, c := range cases {
+		lang, known := LanguageFor(c.path)
+		if !known || lang != c.lang {
+			t.Fatalf("%s: LanguageFor got (%q, %v), want (%q, true)", c.path, lang, known, c.lang)
+		}
+		if _, ok := analyzers[lang]; !ok {
+			t.Fatalf("%s: no analyzer registered for language %q", c.path, lang)
+		}
+	}
+}
+
+// TestAnalyzeFileMatchesLizardAggregatesForJSTS is this PR's contract test
+// against PR1's seam for the javascript/typescript analyzer, mirroring
+// TestAnalyzeFileMatchesLizardAggregatesForJava.
+func TestAnalyzeFileMatchesLizardAggregatesForJSTS(t *testing.T) {
+	corpus := filepath.Join("lizardcc", "testdata", "corpus_js_ts")
+	entries, err := os.ReadDir(corpus)
+	if err != nil {
+		t.Fatalf("read corpus: %v", err)
+	}
+	seen := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".txt")
+		src, err := os.ReadFile(filepath.Join(corpus, entry.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		seen++
+		t.Run(entry.Name(), func(t *testing.T) {
+			result, err := AnalyzeFile(name, string(src), DefaultThresholds())
+			if err != nil {
+				t.Fatalf("AnalyzeFile(%s): %v", name, err)
+			}
+			if result == nil {
+				t.Fatalf("AnalyzeFile(%s): expected a row, got nil", name)
+			}
+			wantLang := "typescript"
+			if strings.HasSuffix(name, ".js") {
+				wantLang = "javascript"
+			}
+			if result.Language != wantLang {
+				t.Errorf("%s: language = %q, want %q", name, result.Language, wantLang)
+			}
+		})
+	}
+	if seen == 0 {
+		t.Fatalf("no corpus files found; this test proved nothing")
+	}
+}
+
 // TestAnalyzeFileMatchesLizardAggregatesForJava is this PR's contract test
 // against PR1's seam for the java analyzer, mirroring
 // TestAnalyzeFileMatchesLizardAggregatesForCFamily.
@@ -517,8 +587,10 @@ func TestAnalyzeFileFailsClosedOnLizardLanguages(t *testing.T) {
 	// routed before the port lands. "b.go" moved out of this list when
 	// go-rust registered `go` (TestLanguageForRoutesEveryGoRustExtension
 	// ToItsAnalyzer proves its own now-ported assertion); "c.java" moved
-	// out when this PR registered `java`.
-	for _, path := range []string{"a.ts", "d.rb", "e.vue"} {
+	// out when a later PR registered `java`; "a.ts" moved out when
+	// CHAOS-4291 registered `javascript`/`typescript`
+	// (lizardcc/typescript.go).
+	for _, path := range []string{"d.rb", "e.vue"} {
 		got, err := AnalyzeFile(path, "function f() { if (a && b) return 1; }", DefaultThresholds())
 		if !errors.Is(err, ErrLanguageNotPorted) {
 			t.Errorf("%s: expected ErrLanguageNotPorted, got err=%v", path, err)

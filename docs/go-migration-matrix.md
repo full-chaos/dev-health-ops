@@ -222,12 +222,6 @@ function directly, even for families whose worker kind is now native:
 | work_item_state | NATIVE | Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads | CHAOS-4278 (Done) |
 <!-- END GENERATED DAILY METRICS MATRIX -->
 
-**`team_complexity`** (writes `team_complexity_daily`, `job_daily.py:853-915 _write_team_complexity_for_day`)
-is a live, currently-computing 25th family that is **not in `families.json` at all** -- invisible to this
-page's own drift gate, per `.remember/remaining-python-compute-inventory-2026-09-01.md` §3 (not
-independently re-verified this pass; tracked as a follow-up ticket, not listed as a row here per team-lead's
-instruction not to fold doc-drift findings into the doc itself).
-
 **`internal/jobs/metrics/testops/compute.go`** is the pure Go compute (with live-Python oracles for parity)
 shared by `testops_risk` and the three `testops_{pipeline,test,coverage}` families. It was written by
 CHAOS-4294 as an internal dependency of `testops_risk`'s own input recompute and was, for a period,

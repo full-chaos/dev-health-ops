@@ -17,8 +17,8 @@ func TestFlagGuardsAndOperationalIncidentStepNamesMatchDeclaredOrder(t *testing.
 	}
 
 	want := buildPreStepOrder()
-	if len(want) != 5 || want[3] != "flag_guards_edges" || want[4] != "operational_incident_edges" {
-		t.Fatalf("buildPreStepOrder() = %v, want [... pr_commit_edges flag_guards_edges operational_incident_edges]", want)
+	if len(want) != 7 || want[5] != "flag_guards_edges" || want[6] != "operational_incident_edges" {
+		t.Fatalf("buildPreStepOrder() = %v, want [... commit_file_edges flag_guards_edges operational_incident_edges]", want)
 	}
 }
 

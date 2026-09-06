@@ -176,8 +176,8 @@ func TestPreStepNameIsStable(t *testing.T) {
 // buildPostStepOrder for why the other went to the post-step seam.
 func TestBuildPreStepOrderIsPinned(t *testing.T) {
 	want := []string{
-		"issue_pr_links", "pr_commit_links", "pr_commit_edges",
-		"flag_guards_edges", "operational_incident_edges",
+		"issue_pr_links", "issue_commit_edges", "pr_commit_links", "pr_commit_edges",
+		"commit_file_edges", "flag_guards_edges", "operational_incident_edges",
 	}
 	got := buildPreStepOrder()
 

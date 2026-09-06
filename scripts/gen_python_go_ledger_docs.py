@@ -528,8 +528,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "system_tasks.py": {
         "category": "c",
-        "evidence": "corrected 2026-08-28 per codex review: NOT a dead shim — `api/webhooks/router.py:34` and `api/billing/router.py:45` import `process_webhook_event`/`send_billing_notification` from this module and call `.delay(...)`/`.apply_async(...)` on them, gated behind `if route_requires_celery(route):`. Since `operational.webhook_delivery`/`billing_notification` are `route=river` in migration-state.json, that gate evaluates false in production today, so the call is live-but-inert (same 'live call site, dead effect' shape as report_task.py above) — the module itself cannot be deleted without removing these two router imports first",
-        "ticket": "CHAOS-4439 (coordinate with api/webhooks/router.py + api/billing/router.py, not a pure file deletion)",
+        "evidence": "corrected 2026-09-06 (CHAOS-5320): NOT a dead shim, but for a different reason than before — `api/webhooks/router.py`'s `process_webhook_event` import and `api/billing/router.py`'s `send_billing_notification`/`.delay(...)` call site (both gated behind `route_requires_celery`) are DELETED; `route_requires_celery` itself is deleted (job_routes.py). `system_tasks.py`'s only remaining live importer is `workers/tasks.py`'s barrel re-export, which registers its `@celery_app.task`-decorated functions with the Celery app at import time for the worker process — unrelated to whether any router still dispatches to them.",
+        "ticket": "CHAOS-4439 (dead worker modules) -- the router-coordination caveat from the prior entry no longer applies",
     },
     "system_webhooks.py": {
         "category": "a",

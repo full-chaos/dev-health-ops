@@ -1,0 +1,16 @@
+// CHAOS-5156: closes a gap codex round r1 on #2292 found (independently
+// confirmed against real lizard 1.23.0 before fixing). stateDecToImp was
+// missing the "(" branch clikeStates.stateDecToImp has (clike.go) --
+// a function returning a function pointer, e.g. `int (*make(int))(int)`.
+// Java has no function-pointer syntax, but JavaStates inherits
+// _state_dec_to_imp UNCHANGED (confirmed from source), so lizard's
+// tolerant tokenizer still parses this token shape. Measured directly
+// against real lizard 1.23.0: complexity 2 (base 1 + if).
+class C {
+    int (*make(int x))(int y) {
+        if (x > 0) {
+            return 1;
+        }
+        return 0;
+    }
+}

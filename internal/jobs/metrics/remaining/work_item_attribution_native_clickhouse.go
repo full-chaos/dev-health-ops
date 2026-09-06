@@ -230,11 +230,17 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 
 	rows := BuildWorkItemAttributionRows(orgID, now, affectedIDs, subjects, derived)
 
+	// Codex confirmation-pass P1 (#2276, found on re-review after the 7th-site
+	// fix landed): WriteAttributions' own batch.Send() branch already
+	// reports its TRUE row count on an ambiguous network error -- assigning
+	// outcome.RowsWritten only on the success path discarded that count a
+	// second time on a failure. Assign it BEFORE the error check, same
+	// idiom as every other fixed site in this PR.
 	written, err := executor.writer.WriteAttributions(ctx, rows)
+	outcome.RowsWritten = written
 	if err != nil {
 		return outcome, err
 	}
-	outcome.RowsWritten = written
 	if err := executor.publishRunMarkers(ctx, orgID, scope, now); err != nil {
 		return outcome, err
 	}

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import argparse
 import logging
-import os
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.active_incidents import (
     IncidentWindow,
     active_incidents_query,
@@ -20,12 +17,6 @@ from dev_health_ops.metrics.schemas import (
 )
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
-from dev_health_ops.utils.cli import (
-    add_date_range_args,
-    add_sink_arg,
-    resolve_date_range,
-    validate_sink,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -267,55 +258,13 @@ def run_dora_metrics_job(
                 logger.exception("Error closing sink %s", type(s).__name__)
 
 
-def register_commands(subparsers: argparse._SubParsersAction) -> None:
-    dora = subparsers.add_parser(
-        "dora",
-        help="Compute and persist DORA metrics from synced ClickHouse data.",
-    )
-    add_date_range_args(dora)
-    dora.add_argument(
-        "--repo-id", type=uuid.UUID, help="Filter to a specific repository UUID."
-    )
-    dora.add_argument("--repo-name", help="Filter to a specific repository by name.")
-    add_sink_arg(dora)
-    dora.add_argument(
-        "--metrics",
-        help="Comma-separated metric names to compute (default: full DORA set).",
-    )
-    # Legacy GitLab-API flags retained for backward compatibility; DORA is now
-    # provider-agnostic and sourced from ClickHouse, so these are ignored.
-    dora.add_argument(
-        "--interval",
-        default="daily",
-        help=argparse.SUPPRESS,
-    )
-    dora.add_argument(
-        "--gitlab-url",
-        default=os.getenv("GITLAB_URL", "https://gitlab.com"),
-        help=argparse.SUPPRESS,
-    )
-    dora.add_argument("--auth", help=argparse.SUPPRESS)
-    dora.set_defaults(func=_cmd_metrics_dora)
-
-
-def _cmd_metrics_dora(ns: argparse.Namespace) -> int:
-    try:
-        validate_sink(ns)
-        end_day, backfill_days = resolve_date_range(ns)
-        run_dora_metrics_job(
-            db_url=resolve_sink_uri(ns),
-            day=end_day,
-            backfill_days=backfill_days,
-            repo_id=ns.repo_id,
-            repo_name=ns.repo_name,
-            sink=ns.sink,
-            metrics=ns.metrics,
-            interval=ns.interval,
-            gitlab_url=ns.gitlab_url,
-            auth=ns.auth,
-            org_id=getattr(ns, "org", None),
-        )
-        return 0
-    except Exception as e:
-        logger.error("DORA metrics job failed: %s", e)
-        return 1
+# CHAOS-5307: `register_commands`/`_cmd_metrics_dora` (the direct-Python-
+# compute `dev-hops metrics dora` CLI verb) were deleted here. They were
+# already 100% orphaned before this change -- CHAOS-5055/#2232 repointed
+# `cli.py` to register `workerctl_dispatch.register_trigger_backstop_commands`
+# instead (dispatches through `dev-health-workerctl metrics remaining
+# trigger-backstop --family dora`), and nothing anywhere in the repo still
+# called these functions or `job_dora.register_commands` by name (verified
+# by repo-wide search before deletion). `run_dora_metrics_job` above is NOT
+# dead -- it still has live callers -- only the unwired CLI wrapper
+# functions were removed.

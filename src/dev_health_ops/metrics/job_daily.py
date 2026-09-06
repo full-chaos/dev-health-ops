@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import gc
 import json
 import logging
@@ -14,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from dev_health_ops.clickhouse_dedup import dedup_from
-from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.active_incidents import (
     IncidentWindow,
     active_incidents_query,
@@ -72,12 +70,6 @@ from dev_health_ops.providers.teams import (
     load_team_repo_ownership_map,
 )
 from dev_health_ops.storage import detect_db_type
-from dev_health_ops.utils.cli import (
-    add_date_range_args,
-    add_sink_arg,
-    resolve_date_range,
-    validate_sink,
-)
 from dev_health_ops.work_graph.extractors.ai_workflow import (
     extract_review_deployment_incident_edges,
 )
@@ -1757,151 +1749,15 @@ async def run_daily_metrics_finalize(
     logger.info("IC finalize complete for day=%s", day.isoformat())
 
 
-def register_commands(subparsers: argparse._SubParsersAction) -> None:
-    daily = subparsers.add_parser("daily", help="Compute daily metrics.")
-    add_date_range_args(daily)
-    daily.add_argument(
-        "--repo-id", type=uuid.UUID, help="Filter to a specific repository UUID."
-    )
-    daily.add_argument("--repo-name", help="Filter to a specific repository by name.")
-    daily.add_argument(
-        "--no-commits",
-        dest="commit_metrics",
-        action="store_false",
-        help="Skip per-commit metrics; compute work-item and derived metrics only.",
-    )
-    daily.set_defaults(commit_metrics=True)
-    add_sink_arg(daily)
-    daily.add_argument(
-        "--provider",
-        default="auto",
-        help="Restrict to a single provider (default: auto = all providers).",
-    )
-    daily.set_defaults(func=_cmd_metrics_daily)
-
-    rebuild = subparsers.add_parser(
-        "rebuild",
-        help=(
-            "Recompute daily metrics for one or more repos (or all repos) over a "
-            "date range, then run a single partitioned finalize per day. Use after "
-            "correcting or re-syncing source data for specific repositories."
-        ),
-    )
-    add_date_range_args(rebuild)
-    rebuild.add_argument(
-        "--repo-id",
-        type=uuid.UUID,
-        action="append",
-        dest="repo_ids",
-        default=[],
-        help="Repo UUID to rebuild; repeatable. Omit to rebuild all repos.",
-    )
-    add_sink_arg(rebuild)
-    rebuild.add_argument(
-        "--provider",
-        default="auto",
-        help="Restrict to a single provider (default: auto = all providers).",
-    )
-    rebuild.set_defaults(func=_cmd_metrics_rebuild)
-
-
-async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
-    try:
-        validate_sink(ns)
-        end_day, backfill_days = resolve_date_range(ns)
-        db_url = resolve_sink_uri(ns)
-        org_id = getattr(ns, "org", None) or ""
-        await run_daily_metrics_job(
-            db_url=db_url,
-            day=end_day,
-            backfill_days=backfill_days,
-            repo_id=ns.repo_id,
-            repo_name=ns.repo_name,
-            include_commit_metrics=ns.commit_metrics,
-            sink=ns.sink,
-            provider=ns.provider,
-            org_id=org_id,
-            # CHAOS-4365 codex R3 (P2): the standalone finalizer below
-            # already recomputes IC metrics/landscape for the whole org --
-            # skip_finalize=True here avoids running that same inline logic
-            # TWICE per day (matches _cmd_metrics_rebuild's existing
-            # skip_finalize=True + explicit run_daily_metrics_finalize
-            # pattern, which this bare-CLI path now also follows).
-            skip_finalize=True,
-        )
-        # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
-        # written from run_daily_metrics_finalize, not from
-        # run_daily_metrics_job itself -- this bare `dev-hops metrics daily`
-        # path (AGENTS.md's documented usage) is the ONLY caller that did not
-        # already invoke the standalone finalizer (_cmd_metrics_rebuild
-        # always has; the worker partition loop triggers a separate
-        # "finalize" operation after all repos land). Without this, the
-        # command exits 0 having silently produced no compounding_risk_team
-        # rows. (team_cognitive_load_daily USED to be produced here too;
-        # CHAOS-5141 deleted its Python compute -- this bare CLI path no
-        # longer produces it at all, only the Go worker's finalize handler
-        # does now.) Idempotent to call even for a single-repo run
-        # (--repo-id): finalize reads the WHOLE org's
-        # repo_metrics_daily/user_metrics_daily/team_metrics_daily back from
-        # ClickHouse, so it reflects every repo's already-persisted state,
-        # not just this run's repo_id scope.
-        for d in _date_range(end_day, backfill_days):
-            await run_daily_metrics_finalize(
-                db_url=db_url,
-                day=d,
-                org_id=org_id,
-                sink=ns.sink,
-            )
-        return 0
-    except Exception as e:
-        logger.error(f"Daily metrics job failed: {e}")
-        return 1
-
-
-async def _cmd_metrics_rebuild(ns: argparse.Namespace) -> int:
-    try:
-        validate_sink(ns)
-        end_day, backfill_days = resolve_date_range(ns)
-        db_url = resolve_sink_uri(ns)
-        org_id = getattr(ns, "org", None) or ""
-        repo_ids: list[uuid.UUID] = ns.repo_ids or []
-        days = _date_range(end_day, backfill_days)
-
-        for d in days:
-            if repo_ids:
-                for rid in repo_ids:
-                    logger.info("Rebuild batch: day=%s repo_id=%s", d, rid)
-                    await run_daily_metrics_job(
-                        db_url=db_url,
-                        day=d,
-                        backfill_days=1,
-                        repo_id=rid,
-                        sink=ns.sink,
-                        provider=ns.provider,
-                        org_id=org_id,
-                        skip_finalize=True,
-                    )
-            else:
-                logger.info("Rebuild batch: day=%s (all repos)", d)
-                await run_daily_metrics_job(
-                    db_url=db_url,
-                    day=d,
-                    backfill_days=1,
-                    sink=ns.sink,
-                    provider=ns.provider,
-                    org_id=org_id,
-                    skip_finalize=True,
-                )
-
-            logger.info("Rebuild finalize: day=%s", d)
-            await run_daily_metrics_finalize(
-                db_url=db_url,
-                day=d,
-                org_id=org_id,
-                sink=ns.sink,
-            )
-
-        return 0
-    except Exception as e:
-        logger.error("Metrics rebuild failed: %s", e)
-        return 1
+# CHAOS-5307: `register_commands`/`_cmd_metrics_daily`/`_cmd_metrics_rebuild`
+# (the direct-Python-compute `dev-hops metrics daily`/`rebuild` CLI verbs)
+# were deleted here. They were already 100% orphaned before this change --
+# CHAOS-5055/#2232 repointed `cli.py` to register
+# `workerctl_dispatch.register_commands` instead (which dispatches through
+# `dev-health-workerctl metrics daily-start`, see that module's own
+# docstring), and nothing anywhere in the repo still called these functions
+# or `job_daily.register_commands` by name (verified by repo-wide search
+# before deletion). `run_daily_metrics_job`/`run_daily_metrics_finalize`
+# above are NOT dead -- they still have live callers (the worker bridge,
+# `scripts/compute_metrics_daily.py`, fixtures, tests) -- only the unwired
+# CLI wrapper functions were removed.

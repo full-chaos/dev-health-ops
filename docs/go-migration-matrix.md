@@ -175,16 +175,18 @@ cross-contract inconsistency between the repo's two provider-sync contract files
 `cmd/dev-health-worker/daily.go` ~L680-820; everything else falls through to `HTTPCompatibilityExecutor` ->
 `POST /internal/worker/daily-metrics/v1/execute` -> `job_daily.py:1104 run_daily_metrics_job`) and 7
 independent `metrics.remaining.*` River kinds (`daily.go:566-646`) are the two WORKER-side families below.
-The **CLI verb layer largely bypasses both** -- several `dev-hops metrics` verbs call the Python compute
-function directly, even for families whose worker kind is now native:
+The CLI verb layer used to bypass both -- several `dev-hops metrics` verbs called the Python compute
+function directly, even for families whose worker kind is now native. CHAOS-5055/#2232 repointed the
+LIVE `daily`/`rebuild`/`complexity`/`dora`/`capacity` verbs to dispatch through the Go worker instead
+(rows below); CHAOS-5307 then deleted the orphaned direct-compute functions those verbs used to call,
+which had been unreachable dead code (never wired into `cli.py`'s argparse tree) since #2232 landed:
 
 | CLI verb | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `dev-hops metrics daily` | COMPAT-Python (direct call) | `job_daily.py` `_cmd_metrics_daily` -> `run_daily_metrics_job` -- **bypasses Go's native executors entirely**, unlike the worker's `metrics.daily_partition` kind (9/24 families native there, see table below) | -- |
-| `dev-hops metrics rebuild` | COMPAT-Python (direct call) | `job_daily.py` `_cmd_metrics_rebuild` -> `run_daily_metrics_job` per repo + `run_daily_metrics_finalize` -- **not** `partition_recompute.go`, that's a different mechanism (next row) | -- |
+| `dev-hops metrics daily` / `rebuild` | NATIVE (dispatch) | `workerctl_dispatch.py` `_cmd_metrics_daily`/`_cmd_metrics_rebuild` -> `dev-health-workerctl metrics daily-start` -- the worker's own native/bridge split decides the rest (CHAOS-5055/#2232). The old direct-Python-compute `job_daily.py` `_cmd_metrics_daily`/`_cmd_metrics_rebuild` (never wired into `cli.py`, zero callers) were deleted (CHAOS-5307); `run_daily_metrics_job`/`run_daily_metrics_finalize` themselves are unaffected -- other live callers remain (the worker bridge, `scripts/compute_metrics_daily.py`, fixtures) | CHAOS-5055/CHAOS-5307 |
 | `dev-health-workerctl metrics partition-recompute` | PARTIAL | `internal/jobs/metrics/daily/partition_recompute.go` -- Go-native REDRIVE only (bumps `daily_metrics_runs.generation`, republishes the partition claim); the recompute itself then follows the ordinary native/bridge split below, it is not a compute engine on its own | CHAOS-4459 |
 | `dev-health-workerctl metrics daily-redrive` / `daily-finalize` / `finalize-redrive` | NATIVE (ledger repair) -> triggers the ordinary native/bridge split on replay | `cmd/dev-health-workerctl/main.go:785-1193` | CHAOS-4358/4389/4405 |
-| `dev-hops metrics complexity` / `dora` / `capacity` / `release-impact` | COMPAT-Python (direct call, always -- bypasses the native worker kinds below regardless of their own split) | `job_complexity_db.py`/`job_dora.py`/`job_capacity.py`/`job_release_impact.py` | -- |
+| `dev-hops metrics complexity` / `dora` / `capacity` | NATIVE (dispatch) | `workerctl_dispatch.py` -> `dev-health-workerctl metrics remaining trigger-backstop --family <complexity\|dora\|capacity>` (CHAOS-5055/#2232). The old direct-Python-compute `job_complexity_db.py`/`job_dora.py`/`job_capacity.py` CLI wrappers (never wired into `cli.py`, zero callers) were deleted (CHAOS-5307); the underlying compute functions themselves are unaffected -- other live callers remain (the worker bridge, GraphQL resolvers, fixtures/tests). `metrics release-impact`'s own module (`job_release_impact.py`) no longer exists as a file at all. | CHAOS-5055/CHAOS-5307 |
 | `dev-hops metrics validate-flags` | **N/A -- confirmed still a read-only diagnostic**, no ClickHouse write, no worker path | `job_ff_validation.py` `_cmd_validate_flags` -> `run_validate_flags` (prints a report only) | -- |
 | `dev-hops metrics compounding-risk` | COMPAT-Python (standalone CLI wrapper; duplicate coverage -- `job_daily.py`'s finalize already writes `compounding_risk_daily` nightly regardless) | `job_compounding_risk.py:318` | CHAOS-4287 |
 | `dev-health-workerctl metrics remaining start` | NATIVE (manual backfill trigger) | `cmd/dev-health-workerctl/main.go:1598-1686` -- help text is stale, only lists complexity/dora/release_impact (doesn't mention membership_backfill/recommendations/work_item_attribution, which also exist) | CHAOS-4254 |

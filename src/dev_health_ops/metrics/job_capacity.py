@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import argparse
-import asyncio
 import logging
 from dataclasses import replace
 from datetime import date
@@ -127,119 +125,15 @@ async def run_capacity_forecast(
         sink.close()
 
 
-def _print_forecast(result: ForecastResult) -> None:
-    print(f"\n{'=' * 60}")
-    print(f"Capacity Forecast: {result.forecast_id[:8]}")
-    print(f"{'=' * 60}")
-    print(f"Team: {result.team_id or 'All'}")
-    print(f"Scope: {result.work_scope_id or 'All'}")
-    print(f"Backlog: {result.backlog_size} items")
-    print(f"History: {result.history_days} days")
-    print(
-        f"Throughput: {result.throughput_mean:.2f} ± {result.throughput_stddev:.2f} items/day"
-    )
-
-    if result.target_items:
-        print(f"\nTarget: Complete {result.target_items} items")
-        print(f"  P50 (optimistic):   {result.p50_days} days → {result.p50_date}")
-        print(f"  P85 (planning):     {result.p85_days} days → {result.p85_date}")
-        print(f"  P95 (conservative): {result.p95_days} days → {result.p95_date}")
-
-    if result.target_date:
-        print(f"\nTarget: By {result.target_date}")
-        print(f"  P50 (optimistic):   {result.p50_items} items")
-        print(f"  P85 (likely):       {result.p85_items} items")
-        print(f"  P95 (minimum):      {result.p95_items} items")
-
-    if result.insufficient_history:
-        print("\n⚠️  WARNING: Insufficient history for reliable forecast")
-    if result.high_variance:
-        print("\n⚠️  WARNING: High throughput variance detected")
-
-
-async def _run_cli(args: argparse.Namespace) -> int:
-    from dev_health_ops.metrics.sinks.factory import detect_backend
-
-    detect_backend(args.db)
-
-    target_date = None
-    if args.target_date:
-        target_date = date.fromisoformat(args.target_date)
-
-    results = await run_capacity_forecast(
-        db_url=args.db,
-        team_id=args.team_id,
-        work_scope_id=args.work_scope_id,
-        target_items=args.target_items,
-        target_date=target_date,
-        history_days=args.history_days,
-        simulations=args.simulations,
-        all_teams=args.all_teams,
-        persist=not args.dry_run,
-        org_id=args.org or "",
-    )
-
-    if not results:
-        print("No forecasts generated. Check logs for warnings.")
-        return 1
-
-    for result in results:
-        _print_forecast(result)
-
-    return 0
-
-
-def register_commands(subparsers: argparse._SubParsersAction) -> None:
-    capacity_parser = subparsers.add_parser(
-        "capacity",
-        help="Compute capacity forecasts using Monte Carlo simulation",
-    )
-    capacity_parser.add_argument(
-        "--db",
-        required=True,
-        help="Database connection string",
-    )
-    capacity_parser.add_argument(
-        "--org",
-        help="Organization ID for tenant-scoped forecast queries",
-    )
-    capacity_parser.add_argument(
-        "--team-id",
-        help="Filter by team ID",
-    )
-    capacity_parser.add_argument(
-        "--work-scope-id",
-        help="Filter by work scope ID (project/board)",
-    )
-    capacity_parser.add_argument(
-        "--target-items",
-        type=int,
-        help="Number of items to complete (defaults to current backlog)",
-    )
-    capacity_parser.add_argument(
-        "--target-date",
-        help="Target deadline (YYYY-MM-DD format)",
-    )
-    capacity_parser.add_argument(
-        "--history-days",
-        type=int,
-        default=90,
-        help="Days of history to use (default: 90)",
-    )
-    capacity_parser.add_argument(
-        "--simulations",
-        type=int,
-        default=10000,
-        help="Number of Monte Carlo simulations (default: 10000)",
-    )
-    capacity_parser.add_argument(
-        "--all-teams",
-        action="store_true",
-        help="Compute forecasts for all discovered team/scope combinations",
-    )
-    capacity_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print forecasts without persisting to database",
-    )
-    capacity_parser.set_defaults(func=lambda args: asyncio.run(_run_cli(args)))
+# CHAOS-5307: `_print_forecast`/`_run_cli`/`register_commands` (the direct-
+# Python-compute `dev-hops metrics capacity` CLI verb, plus its
+# console-print helper and asyncio wrapper, both only ever called from the
+# CLI handler itself) were deleted here. They were already 100% orphaned
+# before this change -- CHAOS-5055/#2232 repointed `cli.py` to register
+# `workerctl_dispatch.register_capacity_trigger_command` instead (dispatches
+# through `dev-health-workerctl metrics remaining trigger-backstop --family
+# capacity`), and nothing anywhere in the repo still called these functions
+# or `job_capacity.register_commands` by name (verified by repo-wide search
+# before deletion). `run_capacity_forecast` above is NOT dead -- it still
+# has live callers (the worker bridge, the GraphQL capacity resolver,
+# tests) -- only the unwired CLI wrapper functions were removed.

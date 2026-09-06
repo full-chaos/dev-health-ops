@@ -206,12 +206,15 @@ func prCommitWindowFor(rawScope []byte, now func() time.Time) (prcommit.Window, 
 		}
 		to = parsed
 	}
-	from := to.AddDate(0, 0, -30)
-	if _, rangeErr := withPythonYearRange("derived from_date", from); rangeErr != nil {
-		return prcommit.Window{}, fmt.Errorf(
-			"build scope to_date %s: the default 30-day lower bound falls outside the "+
-				"reference's 1..9999 year range, where it raises OverflowError", to.Format(time.RFC3339))
-	}
+	// CHAOS-5297 (codex round chaos-4924-pr-d-r1-confirm's P1 on #2301,
+	// EXECUTED repro, same bug shape here): the derived-bound overflow guard
+	// must run ONLY when from_date is absent from scope. Python's own
+	// resolution (work_graph_tasks.py) is an if/else -- `parsed_to -
+	// timedelta(days=30)` is never evaluated at all when from_date is
+	// supplied -- so an explicit from_date/to_date pair that is each
+	// individually valid (e.g. both "0001-01-01") must not be rejected over
+	// a derived value Python would never have computed.
+	var from time.Time
 	if text, present, err := scopeString(scope["from_date"]); err != nil {
 		return prcommit.Window{}, fmt.Errorf("build scope from_date: %w", err)
 	} else if present {
@@ -220,6 +223,13 @@ func prCommitWindowFor(rawScope []byte, now func() time.Time) (prcommit.Window, 
 			return prcommit.Window{}, fmt.Errorf("build scope from_date: %w", parseErr)
 		}
 		from = parsed
+	} else {
+		from = to.AddDate(0, 0, -30)
+		if _, rangeErr := withPythonYearRange("derived from_date", from); rangeErr != nil {
+			return prcommit.Window{}, fmt.Errorf(
+				"build scope to_date %s: the default 30-day lower bound falls outside the "+
+					"reference's 1..9999 year range, where it raises OverflowError", to.Format(time.RFC3339))
+		}
 	}
 
 	window := prcommit.Window{From: &from, To: &to}

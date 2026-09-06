@@ -1,0 +1,38 @@
+-- CHAOS-5359: Investment Sankey repo coverage sits at 28% because
+-- collectSingleRepoID (materializecomponent.go) and AllocateRepoEffort
+-- (repoeffort.go) both only ever look at a component's OWN PR/commit/repo
+-- edges. A "pure-issue" component -- no PR, no commit, member issues only --
+-- has no such edge to resolve from, structurally, no matter how the issue
+-- hierarchy nests. 76.1% of work_unit_investments rows are exactly this
+-- shape (executed count, CHAOS-5359 ticket comment).
+--
+-- The fix (R22, 4452 design-of-record vol.2) is a repo-attribution CASCADE
+-- through the issue hierarchy -- walk work_items.parent_id upward to the
+-- nearest ancestor whose OWN unit resolved to exactly one repo (bounded
+-- depth, cycle-safe); failing that, check direct children (all resolving to
+-- the same single repo -> inherit); otherwise stay unassigned. This is
+-- explicitly NOT component fusion (CHAOS-2774's mega-work-unit failure
+-- class) -- unit identity never changes, ids are never re-cut, only the
+-- repo_id/repo_effort fields on the SAME units gain an inherited value.
+--
+-- repo_source is the provenance column recording which case produced a
+-- unit's repo_id: 'own_edges' (the pre-existing resolution, unchanged),
+-- 'ancestor:<issue_id>' (inherited upward), 'children' (inherited from a
+-- unanimous direct-children resolution), or NULL (stayed unassigned -- no
+-- cascade signal found, including the known ceiling: an ancestor issue that
+-- exists in work_items but is not itself a member of any component in the
+-- SAME materializer run is out of scope for this run and left unassigned,
+-- tracked as a follow-up, not fixed here).
+--
+-- PURE ADD COLUMN (CF-cleared): acr reads work_unit_investments by an
+-- explicit column list, so a new column is invisible to it until acr is
+-- updated to read it; acr has zero references to work_unit_repo_effort at
+-- all. Both tables keep their existing ENGINE/ORDER BY exactly as declared
+-- (ReplacingMergeTree(computed_at); work_unit_investments ORDER BY
+-- (work_unit_id), work_unit_repo_effort ORDER BY (org_id, work_unit_id,
+-- ifNull(toString(repo_id), ''))) -- acr mirrors that DDL and a sorting-key
+-- change would require the 027_add_org_id_to_sorting_keys.py rebuild
+-- pattern, which this fix does not need.
+ALTER TABLE work_unit_investments ADD COLUMN IF NOT EXISTS repo_source Nullable(String);
+
+ALTER TABLE work_unit_repo_effort ADD COLUMN IF NOT EXISTS repo_source Nullable(String);

@@ -159,8 +159,9 @@ comment: "the single six-destination effect projection shared by GitHub and GitL
 was still 100% Python at the time of that note is the separate daily-metrics *aggregation* layer built on
 top of these tables -- `testops_pipeline`/`testops_test`/`testops_coverage` under METRICS below. The brief
 conflated the two layers. **Superseded 2026-09-04 (CHAOS-4284): all three of those families are now NATIVE
-too**, so neither layer is Python-only any more; only the (still-present, no longer authoritative)
-`compute_testops.py` compute remains, feeding `testops_risk` in-process.
+too**, so neither layer is Python-only any more. **Further superseded 2026-09-05 (CHAOS-5245): `compute_testops.py`
+and `compute_testops_risk.py` are both deleted entirely** -- their native Go executors (CHAOS-4284/CHAOS-4294)
+have no Python fallback left; see the METRICS table below.
 
 **Doc-drift finding (filed as a follow-up ticket, not fixed here):** `gitlab` `incidents` is present and
 `native_go`/`route_ready` in `matrix.json` (table above reflects this correctly) but has no entry in the

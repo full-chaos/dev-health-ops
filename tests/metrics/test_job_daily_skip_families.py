@@ -169,20 +169,6 @@ class _FakeLoader:
         }
         return [pipeline_row], []
 
-    async def load_testops_pipeline_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        return [], []
-
-    async def load_testops_test_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        return [], []
-
-    async def load_testops_historical_failed_case_names(
-        self, *a: Any, **k: Any
-    ) -> dict:
-        return {}
-
-    async def load_testops_coverage_data(self, *a: Any, **k: Any) -> list:
-        return []
-
     async def load_incidents(self, *a: Any, **k: Any) -> list:
         return []
 

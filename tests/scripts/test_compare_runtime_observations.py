@@ -1,9 +1,9 @@
 """Runtime-observation mode: the operational-health claim (CHAOS-3092 P0).
 
-Kept strictly apart from product-row parity. Rows are compared in Go by
-internal/testsupport/computeparity; nothing here looks at a product row, and
-the two verdict vocabularies are disjoint so a reader cannot mistake one claim
-for the other.
+Kept strictly apart from product-row parity. Rows were compared in Go by
+internal/testsupport/computeparity (retired, CHAOS-5336); nothing here looks
+at a product row, and the two verdict vocabularies are disjoint so a reader
+cannot mistake one claim for the other.
 """
 
 from __future__ import annotations

@@ -95,12 +95,17 @@ var outputPathPatterns = []*regexp.Regexp{
 // TestExplicitCorpusPathsAreStillNeeded below deletes the excuse when the
 // generator starts declaring its own path.
 var explicitCorpusPaths = map[string]string{
-	// Declares its output as a bare `REPO_ROOT / "tests" / "fixtures" / "..."`
-	// path built inside main(), not a module-level Path(__file__)-relative
-	// constant -- so no pattern matches, but it takes --stdout (CHAOS-5084's
-	// oracle: internal/teamresolve vs the real _repo_to_team_map_for_
-	// compounding_risk) and its corpus is committed beside it.
-	"generate_teamresolve_python_golden.py": "teamresolve_python_golden.json",
+	// CHAOS-4924 removed generate_build_scope_parity_table.py's and
+	// generate_scope_grammar_corpus.py's entries here -- both generators were
+	// deleted outright (their workgraph.build scope-gate subject was retired),
+	// see liveDataGenerators above for the full detail.
+	//
+	// CHAOS-5308/CHAOS-3092 removed generate_teamresolve_python_golden.py's
+	// entry -- the generator itself is deleted (its oracle,
+	// _repo_to_team_map_for_compounding_risk, has zero production callers
+	// once repo_user_commit/compounding_risk's Python deletion lands; the
+	// frozen tests/fixtures/teamresolve_python_golden.json and Go's own
+	// internal/teamresolve/golden_test.go stay, they need no live Python).
 }
 
 func declaredOutputPath(source []byte) (string, bool) {

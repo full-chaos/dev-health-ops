@@ -404,7 +404,9 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("metrics", "release-impact"): frozenset({_REQ_ORG}),
     ("metrics", "validate-flags"): frozenset({_REQ_CLICKHOUSE}),
     ("metrics", "rebuild"): frozenset({_REQ_ORG}),
-    ("metrics", "compounding-risk"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
+    # CHAOS-5308: ("metrics", "compounding-risk") deleted -- the whole CLI
+    # verb (job_compounding_risk.py) is gone, no remaining Python producer
+    # of this family at any scope.
     # CHAOS-5055: capacity dispatches to dev-health-workerctl instead of
     # taking its own ClickHouse DSN -- needs --org, not --db/CLICKHOUSE_URI.
     ("metrics", "capacity"): frozenset({_REQ_ORG}),
@@ -623,7 +625,6 @@ def build_parser() -> argparse.ArgumentParser:
     from dev_health_ops.audit.ai_governance import cli as ai_governance_cli
     from dev_health_ops.fixtures import runner as fixtures_runner
     from dev_health_ops.metrics import (
-        job_compounding_risk,
         job_ff_validation,
         job_work_items,
         workerctl_dispatch,
@@ -691,7 +692,6 @@ def build_parser() -> argparse.ArgumentParser:
     workerctl_dispatch.register_trigger_backstop_commands(metrics_subparsers)
     workerctl_dispatch.register_capacity_trigger_command(metrics_subparsers)
     job_ff_validation.register_commands(metrics_subparsers)
-    job_compounding_risk.register_commands(metrics_subparsers)
 
     # ---- audit ----
     audit_parser = sub.add_parser("audit", help="Run diagnostic audits.")

@@ -110,8 +110,12 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # rot guard (TestCICDGoldenMatchesLivePython +
     # generate_daily_cicd_python_golden.py, both also deleted in this PR)
     # and its own dedicated/shared tests (deleted or surgically trimmed).
-    # pipeline_rows (loader.load_cicd_data) itself is NOT deleted -- it also
-    # feeds active_repos, an unrelated live reader.
+    # pipeline_rows/deployment_rows are now ALSO deleted (CHAOS-5308): cicd's
+    # own compute and active_repos' deployment reader are both deleted, so
+    # the loader.load_cicd_data call site in job_daily.py had no remaining
+    # consumer for either return value -- and DataLoader.load_cicd_data
+    # itself (all three backends) is deleted with it, its only real caller
+    # having been that dead call site.
     "cicd": "compute_cicd_metrics_daily",
     # CHAOS-5234/CHAOS-3092: incident's daily compute deleted from
     # job_daily.py -- the native Go executor (IncidentExecutor,
@@ -170,6 +174,27 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # AIWorkflowExtractionResult and extract_ai_workflow_from_pull_requests)
     # are deleted too -- rg confirmed zero remaining callers of any of them.
     "work_graph_edges": "extract_review_deployment_incident_edges",
+    # CHAOS-5308 (CHAOS-3092): repo_user_commit's daily compute deleted from
+    # job_daily.py -- the native Go executor (RepoUserCommitExecutor,
+    # CHAOS-4275) is the only writer of repo_metrics_daily/user_metrics_
+    # daily/commit_metrics for a daily partition now. compute_daily_metrics
+    # itself is ALSO deleted (from compute.py, along with DailyMetricsResult
+    # in schemas.py and commit_size_bucket) -- rg confirmed zero production
+    # callers outside job_daily.py once this call site is gone.
+    "repo_user_commit": "compute_daily_metrics",
+    # CHAOS-5308 (CHAOS-3092): compounding_risk's REPO-scope daily compute
+    # deleted from job_daily.py -- the native Go executor
+    # (CompoundingRiskExecutor, CHAOS-4287) is the only writer of REPO-scope
+    # compounding_risk_daily rows now. _write_compounding_risk_for_day
+    # itself is ALSO deleted -- rg confirmed job_daily.py was its only real
+    # caller. build_compounding_risk_rows_for_day (compounding_risk.py) is
+    # ALSO deleted: its other real caller, job_compounding_risk.py's own
+    # standalone `dev-hops metrics compounding-risk` CLI backfill job, is
+    # itself deleted whole (with its own private helper,
+    # _fetch_repo_metrics_for_day) -- no straddle, no remaining Python
+    # producer of this family at any scope. TEAM-scope compounding_risk_team
+    # (CHAOS-5084) is a separate family, already deleted, unaffected.
+    "compounding_risk": "_write_compounding_risk_for_day",
     # CHAOS-4279: review_edges's daily compute deleted from job_daily.py --
     # the native Go executor (ReviewEdgesExecutor,
     # internal/jobs/metrics/daily/review_edges_native_executor.go) is

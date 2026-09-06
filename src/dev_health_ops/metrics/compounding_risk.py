@@ -19,11 +19,19 @@ Public surface:
     compute_compounding_risk(...)
     severity_for(score, thresholds)
     load_repo_complexity_delta_30d(sink, repo_id, day)   # I/O helper
-    build_compounding_risk_rows_for_day(...)             # orchestrator
 
 The core compute function is pure: no I/O, no logging side effects, no globals
-mutated. The orchestrator at the bottom is the only I/O entry point and is kept
-thin and explicit.
+mutated.
+
+CHAOS-5308/CHAOS-3092: the day/repo orchestrator (``build_compounding_risk_rows_for_day``)
+is deleted -- its only production caller, the standalone
+``dev-hops metrics compounding-risk`` CLI backfill (``job_compounding_risk.py``),
+is itself deleted (CompoundingRiskExecutor, Go, is the sole writer of
+``compounding_risk_daily`` for REPO scope now; CompoundingRiskTeamExecutor
+already covers TEAM scope, CHAOS-5084). ``compute_compounding_risk`` stays --
+it remains the live oracle for the Go frozen-golden rot guard
+(``internal/jobs/metrics/daily/compoundingrisk``, via
+``tests/fixtures/generate_daily_compounding_risk_python_golden.py``).
 """
 
 from __future__ import annotations
@@ -403,7 +411,8 @@ def compute_compounding_risk(
 
 
 # ---------------------------------------------------------------------------
-# I/O helpers and orchestrator (CHAOS-1641 wiring into job_daily)
+# I/O helper (CHAOS-5308/CHAOS-3092 deleted the day/repo orchestrator that
+# used to sit here, wiring this module into job_daily.py/job_compounding_risk.py)
 # ---------------------------------------------------------------------------
 
 #: Window for the complexity delta computation in days.
@@ -465,84 +474,6 @@ def load_repo_complexity_delta_30d(
     return (second_f - first_f) / max(first_f, 1.0)
 
 
-def build_compounding_risk_rows_for_day(
-    *,
-    sink: Any,
-    day: date,
-    org_id: str,
-    repo_metrics_rows: Iterable[Any],
-    computed_at: datetime,
-    weights: CompoundingWeights = DEFAULT_WEIGHTS,
-    thresholds: CompoundingThresholds = DEFAULT_THRESHOLDS,
-) -> list[CompoundingRiskDailyRecord]:
-    """Compose Compounding Risk rows for every repo.
-
-    Args:
-        sink: ClickHouse sink (read-only for the complexity delta).
-        day: Compute target day.
-        org_id: Org id (also injected into the complexity query).
-        repo_metrics_rows: In-memory repo_metrics rows that were just persisted.
-        computed_at: UTC compute moment, passed explicitly for determinism.
-        weights: Composite weights.
-        thresholds: Severity bucket boundaries.
-
-    CHAOS-5084/no-straddle (#2275 v2): this function used to ALSO emit
-    ``scope='team'`` rows when given an optional ``repo_to_team`` map
-    (aggregating the per-repo inputs via the now-deleted ``_build_team_rows``
-    helper). CompoundingRiskTeamExecutor (Go) is now the SOLE writer for
-    team-scope compounding_risk_daily rows, with no Python compute or
-    fallback for that scope anywhere in this codebase -- team.lead ruling:
-    keeping a second, still-callable Python producer of a family that
-    becomes native in this PR is exactly the straddle this port forbids,
-    even where the two would agree. This function now emits repo-scope rows
-    only; team-scope manual backfill is the Go worker's job.
-    """
-    repo_rows: list[CompoundingRiskDailyRecord] = []
-    for row in repo_metrics_rows:
-        repo_id = getattr(row, "repo_id", None)
-        if repo_id is None:
-            continue
-        repo_id_str = str(repo_id)
-        complexity_delta = load_repo_complexity_delta_30d(
-            sink, repo_id=repo_id_str, day=day, org_id=org_id
-        )
-        inputs = CompoundingInputs(
-            rework_churn=_nullable_float(getattr(row, "rework_churn_ratio_30d", None)),
-            complexity_delta=complexity_delta,
-            review_latency_p90h=_nullable_float(
-                getattr(row, "pr_first_review_p90_hours", None)
-            ),
-            single_owner_ratio=_nullable_float(
-                getattr(row, "single_owner_file_ratio_30d", None)
-            ),
-            ownership_gini=_nullable_float(getattr(row, "code_ownership_gini", None)),
-            bus_factor=_nullable_float(getattr(row, "bus_factor", None)),
-        )
-        repo_rows.append(
-            compute_compounding_risk(
-                day=day,
-                scope="repo",
-                scope_id=str(repo_id),
-                org_id=org_id,
-                inputs=inputs,
-                computed_at=computed_at,
-                weights=weights,
-                thresholds=thresholds,
-            )
-        )
-
-    return repo_rows
-
-
-def _nullable_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 __all__ = [
     "COMPLEXITY_WINDOW_DAYS",
     "CompoundingInputs",
@@ -557,7 +488,6 @@ __all__ = [
     "REASON_MISSING_REVIEW_LATENCY",
     "REASON_MISSING_REWORK_CHURN",
     "REFERENCE_VALUES",
-    "build_compounding_risk_rows_for_day",
     "compute_compounding_risk",
     "load_repo_complexity_delta_30d",
     "missing_input_reasons",

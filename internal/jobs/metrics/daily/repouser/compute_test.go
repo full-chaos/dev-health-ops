@@ -8,18 +8,25 @@ import (
 	"github.com/google/uuid"
 )
 
-// The fixture below mirrors, field for field,
-// tests/fixtures/generate_repo_user_commit_python_golden.py -- the values
-// asserted here were read out of that generator's frozen output,
+// The fixture below mirrors, field for field, the now-deleted
+// generate_repo_user_commit_python_golden.py -- the values asserted here were
+// read out of that generator's frozen output,
 // tests/fixtures/repo_user_commit_python_golden.json, produced by running
 // REAL Python (compute_daily_metrics, compute_rework_churn_ratio,
 // compute_single_owner_file_ratio, compute_bus_factor,
-// compute_code_ownership_gini) against this exact dataset. This is the fast,
-// no-interpreter-required half of the parity guard; the live half
-// (golden_rot_guard_test.go) re-runs the Python generator and diffs it
-// against the checked-in file, so a Python behaviour change that would make
-// these hardcoded expectations wrong gets caught there instead of silently
-// passing here forever.
+// compute_code_ownership_gini) against this exact dataset.
+//
+// CHAOS-5308/CHAOS-3092: repo_user_commit's Python compute (and its
+// generator) is DELETED, not merely un-called -- RepoUserCommitExecutor
+// (native Go) is the sole producer now, same shape as the issueprlinks/
+// filehotspots retirements in ci/check_go.sh. The live half of this parity
+// guard (formerly golden_rot_guard_test.go's
+// TestRepoUserCommitGoldenMatchesLivePython, which re-ran the Python
+// generator and diffed it against the checked-in file) is retired with it --
+// proving "Python still agrees with itself" stops being the protection that
+// matters once Python is no longer in the loop. This frozen-golden test and
+// TestComputeMatchesFrozenGoldenExhaustively (golden_full_test.go) are the
+// regression guard going forward.
 var (
 	repoA = uuid.MustParse("00000000-0000-4000-8000-00000000000a")
 	repoB = uuid.MustParse("00000000-0000-4000-8000-00000000000b")

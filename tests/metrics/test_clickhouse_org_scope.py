@@ -80,20 +80,6 @@ async def test_load_work_items_includes_org_filter(mock_query_dicts):
 
 
 @pytest.mark.asyncio
-async def test_load_cicd_data_includes_org_filter(mock_query_dicts):
-    loader = ClickHouseDataLoader(client=object(), org_id="org-456")
-    start = datetime.now(timezone.utc)
-    end = start + timedelta(days=1)
-
-    await loader.load_cicd_data(start, end, repo_id=None)
-
-    assert mock_query_dicts.call_count == 2
-    for call in mock_query_dicts.call_args_list:
-        params = call.args[2]
-        assert params["org_id"] == "org-456"
-
-
-@pytest.mark.asyncio
 async def test_load_incidents_includes_org_filter(mock_query_dicts):
     loader = ClickHouseDataLoader(client=object(), org_id="org-789")
     start = datetime.now(timezone.utc)

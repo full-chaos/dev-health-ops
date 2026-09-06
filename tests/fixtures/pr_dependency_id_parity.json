@@ -62,7 +62,7 @@
    "target": ""
   }
  ],
- "generated_by": "tests/fixtures/generate_pr_dependency_id_parity.py",
+ "generated_by": "RETIRED (CHAOS-5303): generator tests/fixtures/generate_pr_dependency_id_parity.py was deleted once its sole caller (_parse_pr_dependency_source) was deleted. This frozen fixture is kept forever as the permanent parity fixture; it is no longer regenerated.",
  "note": "Expectations are the reference's OWN output, not transcribed. `raises` is a real recorded outcome: Python's isdigit() accepts characters int() rejects, and the conversion is unguarded (CHAOS-4811).",
  "observations": [
   {
@@ -252,6 +252,6 @@
    "outcome": "raises"
   }
  ],
- "producer": "work_graph/builder.py::_parse_pr_dependency_source",
+ "producer": "RETIRED (CHAOS-5303): work_graph/builder.py::_parse_pr_dependency_source was deleted; internal/jobs/workgraph/edges (Go) is now the sole producer of the parity this fixture checks.",
  "schema": "pr_dependency_id_parity.v2"
 }

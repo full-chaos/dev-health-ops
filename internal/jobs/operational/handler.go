@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
@@ -76,6 +77,19 @@ func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.E
 	}
 	if delivery.ID != id || !validWebhook(delivery) {
 		return jobruntime.Permanent(ErrDeliveryInvalid)
+	}
+	// CHAOS-5318 PR1: GitHub App installation/marketplace_purchase events are
+	// handled entirely natively when the store supports it -- no HTTP
+	// dispatch to the Python bridge at all for these two event types. Every
+	// other event (all of gitlab/jira, and every other github event type)
+	// falls through to the unchanged HTTP dispatch below.
+	if delivery.Provider == "github" && isNativeGithubAppEvent(delivery.EventType) {
+		if writer, ok := handler.store.(InstallationWriter); ok {
+			if _, err := writer.UpsertGithubAppEvent(ctx, delivery.EventType, delivery.Payload, time.Now().UTC()); err != nil {
+				return jobruntime.Retryable(err)
+			}
+			return nil
+		}
 	}
 	if err := handler.dispatcher.DispatchWebhook(ctx, delivery); err != nil {
 		if errors.Is(err, ErrDispatchPermanent) {

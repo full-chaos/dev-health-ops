@@ -86,6 +86,21 @@ func BuildCleanupPlan(rows []DependencyRow, existingEdgeIDs []string) CleanupPla
 	return plan
 }
 
+// BlockerProjectionName is the `projection_name` value BuildBlockerProjection
+// stamps and DeleteProjectionRuns must be called with, so a caller that needs
+// to wipe the prior watermark before publishing a fresh one (CHAOS-5303 r1
+// P1: `_delete_dependency_edge_candidates` runs before
+// `_publish_blocker_projection`, builder.py:911-920 vs 1016-1045) names the
+// exact same projection this package will publish under, rather than
+// duplicating the string literal at the call site.
+const BlockerProjectionName = "issue_blockers"
+
+// BlockerProjectionRuleVersion exposes blockerProjectionRuleVersion
+// (canonical.go) to callers outside this package -- specifically, a caller
+// that must delete stale `work_graph_projection_runs` rows for the exact same
+// rule this package's BuildBlockerProjection will publish under.
+func BlockerProjectionRuleVersion() string { return blockerProjectionRuleVersion }
+
 // ProjectionRun is the `work_graph_projection_runs` row
 // `_publish_blocker_projection` writes (builder.py:1016-1045).
 type ProjectionRun struct {
@@ -132,7 +147,7 @@ func BuildBlockerProjection(
 	}
 	return ProjectionRun{
 		OrgID:          organizationID,
-		ProjectionName: "issue_blockers",
+		ProjectionName: BlockerProjectionName,
 		ScopeRepoID:    scopeRepoID,
 		RuleVersion:    blockerProjectionRuleVersion,
 		InputWatermark: watermark,

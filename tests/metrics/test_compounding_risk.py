@@ -284,9 +284,6 @@ from dev_health_ops.metrics.compounding_risk import (  # noqa: E402
     build_compounding_risk_rows_for_day,
     load_repo_complexity_delta_30d,
 )
-from dev_health_ops.metrics.schemas import (  # noqa: E402
-    CompoundingRiskDailyRecord,
-)
 
 
 @dataclass
@@ -457,127 +454,6 @@ def test_orchestrator_keeps_missing_review_latency_when_window_has_no_value() ->
     assert out[0].review_latency_p90h is None
     assert out[0].compounding_risk is None
     assert out[0].severity == "unknown"
-
-
-# ---------------------------------------------------------------------------
-# Team-scope persistence (CHAOS-1641 follow-up)
-# ---------------------------------------------------------------------------
-
-
-def test_orchestrator_emits_team_rows_when_repo_to_team_map_provided() -> None:
-    repo_a = uuid.uuid4()
-    repo_b = uuid.uuid4()
-    sink = _FakeSink(
-        {
-            str(repo_a): {"first_half": 100.0, "second_half": 130.0},  # +30%
-            str(repo_b): {"first_half": 100.0, "second_half": 100.0},  #   0%
-        }
-    )
-    repo_rows = [
-        _FakeRepoMetrics(
-            repo_id=repo_a,
-            rework_churn_ratio_30d=0.20,
-            single_owner_file_ratio_30d=0.8,
-            code_ownership_gini=0.7,
-            pr_first_review_p90_hours=48.0,
-        ),
-        _FakeRepoMetrics(
-            repo_id=repo_b,
-            rework_churn_ratio_30d=0.0,
-            single_owner_file_ratio_30d=0.0,
-            code_ownership_gini=0.0,
-            pr_first_review_p90_hours=0.0,
-        ),
-    ]
-    repo_to_team = {str(repo_a): "team-X", str(repo_b): "team-X"}
-
-    out = build_compounding_risk_rows_for_day(
-        sink=sink,
-        day=DAY,
-        org_id="acme",
-        repo_metrics_rows=repo_rows,
-        computed_at=NOW,
-        repo_to_team=repo_to_team,
-    )
-
-    # 2 repo rows + 1 team row
-    assert len(out) == 3
-    by_scope: dict[str, list[CompoundingRiskDailyRecord]] = {r.scope: [] for r in out}
-    for r in out:
-        by_scope[r.scope].append(r)
-    assert len(by_scope["repo"]) == 2
-    assert len(by_scope["team"]) == 1
-    team_row = by_scope["team"][0]
-    assert team_row.scope_id == "team-X"
-    # Team score is computed from the *mean of raw inputs* under the same formula.
-    # repo_a has saturated complexity_delta (0.30 / 0.20 ref) ⇒ 1.0 norm; repo_b 0.
-    # Mean delta = 0.15 / 0.20 = 0.75 (complexity_norm).
-    # Mean rework_churn = 0.10 / 0.30 = 0.333 (churn_norm).
-    # Mean ownership = max(mean(0.8,0)=0.4, mean(0.7,0)=0.35) = 0.4.
-    # Mean review = 24.0 / 48.0 = 0.5.
-    # Score = 0.30*0.333 + 0.30*0.75 + 0.20*0.4 + 0.20*0.5 = 0.4849...
-    assert team_row.compounding_risk is not None
-    assert 0.40 <= team_row.compounding_risk <= 0.55
-    assert team_row.severity in ("elevated", "low")  # near threshold
-
-
-def test_orchestrator_team_row_omitted_when_no_repos_in_team() -> None:
-    repo_a = uuid.uuid4()
-    sink = _FakeSink(
-        {
-            str(repo_a): {"first_half": 100.0, "second_half": 110.0},
-        }
-    )
-    repo_rows = [
-        _FakeRepoMetrics(
-            repo_id=repo_a,
-            rework_churn_ratio_30d=0.05,
-            single_owner_file_ratio_30d=0.2,
-            code_ownership_gini=0.1,
-            pr_first_review_p90_hours=12.0,
-        ),
-    ]
-    # No mapping for repo_a, but mapping exists for an unrelated repo.
-    repo_to_team = {"some-other-repo": "team-Y"}
-    out = build_compounding_risk_rows_for_day(
-        sink=sink,
-        day=DAY,
-        org_id="acme",
-        repo_metrics_rows=repo_rows,
-        computed_at=NOW,
-        repo_to_team=repo_to_team,
-    )
-    assert len(out) == 1
-    assert out[0].scope == "repo"
-
-
-def test_orchestrator_team_rows_inherit_weights_and_thresholds() -> None:
-    repo_a = uuid.uuid4()
-    sink = _FakeSink(
-        {
-            str(repo_a): {"first_half": 100.0, "second_half": 110.0},
-        }
-    )
-    repo_rows = [
-        _FakeRepoMetrics(
-            repo_id=repo_a,
-            rework_churn_ratio_30d=0.05,
-            single_owner_file_ratio_30d=0.2,
-            code_ownership_gini=0.1,
-            pr_first_review_p90_hours=12.0,
-        ),
-    ]
-    out = build_compounding_risk_rows_for_day(
-        sink=sink,
-        day=DAY,
-        org_id="acme",
-        repo_metrics_rows=repo_rows,
-        computed_at=NOW,
-        repo_to_team={str(repo_a): "team-Y"},
-    )
-    team_row = next(r for r in out if r.scope == "team")
-    assert team_row.w_churn == DEFAULT_WEIGHTS.churn
-    assert team_row.threshold_elevated == DEFAULT_THRESHOLDS.elevated
 
 
 # ---------------------------------------------------------------------------

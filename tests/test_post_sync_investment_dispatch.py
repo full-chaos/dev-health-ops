@@ -35,7 +35,6 @@ _INVESTMENT_TASK = (
 )
 _WORK_GRAPH_TASK = "dev_health_ops.workers.tasks.run_work_graph_build"
 _PROJECTION_TASK = "dev_health_ops.workers.tasks.run_membership_backfill"
-_DAILY_METRICS_TASK = "dev_health_ops.workers.tasks.run_daily_metrics"
 _COMPLEXITY_TASK = "dev_health_ops.workers.tasks.run_complexity_job"
 
 
@@ -81,9 +80,8 @@ def test_investment_chain_dispatched_with_git_and_work_items() -> None:
     )
 
     assert mock_chain.call_count == 1
-    complexity_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
+    complexity_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert complexity_sig.task_name == _COMPLEXITY_TASK
-    assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
 
@@ -91,9 +89,6 @@ def test_investment_chain_dispatched_with_git_and_work_items() -> None:
     assert complexity_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert complexity_sig.sig_kwargs["queue"] == "metrics"
     assert complexity_sig.sig_kwargs.get("immutable") is True
-    assert daily_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert daily_sig.sig_kwargs["queue"] == "metrics"
-    assert daily_sig.sig_kwargs.get("immutable") is True
     assert build_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     assert build_sig.sig_kwargs["queue"] == "metrics"
     assert materialize_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
@@ -122,9 +117,8 @@ def test_investment_chain_dispatched_with_git_only() -> None:
     )
 
     assert mock_chain.call_count == 1
-    complexity_sig, daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
+    complexity_sig, build_sig, materialize_sig = mock_chain.call_args.args
     assert complexity_sig.task_name == _COMPLEXITY_TASK
-    assert daily_sig.task_name == _DAILY_METRICS_TASK
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
     chain_instance.apply_async.assert_called_once_with()
@@ -143,29 +137,11 @@ def test_investment_chain_dispatched_with_work_items_only_jira() -> None:
     )
 
     assert mock_chain.call_count == 1
-    daily_sig, build_sig, materialize_sig = mock_chain.call_args.args
-    assert daily_sig.task_name == _DAILY_METRICS_TASK
+    build_sig, materialize_sig = mock_chain.call_args.args
     assert build_sig.task_name == _WORK_GRAPH_TASK
     assert materialize_sig.task_name == _INVESTMENT_TASK
-    assert daily_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert daily_sig.sig_kwargs.get("immutable") is True
     assert materialize_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     chain_instance.apply_async.assert_called_once_with()
-
-
-def test_daily_metrics_dispatched_with_work_items_only_jira() -> None:
-    _, mock_chain, _, mock_send_task = _run_dispatch(
-        provider="jira",
-        sync_targets=["work-items"],
-        org_id="org-123",
-    )
-
-    mock_send_task.assert_not_called()
-    daily_sig, *_ = mock_chain.call_args.args
-    assert daily_sig.task_name == _DAILY_METRICS_TASK
-    assert daily_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    assert daily_sig.sig_kwargs["queue"] == "metrics"
-    assert daily_sig.sig_kwargs.get("immutable") is True
 
 
 def test_post_sync_dispatch_forwards_backfill_window() -> None:
@@ -201,15 +177,7 @@ def test_post_sync_dispatch_forwards_backfill_window() -> None:
         )
 
     window_send_task.assert_not_called()
-    daily_sig, build_sig, materialize_sig = window_chain.call_args.args
-    assert daily_sig.task_name == _DAILY_METRICS_TASK
-    assert daily_sig.sig_kwargs["kwargs"] == {
-        "org_id": "org-123",
-        "day": "2026-01-14",
-        "backfill_days": 14,
-    }
-    assert daily_sig.sig_kwargs.get("immutable") is True
-
+    build_sig, materialize_sig = window_chain.call_args.args
     assert build_sig.sig_kwargs["kwargs"] == {
         "org_id": "org-123",
         "from_date": "2026-01-01T00:00:00+00:00",
@@ -219,44 +187,6 @@ def test_post_sync_dispatch_forwards_backfill_window() -> None:
         "org_id": "org-123",
         "from_date": "2026-01-01",
         "to_date": "2026-01-14",
-    }
-
-
-def test_post_sync_dispatch_derives_metrics_window_from_sync_window() -> None:
-    from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
-
-    with (
-        patch(
-            "dev_health_ops.workers.post_sync_dispatch.celery_app.signature"
-        ) as window_signature,
-        patch("dev_health_ops.workers.post_sync_dispatch.chain") as window_chain,
-        patch(
-            "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
-        ) as window_send_task,
-    ):
-
-        def _make_sig(name, **kwargs):
-            sig = MagicMock(name=f"sig:{name}")
-            sig.task_name = name
-            sig.sig_kwargs = kwargs
-            return sig
-
-        window_signature.side_effect = _make_sig
-        _dispatch_post_sync_tasks(
-            provider="linear",
-            sync_targets=["work-items"],
-            org_id="org-123",
-            from_date="2026-01-01",
-            to_date="2026-01-14",
-        )
-
-    window_send_task.assert_not_called()
-    daily_sig, *_ = window_chain.call_args.args
-    assert daily_sig.task_name == _DAILY_METRICS_TASK
-    assert daily_sig.sig_kwargs["kwargs"] == {
-        "org_id": "org-123",
-        "day": "2026-01-14",
-        "backfill_days": 14,
     }
 
 

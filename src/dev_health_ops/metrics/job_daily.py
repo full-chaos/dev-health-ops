@@ -58,7 +58,6 @@ from dev_health_ops.providers.identity import load_identity_resolver
 from dev_health_ops.providers.teams import (
     build_project_key_resolver,
     build_repo_pattern_resolver,
-    load_team_repo_ownership_map,
 )
 from dev_health_ops.storage import detect_db_type
 from dev_health_ops.utils.cli import (
@@ -340,78 +339,12 @@ def _write_compounding_risk_for_day(
         org_id=org_id,
         repo_metrics_rows=rows_for_compounding,
         computed_at=computed_at,
-        repo_to_team=None,
     )
     if not compounding_rows:
         return 0
     for s in sinks:
         s.write_compounding_risk_daily(compounding_rows)
     return len(compounding_rows)
-
-
-def _write_compounding_risk_team_rows_for_day(
-    *,
-    sinks: list[Any],
-    primary_sink: Any,
-    day: date,
-    org_id: str,
-    repo_names_by_id: dict[uuid.UUID, str],
-    repo_team_resolver: Any,
-    computed_at: datetime,
-) -> int:
-    """Write TEAM-scope compounding-risk rows for the WHOLE org/day.
-
-    CHAOS-4365 finalize-step fix (moved out of the per-repo path -- see
-    ``_write_compounding_risk_for_day``'s docstring). Reads back every
-    repo's ``repo_metrics_daily`` row for this org/day from ClickHouse
-    (``_fetch_repo_metrics_for_day``, already argMax-deduped) rather than
-    accumulating in-process across partitions, so it is correct regardless
-    of how many separate per-repo calls already landed. Must run AFTER all
-    of this day's per-repo partitions have written their repo-scope rows.
-    """
-    org_repo_metrics = _fetch_repo_metrics_for_day(primary_sink, org_id, day)
-    if not org_repo_metrics:
-        return 0
-
-    try:
-        as_of = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
-        team_repo_ownership_map = load_team_repo_ownership_map(
-            primary_sink, org_id, as_of=as_of
-        )
-        repo_to_team_map = _repo_to_team_map_for_compounding_risk(
-            repo_metrics_rows=org_repo_metrics,
-            repo_names_by_id=repo_names_by_id,
-            repo_team_resolver=repo_team_resolver,
-            team_repo_ownership_map=team_repo_ownership_map,
-            org_id=org_id,
-            day=day,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(
-            "repo_team_resolver failed for compounding risk (finalize): "
-            "org_id=%s day=%s %s",
-            org_id,
-            day.isoformat(),
-            exc,
-        )
-        repo_to_team_map = {}
-    if not repo_to_team_map:
-        return 0
-
-    all_rows = build_compounding_risk_rows_for_day(
-        sink=primary_sink,
-        day=day,
-        org_id=org_id,
-        repo_metrics_rows=org_repo_metrics,
-        computed_at=computed_at,
-        repo_to_team=repo_to_team_map,
-    )
-    team_rows = [r for r in all_rows if r.scope == "team"]
-    if not team_rows:
-        return 0
-    for s in sinks:
-        s.write_compounding_risk_daily(team_rows)
-    return len(team_rows)
 
 
 def _secondary_uri_from_env() -> str:
@@ -1177,13 +1110,14 @@ async def run_daily_metrics_job(
         # had one, and adding it under a skip would be a false zero-rows signal
         # exactly as it would have been for cicd.
         #
-        # TEAM-scope rows are NOT covered by this gate. They are written once
-        # per org/day from run_daily_metrics_finalize
-        # (_write_compounding_risk_team_rows_for_day), which the Go side still
-        # reaches through the opaque compatibility.Finalize bridge call -- there
-        # is no per-family registration or skip-list at finalize to carve them
-        # out with. They stay Python until that hook exists; CHAOS-4287 stays
-        # open until then.
+        # TEAM-scope rows are NOT covered by this gate -- CHAOS-5084/
+        # no-straddle (#2275 v2): CompoundingRiskTeamExecutor (Go) is the
+        # SOLE writer for team scope now, with no Python compute or
+        # skip_families gate for it anywhere in this module at all (the old
+        # run_daily_metrics_finalize call site, _write_compounding_risk_team_rows_for_day,
+        # is deleted, not merely gated) -- same no-fail-open posture
+        # ic_finalize/team_cognitive_load's own finalize-scope families
+        # already have.
         if "compounding_risk" not in skip_families:
             _write_compounding_risk_for_day(
                 sinks=sinks,
@@ -1263,7 +1197,13 @@ async def run_daily_metrics_job(
         # called" -- see PR3's body for the exact citation), so this call
         # was already dead weight, never a live fallback, before its
         # deletion. `skip_finalize` (this function's own parameter) existed
-        # only to gate this block and is removed with it.
+        # only to gate this block and is removed with it (CHAOS-5254
+        # independently arrived at the same deletion for the same code, one
+        # commit earlier in this branch's history -- the two tickets'
+        # reasoning is complementary, not conflicting: CHAOS-5254 traced
+        # every live caller and found none still needed skip_finalize=False;
+        # CHAOS-4290 PR3 additionally confirms the Go executor made this
+        # block's OUTPUT itself redundant, not just its opt-out flag).
 
         if len(days) > 1:
             # CHAOS-4264: a backfill_days > 1 call holds this day's source
@@ -1431,79 +1371,40 @@ async def run_daily_metrics_finalize(
             except Exception as exc:
                 logger.warning("Benchmarking run failed for day=%s: %s", day, exc)
 
-    # CHAOS-4365 finalize-step fix: team-scope compounding_risk_daily is
-    # written exactly ONCE here, per org/day, after every repo's own
-    # partition has landed -- never in-process inside a single per-repo
-    # run_daily_metrics_job call (see _write_compounding_risk_for_day's
-    # docstring for why that was wrong). team_cognitive_load_daily used to
-    # be written from this same finalize step too; CHAOS-5141 deleted that
-    # Python compute entirely once it was confirmed unreachable in
-    # production -- it is now written ONLY by the Go worker's native
-    # FinalizeHandler, never from this Python path.
-    teams_data = await primary_sink.get_all_teams()
-    repo_team_resolver = build_repo_pattern_resolver(teams_data)
-    discovered_repos = discover_repos(
-        backend=backend,
-        primary_sink=primary_sink,
-        repo_id=None,
-        repo_name=None,
-        org_id=org_id,
-    )
-    repo_names_by_id = {r.repo_id: r.full_name for r in discovered_repos}
-
-    compounding_risk_team_count = _write_compounding_risk_team_rows_for_day(
-        sinks=sinks_list,
-        primary_sink=primary_sink,
-        day=day,
-        org_id=org_id,
-        repo_names_by_id=repo_names_by_id,
-        repo_team_resolver=repo_team_resolver,
-        computed_at=computed_at,
-    )
-    if not compounding_risk_team_count:
-        # CHAOS-4365 codex R1: a resolver failure (or an org with no
-        # ownership-resolvable repos) degrades to zero rows here, never
-        # raises (same CHAOS-4246 contract run_daily_metrics_job's own
-        # families follow) -- log it so a transient CH/resolver failure
-        # doesn't look identical to "no repos to attribute" in the logs.
-        logger.warning(
-            "metrics.daily.finalize family produced zero rows",
-            extra={
-                "family": "compounding_risk_team",
-                "day": day.isoformat(),
-                "org_id": org_id,
-                "cause": "no_rows_computed",
-            },
-        )
-
-    # CHAOS-5141: team_cognitive_load's Python compute (the team_metrics_daily
-    # aggregation query + _write_team_cognitive_load_for_day) was DELETED
-    # here, not merely skip-gated. Reachability analysis at deletion time:
-    # buildDailyWorker (cmd/dev-health-worker/daily.go) refuses the WHOLE
-    # daily worker if the ClickHouse connection fails to open, before
-    # dailyNativeFamilyRegistrations is ever called -- so team_cognitive_load
-    # (and ic_finalize, its co-registration dependency) are guaranteed to
-    # register natively in every real deployment; a construction-time
-    # fallback to this Python path was never actually reachable. On a
-    # RUNTIME native failure, FinalizeHandler.Work's computeNativeFinalizeFamilies
-    # error path explicitly never calls the Python bridge either (daily.go's
-    # own comment: "The bridge is NOT called"). No straddle, no live fallback
-    # path -- safe to delete outright rather than leave skip_families-gated.
-
-    # CHAOS-5051: team_complexity's Python compute
-    # (_fetch_repo_complexity_for_day + _write_team_complexity_for_day) was
-    # DELETED here, not merely skip-gated. Same reachability analysis
-    # CHAOS-5141 (team_cognitive_load) already established: buildDailyWorker
+    # CHAOS-4365 finalize-step fix: this used to be where team-scope
+    # compounding_risk_daily, team_cognitive_load_daily, AND
+    # team_complexity_daily were all written, exactly once here per org/day,
+    # after every repo's own partition had landed -- never in-process inside
+    # a single per-repo run_daily_metrics_job call (see
+    # _write_compounding_risk_for_day's docstring for why that was wrong).
+    # All three Python computes are now DELETED entirely, not merely
+    # skip-gated: team_cognitive_load's (CHAOS-5141, #2294),
+    # compounding_risk_team's (CHAOS-5084/no-straddle, #2275 v2), and
+    # team_complexity's (CHAOS-5051, #2299) are each the SOLE writer for
+    # their scope now via a native Go FinalizeHandler registration, with no
+    # Python compat-bridge fallback path at all (same no-fail-open posture: a
+    # native failure retries via River, it never falls open to a Python
+    # recompute). The teams_data/repo_team_resolver/discovered_repos/
+    # repo_names_by_id block that used to sit here fed only these three
+    # deleted functions -- with all three gone, it had no remaining consumer
+    # anywhere else in this function, so it is deleted too rather than left
+    # as dead computation.
+    #
+    # Reachability analysis, same for all three: buildDailyWorker
     # (cmd/dev-health-worker/daily.go) refuses the WHOLE daily worker if the
     # ClickHouse connection fails to open, before
-    # dailyNativeFamilyRegistrations is ever called -- so team_complexity is
-    # guaranteed to register natively in every real deployment (it has no
-    # co-registration dependency of its own, unlike team_cognitive_load/
-    # ic_finalize). On a RUNTIME native failure, FinalizeHandler.Work's
-    # computeNativeFinalizeFamilies error path explicitly never calls the
-    # Python bridge either (daily.go's own comment: "The bridge is NOT
-    # called"). No straddle, no live fallback path -- safe to delete outright
-    # rather than leave skip_families-gated.
+    # dailyNativeFamilyRegistrations is ever called -- so each family is
+    # guaranteed to register natively in every real deployment (team_cognitive_load
+    # and ic_finalize are co-registration-dependent on each other;
+    # compounding_risk_team and team_complexity have no co-registration
+    # dependency of their own). On a RUNTIME native failure,
+    # FinalizeHandler.Work's computeNativeFinalizeFamilies error path
+    # explicitly never calls the Python bridge either (daily.go's own
+    # comment: "The bridge is NOT called"). No straddle, no live fallback
+    # path for any of the three -- safe to delete outright rather than leave
+    # skip_families-gated. See finalize_family_gate_agreement_test.go's
+    # pythonGatedFinalizeFamilies (which excludes all three now) for the
+    # Go-side proof this stays true.
 
     logger.info("IC finalize complete for day=%s", day.isoformat())
 
@@ -1573,6 +1474,15 @@ async def _cmd_metrics_daily(ns: argparse.Namespace) -> int:
             provider=ns.provider,
             org_id=org_id,
         )
+        # CHAOS-5254: run_daily_metrics_job no longer has an inline IC
+        # metrics/landscape finalize path to opt out of (that dead branch's
+        # only two callers that ever hit its default skip_finalize=False
+        # were the Celery run_daily_metrics task -- NOT deleted, see
+        # workers/metrics_daily.py's own doc -- and the now-DELETED
+        # scripts/compute_metrics_daily.py, which never passed the kwarg
+        # either) -- the standalone finalizer below is the only place IC
+        # metrics/landscape compute now.
+        #
         # CHAOS-4365 codex R2 (P1): team-scope compounding_risk_daily is
         # written from run_daily_metrics_finalize, not from
         # run_daily_metrics_job itself -- this bare `dev-hops metrics daily`

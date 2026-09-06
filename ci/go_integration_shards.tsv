@@ -122,6 +122,17 @@
 # the five tests). Rounded up to 65 for headroom, same reasoning as every
 # other entry in this file -- re-time if a faster reference becomes
 # available, and re-time regardless if the file gains more tests.
+# internal/jobs/operational (CHAOS-5318/CHAOS-5319): 16 tests total, 14
+# Testcontainers-backed (5 github_app_events_integration_test.go + 9
+# sync_dispatch_integration_test.go), each taking a fresh Postgres container
+# -- same container-per-test shape as internal/jobs/workgraph/edges above,
+# weight scales with TEST COUNT per the header's own rule. Measured DIRECTLY
+# on bigboy (not a local run needing the 2x scale-up other entries apply):
+# `go test -tags=integration -count=1 -v ./internal/jobs/operational/...`,
+# 40.872s package time. Rounded up to 45 for headroom, same reasoning as
+# every other entry in this file -- re-time if a faster reference becomes
+# available, and re-time regardless if either integration test file gains
+# more tests.
 shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
@@ -145,6 +156,7 @@ internal/jobs/investment/chwrite	130
 internal/jobs/metrics/daily	6
 internal/jobs/metrics/daily/icfinalize	51
 internal/jobs/metrics/remaining	6
+internal/jobs/operational	45
 internal/jobs/pagerduty	9
 internal/jobs/report	33
 internal/jobs/system	12

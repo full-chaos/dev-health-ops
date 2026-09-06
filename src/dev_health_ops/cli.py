@@ -404,7 +404,9 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("metrics", "release-impact"): frozenset({_REQ_ORG}),
     ("metrics", "validate-flags"): frozenset({_REQ_CLICKHOUSE}),
     ("metrics", "rebuild"): frozenset({_REQ_ORG}),
-    ("metrics", "compounding-risk"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
+    # CHAOS-5308: ("metrics", "compounding-risk") deleted -- the whole CLI
+    # verb (job_compounding_risk.py) is gone, no remaining Python producer
+    # of this family at any scope.
     # CHAOS-5055: capacity dispatches to dev-health-workerctl instead of
     # taking its own ClickHouse DSN -- needs --org, not --db/CLICKHOUSE_URI.
     ("metrics", "capacity"): frozenset({_REQ_ORG}),

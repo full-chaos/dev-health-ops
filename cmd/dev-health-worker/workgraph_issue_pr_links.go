@@ -155,24 +155,19 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 		}
 		to = parsed
 	}
-	// The DEFAULT lower bound is arithmetic, and the arithmetic can leave the
-	// reference's range even when both endpoints of the parse were inside it.
-	//
-	// `to_date: "0001-01-01"` parses cleanly on both planes -- year 1 is valid --
-	// and then `to - 30 days` underflows below year 1, where CPython raises
-	// OverflowError("date value out of range"). Go's time.Time has no such bound
-	// and rolls silently into year zero, so Go RAN a build the bridge rejects.
-	//
-	// Checking only the parse was a check that looked complete: the parse is
-	// where a value enters, but the DERIVED bound is a second value the
-	// reference also range-checks, and nothing had tested it because every date
-	// in the corpus was 2026.
-	from := to.AddDate(0, 0, -30)
-	if _, rangeErr := withPythonYearRange("derived from_date", from); rangeErr != nil {
-		return issueprlinks.Window{}, fmt.Errorf(
-			"build scope to_date %s: the default 30-day lower bound falls outside the "+
-				"reference's 1..9999 year range, where it raises OverflowError", to.Format(time.RFC3339))
-	}
+	// CHAOS-5297 (codex round chaos-4924-pr-d-r1-confirm's P1 on #2301,
+	// EXECUTED repro, same bug shape here): the derived-bound overflow guard
+	// must run ONLY when from_date is absent from scope. Python's own
+	// resolution (work_graph_tasks.py) is an if/else -- `parsed_to -
+	// timedelta(days=30)` is never evaluated at all when from_date is
+	// supplied -- so an explicit from_date/to_date pair that is each
+	// individually valid (e.g. both "0001-01-01") must not be rejected over
+	// a derived value Python would never have computed. Running the guard
+	// unconditionally (as this used to) meant `to_date: "0001-01-01"` with
+	// an explicit from_date still failed on the derived `to - 30 days`
+	// underflowing below year 1, even though that derived value is
+	// discarded a few lines below the moment from_date is present.
+	var from time.Time
 	if text, present, err := scopeString(scope["from_date"]); err != nil {
 		return issueprlinks.Window{}, fmt.Errorf("build scope from_date: %w", err)
 	} else if present {
@@ -181,6 +176,22 @@ func (step *issuePRLinksPreStep) windowFor(rawScope []byte) (issueprlinks.Window
 			return issueprlinks.Window{}, fmt.Errorf("build scope from_date: %w", parseErr)
 		}
 		from = parsed
+	} else {
+		// The DEFAULT lower bound is arithmetic, and the arithmetic can leave
+		// the reference's range even when both endpoints of the parse were
+		// inside it.
+		//
+		// `to_date: "0001-01-01"` parses cleanly on both planes -- year 1 is
+		// valid -- and then `to - 30 days` underflows below year 1, where
+		// CPython raises OverflowError("date value out of range"). Go's
+		// time.Time has no such bound and rolls silently into year zero, so
+		// Go RAN a build the bridge rejects.
+		from = to.AddDate(0, 0, -30)
+		if _, rangeErr := withPythonYearRange("derived from_date", from); rangeErr != nil {
+			return issueprlinks.Window{}, fmt.Errorf(
+				"build scope to_date %s: the default 30-day lower bound falls outside the "+
+					"reference's 1..9999 year range, where it raises OverflowError", to.Format(time.RFC3339))
+		}
 	}
 
 	window := issueprlinks.Window{From: &from, To: &to}

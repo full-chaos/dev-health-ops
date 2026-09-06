@@ -69,10 +69,18 @@ func TestNativePreStepsRunThroughTheProductionWiring(t *testing.T) {
 	repoID := uuid.MustParse("00000000-0000-4000-8000-00000000ff01")
 
 	t.Run("issue_issue_edges pre-step Run() writes an edge from a live dependency row", func(t *testing.T) {
+		// relationship_semantics_version is the CURRENT rule version
+		// ("canonical-blocks.v2", CanonicalDependency's branch 2) so the
+		// stored orientation is trusted as-is. A "legacy.v1" row from a
+		// "gh:"-prefixed source with raw==relationship hits the historical
+		// GitHub body-parsing quirk (canonical.go branch 3) and swaps
+		// source/target -- a deliberate divergence with its own dedicated
+		// coverage in canonical_test.go, not something this wiring-proof test
+		// needs to reproduce.
 		if err := conn.Exec(ctx, `INSERT INTO work_item_dependencies
 (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, relationship_semantics_version, last_synced, org_id)
 VALUES (?,?,?,?,?,?,?)`,
-			"gh:acme/app#201", "gh:acme/app#202", "blocks", "blocks", "legacy.v1",
+			"gh:acme/app#201", "gh:acme/app#202", "blocks", "blocks", "canonical-blocks.v2",
 			time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), org,
 		); err != nil {
 			t.Fatal(err)

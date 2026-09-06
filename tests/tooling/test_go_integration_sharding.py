@@ -124,7 +124,6 @@ EXPECTED_PACKAGES = {
     # ClickHouse container and reads system.tables directly, so a fake
     # connection cannot prove the population it asserts.
     "internal/testsupport/chschema",
-    "internal/testsupport/computeparity",
     "internal/testsupport/containers",
 }
 
@@ -411,10 +410,20 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5358 added THREE new -tags=integration packages in one PR:
     # internal/jobs/workgraph/issuecommitedges, issuepredges, and prcommit.
     # 48 -> 51.
-    # CURRENT TOTAL: 51 -- the one number to bump when a new
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely (51 ->
+    # 50): its two -tags=integration files
+    # (capacity_table_parity_integration_test.go,
+    # dora_table_parity_integration_test.go) were dora/capacity's
+    # Python-producer parity harness, deleted along with job_dora.py/
+    # job_capacity.py/compute_dora.py and scripts/worker/
+    # compute_parity_fixtures.py -- with both callers gone the package's
+    # own machinery (computeparity.go/computeparity_test.go, neither
+    # integration-tagged) had no importer left anywhere in the repo either,
+    # so the whole package was deleted, not just its two integration files.
+    # CURRENT TOTAL: 50 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "51 package(s) discovered, 0 denylisted, 51 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 51 package(s)" in result.stdout
+    assert "50 package(s) discovered, 0 denylisted, 50 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 50 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -466,8 +475,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # the SAME already-discovered package -- no further count change.
     # CHAOS-5358 added THREE new packages in one PR: internal/jobs/workgraph/
     # issuecommitedges, issuepredges, and prcommit. 48 -> 51.
-    # CURRENT TOTAL: 51 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 51
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely: 51 ->
+    # 50 (see the "package(s) discovered" comment above for why the whole
+    # package, not just its two integration files, was deleted). FLATTENED
+    # includes the providersync shard-1 package, same as every other count
+    # in this comment block.
+    # CURRENT TOTAL: 50 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 50
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1839,9 +1853,11 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-5358 added THREE new packages in one PR: internal/jobs/workgraph/
     # issuecommitedges, issuepredges, and prcommit. 47 -> 50 (51 discovered -
     # 1 for the providersync shard-1 package).
-    # CURRENT TOTAL: 50 (== discovered-total-minus-one -- keep this in
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely: 50 ->
+    # 49 (50 discovered - 1 for the providersync shard-1 package).
+    # CURRENT TOTAL: 49 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 50
+    assert len(selected_packages) == len(set(selected_packages)) == 49
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

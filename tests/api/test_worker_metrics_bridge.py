@@ -319,14 +319,16 @@ async def test_effect_then_exception_is_fenced_as_ambiguous_on_retry() -> None:
 def test_evidence_row_count_extracts_only_mapped_families() -> None:
     assert (
         worker_metrics._evidence_row_count(
-            "capacity", {"family": "capacity", "forecast_count": 3}
+            "membership_backfill",
+            {"family": "membership_backfill", "memberships_written": 3},
         )
         == 3
     )
     # An explicit 0 is a real count, not "not applicable" -- must round-trip.
     assert (
         worker_metrics._evidence_row_count(
-            "capacity", {"family": "capacity", "forecast_count": 0}
+            "membership_backfill",
+            {"family": "membership_backfill", "memberships_written": 0},
         )
         == 0
     )
@@ -341,7 +343,19 @@ def test_evidence_row_count_extracts_only_mapped_families() -> None:
     # A bool would satisfy isinstance(x, int) in Python; must be excluded.
     assert (
         worker_metrics._evidence_row_count(
-            "capacity", {"family": "capacity", "forecast_count": True}
+            "membership_backfill",
+            {"family": "membership_backfill", "memberships_written": True},
+        )
+        is None
+    )
+    # capacity was removed from _EVIDENCE_ROW_COUNT_KEYS entirely by
+    # CHAOS-5336 (job_capacity.py and its worker-bridge runner are deleted;
+    # compute_capacity.py survives only as the GraphQL resolver's direct,
+    # non-bridge caller) -- confirm it is now an unmapped family like
+    # complexity, never coerced.
+    assert (
+        worker_metrics._evidence_row_count(
+            "capacity", {"family": "capacity", "forecast_count": 3}
         )
         is None
     )
@@ -390,7 +404,7 @@ async def test_run_membership_surfaces_a_flat_rows_written_count(
 
 
 @pytest.mark.asyncio
-async def test_execute_surfaces_rows_written_for_a_zero_row_capacity_completion() -> (
+async def test_execute_surfaces_rows_written_for_a_zero_row_membership_backfill_completion() -> (
     None
 ):
     """CHAOS-4243: before this, /remaining-metrics/v1/execute's response body
@@ -400,16 +414,19 @@ async def test_execute_surfaces_rows_written_for_a_zero_row_capacity_completion(
     actually carries rows_written=0 through to the caller, not just the
     durable output_evidence.
 
-    Uses capacity (not release_impact, CHAOS-5234/CHAOS-5244 deleted that
-    family's runner and its _EVIDENCE_ROW_COUNT_KEYS entry) as the example
-    family that still maps to a genuine row count.
+    Uses membership_backfill (not release_impact, CHAOS-5234/CHAOS-5244
+    deleted that family's runner and its _EVIDENCE_ROW_COUNT_KEYS entry; not
+    capacity either, CHAOS-5336 deleted job_capacity.py and its runner --
+    compute_capacity.py survives only as the GraphQL resolver's direct,
+    non-bridge caller) as the example family that still maps to a genuine
+    row count.
     """
-    execution = _execution(family="capacity")
+    execution = _execution(family="membership_backfill")
 
     async def zero_row_effect(
         _connection: object, _current: worker_metrics._Execution
     ) -> dict[str, Any]:
-        return {"family": "capacity", "forecast_count": 0}
+        return {"family": "membership_backfill", "memberships_written": 0}
 
     with (
         patch.object(

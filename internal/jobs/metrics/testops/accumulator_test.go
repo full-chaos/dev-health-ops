@@ -22,57 +22,12 @@ import (
 // hand.
 // ----------------------------------------------------------------------
 
-// TestComputePipelineMetricsAvgQueueMatchesLivePythonSum is the red-first
-// proof for the mean() fix. Reverting mean() to `total += value` makes this
-// FAIL with 0.09999999999999999 against Python's 0.1, while every other
-// assertion in this package stays green -- which is exactly why the defect
-// survived CHAOS-4294's review.
-func TestComputePipelineMetricsAvgQueueMatchesLivePythonSum(t *testing.T) {
-	wantRows := runPythonOracle(t, "python_pipeline_avg_queue_oracle.py", "testops-pipeline-avgqueue-golden")
-	if len(wantRows) != 1 {
-		t.Fatalf("python produced %d rows, want 1", len(wantRows))
-	}
-
-	repoID := uuid.MustParse("d4f322ad-2102-1fbf-8425-7400573194f7")
-	const orgID = "70d529e0-3c06-4597-8480-794fd02328b6"
-	rows := make([]PipelineRunRow, 0, 10)
-	for index := 0; index < 10; index++ {
-		rows = append(rows, PipelineRunRow{
-			RepoID: repoID, Status: strPtr("success"),
-			QueuedAt:        floatTimePtr(2026, 8, 27, 19, 39, 4),
-			StartedAt:       floatTime(2026, 8, 27, 19, 39, 4),
-			FinishedAt:      floatTimePtr(2026, 8, 27, 19, 54, 46),
-			DurationSeconds: floatPtr(942.0), QueueSeconds: floatPtr(0.1),
-			RetryCount: 0, TeamID: nil, ServiceID: nil, OrgID: orgID,
-		})
-	}
-	metrics := ComputePipelineMetrics(repoID, rows, "", nil)
-	if len(metrics) != 1 {
-		t.Fatalf("go produced %d rows, want 1", len(metrics))
-	}
-	got := map[string]any{
-		"repo_id": metrics[0].RepoID.String(), "day": "2026-08-27",
-		"pipelines_count": float64(metrics[0].PipelinesCount), "success_count": float64(metrics[0].SuccessCount),
-		"failure_count": float64(metrics[0].FailureCount), "cancelled_count": float64(metrics[0].CancelledCount),
-		"success_rate": metrics[0].SuccessRate, "failure_rate": metrics[0].FailureRate,
-		"cancel_rate": metrics[0].CancelRate, "rerun_rate": metrics[0].RerunRate,
-		"median_duration_seconds": *metrics[0].MedianDurationSeconds, "p95_duration_seconds": *metrics[0].P95DurationSeconds,
-		"avg_queue_seconds": *metrics[0].AvgQueueSeconds, "p95_queue_seconds": *metrics[0].P95QueueSeconds,
-		"team_id": nil, "service_id": nil, "org_id": metrics[0].OrgID,
-	}
-	assertRowsEqual(t, "pipeline_metrics_avg_queue", wantRows[0], got)
-
-	// Independent of the oracle comparison: name the exact bit pattern the
-	// naive loop would produce, so a future reader can see WHICH value is
-	// being excluded, not merely that two JSON blobs matched.
-	const naiveTenTimesPointOne = 0.09999999999999999
-	if *metrics[0].AvgQueueSeconds == naiveTenTimesPointOne {
-		t.Fatalf("avg_queue_seconds is the NAIVE-sum value %v -- mean() must use pythonparity.Sum", naiveTenTimesPointOne)
-	}
-	if *metrics[0].AvgQueueSeconds != 0.1 {
-		t.Fatalf("avg_queue_seconds = %v, want exactly 0.1 (CPython sum semantics)", *metrics[0].AvgQueueSeconds)
-	}
-}
+// TestComputePipelineMetricsAvgQueueMatchesLivePythonSum (the live-Python
+// mean()/Neumaier-sum oracle) was deleted by CHAOS-5245 alongside
+// compute_testops.py -- there is no more live Python compute to compare
+// against. The Neumaier-sum requirement itself is still enforced: see
+// internal/pythonparity's own TestFMAGoldenMatchesLivePython-style guards,
+// and ComputePipelineMetrics's use of pythonparity.Sum directly.
 
 // TestPipelineAccumulatorMatchesSliceAPI proves the streaming path the native
 // executor uses is identical to the slice path the live-Python oracles cover.

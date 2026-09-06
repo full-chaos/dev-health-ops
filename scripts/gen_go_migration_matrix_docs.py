@@ -254,8 +254,12 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         # CHAOS-5153's citation fix (job_daily.py:258, not ai_workflow.py:212
         # -- the module AND the line were both wrong before) is now moot:
         # CHAOS-4286 ported this family to native Go, same shape as the
-        # testops_* rows above.
-        "citation": "Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`, ports `work_graph/extractors/ai_workflow.py`'s `extract_ai_workflow_from_pull_requests`)",
+        # testops_* rows above. CHAOS-5242 (codex chaos-5242-r1 P3): the
+        # Python source this citation named is DELETED -- there is no
+        # Python fallback any more, the frozen golden
+        # (tests/fixtures/ai_workflow_python_golden.json) is the permanent
+        # contract now.
+        "citation": "Go: `internal/jobs/metrics/aiworkflow/compute.go` (`Compute`) -- ports the now-DELETED `work_graph/extractors/ai_workflow.py:extract_ai_workflow_from_pull_requests` (CHAOS-5242); no Python fallback",
         "ticket": "CHAOS-4286",
     },
     "work_graph_edges": {

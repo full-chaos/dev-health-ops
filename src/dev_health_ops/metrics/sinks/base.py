@@ -65,15 +65,9 @@ from dev_health_ops.metrics.testops_schemas import (
     BenchmarkAnomalyRecord,
     BenchmarkBaselineRecord,
     BenchmarkInsightRecord,
-    CoverageMetricsDailyRecord,
     MaturityBandRecord,
     MetricCorrelationRecord,
     PeriodComparisonRecord,
-    PipelineMetricsDailyRecord,
-    PipelineStabilityRecord,
-    QualityDragRecord,
-    ReleaseConfidenceRecord,
-    TestMetricsDailyRecord,
 )
 from dev_health_ops.models.work_items import (
     Sprint,
@@ -248,32 +242,11 @@ class BaseMetricsSink(ABC):
     def write_dora_metrics(self, rows: Sequence[DORAMetricsRecord]) -> None:
         """Write pre-computed DORA metrics from providers."""
 
-    @abstractmethod
-    def write_testops_pipeline_metrics(
-        self, rows: Sequence[PipelineMetricsDailyRecord]
-    ) -> None:
-        """Write daily TestOps pipeline health metrics."""
-
-    @abstractmethod
-    def write_testops_test_metrics(
-        self, rows: Sequence[TestMetricsDailyRecord]
-    ) -> None:
-        """Write daily TestOps test reliability metrics."""
-
-    @abstractmethod
-    def write_testops_coverage_metrics(
-        self, rows: Sequence[CoverageMetricsDailyRecord]
-    ) -> None:
-        """Write daily TestOps coverage metrics."""
-
-    def write_release_confidence(self, rows: Sequence[ReleaseConfidenceRecord]) -> None:
-        pass
-
-    def write_quality_drag(self, rows: Sequence[QualityDragRecord]) -> None:
-        pass
-
-    def write_pipeline_stability(self, rows: Sequence[PipelineStabilityRecord]) -> None:
-        pass
+    # CHAOS-5245 deleted write_testops_pipeline_metrics/write_testops_test_metrics/
+    # write_testops_coverage_metrics/write_release_confidence/write_quality_drag/
+    # write_pipeline_stability -- testops_pipeline/testops_test/testops_coverage/
+    # testops_risk's Python compute+write is gone entirely (CHAOS-4284/CHAOS-4294
+    # native Go executors have no fallback left to feed these).
 
     def write_period_comparisons(self, rows: Sequence[PeriodComparisonRecord]) -> None:
         pass

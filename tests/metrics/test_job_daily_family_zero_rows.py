@@ -1,15 +1,18 @@
-"""CHAOS-4246: cicd/deploy/incident/testops_risk visibility when a family
-computes zero rows.
+"""CHAOS-4246: cicd/deploy/incident visibility when a family computes zero
+rows.
 
 Before this fix, ``run_daily_metrics_job`` wrote whatever
 ``compute_cicd_metrics_daily``/``compute_deploy_metrics_daily``/
-``compute_incident_metrics_daily``/``compute_release_confidence``/
-``compute_quality_drag``/``compute_pipeline_stability`` returned with no
-signal when that was an empty list -- ``write_*`` methods no-op on an empty
-sequence, so a day where these families produced nothing was
-indistinguishable from a day that succeeded normally (the real-world
-incident: 4 of these tables went stale for 16 days while every
-``metrics.daily_partition`` reported ``succeeded``).
+``compute_incident_metrics_daily`` returned with no signal when that was an
+empty list -- ``write_*`` methods no-op on an empty sequence, so a day where
+these families produced nothing was indistinguishable from a day that
+succeeded normally (the real-world incident: 4 of these tables went stale for
+16 days while every ``metrics.daily_partition`` reported ``succeeded``).
+
+testops_risk (``compute_release_confidence``/``compute_quality_drag``/
+``compute_pipeline_stability``) used to be covered here too, until
+CHAOS-5245 deleted its Python compute entirely -- there is no more
+degrade-signal path for it to test.
 
 These tests pin: (1) an empty family is recorded in the job's returned
 ``families_zero_rows`` map and via the
@@ -65,20 +68,6 @@ class _FakeLoader:
     async def load_cicd_data(self, *a: Any, **k: Any) -> tuple[list, list]:
         return self._cicd_rows
 
-    async def load_testops_pipeline_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        return [], []
-
-    async def load_testops_test_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        return [], []
-
-    async def load_testops_historical_failed_case_names(
-        self, *a: Any, **k: Any
-    ) -> dict:
-        return {}
-
-    async def load_testops_coverage_data(self, *a: Any, **k: Any) -> list:
-        return []
-
     async def load_incidents(self, *a: Any, **k: Any) -> list:
         return []
 
@@ -126,9 +115,6 @@ _ALL_ZERO_ROW_FAMILIES = {
     "cicd",
     "deploy",
     "incident",
-    "testops_risk.release_confidence",
-    "testops_risk.quality_drag",
-    "testops_risk.pipeline_stability",
 }
 
 
@@ -195,7 +181,7 @@ async def test_cicd_not_recorded_when_pipeline_data_present(
     )
 
     # cicd produced a row this run -- it must NOT be flagged zero, but
-    # deploy/incident/testops_risk (still empty) must still be.
+    # deploy/incident (still empty) must still be.
     assert "cicd" not in result[DAY]
     assert "cicd" not in recorded
     assert {"deploy", "incident"} <= set(result[DAY])

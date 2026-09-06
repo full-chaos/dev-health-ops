@@ -58,13 +58,13 @@ the native Go executor and this unconditional write would otherwise both
 fire for every partition, doubling every row in both append-only tables.
 
 CHAOS-5234/CHAOS-3092 (chris's ruling: "once go is in main that does the
-same thing, skip flags are pointless") superseded file_hotspots's own
-write-only gate with outright DELETION of its compute+write call sites --
-see test_file_hotspots_compute_and_write_are_deleted_from_job_daily below,
-the runtime counterpart of the structural guard in
+same thing, skip flags are pointless") superseded BOTH file_hotspots' and
+file_risk_hotspots' write-only gates with outright DELETION of their
+compute+write call sites -- see
+test_file_hotspots_compute_and_write_are_deleted_from_job_daily and
+test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily below,
+the runtime counterparts of the structural guard in
 tests/metrics/test_job_daily_skip_families_structural_guard.py.
-file_risk_hotspots is UNCHANGED by that ticket so far and keeps the
-write-only gate shape described above.
 """
 
 from __future__ import annotations
@@ -634,10 +634,14 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
     RUNTIME counterpart to the structural guard in
     tests/metrics/test_job_daily_skip_families_structural_guard.py.
 
-    compute_file_hotspots itself is NOT deleted from the codebase -- golden-
-    fixture generators and the live-Python oracle comparator still call it
-    directly, as do its own dedicated unit tests. Only run_daily_metrics_job's
-    own call is gone.
+    compute_file_hotspots itself IS ALSO deleted from the codebase now
+    (src/dev_health_ops/metrics/hotspots.py, removed whole-file) -- a
+    correction to an earlier pass on this same family, which left the
+    module in place on the (wrong) premise that its fixture-generator/test
+    callers counted as a real production caller. See
+    test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily
+    below for the module-existence assertion (checked once there rather
+    than duplicated here) and this PR's own body for the writeup.
     """
     assert not hasattr(job_daily, "compute_file_hotspots"), (
         "compute_file_hotspots must not be imported into job_daily.py's "
@@ -663,70 +667,76 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
         assert "team_metrics" in sink.write_calls
         assert "repo_metrics" in sink.write_calls
 
-
-@pytest.mark.asyncio
-async def test_file_risk_hotspots_in_skip_families_skips_write_but_still_computes(
-    monkeypatch: Any,
-) -> None:
-    """file_risk_hotspots has a native Go executor (FileRiskHotspotsExecutor).
-    Same write-only-skip shape as repo_user_commit above. (file_hotspots
-    itself used to share this shape too, but CHAOS-5234/CHAOS-3092 deleted
-    its compute+write entirely -- see
-    test_file_hotspots_compute_and_write_are_deleted_from_job_daily above.)"""
-    compute_calls: list[Any] = []
-    original = job_daily.compute_file_risk_hotspots
-
-    def _spy(*args: Any, **kwargs: Any) -> Any:
-        compute_calls.append((args, kwargs))
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(job_daily, "compute_file_risk_hotspots", _spy)
-
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families={"file_risk_hotspots"},
-    )
-
-    assert len(compute_calls) == 1
-    assert "write_file_hotspot_daily" not in sink.write_calls
-    assert "team_metrics" in sink.write_calls
-    assert "repo_metrics" in sink.write_calls
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_finalize=True,
+            skip_families=skip_families,
+        )
 
 
 @pytest.mark.asyncio
-async def test_file_risk_hotspots_skip_families_none_writes_it(
+async def test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily(
     monkeypatch: Any,
 ) -> None:
-    """Red-on-baseline counterpart for file_risk_hotspots: without the gate,
-    write_file_hotspot_daily fires every time regardless of skip_families --
-    this pins that it FIRES when file_risk_hotspots is NOT skipped, so the
-    skip test above is meaningful (not merely a family that never writes in
-    this fixture). (file_hotspots's own equivalent pairing was replaced by
-    test_file_hotspots_compute_and_write_are_deleted_from_job_daily above,
-    which exercises both skip_families states directly since there is no
-    write-only gate left to pin a "red" counterpart against.)"""
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    """CHAOS-5234/CHAOS-3092.
 
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_finalize=True,
-        skip_families=None,
+    Chris's ruling (verbatim, twice): "work_item_attribution python doesn't
+    need a skip, it just needs to be deleted" / "once go is in main that
+    does the same thing, skip flags are pointless." file_risk_hotspots's
+    native Go executor (FileRiskHotspotsExecutor, CHAOS-4277) is the only
+    writer of file_hotspot_daily now, so -- unlike the write-only-skip shape
+    it used to have (see this module's docstring) -- its daily compute+write
+    call is gone from run_daily_metrics_job entirely, in every mode. This is
+    the RUNTIME counterpart to the structural guard in
+    tests/metrics/test_job_daily_skip_families_structural_guard.py.
+
+    compute_file_risk_hotspots itself IS ALSO deleted from the codebase now
+    (src/dev_health_ops/metrics/hotspots.py, removed whole-file, alongside
+    compute_file_hotspots and the private job_daily.py helpers
+    _hotspot_repo_ids/_load_complexity_map_for_repo/_load_blame_map_for_repo)
+    -- a correction to an earlier pass on this same family, which left the
+    module in place on the (wrong) premise that its fixture-generator/test
+    callers counted as a real production caller the way
+    compute_work_item_team_attributions' actual sync-job caller does. See
+    this PR's own body for the writeup.
+    """
+    assert not hasattr(job_daily, "compute_file_risk_hotspots"), (
+        "compute_file_risk_hotspots must not be imported into job_daily.py's "
+        "module namespace at all"
+    )
+    import importlib.util
+
+    assert importlib.util.find_spec("dev_health_ops.metrics.hotspots") is None, (
+        "dev_health_ops.metrics.hotspots must not exist at all -- "
+        "compute_file_hotspots/compute_file_risk_hotspots and their shared "
+        "dataclasses have no caller left anywhere once this family's "
+        "job_daily.py call site (and its sibling file_hotspots) are both "
+        "deleted; if a new, deliberate caller has reappeared, this assertion "
+        "should be removed and explained, not silently loosened"
     )
 
-    assert "write_file_hotspot_daily" in sink.write_calls
+    for skip_families in (None, {"file_risk_hotspots"}):
+        sink = _RecordingSink("clickhouse://test")
+        _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_finalize=True,
+            skip_families=skip_families,
+        )
+
+        assert "write_file_hotspot_daily" not in sink.write_calls
+        # Unrelated families/writes are unaffected by the deletion.
+        assert "team_metrics" in sink.write_calls
+        assert "repo_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio

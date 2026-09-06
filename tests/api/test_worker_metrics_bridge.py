@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.api.dependencies import get_postgres_session_dep
 from dev_health_ops.api.internal import worker_metrics
 from dev_health_ops.api.main import app
-from dev_health_ops.metrics.remaining_scope_contract import CapacityScope
 
 RUN_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 PARTITION_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
@@ -223,7 +222,7 @@ def test_remaining_execution_rejects_unknown_persisted_family() -> None:
         )
 
 
-def test_remaining_runner_is_a_closed_five_family_allowlist() -> None:
+def test_remaining_runner_is_a_closed_two_family_allowlist() -> None:
     # extra_metrics/team_metrics were removed by CHAOS-4243 (registered
     # handlers with zero producer, retired rather than left dormant).
     # release_impact was removed by CHAOS-5234/CHAOS-5244: its native Go
@@ -235,28 +234,15 @@ def test_remaining_runner_is_a_closed_five_family_allowlist() -> None:
     # itself is NOT deleted -- src/dev_health_ops/fixtures/runner.py still
     # imports run_complexity_db_job directly for local/CI fixture
     # generation, a live non-production-job caller -- only this bridge
-    # handler and its dispatch entry were dead.
+    # handler and its dispatch entry were dead. capacity and dora were
+    # removed the same way by CHAOS-5336: both native Go executors
+    # (dora_native.go/capacity_native.go) have no Python fallback, and
+    # job_dora.py/job_capacity.py are deleted outright -- this HTTP bridge's
+    # dispatch entries were the only thing keeping them reachable.
     assert set(worker_metrics._REMAINING_RUNNERS) == {
-        "capacity",
-        "dora",
         "membership_backfill",
         "recommendations",
     }
-
-
-@pytest.mark.asyncio
-async def test_capacity_adapter_passes_persisted_generation_seed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://example/default")
-    run = AsyncMock(return_value=[])
-    scope = CapacityScope.model_validate(_execution().scope)
-    with patch("dev_health_ops.metrics.job_capacity.run_capacity_forecast", run):
-        evidence = await worker_metrics._run_capacity(_execution(), scope)
-    assert evidence == {"family": "capacity", "forecast_count": 0}
-    assert run.await_args is not None
-    assert run.await_args.kwargs["seed"] == 1234
-    assert run.await_args.kwargs["db_url"] == "clickhouse://example/default"
 
 
 @pytest.mark.asyncio

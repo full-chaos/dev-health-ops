@@ -74,11 +74,11 @@ async def resolve_capacity_forecast(
     context: GraphQLContext,
     input: CapacityForecastInput | None = None,
 ) -> CapacityForecast | None:
-    from dev_health_ops.metrics.compute_capacity import forecast_capacity
-    from dev_health_ops.metrics.job_capacity import (
+    from dev_health_ops.metrics.capacity_queries import (
         get_backlog_from_sink,
         load_throughput_from_sink,
     )
+    from dev_health_ops.metrics.compute_capacity import forecast_capacity
     from dev_health_ops.metrics.sinks.factory import create_sink
 
     org_id = require_org_id(context)

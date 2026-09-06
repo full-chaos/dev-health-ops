@@ -2,127 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Sequence
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from dev_health_ops.metrics.compute_capacity import (
     ThroughputHistory,
     ThroughputSample,
     compute_percentiles,
 )
-from dev_health_ops.metrics.compute_dora import compute_dora_metrics_daily
 from dev_health_ops.metrics.release_impact import _compute_confidence
-from dev_health_ops.metrics.schemas import DeploymentRow, IncidentRow
 
 OUTPUT = Path(__file__).with_name("remaining_metrics_python_golden.json")
-REPO_A = "00000000-0000-4000-8000-00000000000a"
-REPO_B = "00000000-0000-4000-8000-00000000000b"
 DAY = date(2026, 7, 20)
-COMPUTED_AT = datetime(2026, 7, 21, tzinfo=timezone.utc)
-
-
-def _timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
-def _dora() -> list[dict[str, Any]]:
-    deployments: list[dict[str, Any]] = [
-        {
-            "repo_id": REPO_B,
-            "status": "success",
-            "deployed_at": _timestamp("2026-07-20T14:00:00Z"),
-            "started_at": None,
-            "merged_at": _timestamp("2026-07-20T12:00:00Z"),
-        },
-        {
-            "repo_id": REPO_A,
-            "status": " FAILURE ",
-            "deployed_at": _timestamp("2026-07-20T10:00:00Z"),
-            "started_at": None,
-            "merged_at": _timestamp("2026-07-20T08:00:00Z"),
-        },
-        {
-            "repo_id": REPO_A,
-            "status": "canceled",
-            "deployed_at": None,
-            "started_at": _timestamp("2026-07-20T12:00:00Z"),
-            "merged_at": _timestamp("2026-07-20T09:00:00Z"),
-        },
-        {
-            "repo_id": REPO_A,
-            "status": "success",
-            "deployed_at": _timestamp("2026-07-19T23:59:59Z"),
-            "started_at": None,
-            "merged_at": _timestamp("2026-07-19T22:00:00Z"),
-        },
-        {
-            "repo_id": REPO_B,
-            "status": "success",
-            "deployed_at": _timestamp("2026-07-20T18:00:00Z"),
-            "started_at": None,
-            "merged_at": _timestamp("2026-07-20T19:00:00Z"),
-        },
-    ]
-    incidents: list[dict[str, Any]] = [
-        {
-            "repo_id": REPO_A,
-            "started_at": _timestamp("2026-07-20T07:00:00Z"),
-            "resolved_at": _timestamp("2026-07-20T09:00:00Z"),
-        },
-        {
-            "repo_id": REPO_A,
-            "started_at": _timestamp("2026-07-20T10:00:00Z"),
-            "resolved_at": _timestamp("2026-07-20T14:00:00Z"),
-        },
-        {
-            "repo_id": REPO_B,
-            "started_at": _timestamp("2026-07-20T16:00:00Z"),
-            "resolved_at": _timestamp("2026-07-20T15:00:00Z"),
-        },
-    ]
-    rows = compute_dora_metrics_daily(
-        day=DAY,
-        deployments=cast(Sequence[DeploymentRow], deployments),
-        incidents=cast(Sequence[IncidentRow], incidents),
-        computed_at=COMPUTED_AT,
-    )
-    return [
-        {
-            "day": DAY.isoformat(),
-            "deployments": [
-                {
-                    key: (
-                        value.isoformat().replace("+00:00", "Z")
-                        if isinstance(value, datetime)
-                        else value or ""
-                    )
-                    for key, value in row.items()
-                }
-                for row in deployments
-            ],
-            "incidents": [
-                {
-                    key: (
-                        value.isoformat().replace("+00:00", "Z")
-                        if isinstance(value, datetime)
-                        else value
-                    )
-                    for key, value in row.items()
-                }
-                for row in incidents
-            ],
-            "expected": [
-                {
-                    "RepoID": str(row.repo_id),
-                    "Name": row.metric_name,
-                    "Value": row.value,
-                }
-                for row in rows
-            ],
-        }
-    ]
 
 
 def _capacity() -> list[dict[str, Any]]:
@@ -165,7 +57,6 @@ def _release_confidence() -> list[dict[str, Any]]:
 def render() -> str:
     value = {
         "schema_version": 1,
-        "dora": _dora(),
         "capacity": _capacity(),
         "release_confidence": _release_confidence(),
     }

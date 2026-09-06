@@ -859,12 +859,13 @@ async def run_daily_metrics_job(
         # (native Go, CHAOS-4293) is now the only writer of
         # deploy_metrics_daily for a daily partition. compute_deploy_metrics_daily
         # itself is ALSO deleted (from compute_deployments.py) -- rg confirmed
-        # job_daily.py was its only real caller; the sibling constant
-        # DEPLOYMENT_FAILURE_STATUSES in the same module is NOT touched, it has
-        # a real, separate caller (compute_dora.py, still Python) plus its own
-        # dedicated test coverage in test_job_dora.py. `deployment_rows` itself
-        # (the raw loader data) stays -- it also feeds `active_repos` earlier
-        # in this function.
+        # job_daily.py was its only real caller. CHAOS-5336: the sibling
+        # constant DEPLOYMENT_FAILURE_STATUSES, whose only OTHER caller was
+        # compute_dora.py, is now genuinely orphaned -- compute_deployments.py
+        # (its defining module) is deleted outright along with compute_dora.py,
+        # not left behind as a dead single-constant file. `deployment_rows`
+        # itself (the raw loader data) stays -- it also feeds `active_repos`
+        # earlier in this function.
         #
         # CHAOS-5234/CHAOS-3092: incident's daily compute is DELETED here too
         # (see the loader.load_incidents removal above) -- no

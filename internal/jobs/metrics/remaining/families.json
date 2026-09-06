@@ -19,7 +19,7 @@
     },
     {
       "name": "dora",
-      "python_sources": ["src/dev_health_ops/metrics/job_dora.py", "src/dev_health_ops/metrics/compute_dora.py"],
+      "python_sources": [],
       "writes": ["dora_metrics_daily"],
       "max_concurrency": 4,
       "clickhouse_read_budget": 2,
@@ -29,7 +29,7 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "Only already-synced canonical deployments and incidents are eligible; no provider API reconstruction is performed.",
-      "parity_state": "numerical_oracle",
+      "parity_state": "native_python_orchestrator_deleted",
       "port": "go"
     },
     {
@@ -49,7 +49,7 @@
     },
     {
       "name": "capacity",
-      "python_sources": ["src/dev_health_ops/metrics/job_capacity.py", "src/dev_health_ops/metrics/compute_capacity.py"],
+      "python_sources": [],
       "writes": ["capacity_forecasts"],
       "max_concurrency": 2,
       "clickhouse_read_budget": 1,
@@ -59,7 +59,7 @@
       "route": "river",
       "rollback_route": "celery",
       "historical_limitation": "The configured throughput history window remains authoritative; deterministic replay additionally requires a persisted generation seed.",
-      "parity_state": "partial_numerical_oracle",
+      "parity_state": "native_python_orchestrator_deleted",
       "port": "go"
     },
     {

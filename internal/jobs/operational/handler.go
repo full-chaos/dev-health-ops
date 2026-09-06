@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -29,6 +30,14 @@ type WebhookDelivery struct {
 	Repository    string
 	Payload       []byte
 	PayloadSHA256 string
+	// CreatedAt is this delivery's own receipt time (webhook_deliveries.
+	// created_at) -- stable across every retry of this same delivery, unlike
+	// time.Now(). CHAOS-5319's native sync-dispatch path uses it as the
+	// scheduled_sync_occurrences.scheduled_for value so a retried Work()
+	// call recomputes the SAME occurrence_id (scheduledSyncOccurrenceIdentity
+	// is a pure function of (config_id, scheduled_for)) instead of minting a
+	// second, duplicate sync for one delivery.
+	CreatedAt time.Time
 }
 
 type BillingNotification struct {
@@ -87,6 +96,26 @@ func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.E
 		if writer, ok := handler.store.(InstallationWriter); ok {
 			if _, err := writer.UpsertGithubAppEvent(ctx, delivery.EventType, delivery.Payload, time.Now().UTC()); err != nil {
 				return jobruntime.Retryable(err)
+			}
+			return nil
+		}
+	}
+	// CHAOS-5319 PR2: the same recognised event types Python's
+	// _process_github_event/_process_gitlab_event already route to a repo-
+	// or project-scoped sync (see isRepoScopedSyncEvent's doc comment for the
+	// exact list) are, when the store supports it, triggered natively via
+	// the scheduled_sync_occurrences/sync_manual_triggers "Sync Now"
+	// mechanism instead of the HTTP bridge -- no Python sync entrypoint is
+	// ever called from this branch. jira and every other event type are
+	// unaffected and keep dispatching over HTTP below.
+	if isRepoScopedSyncEvent(delivery.Provider, delivery.EventType) {
+		if writer, ok := handler.store.(SyncDispatchWriter); ok {
+			result, err := writer.TriggerScopedSync(ctx, delivery.Provider, delivery.EventType, delivery.Payload, delivery.CreatedAt)
+			if err != nil {
+				return jobruntime.Retryable(err)
+			}
+			if !result.Processed {
+				return jobruntime.Permanent(fmt.Errorf("%w: %s", ErrWebhookSyncUnroutable, result.Reason))
 			}
 			return nil
 		}

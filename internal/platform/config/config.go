@@ -57,12 +57,13 @@ const (
 	defaultStreamReplicas          = 1
 	// The OpenTelemetry defaults mirror src/dev_health_ops/tracing.py exactly,
 	// so a sync run crossing the Python/Go boundary is sampled consistently.
-	defaultOTelServiceName   = "dev-health-ops"
-	defaultOTelEnvironment   = "production"
-	defaultOTelEndpoint      = "localhost:4317"
-	defaultOTelSampleRate    = 0.1
-	localStatusMappingPath   = "/app/config/status_mapping.yaml"
-	localInvestmentAreasPath = "/app/config/investment_areas.yaml"
+	defaultOTelServiceName    = "dev-health-ops"
+	defaultOTelEnvironment    = "production"
+	defaultOTelEndpoint       = "localhost:4317"
+	defaultOTelSampleRate     = 0.1
+	localStatusMappingPath    = "/app/config/status_mapping.yaml"
+	localInvestmentAreasPath  = "/app/config/investment_areas.yaml"
+	localComplexityConfigPath = "/app/config/complexity.yaml"
 )
 
 const (
@@ -254,6 +255,14 @@ type Config struct {
 	WorkerGithubWorkItemsStatusMappingPath    string
 	WorkerGithubWorkItemsInvestmentConfigPath string
 
+	// WorkerRemainingComplexityConfigPath is the complexity.yaml the native
+	// ComplexityExecutor (CHAOS-4291) loads its include/exclude globs and
+	// thresholds from -- the same file the Python job reads
+	// (src/dev_health_ops/config/complexity.yaml). Same shape as the two
+	// work-items paths above: no source-relative default in production, only
+	// the fixed image path docker/go-worker.Dockerfile copies it to.
+	WorkerRemainingComplexityConfigPath string
+
 	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
 	// stream. The Python ingress dispatches its Celery task only while this is
 	// "celery"; the Go stream runner constructs its consumer only when it is
@@ -339,6 +348,14 @@ func Load(spec Spec) (Config, error) {
 		lookup,
 		"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
 		localInvestmentAreasPath,
+	)
+	// CHAOS-4291: same reasoning as the two work-items paths above -- the
+	// native complexity executor needs this artifact wherever the worker
+	// image runs, not just under an opt-in preset.
+	cfg.WorkerRemainingComplexityConfigPath = envOrDefault(
+		lookup,
+		"WORKER_REMAINING_COMPLEXITY_CONFIG_PATH",
+		localComplexityConfigPath,
 	)
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
@@ -663,6 +680,10 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool(
 			"worker_github_work_items_investment_config_path_configured",
 			c.WorkerGithubWorkItemsInvestmentConfigPath != "",
+		),
+		slog.Bool(
+			"worker_remaining_complexity_config_path_configured",
+			c.WorkerRemainingComplexityConfigPath != "",
 		),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),

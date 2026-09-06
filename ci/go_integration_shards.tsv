@@ -122,14 +122,17 @@
 # the five tests). Rounded up to 65 for headroom, same reasoning as every
 # other entry in this file -- re-time if a faster reference becomes
 # available, and re-time regardless if the file gains more tests.
-# internal/jobs/operational (CHAOS-5318/CHAOS-5319): 16 tests total, 14
-# Testcontainers-backed (5 github_app_events_integration_test.go + 9
+# internal/jobs/operational (CHAOS-5318/CHAOS-5319): 19 tests total, ALL
+# Testcontainers-backed (5 github_app_events_integration_test.go + 14
 # sync_dispatch_integration_test.go), each taking a fresh Postgres container
 # -- same container-per-test shape as internal/jobs/workgraph/edges above,
-# weight scales with TEST COUNT per the header's own rule. Measured DIRECTLY
-# on bigboy (not a local run needing the 2x scale-up other entries apply):
-# `go test -tags=integration -count=1 -v ./internal/jobs/operational/...`,
-# 40.872s package time. Rounded up to 45 for headroom, same reasoning as
+# weight scales with TEST COUNT per the header's own rule. Re-timed on
+# CHAOS-5319 r1's corrective commit (2026-09-06, sync_dispatch_integration_
+# test.go grew from 9 to 14 tests -- the parent-planner-managed-config
+# resolution path, its own five new cases). Measured DIRECTLY on bigboy (not
+# a local run needing the 2x scale-up other entries apply):
+# `go test -tags=integration -count=1 ./internal/jobs/operational/...`,
+# 48.755s package time. Rounded up to 55 for headroom, same reasoning as
 # every other entry in this file -- re-time if a faster reference becomes
 # available, and re-time regardless if either integration test file gains
 # more tests.
@@ -159,14 +162,25 @@ internal/jobs/investment/chwrite	130
 internal/jobs/metrics/daily	6
 internal/jobs/metrics/daily/icfinalize	51
 internal/jobs/metrics/remaining	6
-internal/jobs/operational	45
+internal/jobs/operational	55
 internal/jobs/pagerduty	9
 internal/jobs/report	33
 internal/jobs/system	12
 internal/jobs/workgraph	7
 internal/jobs/workgraph/edges	20
+# internal/jobs/workgraph/issuecommitedges, issuepredges, prcommit (CHAOS-5358):
+# each gained its first integration-tagged test this PR (repo_id_uuid_bind_
+# integration_test.go), a single Go test function per package, same
+# container-plus-migrations shape as internal/jobs/workgraph/edges above --
+# weighted from the actual measured package time on bigboy (arm64), rounded
+# up: issuecommitedges 25.916s -> 26, issuepredges 26.03s -> 27 (its test
+# calls three Loader methods against one shared container), prcommit 25.19s
+# -> 26 (two Loader methods). Re-time if any of these files gain more tests.
+internal/jobs/workgraph/issuecommitedges	26
+internal/jobs/workgraph/issuepredges	27
 internal/jobs/workgraph/issueprlinks	20
 internal/jobs/workgraph/operationaledges	65
+internal/jobs/workgraph/prcommit	26
 internal/llmorgsettings	15
 internal/providerfoundation	12
 internal/providersync	1166

@@ -82,6 +82,13 @@ EXPECTED_PACKAGES = {
     "internal/jobs/system",
     "internal/jobs/workgraph",
     "internal/jobs/workgraph/edges",
+    # CHAOS-5358: the CHAOS-5341-adjacent bind-value-type fix (bind
+    # window.RepoID.String(), not the raw uuid.UUID, to a {repo_id:UUID}
+    # named ClickHouse query parameter) -- the regression test proves the
+    # fix against a real server, since the defect is a server-side parse
+    # error a fake connection can never reproduce.
+    "internal/jobs/workgraph/issuecommitedges",
+    "internal/jobs/workgraph/issuepredges",
     "internal/jobs/workgraph/issueprlinks",
     # CHAOS-4924: the native operational-incident/flag-guards edge producer.
     # Its correctness claims (the CHAOS-4269 NULL-valid_from guard, the
@@ -89,6 +96,9 @@ EXPECTED_PACKAGES = {
     # are properties of the real migration chain and a real ClickHouse
     # engine, so a fake connection cannot prove them.
     "internal/jobs/workgraph/operationaledges",
+    # CHAOS-5358: same bind-value-type fix as issuecommitedges/issuepredges
+    # above.
+    "internal/jobs/workgraph/prcommit",
     # CHAOS-4989: the org-scoped BYO LLM settings read path's own
     # feature_flags/org_feature_overrides/org_licenses/organizations/
     # settings precedence matrix runs against a real Postgres container.
@@ -403,12 +413,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5318 added internal/jobs/operational's first //go:build
     # integration file: 47 -> 48. CHAOS-5319 added a second integration file
     # to the SAME already-discovered package -- no further count change.
+    # CHAOS-5358 added THREE new -tags=integration packages in one PR:
+    # internal/jobs/workgraph/issuecommitedges, issuepredges, and prcommit.
+    # 48 -> 51.
     # CHAOS-5359 added internal/jobs/investment's first //go:build
-    # integration file: 48 -> 49.
-    # CURRENT TOTAL: 49 -- the one number to bump when a new
+    # integration file: 51 -> 52.
+    # CURRENT TOTAL: 52 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "49 package(s) discovered, 0 denylisted, 49 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 49 package(s)" in result.stdout
+    assert "52 package(s) discovered, 0 denylisted, 52 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 52 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -458,9 +471,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # includes the providersync shard-1 package, same as every other count
     # in this comment block. CHAOS-5319 added a second integration file to
     # the SAME already-discovered package -- no further count change.
-    # CHAOS-5359 added internal/jobs/investment: 48 -> 49.
-    # CURRENT TOTAL: 49 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 49
+    # CHAOS-5358 added THREE new packages in one PR: internal/jobs/workgraph/
+    # issuecommitedges, issuepredges, and prcommit. 48 -> 51.
+    # CHAOS-5359 added internal/jobs/investment: 51 -> 52.
+    # CURRENT TOTAL: 52 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 52
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1720,13 +1735,23 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # SinceAt filters nothing) and TestGitLabTestsReportPhaseBoundsBothEndsOnUpdatedAt,
     # which asserts GitLab bounds its own report phase server-side so the two
     # providers cannot drift apart silently.
-    # CHAOS-5316 (Jira relates_to relationship-type normalisation, 2026-09-06):
-    # +2 top-level (1324 -> 1326), integration-tagged UNCHANGED at 152.
-    # TestJiraRelationshipCanonicalizesRelatesTo and
-    # TestNormalizeJiraDependenciesRelatesTo pin the raw-"relates"-to-canonical-
-    # "relates_to" vocabulary fix in jira_work_items_rows.go; both parse/build
-    # in-memory rows only, so the integration-tagged count stays 152.
-    assert len(expected_provider_tests) == 1326
+    # CHAOS-5323/CHAOS-3092 (work_item_estimate full deletion, 2026-09-06):
+    # -1 top-level (1324 -> 1323), integration-tagged UNCHANGED at 152.
+    # TestGitHubEstimateCoverageMatchesLivePythonProduction (the only
+    # standalone top-level test for this family) is deleted along with
+    # compute_estimate_coverage_metrics_daily and its oracle_pairs script;
+    # gitlab/jira/linear each drop only their inline
+    # "<provider>/work-items/estimate-coverage" compareRowsAgainstPythonOracle
+    # call from an existing multi-case test, not a whole top-level test, so
+    # they contribute no further count change.
+    # CHAOS-5316 (Jira relates_to relationship-type normalisation, landed on
+    # top of the above, 2026-09-06): +2 top-level (1323 -> 1325),
+    # integration-tagged UNCHANGED at 152. TestJiraRelationshipCanonicalizes
+    # RelatesTo and TestNormalizeJiraDependenciesRelatesTo pin the
+    # raw-"relates"-to-canonical-"relates_to" vocabulary fix in
+    # jira_work_items_rows.go; both parse/build in-memory rows only, so the
+    # integration-tagged count stays 152.
+    assert len(expected_provider_tests) == 1325
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1743,7 +1768,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1326
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1325
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1819,11 +1844,14 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # for the providersync shard-1 package). CHAOS-5319 added a second
     # integration file to the SAME already-discovered package -- no further
     # count change.
-    # CHAOS-5359 added internal/jobs/investment: 47 -> 48 (49 discovered - 1
+    # CHAOS-5358 added THREE new packages in one PR: internal/jobs/workgraph/
+    # issuecommitedges, issuepredges, and prcommit. 47 -> 50 (51 discovered -
+    # 1 for the providersync shard-1 package).
+    # CHAOS-5359 added internal/jobs/investment: 50 -> 51 (52 discovered - 1
     # for the providersync shard-1 package).
-    # CURRENT TOTAL: 48 (== discovered-total-minus-one -- keep this in
+    # CURRENT TOTAL: 51 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 48
+    assert len(selected_packages) == len(set(selected_packages)) == 51
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -1840,7 +1868,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1326
+    assert len(selected_tests) == len(set(selected_tests)) == 1325
     assert set(selected_tests) == expected_tests
 
 

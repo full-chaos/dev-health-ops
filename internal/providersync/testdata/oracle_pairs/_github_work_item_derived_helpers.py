@@ -1,18 +1,25 @@
 """Shared live-production wiring for the derived work-item destination pairs.
 
-Three destinations are covered here -- estimate_coverage_metrics_daily,
-work_item_team_attributions and work_item_state_durations_daily. All three
-resolve a work item's team through the SAME production cascade
-(``resolve_team_attribution``, the project-key resolver, the linked-issue donor
-index and the ClickHouse-loaded attribution context), so building that cascade
-once per case and letting each pair call its own production function keeps the
-three comparisons consistent by construction rather than by three copies of the
-same wiring agreeing by luck.
+Two destinations are covered here -- work_item_team_attributions and
+work_item_state_durations_daily. Both resolve a work item's team through the
+SAME production cascade (``resolve_team_attribution``, the project-key
+resolver, the linked-issue donor index and the ClickHouse-loaded attribution
+context), so building that cascade once per case and letting each pair call
+its own production function keeps the comparisons consistent by construction
+rather than by copies of the same wiring agreeing by luck.
+
+A third destination, estimate_coverage_metrics_daily, used to be covered here
+too (this class's own ``estimate_coverage()`` method) until CHAOS-5323/
+CHAOS-3092 deleted compute_estimate_coverage_metrics_daily entirely
+(work_item_estimate is fully native, WorkItemEstimateExecutor, with no
+remaining Python caller) -- the four provider-specific oracle_pairs scripts
+that called that method (github/gitlab/jira/linear_work-items_estimate-
+coverage.py) are deleted with it.
 
 Nothing about the compared values is reimplemented. The team resolvers, the
-attribution context, the linked-issue donor index and all three compute
-functions are the live production functions. Only the ClickHouse transport
-under ``ClickHouseDataLoader`` is faked, exactly as the derivation-context pair
+attribution context, the linked-issue donor index and both compute functions
+are the live production functions. Only the ClickHouse transport under
+``ClickHouseDataLoader`` is faked, exactly as the derivation-context pair
 does, and its SQL and row mapping stay live.
 
 LANE NOTE (derived-lane): the metric-triplet lane's
@@ -51,7 +58,6 @@ with (
     )
     from dev_health_ops.metrics.compute_work_items import (
         build_linked_issue_team_resolver,
-        compute_estimate_coverage_metrics_daily,
         compute_work_item_team_attributions,
     )
     from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
@@ -429,14 +435,6 @@ class DerivedCase:
             "linked_issue_resolver": self.linked_issue_resolver,
             "attribution_context": self.attribution_context,
         }
-
-    def estimate_coverage(self) -> list[Any]:
-        return compute_estimate_coverage_metrics_daily(
-            day=self.day,
-            work_items=self.work_items,
-            computed_at=self.computed_at,
-            **self._resolver_kwargs(),
-        )
 
     def team_attributions(self) -> list[Any]:
         return compute_work_item_team_attributions(

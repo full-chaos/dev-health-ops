@@ -12,9 +12,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// goldenRecord is ReviewEdgeDailyRecord as the Python generator serializes it
-// (tests/fixtures/generate_daily_review_edges_python_golden.py): dataclass
-// field names verbatim, date/datetime as isoformat strings, UUID as str.
+// goldenRecord is ReviewEdgeDailyRecord as the now-deleted CHAOS-4279 Python
+// generator serialized it: dataclass field names verbatim, date/datetime as
+// isoformat strings, UUID as str.
 type goldenRecord struct {
 	RepoID       string `json:"repo_id"`
 	Day          string `json:"day"`

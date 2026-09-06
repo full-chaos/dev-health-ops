@@ -59,6 +59,15 @@ type Family struct {
 	// cmd/dev-health-worker/native_families_artifact_test.go -- that
 	// artifact, not this hand-set field, is the actual source of truth if
 	// the two ever disagree.
+	//
+	// CHAOS-4291: complexity is the first family with NO surviving Python
+	// source at all (job_complexity_db.py deleted whole, unlike
+	// release_impact's release_impact.py which kept a live non-production
+	// caller) -- python_sources is an empty list for it, ParityState
+	// "native_python_orchestrator_deleted" records why. Validate() permits
+	// an empty PythonSources; TestInventoryIsExactBoundedAndSourceBacked's
+	// existence check is then vacuous for that family (an empty range
+	// stats nothing), which is the correct behavior, not a gap.
 	Port string `json:"port"`
 }
 
@@ -81,7 +90,14 @@ func (inventory Inventory) Validate() error {
 	routes := make(map[string]struct{}, len(inventory.Families))
 	for _, family := range inventory.Families {
 		names = append(names, family.Name)
-		if family.Name == "" || len(family.PythonSources) == 0 || len(family.Writes) == 0 ||
+		// An empty PythonSources is valid ONLY when ParityState says so
+		// explicitly (CHAOS-4291: complexity is the first family with no
+		// surviving Python source at all) -- tying the two together means
+		// an accidentally-emptied list for any other family still fails
+		// closed, rather than this becoming a blanket "sources optional"
+		// relaxation.
+		noPythonSourcesLeft := family.ParityState == "native_python_orchestrator_deleted"
+		if family.Name == "" || (len(family.PythonSources) == 0 && !noPythonSourcesLeft) || len(family.Writes) == 0 ||
 			family.MaxConcurrency < 1 || family.MaxConcurrency > 4 ||
 			family.ClickHouseReadBudget < 1 || family.ClickHouseReadBudget > 2 ||
 			family.ClickHouseWriteBudget < 1 || family.ClickHouseWriteBudget > 2 ||

@@ -57,58 +57,6 @@
       "values": []
     }
   ],
-  "complexity": [
-    {
-      "expected": {
-        "CyclomaticPerKLOC": 100.0,
-        "CyclomaticTotal": 50,
-        "HighComplexity": 5,
-        "LOCTotal": 500,
-        "VeryHighComplexity": 1
-      },
-      "files": [
-        {
-          "CyclomaticTotal": 20,
-          "HighComplexity": 2,
-          "LOC": 100,
-          "VeryHighComplexity": 1
-        },
-        {
-          "CyclomaticTotal": 30,
-          "HighComplexity": 3,
-          "LOC": 400,
-          "VeryHighComplexity": 0
-        }
-      ]
-    },
-    {
-      "expected": {
-        "CyclomaticPerKLOC": 0.0,
-        "CyclomaticTotal": 7,
-        "HighComplexity": 1,
-        "LOCTotal": 0,
-        "VeryHighComplexity": 1
-      },
-      "files": [
-        {
-          "CyclomaticTotal": 7,
-          "HighComplexity": 1,
-          "LOC": 0,
-          "VeryHighComplexity": 1
-        }
-      ]
-    },
-    {
-      "expected": {
-        "CyclomaticPerKLOC": 0.0,
-        "CyclomaticTotal": 0,
-        "HighComplexity": 0,
-        "LOCTotal": 0,
-        "VeryHighComplexity": 0
-      },
-      "files": []
-    }
-  ],
   "dora": [
     {
       "day": "2026-07-20",

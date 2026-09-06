@@ -29,7 +29,9 @@ import (
 // An earlier version returned from buildDailyWorker when the native DORA
 // executor refused, which left capacity, complexity, membership,
 // recommendations and release-impact unregistered even though their own
-// dependencies were healthy and they still run on the compatibility bridge. A
+// dependencies were healthy (CHAOS-4291: complexity's own native executor
+// has no compatibility-bridge fallback left either, same as every other
+// kind here -- the "still run on the bridge" framing is historical). A
 // transient ClickHouse inspection failure was therefore enough to take six
 // working kinds offline -- one component's construction failure downing every
 // healthy sibling.
@@ -92,6 +94,15 @@ func TestDORARefusalDoesNotTakeDownTheRemainingFamily(t *testing.T) {
 		OperationalBridgeToken:   secrets.NewValue("boot-test-token"),
 		OperationalBridgeTimeout: 20 * time.Second,
 		ClickHouseURI:            secrets.NewValue(clickhouse),
+		// CHAOS-4291: this struct is hand-built, not routed through
+		// config.Load, so the complexity kind's own config-path default
+		// (normally filled in by envOrDefault) never applies here. Without
+		// this, the native ComplexityExecutor refuses on an unreadable
+		// empty path, not on the ClickHouse-schema fault this test actually
+		// exercises for its DORA-only-fault siblings list below.
+		WorkerRemainingComplexityConfigPath: filepath.Join(
+			"src", "dev_health_ops", "config", "complexity.yaml",
+		),
 	}
 	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
 	if err != nil {

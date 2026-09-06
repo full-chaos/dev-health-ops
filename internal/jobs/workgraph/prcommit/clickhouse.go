@@ -109,7 +109,7 @@ func (loader *Loader) loadPullRequests(ctx context.Context, orgID string, repoID
 	args := []any{clickhouse.Named("org_id", orgID)}
 	if repoID != nil {
 		query += ` AND repo_id = {repo_id:UUID}`
-		args = append(args, clickhouse.Named("repo_id", *repoID))
+		args = append(args, clickhouse.Named("repo_id", repoID.String()))
 	}
 
 	rows, err := loader.conn.Query(ctx, query, args...)
@@ -164,7 +164,7 @@ WHERE org_id = {org_id:String} AND message IS NOT NULL AND message != ''`
 	}
 	if window.RepoID != nil {
 		query += ` AND repo_id = {repo_id:UUID}`
-		args = append(args, clickhouse.Named("repo_id", *window.RepoID))
+		args = append(args, clickhouse.Named("repo_id", window.RepoID.String()))
 	}
 
 	rows, err := loader.conn.Query(ctx, query, args...)
@@ -296,7 +296,7 @@ func (loader *Loader) LoadFastPath(ctx context.Context, orgID string, window Win
 	args := []any{clickhouse.Named("org_id", orgID)}
 	if window.RepoID != nil {
 		query += ` AND p.repo_id = {repo_id:UUID}`
-		args = append(args, clickhouse.Named("repo_id", *window.RepoID))
+		args = append(args, clickhouse.Named("repo_id", window.RepoID.String()))
 	}
 	if window.From != nil {
 		bound, err := truncateBoundToSecond(*window.From)

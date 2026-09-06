@@ -1,0 +1,32 @@
+{
+  "exit_code": 0,
+  "snapshots": [
+    {
+      "file_path": "src/main.go",
+      "language": "go",
+      "loc": 14,
+      "functions_count": 2,
+      "cyclomatic_total": 4,
+      "cyclomatic_avg": 2,
+      "high_complexity_functions": 0,
+      "very_high_complexity_functions": 0
+    },
+    {
+      "file_path": "src/main.py",
+      "language": "python",
+      "loc": 10,
+      "functions_count": 2,
+      "cyclomatic_total": 4,
+      "cyclomatic_avg": 2,
+      "high_complexity_functions": 0,
+      "very_high_complexity_functions": 0
+    }
+  ],
+  "repo_daily": {
+    "loc_total": 24,
+    "cyclomatic_total": 8,
+    "cyclomatic_per_kloc": 333.3333333333333,
+    "high_complexity_functions": 0,
+    "very_high_complexity_functions": 0
+  }
+}

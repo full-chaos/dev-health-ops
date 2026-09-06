@@ -33,7 +33,7 @@
   },
   "remaining": {
     "capacity": "native",
-    "complexity": "compat",
+    "complexity": "native",
     "dora": "native",
     "membership_backfill": "native",
     "recommendations": "native",

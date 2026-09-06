@@ -14,10 +14,11 @@ import (
 // PR-B's differential proof (team-lead's second approval condition): the Go
 // backstop's ClickHouse effect-write path must produce the SAME
 // work_item_team_attributions row shape as the sync-time writer, proven
-// against the SAME live Python oracle
-// (compute_work_item_team_attributions) the sync-time deriver's own
-// TestGitHubWorkItemTeamAttributionsMatchLivePythonProduction already
-// proves itself against, immediately above in
+// against the same frozen Python oracle snapshot
+// (compute_work_item_team_attributions, deleted -- CHAOS-5321/CHAOS-3092 R6)
+// the sync-time deriver's own
+// TestGitHubWorkItemTeamAttributionsMatchFrozenPythonGolden already proves
+// itself against, immediately above in
 // github_work_item_derived_surfaces_oracle_test.go.
 //
 // This does NOT re-prove the shared resolver cascade (native_team_key,
@@ -32,9 +33,15 @@ import (
 // unassigned fallback is enough to prove that mapping; broader resolver
 // coverage would only be retesting teamattribution a second time.
 func TestWorkItemAttributionBackstopMatchesLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(
+	// CHAOS-5321/CHAOS-3092 (R6): compute_work_item_team_attributions is
+	// deleted (native Go executor + providersync own work_item_team_
+	// attributions now) -- frozen under its own snapshot name, since this
+	// test's small backstop-specific fixture differs from
+	// TestGitHubWorkItemTeamAttributionsMatchFrozenPythonGolden's cases
+	// despite sharing the same pair id. See testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(
 		t,
-		"github/work-items/team-attributions",
+		"github_work-items_team-attributions_backstop",
 		workItemAttributionBackstopOracleCases(),
 		func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
 			t.Helper()

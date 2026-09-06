@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 89,
+  "row_count": 84,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -94,7 +94,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 760
+        "line": 758
       },
       "queue_or_cadence": "sync",
       "dispatches": "sync.provider_unit outbox rows (per unit)",
@@ -118,7 +118,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1177
+        "line": 1175
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -142,7 +142,7 @@
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2052
+        "line": 2050
       },
       "queue_or_cadence": "sync",
       "dispatches": "self",
@@ -281,36 +281,12 @@
       "notes": "registry kind sync.team_autoimport"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:90",
-      "surface": "run_work_graph_build",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 90
-      },
-      "queue_or_cadence": "metrics",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "workgraph.build"
-      },
-      "target_kind_id": "kind:workgraph.build",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
-      "deletion_evidence_requirement": "Deleted once registry kind `workgraph.build` no longer routes through the HTTP compatibility bridge.",
-      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "registry kind workgraph.build"
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:166",
+      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:89",
       "surface": "run_investment_materialize",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 166
+        "line": 89
       },
       "queue_or_cadence": "metrics",
       "dispatches": "self",
@@ -329,12 +305,12 @@
       "notes": "registry kind investment.materialize; actual bridge is cmd/dev-health-worker/workgraph.go (gap 4.7)"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:281",
+      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:204",
       "surface": "run_investment_materialize_chunk",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 281
+        "line": 204
       },
       "queue_or_cadence": "metrics",
       "dispatches": "self (chord header)",
@@ -353,12 +329,12 @@
       "notes": "registry kind investment.chunk retired under CHAOS-4438 (dead Go shell, zero producer) -- registry kind investment.chunk"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:429",
+      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:352",
       "surface": "finalize_investment_materialize_partitioned",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 429
+        "line": 352
       },
       "queue_or_cadence": "metrics",
       "dispatches": "self (chord callback)",
@@ -377,12 +353,12 @@
       "notes": "registry kind investment.finalize retired under CHAOS-4438 (dead Go shell, zero producer) -- registry kind investment.finalize"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:503",
+      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:426",
       "surface": "dispatch_investment_materialize_partitioned",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 503
+        "line": 426
       },
       "queue_or_cadence": "default",
       "dispatches": "run_investment_materialize_chunk (chord)",
@@ -401,12 +377,12 @@
       "notes": "registry kind investment.dispatch retired under CHAOS-4438 (dead Go shell, zero producer) -- registry kind investment.dispatch"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:665",
+      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:588",
       "surface": "run_membership_backfill",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 665
+        "line": 588
       },
       "queue_or_cadence": "metrics",
       "dispatches": "self",
@@ -737,15 +713,15 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:368",
-      "surface": "chain(daily_sig,build_sig).apply_async",
+      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:347",
+      "surface": "celery_app.send_task (per-repo daily)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/external_ingest/recompute.py",
-        "line": 368
+        "line": 347
       },
       "queue_or_cadence": "n/a",
-      "dispatches": "run_daily_metrics -> run_work_graph_build",
+      "dispatches": "run_daily_metrics",
       "dispatch_mechanism": "literal_dispatch_call",
       "owner_role": "contributor",
       "target_owner": {
@@ -758,15 +734,15 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": ""
+      "notes": "CHAOS-4924: this row replaces the old chain(daily_sig,build_sig).apply_async() at the old line 368 -- run_work_graph_build was deleted outright, so the per-repo dispatch collapsed from a 2-signature chain into a single plain send_task for run_daily_metrics alone. See workers/post_sync_dispatch.py's identical fold for the reasoning."
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:659",
+      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:629",
       "surface": "flush_external_ingest_recompute.apply_async",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/external_ingest/recompute.py",
-        "line": 659
+        "line": 629
       },
       "queue_or_cadence": "n/a",
       "dispatches": "flush_external_ingest_recompute",
@@ -833,15 +809,15 @@
       "notes": "POST /teams/trigger-drift-sync; dynamic name-based dispatch, TODO CHAOS-2653 to replace with concrete import"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:269",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:266",
       "surface": "chain(*chain_sigs).apply_async",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 269
+        "line": 266
       },
       "queue_or_cadence": "n/a",
-      "dispatches": "complexity/build/materialize signatures",
+      "dispatches": "complexity/materialize signatures",
       "dispatch_mechanism": "literal_dispatch_call",
       "owner_role": "contributor",
       "target_owner": {
@@ -854,15 +830,15 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "CHAOS-5254: daily-metrics dropped from this chain (Celery run_daily_metrics has zero live producer via this post-sync path -- workers/metrics_daily.py's task stays, per CHAOS-5296)"
+      "notes": "CHAOS-5254: daily-metrics dropped from this chain (Celery run_daily_metrics has zero live producer via this post-sync path -- workers/metrics_daily.py's task stays, per CHAOS-5296). CHAOS-4924: run_work_graph_build (build_sig) also dropped -- deleted outright; the Go worker's own post-sync writer (cmd/dev-health-worker/sync_dispatch.go:273-310) already creates workgraph.build requests independent of this chain."
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:654",
+      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:577",
       "surface": "chord(header,callback).apply_async",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 654
+        "line": 577
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_investment_materialize_chunk -> finalize_investment_materialize_partitioned",
@@ -881,60 +857,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:356",
-      "surface": "celery_app.signature (chain builder)",
-      "class": "call_site_literal",
-      "source": {
-        "file": "src/dev_health_ops/external_ingest/recompute.py",
-        "line": 356
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "run_daily_metrics",
-      "dispatch_mechanism": "literal_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "native external recompute"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at recompute.py:368"
-    },
-    {
-      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:362",
-      "surface": "celery_app.signature (chain builder)",
-      "class": "call_site_literal",
-      "source": {
-        "file": "src/dev_health_ops/external_ingest/recompute.py",
-        "line": 362
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "run_work_graph_build",
-      "dispatch_mechanism": "literal_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "native external recompute"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at recompute.py:368"
-    },
-    {
-      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:638",
+      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:561",
       "surface": "celery_app.signature (chord builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 638
+        "line": 561
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_investment_materialize_chunk",
@@ -950,15 +878,15 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chord at work_graph_tasks.py:654"
+      "notes": "feeds chord at work_graph_tasks.py:577"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:644",
+      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:567",
       "surface": "celery_app.signature (chord builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 644
+        "line": 567
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_investment_materialize_partitioned",
@@ -974,7 +902,7 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chord at work_graph_tasks.py:654"
+      "notes": "feeds chord at work_graph_tasks.py:577"
     },
     {
       "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:218",
@@ -998,39 +926,15 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at post_sync_dispatch.py:269"
+      "notes": "feeds chain at post_sync_dispatch.py:266"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:254",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:257",
       "surface": "celery_app.signature (post-sync builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 254
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "run_work_graph_build",
-      "dispatch_mechanism": "literal_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "post_sync (transport-routes.json)"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at post_sync_dispatch.py:269"
-    },
-    {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:260",
-      "surface": "celery_app.signature (post-sync builder)",
-      "class": "call_site_literal",
-      "source": {
-        "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 260
+        "line": 257
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_investment_materialize",
@@ -1046,15 +950,15 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chain at post_sync_dispatch.py:269"
+      "notes": "feeds chain at post_sync_dispatch.py:266"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:396",
+      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:366",
       "surface": "celery_app.send_task (Go bridge drain)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/external_ingest/recompute.py",
-        "line": 396
+        "line": 366
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic (bridge-selected task name)",
@@ -1073,12 +977,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:414",
+      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:384",
       "surface": "celery_app.send_task (Go bridge drain)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/external_ingest/recompute.py",
-        "line": 414
+        "line": 384
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic (bridge-selected task name)",
@@ -1097,12 +1001,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:274",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:270",
       "surface": "celery_app.send_task",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 274
+        "line": 270
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic (post-sync fan-out)",
@@ -1121,12 +1025,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:297",
+      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:293",
       "surface": "celery_app.send_task",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 297
+        "line": 293
       },
       "queue_or_cadence": "n/a",
       "dispatches": "dynamic (post-sync fan-out)",
@@ -1150,7 +1054,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 1683
+        "line": 1681
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_sync_run",
@@ -1174,7 +1078,7 @@
       "class": "call_site_getattr_indirection",
       "source": {
         "file": "src/dev_health_ops/workers/sync_units.py",
-        "line": 2674
+        "line": 2672
       },
       "queue_or_cadence": "sync",
       "dispatches": "finalize_sync_run",
@@ -2092,7 +1996,7 @@
         "line": 9
       },
       "queue_or_cadence": "n/a",
-      "dispatches": "chord(header,callback).apply_async() at line 654",
+      "dispatches": "chord(header,callback).apply_async() at line 577",
       "dispatch_mechanism": "celery_canvas_import",
       "owner_role": "contributor",
       "target_owner": {
@@ -2102,10 +2006,10 @@
       "target_kind_id": null,
       "current_implementation_state": "python_compatibility",
       "verification_status": "verified",
-      "compatibility_dependency": "Celery canvas primitive backing one already-inventoried call site in this file: the investment chord at line 654 (chord(header,callback).apply_async(), header dispatches investment.chunk via run_investment_materialize_chunk, callback dispatches investment.finalize via finalize_investment_materialize_partitioned). CHAOS-4026 (2026-08-21) deleted dispatch_membership_backfill (the only user of `chain` in this file, formerly the chain(build_sig,backfill_sig).apply_async() call site at the old line 809) -- Go's membership_backfill_daily_fanout fixed schedule now owns that cadence, and the import narrowed from `chain, chord` to just `chord`.",
+      "compatibility_dependency": "Celery canvas primitive backing one already-inventoried call site in this file: the investment chord at line 577 (chord(header,callback).apply_async(), header dispatches investment.chunk via run_investment_materialize_chunk, callback dispatches investment.finalize via finalize_investment_materialize_partitioned). CHAOS-4026 (2026-08-21) deleted dispatch_membership_backfill (the only user of `chain` in this file, formerly the chain(build_sig,backfill_sig).apply_async() call site at the old line 809) -- Go's membership_backfill_daily_fanout fixed schedule now owns that cadence, and the import narrowed from `chain, chord` to just `chord`. `run_work_graph_build` (CHAOS-4924) was deleted from this file entirely, unrelated to this import.",
       "deletion_evidence_requirement": "Deleted once work_graph_tasks.py no longer imports celery canvas primitives (investment.* and membership-backfill fan-out both natively owned).",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard. Originally backed two call sites (the investment chord at line 654 and the membership-backfill chain at the old line 809); the chain half was removed under CHAOS-4026 (2026-08-21) along with dispatch_membership_backfill. Only the chord call site (line 654) remains, already separately inventoried as its own call_site_literal row."
+      "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard. Originally backed two call sites (the investment chord at line 577 and the membership-backfill chain at the old line 809); the chain half was removed under CHAOS-4026 (2026-08-21) along with dispatch_membership_backfill. Only the chord call site (line 577) remains, already separately inventoried as its own call_site_literal row."
     },
     {
       "id": "celery_canvas_import:src/dev_health_ops/workers/post_sync_dispatch.py:9",
@@ -2116,7 +2020,7 @@
         "line": 9
       },
       "queue_or_cadence": "n/a",
-      "dispatches": "chain(*chain_sigs).apply_async() at line 263",
+      "dispatches": "chain(*chain_sigs).apply_async() at line 266",
       "dispatch_mechanism": "celery_canvas_import",
       "owner_role": "contributor",
       "target_owner": {
@@ -2126,34 +2030,10 @@
       "target_kind_id": null,
       "current_implementation_state": "celery_only",
       "verification_status": "verified",
-      "compatibility_dependency": "Celery canvas primitive backing the already-inventoried chain(*chain_sigs).apply_async() call site at line 263 in this file.",
+      "compatibility_dependency": "Celery canvas primitive backing the already-inventoried chain(*chain_sigs).apply_async() call site at line 266 in this file.",
       "deletion_evidence_requirement": "Deleted once post_sync_dispatch.py no longer imports celery canvas primitives (post_sync transport route natively owned).",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard; the invocation call site this import backs is already separately inventoried (call_site_literal row at line 263)."
-    },
-    {
-      "id": "celery_canvas_import:src/dev_health_ops/external_ingest/recompute.py:27",
-      "surface": "from celery import chain",
-      "class": "celery_canvas_import",
-      "source": {
-        "file": "src/dev_health_ops/external_ingest/recompute.py",
-        "line": 27
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "chain(daily_sig, build_sig).apply_async() at line 368",
-      "dispatch_mechanism": "celery_canvas_import",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "native external recompute controller (stream-external runner, CUT-11)"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Celery canvas primitive backing the already-inventoried chain(daily_sig, build_sig).apply_async() call site at line 368 in this file.",
-      "deletion_evidence_requirement": "Deleted once recompute.py no longer imports celery canvas primitives (native external recompute owns the chain natively).",
-      "acceptance_test_id": "tests/test_external_ingest_recompute_dispatch.py",
-      "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard; the invocation call site this import backs is already separately inventoried (call_site_literal row at line 368)."
+      "notes": "Added CUT-01 round-2 (Codex HIGH-1): fail-closed canvas-import guard; the invocation call site this import backs is already separately inventoried (call_site_literal row at line 266)."
     }
   ]
 }

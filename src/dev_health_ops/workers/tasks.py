@@ -34,7 +34,6 @@ from dev_health_ops.workers.work_graph_tasks import (
     run_investment_materialize,
     run_investment_materialize_chunk,
     run_membership_backfill,
-    run_work_graph_build,
 )
 
 __all__ = [
@@ -61,6 +60,5 @@ __all__ = [
     "run_sync_reference_discovery",
     "run_sync_unit",
     "run_post_sync_team_autoimport",
-    "run_work_graph_build",
     "send_billing_notification",
 ]

@@ -301,6 +301,42 @@ func DeleteEdgesByID(ctx context.Context, conn driver.Conn, organizationID strin
 	return nil
 }
 
+// staleDependencyIssueEdgesDeleteSQL ports `_delete_stale_pr_dependency_issue_edges`
+// verbatim (work_graph/builder.py, pre-CHAOS-4924 deletion): a legacy stale-row
+// shape where a PR-sourced edge was mislabelled with `source_type='issue'`
+// (`source_id` still carries its real `ghpr:`/`gitlab:` prefix) but
+// `target_type`/`target_id` name a genuine Linear issue via a
+// `linear_attachment` evidence tag. `mutations_sync=2` for the same reason
+// DeleteEdgesByID uses it: this delete must be visible before anything reads
+// work_graph_edges again in the same build.
+const staleDependencyIssueEdgesDeleteSQL = `
+        ALTER TABLE work_graph_edges DELETE WHERE
+        source_type = 'issue' AND target_type = 'issue' AND evidence = 'linear_attachment'
+        AND startsWith(target_id, 'linear:')
+        AND (startsWith(source_id, 'ghpr:') OR startsWith(source_id, 'gitlab:'))
+        AND org_id = {org_id:String}
+        SETTINGS mutations_sync=2
+`
+
+// DeleteStalePRDependencyIssueEdges runs the stale-edge cleanup
+// `_delete_stale_pr_dependency_issue_edges` used to run as the FIRST action
+// inside Python's `build()`, before any other stage. Refuses an unscoped
+// call rather than replicating Python's silent no-op on an empty org_id --
+// same deliberate divergence ReadDependencies/WriteEdges already document
+// for this package: an unscoped delete would target every tenant's stale
+// rows at once, which is never what a per-org build request means.
+func DeleteStalePRDependencyIssueEdges(ctx context.Context, conn driver.Conn, organizationID string) error {
+	if err := requireEdgeScope(organizationID); err != nil {
+		return err
+	}
+	if err := conn.Exec(ctx, staleDependencyIssueEdgesDeleteSQL,
+		clickhouse.Named("org_id", organizationID),
+	); err != nil {
+		return fmt.Errorf("delete stale PR-dependency issue edges: %w", err)
+	}
+	return nil
+}
+
 // WriteProjectionRun inserts one `work_graph_projection_runs` watermark row
 // (`_publish_blocker_projection`, builder.py:1016-1045).
 //

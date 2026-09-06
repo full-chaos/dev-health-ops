@@ -214,8 +214,16 @@ def test_investment_materialize_accepts_clickhouse_via_db_flag() -> None:
     assert "missing required input" not in result.stderr
 
 
-def test_work_graph_build_rejects_unsupported_db_scheme_cleanly() -> None:
-    result = _run_cli("work-graph", "build", "--db", "sqlite:///x.db")
+def test_investment_materialize_rejects_unsupported_db_scheme_cleanly() -> None:
+    # Was test_work_graph_build_rejects_unsupported_db_scheme_cleanly: the
+    # `dev-hops work-graph build` CLI itself is deleted (CHAOS-4924). The
+    # scheme rejection this proves lives in the generic sink factory
+    # (src/dev_health_ops/metrics/sinks/factory.py), shared by every CLI
+    # command that takes a ClickHouse DSN on --db, so any such command
+    # exercises the same path -- investment materialize stands in, same
+    # substitution as test_investment_materialize_accepts_clickhouse_via_db_
+    # flag above.
+    result = _run_cli("investment", "materialize", "--db", "sqlite:///x.db")
 
     assert result.returncode == 2, result.stderr
     assert "Traceback" not in result.stderr

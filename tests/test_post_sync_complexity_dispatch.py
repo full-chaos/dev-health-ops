@@ -37,7 +37,6 @@ import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
 
 _COMPLEXITY_TASK = "dev_health_ops.workers.tasks.run_complexity_job"
-_WORK_GRAPH_TASK = "dev_health_ops.workers.tasks.run_work_graph_build"
 _INVESTMENT_TASK = (
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned"
 )
@@ -94,7 +93,7 @@ def test_current_single_day_sync_enqueues_complexity_with_explicit_date(
         to_date="2026-03-05",
     )
 
-    complexity_sig, build_sig, materialize_sig = mock_chain.call_args.args
+    complexity_sig, materialize_sig = mock_chain.call_args.args
     assert complexity_sig.task_name == _COMPLEXITY_TASK
     assert complexity_sig.sig_kwargs["kwargs"] == {
         "org_id": "org-123",
@@ -120,7 +119,7 @@ def test_current_sync_without_explicit_window_still_enqueues_complexity(
         org_id="org-123",
     )
 
-    complexity_sig, build_sig, materialize_sig = mock_chain.call_args.args
+    complexity_sig, materialize_sig = mock_chain.call_args.args
     assert complexity_sig.task_name == _COMPLEXITY_TASK
     assert complexity_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
     chain_instance.apply_async.assert_called_once_with()
@@ -146,8 +145,8 @@ def test_historical_single_day_sync_skips_complexity_dispatch(
     chain_sigs = mock_chain.call_args.args
     task_names = [sig.task_name for sig in chain_sigs]
     assert _COMPLEXITY_TASK not in task_names
-    build_sig = chain_sigs[0]
-    assert build_sig.task_name == _WORK_GRAPH_TASK
+    materialize_sig = chain_sigs[0]
+    assert materialize_sig.task_name == _INVESTMENT_TASK
     chain_instance.apply_async.assert_called_once_with()
     assert "historical_complexity_unsupported" in caplog.text
     assert "2026-01-01" in caplog.text
@@ -170,8 +169,7 @@ def test_historical_multi_day_backfill_skips_complexity_but_keeps_daily_window(
     chain_sigs = mock_chain.call_args.args
     task_names = [sig.task_name for sig in chain_sigs]
     assert _COMPLEXITY_TASK not in task_names
-    build_sig, materialize_sig = chain_sigs[0], chain_sigs[1]
-    assert build_sig.task_name == _WORK_GRAPH_TASK
+    (materialize_sig,) = chain_sigs
     assert materialize_sig.task_name == _INVESTMENT_TASK
     chain_instance.apply_async.assert_called_once_with()
     assert "historical_complexity_unsupported" in caplog.text

@@ -1,26 +1,30 @@
 """Shared live-production wiring for the derived work-item destination pairs.
 
-Three destinations are covered here -- estimate_coverage_metrics_daily,
-work_item_team_attributions and work_item_state_durations_daily. All three
-resolve a work item's team through the SAME production cascade
-(``resolve_team_attribution``, the project-key resolver, the linked-issue donor
-index and the ClickHouse-loaded attribution context), so building that cascade
-once per case and letting each pair call its own production function keeps the
-three comparisons consistent by construction rather than by three copies of the
-same wiring agreeing by luck.
+CHAOS-5321/CHAOS-3092 (R6): this module used to cover TWO destinations,
+work_item_team_attributions and work_item_state_durations_daily (this
+class's own ``team_attributions()``/``state_durations()`` methods) -- both
+deleted along with compute_work_item_team_attributions/compute_work_item_
+state_durations_daily (native Go executor + providersync ingest derivation
+are the only producers of those tables now). The 8 provider-specific
+oracle_pairs scripts that called those methods (github/gitlab/jira/
+linear_work-items_{team-attributions,state-durations}.py) are deleted with
+them, frozen into testdata/oracle_frozen/. A third destination, estimate_
+coverage_metrics_daily, was deleted the same way earlier (CHAOS-5323/
+CHAOS-3092) -- see estimateCoverageGoldenFixture (golden_test.go) for where
+those cases live now.
+
+What remains here is ``engine_destinations()``/``engine_destinations_all_
+days()``, covering compute_work_item_engine_destinations_daily (issue-type-
+metrics, investment-classifications, investment-metrics) -- still a live
+production function with no Go replacement, used by github/gitlab/jira/
+linear_work-items_{issue-type-metrics,investment-classifications,
+investment-metrics}.py and github_work-items_team-attributions-multiday.py.
 
 Nothing about the compared values is reimplemented. The team resolvers, the
-attribution context, the linked-issue donor index and all three compute
-functions are the live production functions. Only the ClickHouse transport
-under ``ClickHouseDataLoader`` is faked, exactly as the derivation-context pair
+attribution context, the linked-issue donor index and the compute function
+are the live production functions. Only the ClickHouse transport under
+``ClickHouseDataLoader`` is faked, exactly as the derivation-context pair
 does, and its SQL and row mapping stay live.
-
-LANE NOTE (derived-lane): the metric-triplet lane's
-``_github_work_item_metrics_helpers`` carries a near-identical copy of the case
-decoders, the fake query client and ``columns``. That duplication is
-deliberate and temporary -- that lane is unmerged and its files may still move,
-so importing from it would couple this lane to an unreviewed head. Whichever
-lands second collapses the two modules into one.
 """
 
 from __future__ import annotations
@@ -46,13 +50,8 @@ with (
     contextlib.redirect_stderr(io.StringIO()),
 ):
     from dev_health_ops.analytics.investment import InvestmentClassifier
-    from dev_health_ops.metrics.compute_work_item_state_durations import (
-        compute_work_item_state_durations_daily,
-    )
     from dev_health_ops.metrics.compute_work_items import (
         build_linked_issue_team_resolver,
-        compute_estimate_coverage_metrics_daily,
-        compute_work_item_team_attributions,
     )
     from dev_health_ops.metrics.loaders.clickhouse import ClickHouseDataLoader
     from dev_health_ops.metrics.work_item_engine_destinations import (
@@ -429,30 +428,6 @@ class DerivedCase:
             "linked_issue_resolver": self.linked_issue_resolver,
             "attribution_context": self.attribution_context,
         }
-
-    def estimate_coverage(self) -> list[Any]:
-        return compute_estimate_coverage_metrics_daily(
-            day=self.day,
-            work_items=self.work_items,
-            computed_at=self.computed_at,
-            **self._resolver_kwargs(),
-        )
-
-    def team_attributions(self) -> list[Any]:
-        return compute_work_item_team_attributions(
-            work_items=self.work_items,
-            computed_at=self.computed_at,
-            **self._resolver_kwargs(),
-        )
-
-    def state_durations(self) -> list[Any]:
-        return compute_work_item_state_durations_daily(
-            day=self.day,
-            work_items=self.work_items,
-            transitions=self.transitions,
-            computed_at=self.computed_at,
-            **self._resolver_kwargs(),
-        )
 
     def engine_destinations(self) -> tuple[list[Any], list[Any], list[Any]]:
         """Execute the exact production helper called by job_work_items."""

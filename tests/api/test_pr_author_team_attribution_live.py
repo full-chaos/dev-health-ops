@@ -17,12 +17,18 @@ commonly set than the PR's author (`item.reporter`). A PR opened by a team
 member with no assignee, no repo_patterns row, and no linked issue -- exactly
 the shape of all 87 sampled units -- resolved `unassigned`.
 
-This file proves the fix through the PRODUCTION READ PATH, not just the
-producer function in isolation: run the real `compute_work_item_team_attributions`
-against a PR-shaped `WorkItem` (author known, no assignee), persist through the
-real sink, and assert `fetch_investment_team_edges` (which compiles
-`build_unit_team_subquery`) resolves the team -- the same query the UI and the
-ticket's own measurement used.
+This file proves the fix through the PRODUCTION READ PATH: seed
+`work_item_team_attributions` with the exact row shapes `resolve_team_
+attribution` produces for each scenario (see `tests/metrics/
+test_pr_author_team_attribution.py` for the producer-level proof of those
+shapes), persist through the real sink, and assert `fetch_investment_team_
+edges` (which compiles `build_unit_team_subquery`) resolves the team -- the
+same query the UI and the ticket's own measurement used.
+
+CHAOS-5321/CHAOS-3092 (R6): `compute_work_item_team_attributions` itself is
+deleted -- native Go executor + providersync ingest derivation are the only
+producers of `work_item_team_attributions` rows now. This file's subject was
+always the READ side, so its rows are seeded literally instead of computed.
 
 Opt-in (filtered from unit/CI runs): ``pytest -m clickhouse``. Provision an
 ISOLATED scratch DB first, e.g.::
@@ -48,14 +54,10 @@ import pytest
 
 import dev_health_ops.api.queries.investment as investment_queries
 from dev_health_ops.external_ingest.ids import derive_work_item_id
-from dev_health_ops.metrics.compute_work_items import (
-    TeamAttributionCandidate,
-    TeamAttributionContext,
-    compute_work_item_team_attributions,
+from dev_health_ops.metrics.schemas import (
+    WorkItemTeamAttributionRecord,
+    WorkUnitInvestmentRecord,
 )
-from dev_health_ops.metrics.schemas import WorkUnitInvestmentRecord
-from dev_health_ops.models.work_items import WorkItem
-from dev_health_ops.providers.teams import TeamResolver
 from dev_health_ops.work_graph.ids import generate_pr_id
 
 CLICKHOUSE_URI = os.environ.get("CLICKHOUSE_URI")
@@ -116,28 +118,6 @@ def _cleanup(sink: Any, org_id: str, repo_ids: list[uuid.UUID]) -> None:
             "ALTER TABLE repos DELETE WHERE id = {r:UUID} SETTINGS mutations_sync=2",
             parameters={"r": str(repo_id)},
         )
-
-
-def _alice_ops_context() -> TeamAttributionContext:
-    """The org-scoped attribution_context path -- the ONLY reporter-resolution
-    path that exists (CHAOS-4110/codex, 2026-08-24: no legacy-TeamResolver
-    reporter path; TeamResolver is not org-scoped and would bypass the
-    ambiguity gate)."""
-    return TeamAttributionContext(
-        member_by_identity={
-            ("github", "alice"): [
-                TeamAttributionCandidate(
-                    source="assignee_membership",
-                    team_id="team-ops",
-                    team_name="Ops Team",
-                    confidence="medium",
-                    evidence="assignee_membership=alice",
-                    is_primary=1,
-                    specificity=50,
-                )
-            ]
-        }
-    )
 
 
 def _seed_repo(sink: Any, org: str, *, repo_id: uuid.UUID, slug: str) -> None:
@@ -217,26 +197,26 @@ async def test_pr_only_unit_is_unassigned_without_the_author_candidate_red_contr
             pr_number=GITHUB_PR_NUMBER,
         )
 
-        pr_item = WorkItem(
-            work_item_id=work_item_id,
-            provider="github",
-            title="Fix attribution gap",
-            type="pr",
-            status="done",
-            status_raw="merged",
-            reporter=None,  # pre-fix shape: author never reaches the resolver
-            assignees=[],
-            created_at=COMPUTED_AT,
-            updated_at=COMPUTED_AT,
-            org_id=org,
-        )
-        records = compute_work_item_team_attributions(
-            work_items=[pr_item],
-            computed_at=COMPUTED_AT,
-            team_resolver=TeamResolver(
-                member_to_team={"alice": ("team-ops", "Ops Team")}
-            ),
-        )
+        # Pre-fix shape: the resolver never sees the author (reporter=None
+        # reaching resolve_team_attribution), so the only candidate is
+        # `unassigned`. CHAOS-5321/CHAOS-3092 (R6): the producer
+        # (compute_work_item_team_attributions) that used to compute this
+        # row is deleted -- native Go executor + providersync ingest
+        # derivation are the only producers now. This test's subject is the
+        # READ side (fetch_investment_team_edges/build_unit_team_subquery),
+        # so the row is seeded literally instead of computed.
+        records = [
+            WorkItemTeamAttributionRecord(
+                work_item_id=work_item_id,
+                provider="github",
+                source="unassigned",
+                is_primary=1,
+                confidence="none",
+                evidence="no_candidate:no_author",
+                computed_at=COMPUTED_AT,
+                org_id=org,
+            )
+        ]
         sink.write_work_item_team_attributions(records)
 
         by_team = await _team_edges(sink, org)
@@ -272,25 +252,23 @@ async def test_pr_author_resolves_through_the_real_producer_and_the_production_q
             pr_number=GITHUB_PR_NUMBER,
         )
 
-        pr_item = WorkItem(
-            work_item_id=work_item_id,
-            provider="github",
-            title="Fix attribution gap",
-            type="pr",
-            status="done",
-            status_raw="merged",
-            reporter="alice",
-            assignees=[],
-            created_at=COMPUTED_AT,
-            updated_at=COMPUTED_AT,
-            org_id=org,
-        )
-        records = compute_work_item_team_attributions(
-            work_items=[pr_item],
-            computed_at=COMPUTED_AT,
-            attribution_context=_alice_ops_context(),
-        )
-        assert any(r.is_primary and r.team_id == "team-ops" for r in records), records
+        # Post-fix shape: the PR's author (alice) resolves to team-ops via
+        # the attribution_context membership path. CHAOS-5321/CHAOS-3092
+        # (R6): seeded literally -- see the red-control test above for why.
+        records = [
+            WorkItemTeamAttributionRecord(
+                work_item_id=work_item_id,
+                provider="github",
+                source="author_membership",
+                is_primary=1,
+                confidence="medium",
+                evidence="reporter=alice",
+                computed_at=COMPUTED_AT,
+                team_id="team-ops",
+                team_name="Ops Team",
+                org_id=org,
+            )
+        ]
         sink.write_work_item_team_attributions(records)
 
         by_team = await _team_edges(sink, org)
@@ -334,45 +312,24 @@ async def test_pr_with_no_author_match_falls_back_to_repo_ownership(sink):
             pr_number=GITHUB_PR_NUMBER,
         )
 
-        pr_item = WorkItem(
-            work_item_id=work_item_id,
-            provider="github",
-            title="Fix attribution gap",
-            type="pr",
-            status="done",
-            status_raw="merged",
-            reporter="external-contributor",  # not a member of any team
-            assignees=[],
-            project_id=GITHUB_REPO_SLUG,
-            created_at=COMPUTED_AT,
-            updated_at=COMPUTED_AT,
-            org_id=org,
-        )
-        context = TeamAttributionContext(
-            repo_by_name={
-                ("github", GITHUB_REPO_SLUG): [
-                    TeamAttributionCandidate(
-                        source="repo_ownership",
-                        team_id="team-ops",
-                        team_name="Ops Team",
-                        confidence="medium",
-                        evidence=f"repo_pattern={GITHUB_REPO_SLUG}",
-                        is_primary=1,
-                        specificity=30,
-                    )
-                ]
-            }
-        )
-        records = compute_work_item_team_attributions(
-            work_items=[pr_item],
-            computed_at=COMPUTED_AT,
-            team_resolver=TeamResolver(member_to_team={}),
-            attribution_context=context,
-        )
-        primary = [r for r in records if r.is_primary]
-        assert len(primary) == 1
-        assert primary[0].source == "repo_ownership"
-        assert primary[0].team_id == "team-ops"
+        # Author is unknown (not a member of any team), so this proves the
+        # repo_ownership fallback fires on its own -- unchanged, pre-existing
+        # logic this ticket's fix does not touch. CHAOS-5321/CHAOS-3092 (R6):
+        # seeded literally -- see the red-control test above for why.
+        records = [
+            WorkItemTeamAttributionRecord(
+                work_item_id=work_item_id,
+                provider="github",
+                source="repo_ownership",
+                is_primary=1,
+                confidence="medium",
+                evidence=f"repo_pattern={GITHUB_REPO_SLUG}",
+                computed_at=COMPUTED_AT,
+                team_id="team-ops",
+                team_name="Ops Team",
+                org_id=org,
+            )
+        ]
         sink.write_work_item_team_attributions(records)
 
         by_team = await _team_edges(sink, org)
@@ -411,52 +368,42 @@ async def test_backfill_next_run_attributes_a_previously_unassigned_unit(sink):
         )
 
         # "Day 1": the run BEFORE this fix -- resolver never sees the author.
-        stale_item = WorkItem(
-            work_item_id=work_item_id,
-            provider="github",
-            title="Fix attribution gap",
-            type="pr",
-            status="done",
-            status_raw="merged",
-            reporter=None,
-            assignees=[],
-            created_at=COMPUTED_AT,
-            updated_at=COMPUTED_AT,
-            org_id=org,
-        )
-        stale_records = compute_work_item_team_attributions(
-            work_items=[stale_item],
-            computed_at=COMPUTED_AT,
-            team_resolver=TeamResolver(
-                member_to_team={"alice": ("team-ops", "Ops Team")}
-            ),
-        )
+        # CHAOS-5321/CHAOS-3092 (R6): seeded literally -- see the red-control
+        # test above for why.
+        stale_records = [
+            WorkItemTeamAttributionRecord(
+                work_item_id=work_item_id,
+                provider="github",
+                source="unassigned",
+                is_primary=1,
+                confidence="none",
+                evidence="no_candidate:no_author",
+                computed_at=COMPUTED_AT,
+                org_id=org,
+            )
+        ]
         sink.write_work_item_team_attributions(stale_records)
         assert await _team_edges(sink, org) == {"unassigned": pytest.approx(EFFORT)}
 
-        # "Day 2": next scheduled producer run, same WorkItem, fixed code --
+        # "Day 2": next scheduled producer run, same work item, fixed code --
         # no manual backfill step, no re-sync, just the normal recompute
         # picking up the SAME provider-fetched item (reporter is a normalized
         # field on the row, sourced from the PR's real author every sync).
         next_run_at = datetime(2026, 1, 8, tzinfo=timezone.utc)
-        fresh_item = WorkItem(
-            work_item_id=work_item_id,
-            provider="github",
-            title="Fix attribution gap",
-            type="pr",
-            status="done",
-            status_raw="merged",
-            reporter="alice",
-            assignees=[],
-            created_at=COMPUTED_AT,
-            updated_at=COMPUTED_AT,
-            org_id=org,
-        )
-        fresh_records = compute_work_item_team_attributions(
-            work_items=[fresh_item],
-            computed_at=next_run_at,
-            attribution_context=_alice_ops_context(),
-        )
+        fresh_records = [
+            WorkItemTeamAttributionRecord(
+                work_item_id=work_item_id,
+                provider="github",
+                source="author_membership",
+                is_primary=1,
+                confidence="medium",
+                evidence="reporter=alice",
+                computed_at=next_run_at,
+                team_id="team-ops",
+                team_name="Ops Team",
+                org_id=org,
+            )
+        ]
         sink.write_work_item_team_attributions(fresh_records)
 
         # Same work unit, no re-materialization -- now attributed.

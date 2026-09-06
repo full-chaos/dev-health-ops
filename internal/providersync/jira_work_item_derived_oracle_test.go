@@ -62,7 +62,10 @@ func jiraDerivedOracleRows(
 
 func TestJiraWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
 	cases := jiraDerivedOracleCases(githubWorkItemMetricTripletOracleCases())
-	compareRowsAgainstPythonOracle(t, "jira/work-items/metrics-daily", cases,
+	// CHAOS-5310/CHAOS-3092 (R6): compute_work_item_metrics_daily is deleted
+	// (native Go executor + providersync own work_item_metrics_daily now) --
+	// frozen, see testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(t, "jira_work-items_metrics-daily", cases,
 		func(t *testing.T, input map[string]any) githubWorkItemMetricsDailyOracleColumns {
 			claim, rows, derived := jiraDerivedOracleRows(t, input)
 			triplet, err := buildWorkItemMetricTripletForProvider(
@@ -74,7 +77,7 @@ func TestJiraWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
 			}
 			return newGitHubWorkItemMetricsDailyOracleColumns(len(triplet.MetricsDaily)).fromRows(triplet.MetricsDaily)
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "jira/work-items/user-metrics-daily", cases,
+	compareRowsAgainstFrozenOracle(t, "jira_work-items_user-metrics-daily", cases,
 		func(t *testing.T, input map[string]any) githubWorkItemUserMetricsDailyOracleColumns {
 			claim, rows, derived := jiraDerivedOracleRows(t, input)
 			triplet, err := buildWorkItemMetricTripletForProvider(
@@ -86,7 +89,7 @@ func TestJiraWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
 			}
 			return newGitHubWorkItemUserMetricsDailyOracleColumns(len(triplet.UserMetricsDaily)).fromRows(triplet.UserMetricsDaily)
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "jira/work-items/cycle-times", cases,
+	compareRowsAgainstFrozenOracle(t, "jira_work-items_cycle-times", cases,
 		func(t *testing.T, input map[string]any) githubWorkItemCycleTimeOracleColumns {
 			claim, rows, derived := jiraDerivedOracleRows(t, input)
 			triplet, err := buildWorkItemMetricTripletForProvider(
@@ -102,19 +105,16 @@ func TestJiraWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
 
 func TestJiraDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 	cases := jiraDerivedOracleCases(githubDerivedOracleCases())
-	compareRowsAgainstPythonOracle(t, "jira/work-items/estimate-coverage", cases,
-		func(t *testing.T, input map[string]any) githubEstimateCoverageColumns {
-			claim, rows, derived := jiraDerivedOracleRows(t, input)
-			surfaces, err := buildWorkItemDerivedSurfacesForProvider(
-				"jira", claim, rows, gitlabWorkItemOracleDay(t, input),
-				gitlabWorkItemOracleComputedAt(t, input), derived,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return newGitHubEstimateCoverageColumns(surfaces.EstimateCoverage)
-		}, nil)
-	compareRowsAgainstPythonOracle(t, "jira/work-items/team-attributions", cases,
+	// CHAOS-5323/CHAOS-3092: no "jira/work-items/estimate-coverage" oracle
+	// pair here anymore -- compute_estimate_coverage_metrics_daily is
+	// deleted entirely (work_item_estimate is fully native, no remaining
+	// Python caller), and its oracle_pairs script (jira_work-
+	// items_estimate-coverage.py) is deleted with it.
+	// CHAOS-5321/CHAOS-3092 (R6): compute_work_item_team_attributions/
+	// compute_work_item_state_durations_daily are deleted (native Go
+	// executor + providersync own these tables now) -- frozen, see
+	// testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(t, "jira_work-items_team-attributions", cases,
 		func(t *testing.T, input map[string]any) githubTeamAttributionColumns {
 			claim, rows, derived := jiraDerivedOracleRows(t, input)
 			surfaces, err := buildWorkItemDerivedSurfacesForProvider(
@@ -126,7 +126,7 @@ func TestJiraDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 			}
 			return newGitHubTeamAttributionColumns(surfaces.TeamAttributions)
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "jira/work-items/state-durations", cases,
+	compareRowsAgainstFrozenOracle(t, "jira_work-items_state-durations", cases,
 		func(t *testing.T, input map[string]any) githubStateDurationColumns {
 			claim, rows, derived := jiraDerivedOracleRows(t, input)
 			surfaces, err := buildWorkItemDerivedSurfacesForProvider(
@@ -258,9 +258,15 @@ func TestJiraWorkItemsRouteIncludesLivePythonMetricEffect(t *testing.T) {
 			"Members": []any{}, "ManualFallbacks": []any{},
 		},
 	}
-	compareRowsAgainstPythonOracle(
+	// CHAOS-5310/CHAOS-3092 (R6): compute_work_item_metrics_daily is deleted
+	// (native Go executor + providersync own work_item_metrics_daily now) --
+	// frozen under its own snapshot name, since this test's single-case
+	// fixture differs from TestJiraWorkItemMetricTripletMatchesLivePython
+	// Production's cases despite sharing the same pair id. See
+	// testdata/oracle_frozen/README.md.
+	compareRowsAgainstFrozenOracle(
 		t,
-		"jira/work-items/metrics-daily",
+		"jira_work-items_metrics-daily_route",
 		[]oracleCase{{ID: "atlassian_route_non_empty", Input: input}},
 		func(t *testing.T, _ map[string]any) githubWorkItemMetricsDailyOracleColumns {
 			t.Helper()

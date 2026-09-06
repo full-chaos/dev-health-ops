@@ -287,119 +287,19 @@ class WorkGraphBuilder:
         self._write_edges([edge])
         return edge
 
-    def build(self) -> dict:
-        """
-        Execute the full work graph build.
 
-        Returns:
-            Dictionary with statistics about edges created
-        """
-        stats = {
-            "issue_issue_edges": 0,
-            "issue_pr_edges": 0,
-            "issue_commit_edges": 0,
-            "pr_commit_edges": 0,
-            "commit_file_edges": 0,
-            "heuristic_edges": 0,
-            "flag_guards_edges": 0,
-            "operational_incident_edges": 0,
-        }
-
-        logger.info("Starting work graph build...")
-
-        self._delete_stale_pr_dependency_issue_edges()
-
-        # 1. Issue->issue edges from work_item_dependencies: CHAOS-4924 ported
-        # to Go (internal/jobs/workgraph/edges), wired as a native pre-step
-        # ahead of this bridge call, not here -- deleted the Python
-        # `_build_issue_issue_edges`/`_delete_dependency_edge_candidates`/
-        # `_publish_blocker_projection` trio. stats stays at its 0 default
-        # (see the dict literal above) -- the native pre-step reports its own
-        # counts through the ledger, same as issue_pr_links (CHAOS-5249) and
-        # pr_commit_links/pr_commit_edges (CHAOS-5264).
-
-        # issue->PR native-provenance links (work_item_dependencies ->
-        # work_graph_issue_pr) are derived by the Go pre-step
-        # (internal/jobs/workgraph/issueprlinks) before this bridge call runs,
-        # not here -- CHAOS-5249 deleted _derive_issue_pr_links_from_dependencies,
-        # retiring the Python half of that straddle (it ran a second time,
-        # every build, after the Go pre-step already wrote the same rows).
-
-        # 2/3/4. Issue->PR edges from the fast-path table, from PR
-        # title/body text parsing, and the heuristic time-window matcher:
-        # CHAOS-4924 ported all three to Go
-        # (internal/jobs/workgraph/issuepredges), wired as native pre-steps
-        # ahead of this bridge call, not here. stats stays at its 0 default
-        # (see the dict literal above) -- the native pre-steps report their
-        # own counts through the ledger, same as issue_pr_links (CHAOS-5249)
-        # and pr_commit_links/pr_commit_edges (CHAOS-5264). The heuristic
-        # step reads its own "already explicitly linked" exclusion set fresh
-        # from work_graph_issue_pr (by the time it runs, the native
-        # issue_pr_links pre-step AND the two issuepredges pre-steps ahead of
-        # it have already committed their rows there) -- see
-        # issuepredges.ExplicitLink's doc comment.
-
-        # 3b. Build issue->commit edges from commit message parsing:
-        # CHAOS-5304 ported to Go (internal/jobs/workgraph/issuecommitedges),
-        # wired as a native pre-step ahead of this bridge call, not here. stats
-        # stays at its 0 default (see the dict literal above) -- the native
-        # pre-step reports its own count through the ledger, same as
-        # issue_pr_links (CHAOS-5249) and pr_commit_links/pr_commit_edges
-        # (CHAOS-5264).
-
-        # 4b/5. PR->commit link derivation and fast-path edges: CHAOS-5264
-        # ported both to Go (internal/jobs/workgraph/prcommit), wired as
-        # native pre-steps ahead of this bridge call, not here. stats stays at
-        # its 0 default (line 441) -- the native pre-steps report their own
-        # counts through the ledger, same as issue_pr_links (CHAOS-5249).
-
-        # 6. Commit->file edges are handled by view over git_commit_stats:
-        # CHAOS-5306 ported to Go (issuecommitedges.CountCommitFileEdges),
-        # wired as a native pre-step ahead of this bridge call, not here. stats
-        # stays at its 0 default (see the dict literal above) -- the native
-        # pre-step reports its own count through the ledger.
-
-        # 7/8. Feature-flag GUARDS edges and operational-incident edges:
-        # CHAOS-4924 ported both to Go (internal/jobs/workgraph/operationaledges),
-        # wired as native pre-steps ahead of this bridge call, not here. stats
-        # stay at their 0 default (see the dict literal above) -- the native
-        # pre-steps report their own counts through the ledger, same as
-        # issue_pr_links (CHAOS-5249) and pr_commit_links/pr_commit_edges
-        # (CHAOS-5264).
-
-        logger.info(
-            "Work graph build complete: %s",
-            ", ".join(f"{k}={v}" for k, v in stats.items()),
-        )
-
-        return stats
-
-    def _delete_stale_pr_dependency_issue_edges(self) -> None:
-        if not self.config.org_id:
-            return
-        command = getattr(getattr(self.sink, "client", None), "command", None)
-        if not callable(command):
-            return
-
-        where_parts = [
-            "source_type = 'issue'",
-            "target_type = 'issue'",
-            "evidence = 'linear_attachment'",
-            "startsWith(target_id, 'linear:')",
-            "(startsWith(source_id, 'ghpr:') OR startsWith(source_id, 'gitlab:'))",
-        ]
-        params: dict[str, str] = {}
-        if self.config.org_id:
-            where_parts.append("org_id = {org_id:String}")
-            params["org_id"] = self.config.org_id
-
-        command(
-            "ALTER TABLE work_graph_edges DELETE WHERE "
-            + " AND ".join(where_parts)
-            + " SETTINGS mutations_sync=2",
-            parameters=params or None,
-        )
-
+# CHAOS-4924: `build()` and `_delete_stale_pr_dependency_issue_edges` are
+# DELETED. `build()` had shrunk to a 0-stats no-op shell (every numbered
+# stage it used to run was already ported natively -- see the six CHAOS-4924
+# family PRs plus CHAOS-5249/CHAOS-5264/CHAOS-5304/CHAOS-5306) except for its
+# one real remaining action, `_delete_stale_pr_dependency_issue_edges`, now
+# ported to Go as `edges.DeleteStalePRDependencyIssueEdges`
+# (internal/jobs/workgraph/edges/clickhouse.go) and wired as the FIRST native
+# pre-step (`stale_pr_dependency_issue_edges_cleanup`, matching its former
+# position as the first action inside `build()`). `WorkGraphBuilder` itself
+# is NOT deleted -- `add_release_node`/`add_feature_flag_node`/edge-writer
+# methods are still used by `workers/feature_flag_sync.py` and
+# `fixtures/runner.py`, an unrelated system this cutover leaves untouched.
 
 # CHAOS-5303 r1 P2: this module used to end with its own standalone
 # `main()`/`argparse` CLI (`python -m work_graph.builder ...`), a SECOND,

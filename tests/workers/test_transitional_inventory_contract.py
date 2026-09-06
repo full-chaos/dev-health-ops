@@ -128,7 +128,39 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # post_sync_dispatch.py (complexity/build/materialize signatures, the
     # chain(...).apply_async() call, and the 2 send_task calls) were
     # re-anchored to their new lines after the deletion shifted them up.
-    # = 95, - 6 removed under CHAOS-5320: resolve_worker_job_route now rejects
+    # = 95, - 2 removed under CHAOS-4924: the celery_task:work_graph_tasks.py
+    # row for run_work_graph_build (deleted outright -- its own
+    # deletion_evidence_requirement, "deleted once registry kind
+    # workgraph.build no longer routes through the HTTP compatibility
+    # bridge", is exactly what this PR does), and the
+    # call_site_literal:post_sync_dispatch.py row for the build_sig
+    # celery_app.signature builder that fed it (also deleted outright --
+    # the Go worker's own post-sync writer, sync_dispatch.go:273-310,
+    # already creates workgraph.build requests independent of this chain).
+    # Every other celery_task/call_site_literal row in both files was
+    # re-anchored to its new line after the deletions shifted them up; no
+    # other row's surface changed.
+    # = 93, - 3 removed under CHAOS-4924 (second dispatch site, found via
+    # mypy after the first commit): external_ingest/recompute.py's bounded
+    # recompute (D5) ALSO chained run_work_graph_build after run_daily_metrics
+    # per repo -- a third live dispatch site for the deleted task, missed
+    # until mypy's pre-commit hook caught the broken import. Same fix as
+    # post_sync_dispatch.py: build_sig dropped, per-repo dispatch collapsed
+    # from a 2-signature celery.chain into one plain send_task. Net: the
+    # celery_canvas_import:recompute.py:27 row (`from celery import chain`)
+    # is deleted outright (the import is gone), and the two
+    # celery_app.signature "chain builder" rows (daily_sig at the old line
+    # 356, build_sig at the old line 362) are deleted outright with it --
+    # 3 rows removed. The old chain(...).apply_async() row (line 368) is
+    # REPURPOSED in place (same row, new surface: a plain send_task for
+    # run_daily_metrics alone, re-anchored to line 347) rather than deleted,
+    # since a dispatch site for run_daily_metrics still exists there, just a
+    # different mechanism -- net zero row-count effect from that one. The
+    # two celery_app.send_task "Go bridge drain" rows (recompute.py's
+    # daily-fallback and investment dispatches) and the
+    # flush_external_ingest_recompute.apply_async row were re-anchored to
+    # their new lines, no surface change.
+    # = 90, - 6 removed under CHAOS-5320: resolve_worker_job_route now rejects
     # the celery rollback route outright (job_routes.py), so every remaining
     # celery-dispatch surface feeding operational.webhook_delivery and
     # operational.billing_notification is provably dead --
@@ -145,8 +177,8 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # The still-live pagerduty celery_task (process_pagerduty_webhook_event,
     # a wholly separate stream, unaffected by this change) is re-anchored
     # in place (line 254 -> 53) after the file shrank, not removed.
-    # = 89.
-    assert inventory["row_count"] == 89
+    # = 84.
+    assert inventory["row_count"] == 84
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

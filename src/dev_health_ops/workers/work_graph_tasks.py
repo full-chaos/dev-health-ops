@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 # CHAOS-4438 removed dispatch_investment_materialize_partitioned/
 # run_investment_materialize_chunk/finalize_investment_materialize_partitioned:
 RIVER_CONTRACT_TARGETS = {
-    "run_work_graph_build": "workgraph.build",
     "run_investment_materialize": "investment.materialize",
 }
 
@@ -85,82 +84,6 @@ def _investment_chunk_scope_id(run_id: str, chunk_index: int) -> uuid.UUID:
     return uuid.uuid5(
         uuid.NAMESPACE_URL, f"dev-health:investment:{run_id}:{chunk_index}"
     )
-
-
-@celery_app.task(
-    bind=True,
-    max_retries=3,
-    queue="metrics",
-    name="dev_health_ops.workers.tasks.run_work_graph_build",
-)
-def run_work_graph_build(
-    self,
-    db_url: str | None = None,
-    from_date: str | None = None,
-    to_date: str | None = None,
-    repo_id: str | None = None,
-    heuristic_window: int = 7,
-    heuristic_confidence: float = 0.3,
-    org_id: str = "",
-) -> dict:
-    """Build work graph from evidence.
-
-    Args:
-        db_url: Database connection string
-        from_date: Start date (ISO format, defaults to 30 days ago)
-        to_date: End date (ISO format, defaults to now)
-        repo_id: Optional repository UUID to filter
-        heuristic_window: Days window for heuristics
-        heuristic_confidence: Confidence threshold for heuristics
-
-    Returns:
-        dict with build status and edge count
-    """
-    from dev_health_ops.work_graph.builder import BuildConfig, WorkGraphBuilder
-
-    db_url = db_url or _get_db_url()
-    now = datetime.now(timezone.utc)
-
-    # Parse dates
-    if to_date:
-        parsed_to = datetime.fromisoformat(to_date)
-    else:
-        parsed_to = now
-
-    if from_date:
-        parsed_from = datetime.fromisoformat(from_date)
-    else:
-        parsed_from = parsed_to - timedelta(days=30)
-
-    # Parse repo_id
-    parsed_repo_id = uuid.UUID(repo_id) if repo_id else None
-
-    logger.info(
-        "Starting work graph build task: from=%s to=%s repo=%s",
-        parsed_from.isoformat(),
-        parsed_to.isoformat(),
-        repo_id or "all",
-    )
-
-    try:
-        config = BuildConfig(
-            dsn=db_url,
-            from_date=parsed_from,
-            to_date=parsed_to,
-            repo_id=parsed_repo_id,
-            heuristic_days_window=heuristic_window,
-            heuristic_confidence=heuristic_confidence,
-            org_id=org_id,
-        )
-        builder = WorkGraphBuilder(config)
-        try:
-            result = builder.build()
-            return {"status": "success", "edges": result}
-        finally:
-            builder.close()
-    except Exception as exc:
-        logger.exception("Work graph build task failed: %s", exc)
-        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
 
 @celery_app.task(

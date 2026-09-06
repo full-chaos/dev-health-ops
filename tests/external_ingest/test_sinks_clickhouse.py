@@ -37,9 +37,36 @@ pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.skipif(
         not CLICKHOUSE_URI,
-        reason="Requires CLICKHOUSE_URI (e.g. clickhouse://ch:ch@localhost:8123/ci_local_validate_2698)",
+        reason="Requires CLICKHOUSE_URI pointed at a SCRATCH database "
+        "(e.g. clickhouse://ch:ch@localhost:8123/ci_local_validate_2698) "
+        "-- never /default, which holds real dev data.",
     ),
 ]
+
+
+def _resolves_to_default_database(uri: str) -> bool:
+    """True if *uri* would have the ClickHouse client connect to "default".
+
+    Mirrors how the client itself resolves the database name from a DSN:
+    the URL path component, percent-decoded, with an EMPTY path (no
+    trailing "/xxx" at all, e.g. "clickhouse://ch:ch@localhost:8123")
+    also meaning "default" -- a naive literal "/default" string match
+    misses both that empty-path case and any percent-encoded form
+    (e.g. "%64efault").
+    """
+    from urllib.parse import unquote, urlsplit
+
+    path = urlsplit(uri).path.lstrip("/")
+    return unquote(path) in ("", "default")
+
+
+if CLICKHOUSE_URI and _resolves_to_default_database(CLICKHOUSE_URI):
+    pytest.skip(
+        "refusing to run against CLICKHOUSE_URI's /default database -- "
+        "point this at a scratch db (see ops-local-validate skill / "
+        "ops/AGENTS.md 'Safety rule')",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -359,48 +386,59 @@ async def test_review_round_trip(raw_client, dsn, source_id):
 async def test_team_round_trip_and_updated_at_passthrough(raw_client, dsn, source_id):
     org_id = _org()
     team_id = f"team-{uuid.uuid4().hex[:8]}"
-    ts = datetime.now(timezone.utc) - timedelta(days=1)
-    batch = NormalizedBatch(
-        org_id=org_id,
-        source_id=source_id,
-        source_system="linear",
-        source_instance="CHAOS",
-        ingestion_id=uuid.uuid4(),
-        teams=[{"id": team_id, "name": "Team One", "updated_at": ts}],
-    )
-    result = await write_batch(batch, clickhouse_dsn=dsn)
-    assert not result.errors
-    assert not result.warnings
-    rows = _col_index(
-        raw_client,
-        "teams",
-        "id = {id:String} AND org_id = {org_id:String}",
-        {"id": team_id, "org_id": org_id},
-        "name, source_id",
-    )
-    assert len(rows) == 1
-    assert rows[0][0] == "Team One"
-    assert str(rows[0][1]) == str(source_id)
+    try:
+        ts = datetime.now(timezone.utc) - timedelta(days=1)
+        batch = NormalizedBatch(
+            org_id=org_id,
+            source_id=source_id,
+            source_system="linear",
+            source_instance="CHAOS",
+            ingestion_id=uuid.uuid4(),
+            teams=[{"id": team_id, "name": "Team One", "updated_at": ts}],
+        )
+        result = await write_batch(batch, clickhouse_dsn=dsn)
+        assert not result.errors
+        assert not result.warnings
+        rows = _col_index(
+            raw_client,
+            "teams",
+            "id = {id:String} AND org_id = {org_id:String}",
+            {"id": team_id, "org_id": org_id},
+            "name, source_id",
+        )
+        assert len(rows) == 1
+        assert rows[0][0] == "Team One"
+        assert str(rows[0][1]) == str(source_id)
 
-    # Re-push with an OLDER updated_at than the current row — must NOT win.
-    stale_ts = ts - timedelta(days=5)
-    batch_stale = NormalizedBatch(
-        org_id=org_id,
-        source_id=source_id,
-        source_system="linear",
-        source_instance="CHAOS",
-        ingestion_id=uuid.uuid4(),
-        teams=[{"id": team_id, "name": "Stale Name", "updated_at": stale_ts}],
-    )
-    await write_batch(batch_stale, clickhouse_dsn=dsn)
-    rows2 = _col_index(
-        raw_client,
-        "teams",
-        "id = {id:String} AND org_id = {org_id:String}",
-        {"id": team_id, "org_id": org_id},
-        "name",
-    )
-    assert rows2[0][0] == "Team One"
+        # Re-push with an OLDER updated_at than the current row — must NOT win.
+        stale_ts = ts - timedelta(days=5)
+        batch_stale = NormalizedBatch(
+            org_id=org_id,
+            source_id=source_id,
+            source_system="linear",
+            source_instance="CHAOS",
+            ingestion_id=uuid.uuid4(),
+            teams=[{"id": team_id, "name": "Stale Name", "updated_at": stale_ts}],
+        )
+        await write_batch(batch_stale, clickhouse_dsn=dsn)
+        rows2 = _col_index(
+            raw_client,
+            "teams",
+            "id = {id:String} AND org_id = {org_id:String}",
+            {"id": team_id, "org_id": org_id},
+            "name",
+        )
+        assert rows2[0][0] == "Team One"
+    finally:
+        # CHAOS-5367: this test previously left a permanent orphaned `teams`
+        # row behind on every run -- a fresh random org_id each time means
+        # ReplacingMergeTree never collapses them, so they accumulate
+        # forever on whatever database CLICKHOUSE_URI points at.
+        raw_client.command(
+            "ALTER TABLE teams DELETE WHERE org_id = {org_id:String} "
+            "SETTINGS mutations_sync=2",
+            parameters={"org_id": org_id},
+        )
 
 
 async def test_identity_updated_at_future_clamp_loses_to_later_legitimate_write(

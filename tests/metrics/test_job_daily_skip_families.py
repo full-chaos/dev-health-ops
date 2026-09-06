@@ -427,7 +427,7 @@ async def test_repo_user_commit_skip_does_not_affect_other_families(
     """Naming repo_user_commit in skip_families must not perturb any other
     family's write path."""
     sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
 
     await job_daily.run_daily_metrics_job(
         db_url="clickhouse://test",
@@ -438,15 +438,17 @@ async def test_repo_user_commit_skip_does_not_affect_other_families(
         skip_families={"repo_user_commit"},
     )
 
-    # CHAOS-5234/CHAOS-3092/CHAOS-5309/CHAOS-4279: this used
-    # "write_deploy_metrics", then review_edges, as its unrelated-family
-    # control; review_edges' own write is now deleted outright too
-    # (CHAOS-4279). compounding_risk cannot take its place either -- the
-    # base _FakeLoader has no PR/review data for it to compute from, so it
-    # writes nothing regardless of skip_families. work_item, fed by
-    # _FakeLoaderWithWorkItem, is the first still-live family in this file
-    # with real fixture data of its own -- switched loader accordingly.
-    assert "write_work_item_metrics" in sink.write_calls
+    # CHAOS-5234/CHAOS-3092/CHAOS-5309/CHAOS-4279/CHAOS-5310/CHAOS-5321: this
+    # used "write_deploy_metrics", then review_edges, then work_item, as its
+    # unrelated-family control -- all four had their own compute+write
+    # deleted in this same PR/sibling PRs, so none can serve as this control
+    # any more. compounding_risk cannot take their place either: the fixture
+    # has no PR/review data for it to compute from, so its own write is
+    # never reached. repo_user_commit is now the ONLY family in this file's
+    # fixture that produces an unconditional write with real data -- with it
+    # named in skip_families, this assertion is genuinely "no other family
+    # writes anything" rather than a positive different-family check.
+    assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -948,15 +950,16 @@ async def test_ai_governance_compute_and_write_are_deleted_from_job_daily(
         )
         assert "write_ai_policy_events" not in sink.write_calls
         assert "write_ai_governance_coverage_daily" not in sink.write_calls
-        # work_item (unrelated family, same partition) must be entirely
-        # unaffected by the deletion. (Was cicd, then deploy, then
-        # review_edges -- all three had their own compute+write deleted in
-        # this same PR/sibling PRs, so none can serve as this control any
-        # more; compounding_risk can't either, the base _FakeLoader has no
-        # PR/review data for it to compute from. work_item, fed by
-        # _FakeLoaderWithWorkItem, is the first still-live family in this
-        # file with real fixture data of its own.)
-        assert "write_work_item_metrics" in sink.write_calls
+        # repo_user_commit (unrelated family, same partition) must be
+        # entirely unaffected by the deletion. (Was cicd, then deploy, then
+        # review_edges, then work_item -- all four had their own
+        # compute+write deleted in this same PR/sibling PRs, so none can
+        # serve as this control any more; compounding_risk can't either, the
+        # fixture has no PR/review data for it to compute from, so its own
+        # write is never reached. repo_user_commit, fed by _FakeLoader's real
+        # commit row and NOT itself in skip_families here, is the only
+        # family left in this file with an unconditional write.)
+        assert "repo_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio
@@ -997,15 +1000,16 @@ async def test_ai_impact_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_ai_impact_metrics" not in sink.write_calls
-        # work_item (unrelated family, same partition) must be entirely
-        # unaffected by the deletion. (Was cicd, then deploy, then
-        # review_edges -- all three had their own compute+write deleted in
-        # this same PR/sibling PRs, so none can serve as this control any
-        # more; compounding_risk can't either, the base _FakeLoader has no
-        # PR/review data for it to compute from. work_item, fed by
-        # _FakeLoaderWithWorkItem, is the first still-live family in this
-        # file with real fixture data of its own.)
-        assert "write_work_item_metrics" in sink.write_calls
+        # repo_user_commit (unrelated family, same partition) must be
+        # entirely unaffected by the deletion. (Was cicd, then deploy, then
+        # review_edges, then work_item -- all four had their own
+        # compute+write deleted in this same PR/sibling PRs, so none can
+        # serve as this control any more; compounding_risk can't either, the
+        # fixture has no PR/review data for it to compute from, so its own
+        # write is never reached. repo_user_commit, fed by _FakeLoader's real
+        # commit row and NOT itself in skip_families here, is the only
+        # family left in this file with an unconditional write.)
+        assert "repo_metrics" in sink.write_calls
 
 
 @pytest.mark.asyncio

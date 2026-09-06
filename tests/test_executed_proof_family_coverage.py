@@ -129,6 +129,39 @@ KNOWN_UNCOVERED = {
     # "ai-attribution" seed step and a "prs" seed step added to the loop, out
     # of scope for a port PR.
     "ai_impact",
+    # MINE (CHAOS-5051), pinned with evidence, DOUBLE-blocked in a way none of
+    # the entries above are -- unsatisfiable in BOTH executed-proof gates for
+    # two SEPARATE reasons, not one:
+    #
+    # ci/run_metrics_executed_proof.sh: team_complexity's only input,
+    # repo_complexity_daily, is written by the complexity SCAN job (needs
+    # persisted file CONTENTS via git_files.contents), which `dev-hops
+    # fixtures generate` does not write by default -- this script's own
+    # comment already excludes "complexity" (the remaining/complexity family)
+    # for the IDENTICAL reason. Zero repo_complexity_daily rows means zero
+    # team_complexity_daily rows regardless of the port's correctness.
+    #
+    # ci/local_validate.sh: this stage's "daily/dora/complexity SYNCHRONOUSLY"
+    # block calls the Python job functions DIRECTLY (there is no Postgres
+    # coordinator or Go worker in this lightweight ClickHouse-only proof for
+    # them to dispatch to -- see that block's own CHAOS-5055 comment). Before
+    # this PR, `_cmd_metrics_daily`'s finalize step still called Python's
+    # team_complexity compute, so a synchronous call could have produced rows.
+    # This PR deletes that Python compute entirely (CHAOS-5051, same
+    # reachability argument as CHAOS-5141's team_cognitive_load) -- the ONLY
+    # remaining writer is the Go worker's FinalizeHandler, which this
+    # ClickHouse-only stage never runs. Unlike team_cognitive_load (still
+    # Python-backed on this branch, hence still coverable here today),
+    # team_complexity has no synchronous-compute fallback left at all.
+    #
+    # Closing this needs either a complexity-scan seed step in
+    # run_metrics_executed_proof.sh's E2E loop, or a real worker dispatch
+    # added to local_validate.sh's readback stage -- both out of scope for a
+    # port PR. Tracked as CHAOS-5283 (parent CHAOS-5051, sibling of
+    # CHAOS-5258): executed-proof scripts must run the Go worker
+    # FinalizeHandler path so Go-only families (team_complexity first) leave
+    # this set instead of accumulating in it forever.
+    "team_complexity",
 }
 
 

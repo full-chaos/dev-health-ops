@@ -62,14 +62,15 @@ func TestEveryRecognisedFinalizeFamilyHasAPythonGate(t *testing.T) {
 	}
 }
 
-// CHAOS-5141 (team_cognitive_load) and CHAOS-4290 PR3 (ic_finalize) both
-// deleted a registerable-native family's Python compute entirely rather than
-// merely gating it -- each must NOT have a live gate line for the test above
-// to ever find, or a future accidental re-add of the Python compute would
-// silently re-introduce the two-writer hazard this whole file exists to
-// prevent. This loop covers BOTH (and any future family in the same shape)
-// by construction: it is every pythonRecognisedFinalizeFamilies entry that
-// is NOT in pythonGatedFinalizeFamilies, not a hand-maintained list of names.
+// CHAOS-5141 (team_cognitive_load), CHAOS-4290 PR3 (ic_finalize), and
+// CHAOS-5051 (team_complexity) all deleted a registerable-native family's
+// Python compute entirely rather than merely gating it -- each must NOT have
+// a live gate line for the test above to ever find, or a future accidental
+// re-add of that family's Python compute would silently re-introduce the
+// two-writer hazard this whole file exists to prevent. This loop covers ALL
+// THREE (and any future family in the same shape) by construction: it is
+// every pythonRecognisedFinalizeFamilies entry that is NOT in
+// pythonGatedFinalizeFamilies, not a hand-maintained list of names.
 func TestDeletedPythonComputeFamilyHasNoGateLine(t *testing.T) {
 	source := pythonFinalizeSource(t)
 	for _, family := range pythonRecognisedFinalizeFamilies {

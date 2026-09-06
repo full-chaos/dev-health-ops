@@ -238,9 +238,17 @@ def test_daily_finalize_compat_families_matches_known_calls() -> None:
     # irregular-named calls once had before their ledger entries were
     # removed) -- the mechanism still exists, generically, for the next
     # family this happens to.
+    #
+    # ("remaining", "complexity") is ALSO now absent (CHAOS-5051): it was
+    # never really about remaining/complexity's own compute -- it was
+    # _write_team_complexity_for_day's call misattributed via
+    # FINALIZE_CALL_IRREGULAR_FAMILY, the only mechanical evidence available
+    # before team_complexity had its own native "daily" registration to
+    # classify under. CHAOS-5051 deletes that call (and its Python compute)
+    # entirely, so there is no finalize-scope Python call left for the AST
+    # walk to find under either name.
     assert compat_families == {
         ("daily", "compounding_risk"),
-        ("remaining", "complexity"),
     }
 
 
@@ -496,11 +504,18 @@ def test_split_status_still_counts_as_compat_once_repo_scope_goes_native() -> No
     assert daily_status == "NATIVE (repo) / COMPAT-Python (finalize)"
     assert gen.is_compat_executor(daily_status) is True
 
+    # The "remaining" namespace's own split-status example (complexity) was
+    # CHAOS-5051's _write_team_complexity_for_day, the same call this PR
+    # deletes -- see FINALIZE_CALL_IRREGULAR_FAMILY and
+    # test_daily_finalize_compat_families_matches_known_calls's updated
+    # comment. There is no other live remaining-namespace finalize call to
+    # exercise this half against today; compounding_risk above still proves
+    # the mechanism end-to-end for the "daily" namespace.
     remaining_status = gen.remaining_family_executor(
         "complexity", {"complexity": "native"}, finalize_compat
     )
-    assert remaining_status == "NATIVE (repo) / COMPAT-Python (finalize)"
-    assert gen.is_compat_executor(remaining_status) is True
+    assert remaining_status == "NATIVE"
+    assert gen.is_compat_executor(remaining_status) is False
 
 
 def test_split_render_fires_through_the_actual_count_helpers_and_reverses() -> None:

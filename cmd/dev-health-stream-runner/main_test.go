@@ -329,25 +329,50 @@ func TestStreamRunnerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	response, err := client.Get("http://" + address + "/readyz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	readiness, err := io.ReadAll(response.Body)
-	_ = response.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("readyz status = %d, want %d", response.StatusCode, http.StatusServiceUnavailable)
-	}
-	for _, dependency := range []string{"clickhouse", "domain_postgres", "stream_consumer", "valkey"} {
-		if !strings.Contains(string(readiness), `"`+dependency+`"`) {
-			t.Fatalf("readyz omitted %s: %s", dependency, readiness)
+	// The readiness gate (health.Gate) is a SEPARATE lifecycle component that
+	// opens admission (Registry.SetReady(true)) only after earlier components
+	// -- including the HTTP server this loop above just confirmed is
+	// listening -- have started. Until the gate opens, Registry.Readiness
+	// fails closed with the sentinel Failed: []string{"runtime"} (registry.go
+	// SetReady/Readiness), never the real per-dependency check names. That
+	// window is a normal, sequential part of startup, not a race in the
+	// product: it only WIDENS under -race/hosted-CI load, which is what
+	// turned a single immediate /readyz check flaky (CHAOS-5338). Poll with a
+	// generous bounded deadline instead of asserting on the first response.
+	readyDeadline := time.Now().Add(30 * time.Second)
+	var readiness []byte
+	for {
+		response, err := client.Get("http://" + address + "/readyz")
+		if err != nil {
+			t.Fatal(err)
 		}
+		body, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("readyz status = %d, want %d", response.StatusCode, http.StatusServiceUnavailable)
+		}
+		readiness = body
+		missingDependency := false
+		for _, dependency := range []string{"clickhouse", "domain_postgres", "stream_consumer", "valkey"} {
+			if !strings.Contains(string(readiness), `"`+dependency+`"`) {
+				missingDependency = true
+				break
+			}
+		}
+		if !missingDependency {
+			break
+		}
+		if time.Now().After(readyDeadline) {
+			t.Fatalf("readyz never reported all four dependency checks within the poll deadline: %s logs=%s stderr=%s",
+				readiness, stdout.String(), stderr.String())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
-	response, err = client.Get("http://" + address + "/metrics")
+	response, err := client.Get("http://" + address + "/metrics")
 	if err != nil {
 		t.Fatal(err)
 	}

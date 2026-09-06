@@ -160,21 +160,6 @@ class _FakeLoader:
         }
         return [commit_row], [], []
 
-    async def load_cicd_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        # One in-window pipeline run for REPO_ID -- enough for
-        # compute_cicd_metrics_daily to produce exactly one row when NOT
-        # skipped, so the skip tests below can tell "computed nothing"
-        # apart from "computed something and just didn't write it".
-        pipeline_row = {
-            "repo_id": REPO_ID,
-            "run_id": "run-1",
-            "status": "success",
-            "queued_at": None,
-            "started_at": datetime(2025, 12, 18, 9, 0, tzinfo=timezone.utc),
-            "finished_at": datetime(2025, 12, 18, 9, 10, tzinfo=timezone.utc),
-        }
-        return [pipeline_row], []
-
     async def load_incidents(self, *a: Any, **k: Any) -> list:
         return []
 
@@ -242,7 +227,10 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     # CHAOS-5234/CHAOS-3092: no compute_ai_impact_metrics_daily to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
-    monkeypatch.setattr(job_daily, "run_benchmarking_for_day", lambda *a, **k: None)
+    # CHAOS-4288: no run_benchmarking_for_day to neutralize here either --
+    # its Python compute is deleted entirely (it was already unreachable
+    # from this function since CHAOS-5194 relocated the call site to
+    # run_daily_metrics_finalize).
     # CHAOS-5308/CHAOS-3092: no _write_compounding_risk_for_day to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
@@ -529,11 +517,15 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
     generate_daily_cicd_python_golden.py, both also deleted in this PR) plus
     its own dedicated tests (tests/metrics/test_cicd_daily_recompute_dedup_
     live.py, deleted, and tests/metrics/test_compute_delivery_ops.py's cicd
-    test function, removed). pipeline_rows is now ALSO deleted (CHAOS-5308):
-    its other reader, active_repos, is deleted too, so the
-    loader.load_cicd_data call site in job_daily.py has no remaining
-    consumer for either return value -- deleted entirely. The loader METHOD
-    itself stays (a shared interface with real other callers).
+    test function, removed). pipeline_rows/deployment_rows are now ALSO
+    deleted (CHAOS-5308): cicd's own compute (this PR's sibling) and
+    active_repos' deployment reader are both deleted, so the
+    loader.load_cicd_data call site in job_daily.py had no remaining
+    consumer for either return value -- and DataLoader.load_cicd_data itself
+    (all three backends: base Protocol, sqlalchemy, clickhouse) is deleted
+    with it, since its only real caller was that dead call site
+    (tests/metrics/test_clickhouse_org_scope.py's dedicated test of it is
+    also deleted in this PR).
     """
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
@@ -864,10 +856,11 @@ async def test_review_edges_skip_does_not_perturb_other_families(
 # run_daily_metrics_job (partition scope, this file) to
 # run_daily_metrics_finalize (finalize scope), for the same "runs once per
 # org/day, not once per partition" reason compounding_risk_team and
-# team_cognitive_load already live there. Their red/green replacements are
-# test_benchmarking_in_skip_families_runs_nothing /
+# team_cognitive_load already live there. Their red/green replacements
+# (test_benchmarking_in_skip_families_runs_nothing /
 # test_without_the_skip_benchmarking_still_runs in
-# test_job_daily_finalize_skip_families.py.
+# test_job_daily_finalize_skip_families.py) are themselves gone now too --
+# CHAOS-4288 deleted benchmarking's Python compute entirely.
 
 
 @pytest.mark.asyncio

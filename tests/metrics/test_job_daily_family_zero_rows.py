@@ -64,19 +64,15 @@ class _RecordingSink:
 class _FakeLoader:
     """All sources empty.
 
-    load_cicd_data still exists here (job_daily.py still calls it --
-    pipeline_rows feeds active_repos even though cicd's own compute+write is
-    deleted, CHAOS-5234/CHAOS-3092), but nothing in this file parameterizes
-    it any more -- the only test that used to (test_cicd_not_recorded_when_
-    pipeline_data_present) tested cicd's zero-rows-note behavior, which no
-    longer exists.
+    CHAOS-5308/CHAOS-3092: no load_cicd_data here anymore -- the loader
+    METHOD itself is deleted (its only remaining caller, job_daily.py's
+    pipeline_rows/deployment_rows fetch, was already dead: cicd's compute
+    was deleted by CHAOS-5312 and active_repos' deployment reader by this
+    PR), not just this file's own parameterization of it.
     """
 
     async def load_git_rows(self, *a: Any, **k: Any) -> tuple[list, list, list]:
         return [], [], []
-
-    async def load_cicd_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        return [], []
 
     async def load_incidents(self, *a: Any, **k: Any) -> list:
         return []
@@ -122,7 +118,10 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     # CHAOS-5234/CHAOS-3092: no compute_ai_impact_metrics_daily to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
-    monkeypatch.setattr(job_daily, "run_benchmarking_for_day", lambda *a, **k: None)
+    # CHAOS-4288: no run_benchmarking_for_day to neutralize here either --
+    # its Python compute is deleted entirely (it was already unreachable
+    # from this function since CHAOS-5194 relocated the call site to
+    # run_daily_metrics_finalize).
     # CHAOS-5308/CHAOS-3092: no _write_compounding_risk_for_day to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).

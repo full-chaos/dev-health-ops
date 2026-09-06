@@ -30,9 +30,7 @@ from dev_health_ops.metrics.loaders.base import (
 )
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
-    DeploymentRow,
     IncidentRow,
-    PipelineRunRow,
     PullRequestReviewRow,
     PullRequestRow,
 )
@@ -1118,44 +1116,6 @@ class ClickHouseDataLoader(AIImpactClickHouseLoader, DataLoader):
                 )
             )
         return context
-
-    async def load_cicd_data(
-        self,
-        start: datetime,
-        end: datetime,
-        repo_id: uuid.UUID | None,
-        repo_name: str | None = None,
-    ) -> tuple[list[PipelineRunRow], list[DeploymentRow]]:
-        params: dict[str, Any] = {"start": naive_utc(start), "end": naive_utc(end)}
-        repo_filter = ""
-        if repo_id is not None:
-            params["repo_id"] = str(repo_id)
-            repo_filter = " AND repo_id = {repo_id:UUID}"
-
-        org_filter = self._org_filter()
-        params = self._inject_org_id(params)
-
-        pipe_query = f"""
-        SELECT * FROM ci_pipeline_runs
-        WHERE finished_at >= {{start:DateTime}} AND finished_at < {{end:DateTime}}
-        {repo_filter}
-        {org_filter}
-        """
-        deploy_query = f"""
-        SELECT * FROM deployments
-        WHERE deployed_at >= {{start:DateTime}} AND deployed_at < {{end:DateTime}}
-        {repo_filter}
-        {org_filter}
-        """
-
-        pipes_dicts = await _clickhouse_query_dicts(self.client, pipe_query, params)
-        deploys_dicts = await _clickhouse_query_dicts(self.client, deploy_query, params)
-
-        # ClickHouse dicts can be directly cast if they match keys
-        pipes: list[PipelineRunRow] = [dict(p) for p in pipes_dicts]  # type: ignore
-        deploys: list[DeploymentRow] = [dict(d) for d in deploys_dicts]  # type: ignore
-
-        return pipes, deploys
 
     async def load_incidents(
         self,

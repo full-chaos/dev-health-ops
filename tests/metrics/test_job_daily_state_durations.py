@@ -105,9 +105,6 @@ class _FakeLoader:
     async def load_git_rows(self, *a: Any, **k: Any) -> tuple[list, list, list]:
         return [], [], []
 
-    async def load_cicd_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        return [], []
-
     async def load_incidents(self, *a: Any, **k: Any) -> list:
         return []
 
@@ -171,7 +168,10 @@ def _neutralize_daily_job(
     # CHAOS-5234/CHAOS-3092: no compute_ai_impact_metrics_daily to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).
-    monkeypatch.setattr(job_daily, "run_benchmarking_for_day", lambda *a, **k: None)
+    # CHAOS-4288: no run_benchmarking_for_day to neutralize here either --
+    # its Python compute is deleted entirely (it was already unreachable
+    # from this function since CHAOS-5194 relocated the call site to
+    # run_daily_metrics_finalize).
     # CHAOS-5308/CHAOS-3092: no _write_compounding_risk_for_day to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
     # skip-gated; see CHAOS-5233's shape for work_item_attribution).

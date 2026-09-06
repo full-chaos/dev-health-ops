@@ -34,8 +34,6 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-import pytest
-
 from dev_health_ops.metrics import job_daily
 
 DAY = date(2026, 9, 4)
@@ -135,65 +133,9 @@ def _neutralize_finalize(monkeypatch: Any, *, sink: Any, calls: dict[str, int]) 
     # for these IC-focused tests to neutralise on this family's behalf.
 
 
-@pytest.mark.asyncio
-async def test_benchmarking_in_skip_families_runs_nothing(monkeypatch: Any) -> None:
-    """CHAOS-5194 (astra F3, #2277): benchmarking was relocated here from
-    run_daily_metrics_job (partition scope) -- it now lives EXCLUSIVELY in
-    run_daily_metrics_finalize, gated by the same skip_families shape
-    ic_finalize used before its own Python compute was deleted. When the Go
-    dispatcher names "benchmarking" in skip_families, the native
-    BenchmarkingFinalizeExecutor already computed and wrote this org/day, so
-    run_benchmarking_for_day must not run.
-
-    Worth restating why the gate matters more here than for most families:
-    run_benchmarking_for_day takes no repo_id -- it recomputes the WHOLE ORG
-    once per finalize call -- so a native run and an un-gated Python run
-    firing together would duplicate a full row set across six append-only
-    tables, not merely redo redundant work."""
-    sink = _RecordingSink()
-    calls: dict[str, int] = {}
-    _neutralize_finalize(monkeypatch, sink=sink, calls=calls)
-
-    def _benchmarking_spy(*_a: Any, **_k: Any) -> None:
-        calls["benchmarking"] = calls.get("benchmarking", 0) + 1
-
-    monkeypatch.setattr(job_daily, "run_benchmarking_for_day", _benchmarking_spy)
-
-    await job_daily.run_daily_metrics_finalize(
-        db_url="clickhouse://test",
-        day=DAY,
-        org_id=ORG_ID,
-        skip_families={"benchmarking"},
-    )
-
-    assert calls.get("benchmarking", 0) == 0, (
-        "run_benchmarking_for_day ran despite being named in skip_families"
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("skip", [None, set(), {"some_other_family"}])
-async def test_without_the_skip_benchmarking_still_runs(
-    monkeypatch: Any, skip: set[str] | None
-) -> None:
-    """The CONTROL for the test above: without "benchmarking" in
-    skip_families (or with an unrelated family named instead), the call still
-    fires -- proving the assertion above is the gate, not a broken fixture,
-    and that the gate is keyed on "benchmarking" specifically."""
-    sink = _RecordingSink()
-    calls: dict[str, int] = {}
-    _neutralize_finalize(monkeypatch, sink=sink, calls=calls)
-
-    def _benchmarking_spy(*_a: Any, **_k: Any) -> None:
-        calls["benchmarking"] = calls.get("benchmarking", 0) + 1
-
-    monkeypatch.setattr(job_daily, "run_benchmarking_for_day", _benchmarking_spy)
-
-    await job_daily.run_daily_metrics_finalize(
-        db_url="clickhouse://test",
-        day=DAY,
-        org_id=ORG_ID,
-        skip_families=skip,
-    )
-
-    assert calls.get("benchmarking", 0) == 1
+# CHAOS-4288 deleted benchmarking's Python compute (run_benchmarking_for_day)
+# entirely -- job_daily.py no longer names "benchmarking" in skip_families at
+# all, so the two tests that used to pin this gate
+# (test_benchmarking_in_skip_families_runs_nothing and its control
+# test_without_the_skip_benchmarking_still_runs) have no gate left to test.
+# See ic_finalize's tests above for the shape this used to share.

@@ -29,10 +29,12 @@ func dtPtr(hour, minute, dayOfMonth int) *time.Time {
 	return &value
 }
 
-// fixturePipelineRuns mirrors tests/fixtures/generate_daily_cicd_python_golden.py's
-// PIPELINE_RUNS verbatim -- keep the two in lockstep; a codex/CI mismatch
-// between them is exactly what TestCICDGoldenMatchesLivePython (golden_rot_
-// guard_test.go) and this file's exhaustive decode both exist to catch.
+// fixturePipelineRuns mirrors the PIPELINE_RUNS corpus the (now-deleted,
+// CHAOS-5312/CHAOS-3092: cicd's Python compute is gone)
+// generate_daily_cicd_python_golden.py generator used to produce
+// tests/fixtures/daily_cicd_python_golden.json verbatim -- keep this in sync
+// with that frozen golden; this file's exhaustive decode against it is the
+// only thing left to catch a drift between them.
 func fixturePipelineRuns() []PipelineRunRow {
 	return []PipelineRunRow{
 		{

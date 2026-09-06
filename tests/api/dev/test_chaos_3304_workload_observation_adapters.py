@@ -107,8 +107,10 @@ def test_after_hours_pressure_carries_own_history_comparison_value() -> None:
 
 def test_after_hours_pressure_discloses_chaos_3331_attribution_gap() -> None:
     """CHAOS-3331 (disclose-and-defer ruling, 2026-08-02):
-    ``team_metrics_daily``'s writer (``compute_wellbeing.py``) resolves
-    ``team_id`` via a legacy repo-pattern/identity-map resolver, not
+    ``team_metrics_daily``'s writer (TeamWellbeingExecutor, native Go --
+    ``compute_wellbeing.py``'s Python compute was deleted outright by
+    CHAOS-5234/CHAOS-3092) resolves ``team_id`` via a legacy
+    repo-pattern/identity-map resolver, not
     canonical primary attribution -- so ``attribution_present`` is
     ``False`` even for a genuinely measured result, which -- paired with
     this rule's own ``attribution_required=True``

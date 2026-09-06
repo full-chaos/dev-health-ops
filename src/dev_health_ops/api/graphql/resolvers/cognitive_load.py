@@ -482,9 +482,11 @@ async def _fetch_repo_scoped_team_metrics(
     attached to that repo's rows, never filtered BY ``team_id``.
 
     CHAOS-4406: ``team_metrics_daily``'s per-row ``team_id`` is resolved
-    PER COMMIT at write time (``metrics/compute_wellbeing.py``:
-    repo-pattern/ownership resolution first, author-membership fallback
-    second -- the CHAOS-4396 taint), so one repo's commits can be split
+    PER COMMIT at write time (TeamWellbeingExecutor, native Go --
+    ``metrics/compute_wellbeing.py``'s Python compute was the original
+    implementation, deleted outright by CHAOS-5234/CHAOS-3092: repo-pattern/
+    ownership resolution first, author-membership fallback second -- the
+    CHAOS-4396 taint), so one repo's commits can be split
     across several ``(team_id, repo_id, day)`` buckets when the fallback
     fires for some authors. Once the CALLER (``resolve_cognitive_load``)
     has independently confirmed, via ``team_repo_ownership`` /

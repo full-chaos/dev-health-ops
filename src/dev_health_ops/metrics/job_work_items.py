@@ -42,7 +42,6 @@ from dev_health_ops.metrics.work_item_engine_destinations import (
 from dev_health_ops.metrics.work_items import (
     fetch_github_project_v2_items,
     fetch_gitlab_work_items,
-    fetch_jira_work_items_with_extras,
     parse_github_projects_v2_env,
 )
 from dev_health_ops.models.work_items import WorkItem, WorkItemDependency
@@ -429,7 +428,6 @@ def _require_work_item_unit_source(
     *,
     provider_set: set[str],
     repo_name: str | None,
-    jira_project_keys: list[str] | None,
 ) -> None:
     required_sources = {
         "github": (repo_name, "repo"),
@@ -441,13 +439,6 @@ def _require_work_item_unit_source(
             error = WorkItemUnitMissingSource(provider, source_kind)
             logger.error(str(error))
             raise error
-
-    if "jira" in provider_set and not any(
-        _has_text(project_key) for project_key in (jira_project_keys or [])
-    ):
-        error = WorkItemUnitMissingSource("jira", "project_keys")
-        logger.error(str(error))
-        raise error
 
 
 def _build_github_work_client(
@@ -531,46 +522,6 @@ def _build_gitlab_work_client(
     if not isinstance(resolved_credentials, GitLabCredentials):
         raise ValueError("Resolved credentials are not GitLab credentials")
     return resolved_credentials.token, resolved_credentials.base_url or None
-
-
-def _build_jira_work_client(
-    *, org_id: str, credentials: dict[str, Any] | None = None
-) -> Any:
-    from dev_health_ops.credentials.resolver import (
-        jira_credentials_from_mapping,
-        resolve_credentials_sync,
-    )
-    from dev_health_ops.credentials.types import JiraCredentials
-    from dev_health_ops.providers.jira.client import (
-        JiraAuth,
-        JiraClient,
-        _normalize_jira_base_url,
-    )
-
-    if credentials:
-        jira_credentials = jira_credentials_from_mapping(credentials)
-        if jira_credentials is None:
-            raise ValueError(
-                "Missing Jira credentials for work-items sync configuration"
-            )
-    elif org_id:
-        resolved_credentials = resolve_credentials_sync(
-            "jira", org_id=org_id, allow_env_fallback=True
-        )
-        if not isinstance(resolved_credentials, JiraCredentials):
-            raise ValueError("Resolved credentials are not Jira credentials")
-        jira_credentials = resolved_credentials
-    else:
-        return JiraClient.from_env()
-
-    return JiraClient(
-        auth=JiraAuth(
-            base_url=_normalize_jira_base_url(jira_credentials.base_url),
-            email=jira_credentials.email,
-            api_token=jira_credentials.api_token,
-        ),
-        org_id=org_id or None,
-    )
 
 
 def _build_linear_work_client(
@@ -685,9 +636,6 @@ def run_work_items_sync_job(
     search_pattern: str | None = None,
     org_id: str = "",
     credentials: dict[str, Any] | None = None,
-    jira_project_keys: list[str] | None = None,
-    jira_jql: str | None = None,
-    jira_fetch_all: bool | None = None,
     include_issues: bool | None = None,
     include_pull_requests: bool | None = None,
     fetch_comments: bool | None = None,
@@ -714,13 +662,13 @@ def run_work_items_sync_job(
     provider_set: set[str]
     if provider in {"none", "off", "skip"}:
         raise ValueError(
-            "work item sync requires --provider (jira|github|gitlab|linear|synthetic|all)"
+            "work item sync requires --provider (github|gitlab|linear|synthetic|all)"
         )
     if provider in {"all", "*"}:
-        provider_set = {"jira", "github", "gitlab", "linear", "synthetic"}
+        provider_set = {"github", "gitlab", "linear", "synthetic"}
     else:
         provider_set = {provider}
-    unknown = provider_set - {"jira", "github", "gitlab", "linear", "synthetic"}
+    unknown = provider_set - {"github", "gitlab", "linear", "synthetic"}
     if unknown:
         raise ValueError(f"Unknown provider(s): {sorted(unknown)}")
 
@@ -802,7 +750,6 @@ def run_work_items_sync_job(
             _require_work_item_unit_source(
                 provider_set=provider_set,
                 repo_name=repo_name,
-                jira_project_keys=jira_project_keys,
             )
 
         discovered_repos = _discover_repos(
@@ -1123,38 +1070,6 @@ def run_work_items_sync_job(
         # Populated when providers emit attribution signals (GitHub PRs).
         # Written to sink via write_ai_attribution() at end of sync loop.
         ai_attributions: list[Any] = []
-
-        if "jira" in provider_set:
-            jira_client = _build_jira_work_client(
-                org_id=org_id, credentials=credentials
-            )
-            (
-                items,
-                tr,
-                dep,
-                reopen,
-                interaction,
-                sprint_rows,
-            ) = fetch_jira_work_items_with_extras(
-                since=since_dt,
-                until=until_dt,
-                status_mapping=status_mapping,
-                identity=identity,
-                client=jira_client,
-                project_keys=jira_project_keys,
-                jql_override=jira_jql,
-                fetch_all=jira_fetch_all,
-                use_env_query_options=not bool(org_id or credentials),
-                reference_sprints=reference_sprints,
-                reference_sink=primary_sink,
-            )
-            provider_usage_observations.extend(drain_provider_usage(jira_client))
-            work_items.extend(items)
-            transitions.extend(tr)
-            dependencies.extend(dep)
-            reopen_events.extend(reopen)
-            interactions.extend(interaction)
-            sprints.extend(sprint_rows)
 
         if "github" in provider_set:
             from uuid import UUID
@@ -1690,7 +1605,7 @@ def register_commands(sync_subparsers: argparse._SubParsersAction) -> None:
     add_date_range_args(wi)
     wi.add_argument(
         "--provider",
-        choices=["all", "jira", "github", "gitlab", "linear", "synthetic", "none"],
+        choices=["all", "github", "gitlab", "linear", "synthetic", "none"],
         default="all",
         help="Provider to sync from (default: all).",
     )

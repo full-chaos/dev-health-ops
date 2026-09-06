@@ -4,6 +4,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -262,4 +263,150 @@ func assertOneRow(ctx context.Context, t *testing.T, conn driver.Conn, table, or
 	if count != 1 {
 		t.Fatalf("%s row count=%d, want 1", table, count)
 	}
+}
+
+// TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite is
+// the codex confirmation-pass F2 fix (CHAOS-5190, mirrors the sibling
+// mutant-proof tests for repo_user_commit/ai_governance): a call-site
+// revert of ComputeFamily's `return wrapTestopsRiskPartialWrite(written,
+// err)` back to a bare `return 0, err` must turn this test red. Rather than
+// a hand-built fake conn (this executor's ComputeFamily issues 5+ distinct
+// query shapes per repo before it ever writes -- teams, pipeline runs,
+// suite/case rows, historical failed names, two coverage-snapshot windows
+// -- reproducing all of them in a fake would be its own large, easily-wrong
+// surface), this drives the REAL production path against a real
+// ClickHouse, identically to
+// TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHouse
+// above, and forces a genuine failure on the LAST of the three sequential
+// writes by never creating testops_pipeline_stability -- writeTestopsRisk's
+// own PrepareBatch against a table that does not exist fails exactly the
+// way a transient ClickHouse write failure would, after
+// testops_release_confidence and testops_quality_drag have already landed.
+func TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	clickhouseInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clickhouseInstance.Close(context.Background())
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(clickhouseInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	for _, statement := range []string{
+		`CREATE TABLE teams (
+    id String, name String, members Array(String), repo_patterns Array(String), org_id String
+) ENGINE = ReplacingMergeTree ORDER BY (id)`,
+		`CREATE TABLE ci_pipeline_runs (
+    repo_id UUID, run_id String, status Nullable(String),
+    queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
+    finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
+    pipeline_name Nullable(String), provider LowCardinality(String) DEFAULT '',
+    duration_seconds Nullable(Float64), queue_seconds Nullable(Float64),
+    retry_count UInt32 DEFAULT 0, cancel_reason Nullable(String), trigger_source Nullable(String),
+    commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
+    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT ''
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id)`,
+		`CREATE TABLE test_suite_results (
+    repo_id UUID, run_id String, suite_id String, suite_name String,
+    framework Nullable(String), environment Nullable(String),
+    total_count UInt32, passed_count UInt32, failed_count UInt32, skipped_count UInt32,
+    error_count UInt32 DEFAULT 0, quarantined_count UInt32 DEFAULT 0, retried_count UInt32 DEFAULT 0,
+    duration_seconds Nullable(Float64), started_at Nullable(DateTime64(3, 'UTC')),
+    finished_at Nullable(DateTime64(3, 'UTC')), team_id Nullable(String), service_id Nullable(String),
+    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id)`,
+		`CREATE TABLE test_case_results (
+    repo_id UUID, run_id String, suite_id String, case_id String, case_name String,
+    class_name Nullable(String), status LowCardinality(String), duration_seconds Nullable(Float64),
+    retry_attempt UInt32 DEFAULT 0, failure_message Nullable(String), failure_type Nullable(String),
+    stack_trace Nullable(String), is_quarantined UInt8 DEFAULT 0,
+    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, suite_id, case_id)`,
+		`CREATE TABLE coverage_snapshots (
+    repo_id UUID, run_id String, snapshot_id String, report_format Nullable(String),
+    lines_total Nullable(UInt32), lines_covered Nullable(UInt32), line_coverage_pct Nullable(Float64),
+    branches_total Nullable(UInt32), branches_covered Nullable(UInt32), branch_coverage_pct Nullable(Float64),
+    functions_total Nullable(UInt32), functions_covered Nullable(UInt32),
+    commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
+    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
+    last_synced DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, run_id, snapshot_id)`,
+		`CREATE TABLE testops_release_confidence (
+    repo_id UUID, day Date, confidence_score Float64, pipeline_success_factor Float64,
+    test_pass_factor Float64, coverage_factor Float64, flake_penalty Float64, regression_penalty Float64,
+    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
+    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
+) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
+		`CREATE TABLE testops_quality_drag (
+    repo_id UUID, day Date, drag_hours Float64, failure_rework_hours Float64,
+    flake_investigation_hours Float64, queue_wait_hours Float64, retry_overhead_hours Float64,
+    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
+    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
+) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
+		// testops_pipeline_stability is DELIBERATELY never created -- see the
+		// test's doc comment. writeTestopsRisk writes this table LAST
+		// (testops_risk_native_clickhouse.go:1003-1092), so its PrepareBatch
+		// failure here happens strictly after the other two tables' writes
+		// have already landed.
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const orgID = "00000000-0000-4000-8000-00000000000a"
+	repoID := "00000000-0000-4000-8000-0000000000b1"
+
+	if err := conn.Exec(ctx, `
+INSERT INTO ci_pipeline_runs (repo_id, run_id, status, queued_at, started_at, finished_at, last_synced, retry_count, org_id) VALUES
+(toUUID('`+repoID+`'), 'run-1', 'success', toDateTime64('2026-08-15 09:00:00', 3, 'UTC'), toDateTime64('2026-08-15 09:01:00', 3, 'UTC'), toDateTime64('2026-08-15 09:11:00', 3, 'UTC'), now64(3), 0, '`+orgID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO test_suite_results (repo_id, run_id, suite_id, suite_name, total_count, passed_count, failed_count, skipped_count, started_at, finished_at, org_id, last_synced) VALUES
+(toUUID('`+repoID+`'), 'run-1', 'suite-1', 'unit', 10, 9, 1, 0, toDateTime64('2026-08-15 09:01:00', 3, 'UTC'), toDateTime64('2026-08-15 09:05:00', 3, 'UTC'), '`+orgID+`', now64(3))`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO test_case_results (repo_id, run_id, suite_id, case_id, case_name, status, org_id, last_synced) VALUES
+(toUUID('`+repoID+`'), 'run-1', 'suite-1', 'c1', 'test_one', 'passed', '`+orgID+`', now64(3))`); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `
+INSERT INTO coverage_snapshots (repo_id, run_id, snapshot_id, lines_total, lines_covered, line_coverage_pct, org_id, last_synced) VALUES
+(toUUID('`+repoID+`'), 'run-1', 'snap-1', 1000, 900, 90.0, '`+orgID+`', now64(3))`); err != nil {
+		t.Fatal(err)
+	}
+
+	executor, err := NewTestopsRiskExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := Run{OrganizationID: orgID, TargetDay: time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)}
+	partition := Partition{
+		ID:      "00000000-0000-4000-8000-000000000131",
+		RunID:   "00000000-0000-4000-8000-000000000130",
+		RepoIDs: []RepositoryID{RepositoryID(repoID)},
+	}
+
+	written, err := executor.ComputeFamily(ctx, run, partition)
+	if !errors.Is(err, ErrPartialWrite) {
+		t.Fatalf("ComputeFamily error = %v, want it to wrap ErrPartialWrite -- "+
+			"a call-site revert to `return 0, err` would not be caught by this test failing", err)
+	}
+	// 1 testops_release_confidence + 1 testops_quality_drag row landed
+	// before the (table-does-not-exist) testops_pipeline_stability write
+	// failed. Reporting 0 here is exactly the bug this pass exists to catch.
+	if written != 2 {
+		t.Fatalf("written=%d, want 2 (release_confidence + quality_drag landed before the "+
+			"pipeline_stability write failed)", written)
+	}
+
+	assertOneRow(ctx, t, conn, "testops_release_confidence", orgID)
+	assertOneRow(ctx, t, conn, "testops_quality_drag", orgID)
 }

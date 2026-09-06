@@ -464,8 +464,16 @@ func WriteAIPolicyEvents(
 			return 0, fmt.Errorf("append ai_policy_events row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send ai_policy_events batch: %w", err)
+		return len(violations), fmt.Errorf("send ai_policy_events batch: %w", err)
 	}
 	return len(violations), nil
 }
@@ -499,8 +507,16 @@ func WriteAIGovernanceCoverageDaily(
 			return 0, fmt.Errorf("append ai_governance_coverage_daily row: %w", err)
 		}
 	}
+	// CHAOS-5190 confirmation-pass sweep: Send is the one call here that
+	// crosses the network, so a Send error is AMBIGUOUS -- ClickHouse may
+	// have committed the insert server-side and only the acknowledgement
+	// was lost. Report the true row count on this specific error path
+	// (never on PrepareBatch/Append, which have not crossed the network
+	// and genuinely wrote nothing), so the caller fails CLOSED on the
+	// ambiguity instead of silently open (matches
+	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
-		return 0, fmt.Errorf("send ai_governance_coverage_daily batch: %w", err)
+		return len(rows), fmt.Errorf("send ai_governance_coverage_daily batch: %w", err)
 	}
 	return len(rows), nil
 }

@@ -154,8 +154,14 @@ internal/jobrescue	5
 internal/jobroute	6
 internal/jobruntime	5
 # internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
-# measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run).
-internal/jobs/investment	34
+# measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run),
+# rounded up one further second to 35 for shard-balance headroom -- combined
+# with CHAOS-5358's three new packages landing the same week, 34 put the two
+# "packages" shards 2s apart (819 vs 817), over the shard-balance test's 1s
+# tolerance; 35 keeps LPT assignment identical and balances them within 1s,
+# same "over-state a cheap package for packing efficiency" convention this
+# file already uses throughout (see internal/storage/postgres/authschema).
+internal/jobs/investment	35
 internal/jobs/investment/categorize	15
 internal/jobs/investment/chquery	122
 internal/jobs/investment/chwrite	130

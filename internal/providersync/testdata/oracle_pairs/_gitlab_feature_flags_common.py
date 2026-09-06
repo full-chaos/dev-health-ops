@@ -259,10 +259,6 @@ def _load_edge_targets() -> tuple[Any, Any]:
             "extract_squash_pr_refs": lambda *_args, **_kwargs: [],
         },
     )
-    _install_module(
-        "dev_health_ops.work_graph.operational_edges",
-        {"build_operational_incident_edges": lambda *_args, **_kwargs: []},
-    )
     _load_source_module("dev_health_ops.work_graph.models", MODELS_SOURCE)
     _load_source_module("dev_health_ops.work_graph.ids", IDS_SOURCE)
     builder_module = _load_source_module(

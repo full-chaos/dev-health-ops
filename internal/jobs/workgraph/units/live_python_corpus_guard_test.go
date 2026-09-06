@@ -231,14 +231,16 @@ var liveDataGenerators = map[string]struct {
 	"generate_workgraph_issue_edges_python_golden.py": {
 		reason: "queries live ClickHouse via CLICKHOUSE_URI; no --replay wiring into this guard yet",
 	},
-	// CHAOS-4924: same shape as its sibling above -- queries
-	// operational_incidents/operational_service_repository_mappings/... over
-	// a live org via CLICKHOUSE_URI. ORG_ID is a hardcoded module constant
-	// (not env-overridable), so even a live connection would only ever
-	// reproduce the org-70d529e0 golden, never the synthetic one.
-	"generate_workgraph_operational_edges_python_golden.py": {
-		reason: "queries live ClickHouse via CLICKHOUSE_URI; no --replay wiring into this guard yet",
-	},
+	// CHAOS-4924's sibling entry (generate_workgraph_operational_edges_python_
+	// golden.py) was DELETED, not reclassified: the Python producer it existed
+	// to freeze a golden from (operational_edges.py::build_operational_incident_
+	// edges, builder.py::_build_flag_guards_edges) was itself deleted the same
+	// PR, ported to Go (internal/jobs/workgraph/operationaledges). The frozen
+	// goldens it once generated (tests/fixtures/workgraph_operational_edges_
+	// python_golden.json and its _synthetic_ sibling) stay -- the Go
+	// integration test that already reads them is the regression guard going
+	// forward, no live Python needed. Same precedent as CHAOS-5249's issue_pr_
+	// links generator retirement.
 }
 
 // TestLiveDataGeneratorsGenuinelyNeedClickHouse deletes the excuse the moment

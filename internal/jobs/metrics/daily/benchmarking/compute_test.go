@@ -503,8 +503,9 @@ func TestTheCorpusExercisesEveryBranchItClaimsTo(t *testing.T) {
 // themselves against values taken from the live interpreter, before any
 // rounding can hide a difference.
 //
-// The reference values below came from CPython via
-// dev_health_ops.metrics.benchmarking._common on the same corpus.
+// The reference values below came from CPython via the now-deleted
+// dev_health_ops.metrics.benchmarking._common (CHAOS-4288) on the same
+// corpus, captured before the Python source was removed.
 func TestRawPrimitivesMatchCPythonBitForBit(t *testing.T) {
 	values := []float64{0.1, 0.2, 0.3, 0.7, 1.1, 2.9, 5.5}
 	paired := make([]float64, len(values))

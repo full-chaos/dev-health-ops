@@ -1,7 +1,7 @@
 // Package benchmarking is the native Go port of the Python `benchmarking`
-// daily metrics family (CHAOS-4288): `run_benchmarking_for_day`
-// (src/dev_health_ops/metrics/benchmarking/runner.py:259) and the five compute
-// primitives plus insight generation beneath it.
+// daily metrics family: `run_benchmarking_for_day` (CHAOS-4288 deleted the
+// Python source, formerly src/dev_health_ops/metrics/benchmarking/runner.py:259)
+// and the five compute primitives plus insight generation beneath it.
 //
 // # It is ORG-scoped compute, and Python runs it once per REPO
 //

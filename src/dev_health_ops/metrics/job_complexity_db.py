@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import fnmatch
 import logging
 import os
@@ -14,16 +13,9 @@ from dev_health_ops.analytics.complexity import (
     ComplexityScanner,
     FileComplexity,
 )
-from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.schemas import FileComplexitySnapshot, RepoComplexityDaily
 from dev_health_ops.metrics.sinks.clickhouse import ClickHouseMetricsSink
 from dev_health_ops.storage import detect_db_type
-from dev_health_ops.utils.cli import (
-    add_date_range_args,
-    add_sink_arg,
-    resolve_date_range,
-    validate_sink,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -502,41 +494,13 @@ def _build_snapshots(
     return snapshots, repo_daily
 
 
-def register_commands(metrics_subparsers: argparse._SubParsersAction) -> None:
-    complexity = metrics_subparsers.add_parser(
-        "complexity",
-        help="Compute file complexity metrics from DB (git_files/git_blame).",
-    )
-    add_date_range_args(complexity)
-    add_sink_arg(complexity)
-    complexity.add_argument(
-        "--repo-id", type=uuid.UUID, help="Filter to specific repo."
-    )
-    complexity.add_argument("-s", "--search", help="Repo name search pattern (glob).")
-    complexity.add_argument(
-        "--lang", action="append", help="Include language globs (e.g. *.py)."
-    )
-    complexity.add_argument(
-        "--exclude", action="append", help="Exclude language globs (e.g. */tests/*)."
-    )
-    complexity.add_argument(
-        "--max-files", type=int, help="Limit number of files scanned per repo."
-    )
-    complexity.set_defaults(func=_cmd_metrics_complexity)
-
-
-def _cmd_metrics_complexity(ns: argparse.Namespace) -> int:
-    validate_sink(ns)
-    end_day, backfill_days = resolve_date_range(ns)
-    org_id = getattr(ns, "org", None) or ""
-    return run_complexity_db_job(
-        repo_id=ns.repo_id,
-        db_url=resolve_sink_uri(ns),
-        date=end_day,
-        backfill_days=backfill_days,
-        language_globs=ns.lang,
-        max_files=ns.max_files,
-        search_pattern=ns.search,
-        exclude_globs=ns.exclude,
-        org_id=org_id,
-    )
+# CHAOS-5307: `register_commands`/`_cmd_metrics_complexity` (the direct-
+# Python-compute `dev-hops metrics complexity` CLI verb) were deleted here.
+# They were already 100% orphaned before this change -- CHAOS-5055/#2232
+# repointed `cli.py` to register `workerctl_dispatch.register_trigger_backstop_commands`
+# instead (dispatches through `dev-health-workerctl metrics remaining
+# trigger-backstop --family complexity`), and nothing anywhere in the repo
+# still called these functions or `job_complexity_db.register_commands` by
+# name (verified by repo-wide search before deletion). `run_complexity_db_job`
+# above is NOT dead -- it still has live callers -- only the unwired CLI
+# wrapper functions were removed.

@@ -6,7 +6,8 @@ the throwaway local `ch:ch`; under `CH_TRANSPORT=http` it is a REAL cluster
 password, and this gate runs on a shared host where process listings and log
 scrollback are readable. Two exposure classes are pinned here:
 
-* display — `ch_migrate`/`ch_provision`/`metrics_readback` printed the full URI;
+* display — `ch_migrate`/`ch_provision`/the (now-retired, CHAOS-5307)
+  `metrics_readback` stage printed the full URI;
 * argv — `fixtures generate --sink <uri>` and
   `assert_metrics_executed_proof.py --clickhouse-uri <uri>` passed it as an
   argument.

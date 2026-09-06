@@ -89,15 +89,15 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 
 | Requirement | Commands |
 |-------------|----------|
-| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `recommendations compute` (read-only preview, CHAOS-5055); `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
-| `dev-health-workerctl` binary on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN`), Postgres coordinator (+org) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics release-impact` (CHAOS-5055: dispatch to the Go worker, no direct ClickHouse connection of their own) |
+| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
+| `dev-health-workerctl` binary on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN`), Postgres coordinator (+org) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055: dispatch to the Go worker, no direct ClickHouse connection of their own) |
 | ClickHouse via `--db` (`CLICKHOUSE_URI`) | `investment materialize` |
 | PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); `migrate configs-to-integrations` (one-time child-config -> integration data migration; `--dry-run` to preview); legacy `migrate upgrade`/`downgrade`/`current` |
-| Organization (`--org` / `ORG_ID`) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics release-impact` (CHAOS-5055), `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
+| Organization (`--org` / `ORG_ID`) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055), `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
 
 > The org id auto-resolves from the first organization in PostgreSQL when `--org`/`ORG_ID` are omitted; the preflight only fails when no org can be resolved.
 
-> Read-only Alembic commands that do not open a connection (`migrate [postgres] heads`, `migrate [postgres] history`) are intentionally **not** gated. Commands that declare their own `required=True` flag (e.g. `audit completeness`/`coverage` `--db`, `metrics capacity` `--db`, `fixtures validate` `--sink`) keep using argparse's own required-argument error.
+> Read-only Alembic commands that do not open a connection (`migrate [postgres] heads`, `migrate [postgres] history`) are intentionally **not** gated. Commands that declare their own `required=True` flag (e.g. `audit completeness`/`coverage` `--db`, `fixtures validate` `--sink`) keep using argparse's own required-argument error.
 
 ---
 
@@ -1943,28 +1943,7 @@ dev-hops investment materialize --window-days 30 --llm-provider none
 
 ## Recommendations
 
-### `recommendations compute`
-
-> **CHAOS-5055:** this command is now **preview-only** — it evaluates rules and prints the result, but never writes to ClickHouse. It used to persist to the same `recommendations_daily` table the Go worker's NATIVE `metrics.remaining.recommendations` kind writes, on an independent per-team/arbitrary-window schedule with no dedup between the two writers. For a persisted, generation-deduped compute, use `dev-health-workerctl metrics remaining trigger-backstop --family recommendations --team <team-uuid>` (or `--all-teams`) `--window <days> --review-evidence <why>` directly — **not** `metrics remaining start`, which only accepts `complexity`/`dora`/`release_impact` and rejects `recommendations` outright. There is no `dev-hops` wrapper verb for this (unlike `metrics capacity`); recommendations is dispatched via the raw workerctl binary only.
-
-Preview rule-based recommendations for a team — evaluates both fired recommendations and explicit `fired=False` tombstones, and prints them. Uses `CLICKHOUSE_URI` for input reads only.
-
-```bash
-dev-hops recommendations compute --team <team-uuid> --window 7d
-
-# Override the window with an explicit date range and print JSON
-dev-hops recommendations compute --team <team-uuid> \
-  --since 2025-01-01 --until 2025-01-31 --output-json
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--team` | Team ID to evaluate (required) |
-| `--window` | Evaluation window, e.g. `7d` or `14d` (default: `7d`) |
-| `--since` | Override window start (exclusive end = `--until`) |
-| `--until` | Override window end (inclusive). Requires `--since` |
-| `--output-json` | Print fired recommendations as JSON to stdout |
+> **CHAOS-5307:** the `dev-hops recommendations compute` preview verb was deleted — a Python CLI running `RuleEngine` directly is Python compute executing in production tooling, read-only or not (team-lead ruling). There is no `dev-hops` wrapper verb for recommendations. For the persisted, generation-deduped compute, use `dev-health-workerctl metrics remaining trigger-backstop --family recommendations --team <team-uuid>` (or `--all-teams`) `--window <days> --review-evidence <why>` directly — **not** `metrics remaining start`, which only accepts `complexity`/`dora`/`release_impact` and rejects `recommendations` outright. A Go-native `workerctl recommendations preview` verb is tracked as a follow-up so the read-only preview capability itself is not lost.
 
 ---
 

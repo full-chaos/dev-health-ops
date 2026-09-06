@@ -1419,295 +1419,15 @@ ch_tests() {
   run_stage "argMax live-exec proof (real engine)" ch_argmax_proof ch_argmax_proof
 }
 
-# --- metrics_readback (CHAOS-4266): executed-proof for the metrics.daily
-# family. CHAOS-4263/CHAOS-4264 ran undetected on prod and local for a week
-# because every existing check asserted a job RAN (trigger fired, zero rows
-# logged) rather than that it produced rows for the org it computed for
-# (feedback_metrics_merge_requires_ch_readback.md). This stage seeds real
-# source rows (ci runs, deployments, incidents, test results — via `fixtures
-# generate` WITHOUT --with-metrics, so no derived metric table is
-# pre-seeded), computes daily/dora/complexity SYNCHRONOUSLY through the real
-# `dev-hops metrics` CLI, then asserts rows actually landed for the seeded
-# org's live ClickHouse repo ids (ci/assert_metrics_executed_proof.py, shared
-# with CI's live-e2e gate).
-#
-# Unlike CI's live-e2e `metrics-executed-proof` job (CHAOS-4266 item 1), this
-# stage does NOT drive the Go dispatch/post-sync path — it calls the same
-# compute functions the Go bridge calls, synchronously, which is the
-# faithful-enough proof for a fast local gate but does not on its own catch a
-# dispatch-layer defect (CHAOS-4263's wrong repo-id space reaching the
-# partition, or CHAOS-4264's bridge OOM). CI is what catches those.
-#
-# Seeding source rows directly via `fixtures generate` (rather than through a
-# real or synthetic provider sync_run, as CI's job does) is ACCEPTABLE HERE,
-# specifically because this stage's job is proving compute+readback
-# synchronously, not proving the sync -> dispatch -> compute chain end to
-# end. Do not cite a green run of THIS stage as evidence the dispatch path
-# works — only CI's `metrics-executed-proof` job is that proof.
-METRICS_READBACK_ORG_ID="${METRICS_READBACK_ORG_ID:-c0ffee00-dead-4bee-8bad-f00dfeedface}"
-METRICS_READBACK_REPO_NAME="${METRICS_READBACK_REPO_NAME:-ci-local-validate/metrics-readback}"
-
-# Decide ONCE, up front (CHAOS-3571 discipline — see run_declared_stages):
-# does the diff touch a path this stage exists to guard? Fails OPEN (runs the
-# stage) on any git error or unresolvable base ref — being unable to tell is a
-# reason to be MORE careful, never less. Deliberately not gated behind any
-# "under contention" carve-out (feedback_local_verify_under_contention.md):
-# chris's 2026-08-25 ruling is that a metrics-family PR merges only with a
-# real ClickHouse readback in evidence, and host load does not change what
-# the PR touches.
-# _metrics_diff_relevant_check <newline-separated-changed-files>
-#
-# Pure function over an explicit argument (no git call): does the given
-# changed-file list touch a path this stage exists to guard? Split out of
-# metrics_readback_diff_relevant (CHAOS-4487) so a test can drive it
-# directly with an arbitrary payload, without faking git/merge-base state
-# -- see the `--metrics-diff-relevant-probe` harness hook below main() and
-# tests/tooling/test_local_validate_here_string_deadlock.py.
-#
-# CHAOS-4319 (why not `printf ... | grep -qE ...`): under this script's
-# `set -uo pipefail`, `grep -q` exits the instant it finds its first match
-# without draining the rest of stdin -- if the payload has more lines still
-# queued, the upstream `printf` gets SIGPIPE on its next write and exits
-# 141, and pipefail reports THAT as the pipeline's status instead of
-# grep's real (matching, 0) result. That bug is silent and
-# match-position-dependent: it only fires when the match is early enough
-# that printf is still writing when grep exits, which is exactly the
-# common case for a real PR's small file count -- this exact function
-# returned 141 (falsely "not relevant") against CHAOS-4319's own diff,
-# which very much touches internal/jobs/metrics/. A here-string was the
-# fix: it has no live producer process to SIGPIPE.
-#
-# CHAOS-4487 (why not the here-string either, `grep -qE ... <<<"$1"`): a
-# here-string is not free of forked-process risk either -- bash 5.3
-# implements `<<<` by forking a child that does the heredoc_write into a
-# pipe while the parent `wait4`s on it, and on this host that write blocks
-# forever once the payload crosses roughly 500-550 bytes (empirically
-# measured; see tests/tooling/test_local_validate_here_string_deadlock.py),
-# not the ~4000-byte figure a DIFFERENT here-document call site elsewhere
-# in this file documents for the same general class of bug (CHAOS-3362).
-# A real diff easily crosses 500 bytes (the incident that opened CHAOS-4487
-# hung on a 1279-byte / 28-file changed-files value), so the here-string
-# deadlocks in exactly the common case this function exists to handle
-# correctly, the same way the pipe form did for CHAOS-4319.
-#
-# The fix used by the argMax proof stage a few hundred lines up (search
-# ARGMAX_PROOF_TMPDIR) for this identical class of problem: remove the
-# forked process entirely. `printf` as a BUILTIN writes straight to a
-# redirected regular file -- no pipe, no fork, nothing that can block --
-# and `grep` then reads that file directly (a real file has no producer
-# to SIGPIPE, closing the CHAOS-4319 gap too). Same fix, applied here.
-_metrics_diff_relevant_check() {
-  local changed="$1"
-  local changed_file
-  changed_file="$(mktemp "${TMPDIR:-/tmp}/local-validate-metrics-diff.XXXXXX")" || {
-    printf '   %s could not create a temp file for the metrics-diff relevance check -- running the stage rather than guessing.\n' "$(c_red 'WARN:')" >&2
-    return 0
-  }
-  if ! printf '%s' "${changed}" >"${changed_file}"; then
-    printf '   %s could not write the metrics-diff relevance payload to %s -- running the stage rather than guessing.\n' "$(c_red 'WARN:')" "${changed_file}" >&2
-    rm -f "${changed_file}"
-    return 0
-  fi
-  local rc
-  # Includes the oracle script and its synthetic-seeding path too (codex
-  # review, CHAOS-4266) -- a PR that only touches
-  # ci/assert_metrics_executed_proof.py or sync_synthetic_target itself, as
-  # this one does, must not have this stage silently skip.
-  grep -qE \
-    '^(src/dev_health_ops/metrics/|internal/jobs/metrics/|internal/syncdispatchruntime/|src/dev_health_ops/api/internal/worker_metrics|ci/assert_metrics_executed_proof\.py|ci/run_metrics_executed_proof\.sh|src/dev_health_ops/processors/sync\.py|src/dev_health_ops/fixtures/)' \
-    "${changed_file}"
-  rc=$?
-  rm -f "${changed_file}"
-  return "${rc}"
-}
-
-metrics_readback_diff_relevant() {
-  local base changed
-  base="$(git -C "${ROOT}" merge-base origin/main HEAD 2>/dev/null || true)"
-  if [ -z "${base}" ]; then
-    return 0 # can't resolve a base ref — run it rather than guess.
-  fi
-  changed="$(git -C "${ROOT}" diff --name-only "${base}"...HEAD 2>/dev/null || true)"
-  if [ -z "${changed}" ]; then
-    return 0 # diff failed, or genuinely empty (e.g. no commits yet) — run it.
-  fi
-  _metrics_diff_relevant_check "${changed}"
-}
-
-metrics_readback() {
-  case "${SCRATCH_URI}" in
-  *"/default" | *"/default?"*) die "refusing metrics_readback: SCRATCH_URI resolves to /default ($(redact_uri "${SCRATCH_URI}"))." ;;
-  esac
-
-  local run_start
-  run_start="$("${PYBIN}" -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
-
-  printf '   seeding real source rows (ci runs, deployments, incidents, test results) into scratch CH — no --with-metrics\n'
-  # POSTGRES_URI/DATABASE_URI/DATABASE_URL must be UNSET here, not pointed at
-  # the (ClickHouse) SCRATCH_URI: fixtures/runner.py's auth/org seeding opens a
-  # separate SQLAlchemy engine from whichever of those env vars it finds first,
-  # and a clickhouse:// URI has no such SQLAlchemy dialect registered
-  # (NoSuchModuleError). run_live_backend_e2e.sh hits the same hazard and
-  # unsets all three for the identical reason -- mirrored here, not guessed.
-  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" env -u POSTGRES_URI -u DATABASE_URI -u DATABASE_URL \
-    "${DEVHOPS}" fixtures generate \
-    `# --sink omitted deliberately: it defaults to os.getenv("CLICKHOUSE_URI")` \
-    `# (fixtures/runner.py:3113) and this invocation already exports that, so` \
-    `# passing it again only put the credential into argv where ps can read it.` \
-    --db-type clickhouse \
-    --repo-name "${METRICS_READBACK_REPO_NAME}" \
-    --provider synthetic \
-    --days 7 --commits-per-day 3 --pr-count 5 \
-    --seed 20260825 || return 1
-
-  printf '   computing daily/dora/complexity SYNCHRONOUSLY (direct Python job calls)\n'
-  # --sink here takes a BACKEND NAME ("clickhouse"), not a URI -- unlike
-  # fixtures generate's --sink above. The connection itself comes from
-  # CLICKHOUSE_URI (add_sink_arg / validate_sink in utils/cli.py); passing the
-  # scratch URI as --sink fails closed with "Unknown sink" rather than
-  # silently reading the wrong database, which is how this was caught.
-  # --backfill 7 covers the whole 7-day window `fixtures generate` seeded
-  # above (day-to-day variance in the fixture generator can leave any single
-  # day's bucket empty for a given family, which is not the defect this stage
-  # checks for) — verified locally 2026-08-25.
-  #
-  # CHAOS-5055 (RISK-NOTES): this used to shell to `${DEVHOPS} metrics
-  # daily/dora/complexity` directly. Those verbs now dispatch to
-  # dev-health-workerctl (an async Go-worker request) instead of computing
-  # in-process -- there is no Postgres coordinator or worker in this
-  # lightweight ClickHouse-only proof for them to dispatch to (this stage
-  # deliberately does not stand up the full topology
-  # ci/run_metrics_executed_proof.sh does; that script is unaffected -- it
-  # seeds through the real sync/outbox/worker path, never through `dev-hops
-  # metrics ...`). This stage only ever needed compute correctness against
-  # the scratch DB, never CLI dispatch semantics, so it now calls the
-  # still-unchanged Python job functions directly through the SAME
-  # register_commands/_cmd_* argparse wiring the old CLI verbs used (gate
-  # tooling reaching into compute internals is allowed; product code must
-  # not). --org isn't a flag either module registers (it was always the
-  # top-level dev-hops parser's global flag) -- set on the namespace
-  # explicitly from ORG_ID, mirroring what `_resolve_org` did for a real CLI
-  # invocation. This stage exercises Python COMPAT compute only (daily/dora/
-  # complexity are all still Python-computed per docs/go-migration-matrix.md
-  # as of CHAOS-5055) and should retire once the matrix shows zero COMPAT
-  # rows for these families.
-  # Written to a temp file via the printf BUILTIN, never a heredoc: bash
-  # writes a here-document into a pipe it also holds the read end of, which
-  # hangs forever on a host with a small effective pipe buffer (CHAOS-3362/
-  # 3489/4487) -- test_no_ci_script_has_a_heredoc_over_the_measured_pipe_budget
-  # and test_here_redirections_match_the_pinned_allowlist both guard every
-  # script under ci/ against exactly this, unconditionally. A single-argument
-  # printf writes straight to the file with no pipe involved regardless of
-  # payload size.
-  local metrics_readback_py
-  metrics_readback_py="$(mktemp "${TMPDIR:-/tmp}/local-validate-metrics-readback.XXXXXX")" || {
-    printf 'metrics_readback: could not create a temp file for the compute script\n' >&2
-    return 2
-  }
-  printf '%s' 'import argparse
-import asyncio
-import os
-
-from dev_health_ops.metrics import job_complexity_db, job_daily, job_dora
-
-org_id = os.environ.get("ORG_ID") or None
-
-parser = argparse.ArgumentParser()
-sub = parser.add_subparsers(dest="cmd")
-job_daily.register_commands(sub)
-job_dora.register_commands(sub)
-job_complexity_db.register_commands(sub)
-
-ns = parser.parse_args(["daily", "--backfill", "7"])
-ns.org = org_id
-rc = asyncio.run(job_daily._cmd_metrics_daily(ns))
-if rc:
-    raise SystemExit(rc)
-
-ns = parser.parse_args(["dora", "--backfill", "7"])
-ns.org = org_id
-rc = job_dora._cmd_metrics_dora(ns)
-if rc:
-    raise SystemExit(rc)
-
-ns = parser.parse_args(["complexity"])
-ns.org = org_id
-rc = job_complexity_db._cmd_metrics_complexity(ns)
-if rc:
-    raise SystemExit(rc)
-' >"${metrics_readback_py}"
-  local metrics_readback_rc
-  OPERATIONAL_ORDERING_CONTRACT=2 ORG_ID="${METRICS_READBACK_ORG_ID}" CLICKHOUSE_URI="${SCRATCH_URI}" OTEL_ENABLED=false PYTHONPATH=src \
-    "${PROXY_OFF[@]}" "${PYBIN}" "${metrics_readback_py}"
-  metrics_readback_rc=$?
-  rm -f "${metrics_readback_py}"
-  [ "${metrics_readback_rc}" -eq 0 ] || return 1
-
-  printf '   asserting ClickHouse readback (rows with computed_at >= %s, repo_ids ⊆ repos.id)\n' "${run_start}"
-  # "incident" is deliberately excluded — see CHAOS-4269. `fixtures generate`
-  # DOES seed a valid operational_service_repository_mappings row (via the
-  # real map_issue_incidents path); the family is still permanently zero-row
-  # because active_incidents_query's `valid_from <= {as_of}` filter
-  # (src/dev_health_ops/metrics/active_incidents.py:60) has no NULL-OK guard,
-  # unlike the symmetric `valid_to IS NULL OR ...` clause beside it — and
-  # map_issue_incidents never sets valid_from, so the mapping is silently
-  # excluded (confirmed by hand: 0/7 days with 10 seeded incidents AND a
-  # correct, present mapping row). That is a real bug (CHAOS-4269, filed
-  # 2026-08-25), not the CHAOS-4263/4264 defect this stage exists to catch,
-  # so it is cited rather than papered over or misdiagnosed as a fixture gap.
-  # "file_hotspots" (native FileHotspotsExecutor -> file_metrics_daily,
-  # CHAOS-5234/CHAOS-3092 deleted the old compute_file_hotspots Python path)
-  # is included
-  # here but NOT in ci/run_metrics_executed_proof.sh's list: `fixtures
-  # generate` above seeds real commit stats (--commits-per-day 3), which
-  # `metrics daily` needs to compute it, but the CI job's synthetic
-  # cicd/deployments/incidents/tests seeding never touches git data at all.
-  # CLICKHOUSE_URI in the environment, not --clickhouse-uri in argv: same
-  # reason as --sink above. assert_metrics_executed_proof.py reads the env.
-  # CHAOS-4794: cicd/deploy/.../file_hotspots are REPO_DAY_FAMILIES entries
-  # only -- this list never included a TEAM_DAY_FAMILIES entry, missing
-  # team_wellbeing (CHAOS-4276) since it landed and now also work_item_state
-  # (CHAOS-4278). Both are covered by the `metrics daily --backfill 7` call
-  # above already: work_item_state's compute_work_item_state_durations_daily
-  # still runs in-process inside compute_daily_metrics; team_wellbeing's own
-  # Python compute (compute_team_wellbeing_metrics_daily) is DELETED outright
-  # by CHAOS-5311 -- the same `metrics daily` invocation now drives it via
-  # the native Go TeamWellbeingExecutor instead, using the same
-  # work_items/transitions `fixtures generate` seeds unconditionally -- see
-  # generate_work_item_transitions in fixtures/runner.py -- so no extra
-  # seeding/compute call is needed here.
-  # team_cognitive_load and recommendations (the other two TEAM_DAY_FAMILIES
-  # entries) are deliberately NOT added: team_cognitive_load resolves team_id
-  # from repo ownership only and this fixture org has none configured, so it
-  # legitimately writes zero rows here (not a proof failure, but
-  # assert_metrics_executed_proof.py's team_readback treats zero as a hard
-  # FAIL with no carve-out) -- and recommendations isn't computed by `metrics
-  # daily` at all (separate `recommendations compute` CLI, no seeding call
-  # exists in this stage). Adding either would break this stage on a
-  # non-defect.
-  #
-  # WHAT THIS STAGE CANNOT PROVE (CHAOS-4288, codex r3 on #2230). It proves rows
-  # EXIST for the seeded org with a fresh computed_at. It does NOT prove a Go
-  # native executor produced them, and it structurally cannot: this stage runs
-  # `dev-hops metrics daily`, which calls Python's run_daily_metrics_job
-  # directly -- there is no dev-health-worker process here at all, so there is no
-  # native-family registration and no telemetry to read. The readback would stay
-  # green with every native executor disabled, because Python still writes the
-  # rows.
-  #
-  # That is not a gap to paper over here; it is the honest boundary of this
-  # gate. The proof that Go wrote the rows lives in
-  # ci/run_metrics_executed_proof.sh, which runs the real worker and now FAILS
-  # (rather than warning) when a family has no outcome="computed" sample. Do not
-  # add a native assertion to this stage without first giving it a worker --
-  # asserting native execution from a path that never runs Go would be a check
-  # that cannot fail, which is worse than the absence of one.
-  CLICKHOUSE_URI="${SCRATCH_URI}" PYTHONPATH=src "${PROXY_OFF[@]}" "${PYBIN}" "${ROOT}/ci/assert_metrics_executed_proof.py" \
-    --org-id "${METRICS_READBACK_ORG_ID}" \
-    --run-start "${run_start}" \
-    --families cicd deploy testops_pipeline testops_test testops_coverage repo_user_commit dora complexity file_hotspots team_wellbeing work_item_state compounding_risk ic_finalize team_cognitive_load
-}
+# metrics_readback (CHAOS-4266) RETIRED, CHAOS-5307: this stage exercised
+# Python compute (job_daily/job_dora/job_complexity_db's register_commands/
+# _cmd_metrics_* wiring) directly -- that wiring is deleted (CHAOS-5307,
+# #2316). Per standing rule, a gate stage that invokes Python compute
+# retires with that compute; it is not rewritten to call another entrypoint.
+# The compute-correctness gate for these families is now CI's Go executor
+# integration tests (the `go-storage-integration` shards) -- CI's separate
+# `metrics-executed-proof` job (ci/run_metrics_executed_proof.sh, unaffected
+# by this deletion) remains the dispatch-path proof it always was.
 
 print_summary() {
   echo
@@ -1764,15 +1484,8 @@ verify_stage_manifest() {
 # same precedent as `--lock-probe` exercising the real acquire_lock/
 # release_lock without paying for preflight/lint/mypy/the unit suite.
 run_declared_stages() {
-  local metrics_readback_needed=0
-  if [ "${SKIP_CLICKHOUSE:-0}" != "1" ] && metrics_readback_diff_relevant; then
-    metrics_readback_needed=1
-  fi
-
   if [ "${SKIP_CLICKHOUSE:-0}" = "1" ]; then
     DECLARED_STAGE_IDS=(lint_format lint_check typecheck unit_suite)
-  elif [ "${metrics_readback_needed}" = "1" ]; then
-    DECLARED_STAGE_IDS=(lint_format lint_check typecheck ch_probe ch_scratch_create ch_migrate metrics_readback unit_suite ch_argmax_proof)
   else
     DECLARED_STAGE_IDS=(lint_format lint_check typecheck ch_probe ch_scratch_create ch_migrate unit_suite ch_argmax_proof)
   fi
@@ -1783,11 +1496,6 @@ run_declared_stages() {
   # run_stage "go: format + vet + test"     go_fast    gate_go_fast
   # run_stage "river: static compatibility harness" river_compat gate_river_compat_static
   ch_provision # scratch db + migrations; exports CLICKHOUSE_URI when available
-  if [ "${metrics_readback_needed}" = "1" ]; then
-    run_stage "metrics executed-proof readback (CHAOS-4266)" metrics_readback metrics_readback
-  else
-    skip "metrics executed-proof readback (CHAOS-4266)" "diff does not touch src/dev_health_ops/metrics, internal/jobs/metrics, internal/syncdispatchruntime, or the metrics bridge (or SKIP_CLICKHOUSE=1)"
-  fi
   run_stage "unit suite (FULL, not subset)" unit_suite gate_unit_suite
   ch_tests # argMax live-exec proof on the real engine (reuses the scratch db)
 
@@ -1988,12 +1696,6 @@ if [ "${1:-}" = "--stage-manifest-probe" ]; then
   ch_create_scratch() { return 0; }
   ch_migrate() { return 0; }
   ch_argmax_proof() { return 0; }
-  # CHAOS-4266: pin the diff-relevance check true so the declared set is
-  # deterministic (9 stages) regardless of this checkout's actual git state --
-  # same reasoning as every other stub above, applied to the one stage whose
-  # declaration is itself conditional.
-  metrics_readback_diff_relevant() { return 0; }
-  metrics_readback() { return 0; }
   run_declared_stages
 fi
 
@@ -2026,24 +1728,6 @@ fi
 if [ "${1:-}" = "--ch-query-probe" ]; then
   shift
   ch_query "${1:?query required}"
-  exit $?
-fi
-
-# CHAOS-4487: lets a test drive _metrics_diff_relevant_check() directly with
-# an arbitrary payload, without faking git/merge-base state (metrics_read
-# back_diff_relevant, its only other caller, always resolves `changed` from a
-# real `git diff`). The payload is read from a FILE path, not argv: a test
-# proving the fix at ~500+ bytes must not itself be limited by shell argv
-# quoting/length behavior, which is exactly the kind of indirection that
-# would make the test's own harness suspect. Same argument-hook convention
-# as --stage-manifest-mismatch-probe / --ch-query-probe above. Never invoked
-# by main(); only by
-# tests/tooling/test_local_validate_here_string_deadlock.py.
-if [ "${1:-}" = "--metrics-diff-relevant-probe" ]; then
-  shift
-  changed_input_file="${1:?path to a file holding the changed-files payload is required}"
-  changed_payload="$(cat "${changed_input_file}")"
-  _metrics_diff_relevant_check "${changed_payload}"
   exit $?
 fi
 

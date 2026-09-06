@@ -3,10 +3,12 @@ package edges
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 )
 
 // dependencyReadSQL is the read `_build_issue_issue_edges` performs
@@ -174,4 +176,166 @@ func WriteEdges(ctx context.Context, conn driver.Conn, organizationID string, ro
 		return 0, fmt.Errorf("send work_graph_edges batch: %w", err)
 	}
 	return len(rows), nil
+}
+
+// existingBlockerEdgeIDsSQL is `_delete_dependency_edge_candidates`'s own read
+// (builder.py:952-971), reproduced verbatim in shape: every NATIVE issue<->issue
+// blocker-family edge id currently live, paged by edge_id after a cursor.
+//
+// FINAL here is deliberate and NOT the same divergence flagged on
+// dependencyReadSQL above -- Python's own read of THIS table uses FINAL too
+// (builder.py:959), because this query decides what to DELETE and reading a
+// pre-merge duplicate would target an id that may already be gone.
+const existingBlockerEdgeIDsSQL = `
+        SELECT edge_id
+        FROM work_graph_edges FINAL
+        WHERE org_id = {org_id:String}
+          AND source_type = 'issue'
+          AND target_type = 'issue'
+          AND edge_type IN ('blocks', 'is_blocked_by')
+          AND provenance = 'native'
+          AND edge_id > {after:String}
+        ORDER BY edge_id
+        LIMIT 1000
+`
+
+// ReadExistingBlockerEdgeIDs pages through every currently-live native
+// issue<->issue blocker-family edge id, for BuildCleanupPlan's
+// existingEdgeIDs input (builder.py:953-971).
+func ReadExistingBlockerEdgeIDs(ctx context.Context, conn driver.Conn, organizationID string) ([]string, error) {
+	if err := requireEdgeScope(organizationID); err != nil {
+		return nil, err
+	}
+	var ids []string
+	after := ""
+	for {
+		rows, err := conn.Query(ctx, existingBlockerEdgeIDsSQL,
+			clickhouse.Named("org_id", organizationID), clickhouse.Named("after", after))
+		if err != nil {
+			return nil, fmt.Errorf("read existing blocker edge ids: %w", err)
+		}
+		page := make([]string, 0, cleanupPageSize)
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan blocker edge id: %w", err)
+			}
+			page = append(page, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate blocker edge ids: %w", err)
+		}
+		rows.Close()
+		if len(page) == 0 {
+			break
+		}
+		// Defensive, matching Python's own re-sort (builder.py:962) even though
+		// the ORDER BY above already guarantees it: the cursor (`after`) MUST be
+		// derived from a sorted page, or a server that returned ids out of order
+		// for any reason would silently skip or repeat entries across pages.
+		sort.Strings(page)
+		ids = append(ids, page...)
+		after = page[len(page)-1]
+		if len(page) < cleanupPageSize {
+			break
+		}
+	}
+	return ids, nil
+}
+
+// deleteProjectionRunsSQL removes prior watermark rows for one org+projection+
+// rule before a rerun computes and publishes a fresh one
+// (`_delete_dependency_edge_candidates`, builder.py:911-920). `mutations_sync=2`
+// waits for the mutation to complete on all replicas before returning, matching
+// Python's own synchronous wait -- a caller that proceeds to publish a new
+// watermark immediately after must not race the delete of the old one.
+const deleteProjectionRunsSQL = `
+        ALTER TABLE work_graph_projection_runs DELETE WHERE
+        org_id = {org_id:String}
+        AND projection_name = {projection_name:String}
+        AND rule_version = {rule_version:String}
+        SETTINGS mutations_sync=2
+`
+
+// DeleteProjectionRuns wipes this org+projection+rule's prior watermark rows.
+func DeleteProjectionRuns(ctx context.Context, conn driver.Conn, organizationID, projectionName, ruleVersion string) error {
+	if err := requireEdgeScope(organizationID); err != nil {
+		return err
+	}
+	if err := conn.Exec(ctx, deleteProjectionRunsSQL,
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("projection_name", projectionName),
+		clickhouse.Named("rule_version", ruleVersion),
+	); err != nil {
+		return fmt.Errorf("delete work_graph_projection_runs: %w", err)
+	}
+	return nil
+}
+
+// deleteEdgesByIDSQL is one page of `_delete_dependency_edge_candidates`'s
+// delete (builder.py:988-1006). `mutations_sync=2` for the same reason as
+// above: the edges this deletes are re-created by the very next write in
+// Run(), and that write must not race a still-pending delete of the same ids.
+const deleteEdgesByIDSQL = `
+        ALTER TABLE work_graph_edges DELETE WHERE
+        org_id = {org_id:String} AND edge_id IN {edge_ids:Array(String)}
+        SETTINGS mutations_sync=2
+`
+
+// DeleteEdgesByID executes a CleanupPlan, one page at a time, in the order
+// BuildCleanupPlan produced them.
+func DeleteEdgesByID(ctx context.Context, conn driver.Conn, organizationID string, plan CleanupPlan) error {
+	if err := requireEdgeScope(organizationID); err != nil {
+		return err
+	}
+	for _, page := range plan.Pages {
+		if err := conn.Exec(ctx, deleteEdgesByIDSQL,
+			clickhouse.Named("org_id", organizationID),
+			clickhouse.Named("edge_ids", page),
+		); err != nil {
+			return fmt.Errorf("delete work_graph_edges page (%d ids): %w", len(page), err)
+		}
+	}
+	return nil
+}
+
+// WriteProjectionRun inserts one `work_graph_projection_runs` watermark row
+// (`_publish_blocker_projection`, builder.py:1016-1045).
+//
+// ScopeRepoID is written NULL whenever empty: the column is `Nullable(UUID)`,
+// and this step is deliberately window/repo-scope-independent by design (see
+// issueIssueEdgesPreStep.Run's own doc comment) -- there is no repo scope for
+// this step to have parsed in the first place, unlike Python's config.repo_id,
+// which is only ever non-nil for a repo-scoped legacy CLI invocation with no
+// Go pre-step equivalent.
+func WriteProjectionRun(ctx context.Context, conn driver.Conn, run ProjectionRun) error {
+	if err := requireEdgeScope(run.OrgID); err != nil {
+		return err
+	}
+	var scopeRepoID *uuid.UUID
+	if run.ScopeRepoID != "" {
+		parsed, err := uuid.Parse(run.ScopeRepoID)
+		if err != nil {
+			return fmt.Errorf("parse scope_repo_id %q: %w", run.ScopeRepoID, err)
+		}
+		scopeRepoID = &parsed
+	}
+	batch, err := conn.PrepareBatch(ctx,
+		"INSERT INTO work_graph_projection_runs ("+
+			"org_id, projection_name, scope_repo_id, rule_version, input_watermark, row_count, completed_at)")
+	if err != nil {
+		return fmt.Errorf("prepare work_graph_projection_runs batch: %w", err)
+	}
+	if err := batch.Append(
+		run.OrgID, run.ProjectionName, scopeRepoID, run.RuleVersion,
+		run.InputWatermark, uint64(run.RowCount), run.CompletedAt,
+	); err != nil {
+		return fmt.Errorf("append work_graph_projection_runs row: %w", err)
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("send work_graph_projection_runs batch: %w", err)
+	}
+	return nil
 }

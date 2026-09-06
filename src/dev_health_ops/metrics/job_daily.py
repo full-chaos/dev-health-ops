@@ -18,7 +18,6 @@ from dev_health_ops.db import resolve_sink_uri
 from dev_health_ops.metrics.compounding_risk import build_compounding_risk_rows_for_day
 from dev_health_ops.metrics.compute import compute_daily_metrics
 from dev_health_ops.metrics.compute_cicd import compute_cicd_metrics_daily
-from dev_health_ops.metrics.compute_deployments import compute_deploy_metrics_daily
 from dev_health_ops.metrics.compute_incidents import compute_incident_metrics_daily
 from dev_health_ops.metrics.compute_wellbeing import (
     compute_team_wellbeing_metrics_daily,
@@ -371,13 +370,16 @@ async def run_daily_metrics_job(
     """Run the daily metrics compute+write pipeline.
 
     Returns a ``{day: [family, ...]}`` map of sub-families (currently
-    cicd/deploy/incident -- CHAOS-4246) that computed zero rows
+    cicd/incident -- CHAOS-4246) that computed zero rows
     for that day despite the rest of the run succeeding. This is a
     DEGRADE signal, not a failure: zero rows is often legitimate (no CI
-    activity, no deploys, no incidents that day), so an empty result for one
+    activity, no incidents that day), so an empty result for one
     family never raises or aborts the job. Callers that want the partition to
     reflect it should surface this map (e.g. in the HTTP execution result or
-    a log line) rather than relying on the job's plain completion.
+    a log line) rather than relying on the job's plain completion. ``deploy``
+    used to be a third member of this map (CHAOS-4246) until
+    CHAOS-5234/CHAOS-3092 deleted its Python compute+write+zero-rows-note
+    outright -- see the ``deploy`` entry below.
 
     ``skip_families`` (CHAOS-4276) names families.json families a native Go
     executor already computed and wrote for this (org, day, repo) scope --
@@ -385,7 +387,7 @@ async def run_daily_metrics_job(
     set is a no-op: every family computes and writes exactly as it did
     before this parameter existed. Only families with a Go native executor
     check this set (``team_wellbeing`` CHAOS-4276, ``repo_user_commit``
-    CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295, ``deploy`` CHAOS-4293,
+    CHAOS-4275, ``incident`` CHAOS-4269/CHAOS-4295,
     ``work_item_state`` CHAOS-4278, ``cicd`` CHAOS-4292
     (``file_hotspots``/``file_risk_hotspots``, CHAOS-4277, had their Python
     compute+write deleted outright rather than gated --
@@ -394,7 +396,10 @@ async def run_daily_metrics_job(
     (``ai_impact`` CHAOS-4280 had the same write-only-skip shape as
     file_hotspots above until CHAOS-5234/CHAOS-3092 -- its Python
     compute+write was deleted outright, so it no longer checks this set at
-    all); naming any other family here has no effect. ``benchmarking``
+    all; ``deploy`` CHAOS-4293 had the same write-only-skip shape too, plus
+    a zero-rows note, until the same ruling deleted its Python
+    compute+write+note outright, so it no longer checks this set either);
+    naming any other family here has no effect. ``benchmarking``
     CHAOS-4288 was NEVER checked in this set within THIS function -- it was
     moved to ``run_daily_metrics_finalize``'s own skip_families gate by
     CHAOS-5194 before this docstring paragraph was last touched, and that
@@ -509,7 +514,10 @@ async def run_daily_metrics_job(
     # the compute+write path was correct, but nothing recorded that these
     # specific families produced nothing. families_zero_rows makes that
     # visible per day without failing the job (see run_daily_metrics_job
-    # docstring for why this degrades rather than fails).
+    # docstring for why this degrades rather than fails). Historical: deploy
+    # was one of the three at the time of the incident; CHAOS-5234/CHAOS-3092
+    # later deleted its Python compute+write+note outright, so only cicd and
+    # incident populate this map today.
     families_zero_rows: dict[date, list[str]] = {}
 
     # Work-item dependency edges are org-scoped and time-independent (a PR's
@@ -586,7 +594,7 @@ async def run_daily_metrics_job(
         """Record (log + counter) a family that computed zero rows for `day`.
 
         Degrades, never raises: zero rows is frequently legitimate (a repo
-        with no CI activity, no deploys, or no incidents that day), so this
+        with no CI activity or no incidents that day), so this
         must never fail the partition (CHAOS-4246). It exists so that case
         is distinguishable from "never ran" in logs/metrics instead of being
         indistinguishable from a genuinely quiet day.
@@ -859,9 +867,19 @@ async def run_daily_metrics_job(
                 day=d, pipeline_runs=pipeline_rows, computed_at=computed_at
             )
         )
-        deploy_metrics = compute_deploy_metrics_daily(
-            day=d, deployments=deployment_rows, computed_at=computed_at
-        )
+        # CHAOS-5234/CHAOS-3092: deploy's daily compute is DELETED here, not
+        # skip-gated -- chris's standing rule (CHAOS-5233): once a family's
+        # Go executor is on main, its Python compute is deleted, never
+        # skip-gated. DeployExecutor (native Go, CHAOS-4293) is now the only
+        # writer of deploy_metrics_daily for a daily partition.
+        # compute_deploy_metrics_daily itself is ALSO deleted (from
+        # compute_deployments.py) -- rg confirmed job_daily.py was its only
+        # real caller; the sibling constant DEPLOYMENT_FAILURE_STATUSES in
+        # the same module is NOT touched, it has a real, separate caller
+        # (compute_dora.py, still Python) plus its own dedicated test
+        # coverage in test_job_dora.py. `deployment_rows` itself (the raw
+        # loader data) stays -- it also feeds `active_repos` earlier in this
+        # function.
         # CHAOS-4269/CHAOS-4295: incident has a native Go executor, WITH the
         # CHAOS-4269 NULL-guard fix (this Python path stays permanently
         # zero-yield for repository-derived incident mappings -- port-with-fix
@@ -958,19 +976,14 @@ async def run_daily_metrics_job(
         # unconditional write path would otherwise both fire for every
         # partition, doubling every repo/user/commit row's generation.
         skip_repo_user_commit_write = "repo_user_commit" in skip_families
-        # CHAOS-4293: deploy has a native Go executor (DeployExecutor). Same
-        # shape as repo_user_commit above -- skip ONLY the write here, not
-        # the compute: `deploy_metrics` is also a live in-process input to
-        # `_note_family_zero_rows("deploy", deploy_metrics, day=d)` a few
-        # lines below (the CHAOS-4246/CHAOS-4263 staleness-with-source-data
-        # check), which has no other source for it and must keep observing
-        # a real "did compute_deploy_metrics_daily produce rows" signal
-        # regardless of which side wrote them. Without this guard the native
-        # executor and this unconditional write path both fire for every
-        # partition, doubling every (org_id, repo_id, day) deploy_metrics_daily
-        # row's generation -- the same class of gap CHAOS-4275's own guard
-        # above exists to close, caught here by codex round 1 on this port.
-        skip_deploy_write = "deploy" in skip_families
+        # CHAOS-5234/CHAOS-3092: no skip_deploy_write here anymore -- deploy
+        # used to have the SAME write-only-skip shape as repo_user_commit
+        # above (deploy_metrics fed `_note_family_zero_rows("deploy", ...)`,
+        # the CHAOS-4246/CHAOS-4263 staleness check, so only the write could
+        # be skipped). CHAOS-4293's DeployExecutor being native superseded
+        # that: the compute+write+zero-rows-note are all deleted together
+        # now, not skip-gated -- see the comment above the deleted
+        # `compute_deploy_metrics_daily` call site earlier in this function.
         # CHAOS-4277/CHAOS-5234/CHAOS-3092: file_risk_hotspots (like
         # file_hotspots, its sibling CHAOS-4277 family) no longer checks
         # skip_families at all -- its compute+write is deleted entirely, see
@@ -1040,8 +1053,9 @@ async def run_daily_metrics_job(
             # Python compute+write entirely (their native Go executors,
             # CHAOS-4284, have no fallback left) -- there is nothing left here
             # to gate.
-            if not skip_deploy_write:
-                s.write_deploy_metrics(deploy_metrics)
+            # CHAOS-5234/CHAOS-3092: no write_deploy_metrics call here --
+            # deleted alongside the compute call above; DeployExecutor
+            # (native Go) is the only writer now.
             s.write_incident_metrics(incident_metrics)
             # CHAOS-5234/CHAOS-3092: no write_ai_policy_events/
             # write_ai_governance_coverage_daily call here -- deleted
@@ -1067,9 +1081,11 @@ async def run_daily_metrics_job(
             # executors are the only writers of file_metrics_daily and
             # file_hotspot_daily now.
 
-        # CHAOS-4246: cicd/deploy/incident are written unconditionally above
+        # CHAOS-4246: cicd/incident are written unconditionally above
         # (write_*_metrics no-ops on an empty list) -- note it here so a run
         # of zero rows is visible instead of indistinguishable from success.
+        # (deploy used to be a third member of this comment's list; its
+        # write and this note were deleted outright by CHAOS-5234/CHAOS-3092.)
         # CHAOS-4292: when cicd was skipped (native Go already computed and
         # wrote it), cicd_metrics is always [] here regardless of how many
         # rows the Go side actually wrote -- noting it would be a FALSE zero-
@@ -1079,7 +1095,11 @@ async def run_daily_metrics_job(
         # shape as incident's own gate just below (CHAOS-4269/CHAOS-4295).
         if not skip_cicd:
             _note_family_zero_rows("cicd", cicd_metrics, day=d)
-        _note_family_zero_rows("deploy", deploy_metrics, day=d)
+        # CHAOS-5234/CHAOS-3092: no _note_family_zero_rows("deploy", ...) here
+        # anymore -- deploy_metrics no longer exists (the compute call above
+        # is deleted); the native Go executor's own anomaly detection
+        # (ClickHouseSourceDataChecker) is the only staleness signal for this
+        # family now, same reasoning as cicd's gate just above.
         if "incident" not in skip_families:
             _note_family_zero_rows("incident", incident_metrics, day=d)
 

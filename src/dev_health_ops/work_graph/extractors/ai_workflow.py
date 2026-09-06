@@ -9,34 +9,30 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from dev_health_ops.models.ai_attribution import AIAttributionSignal
 from dev_health_ops.models.ai_workflow import (
-    AIWorkflowArtifactEdge,
-    AIWorkflowArtifactType,
-    AIWorkflowIssueEdge,
-    AIWorkflowRun,
-    AIWorkflowRunKind,
-    AIWorkflowRunStatus,
     WorkGraphDeploymentIncidentEdge,
     WorkGraphPRDeploymentEdge,
     WorkGraphPRReviewOutcomeEdge,
-)
-from dev_health_ops.providers._ai_detection import (
-    AuthorInfo,
-    detect_from_author,
-    detect_from_branch_name,
-    detect_from_pr_body,
-    detect_from_pr_labels,
 )
 
 
 @dataclass(frozen=True)
 class AIWorkflowExtractionResult:
-    """AI workflow entities and edges emitted by the extractor."""
+    """Work Graph review/deployment/incident edges emitted by the extractor.
 
-    runs: list[AIWorkflowRun] = field(default_factory=list)
-    issue_edges: list[AIWorkflowIssueEdge] = field(default_factory=list)
-    artifact_edges: list[AIWorkflowArtifactEdge] = field(default_factory=list)
+    CHAOS-5242: this dataclass used to also carry ``runs``/``issue_edges``/
+    ``artifact_edges`` for ``extract_ai_workflow_from_pull_requests``, deleted
+    alongside its own native Go port (AIWorkflowExecutor, #2280) -- the native
+    executor has no Python fallback (chris's standing CHAOS-5233 rule: once a
+    family's Go executor is on main, its Python compute is deleted, never
+    skip-gated). The three fields below belong to
+    ``extract_review_deployment_incident_edges``, which serves the SEPARATE,
+    still-Python work_graph_edges family (CHAOS-4286, write-only skip-gated)
+    and is unaffected by this deletion -- verified via rg that neither
+    function's helpers overlapped beyond the shared, still-needed
+    ``_hash``/``_json``/``_dt``/``_str``/``_int_str`` primitives below.
+    """
+
     review_outcome_edges: list[WorkGraphPRReviewOutcomeEdge] = field(
         default_factory=list
     )
@@ -81,132 +77,6 @@ def _dt(row: dict[str, Any], *keys: str) -> datetime:
         if isinstance(value, datetime):
             return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     return _now()
-
-
-def _signals_from_pr(row: dict[str, Any]) -> list[AIAttributionSignal]:
-    signals: list[AIAttributionSignal] = []
-    labels_raw = row.get("labels") or []
-    labels = (
-        [str(label) for label in labels_raw] if isinstance(labels_raw, list) else []
-    )
-    signals.extend(detect_from_pr_labels(labels))
-
-    author_name = _str(row, "author_name") or _str(row, "author_login")
-    if author_name:
-        author_signal = detect_from_author(
-            AuthorInfo(
-                login=author_name,
-                user_type=_str(row, "author_user_type"),
-                app_slug=_str(row, "author_app_slug"),
-            )
-        )
-        if author_signal:
-            signals.append(author_signal)
-
-    branch_signal = detect_from_branch_name(_str(row, "head_branch"))
-    if branch_signal:
-        signals.append(branch_signal)
-
-    body_signal = detect_from_pr_body(_str(row, "body"))
-    if body_signal:
-        signals.append(body_signal)
-
-    return signals
-
-
-def _run_kind(signal: AIAttributionSignal) -> AIWorkflowRunKind:
-    if str(signal.kind) == "agent_created":
-        return AIWorkflowRunKind.AGENT_AUTONOMOUS
-    if str(signal.kind) == "ai_assisted":
-        return AIWorkflowRunKind.CHAT_ASSISTED
-    return AIWorkflowRunKind.UNKNOWN
-
-
-def extract_ai_workflow_from_pull_requests(
-    pull_requests: list[dict[str, Any]],
-    *,
-    org_id: UUID,
-    provider: str,
-    issue_ids_by_pr: dict[str, list[str]] | None = None,
-) -> AIWorkflowExtractionResult:
-    """Create AI workflow runs and issue/PR edges from normalized PR rows.
-
-    Rows may be partial; missing metadata produces fewer fields, not exceptions.
-    ``issue_ids_by_pr`` keys are PR ids in ``repo_id:number`` form.
-    """
-
-    issue_ids_by_pr = issue_ids_by_pr or {}
-    result = AIWorkflowExtractionResult()
-
-    for row in pull_requests:
-        repo_id_raw = row.get("repo_id")
-        if repo_id_raw is None:
-            continue
-        repo_id = UUID(str(repo_id_raw))
-        pr_number = _int_str(row, "number")
-        if not pr_number:
-            continue
-        pr_id = f"{repo_id}:{pr_number}"
-        signals = _signals_from_pr(row)
-        if not signals:
-            continue
-
-        observed_at = _dt(row, "merged_at", "closed_at", "created_at", "last_synced")
-        strongest = max(signals, key=lambda signal: float(signal.confidence))
-        run_id = _hash(org_id, provider, "pull_request", pr_id, strongest.source)
-        result.runs.append(
-            AIWorkflowRun(
-                run_id=run_id,
-                org_id=org_id,
-                provider=provider,
-                run_kind=_run_kind(strongest),
-                status=AIWorkflowRunStatus.COMPLETED,
-                tool=strongest.actor,
-                actor=strongest.actor or _str(row, "author_name") or None,
-                repo_id=repo_id,
-                prompts_redacted=True,
-                started_at=_dt(row, "created_at", "last_synced"),
-                completed_at=_dt(row, "merged_at", "closed_at", "last_synced"),
-                observed_at=observed_at,
-                metadata={
-                    "subject_type": "pull_request",
-                    "subject_id": pr_id,
-                    "signals": [signal.evidence for signal in signals],
-                },
-            )
-        )
-        result.artifact_edges.append(
-            AIWorkflowArtifactEdge(
-                edge_id=_hash("ai_run_pr", org_id, run_id, pr_id),
-                org_id=org_id,
-                run_id=run_id,
-                artifact_type=AIWorkflowArtifactType.PULL_REQUEST,
-                artifact_id=pr_id,
-                provider=provider,
-                repo_id=repo_id,
-                confidence=float(strongest.confidence),
-                source=str(strongest.source),
-                evidence=_json(strongest.evidence),
-                observed_at=observed_at,
-            )
-        )
-        for issue_id in issue_ids_by_pr.get(pr_id, []):
-            result.issue_edges.append(
-                AIWorkflowIssueEdge(
-                    edge_id=_hash("issue_ai_run", org_id, issue_id, run_id),
-                    org_id=org_id,
-                    issue_id=issue_id,
-                    run_id=run_id,
-                    provider=provider,
-                    repo_id=repo_id,
-                    confidence=float(strongest.confidence),
-                    source=str(strongest.source),
-                    evidence=_json({"pr_id": pr_id, "signal": strongest.evidence}),
-                    observed_at=observed_at,
-                )
-            )
-
-    return result
 
 
 def extract_review_deployment_incident_edges(

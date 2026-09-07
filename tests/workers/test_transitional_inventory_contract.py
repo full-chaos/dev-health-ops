@@ -206,7 +206,6 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # native_go, the same treatment CHAOS-5320 gave
     # operational.webhook_delivery's row and CHAOS-4105 gave the pagerduty
     # stream surface.
-    # = 80.
     # = 80, - 2 removed under CHAOS-5296: the external-ingest recompute Celery
     # bridge is replaced by a native Go consumer
     # (internal/externalrecompute/drain.go) in the same change that repoints
@@ -219,15 +218,32 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # calls schedule_or_coalesce, so that surface keeps a live producer and
     # belongs to CHAOS-4427, not here; it is only re-anchored after the file
     # shrank.
-    # = 78. THREE independent tickets removed disjoint sets of rows and landed
-    # separately: CHAOS-4105's -3 (pagerduty), CHAOS-5353's -1 (billing), and
-    # CHAOS-5296's -2 (external-ingest recompute). This figure is RECOUNTED
+    # = 78, - 1 removed under CHAOS-3092 (leftovers): the
+    # celery_task:work_graph_tasks.py row for run_investment_materialize
+    # (the plain, unchunked task) -- deleted outright, its own
+    # deletion_evidence_requirement ("Deleted once registry kind
+    # investment.materialize no longer routes through the HTTP compatibility
+    # bridge") is exactly what this PR does (worker_workgraph.py's POST
+    # /execute, the route's only caller, is deleted with it). The registry_kind
+    # row for investment.materialize is NOT removed (the kind itself stays,
+    # now fully native) -- re-anchored in place, current_implementation_state
+    # native_go, dispatches investment.NewNativeExecutor. Every other
+    # celery_task/call_site_literal row in work_graph_tasks.py was re-anchored
+    # to its new line after the deletion shifted them up (-110 lines); no
+    # other row's surface changed. materialize_investments() itself is
+    # retained (still reachable via dispatch_investment_materialize_partitioned
+    # -> run_investment_materialize_chunk, unaffected by this change);
+    # deleting it is CHAOS-4767.
+    # = 77. FOUR independent tickets removed disjoint sets of rows and landed
+    # separately: CHAOS-4105's -3 (pagerduty), CHAOS-5353's -1 (billing),
+    # CHAOS-5296's -2 (external-ingest recompute), and this PR's -1
+    # (investment.materialize's plain Celery task). This figure is RECOUNTED
     # from contracts/jobs/v1/transitional-inventory.json on the merged tree --
-    # len(rows) == 78 == 80 - 2 -- not derived from any one branch's number,
-    # which is the merge hazard tests/test_endpoint_profiles_contract.py's note
+    # len(rows) == 77 -- not derived from any one branch's number, which is
+    # the merge hazard tests/test_endpoint_profiles_contract.py's note
     # describes: each branch's arithmetic is correct against its own base and
     # wrong against the union.
-    assert inventory["row_count"] == 78
+    assert inventory["row_count"] == 77
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

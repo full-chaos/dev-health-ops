@@ -30,7 +30,6 @@ from dev_health_ops.workers.team_autoimport import run_post_sync_team_autoimport
 from dev_health_ops.workers.work_graph_tasks import (
     dispatch_investment_materialize_partitioned,
     finalize_investment_materialize_partitioned,
-    run_investment_materialize,
     run_investment_materialize_chunk,
     run_membership_backfill,
 )
@@ -51,7 +50,6 @@ __all__ = [
     "prune_rate_limit_observations",
     "reconcile_sync_dispatch",
     "run_daily_metrics",
-    "run_investment_materialize",
     "run_investment_materialize_chunk",
     "finalize_investment_materialize_partitioned",
     "finalize_sync_run",

@@ -1,13 +1,18 @@
 """Unit tests for the post-sync investment-materialize dispatch (CHAOS-2374).
 
 ``work_unit_investments`` / ``work_unit_investment_quotes`` are written only by
-``materialize_investments`` via the ``run_investment_materialize`` Celery task.
-That task was never dispatched on the live sync path, so real orgs saw an empty
-``/investment`` view.
+``materialize_investments`` via the (chunked) ``dispatch_investment_materialize_partitioned``
+/ ``run_investment_materialize_chunk`` Celery chord. That chord was never
+dispatched on the live sync path, so real orgs saw an empty ``/investment``
+view. (The plain, unchunked ``run_investment_materialize`` task -- only ever
+called by worker_workgraph.py's POST /execute route -- was deleted under
+CHAOS-3092 (leftovers); investment.materialize's River kind is entirely
+native, see cmd/dev-health-worker/workgraph.go's buildNativeInvestmentExecutor.)
 
 ``_dispatch_post_sync_tasks`` now enqueues a Celery **chain**:
-``run_investment_materialize`` -> ``run_membership_backfill`` (the no-LLM
-membership PROJECTION). The chain (not independent ``send_task`` calls)
+``dispatch_investment_materialize_partitioned`` -> ``run_membership_backfill``
+(the no-LLM membership PROJECTION). The chain (not independent ``send_task``
+calls)
 guarantees each step only starts after its predecessor *succeeds*. CHAOS-2433
 round-3 finding #2 added the projection step: the materializer writes
 ``work_unit_investments`` ONLY, and the full-coverage projection is the SOLE
@@ -35,7 +40,6 @@ from unittest.mock import MagicMock, patch
 # import that otherwise ERRORs isolated collection (mirrors CHAOS-2370).
 import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
-from tests._helpers import closing_coroutine_runner
 
 _INVESTMENT_TASK = (
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned"
@@ -221,159 +225,3 @@ def test_no_investment_chain_for_feature_flags_only() -> None:
     # And no investment send_task either.
     sent = [call.args[0] for call in mock_send_task.call_args_list]
     assert _INVESTMENT_TASK not in sent
-
-
-def test_run_investment_materialize_forwards_org_id_to_config() -> None:
-    """The task forwards org_id into MaterializeConfig so queries stay scoped."""
-    from typing import Any, cast
-
-    from dev_health_ops.workers.work_graph_tasks import run_investment_materialize
-
-    captured: dict[str, Any] = {}
-
-    class _FakeConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            captured.update(kwargs)
-
-    with (
-        patch(
-            "dev_health_ops.work_graph.investment.materialize.MaterializeConfig",
-            _FakeConfig,
-        ),
-        patch(
-            "dev_health_ops.work_graph.investment.materialize.materialize_investments",
-            return_value=None,
-        ),
-        patch(
-            "dev_health_ops.workers.work_graph_tasks.run_async",
-            side_effect=closing_coroutine_runner(
-                {"components": 0, "records": 0, "quotes": 0}
-            ),
-        ),
-    ):
-        task = cast(Any, run_investment_materialize)
-        result = task.run(
-            db_url="clickhouse://x", org_id="org-123", llm_provider="mock"
-        )
-
-    assert result["status"] == "success"
-    assert captured["org_id"] == "org-123"
-
-
-def test_run_investment_materialize_empty_org_id_becomes_none() -> None:
-    """An empty org_id collapses to None (no accidental cross-org scan)."""
-    from typing import Any, cast
-
-    from dev_health_ops.workers.work_graph_tasks import run_investment_materialize
-
-    captured: dict[str, Any] = {}
-
-    class _FakeConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            captured.update(kwargs)
-
-    with (
-        patch(
-            "dev_health_ops.work_graph.investment.materialize.MaterializeConfig",
-            _FakeConfig,
-        ),
-        patch(
-            "dev_health_ops.work_graph.investment.materialize.materialize_investments",
-            return_value=None,
-        ),
-        patch(
-            "dev_health_ops.workers.work_graph_tasks.run_async",
-            side_effect=closing_coroutine_runner(
-                {"components": 0, "records": 0, "quotes": 0}
-            ),
-        ),
-    ):
-        task = cast(Any, run_investment_materialize)
-        task.run(db_url="clickhouse://x", llm_provider="mock")
-
-    assert captured["org_id"] is None
-
-
-def test_run_investment_materialize_uses_env_batch_defaults(monkeypatch) -> None:
-    from typing import Any, cast
-
-    from dev_health_ops.workers.work_graph_tasks import run_investment_materialize
-
-    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MODE", "auto")
-    monkeypatch.setenv("INVESTMENT_LLM_BATCH_MIN_ITEMS", "9")
-    monkeypatch.setenv("INVESTMENT_LLM_BATCH_POLL_INTERVAL_SECONDS", "2.5")
-    monkeypatch.setenv("INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS", "99")
-    captured: dict[str, Any] = {}
-
-    class _FakeConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            captured.update(kwargs)
-
-    with (
-        patch(
-            "dev_health_ops.work_graph.investment.materialize.MaterializeConfig",
-            _FakeConfig,
-        ),
-        patch(
-            "dev_health_ops.work_graph.investment.materialize.materialize_investments",
-            return_value=None,
-        ),
-        patch(
-            "dev_health_ops.workers.work_graph_tasks.run_async",
-            side_effect=closing_coroutine_runner(
-                {"components": 0, "records": 0, "quotes": 0}
-            ),
-        ),
-    ):
-        task = cast(Any, run_investment_materialize)
-        result = task.run(
-            db_url="clickhouse://x", org_id="org-123", llm_provider="mock"
-        )
-
-    assert result["status"] == "success"
-    assert captured["llm_batch_mode"] == "auto"
-    assert captured["llm_batch_min_items"] == 9
-    assert captured["llm_batch_poll_interval_seconds"] == 2.5
-    assert captured["llm_batch_timeout_seconds"] == 99.0
-
-
-def test_run_investment_materialize_resolves_worker_llm_credentials(
-    monkeypatch,
-) -> None:
-    from typing import Any, cast
-
-    from dev_health_ops.workers.work_graph_tasks import run_investment_materialize
-
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
-    monkeypatch.setenv("LLM_API_KEY", "sk-worker-secret")
-    monkeypatch.setenv("LLM_BASE_URL", "https://worker.invalid/v1")
-    captured: dict[str, Any] = {}
-
-    class _FakeConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            captured.update(kwargs)
-
-    with (
-        patch(
-            "dev_health_ops.work_graph.investment.materialize.MaterializeConfig",
-            _FakeConfig,
-        ),
-        patch(
-            "dev_health_ops.work_graph.investment.materialize.materialize_investments",
-            return_value=None,
-        ),
-        patch(
-            "dev_health_ops.workers.work_graph_tasks.run_async",
-            side_effect=closing_coroutine_runner(
-                {"components": 0, "records": 0, "quotes": 0}
-            ),
-        ),
-    ):
-        task = cast(Any, run_investment_materialize)
-        result = task.run(db_url="clickhouse://x", org_id="org-123", llm_concurrency=1)
-
-    assert result["status"] == "success"
-    assert captured["llm_provider"] == "openai"
-    assert captured["llm_api_key"] == "sk-worker-secret"
-    assert captured["llm_base_url"] == "https://worker.invalid/v1"
-    assert captured["llm_concurrency"] == 1

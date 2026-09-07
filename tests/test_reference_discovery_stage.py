@@ -802,49 +802,17 @@ def test_reference_discovery_noop_for_non_capable_provider_arms_dispatch(
     assert dispatch_outbox[0].status == OUTBOX_STATUS_PENDING
 
 
-def test_seed_reference_discovery_run_arms_ledger_and_outbox_like_plan_sync_run(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """CHAOS-4498: seed_reference_discovery_run must arm the SAME
-    SyncRunReferenceDiscovery + OUTBOX_KIND_DISCOVERY row shape
-    plan_sync_run seeds unconditionally, off a zero-unit anchor SyncRun --
-    the exact row NativeReferenceDiscoveryService (Go) claims."""
-    from dev_health_ops.sync.planner import seed_reference_discovery_run
-
-    org_id = str(uuid.uuid4())
-    integration = Integration(
-        org_id=org_id,
-        provider="linear",
-        name="Linear integration",
-        config={},
-        is_active=True,
-    )
-    db_session.add(integration)
-    db_session.flush()
-
-    sync_run_id = seed_reference_discovery_run(
-        db_session,
-        integration_id=str(integration.id),
-        org_id=org_id,
-        triggered_by="test",
-    )
-    db_session.flush()
-
-    run = db_session.get(SyncRun, uuid.UUID(sync_run_id))
-    assert run is not None
-    assert run.mode == SyncRunMode.BACKFILL.value
-    assert run.status == SyncRunStatus.PLANNED.value
-    assert run.total_units == 0
-
-    ledger = (
-        db_session.query(SyncRunReferenceDiscovery).filter_by(sync_run_id=run.id).one()
-    )
-    assert ledger.status == "planned"
-    assert ledger.attempts == 0
-
-    outbox = _outbox_rows(db_session, run, OUTBOX_KIND_DISCOVERY)
-    assert len(outbox) == 1
-    assert outbox[0].status == OUTBOX_STATUS_PENDING
+# CHAOS-5351: test_seed_reference_discovery_run_arms_ledger_and_outbox_like_plan_sync_run
+# (a dedicated unit test of sync.planner.seed_reference_discovery_run)
+# deleted along with the function itself -- its only caller was the legacy
+# backfill path (run_backfill_for_config /
+# _run_strict_reference_discovery_for_backfill), already deleted earlier in
+# this ticket; the backfill tool now dispatches through plan_sync_run like
+# every other sync run, which arms the SAME
+# SyncRunReferenceDiscovery/OUTBOX_KIND_DISCOVERY seeding via
+# seed_reference_discovery_ledger directly -- see
+# test_backfill_runner_dispatch_path_blocks_until_discovery above for the
+# surviving executed proof of that path.
 
 
 def test_await_reference_discovery_terminal_returns_success_with_result(
@@ -948,9 +916,11 @@ def test_await_reference_discovery_terminal_reports_timeout_running_past_lifetim
 def test_load_discovery_context_resolves_credentials_for_zero_unit_anchor_run(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CHAOS-4498 (codex review, P1): seed_reference_discovery_run creates a
-    deliberately zero-unit anchor SyncRun to arm strict discovery for an
-    operator backfill. _load_discovery_context used to gate credential
+    """CHAOS-4498 (codex review, P1): sync.planner.seed_reference_discovery_run
+    (deleted CHAOS-5351 -- see the comment on the hand-built SyncRun below)
+    used to create a deliberately zero-unit anchor SyncRun to arm strict
+    discovery for an operator backfill. _load_discovery_context used to gate
+    credential
     resolution on `if units:` -- correct when every caller was a
     unit-planned sync run, wrong for a zero-unit anchor whose entire
     purpose is to feed a strict populate() call that needs real
@@ -977,17 +947,23 @@ def test_load_discovery_context_resolves_credentials_for_zero_unit_anchor_run(
         mode=SyncRunMode.BACKFILL.value,
         status=SyncRunStatus.PLANNED.value,
         total_units=0,
-        # seed_reference_discovery_run ALWAYS stamps a non-None auth_source
-        # via _resolve_credential_stamp, unconditionally, regardless of
-        # unit count -- that stamp is exactly the signal
-        # _load_discovery_context now uses (codex round 2, P1) to tell a
-        # backfill anchor apart from a genuine zero-unit planner run.
+        # The deleted (CHAOS-5351) seed_reference_discovery_run ALWAYS
+        # stamped a non-None auth_source via _resolve_credential_stamp,
+        # unconditionally, regardless of unit count -- that stamp is
+        # exactly the signal _load_discovery_context uses (codex round 2,
+        # P1) to tell a backfill anchor apart from a genuine zero-unit
+        # planner run. Hand-built here (rather than via a live call) since
+        # the function that used to produce this exact row shape no longer
+        # exists; the shape itself is still what a backfill anchor row
+        # looks like historically, and _load_discovery_context's
+        # discriminator logic below is unchanged.
         auth_source="environment",
     )
     db_session.add(run)
     db_session.flush()
-    # No SyncRunUnit rows at all -- this run is a zero-unit anchor, exactly
-    # what seed_reference_discovery_run produces.
+    # No SyncRunUnit rows at all -- this run is a zero-unit anchor, the
+    # exact shape the deleted (CHAOS-5351) seed_reference_discovery_run used
+    # to produce.
     _patch_db_session(monkeypatch, db_session)
 
     calls: list[dict[str, object]] = []
@@ -1018,8 +994,9 @@ def test_load_discovery_context_preserves_credential_free_zero_unit_planner_run(
     no-op (run_team_autoimport_strict's _provider_capability check never
     got the chance to run). Distinguishing signal from a backfill anchor
     (which DOES need credentials resolved, see the sibling test above):
-    run.auth_source is not None -- seed_reference_discovery_run always
-    stamps one, a genuine zero-unit planner run never does.
+    run.auth_source is not None -- the deleted (CHAOS-5351)
+    seed_reference_discovery_run always stamped one, a genuine zero-unit
+    planner run never does.
 
     Red on the codex-round-1 fix (unconditional resolve_run_auth call):
     resolve_run_auth would have been called and raised for this

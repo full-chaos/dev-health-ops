@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import pytest
 
 from dev_health_ops.audit.coverage import (
     AUDIT_PROVIDERS,
+    _commands_check,
     compile_coverage_report,
     format_coverage_table,
     parse_provider_list,
@@ -49,6 +52,24 @@ def test_compile_coverage_report_flags_missing_schema():
     )
     assert report["overall_ok"] is False
     assert report["providers"]["jira"]["overall"] == "missing"
+
+
+def test_commands_check_does_not_report_ok_for_a_provider_with_no_native_route():
+    """CHAOS-5351 (codex review, r1 P2): every REAL ingestion provider
+    reports "ok" unconditionally on this dimension now (native Go route is
+    unconditional, see the function's own comment) -- but "synthetic" has
+    NO native provider-sync route at all (it's fixture/demo data via a
+    different mechanism entirely, confirmed zero entries in
+    internal/providersync/execution_registry.go), so it must not be
+    swept into the same unconditional "ok" as github/gitlab -- that would
+    be a provider-blind false-green on this specific dimension."""
+    repo_root = Path(__file__).resolve().parents[1] / "src" / "dev_health_ops"
+    result = _commands_check(repo_root)
+
+    assert set(result) == set(AUDIT_PROVIDERS)
+    assert result["github"]["status"] == "ok"
+    assert result["gitlab"]["status"] == "ok"
+    assert result["synthetic"]["status"] != "ok"
 
 
 def test_format_coverage_table_renders_rows():

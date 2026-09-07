@@ -86,3 +86,72 @@ The instrumentation itself was never committed; capturing again (a future
 provider/field addition to these families' Go code, requiring a new frozen
 fixture) means re-adding the same temporary hook, one test run per pair, then
 discarding it.
+
+## CHAOS-5351 (parent CHAOS-3092): work-items sync-job deletion pairs
+
+`run_work_items_sync_job` (`job_work_items.py`) and its Python callers
+(`dataset_adapters._run_work_item_dataset`/`_work_item_kwargs`/
+`_github_work_item_options`, `backfill.run_backfill_for_config`, the
+`sync work-items` CLI verb) are deleted -- the native provider-sync route
+(`cmd/dev-health-worker/provider_sync.go`'s work-items dataset case, one Go
+implementation per provider) is the only production ingest path now. Two
+independent sets of pairs converted here:
+
+- `github_work-items_rest-selection.json` -- `TestGitHubWorkItemsRESTSelectionMatchesFrozenPythonProducer`
+  (`github_work_items_rest_selection_oracle_test.go`), pair
+  `github/work-items/rest-selection`. This pair compared Go's
+  `GitHubWorkItemsRESTCollector`/`githubWorkItemsRESTOptionsForClaim` against
+  `dataset_adapters._github_work_item_options`, deleted with
+  `_run_work_item_dataset`.
+- `{github,gitlab,jira,linear}_work-items_{issue-type-metrics,
+  investment-classifications,investment-metrics}.json` (12 files) --
+  `Test{GitHub,GitLab,Jira,LinearWorkItem}{IssueTypeMetrics,
+  InvestmentClassifications,InvestmentMetrics,EngineDestinations}Match
+  FrozenPythonProduction` across
+  `github_work_item_engine_destinations_oracle_test.go`,
+  `gitlab_work_item_derived_oracle_test.go`,
+  `jira_work_item_derived_oracle_test.go`,
+  `linear_work_items_derived_oracle_test.go`. These compared each provider's
+  Go derivation against `compute_work_item_engine_destinations_daily`
+  (`work_item_engine_destinations.py`), whose ONLY Python caller was
+  `run_work_items_sync_job` -- the oracle_pairs helper
+  (`_github_work_item_derived_helpers.py`'s
+  `engine_destinations_all_days`/`_assert_engine_helper_called_inside_job_loop`)
+  statically asserted the comparison ran inside `job_work_items.py`'s
+  `for d in days:` loop, so once that loop's enclosing function is deleted the
+  live comparison is unrepresentable, not merely unavailable.
+  `compute_work_item_engine_destinations_daily` (and
+  `work_item_engine_destinations.py`, its dedicated test file, the now-fully-
+  unused `_github_work_item_derived_helpers.py`, and
+  `testdata/python_investment_call_site.py`) ARE deleted in this PR --
+  chris's rule: zero production callers, delete now. The one other consumer
+  of `python_investment_call_site.py`'s reflection,
+  `investment_classifier_reachability_test.go`'s
+  `TestInvestmentCallSiteArtifactPremiseHolds`/
+  `TestInvestmentClassifierUnreachableRulesStayUnreachable`, is repointed at
+  a new Go-source reflector (`investmentParseGoCallSitePremise`, same file)
+  that parses `github_work_item_engine_destinations.go`'s own
+  `InvestmentArtifact{...}` composite literal via `go/ast` -- Go is
+  production now, so the premise derives from Go source, not Python's dead
+  mirror of it. A new tripwire
+  (`TestInvestmentGoCallSiteReflectorFailsWhenLiteralMissing`) proves the
+  reflector errors loudly (never silently passes) if the literal moves,
+  duplicates, or turns positional.
+
+Captured 2026-09-07 on bigboy, from the still-live `job_work_items.py` /
+`dataset_adapters.py` at `chaos-5351-delete-work-items-sync-job-v2`'s merge
+base with main (`ab0c5074d`), by temporarily instrumenting `oracleDivergences`
+to dump its own decoded `output` bytes for each pairID while running the
+then-still-live `Test*MatchesLivePythonProduction` tests with
+`DEV_HEALTH_LIVE_PYTHON_ORACLES=1` (`PYTHON` pointed at the `uv`-managed venv,
+not bare system `python3`, which lacks `pydantic`/`sqlalchemy` on this host)
+against the SAME case sets those tests already use
+(`githubWorkItemEngineOracleCases`, `gitlabOracleCases`,
+`jiraDerivedOracleCases`, `linearizeWorkItemOracleCases`) plus a direct
+`python_generic_row_oracle.py "github/work-items/rest-selection" <cases>`
+invocation for the REST-selection pair (hand-built cases matching the Go
+test's own two cases verbatim) -- never a hand-reconstructed case set for the
+engine-destinations pairs, so those frozen bytes are exactly what those tests
+would have produced. The instrumentation itself was never committed;
+capturing again means re-adding the same temporary hook, one test run per
+pair, then discarding it.

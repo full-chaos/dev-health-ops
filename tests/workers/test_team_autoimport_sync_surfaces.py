@@ -9,7 +9,6 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from dev_health_ops.backfill import runner as backfill_runner
 from dev_health_ops.models import (
     Base,
     Integration,
@@ -25,96 +24,23 @@ _TEAM_AUTOIMPORT_TASK = "dev_health_ops.workers.tasks.run_post_sync_team_autoimp
 _ORG = "team-autoimport-sync-org"
 
 
-def test_backfill_reference_discovery_arms_ledger_and_returns_ledger_result(
-    monkeypatch,
-) -> None:
-    """CHAOS-4498: _run_strict_reference_discovery_for_backfill arms the
-    shared sync_run_reference_discoveries ledger (via
-    sync.planner.seed_reference_discovery_run) and waits for it
-    (await_reference_discovery_terminal) instead of calling
-    run_team_autoimport_strict directly -- for jira exactly like every
-    other provider, since the native-vs-bridge choice is made entirely by
-    TeamCatalogDiscoveryExecutor on the Go side, not by this function."""
-    seed_calls: list[dict[str, Any]] = []
-
-    def fake_seed(session: Any, **kwargs: Any) -> str:
-        seed_calls.append(kwargs)
-        return "22222222-2222-2222-2222-222222222222"
-
-    monkeypatch.setattr(
-        "dev_health_ops.sync.planner.seed_reference_discovery_run", fake_seed
-    )
-    monkeypatch.setattr(
-        backfill_runner,
-        "get_postgres_session_sync",
-        lambda: _session_ctx_noop(),
-    )
-    monkeypatch.setattr(
-        backfill_runner,
-        "await_reference_discovery_terminal",
-        lambda sync_run_id, **kwargs: {
-            "outcome": "success",
-            "sync_run_id": sync_run_id,
-            "result": {"status": "success", "teams_imported": 1},
-        },
-    )
-
-    result = backfill_runner._run_strict_reference_discovery_for_backfill(
-        provider="jira",
-        org_id="org-1",
-        integration_id="integration-1",
-        sync_config_id="cfg-1",
-        triggered_by="operator_backfill",
-    )
-
-    assert result == {"status": "success", "teams_imported": 1}
-    assert len(seed_calls) == 1
-    assert seed_calls[0] == {
-        "integration_id": "integration-1",
-        "org_id": "org-1",
-        "triggered_by": "operator_backfill",
-    }
-
-
-@contextmanager
-def _session_ctx_noop():
-    class _Session:
-        def commit(self) -> None:
-            pass
-
-    yield _Session()
-
-
-def test_backfill_reference_discovery_raises_on_failed_ledger_outcome(
-    monkeypatch,
-) -> None:
-    """CHAOS-4498: a failed ledger outcome raises with the row's reason --
-    never falls back to calling the Python populator directly."""
-    monkeypatch.setattr(
-        "dev_health_ops.sync.planner.seed_reference_discovery_run",
-        lambda session, **kwargs: "22222222-2222-2222-2222-222222222222",
-    )
-    monkeypatch.setattr(
-        backfill_runner, "get_postgres_session_sync", lambda: _session_ctx_noop()
-    )
-    monkeypatch.setattr(
-        backfill_runner,
-        "await_reference_discovery_terminal",
-        lambda sync_run_id, **kwargs: {
-            "outcome": "failed",
-            "sync_run_id": sync_run_id,
-            "reason": "missing Jira credentials",
-        },
-    )
-
-    with pytest.raises(ValueError, match="missing Jira credentials"):
-        backfill_runner._run_strict_reference_discovery_for_backfill(
-            provider="jira",
-            org_id="org-1",
-            integration_id="integration-1",
-            sync_config_id="cfg-1",
-            triggered_by="operator_backfill",
-        )
+# CHAOS-5351 (found post-round, mypy `.` / pytest full-tree run on the
+# pushed tip): the two tests that used to live here
+# (test_backfill_reference_discovery_arms_ledger_and_returns_ledger_result,
+# test_backfill_reference_discovery_raises_on_failed_ledger_outcome) drove
+# backfill.runner._run_strict_reference_discovery_for_backfill directly --
+# deleted along with run_backfill_for_config when this ticket repointed
+# `dev-hops backfill run` at run_backfill_via_planner (the native
+# plan_sync_run/dispatch_sync_run seam, which arms the SAME
+# sync_run_reference_discoveries ledger unconditionally via
+# plan_sync_run -> seed_reference_discovery_ledger, not via the deleted
+# standalone seed_reference_discovery_run helper any more). The CHAOS-4498
+# "backfill blocks on reference discovery" contract these tests covered is
+# now proven by
+# tests/test_reference_discovery_stage.py::test_backfill_runner_dispatch_path_blocks_until_discovery
+# (an executed, DB-backed test against the real dispatch path, not a
+# mocked one). This file's remaining tests (regular-sync post-sync-dispatch
+# team-autoimport surfaces) are unaffected -- unrelated to backfill.
 
 
 # ---------------------------------------------------------------------------

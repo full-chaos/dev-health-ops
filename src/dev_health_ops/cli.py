@@ -419,7 +419,11 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("sync", "incidents"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "security"): frozenset({_REQ_CLICKHOUSE}),
     ("sync", "tests"): frozenset({_REQ_CLICKHOUSE}),
-    ("sync", "work-items"): frozenset({_REQ_CLICKHOUSE}),
+    # CHAOS-5351: ("sync", "work-items") deleted -- the whole CLI verb
+    # (job_work_items.py's register_commands/run_work_items_sync_job) is
+    # gone, no remaining Python producer at any scope. The native
+    # provider-sync route is the only ingest path now (see cli.py's own
+    # import-tuple comment above `sync_processor.register_commands`).
     ("sync", "teams"): frozenset({_REQ_CLICKHOUSE}),
     # finalize-synthetic-sync (CHAOS-4266) never touches ClickHouse -- it only
     # completes a durable sync_run via get_postgres_session_sync() -- so it
@@ -625,7 +629,6 @@ def build_parser() -> argparse.ArgumentParser:
     from dev_health_ops.fixtures import runner as fixtures_runner
     from dev_health_ops.metrics import (
         job_ff_validation,
-        job_work_items,
         workerctl_dispatch,
     )
     from dev_health_ops.processors import sync as sync_processor
@@ -678,8 +681,10 @@ def build_parser() -> argparse.ArgumentParser:
     sync_processor.register_commands(sync_subparsers)
     # Register team sync
     teams_provider.register_commands(sync_subparsers)
-    # Register work-items sync
-    job_work_items.register_commands(sync_subparsers)
+    # CHAOS-5351: `sync work-items` (job_work_items.register_commands) is
+    # deleted along with run_work_items_sync_job -- the native provider-sync
+    # route (cmd/dev-health-worker/provider_sync.go's work-items dataset
+    # case, one per provider) is the only production ingest path now.
 
     # ---- metrics ----
     metrics_parser = sub.add_parser("metrics", help="Compute metrics.")

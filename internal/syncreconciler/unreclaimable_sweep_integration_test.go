@@ -63,6 +63,33 @@ func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			failed_units int NOT NULL DEFAULT 0,
 			total_units int NOT NULL DEFAULT 0
 		)`,
+		// The finalizer's wakeup row. Shape copied from this package's
+		// materializer fixture (materializer_integration_test.go:685), which
+		// derives it from alembic; the production route-fence TRIGGER is
+		// deliberately absent here for the same reason it is absent there --
+		// its only branch fires on a claim_token transition, and nothing the
+		// sweep writes takes a claim.
+		`CREATE TABLE public.sync_dispatch_outbox (
+			id uuid PRIMARY KEY,
+			org_id text NOT NULL,
+			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
+			kind text NOT NULL,
+			status text NOT NULL,
+			available_at timestamptz NOT NULL,
+			attempts integer NOT NULL,
+			last_error text,
+			dispatched_at timestamptz,
+			claim_token text,
+			claim_expires_at timestamptz,
+			claim_transport text,
+			claim_route_generation bigint,
+			dispatched_transport text,
+			dispatched_route_generation bigint,
+			transport_job_id text,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			UNIQUE (sync_run_id, kind)
+		)`,
 		`CREATE TABLE public.sync_run_units (
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,
@@ -1004,6 +1031,135 @@ func TestUnreclaimableSweepDefersAUnitWhoseOutboxDeliveryBudgetRemains(t *testin
 	}
 	if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "dispatching" {
 		t.Fatalf("unit status = %q, want it untouched for the repair to rearm", status)
+	}
+}
+
+// A run whose LAST non-terminal unit the sweep terminalizes must reach the
+// finalizer.
+//
+// syncrunrollup.Bump keeps completed_units/failed_units live and writes nothing
+// else -- never sync_runs.status, never completed_at. What closes a run is
+// finalize_sync_run, and the finalizer only re-evaluates a run whose
+// dispatch-outbox row has been re-armed to 'pending'. A pass that correctly
+// declined while this unit was still open leaves that row 'dispatched' with
+// nothing scheduled to reconsider it.
+//
+// MEASURED, not hypothetical: this sweep terminalized the last 17 non-terminal
+// units of run 115e6246-6e8c-5f53-a2c4-f6b109daba68 at 09:31:48-09:32:50Z on
+// 2026-09-07. The counters went to 44 success / 19 failed of 63 -- every unit
+// terminal -- and the run sat status='dispatching' with completed_at NULL, its
+// finalize row untouched since 03:23:26Z, with nothing left able to close it.
+//
+// RED CONTROL: without the ArmFinalize call in terminalize(), the row below
+// stays 'dispatched' and this test fails on that assertion.
+func TestUnreclaimableSweepArmsTheFinalizerAfterTerminalizing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(82)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	seedSweepDelivery(t, ctx, pool, unit, "cancelled",
+		"JobCancelError: dev-health job failed [validation]")
+	// The exact state 115e6246's finalize row was in: a finalizer already ran,
+	// correctly declined while the unit was open, and left the row dispatched.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			dispatched_at, dispatched_transport, dispatched_route_generation,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, 'finalize_sync_run', 'dispatched', $4, 38, $4, 'river', 1, $4, $4)`,
+		sweepUnitID(83), sweepOrg, sweepRun, now.Add(-6*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Terminalized != 1 {
+		t.Fatalf("Terminalized = %d, want 1 -- nothing below tests anything if the unit survived", result.Terminalized)
+	}
+
+	var status string
+	var dispatchedAt, claimExpires *time.Time
+	var lastError *string
+	var availableAt time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT status, dispatched_at, last_error, claim_expires_at, available_at
+		FROM public.sync_dispatch_outbox
+		WHERE sync_run_id = $1 AND kind = 'finalize_sync_run'`, sweepRun).
+		Scan(&status, &dispatchedAt, &lastError, &claimExpires, &availableAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" {
+		t.Fatalf("finalize row status = %q, want pending -- the run has every unit terminal and "+
+			"nothing else in the system re-evaluates it", status)
+	}
+	// The dispatch stamp and any stale claim must be cleared with the status,
+	// or the row is 'pending' and still unclaimable.
+	if dispatchedAt != nil {
+		t.Fatalf("finalize row keeps dispatched_at = %v; a re-armed row must look unclaimed", dispatchedAt)
+	}
+	if claimExpires != nil {
+		t.Fatalf("finalize row keeps claim_expires_at = %v", claimExpires)
+	}
+	if lastError != nil {
+		t.Fatalf("finalize row keeps last_error = %v", *lastError)
+	}
+	// Availability moved EARLIER (it was already 6h in the past, so it stays
+	// there) -- LEAST, never GREATEST: a re-arm must not push a due finalizer
+	// further out.
+	if availableAt.After(now) {
+		t.Fatalf("finalize row available_at = %s is in the future; the re-arm delayed the finalizer", availableAt)
+	}
+}
+
+// The counterpart: a run whose finalize row was parked by the entitlement gate
+// must NOT be re-armed. That row is a decision, not a pending step, and
+// re-arming it puts the run back in the finalizer's queue forever.
+//
+// This is the half a "does the status become pending" test alone would miss,
+// and the reason ArmFinalizeSQL repeats its feature_disabled predicate on
+// every column rather than collapsing it.
+func TestUnreclaimableSweepLeavesAFeatureDisabledFinalizeRowParked(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(84)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	seedSweepDelivery(t, ctx, pool, unit, "cancelled",
+		"JobCancelError: dev-health job failed [validation]")
+	parkedAt := now.Add(-6 * time.Hour)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			dispatched_at, last_error, created_at, updated_at
+		) VALUES ($1, $2, $3, 'finalize_sync_run', 'dispatched', $4, 1, $4, 'feature_disabled', $4, $4)`,
+		sweepUnitID(85), sweepOrg, sweepRun, parkedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	var status string
+	var lastError *string
+	var dispatchedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT status, last_error, dispatched_at FROM public.sync_dispatch_outbox
+		WHERE sync_run_id = $1 AND kind = 'finalize_sync_run'`, sweepRun).
+		Scan(&status, &lastError, &dispatchedAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "dispatched" || lastError == nil || *lastError != "feature_disabled" || dispatchedAt == nil {
+		t.Fatalf("parked finalize row = status %q last_error %v dispatched_at %v; "+
+			"an entitlement-terminated run must stay parked, not be re-queued forever",
+			status, lastError, dispatchedAt)
 	}
 }
 

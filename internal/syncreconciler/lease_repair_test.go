@@ -121,6 +121,12 @@ func (tx *fakeLeaseRepairTx) Exec(_ context.Context, sql string, args ...any) (p
 	switch {
 	case strings.Contains(sql, "pg_advisory_xact_lock"):
 		tx.callLog = append(tx.callLog, "exec:advisory")
+	case strings.Contains(sql, "'finalize_sync_run'"):
+		// Labelled distinctly, not folded into "exec:unit": the whole point of
+		// the ordering assertions below is WHERE this lands relative to the
+		// unit write and the rollup recompute, and an indistinguishable label
+		// would let a re-arm before the terminal write pass unnoticed.
+		tx.callLog = append(tx.callLog, "exec:armfinalize")
 	case len(args) > 0:
 		if id, ok := args[0].(string); ok {
 			tx.callLog = append(tx.callLog, "exec:unit:"+id)
@@ -276,12 +282,30 @@ func TestLeaseRepairStepUsesCASAndRollsBackOnFault(t *testing.T) {
 			t.Fatalf("selection SQL missing %q:\n%s", required, tx.querySQL)
 		}
 	}
-	if len(tx.execSQL) != 4 || tx.execSQL[0] != "SELECT pg_advisory_xact_lock($1)" ||
+	// FIVE execs, not four: the two bucket advisory locks, the retrying
+	// update, the failing update, and -- new -- the finalize_sync_run re-arm
+	// that must follow a terminal unit write in the SAME transaction.
+	//
+	// The ORDER is asserted, not just the presence: the re-arm has to land
+	// AFTER the terminal write it is about. Arming first would schedule a
+	// finalizer against a run whose last unit is still non-terminal, which is
+	// the pass that declines and leaves the row 'dispatched' again -- the
+	// exact state that left run 115e6246 open with 63/63 units terminal.
+	if len(tx.execSQL) != 5 || tx.execSQL[0] != "SELECT pg_advisory_xact_lock($1)" ||
 		tx.execSQL[1] != "SELECT pg_advisory_xact_lock($1)" ||
 		!strings.Contains(tx.execSQL[2], "rate_limit_deferrals = 0") ||
 		!strings.Contains(tx.execSQL[2], "unit.lease_owner = $2") ||
-		!strings.Contains(tx.execSQL[3], "'error_category', $4::text") {
+		!strings.Contains(tx.execSQL[3], "'error_category', $4::text") ||
+		!strings.Contains(tx.execSQL[4], "'finalize_sync_run'") ||
+		!strings.Contains(tx.execSQL[4], "ON CONFLICT (sync_run_id, kind)") {
 		t.Fatalf("write SQL = %v", tx.execSQL)
+	}
+	// The retrying write (execSQL[2]) must NOT be followed by a re-arm of its
+	// own: a unit going back to 'retrying' is not terminal and the run cannot
+	// close, so arming there would put the finalizer in a loop that declines
+	// on every pass. Only the FAILED write arms.
+	if strings.Contains(tx.execSQL[2], "finalize_sync_run") {
+		t.Fatal("the retrying path armed finalize_sync_run; only a TERMINAL unit write may")
 	}
 	if got, want := tx.execArgs[2][4], wantLinearExpiredLeaseRetrySurfaces(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("retry surfaces = %#v, want %#v", got, want)
@@ -375,8 +399,12 @@ func TestLeaseRepairStepLocksUnitsBeforeRunsAndVisitsRunsInAscendingOrder(t *tes
 		}
 		events = append(events, entry)
 	}
-	if len(events) != len(candidates)+3*len(candidates) {
-		t.Fatalf("callLog (advisory locks excluded) = %v, want %d entries", events, len(candidates)+3*len(candidates))
+	// FOUR events per candidate now, not three: unit write, run lock, rollup
+	// recompute, finalize re-arm.
+	const eventsPerCandidate = 4
+	if len(events) != len(candidates)+eventsPerCandidate*len(candidates) {
+		t.Fatalf("callLog (advisory locks excluded) = %v, want %d entries",
+			events, len(candidates)+eventsPerCandidate*len(candidates))
 	}
 
 	// Phase 0: every candidate's unit row locked, ascending by unit id,
@@ -404,15 +432,26 @@ func TestLeaseRepairStepLocksUnitsBeforeRunsAndVisitsRunsInAscendingOrder(t *tes
 	phase2 := events[len(candidates):]
 	var runLockOrder []string
 	for i := range candidates {
-		unitEvent, lockEvent, recomputeEvent := phase2[3*i], phase2[3*i+1], phase2[3*i+2]
+		base := eventsPerCandidate * i
+		unitEvent, lockEvent := phase2[base], phase2[base+1]
+		recomputeEvent, armEvent := phase2[base+2], phase2[base+3]
 		if !strings.HasPrefix(unitEvent, "exec:unit:") {
-			t.Fatalf("phase-2 event %d = %q, want the unit write to come first for each candidate", 3*i, unitEvent)
+			t.Fatalf("phase-2 event %d = %q, want the unit write to come first for each candidate", base, unitEvent)
 		}
 		if !strings.HasPrefix(lockEvent, "queryrow:runlock:") {
-			t.Fatalf("phase-2 event %d = %q, want the run lock to come right after its candidate's unit write", 3*i+1, lockEvent)
+			t.Fatalf("phase-2 event %d = %q, want the run lock to come right after its candidate's unit write", base+1, lockEvent)
 		}
 		if !strings.HasPrefix(recomputeEvent, "queryrow:recompute:") {
-			t.Fatalf("phase-2 event %d = %q, want the rollup recompute right after the run lock", 3*i+2, recomputeEvent)
+			t.Fatalf("phase-2 event %d = %q, want the rollup recompute right after the run lock", base+2, recomputeEvent)
+		}
+		// LAST, and inside the same run lock the Bump just took. Arming
+		// before the unit write would schedule a finalizer against a run whose
+		// unit is still non-terminal; arming outside the lock would race a
+		// concurrent writer for the same run's outbox row.
+		if armEvent != "exec:armfinalize" {
+			t.Fatalf("phase-2 event %d = %q, want the finalize re-arm last for each candidate -- "+
+				"a run whose last unit just went terminal has to reach the finalizer, and nothing "+
+				"else re-evaluates it", base+3, armEvent)
 		}
 		runLockOrder = append(runLockOrder, strings.TrimPrefix(lockEvent, "queryrow:runlock:"))
 	}

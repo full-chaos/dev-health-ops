@@ -123,6 +123,7 @@ const (
 	sweepStepBucketLock         = "org/provider/cost_class advisory lock, shared with dispatch (CHAOS-4586)"
 	sweepStepUnitLock           = "sync_run_units row lock, ascending order (CHAOS-4586)"
 	sweepStepRollupBump         = "sync_runs rollup recompute (CHAOS-4586)"
+	sweepStepArmFinalize        = "finalize_sync_run re-arm after terminalization"
 	sweepStepCommit             = "commit domain transaction"
 )
 
@@ -1352,6 +1353,29 @@ func (sweep *UnreclaimableSweep) terminalize(
 	if rowsAffected > 0 {
 		if _, _, _, err := syncrunrollup.Bump(ctx, tx, candidate.syncRunID); err != nil {
 			return 0, sweepUnavailable(sweepStepRollupBump, err)
+		}
+		// Bump keeps the COUNTERS live and nothing else -- it never writes
+		// sync_runs.status or completed_at, deliberately. What closes a run is
+		// finalize_sync_run, and the finalizer only re-evaluates a run whose
+		// dispatch-outbox row is re-armed; a pass that correctly declined
+		// while this unit was still open leaves that row 'dispatched' with
+		// nothing scheduled to reconsider it.
+		//
+		// Measured: this sweep terminalized the last 17 non-terminal units of
+		// run 115e6246-6e8c-5f53-a2c4-f6b109daba68 at 09:31:48-09:32:50Z on
+		// 2026-09-07. The counters went to 44 success / 19 failed / 63 total,
+		// every unit terminal -- and the run sat status='dispatching',
+		// completed_at NULL, its finalize row untouched since 03:23:26Z, with
+		// nothing left in the system that could ever close it.
+		//
+		// providersync's per-unit commit paths always did both, one line
+		// apart; the two RECOVERY writers did only the Bump. Same transaction
+		// as the unit write and the Bump, never after: a crash between them
+		// reaches the same permanently-open state through a narrower window.
+		if err := syncrunrollup.ArmFinalize(
+			ctx, tx, candidate.syncRunID, candidate.orgID, now,
+		); err != nil {
+			return 0, sweepUnavailable(sweepStepArmFinalize, err)
 		}
 	}
 	return rowsAffected, nil

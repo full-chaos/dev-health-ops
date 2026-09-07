@@ -293,7 +293,7 @@ func TestBuildProviderSyncHandlerWiresPagerDutyCredentialHydrator(t *testing.T) 
 	})
 	handler, _ := buildProviderSyncHandlerWithRuntimeDependencies(
 		nil, nil, hydrator,
-		nil, nil, nil, stubIncidentEntitlement{}, nil, slog.Default(), workItemsRuntimeConfig{},
+		nil, nil, nil, stubIncidentEntitlement{}, nil, slog.Default(), workItemsRuntimeConfig{}, 0,
 	)
 	executor, err := handler.BuildExecutor(&providersync.LeaseSession{
 		Claim: providersync.Claim{Unit: providersync.Unit{

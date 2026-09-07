@@ -47,9 +47,14 @@ const (
 	// reconciler service, so a bare "!= 0" check cannot make that
 	// distinction on its own. See cmd/dev-health-reconciler/dependencies.go.
 	DefaultSyncObservationTimeout = defaultSyncObservationTimeout
-	defaultRiverDatabaseSchema    = "river"
-	defaultDomainDatabaseRole     = "devhealth_domain"
-	defaultQueueDatabaseRole      = "devhealth_queue"
+	// defaultGithubTestsMaxArtifactBytes mirrors providersync's own unconfigured
+	// default (githubTestsMaxDownloadSize) so a deployment that never sets the
+	// override sees no behavior change from this option's introduction
+	// (CHAOS-4315/CHAOS-4185 interaction fix).
+	defaultGithubTestsMaxArtifactBytes = 100 << 20
+	defaultRiverDatabaseSchema         = "river"
+	defaultDomainDatabaseRole          = "devhealth_domain"
+	defaultQueueDatabaseRole           = "devhealth_queue"
 	// The coordinator role of the CHAOS-3033 Option B split. Provisioned
 	// alongside the other two by docker/init-extra-dbs.sh (local dev) and
 	// scripts/worker/provision_river_roles.sql (deployed environments).
@@ -221,6 +226,15 @@ type Config struct {
 	// work-items paths above: no source-relative default in production, only
 	// the fixed image path docker/go-worker.Dockerfile copies it to.
 	WorkerRemainingComplexityConfigPath string
+
+	// WorkerGithubTestsMaxArtifactBytes overrides the github cicd/tests
+	// route's per-artifact download cap (WORKER_GITHUB_TESTS_MAX_ARTIFACT_BYTES,
+	// default defaultGithubTestsMaxArtifactBytes -- providersync's own
+	// githubTestsMaxDownloadSize). A legitimate repo shape (e.g. a large
+	// nightly test bundle) can exceed the default without the download itself
+	// being broken; before this existed the only remedy was a rebuild
+	// (CHAOS-4315/CHAOS-4185 interaction fix).
+	WorkerGithubTestsMaxArtifactBytes int
 }
 
 // Load reads and validates explicit process arguments plus environment-backed
@@ -301,6 +315,19 @@ func Load(spec Spec) (Config, error) {
 		"WORKER_REMAINING_COMPLEXITY_CONFIG_PATH",
 		localComplexityConfigPath,
 	)
+	// 1 MiB..2 GiB: below 1 MiB would cap out ordinary report artifacts, above
+	// 2 GiB risks the whole-body io.ReadAll buffering a multi-gigabyte
+	// download in memory per CHAOS-4264's whole-partition-in-memory rule.
+	cfg.WorkerGithubTestsMaxArtifactBytes, err = boundedIntEnv(
+		lookup,
+		"WORKER_GITHUB_TESTS_MAX_ARTIFACT_BYTES",
+		defaultGithubTestsMaxArtifactBytes,
+		1<<20,
+		2<<30,
+	)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg.HealthCheckTimeout, err = durationEnv(
 		lookup,
 		"DEV_HEALTH_HEALTH_CHECK_TIMEOUT",
@@ -598,6 +625,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 			"worker_remaining_complexity_config_path_configured",
 			c.WorkerRemainingComplexityConfigPath != "",
 		),
+		slog.Int("worker_github_tests_max_artifact_bytes", c.WorkerGithubTestsMaxArtifactBytes),
 		slog.Bool("clickhouse_configured", c.ClickHouseURI.Configured()),
 		slog.Bool("valkey_configured", c.ValkeyURI.Configured()),
 		slog.Bool("settings_encryption_key_configured", c.SettingsEncryptionKey.Configured()),

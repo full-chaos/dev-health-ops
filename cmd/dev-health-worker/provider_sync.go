@@ -175,7 +175,7 @@ func buildProviderSyncHandler(
 	return buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 		repository, decryptor, clickhouseConnection, valkeyClient,
 		domainPool, incidentEntitlement, collector, logger,
-		workItemsRuntimeConfig{},
+		workItemsRuntimeConfig{}, 0,
 	)
 }
 
@@ -196,7 +196,7 @@ func buildProviderSyncHandlerWithGitHubWorkItemsRuntimeConfig(
 	return buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 		repository, decryptor, clickhouseConnection, valkeyClient,
 		domainPool, incidentEntitlement, collector, logger,
-		githubWorkItemsRuntime,
+		githubWorkItemsRuntime, 0,
 	)
 }
 
@@ -210,10 +210,12 @@ func buildProviderSyncHandlerWithWorkItemsRuntimeConfig(
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 	workItemsRuntime workItemsRuntimeConfig,
+	githubTestsMaxArtifactBytes int64,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
 	return buildProviderSyncHandlerWithRuntimeDependencies(
 		repository, decryptor, nil, clickhouseConnection, valkeyClient,
 		domainPool, incidentEntitlement, collector, logger, workItemsRuntime,
+		githubTestsMaxArtifactBytes,
 	)
 }
 
@@ -228,6 +230,12 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 	collector *jobruntime.MetricsCollector,
 	logger *slog.Logger,
 	workItemsRuntime workItemsRuntimeConfig,
+	// githubTestsMaxArtifactBytes overrides the github cicd/tests route's
+	// per-artifact download cap (config.Config.WorkerGithubTestsMaxArtifactBytes,
+	// WORKER_GITHUB_TESTS_MAX_ARTIFACT_BYTES). Zero keeps
+	// providersync.GitHubTestsRouteHandler's own package default
+	// (githubTestsMaxDownloadSize) -- see its zero-means-default doc comment.
+	githubTestsMaxArtifactBytes int64,
 ) (*providerunit.Handler, *providerfoundation.Metrics) {
 	// providerMetrics is constructed exactly once per worker process and
 	// referenced by every claim's executor, so dev_health_provider_* actually
@@ -519,7 +527,9 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				ghCICDSink := providersync.GitHubTestsClickHouseEffects{
 					Conn: clickhouseConnection, Lease: session,
 				}
-				routeHandler = providersync.GitHubTestsRouteHandler{}
+				routeHandler = providersync.GitHubTestsRouteHandler{
+					MaxArtifactBytes: githubTestsMaxArtifactBytes,
+				}
 				sink, readback = ghCICDSink, ghCICDSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "commits":
@@ -589,7 +599,9 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				ghTestsSink := providersync.GitHubTestsClickHouseEffects{
 					Conn: clickhouseConnection, Lease: session,
 				}
-				routeHandler = providersync.GitHubTestsRouteHandler{}
+				routeHandler = providersync.GitHubTestsRouteHandler{
+					MaxArtifactBytes: githubTestsMaxArtifactBytes,
+				}
 				sink, readback = ghTestsSink, ghTestsSink
 			case session.Claim.Provider == "pagerduty":
 				// Every PagerDuty dataset is canonical-incident gated
@@ -826,6 +838,7 @@ func constructProviderSyncWorkerWithDependencies(
 		clickhouseConnection, valkeyClient, postgresDatabase.pools.Domain,
 		providersync.PostgresIncidentEntitlement{Pool: postgresDatabase.pools.Domain},
 		collector, logger, workItemsRuntime,
+		int64(cfg.WorkerGithubTestsMaxArtifactBytes),
 	)
 	// CHAOS-4078: repository was constructed before providerMetrics existed
 	// (buildProviderSyncHandlerWithRuntimeDependencies owns the one

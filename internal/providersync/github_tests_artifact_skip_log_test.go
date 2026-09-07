@@ -81,7 +81,7 @@ func TestGitHubTestsSkipSummaryLogsOverflowedCauses(t *testing.T) {
 		githubTestsUnreadableArchiveCause:       true,
 		githubTestsLegacyReportOverflowSentinel: true, // must NOT appear in the surfaced list
 	}
-	githubTestsLogArtifactSkipSummary(claim, "acme/api", incomplete, nil, causeOverflow, 0, 0, nil)
+	githubTestsLogArtifactSkipSummary(claim, "acme/api", incomplete, nil, causeOverflow, 0, 0, nil, 0)
 
 	var summaries []slog.Record
 	for _, record := range *records {

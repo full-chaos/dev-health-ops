@@ -133,6 +133,16 @@ type githubTestsChunkCursor struct {
 	ExcludedNonReportSuffix int      `json:"excluded_non_report_suffix,omitempty"`
 	ExcludedNonReportPrefix int      `json:"excluded_non_report_prefix,omitempty"`
 	ExcludedArtifactSample  []string `json:"excluded_artifact_sample,omitempty"`
+	// ArtifactsExcludedNotFound counts routine 404/410 download-time
+	// disappearances (see the notFound branch below), which -- like an
+	// oversized skip -- are excluded from the ArchivesSeen/ArchivesUnreadable
+	// totality gate entirely. A plain additive counter, not a pointer like
+	// ArchivesSeen/Unreadable: it never gates anything, so a cursor that
+	// predates this field decoding it as zero is not the CHAOS-4177-class
+	// false-positive hazard bumpGitHubTestsArchiveCounter's doc comment
+	// describes -- it only ever under-reports one telemetry field on a
+	// resumed walk, never mis-terminalizes a unit.
+	ArtifactsExcludedNotFound int `json:"artifacts_excluded_not_found,omitempty"`
 }
 
 // markGitHubTestsSkippedArtifactCauseOverflow returns a NEW map with cause
@@ -539,6 +549,7 @@ func githubTestsLogArtifactSkipSummary(
 	claim Claim, repo string, incomplete []GitHubTestsIncomplete,
 	skippedArtifacts []GitHubTestsSkippedArtifact, causeOverflow map[string]bool,
 	excludedSuffix, excludedPrefix int, excludedSample []string,
+	notFoundExcluded int,
 ) {
 	// Gate on an actual artifact/member disposition, not on incomplete being
 	// non-empty (CHAOS-4592 codex review, on merged CHAOS-4588 code): incomplete
@@ -573,6 +584,14 @@ func githubTestsLogArtifactSkipSummary(
 	// available alongside it, broken down per (component, cause) in the
 	// attrs loop below regardless of kind.
 	artifactSkipTotal := 0
+	// totalityExcludedOversized isolates the oversized share of
+	// artifactSkipTotal: every oversized skip (CHAOS-4315) is now excluded
+	// from the ArchivesSeen/ArchivesUnreadable totality gate (see the
+	// oversized branch's doc comment in CollectChunks), so this is exactly
+	// the count of report_member skips this unit had that never touched the
+	// gate's denominator or numerator -- surfaced here so that fact is
+	// readable from the log line without cross-referencing the cursor JSON.
+	totalityExcludedOversized := 0
 	for _, observation := range incomplete {
 		if observation.Component != githubTestsReportMemberComponent {
 			continue
@@ -581,12 +600,23 @@ func githubTestsLogArtifactSkipSummary(
 		case githubTestsArtifactOversizedCause, githubTestsArtifactUnavailableCause, githubTestsUnreadableArchiveCause:
 			artifactSkipTotal += observation.Count
 		}
+		if observation.Cause == githubTestsArtifactOversizedCause {
+			totalityExcludedOversized += observation.Count
+		}
 	}
-	attrs := make([]any, 0, 16+2*len(incomplete))
+	attrs := make([]any, 0, 20+2*len(incomplete))
 	attrs = append(attrs,
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
 		"repository", repo, "artifact_skip_total", artifactSkipTotal,
 		"incomplete_total", githubTestsIncompleteCount(incomplete),
+		// totality_excluded_* (CHAOS-4315/CHAOS-4185 interaction fix): the two
+		// skip causes that never feed the ArchivesSeen/ArchivesUnreadable
+		// totality gate, so an operator can see the numbers the gate divides
+		// by are NOT what this line's artifact_skip_total/incomplete_total
+		// otherwise suggest -- both can be nonzero on a unit the gate never
+		// looks twice at.
+		"totality_excluded_oversized", totalityExcludedOversized,
+		"totality_excluded_not_found", notFoundExcluded,
 	)
 	for _, observation := range incomplete {
 		attrs = append(attrs, observation.Component+"_"+observation.Cause, observation.Count)
@@ -966,6 +996,7 @@ func githubTestsFinalMetadataBatch(claim Claim, cursor githubTestsChunkCursor) (
 	githubTestsLogArtifactSkipSummary(
 		claim, cursor.Repo, incomplete, skippedArtifacts, causeOverflow,
 		cursor.ExcludedNonReportSuffix, cursor.ExcludedNonReportPrefix, cursor.ExcludedArtifactSample,
+		cursor.ArtifactsExcludedNotFound,
 	)
 	return CompleteRouteBatch{
 		Effects: effects,
@@ -1107,6 +1138,10 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 	jobPages := handler.MaxJobPages
 	if jobPages == 0 {
 		jobPages = nativeMaxPages
+	}
+	maxArtifactBytes := handler.MaxArtifactBytes
+	if maxArtifactBytes <= 0 {
+		maxArtifactBytes = githubTestsMaxDownloadSize
 	}
 	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return ErrInvalidConfiguration
@@ -1447,7 +1482,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 						if artifact.Expired {
 							continue
 						}
-						archive, used, notFound, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
+						archive, used, notFound, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
 						cursor.Requests += used
 						if downloadErr != nil {
 							// An artifact whose bytes could never be
@@ -1503,6 +1538,30 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// provider-supplied and unbounded, which is why
 							// neither belongs on GitHubTestsIncomplete's own
 							// closed Component/Cause/Count shape.
+							//
+							// Deliberately NOT counted toward
+							// ArchivesSeen/ArchivesUnreadable (CHAOS-4315/
+							// CHAOS-4185 interaction fix): a repository whose
+							// only recent artifacts are legitimately oversized
+							// (e.g. a 100+MB nightly bundle) downloaded fine --
+							// we read every byte up to the cap -- so this is not
+							// evidence our channel to read artifacts is broken,
+							// the exact reasoning the routine-404/410 branch
+							// below already applies. Bumping both counters here
+							// (as this branch used to) fed a deliberate CHAOS-4315
+							// policy skip into the CHAOS-4185 totality gate's own
+							// denominator AND numerator: with >=2 oversized
+							// artifacts and nothing else, seen==unreadable>=floor
+							// tripped ErrGitHubTestsAllArtifactsUnreadable and
+							// terminalized a unit CHAOS-4315 says must not fail,
+							// discarding its committed rows every hour and
+							// pinning since_at forever (CHAOS-4315 removed the
+							// unit-level failure through the front door, this
+							// reinstated it through the back door). Excluding
+							// from BOTH counters -- not just Unreadable -- keeps
+							// a genuinely broken channel mixed with oversized
+							// skips still visible to the gate (3 corrupt + 2
+							// oversized -> 3/3, not 3/5).
 							if errors.Is(downloadErr, ErrGitHubTestsArtifactOversized) {
 								cursor.Incomplete = recordGitHubTestsSkippedArtifact(
 									cursor.Incomplete, client, claim, cursor.Repo, pipeline.RunID,
@@ -1537,9 +1596,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								// the GitHubTestsSkippedArtifact marker just
 								// above (SizeBytes/CapBytes) and rendered into
 								// the summary's skipped_sample
-								// (githubTestsSkippedArtifactLogSample).
-								cursor.ArchivesSeen = bumpGitHubTestsArchiveCounter(cursor.ArchivesSeen)
-								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
+								// (githubTestsSkippedArtifactLogSample). No
+								// ArchivesSeen/ArchivesUnreadable bump here --
+								// see the doc comment on the branch above.
 								continue
 							}
 							return downloadErr
@@ -1560,7 +1619,11 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 							// simply expired between listing and download
 							// would satisfy the totality floor and
 							// terminalize a healthy unit (CHAOS-4185 codex
-							// round 3).
+							// round 3). Counted on ArtifactsExcludedNotFound
+							// purely for telemetry (the skip summary's
+							// totality_excluded_not_found) -- never fed to the
+							// gate itself.
+							cursor.ArtifactsExcludedNotFound++
 							continue
 						}
 						// Counted as SEEN the moment a real read is attempted

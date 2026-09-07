@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,14 +23,20 @@ func hasCategory(err error, category jobruntime.ErrorCategory) bool {
 }
 
 type fakeFence struct {
-	claim        ClaimResult
-	claimErr     error
-	completeErr  error
-	releaseErr   error
-	claims       int
-	completions  int
-	releases     int
-	completedNow time.Time
+	claim       ClaimResult
+	claimErr    error
+	completeErr error
+	// releaseErr fails EVERY release attempt. releaseFailures instead fails
+	// only the first N, so a transient blip that the inline retry recovers
+	// from can be distinguished from one that never clears.
+	releaseErr      error
+	releaseFailures int
+	claims          int
+	completions     int
+	releases        int
+	completedNow    time.Time
+	// released is the durable effect: whether the claim is actually clear.
+	released bool
 }
 
 func (fence *fakeFence) Claim(_ context.Context, _ string, now time.Time) (ClaimResult, error) {
@@ -52,7 +59,14 @@ func (fence *fakeFence) MarkCompleted(_ context.Context, _ string, now time.Time
 
 func (fence *fakeFence) ReleaseClaim(_ context.Context, _ string) error {
 	fence.releases++
-	return fence.releaseErr
+	if fence.releaseErr != nil {
+		return fence.releaseErr
+	}
+	if fence.releases <= fence.releaseFailures {
+		return errors.New("billing claim release is unavailable")
+	}
+	fence.released = true
+	return nil
 }
 
 type fakeOwners struct {
@@ -143,22 +157,35 @@ func TestBillingHandlerClaimsRendersSendsAndCompletes(t *testing.T) {
 	}
 }
 
-// TestBillingHandlerSendsNothingWhenTheClaimIsLost is the duplicate-suppression
-// path: losing the claim must never reach the sender.
+// TestBillingHandlerSendsNothingWhenTheClaimIsLost: losing the claim must
+// never reach the sender, whatever the reason.
+//
+// NOTE (CHAOS-5353 r1): this test used to assert that BOTH a completed claim
+// and an in-flight one returned SUCCESS. The in-flight half encoded the P1
+// defect -- it is what let a retry whose own release had failed report a
+// delivery that never happened. Only the completed case is a success now; the
+// in-flight case is pinned as Retryable by
+// TestRetryAfterASendFailureIsNeverReportedAsADuplicate below.
 func TestBillingHandlerSendsNothingWhenTheClaimIsLost(t *testing.T) {
-	// A completed claim is suppressed regardless of age; an in-flight one is
-	// only an ordinary duplicate while it is INSIDE the stale window, so this
-	// fixture sits well within it (the stale case is its own test below).
 	completedAt := time.Date(2026, 9, 7, 11, 0, 0, 0, time.UTC)
-	oldClaimedAt := completedAt
+	claimedAt := completedAt
 	freshClaimedAt := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC).
 		Add(-StaleClaimThreshold / 2)
 	for _, test := range []struct {
-		name  string
-		claim ClaimResult
+		name        string
+		claim       ClaimResult
+		wantSuccess bool
 	}{
-		{"already completed", ClaimResult{ClaimedAt: &oldClaimedAt, CompletedAt: &completedAt}},
-		{"in flight", ClaimResult{ClaimedAt: &freshClaimedAt}},
+		{
+			name:        "already completed",
+			claim:       ClaimResult{ClaimedAt: &claimedAt, CompletedAt: &completedAt},
+			wantSuccess: true,
+		},
+		{
+			name:        "in flight and uncompleted",
+			claim:       ClaimResult{ClaimedAt: &freshClaimedAt},
+			wantSuccess: false,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &fakeStore{billing: billingRow(`{}`)}
@@ -167,8 +194,17 @@ func TestBillingHandlerSendsNothingWhenTheClaimIsLost(t *testing.T) {
 			sender := &fakeSender{}
 			handler := newTestBillingHandler(t, store, fence, owners, sender)
 
-			if err := handler.Work(context.Background(), billingExecution()); err != nil {
-				t.Fatalf("a suppressed duplicate must succeed, got %v", err)
+			err := handler.Work(context.Background(), billingExecution())
+			if test.wantSuccess && err != nil {
+				t.Fatalf("a genuinely completed notification must succeed, got %v", err)
+			}
+			if !test.wantSuccess {
+				if err == nil {
+					t.Fatal("an UNCOMPLETED claim was reported as a successful delivery")
+				}
+				if !hasCategory(err, jobruntime.CategoryRetryable) {
+					t.Fatalf("classified as %v, want retryable", err)
+				}
 			}
 			if len(sender.sent) != 0 {
 				t.Fatal("an email was sent despite losing the claim")
@@ -463,14 +499,21 @@ func TestEmailSenderSelectionFollowsTheExistingEnvironmentNames(t *testing.T) {
 			map[string]string{"EMAIL_PROVIDER": "smtp", "SMTP_PORT": "not-a-port"}, "", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			// Blank every variable first so a value leaking in from the
-			// developer's own shell cannot decide the outcome. Blank reads as
-			// absent everywhere in NewEmailSenderFromEnv.
+			// UNSET every variable first so a value leaking in from the
+			// developer's own shell cannot decide the outcome. It must be
+			// unset, not blanked: since the CHAOS-5353 r1 fix, blank means
+			// "configured to nothing" and is a refusal, which is exactly what
+			// TestEmptyEnvironmentValuesAreRefusedNotDefaulted pins. t.Setenv
+			// first so the test framework restores the original on cleanup,
+			// then Unsetenv to reach the genuinely-absent state.
 			for _, name := range []string{
 				"EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "EMAIL_API_KEY", "RESEND_API_KEY",
 				"SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_USE_TLS",
 			} {
 				t.Setenv(name, "")
+				if err := os.Unsetenv(name); err != nil {
+					t.Fatal(err)
+				}
 			}
 			for name, value := range test.env {
 				t.Setenv(name, value)
@@ -544,5 +587,217 @@ func TestDecodeBillingAttributesMatchesPythonDefaultsAndCoercion(t *testing.T) {
 		if _, err := DecodeBillingAttributes([]byte(malformed)); !errors.Is(err, ErrMalformedAttributes) {
 			t.Errorf("DecodeBillingAttributes(%s) = %v, want ErrMalformedAttributes", malformed, err)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CHAOS-5353 r1 regression pins. Each of these FAILS at the fix parent.
+// ---------------------------------------------------------------------------
+
+// TestRetryAfterASendFailureIsNeverReportedAsADuplicate is the r1 P1 pin.
+//
+// At the fix parent: attempt 1's send failed AND its release failed, so the
+// claim stayed held; attempt 2 met that fresh uncompleted claim, logged
+// duplicate_suppressed and returned nil. River recorded success for an email
+// that was never sent, and the "will surface as a stale claim" comment could
+// not come true because nothing retried again.
+//
+// At the tip: an uncompleted claim is Retryable, never success.
+func TestRetryAfterASendFailureIsNeverReportedAsADuplicate(t *testing.T) {
+	claimedAt := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC).Add(-time.Minute)
+	store := &fakeStore{billing: billingRow(`{}`)}
+	// The row this retry meets: claimed a minute ago, well inside the stale
+	// window, never completed -- exactly the state a failed release leaves.
+	fence := &fakeFence{claim: ClaimResult{ClaimedAt: &claimedAt}}
+	sender := &fakeSender{}
+	handler := newTestBillingHandler(t, store, fence, &fakeOwners{}, sender)
+
+	err := handler.Work(context.Background(), billingExecution())
+	if err == nil {
+		t.Fatal("a retry meeting an UNCOMPLETED claim reported success; " +
+			"the notification was never sent and River will not try again")
+	}
+	if !hasCategory(err, jobruntime.CategoryRetryable) {
+		t.Fatalf("classified as %v, want retryable", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatal("the claim was held by another attempt but this one sent anyway")
+	}
+	if fence.completions != 0 {
+		t.Fatal("a notification nobody sent was marked completed")
+	}
+}
+
+// TestACompletedClaimStillResolvesImmediately guards the fix above from
+// over-reaching: a genuine prior SUCCESS must still short-circuit to success,
+// or every duplicate would retry until it went stale.
+func TestACompletedClaimStillResolvesImmediately(t *testing.T) {
+	at := time.Date(2026, 9, 7, 11, 59, 0, 0, time.UTC)
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{claim: ClaimResult{ClaimedAt: &at, CompletedAt: &at}}
+	sender := &fakeSender{}
+	handler := newTestBillingHandler(t, store, fence, &fakeOwners{}, sender)
+
+	if err := handler.Work(context.Background(), billingExecution()); err != nil {
+		t.Fatalf("a genuinely completed notification must succeed, got %v", err)
+	}
+	if len(sender.sent) != 0 || fence.completions != 0 {
+		t.Fatal("a completed notification was acted on again")
+	}
+}
+
+// TestAFailedReleaseIsRetriedSoTheNextAttemptCanSend is the other half of the
+// r1 P1: the release itself is retried inline, so a transient database blip
+// no longer strands the notification behind its own claim.
+//
+// At the fix parent the release was attempted exactly once, so releases==1 and
+// the claim stayed held.
+func TestAFailedReleaseIsRetriedSoTheNextAttemptCanSend(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	// The first release attempt fails, the second succeeds.
+	fence := &fakeFence{claim: ClaimResult{Claimed: true}, releaseFailures: 1}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{err: errors.New("smtp server unreachable")}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	err := handler.Work(context.Background(), billingExecution())
+	if !hasCategory(err, jobruntime.CategoryRetryable) {
+		t.Fatalf("classified as %v, want retryable", err)
+	}
+	if fence.releases < 2 {
+		t.Fatalf("release attempted %d time(s); a transient failure must be retried "+
+			"or the notification is stranded behind its own claim", fence.releases)
+	}
+	if !fence.released {
+		t.Fatal("the claim was never actually released, so the next attempt " +
+			"cannot send this notification")
+	}
+}
+
+// TestReleaseThatNeverSucceedsStillDoesNotFakeSuccess: the inline retry is
+// bounded, so pin what happens when it is exhausted. The original error must
+// survive, and nothing may report a delivery.
+func TestReleaseThatNeverSucceedsStillDoesNotFakeSuccess(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{
+		claim:      ClaimResult{Claimed: true},
+		releaseErr: errors.New("billing claim release is unavailable"),
+	}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{err: errors.New("smtp server unreachable")}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	err := handler.Work(context.Background(), billingExecution())
+	if err == nil {
+		t.Fatal("an undelivered notification reported success")
+	}
+	if !errors.Is(err, sender.err) {
+		t.Fatalf("the release failure replaced the original send error: %v", err)
+	}
+	if fence.releases != releaseClaimAttempts {
+		t.Fatalf("release attempted %d times, want the full bounded %d",
+			fence.releases, releaseClaimAttempts)
+	}
+	if fence.completions != 0 {
+		t.Fatal("a notification nobody sent was marked completed")
+	}
+}
+
+// TestEnvelopeIdempotencyKeyMismatchRefusesBeforeClaiming is the r1 P2 pin for
+// the restored identity fence. At the fix parent the handler ignored
+// execution.Args.IdempotencyKey entirely and sent the row.
+func TestEnvelopeIdempotencyKeyMismatchRefusesBeforeClaiming(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	execution := billingExecution()
+	execution.Args.IdempotencyKey = "billing:some-other-row"
+
+	err := handler.Work(context.Background(), execution)
+	if err == nil {
+		t.Fatal("a job whose envelope names a DIFFERENT row still sent the email")
+	}
+	if !hasCategory(err, jobruntime.CategoryPermanent) {
+		t.Fatalf("classified as %v, want permanent", err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatal("an email was sent despite the identity mismatch")
+	}
+	if fence.claims != 0 {
+		t.Fatal("the mismatch reached the fence; it must refuse BEFORE claiming")
+	}
+}
+
+// TestAnAbsentEnvelopeIdempotencyKeyStillSends keeps the restored fence from
+// becoming a rolling-deploy hazard: a producer that never sets the key must
+// degrade to "no cross-check", not to "billing mail stops".
+func TestAnAbsentEnvelopeIdempotencyKeyStillSends(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	execution := billingExecution()
+	execution.Args.IdempotencyKey = ""
+
+	if err := handler.Work(context.Background(), execution); err != nil {
+		t.Fatalf("an absent envelope key must not stop delivery, got %v", err)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(sender.sent))
+	}
+}
+
+// TestEmptyEnvironmentValuesAreRefusedNotDefaulted is the r1 P1 pin for
+// empty-vs-absent. At the fix parent every one of these silently took a
+// default -- EMAIL_PROVIDER="" became the console sender, which logs instead
+// of sending while the handler marks the notification delivered.
+func TestEmptyEnvironmentValuesAreRefusedNotDefaulted(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{"empty EMAIL_PROVIDER", map[string]string{"EMAIL_PROVIDER": ""}},
+		{"empty EMAIL_FROM_ADDRESS", map[string]string{
+			"EMAIL_PROVIDER": "console", "EMAIL_FROM_ADDRESS": ""}},
+		{"empty SMTP_HOST", map[string]string{
+			"EMAIL_PROVIDER": "smtp", "SMTP_HOST": ""}},
+		{"empty SMTP_PORT", map[string]string{
+			"EMAIL_PROVIDER": "smtp", "SMTP_PORT": ""}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for name, value := range test.env {
+				t.Setenv(name, value)
+			}
+			sender, err := NewEmailSenderFromEnv(nil)
+			if err == nil {
+				t.Fatalf("a configured-but-empty value was silently defaulted to %q; "+
+					"billing mail would go nowhere while rows are marked delivered",
+					sender.Name())
+			}
+		})
+	}
+}
+
+// TestAbsentEnvironmentValuesStillTakeTheirDefaults is the counterpart: the
+// fix must reject EMPTY without breaking ABSENT, which is the ordinary case.
+func TestAbsentEnvironmentValuesStillTakeTheirDefaults(t *testing.T) {
+	for _, name := range []string{
+		"EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "SMTP_HOST", "SMTP_PORT",
+	} {
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sender, err := NewEmailSenderFromEnv(nil)
+	if err != nil {
+		t.Fatalf("all variables absent must still yield the console default: %v", err)
+	}
+	if sender.Name() != "console" {
+		t.Fatalf("provider = %q, want console", sender.Name())
 	}
 }

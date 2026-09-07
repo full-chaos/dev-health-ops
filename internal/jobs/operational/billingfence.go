@@ -57,8 +57,14 @@ const (
 	// than StaleClaimThreshold. We do NOT know whether the email went out, so
 	// this is reported as its own outcome rather than as a success.
 	FenceOutcomeStaleClaim FenceOutcome = "stale_claim_detected"
-	// FenceOutcomeKeyMismatch means the queue arguments' idempotency key
-	// disagreed with the durable row's; dropped before any claim attempt.
+	// FenceOutcomeKeyMismatch means the queue envelope's idempotency key
+	// disagreed with the durable row's own. Reported BEFORE any claim
+	// attempt, so nothing is held and nothing is sent. Restored in
+	// CHAOS-5353 r1: an earlier revision of this port dropped it on the
+	// reasoning that Go is now the sole READER of the row, but the job
+	// envelope carries its own copy of the key
+	// (jobruntime.EnvelopeArgs.IdempotencyKey), so two values that can
+	// disagree still exist and the identity fence is still meaningful.
 	FenceOutcomeKeyMismatch FenceOutcome = "key_mismatch"
 	// FenceOutcomePermanentDrop means the claim was WON and then permanently
 	// dropped (malformed stored attributes, unknown email type, invalid

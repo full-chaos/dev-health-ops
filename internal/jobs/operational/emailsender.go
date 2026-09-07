@@ -52,14 +52,45 @@ type EmailSender interface {
 // NewEmailSenderFromEnv mirrors Python's `get_email_service()` selection:
 // EMAIL_PROVIDER in {console, resend, smtp}, default console; an unknown value
 // is an error rather than a silent fallback.
+// configuredValue distinguishes an ABSENT variable from an explicitly EMPTY
+// one. That distinction is the whole point: `os.Getenv` collapses them, so a
+// blank Helm/compose expansion silently took the default. For EMAIL_PROVIDER
+// Python did NOT collapse them -- `os.getenv("EMAIL_PROVIDER", "console")`
+// preserves "" and falls through to its unsupported-provider raise -- so
+// collapsing here turned a loud misconfiguration into billing mail delivered
+// to a log line while the durable row was marked completed (CHAOS-5353 r1).
+//
+// Returns the trimmed value and whether the variable was set at all.
+func configuredValue(name string) (string, bool) {
+	raw, present := os.LookupEnv(name)
+	return strings.TrimSpace(raw), present
+}
+
 func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
-	provider := strings.ToLower(strings.TrimSpace(os.Getenv("EMAIL_PROVIDER")))
-	if provider == "" {
+	provider, providerSet := configuredValue("EMAIL_PROVIDER")
+	if !providerSet {
 		provider = "console"
 	}
-	from := strings.TrimSpace(os.Getenv("EMAIL_FROM_ADDRESS"))
-	if from == "" {
+	provider = strings.ToLower(provider)
+	if provider == "" {
+		// Set-but-empty. Python raised here; so do we, rather than sending
+		// every billing email to a logger.
+		slog.Error("billing notification email provider is configured but empty",
+			"variable", "EMAIL_PROVIDER")
+		return nil, fmt.Errorf("%w: EMAIL_PROVIDER is set but empty", ErrEmailProviderUnsupported)
+	}
+	from, fromSet := configuredValue("EMAIL_FROM_ADDRESS")
+	if !fromSet {
 		from = "dev-health@example.com"
+	}
+	if from == "" {
+		// Python left this empty and sent with a blank From. Refusing is
+		// deliberately STRICTER: a blank envelope sender is rejected or
+		// silently dropped by most relays, which is the same invisible
+		// mail loss in a different place.
+		slog.Error("billing notification from-address is configured but empty",
+			"variable", "EMAIL_FROM_ADDRESS")
+		return nil, errors.New("EMAIL_FROM_ADDRESS is set but empty")
 	}
 	switch provider {
 	case "console":
@@ -71,6 +102,8 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 			key = strings.TrimSpace(os.Getenv("RESEND_API_KEY"))
 		}
 		if key == "" {
+			slog.Error("billing notification resend API key is missing or empty",
+				"variables", "EMAIL_API_KEY,RESEND_API_KEY")
 			return nil, errors.New(
 				"EMAIL_API_KEY (or RESEND_API_KEY) is required when EMAIL_PROVIDER=resend")
 		}
@@ -80,16 +113,27 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 		return &resendEmailSender{from: from, apiKey: key, client: client}, nil
 	case "smtp":
 		port := 1025
-		if raw := strings.TrimSpace(os.Getenv("SMTP_PORT")); raw != "" {
+		if raw, set := configuredValue("SMTP_PORT"); set {
+			// Python's int(os.getenv("SMTP_PORT", "1025")) raised ValueError
+			// on a set-but-empty value; so does this.
 			parsed, err := strconv.Atoi(raw)
 			if err != nil || parsed <= 0 || parsed > 65535 {
+				slog.Error("billing notification SMTP port is not a valid port",
+					"variable", "SMTP_PORT")
 				return nil, fmt.Errorf("SMTP_PORT is not a valid port: %q", raw)
 			}
 			port = parsed
 		}
-		host := strings.TrimSpace(os.Getenv("SMTP_HOST"))
-		if host == "" {
+		host, hostSet := configuredValue("SMTP_HOST")
+		if !hostSet {
 			host = "localhost"
+		}
+		if host == "" {
+			// Python kept "" and failed later, at connect time, once per
+			// notification. Refusing at startup is stricter and fails closed.
+			slog.Error("billing notification SMTP host is configured but empty",
+				"variable", "SMTP_HOST")
+			return nil, errors.New("SMTP_HOST is set but empty")
 		}
 		useTLS := false
 		switch strings.ToLower(strings.TrimSpace(os.Getenv("SMTP_USE_TLS"))) {
@@ -105,6 +149,8 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 			useTLS:   useTLS,
 		}, nil
 	default:
+		slog.Error("billing notification email provider is unsupported",
+			"variable", "EMAIL_PROVIDER", "value", provider)
 		return nil, fmt.Errorf("%w: %q", ErrEmailProviderUnsupported, provider)
 	}
 }

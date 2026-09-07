@@ -90,6 +90,27 @@ func (handler *BillingHandler) Work(
 		"provider", handler.sender.Name(),
 	)
 
+	// Identity fence, BEFORE any claim (CHAOS-3952, restored in CHAOS-5353
+	// r1). The job envelope carries its own copy of the durable row's
+	// idempotency key. Two sides that disagree about which row this job is
+	// for must never act: a stale, corrupted or misrouted job would
+	// otherwise send the email for whichever row the payload id happened to
+	// name. The key stays OPTIONAL on the envelope -- an older producer that
+	// never set it degrades to "no cross-check", not to "billing mail
+	// stops", which is the rolling-deploy hazard the Python bridge model
+	// documented. Only a PRESENT and DIFFERENT key is a refusal.
+	if envelopeKey := execution.Args.IdempotencyKey; envelopeKey != "" &&
+		envelopeKey != notification.IdempotencyKey {
+		// Neither key is logged: both embed the organization id and the
+		// notification type. The field that tripped it is named instead.
+		logger.ErrorContext(ctx,
+			"billing notification: the job envelope's idempotency key disagrees with "+
+				"the durable row's; refusing to send",
+			"field", "idempotency_key", "claim_outcome", string(FenceOutcomeKeyMismatch))
+		return jobruntime.Permanent(fmt.Errorf(
+			"%w: idempotency key mismatch", ErrDeliveryInvalid))
+	}
+
 	now := handler.now()
 	claim, err := handler.fence.Claim(ctx, notification.ID, now)
 	if err != nil {
@@ -223,31 +244,71 @@ func (handler *BillingHandler) reportLostClaim(
 			"claimed_at", claim.ClaimedAt, "claim_outcome", string(FenceOutcomeStaleClaim))
 		return jobruntime.Permanent(errors.New("operational billing notification claim is stale"))
 	}
-	// Inside the normal in-flight window: an ordinary duplicate suppression.
-	// If the other attempt is itself stuck, a later retry's claim will find
-	// the same claimed_at and cross the staleness threshold above instead.
-	logger.InfoContext(ctx, "billing notification: another attempt holds the claim",
+	// Inside the normal in-flight window. This is NOT reported as success.
+	//
+	// CHAOS-5353 r1 (P1): returning nil here was the one path that could
+	// record an email as delivered when none was ever sent. If an attempt
+	// failed its send AND then failed to release its claim, the very next
+	// retry met its own still-fresh, uncompleted claim, called it a
+	// duplicate, and returned success -- so the swallowed release error was
+	// never actually observable, despite the comment that said it would
+	// surface as a stale claim. It could not surface: nothing retried again.
+	//
+	// A held claim with completed_at NULL means "not finished", which is
+	// precisely what Retryable means -- so that is what we return. The
+	// genuine concurrent-duplicate case is unaffected in outcome, only in
+	// timing: once the winner records completion, the next retry takes the
+	// completed_at branch above and succeeds. A winner that died instead
+	// crosses the staleness threshold and is reported there. Neither path
+	// can report a delivery that did not happen.
+	logger.InfoContext(ctx, "billing notification: another attempt holds an uncompleted claim",
 		"claimed_at", claim.ClaimedAt, "claim_outcome", string(FenceOutcomeDuplicateSuppressed))
-	return nil
+	return jobruntime.Retryable(errors.New(
+		"operational billing notification is claimed by an attempt that has not completed"))
 }
+
+// releaseClaimAttempts bounds the inline retry below. A release failure is
+// almost always a transient database blip, and each extra try costs one small
+// UPDATE -- cheap next to the alternative, which is a notification stranded
+// behind its own claim until the staleness threshold expires.
+const releaseClaimAttempts = 3
 
 // releaseClaim undoes a claim whose delivery never happened.
 //
-// A release failure is logged and swallowed rather than propagated: this runs
-// inside the handling of an error the caller is about to return, so letting a
-// second error replace the first would hide why the delivery failed at all.
-// The claim is then left held, which the stale-claim detection surfaces on a
-// later contending attempt -- observable, not silently lost.
+// The release is retried inline (CHAOS-5353 r1, P1) rather than attempted
+// once. The single-shot version left the claim held on any transient failure,
+// and because the next retry then met a fresh uncompleted claim, the
+// notification could never be sent again within the staleness window.
+//
+// A release failure that outlasts every attempt is still logged and swallowed
+// rather than propagated: this runs inside the handling of an error the caller
+// is about to return, and letting a second error replace the first would hide
+// why the delivery failed at all. What changed is that the leftover state is
+// now genuinely observable -- reportLostClaim no longer reports an uncompleted
+// claim as success, so the job keeps retrying until the claim goes stale and
+// is reported as such, instead of terminating with a false delivery.
 func (handler *BillingHandler) releaseClaim(
 	ctx context.Context, logger *slog.Logger, notificationID string, outcome FenceOutcome,
 ) {
-	if err := handler.fence.ReleaseClaim(ctx, notificationID); err != nil {
-		logger.ErrorContext(ctx,
-			"billing notification: claim release failed; the claim stays held and "+
-				"will surface as a stale claim on a later attempt",
-			"error", err, "claim_outcome", string(outcome))
-		return
+	var err error
+	for attempt := 1; attempt <= releaseClaimAttempts; attempt++ {
+		if err = handler.fence.ReleaseClaim(ctx, notificationID); err == nil {
+			logger.InfoContext(ctx, "billing notification: claim released without a delivery",
+				"claim_outcome", string(outcome), "release_attempts", attempt)
+			return
+		}
+		logger.WarnContext(ctx, "billing notification: claim release failed, retrying",
+			"error", err, "attempt", attempt, "of", releaseClaimAttempts,
+			"claim_outcome", string(outcome))
+		// Stop early if the caller's context is already done; further
+		// attempts would fail for that reason alone and say nothing new.
+		if ctx.Err() != nil {
+			break
+		}
 	}
-	logger.InfoContext(ctx, "billing notification: claim released without a delivery",
+	logger.ErrorContext(ctx,
+		"billing notification: claim release failed on every attempt; the claim stays "+
+			"held and this notification cannot be sent until it goes stale",
+		"error", err, "release_attempts", releaseClaimAttempts,
 		"claim_outcome", string(outcome))
 }

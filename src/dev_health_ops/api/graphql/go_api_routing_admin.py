@@ -35,7 +35,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
@@ -45,6 +45,7 @@ from dev_health_ops.models.go_api_registry import ProofRun, RoutingState
 from .go_api_registry import register_candidate_build
 
 __all__ = [
+    "DISABLE_MODES",
     "ENABLEMENT_PROOF_STAGE",
     "build_enablement_proof_select",
     "ENABLEMENT_PROOF_TERMINAL_STATE",
@@ -73,6 +74,23 @@ ENABLEMENT_PROOF_STAGE = "deployed_executed"
 #: operation is NOT ready -- treating any terminal state as "proof exists"
 #: would make the gate worse than absent, because it would look enforced.
 ENABLEMENT_PROOF_TERMINAL_STATE = "match"
+
+#: Modes `disable` may set. All three make an operation UNREACHABLE to a
+#: real client, which is the whole point of the verb:
+#:
+#: * ``python``   -- the documented safe default; identical in effect to
+#:                   having no row at all.
+#: * ``disabled`` -- same reachability, but records a deliberate decision
+#:                   rather than a default, so an operator reading the
+#:                   table later can tell "turned off" from "never on".
+#: * ``shadow``   -- the client still receives Python's response (plan §5
+#:                   stage 4), and the dispatcher logs loudly that the
+#:                   shadow executor does not exist. Protective today even
+#:                   though the comparison half is unimplemented.
+#:
+#: `canary`/`primary` are deliberately absent: turning an operation ON is
+#: `enable`'s job, and it has preflights this verb intentionally does not.
+DISABLE_MODES = ("python", "disabled", "shadow")
 
 
 @dataclass(frozen=True)
@@ -130,6 +148,8 @@ async def upsert_routing_state(
     mode: str,
     rollout_percentage: int = 100,
     owner: str = "go",
+    review_evidence: str | None = None,
+    recorded_by: str | None = None,
 ) -> None:
     """Insert or update ONE routing row, idempotently.
 
@@ -158,6 +178,8 @@ async def upsert_routing_state(
             owner=owner,
             mode=mode,
             rollout_percentage=rollout_percentage,
+            review_evidence=review_evidence,
+            recorded_by=recorded_by,
             updated_at=now,
         )
         .on_conflict_do_update(
@@ -171,6 +193,8 @@ async def upsert_routing_state(
                 "owner": owner,
                 "mode": mode,
                 "rollout_percentage": rollout_percentage,
+                "review_evidence": review_evidence,
+                "recorded_by": recorded_by,
                 "updated_at": now,
             },
         )
@@ -187,6 +211,8 @@ async def enable_operation(
     candidate_build: str,
     mode: str,
     rollout_percentage: int = 100,
+    review_evidence: str | None = None,
+    recorded_by: str | None = None,
 ) -> None:
     """Register the candidate build, then point the routing row at it.
 
@@ -211,7 +237,133 @@ async def enable_operation(
         candidate_build=candidate_build,
         mode=mode,
         rollout_percentage=rollout_percentage,
+        review_evidence=review_evidence,
+        recorded_by=recorded_by,
     )
+
+
+@dataclass(frozen=True)
+class ModeChange:
+    """One row `disable` would change, or did.
+
+    ``applied`` is False for a dry run. ``current_mode`` is None when no row
+    exists at the live digest -- reported as "nothing to disable" rather
+    than invented, because writing a `python` row for an operation that was
+    never enabled would manufacture history.
+    """
+
+    operation: str
+    document_digest: str
+    current_mode: str | None
+    new_mode: str
+    candidate_build: str | None
+    applied: bool = False
+
+    @property
+    def is_noop(self) -> bool:
+        return self.current_mode is None or self.current_mode == self.new_mode
+
+
+async def plan_disable(
+    session: AsyncSession,
+    *,
+    schema_digest: str,
+    operations: Mapping[str, str],
+    new_mode: str,
+    expected_candidate_build: str | None = None,
+) -> tuple[list[ModeChange], list[str]]:
+    """Work out what `disable` would change, WITHOUT changing anything.
+
+    Returns ``(changes, problems)``. ``problems`` is non-empty only for a
+    condition an operator must resolve -- currently just a candidate-build
+    guard mismatch, meaning someone repointed the row since they looked.
+
+    Deliberately performs no digest-agreement or reachability check. This
+    is the OFF ramp: it has to work when the planes disagree, when
+    query-api is down, and when the operator is in a hurry. `enable`'s
+    preflights exist to stop traffic moving to an unproven plane; none of
+    that reasoning applies to moving traffic back.
+    """
+    if new_mode not in DISABLE_MODES:
+        raise ValueError(
+            f"invalid disable mode {new_mode!r}, expected one of {DISABLE_MODES}"
+        )
+    result = await session.execute(
+        select(RoutingState).where(RoutingState.schema_digest == schema_digest)
+    )
+    live = {row.selected_operation: row for row in result.scalars().all()}
+
+    changes: list[ModeChange] = []
+    problems: list[str] = []
+    for operation, document_digest in sorted(operations.items()):
+        row = live.get(operation)
+        if row is not None and expected_candidate_build is not None:
+            if row.current_candidate_build != expected_candidate_build:
+                problems.append(
+                    f"{operation}: row points at candidate build "
+                    f"{row.current_candidate_build}, not the "
+                    f"{expected_candidate_build} you named -- someone has "
+                    "repointed it since you looked; re-run `status` and "
+                    "decide again"
+                )
+                continue
+        changes.append(
+            ModeChange(
+                operation=operation,
+                document_digest=document_digest,
+                current_mode=row.mode if row is not None else None,
+                new_mode=new_mode,
+                candidate_build=row.current_candidate_build
+                if row is not None
+                else None,
+            )
+        )
+    return changes, problems
+
+
+async def apply_disable(
+    session: AsyncSession,
+    *,
+    schema_digest: str,
+    changes: Sequence[ModeChange],
+    review_evidence: str | None = None,
+    recorded_by: str | None = None,
+) -> list[ModeChange]:
+    """Write the mode changes `plan_disable` produced.
+
+    Only rows that actually exist are touched: a `ModeChange` with
+    ``current_mode is None`` is skipped, never inserted. Turning something
+    off must not be able to turn something on.
+    """
+    applied: list[ModeChange] = []
+    for change in changes:
+        if change.current_mode is None:
+            continue
+        await session.execute(
+            update(RoutingState)
+            .where(
+                RoutingState.schema_digest == schema_digest,
+                RoutingState.document_digest == change.document_digest,
+                RoutingState.selected_operation == change.operation,
+            )
+            .values(
+                mode=change.new_mode,
+                review_evidence=review_evidence,
+                recorded_by=recorded_by,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        applied.append(
+            ModeChange(
+                operation=change.operation,
+                document_digest=change.document_digest,
+                current_mode=change.current_mode,
+                new_mode=change.new_mode,
+                candidate_build=change.candidate_build,
+                applied=True,
+            )
+        )
+    return applied
 
 
 async def operations_with_enablement_proof(

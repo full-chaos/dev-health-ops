@@ -226,6 +226,22 @@ def _fetch_go_plane_registry(base_url: str) -> GoPlaneRegistry:
     return GoPlaneRegistry(schema_digest=schema_digest, operations=operations)
 
 
+def _recorded_by() -> str:
+    """Who is running this command.
+
+    Resolved by the tool, never typed by the operator and never inferred
+    from their prose -- `recorded_by` answers "who" and `review_evidence`
+    answers "why", and conflating them makes both unreliable. Falls back
+    through the usual identity sources and finally to a literal, because a
+    missing identity must read as unknown rather than as somebody.
+    """
+    for var in ("DEV_HOPS_OPERATOR", "SUDO_USER", "USER", "LOGNAME"):
+        value = (os.getenv(var) or "").strip()
+        if value:
+            return value
+    return "unknown"
+
+
 def _query_api_url(ns: argparse.Namespace) -> str | None:
     return getattr(ns, "query_api_url", None) or os.getenv("GO_API_QUERY_API_URL")
 
@@ -265,6 +281,23 @@ def _resolve_requested_operations(
             f"registrydump). Known: {', '.join(sorted(catalog))}"
         )
     return sorted(set(names)), None
+
+
+def _enable_review_evidence(ns: argparse.Namespace, unproven: bool) -> str | None:
+    """What goes in the row's `review_evidence`.
+
+    An acknowledged-unproven enablement carries its reason DURABLY, on the
+    row. Previously the only record was a WARNING line at the moment it
+    happened: on 2026-09-07, 15 operations were enabled on an explicit
+    ruling and that ruling lived in a chat message, which is precisely the
+    "unreadable six weeks later" problem `status`'s UNPROVEN marker exists
+    to flag.
+    """
+    supplied = (getattr(ns, "review_evidence", None) or "").strip()
+    if unproven:
+        prefix = "ACKNOWLEDGED-UNPROVEN: "
+        return prefix + (supplied or "no reason given")
+    return supplied or None
 
 
 async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
@@ -394,6 +427,8 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
                 candidate_build=ns.candidate_build,
                 mode=ns.mode,
                 rollout_percentage=ns.rollout,
+                review_evidence=_enable_review_evidence(ns, operation in unproven),
+                recorded_by=_recorded_by(),
             )
         await session.commit()
 
@@ -405,6 +440,100 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
     for operation in operations:
         flag = " (UNPROVEN)" if operation in unproven else ""
         print(f"  {operation}{flag}")
+    return 0
+
+
+async def _cmd_routing_disable(ns: argparse.Namespace) -> int:
+    """The off-ramp.
+
+    `enable` shipped without one. For several hours on 2026-09-07 fifteen
+    operations were live on the Go plane, four of them measurably
+    divergent, and there was NO way to turn them off short of hand-written
+    SQL -- the practice this whole surface exists to abolish. Plan section
+    5 says "rollback is a registry change, not an image rollback"; this is
+    the verb that makes that change possible.
+    """
+    from dev_health_ops.db import get_postgres_session
+
+    from .go_api_routing_admin import DISABLE_MODES, apply_disable, plan_disable
+
+    catalog = dict(catalog_entries())
+    if not catalog:
+        return _refuse(
+            "the registered-operation catalog is empty or failed to load "
+            "(api/graphql/go_api_operations.json)"
+        )
+    operations, error = _resolve_requested_operations(ns.operations, catalog)
+    if error:
+        return _refuse(error)
+    if ns.mode not in DISABLE_MODES:
+        return _refuse(f"--mode must be one of {', '.join(DISABLE_MODES)}")
+    if ns.apply and not (getattr(ns, "review_evidence", None) or "").strip():
+        return _refuse(
+            "--apply requires --review-evidence: a mode change is a decision, "
+            "and a decision with no durable reason is unreadable weeks later"
+        )
+
+    local_digest = current_schema_digest()
+    selected = {op: catalog[op] for op in operations}
+
+    async with get_postgres_session() as session:
+        changes, problems = await plan_disable(
+            session,
+            schema_digest=local_digest,
+            operations=selected,
+            new_mode=ns.mode,
+            expected_candidate_build=getattr(ns, "candidate_build", None),
+        )
+        if problems:
+            return _refuse("; ".join(problems))
+
+        actionable = [c for c in changes if not c.is_noop]
+        print(f"schema_digest {local_digest}")
+        print(f"{'OPERATION':<24} {'FROM':<10} -> {'TO':<10} CANDIDATE BUILD")
+        for change in changes:
+            current = change.current_mode or "(no row)"
+            build = change.candidate_build or "-"
+            suffix = "" if not change.is_noop else "   [no change]"
+            print(
+                f"{change.operation:<24} {current:<10} -> {change.new_mode:<10} "
+                f"{build}{suffix}"
+            )
+            # A `primary` operation is the one Go is fully serving; saying so
+            # out loud is cheap and the operator may not have realised.
+            if change.current_mode == "primary" and change.new_mode == "disabled":
+                print(
+                    "    NOTE: this removes Go entirely for this operation -- "
+                    "Python serves it from the next request."
+                )
+
+        if not ns.apply:
+            print(
+                f"\nDRY RUN: {len(actionable)} row(s) would change, "
+                f"{len(changes) - len(actionable)} unchanged. "
+                "Re-run with --apply --review-evidence '<why>' to write."
+            )
+            return 0
+
+        applied = await apply_disable(
+            session,
+            schema_digest=local_digest,
+            changes=changes,
+            review_evidence=ns.review_evidence.strip(),
+            recorded_by=_recorded_by(),
+        )
+        await session.commit()
+
+    for change in applied:
+        # One structured line per row, so a log search finds the specific
+        # operation and not merely that "something was disabled".
+        print(
+            f"go_api_routing.disabled operation={change.operation} "
+            f"from={change.current_mode} to={change.new_mode} "
+            f"schema_digest={local_digest} recorded_by={_recorded_by()}",
+            file=sys.stderr,
+        )
+    print(f"\napplied: {len(applied)} row(s) now mode={ns.mode}")
     return 0
 
 
@@ -668,7 +797,66 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
             "UNPROVEN in `status` for as long as they are in force."
         ),
     )
+    enable.add_argument(
+        "--review-evidence",
+        dest="review_evidence",
+        default=None,
+        help=(
+            "Why this enablement is being made, recorded durably on each "
+            "row. Prefixed ACKNOWLEDGED-UNPROVEN for any row enabled "
+            "without a proof run."
+        ),
+    )
     enable.set_defaults(func=_cmd_routing_enable)
+
+    disable = routing_sub.add_parser(
+        "disable",
+        help=(
+            "Turn operations OFF -- the rollback half of the rollout. Sets "
+            "mode to python/disabled/shadow, none of which are reachable to "
+            "a real client. Deliberately has FEWER preflights than enable: "
+            "it must work when the planes disagree or query-api is down, "
+            "which is exactly when it is needed."
+        ),
+    )
+    disable.add_argument(
+        "--operations",
+        default="all-registered",
+        help="Comma-separated operation names, or 'all-registered' (default).",
+    )
+    disable.add_argument(
+        "--mode",
+        required=True,
+        choices=["python", "disabled", "shadow"],
+        help=(
+            "python = the documented safe default (same as no row); "
+            "disabled = same reachability but records a deliberate "
+            "decision; shadow = the client still gets Python's response "
+            "(the shadow executor does not exist and logs loudly)."
+        ),
+    )
+    disable.add_argument(
+        "--candidate-build",
+        dest="candidate_build",
+        default=None,
+        help=(
+            "Optional guard: refuse if a row points at a different build "
+            "than this, i.e. someone repointed it since you looked. Never "
+            "written -- disable changes mode only."
+        ),
+    )
+    disable.add_argument(
+        "--review-evidence",
+        dest="review_evidence",
+        default=None,
+        help="Why. Required with --apply; recorded durably on each row.",
+    )
+    disable.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write the changes. Without it, prints what would change and exits 0.",
+    )
+    disable.set_defaults(func=_cmd_routing_disable)
 
     status = routing_sub.add_parser(
         "status",

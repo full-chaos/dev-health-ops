@@ -139,9 +139,23 @@ func githubWorkItemEngineOracleCases() []oracleCase {
 	}
 }
 
-func TestGitHubIssueTypeMetricsMatchLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(
-		t, "github/work-items/issue-type-metrics", githubWorkItemEngineOracleCases(),
+// CHAOS-5351: these three tests used to shell out to the live Python
+// oracle (compute_work_item_engine_destinations_daily, called only from the
+// now-deleted run_work_items_sync_job). The oracle_pairs helper
+// (_github_work_item_derived_helpers.py's engine_destinations_all_days)
+// statically asserted the production call happened inside
+// job_work_items.py's "for d in days:" loop -- that loop no longer exists,
+// so the live comparison is unrepresentable, not merely unavailable. Frozen
+// once to JSON (captured 2026-09-07 on bigboy, from these same cases run
+// against the still-live job_work_items.py at
+// chaos-5351-delete-work-items-sync-job-v2's main merge-base) instead of
+// deleted outright: providersync's Go derivation
+// (buildGitHubWorkItemEngineOracleRows) is independent, native logic that
+// still needs a regression guard against silent field drift, same as every
+// other R6 (CHAOS-5310/5321) conversion -- see testdata/oracle_frozen/README.md.
+func TestGitHubIssueTypeMetricsMatchFrozenPythonProduction(t *testing.T) {
+	compareRowsAgainstFrozenOracle(
+		t, "github_work-items_issue-type-metrics", githubWorkItemEngineOracleCases(),
 		func(t *testing.T, input map[string]any) githubIssueTypeMetricsColumns {
 			issueTypes, _, _ := buildGitHubWorkItemEngineOracleRows(t, input)
 			if !input["AllowEmpty"].(bool) && len(issueTypes) == 0 {
@@ -152,9 +166,9 @@ func TestGitHubIssueTypeMetricsMatchLivePythonProduction(t *testing.T) {
 	)
 }
 
-func TestGitHubInvestmentClassificationsMatchLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(
-		t, "github/work-items/investment-classifications", githubWorkItemEngineOracleCases(),
+func TestGitHubInvestmentClassificationsMatchFrozenPythonProduction(t *testing.T) {
+	compareRowsAgainstFrozenOracle(
+		t, "github_work-items_investment-classifications", githubWorkItemEngineOracleCases(),
 		func(t *testing.T, input map[string]any) githubInvestmentClassificationColumns {
 			_, classifications, _ := buildGitHubWorkItemEngineOracleRows(t, input)
 			if !input["AllowEmpty"].(bool) && len(classifications) == 0 {
@@ -165,9 +179,9 @@ func TestGitHubInvestmentClassificationsMatchLivePythonProduction(t *testing.T) 
 	)
 }
 
-func TestGitHubInvestmentMetricsMatchLivePythonProduction(t *testing.T) {
-	compareRowsAgainstPythonOracle(
-		t, "github/work-items/investment-metrics", githubWorkItemEngineOracleCases(),
+func TestGitHubInvestmentMetricsMatchFrozenPythonProduction(t *testing.T) {
+	compareRowsAgainstFrozenOracle(
+		t, "github_work-items_investment-metrics", githubWorkItemEngineOracleCases(),
 		func(t *testing.T, input map[string]any) githubInvestmentMetricsColumns {
 			_, _, metrics := buildGitHubWorkItemEngineOracleRows(t, input)
 			// The open-item default case intentionally has no completed metric;

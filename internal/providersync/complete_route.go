@@ -470,5 +470,23 @@ func (executor CompleteRouteExecutor) Execute(
 		}
 		return err
 	})
+	// CHAOS-5351: the deleted Python `run_work_items_sync_job` logged an
+	// Info-level "fetched N items and M transitions" summary operators relied
+	// on when running it manually (`dev-hops sync work-items`). This executor
+	// is the shared completion point for every provider/dataset route (not
+	// just work-items), and `result.Result` already carries each route's own
+	// `*_synced` counts (e.g. `work_items_synced`, `transitions_synced` --
+	// github_work_items_route.go, gitlab_work_items_route.go,
+	// jira_work_items_route.go, jira_atlassian_route.go,
+	// linear_work_items_route.go all populate it), so this is a straight
+	// surface-the-existing-data log, not a new computation.
+	if err == nil {
+		slog.Info(
+			"provider_sync.route_completed",
+			"provider", session.Claim.Provider, "dataset", session.Claim.Dataset,
+			"unit", session.Claim.ID, "effects_written", result.Effects.Written,
+			"result", result.Result,
+		)
+	}
 	return result, err
 }

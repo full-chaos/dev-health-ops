@@ -21,7 +21,22 @@ type githubWorkItemsRESTSelectionOracleRow struct {
 	CommentLimitObserved int      `json:"comment_limit_observed"`
 }
 
-func TestGitHubWorkItemsRESTSelectionMatchesLivePythonProducer(t *testing.T) {
+// CHAOS-5351: this used to be TestGitHubWorkItemsRESTSelectionMatchesLive
+// PythonProducer, shelling out to the live Python oracle
+// (dataset_adapters._github_work_item_options, via
+// testdata/oracle_pairs/github_work-items_rest-selection.py). Both the
+// Python adapter function and the CLI/Celery dispatch surface that fed it
+// are deleted -- run_work_items_sync_job and its callers are gone, and
+// dataset_adapters.py no longer builds work-item kwargs for anyone. Frozen
+// once to JSON (captured 2026-09-07 on bigboy from the pushed tip of
+// chaos-5351-delete-work-items-sync-job-v2's merge-base with main, by
+// running python_generic_row_oracle.py directly against origin/main's
+// still-live dataset_adapters.py with these same two cases) instead of
+// deleted outright: this pair also feeds `reflected_fields` (the field-name
+// completeness check), and Go's own githubWorkItemsRESTOptionsForClaim
+// derivation this test compares against is independent, native logic that
+// still needs a regression guard against silent field drift.
+func TestGitHubWorkItemsRESTSelectionMatchesFrozenPythonProducer(t *testing.T) {
 	cases := []oracleCase{
 		{ID: "all_optional_controls", Input: map[string]any{
 			"sync_prs": false,
@@ -36,8 +51,8 @@ func TestGitHubWorkItemsRESTSelectionMatchesLivePythonProducer(t *testing.T) {
 			},
 		}},
 	}
-	compareRowsAgainstPythonOracle(
-		t, "github/work-items/rest-selection", cases,
+	compareRowsAgainstFrozenOracle(
+		t, "github_work-items_rest-selection", cases,
 		buildGitHubWorkItemsRESTSelectionOracleRow, nil,
 	)
 }

@@ -12,72 +12,36 @@ import (
 	"testing"
 )
 
-type workItemContractVariant struct {
-	SyncPRs             bool  `json:"sync_prs"`
-	IncludeIssues       *bool `json:"include_issues"`
-	IncludePullRequests *bool `json:"include_pull_requests"`
-	FetchComments       *bool `json:"fetch_comments"`
-	FetchMilestones     *bool `json:"fetch_milestones"`
-	CommentsLimit       *int  `json:"comments_limit"`
-}
+// CHAOS-5351: TestWorkItemCompatibilityContractComesFromLivePythonAdapter used
+// to live here, executing testdata/python_work_item_contract_oracle.py
+// against dataset_adapters.py's _work_item_kwargs/_github_work_item_options
+// to pin the github/gitlab include_issues/include_pull_requests/
+// fetch_comments/fetch_milestones/comments_limit contract. Both Python
+// functions are deleted along with run_work_items_sync_job and the Celery
+// dataset-unit dispatch that called them (dataset_adapters.run_dataset_unit's
+// work-items branch) -- there is no longer a Python "work item kwargs"
+// contract to assert on; the native provider-sync route
+// (cmd/dev-health-worker/provider_sync.go's work-items dataset case, one Go
+// implementation per provider) is production now. Deleted the oracle script
+// (testdata/python_work_item_contract_oracle.py) and this test with it.
+//
+// TestWorkItemCompatibilityOracleRejectsUnexpectedSource and
+// TestWorkItemCompatibilityOracleIgnoresSiblingPythonPath below used that
+// SAME script only as a vehicle to exercise python_oracle_loader.py's
+// generic security properties (ALLOWED_MODULES identity rejection,
+// PYTHONPATH sibling-injection immunity) -- properties of the shared loader,
+// not of work-items specifically, and this package's only tests of them
+// (`rg` confirmed no equivalent for the other two live oracle scripts).
+// Repointed to python_launchdarkly_normalization_oracle.py /
+// processors/launchdarkly.py instead of deleting: that oracle is unrelated
+// to this ticket, still live, and exercises load_live_module the identical
+// way (single source-file argv[1]).
 
-type workItemContractEntry struct {
-	Variants []workItemContractVariant `json:"variants"`
-}
-
-func TestWorkItemCompatibilityContractComesFromLivePythonAdapter(t *testing.T) {
+func TestPythonOracleLoaderRejectsUnexpectedSource(t *testing.T) {
 	python := pythonExecutable(t)
 	_, currentFile, _, _ := runtime.Caller(0)
 	packageDir := filepath.Dir(currentFile)
-	adapterSource := filepath.Join(
-		packageDir, "..", "..", "src", "dev_health_ops", "processors", "dataset_adapters.py",
-	)
-	oracleScript := filepath.Join(packageDir, "testdata", "python_work_item_contract_oracle.py")
-	output, err := exec.Command(python, oracleScript, adapterSource).CombinedOutput()
-	if err != nil {
-		t.Fatalf("execute Python work-item oracle: %v: %s", err, output)
-	}
-	var contract map[string]map[string]workItemContractEntry
-	if err := json.Unmarshal(output, &contract); err != nil {
-		t.Fatalf("decode Python work-item oracle: %v: %s", err, output)
-	}
-	for _, provider := range []string{"github", "gitlab"} {
-		for _, dataset := range []string{
-			"work-items",
-			"work-item-labels",
-			"work-item-projects",
-			"work-item-history",
-			"work-item-comments",
-		} {
-			entry, ok := contract[provider][dataset]
-			if !ok || len(entry.Variants) != 2 {
-				t.Fatalf("%s/%s entry=%+v", provider, dataset, entry)
-			}
-			for index, variant := range entry.Variants {
-				if provider == "github" {
-					if variant.IncludeIssues == nil || !*variant.IncludeIssues ||
-						variant.IncludePullRequests == nil ||
-						*variant.IncludePullRequests != (index == 1) ||
-						variant.FetchComments == nil || !*variant.FetchComments ||
-						variant.FetchMilestones == nil || !*variant.FetchMilestones ||
-						variant.CommentsLimit == nil || *variant.CommentsLimit != 500 {
-						t.Fatalf("%s/%s variant=%+v", provider, dataset, variant)
-					}
-				} else if variant.IncludeIssues != nil || variant.IncludePullRequests != nil ||
-					variant.FetchComments != nil || variant.FetchMilestones != nil ||
-					variant.CommentsLimit != nil {
-					t.Fatalf("%s/%s GitLab flags drifted: %+v", provider, dataset, variant)
-				}
-			}
-		}
-	}
-}
-
-func TestWorkItemCompatibilityOracleRejectsUnexpectedSource(t *testing.T) {
-	python := pythonExecutable(t)
-	_, currentFile, _, _ := runtime.Caller(0)
-	packageDir := filepath.Dir(currentFile)
-	oracleScript := filepath.Join(packageDir, "testdata", "python_work_item_contract_oracle.py")
+	oracleScript := filepath.Join(packageDir, "testdata", "python_launchdarkly_normalization_oracle.py")
 	unexpectedSource := filepath.Join(
 		packageDir, "..", "..", "src", "dev_health_ops", "processors", "__init__.py",
 	)
@@ -87,13 +51,13 @@ func TestWorkItemCompatibilityOracleRejectsUnexpectedSource(t *testing.T) {
 	}
 }
 
-func TestWorkItemCompatibilityOracleIgnoresSiblingPythonPath(t *testing.T) {
+func TestPythonOracleLoaderIgnoresSiblingPythonPath(t *testing.T) {
 	python := pythonExecutable(t)
 	_, currentFile, _, _ := runtime.Caller(0)
 	packageDir := filepath.Dir(currentFile)
 	root := filepath.Join(packageDir, "..", "..")
-	oracleScript := filepath.Join(packageDir, "testdata", "python_work_item_contract_oracle.py")
-	adapterSource := filepath.Join(root, "src", "dev_health_ops", "processors", "dataset_adapters.py")
+	oracleScript := filepath.Join(packageDir, "testdata", "python_launchdarkly_normalization_oracle.py")
+	adapterSource := filepath.Join(root, "src", "dev_health_ops", "processors", "launchdarkly.py")
 
 	siblingSourceRoot := filepath.Join(t.TempDir(), "src")
 	siblingPackage := filepath.Join(siblingSourceRoot, "dev_health_ops")
@@ -105,9 +69,9 @@ func TestWorkItemCompatibilityOracleIgnoresSiblingPythonPath(t *testing.T) {
 		"from pathlib import Path\nPath(" + strconv.Quote(sentinel) + ").write_text('executed')\n",
 	)
 	for path, content := range map[string][]byte{
-		filepath.Join(siblingPackage, "__init__.py"):                       malicious,
-		filepath.Join(siblingPackage, "processors", "__init__.py"):         {},
-		filepath.Join(siblingPackage, "processors", "dataset_adapters.py"): malicious,
+		filepath.Join(siblingPackage, "__init__.py"):                   malicious,
+		filepath.Join(siblingPackage, "processors", "__init__.py"):     {},
+		filepath.Join(siblingPackage, "processors", "launchdarkly.py"): malicious,
 	} {
 		if err := os.WriteFile(path, content, 0o644); err != nil {
 			t.Fatal(err)
@@ -130,7 +94,7 @@ func TestWorkItemCompatibilityOracleIgnoresSiblingPythonPath(t *testing.T) {
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("execute Python work-item oracle: %v: %s", err, output)
+		t.Fatalf("execute Python launchdarkly oracle: %v: %s", err, output)
 	}
 	if _, err := os.Stat(sentinel); err == nil || !os.IsNotExist(err) {
 		t.Fatalf("sibling module executed: stat error=%v output=%s", err, output)
@@ -227,13 +191,6 @@ func TestParityOraclesRunWithoutSQLAlchemy(t *testing.T) {
 			script: "python_launchdarkly_normalization_oracle.py",
 			source: []string{
 				filepath.Join(root, "src", "dev_health_ops", "processors", "launchdarkly.py"),
-			},
-		},
-		{
-			name:   "work-item contract parity",
-			script: "python_work_item_contract_oracle.py",
-			source: []string{
-				filepath.Join(root, "src", "dev_health_ops", "processors", "dataset_adapters.py"),
 			},
 		},
 	} {

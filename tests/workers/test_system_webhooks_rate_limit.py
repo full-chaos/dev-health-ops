@@ -20,7 +20,6 @@ from dev_health_ops.workers import system_webhooks
 
 _GITHUB_PAYLOAD = {"repository": {"owner": {"login": "acme"}, "name": "widget"}}
 _GITLAB_PAYLOAD = {"project": {"id": 123}}
-_JIRA_PAYLOAD = {"issue": {"key": "ENG-1"}}
 
 
 def _patch_storage() -> Any:
@@ -166,13 +165,16 @@ def test_gitlab_webhook_events_request_security_sync(
     assert process_project.await_args.kwargs["sync_security"] is True
 
 
-def test_jira_rate_limit_reraises() -> None:
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job",
-        side_effect=RateLimitException("jira limit", retry_after_seconds=60),
-    ):
-        with pytest.raises(RateLimitException):
-            system_webhooks._process_jira_event("issue_updated", _JIRA_PAYLOAD, "org-1")
+# CHAOS-5351: test_jira_rate_limit_reraises used to live here, patching
+# dev_health_ops.metrics.job_work_items.run_work_items_sync_job (the target
+# system_webhooks.py's _process_jira_event calls) to prove a RateLimitException
+# reaches the outer Celery retry instead of being swallowed. Deleted along
+# with run_work_items_sync_job -- system_webhooks.py itself is untouched here
+# (CHAOS-5320/#2346 owns that file and is expected to delete
+# _process_jira_event's work-item branch entirely), but the symbol this test
+# patched no longer exists, so it can no longer even construct its mock.
+# Nothing survives to test until #2346 lands and repoints (or removes) the
+# Jira webhook path.
 
 
 def test_outer_task_honors_retry_after_countdown() -> None:

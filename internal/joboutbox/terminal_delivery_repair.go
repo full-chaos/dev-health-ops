@@ -198,6 +198,25 @@ const repairProviderUnitTerminalDeliverySQL = `
 	WHERE outbox.job_kind = 'sync.provider_unit'
 		AND outbox.dedupe_key = 'sync.provider_unit:' || unit.id::text
 		AND outbox.args #>> '{domain,type}' = 'sync_run_unit'
+		-- The OUTBOX delivery budget, not just River's (codex r1, P2).
+		--
+		-- This repair bounded itself on candidate_job.attempt <
+		-- candidate_job.max_attempts alone, which is River's budget for ONE
+		-- delivery, not the row's budget across rearms. Neither this rearm nor
+		-- StrandRepair's resets attempt_count, but Repository's claim
+		-- (repository.go:96) increments it with no budget predicate of its own,
+		-- so a row whose attempt_count was already spent could be rearmed here
+		-- and climb past max_attempts indefinitely: every replacement delivery
+		-- that River discards early (attempt < max_attempts) with the rescue
+		-- sentinel makes it eligible again.
+		--
+		-- That also made the bounded-rearm guarantee stated on
+		-- repairStrandedProviderUnitSQL and on UnreclaimableSweep's outbox read
+		-- FALSE as a whole-system claim: those two split on attempt_count, and
+		-- a third path ignoring it can hand the same row back forever. The
+		-- predicate is the same one, so all three now agree on when recovery is
+		-- out of road and the sweep may act.
+		AND outbox.attempt_count < outbox.max_attempts
 		AND unit.status = 'dispatching'
 		AND (unit.available_at IS NULL OR unit.available_at <= $1)
 		AND unit.lease_owner IS NULL

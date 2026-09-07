@@ -1154,6 +1154,44 @@ func partitionPublishedUnits(
 // reached that row before this change either), and widening it would mean
 // racing the repair for rows the repair may legitimately want.
 //
+// # THE THREE-WAY SPLIT (CHAOS-5428), stated once, here
+//
+// The two states above are ALSO taken by joboutbox.StrandRepair's
+// provider-unit shape (repairStrandedProviderUnitSQL). That is deliberate and
+// unavoidable: a delivery that died in transport and one that is beyond saving
+// look identical in River. So River state alone no longer separates all three
+// paths, and the second axis is worth naming explicitly rather than leaving a
+// future reader to rediscover it from three files.
+//
+// Let A = job.attempt (River's budget for ONE delivery) and
+//
+//	    C = outbox.attempt_count (deliveries spent on this row, across rearms).
+//
+//		                          | River state       | River budget | Outbox budget
+//		  TerminalDeliveryRepair  | discarded + the   | A <  max     | C <  max
+//		  (recover, replacement   | rescue sentinel   |              |
+//		   delivery)              |                   |              |
+//		  StrandRepair provider   | cancelled, or     | A >= max for | C <  max
+//		  shape (recover, rearm)  | discarded         | discarded    |
+//		  THIS sweep (destroy)    | cancelled, or     | A >= max for | C >= max
+//		                          | discarded         | discarded    |
+//
+// Row 1 and row 2 are disjoint on the River budget: their attempt predicates
+// are exact complements for 'discarded', and row 1 never matches 'cancelled'.
+// Rows 2 and 3 are disjoint on the OUTBOX budget, which is the only clock that
+// survives a rearm -- neither rearm path resets attempt_count, while
+// sync_run_units.attempts is 0 for every candidate rows 2 and 3 select at all
+// and therefore separates nothing.
+//
+// The direction matters as much as the disjointness: recovery holds the row
+// while a delivery budget remains, and only once it is spent may this sweep
+// destroy the unit. That is what makes the sweep the last resort its own
+// documentation claims, instead of a race for the same rows.
+//
+// TestProviderUnitPathsAreDisjointAcrossTheAttemptCountRange walks C from 0 to
+// max and asserts EXACTLY ONE of the three predicates matches at every value,
+// so this table cannot quietly stop being true.
+//
 // The join is on river_job.id, a bigint, against a bigint array. CHAOS-4092 is
 // the reason that is stated: casting River's primary key to text is not
 // sargable against river_job_pkey and turned a sibling repair into a 9.5h

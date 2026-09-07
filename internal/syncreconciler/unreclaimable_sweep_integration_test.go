@@ -1163,6 +1163,45 @@ func TestUnreclaimableSweepLeavesAFeatureDisabledFinalizeRowParked(t *testing.T)
 	}
 }
 
+// The BOUNDARY, from this side: at attempt_count == max_attempts the outbox
+// delivery budget is spent, recovery is out of road, and this sweep owns the
+// row.
+//
+// Its pair is TestUnreclaimableSweepDefersAUnitWhoseOutboxDeliveryBudgetRemains
+// one value below. Together they pin the exact point the ownership flips, which
+// a test at only one end cannot: a predicate written with the wrong comparison
+// (<= instead of <, or >= instead of >) passes one of them and fails the other,
+// and passes neither pair if the split is dropped entirely.
+func TestUnreclaimableSweepSelectsAUnitWhoseDeliveryBudgetIsSpent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(86)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	// Identical to the deferral test in every respect EXCEPT the outbox
+	// attempt_count: 5 of 5 rather than 1 of 5.
+	seedSweepDeliveryWithBudget(t, ctx, pool, unit, "discarded",
+		"dev-health job failed [retryable]", 5, 5, 5)
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 1 || result.Terminalized != 1 {
+		t.Fatalf("result = %+v, want the spent-budget delivery terminalized -- once recovery cannot "+
+			"rearm the row, this sweep is the only thing left that can resolve the unit", result)
+	}
+	if result.DeferredToRepair != 0 {
+		t.Fatalf("DeferredToRepair = %d, want 0 -- the budget is spent, nothing is deferring",
+			result.DeferredToRepair)
+	}
+	if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "failed" {
+		t.Fatalf("unit status = %q, want failed", status)
+	}
+}
+
 // THE CAS, executed rather than argued.
 //
 // The liveness proof is taken on the queue-control pool, outside the domain

@@ -130,6 +130,14 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The SIBLING provider-unit repair, constructed here so the disjointness
+	// matrix below can drive the real thing rather than a model of its
+	// predicate. It runs on the queue-control pool only: unlike StrandRepair
+	// it reads no execution state.
+	terminalRepair, err := NewTerminalDeliveryRepair(queue, "river")
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixture := &strandFixture{
 		admin: admin, relay: relay, registry: registry, orgID: integrationUUID(7001),
 	}
@@ -838,6 +846,223 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	// THE THREE-WAY DISJOINTNESS, EXECUTED across the whole attempt_count
+	// range rather than argued from the SQL.
+	//
+	// Three paths can act on one provider-unit outbox row and two RECOVER
+	// while one DESTROYS, so an overlap is a correctness bug: the sweep could
+	// terminalize a unit a repair was about to revive, or two repairs could
+	// hand the same row back and forth. unreclaimable_sweep.go's own doc
+	// comment refuses to settle this with an ordering argument, because a
+	// timing argument stops being true during an incident -- which is exactly
+	// when all three are live.
+	//
+	// Both joboutbox repairs are driven FOR REAL here (no hand-written model
+	// of their predicates, which is the drift this repository has been bitten
+	// by), at every value of outbox.attempt_count from 0 to max_attempts, in
+	// both River shapes that reach them. The sweep is the third path and lives
+	// in another package; its two halves of the same boundary are pinned from
+	// its own side by TestUnreclaimableSweepDefersAUnitWhoseOutboxDeliveryBudgetRemains
+	// and TestUnreclaimableSweepSelectsAUnitWhoseDeliveryBudgetIsSpent.
+	//
+	// A row where BOTH stay silent is not automatically a gap: an outbox budget
+	// of max_attempts spent is precisely where recovery is out of road and the
+	// sweep becomes the owner. The OTHER silent row -- a discard with River
+	// attempts remaining -- is a real, separate defect on origin/main, pinned
+	// by TestTerminalDeliveryRepairCannotMatchAProviderUnitDiscard below.
+	t.Run("exactly one provider-unit path claims a row at every attempt_count", func(t *testing.T) {
+		const maxAttempts = 5
+		for _, shape := range []struct {
+			name string
+			// riverState/riverAttempt/riverError place the delivery on one
+			// side of the FIRST axis (River's own per-delivery budget).
+			riverState   string
+			riverAttempt int
+			riverError   string
+			// wantTerminal/wantStrand: which repair owns the row while the
+			// OUTBOX budget remains. At most one is ever true.
+			wantTerminal bool
+			wantStrand   bool
+			reason       string
+		}{
+			{
+				// TerminalDeliveryRepair's half of the River-budget axis --
+				// and it claims NOTHING, which is a measured fact about
+				// origin/main, not an artefact of this fixture. See
+				// TestTerminalDeliveryRepairCannotMatchAProviderUnitDiscard
+				// below for the proof and the mechanism.
+				name:       "discarded, river budget left, rescue sentinel",
+				riverState: "discarded", riverAttempt: 2,
+				riverError: riverUnhandledRescueError,
+				reason: "neither: this is TerminalDeliveryRepair's half of the split, and that repair is " +
+					"structurally unable to match a provider-unit discard (unique_states contradiction)",
+			},
+			{
+				name:       "discarded, river budget spent",
+				riverState: "discarded", riverAttempt: maxAttempts,
+				riverError: "dev-health job failed [retryable]",
+				wantStrand: true,
+				reason:     "the 115e6246 shape: River has no retry left, so the strand shape owns it",
+			},
+			{
+				name:       "cancelled",
+				riverState: "cancelled", riverAttempt: 1,
+				riverError: "JobCancelError: dev-health job failed [validation]",
+				wantStrand: true,
+				reason:     "TerminalDeliveryRepair matches 'discarded' only, so cancelled is unambiguously the strand shape's at any attempt",
+			},
+			{
+				name:       "discarded, river budget left, NO rescue sentinel",
+				riverState: "discarded", riverAttempt: 2,
+				riverError: "dev-health job failed [retryable]",
+				reason:     "neither: a knowingly narrower cut, documented on selectTerminalDeliveryStatesSQL",
+			},
+		} {
+			for outboxAttempts := 0; outboxAttempts <= maxAttempts; outboxAttempts++ {
+				name := fmt.Sprintf("%s/attempt_count=%d", shape.name, outboxAttempts)
+				t.Run(name, func(t *testing.T) {
+					resetStrandTables(t, ctx, admin)
+					now := time.Now().UTC().Truncate(time.Microsecond)
+					unitID := seedSyncStrandUnit(t, ctx, admin, fixture.orgID, syncStrandUnitSpec{
+						runStatus: "dispatching", unitStatus: "dispatching", now: now,
+					})
+					outboxID := deliverStrandSeed(t, ctx, fixture, now,
+						jobcontract.KindSyncProviderUnit, "sync.provider_unit:"+unitID,
+						"sync_run_unit", unitID, jobcontract.ProviderUnitPayload{UnitID: unitID})
+					jobID := riverJobFor(t, ctx, admin, outboxID)
+					setJobBudget(t, ctx, admin, jobID, shape.riverState, shape.riverAttempt, now)
+					setJobLastError(t, ctx, admin, jobID, shape.riverError)
+					setOutboxAttemptCount(t, ctx, admin, outboxID, outboxAttempts)
+
+					// The OUTBOX budget is the second axis: once it is spent,
+					// neither repair may claim the row whatever River says.
+					budgetLeft := outboxAttempts < maxAttempts
+					wantTerminal := shape.wantTerminal && budgetLeft
+					wantStrand := shape.wantStrand && budgetLeft
+
+					terminalResult, err := terminalRepair.Step(ctx, now, 10)
+					if err != nil {
+						t.Fatalf("TerminalDeliveryRepair.Step(): %v", err)
+					}
+					// Run the strand repair against the state the terminal
+					// repair left, exactly as the reconciler loop does -- so a
+					// row both would claim shows up as two rearms here rather
+					// than being hidden by running them in isolation.
+					strandResult, err := repair.Step(ctx, now, 10)
+					if err != nil {
+						t.Fatalf("StrandRepair.Step(): %v", err)
+					}
+
+					gotTerminal := terminalResult.Recovered
+					gotStrand := len(strandResult.ProviderUnitRearms)
+					if gotTerminal != boolToInt(wantTerminal) || gotStrand != boolToInt(wantStrand) {
+						t.Fatalf(
+							"terminal=%d strand=%d, want terminal=%d strand=%d "+
+								"(river %s attempt=%d/%d, outbox attempt_count=%d/%d) -- %s",
+							gotTerminal, gotStrand, boolToInt(wantTerminal), boolToInt(wantStrand),
+							shape.riverState, shape.riverAttempt, maxAttempts,
+							outboxAttempts, maxAttempts, shape.reason,
+						)
+					}
+					if gotTerminal+gotStrand > 1 {
+						t.Fatalf("BOTH repairs claimed one row (terminal=%d strand=%d): the two recovery "+
+							"paths are no longer disjoint and will fight over it", gotTerminal, gotStrand)
+					}
+				})
+			}
+		}
+	})
+
+	// TerminalDeliveryRepair CANNOT MATCH A PROVIDER-UNIT DISCARD.
+	//
+	// Found while executing the disjointness matrix above: the shape that
+	// repair is documented to own -- a job River's unhandled-kind rescue
+	// discarded with attempts still on the clock -- produces zero recoveries,
+	// at every outbox attempt_count. It is not a fixture artefact; it is a
+	// contradiction between two pieces of origin/main:
+	//
+	//   - repairProviderUnitTerminalDeliverySQL requires BOTH
+	//     `candidate_job.state::text = 'discarded'` AND
+	//     `river_job_state_in_bitmask(candidate_job.unique_states, state)` --
+	//     i.e. the dead job must still be HOLDING the unique key, which is why
+	//     the repair goes on to delete it before minting a replacement.
+	//   - uniqueStatesForKind (inserter.go) deliberately gives
+	//     sync.provider_unit `rivertype.UniqueOptsByStateDefault()`, whose own
+	//     comment says "a discarded/cancelled provider transport row is not a
+	//     successful logical delivery... lets the fenced outbox repair create a
+	//     replacement" -- so for this kind, discarded is EXCLUDED from
+	//     unique_states and the dead job holds nothing.
+	//
+	// The two were written for the same goal from opposite directions: one
+	// assumes the key is held and deletes to free it, the other guarantees the
+	// key is already free. Their conjunction is unsatisfiable, so this repair
+	// has never fired for the only job_kind it selects
+	// (`WHERE outbox.job_kind = 'sync.provider_unit'`).
+	//
+	// NOT FIXED HERE, deliberately: repairing it means changing an existing
+	// recovery path's semantics -- either dropping the bitmask predicate (and
+	// with it the "we are freeing the key" justification for the delete) or
+	// widening uniqueStatesForKind (which changes deduplication for every
+	// provider unit). That is its own review, not a rider on this one. It is
+	// pinned here so the contradiction is a red test the day someone touches
+	// either side, rather than a silent no-op for another year.
+	//
+	// It also bounds codex r1's P2 on this file: the unbounded-rearm trace it
+	// describes runs THROUGH this repair, so it is unreachable today. The
+	// outbox-budget predicate was still added to that query, because the guard
+	// has to already be there on the day the contradiction is resolved.
+	t.Run("terminal delivery repair cannot match a provider-unit discard", func(t *testing.T) {
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		unitID := seedSyncStrandUnit(t, ctx, admin, fixture.orgID, syncStrandUnitSpec{
+			runStatus: "dispatching", unitStatus: "dispatching", now: now,
+		})
+		outboxID := deliverStrandSeed(t, ctx, fixture, now,
+			jobcontract.KindSyncProviderUnit, "sync.provider_unit:"+unitID,
+			"sync_run_unit", unitID, jobcontract.ProviderUnitPayload{UnitID: unitID})
+		jobID := riverJobFor(t, ctx, admin, outboxID)
+		// Exactly the shape the repair documents: rescue sentinel, attempts
+		// remaining, outbox budget remaining.
+		setJobBudget(t, ctx, admin, jobID, "discarded", 2, now)
+		setJobLastError(t, ctx, admin, jobID, riverUnhandledRescueError)
+		setOutboxAttemptCount(t, ctx, admin, outboxID, 1)
+
+		// The mechanism, asserted directly rather than inferred from a zero
+		// result -- a zero could equally mean the fixture failed to build the
+		// row, and that would make this test prove nothing.
+		var holdsUniqueKey, stateInMask bool
+		var uniqueStates string
+		if err := admin.QueryRow(ctx, `
+			SELECT unique_key IS NOT NULL,
+			       river.river_job_state_in_bitmask(unique_states, state),
+			       unique_states::text
+			FROM river.river_job WHERE id = $1`, jobID).
+			Scan(&holdsUniqueKey, &stateInMask, &uniqueStates); err != nil {
+			t.Fatal(err)
+		}
+		if !holdsUniqueKey {
+			t.Fatal("the relay minted a provider-unit job with no unique_key at all; " +
+				"this test's premise about WHICH predicate excludes it is wrong")
+		}
+		if stateInMask {
+			t.Fatalf("river_job_state_in_bitmask(unique_states=%s, 'discarded') is TRUE -- "+
+				"uniqueStatesForKind no longer excludes discarded for sync.provider_unit, so the "+
+				"contradiction this test pins is resolved. Re-derive TerminalDeliveryRepair's "+
+				"reachability and update the disjointness table in unreclaimable_sweep.go", uniqueStates)
+		}
+
+		result, err := terminalRepair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatalf("TerminalDeliveryRepair.Step(): %v", err)
+		}
+		if result.Recovered != 0 {
+			t.Fatalf("Recovered = %d, want 0 -- the bitmask predicate above is false, so this query "+
+				"cannot select the row; a non-zero here means the query changed and this whole "+
+				"finding needs re-deriving", result.Recovered)
+		}
+		assertOutboxStillDelivered(t, ctx, admin, outboxID, jobID)
 	})
 
 	// THE 624 FALSE SUCCESSES, made observable.
@@ -1597,6 +1822,33 @@ func setJobBudget(
 // against syncreconciler.UnreclaimableSweep. attempt_count is the only clock
 // that survives a rearm, which is why the split hangs off it; see
 // repairStrandedProviderUnitSQL's own comment.
+// setJobLastError rewrites the delivery's LAST River error, which is the
+// third axis of the disjointness split: TerminalDeliveryRepair matches only
+// River's own unhandled-kind rescue sentinel, and a fixture that left the
+// error unset would silently test only the states, never the sentinel.
+func setJobLastError(
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool, jobID int64, message string,
+) {
+	t.Helper()
+	command, err := pool.Exec(ctx, `
+		UPDATE river.river_job
+		SET errors = ARRAY[jsonb_build_object('attempt', attempt, 'error', $2::text)]
+		WHERE id = $1`, jobID, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.RowsAffected() != 1 {
+		t.Fatalf("no River job %d to restate", jobID)
+	}
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func setOutboxAttemptCount(
 	t *testing.T, ctx context.Context, pool *pgxpool.Pool, outboxID string, attemptCount int,
 ) {

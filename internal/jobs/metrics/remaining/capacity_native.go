@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -55,6 +56,12 @@ type CapacityExecutor struct {
 	observer  CapacityObserver
 	nowUTC    func() time.Time
 	batchSize int
+	// logger restores the per-(org,team,scope) observability the deleted
+	// Python job (job_capacity.py) had and the native executor's aggregate-only
+	// counters (CapacityObserver) do not carry (CHAOS-5382). Defaults to
+	// slog.Default() at construction, following ReleaseImpactExecutor's
+	// convention, so every call site here can log unconditionally.
+	logger *slog.Logger
 }
 
 // CapacityObserver reports what the native capacity executor actually did.
@@ -85,7 +92,7 @@ var ErrCapacitySeedMissing = errors.New(
 // NewCapacityExecutor fails closed on a nil connection or an incompatible
 // schema.
 func NewCapacityExecutor(
-	ctx context.Context, conn driver.Conn, observer CapacityObserver,
+	ctx context.Context, conn driver.Conn, observer CapacityObserver, logger *slog.Logger,
 ) (*CapacityExecutor, error) {
 	if conn == nil {
 		return nil, errCapacityUnavailable
@@ -96,12 +103,92 @@ func NewCapacityExecutor(
 	if err := verifyCapacitySchema(ctx, conn); err != nil {
 		return nil, err
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &CapacityExecutor{
 		conn:      conn,
 		observer:  observer,
 		nowUTC:    func() time.Time { return time.Now().UTC() },
 		batchSize: capacityDefaultBatchSize,
+		logger:    logger,
 	}, nil
+}
+
+// stringOrEmpty renders a possibly-nil scope identifier for logging. nil
+// (an explicit scope naming no team/work-scope) and "" (discovery finding an
+// unteamed row, see capacityTarget's own doc) both print as "" here -- the
+// distinction that matters to the WRITER (NULL vs "") is not a distinction a
+// log line needs to preserve.
+func stringOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// logScopeStart restores job_capacity.py:78's per-(team,scope) Info line
+// ("Computing forecast for team=%s, scope=%s"), lost when the native executor
+// replaced Python's per-scope logging with an aggregate-only counter
+// (CapacityObserver, CHAOS-5382).
+func (executor *CapacityExecutor) logScopeStart(orgID string, target capacityTarget) {
+	executor.logger.Info("capacity: computing forecast",
+		"org_id", orgID,
+		"team_id", stringOrEmpty(target.TeamID),
+		"work_scope_id", stringOrEmpty(target.WorkScopeID))
+}
+
+// logNoHistory restores job_capacity.py:85's Warning for a scope with no
+// throughput history. Python logs and continues; ComputePartition already
+// skips the scope the same way (the CapacityObserver skip counter) -- this
+// restores WHICH scope and WHY, which the counter alone cannot say.
+func (executor *CapacityExecutor) logNoHistory(orgID string, target capacityTarget) {
+	executor.logger.Warn("capacity: no throughput history for team/scope",
+		"org_id", orgID,
+		"team_id", stringOrEmpty(target.TeamID),
+		"work_scope_id", stringOrEmpty(target.WorkScopeID))
+}
+
+// logNoTargetItems restores job_capacity.py:92's Warning for a scope that
+// resolves to zero (or fewer) target items after the backlog fallback.
+func (executor *CapacityExecutor) logNoTargetItems(orgID string, target capacityTarget) {
+	executor.logger.Warn("capacity: no target items for team/scope",
+		"org_id", orgID,
+		"team_id", stringOrEmpty(target.TeamID),
+		"work_scope_id", stringOrEmpty(target.WorkScopeID))
+}
+
+// logInsufficientHistory restores job_capacity.py:108's Warning for a scope
+// whose forecast ran on fewer than the sufficient-history threshold of days.
+// Unlike the no-history/no-target-items cases, this scope is NOT skipped --
+// Python still forecasts and persists it, flagged.
+func (executor *CapacityExecutor) logInsufficientHistory(orgID string, target capacityTarget, historyDays int) {
+	executor.logger.Warn("capacity: insufficient history for team/scope",
+		"org_id", orgID,
+		"team_id", stringOrEmpty(target.TeamID),
+		"work_scope_id", stringOrEmpty(target.WorkScopeID),
+		"history_days", historyDays)
+}
+
+// logHighVariance restores job_capacity.py:112's Warning for a scope whose
+// throughput coefficient of variation crossed the high-variance threshold.
+func (executor *CapacityExecutor) logHighVariance(orgID string, target capacityTarget) {
+	executor.logger.Warn("capacity: high throughput variance detected for team/scope",
+		"org_id", orgID,
+		"team_id", stringOrEmpty(target.TeamID),
+		"work_scope_id", stringOrEmpty(target.WorkScopeID))
+}
+
+// logWroteForecasts restores job_capacity.py:120's Info line
+// ("Persisted %d forecast(s)"). Gated on written > 0 the same way Python's
+// `if persist and results:` was -- a partition that forecasts nothing logs
+// nothing here either.
+func (executor *CapacityExecutor) logWroteForecasts(orgID string, written int) {
+	if written == 0 {
+		return
+	}
+	executor.logger.Info("capacity: wrote forecast rows",
+		"org_id", orgID, "table", "capacity_forecasts", "rows_written", written)
 }
 
 // ComputePartition runs the capacity forecast for one partition.
@@ -144,6 +231,7 @@ func (executor *CapacityExecutor) ComputePartition(
 	var rows []capacityRow
 	var skipped int
 	for _, target := range scopes {
+		executor.logScopeStart(run.OrganizationID, target)
 		history, err := executor.loadThroughput(
 			ctx, run.OrganizationID, target, scope.HistoryDays, today,
 		)
@@ -152,6 +240,7 @@ func (executor *CapacityExecutor) ComputePartition(
 		}
 		// Python logs and continues; a scope with no history is not an error.
 		if len(history.DailyThroughputs) == 0 {
+			executor.logNoHistory(run.OrganizationID, target)
 			skipped++
 			continue
 		}
@@ -162,6 +251,7 @@ func (executor *CapacityExecutor) ComputePartition(
 
 		items := resolveTargetItems(scope.TargetItems, backlog)
 		if items <= 0 {
+			executor.logNoTargetItems(run.OrganizationID, target)
 			skipped++
 			continue
 		}
@@ -188,6 +278,12 @@ func (executor *CapacityExecutor) ComputePartition(
 		if err != nil {
 			return CompatibilityOutcome{}, fmt.Errorf("capacity forecast: %w", err)
 		}
+		if forecast.InsufficientHistory {
+			executor.logInsufficientHistory(run.OrganizationID, target, history.DaysOfHistory)
+		}
+		if forecast.HighVariance {
+			executor.logHighVariance(run.OrganizationID, target)
+		}
 		rows = append(rows, capacityRow{
 			OrgID:       run.OrganizationID,
 			TeamID:      target.TeamID,
@@ -204,6 +300,7 @@ func (executor *CapacityExecutor) ComputePartition(
 	if err != nil {
 		return CompatibilityOutcome{}, err
 	}
+	executor.logWroteForecasts(run.OrganizationID, written)
 	if executor.observer != nil {
 		// Telemetry never fails the partition: the work is durably written and
 		// losing a counter must not cause a retry that writes it again.

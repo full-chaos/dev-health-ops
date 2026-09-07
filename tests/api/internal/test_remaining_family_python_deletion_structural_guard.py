@@ -22,13 +22,14 @@ inside one monolithic daily-compute function.
 DELETED_REMAINING_FAMILY_PYTHON_MODULES below is the deletion ledger: one
 entry per family whose ``metrics.remaining.*`` Python orchestrator module has
 already been removed (CHAOS-5244 is the first entry, release_impact;
-CHAOS-4291 the second, complexity). It is expected to GROW, one deletion PR
-at a time, as CHAOS-3092's audit (CHAOS-5234) works through the rest of the
-native remaining-family list -- this is NOT yet a blanket "every native
-remaining family must have its Python deleted" check, because most
-remaining families (capacity, dora) have not been migrated from
-skip-gating/no-fallback to full deletion yet. Widen this set as each
-subsequent deletion PR lands; do not remove entries once added.
+CHAOS-4291 the second, complexity; CHAOS-5336 the third and fourth, dora and
+capacity). It is expected to GROW, one deletion PR at a time, as CHAOS-3092's
+audit (CHAOS-5234) works through the rest of the native remaining-family
+list -- this is NOT yet a blanket "every native remaining family must have
+its Python deleted" check, because the remaining families not yet listed
+here have not been migrated from skip-gating/no-fallback to full deletion
+yet. Widen this set as each subsequent deletion PR lands; do not remove
+entries once added.
 """
 
 from __future__ import annotations
@@ -74,6 +75,28 @@ DELETED_REMAINING_FAMILY_PYTHON_MODULES: dict[str, Path] = {
     # readback stage dropped complexity entirely. The whole module is
     # gone, not just its dispatch entry.
     "complexity": ROOT / "src" / "dev_health_ops" / "metrics" / "job_complexity_db.py",
+    # CHAOS-5336 (CHAOS-3092/CHAOS-5382): dora's native DORAExecutor (R1,
+    # dora_native.go) already has no Python fallback in daily.go's own worker
+    # registration (`if doraExecutor == nil { continue }`), so job_dora.py
+    # (run_dora_metrics_job, its CLI verb, and the worker_metrics.py
+    # `_run_dora` bridge handler it fed) is deleted entirely. Unlike
+    # release_impact, dora's compute kernel had no live non-production
+    # caller left either: compute_dora.py (the module job_dora.py called
+    # into) is ALSO deleted outright, along with compute_deployments.py --
+    # see job_daily.py's CHAOS-5336 comment on the now-orphaned
+    # DEPLOYMENT_FAILURE_STATUSES constant those two modules used to share.
+    "dora": ROOT / "src" / "dev_health_ops" / "metrics" / "job_dora.py",
+    # CHAOS-5336 (CHAOS-3092/CHAOS-5382): capacity's native CapacityExecutor
+    # (R2, capacity_native.go) already has no Python fallback in daily.go's
+    # own worker registration (`if capacityExecutor == nil { continue }`),
+    # so job_capacity.py (run_capacity_forecast, its CLI verb, and the
+    # worker_metrics.py `_run_capacity` bridge handler it fed) is deleted
+    # entirely. Unlike dora, capacity's compute kernel is NOT dead:
+    # compute_capacity.py's `forecast_capacity` survives as a real, live,
+    # PRODUCTION caller -- `api/graphql/resolvers/capacity.py` imports it
+    # directly to serve the throughput-forecast GraphQL field. That module
+    # is deliberately absent from this ledger.
+    "capacity": ROOT / "src" / "dev_health_ops" / "metrics" / "job_capacity.py",
 }
 
 

@@ -14,10 +14,12 @@
 -- A ClickHouse materialized view only transforms rows at INSERT time, so
 -- recreating it makes every future deployment sync correct. Historical
 -- deployment_daily_rollup rows are intentionally left untouched: no in-app
--- reader consumes that rollup today (DORA computes change-failure-rate in
--- Python directly from the deployments table), and the next sync repopulates
--- current partitions. The MV definition below is byte-for-byte the org-scoped
--- 027 definition with only the failure countIf widened.
+-- reader consumes that rollup today (DORA computes change-failure-rate
+-- natively in Go, directly from the deployments table -- see
+-- internal/jobs/metrics/remaining/dora_native.go -- the Python job_dora.py this
+-- comment originally described was deleted at CHAOS-5336), and the next sync
+-- repopulates current partitions. The MV definition below is byte-for-byte
+-- the org-scoped 027 definition with only the failure countIf widened.
 DROP VIEW IF EXISTS deployment_daily_rollup_mv;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS deployment_daily_rollup_mv

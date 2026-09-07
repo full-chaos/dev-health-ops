@@ -1405,10 +1405,10 @@
         "value": "metrics.daily_dispatch"
       },
       "target_kind_id": "kind:metrics.daily_dispatch",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `metrics.daily_dispatch` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. CHAOS-3092 (CUT-20) deleted the daily HTTP compatibility bridge outright: internal/jobs/metrics/daily/compatibility_http.go, the daily.CompatibilityExecutor interface, and POST /internal/worker/daily-metrics/v1/execute are all gone. This kind resolves durable run/partition state and publishes the partition/finalize handoff entirely in Go.",
+      "deletion_evidence_requirement": "Satisfied. registry.json kind `metrics.daily_dispatch` resolves to a concrete non-HTTP-bridge handler (daily.NewDispatcher, cmd/dev-health-worker/daily.go); the daily compatibility runner and its route are deleted from the Python API.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": "gap 2.3"
     },
@@ -1429,10 +1429,10 @@
         "value": "metrics.daily_finalize"
       },
       "target_kind_id": "kind:metrics.daily_finalize",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `metrics.daily_finalize` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. CHAOS-3092 PR-A' deleted the finalize half of the daily bridge (the executor's Finalize method and the Python finalize branch) and PR-A deleted the remaining partition half. Every finalize-scope family is a registered NativeFinalizeFamilyExecutor; a recognised family with no executor fails the run loudly with ErrFinalizeFamilyIncomplete rather than falling open.",
+      "deletion_evidence_requirement": "Satisfied. registry.json kind `metrics.daily_finalize` resolves to a concrete non-HTTP-bridge handler (daily.NewFinalizeHandler); the daily compatibility runner and its route are deleted from the Python API.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": ""
     },
@@ -1453,10 +1453,10 @@
         "value": "metrics.daily_partition"
       },
       "target_kind_id": "kind:metrics.daily_partition",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `metrics.daily_partition` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. CHAOS-3092 PR-A deleted PartitionHandler's ComputePartition call, the skip-families negotiation and the HTTP executor. Every families.json family is computed by a registered native executor; a family that cannot be constructed is a worker startup error, and one that fails at runtime holds the partition incomplete.",
+      "deletion_evidence_requirement": "Satisfied. registry.json kind `metrics.daily_partition` resolves to a concrete non-HTTP-bridge handler (daily.NewPartitionHandler, which no longer accepts a compatibility executor at all); the daily compatibility runner and its route are deleted from the Python API.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
       "notes": ""
     },

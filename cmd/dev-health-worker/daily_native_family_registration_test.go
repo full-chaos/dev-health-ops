@@ -67,7 +67,7 @@ type fakeDailyStoreForRegistrationTest struct{ daily.Store }
 // maps' mere key-set union could never see.
 func TestDailyNativeFamilyRegistrationsMatchesFamiliesJSONPortGo(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	native, postBridge, finalize := dailyNativeFamilyRegistrations(
+	native, postBridge, finalize, _ := dailyNativeFamilyRegistrations(
 		fakeDailyStoreForRegistrationTest{}, githubWorkItemsBuildExecutorConn{}, nil, logger,
 	)
 
@@ -223,6 +223,77 @@ func (observer *recordingNativeFamilyObserver) ObserveDailyMetricsNativeFamily(
 	return nil
 }
 
+// TestDailyNativeFamilyRegistrationsReturnsEveryRefusalForFailFast is
+// CHAOS-3092 (PR-A)'s startup fail-fast proof.
+//
+// Before this change, a partition-scope family whose executor could not be
+// constructed was logged and left off the map, because "the Python
+// compatibility bridge still computes that family for every partition."
+// That bridge is deleted. An unregistered family now means its rows are
+// never written by ANYONE, silently, for the worker's whole process
+// lifetime -- so every refusal must instead reach buildDailyWorker as a
+// startup error naming the family and its cause.
+//
+// This asserts the mechanism that makes that possible: with a nil ClickHouse
+// connection every constructor refuses, and EVERY refusal (not a sampled
+// four, not only the ones with an observer hook) is returned in `refusals`
+// carrying both a family name and a non-nil error. It also asserts the
+// refusal set and the native/postBridge maps are exact complements, which is
+// what stops a family from being silently dropped on the floor -- neither
+// registered nor reported.
+func TestDailyNativeFamilyRegistrationsReturnsEveryRefusalForFailFast(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	observer := &recordingNativeFamilyObserver{}
+
+	// nil connection fails every native executor's own `conn != nil` check.
+	native, postBridge, _, refusals := dailyNativeFamilyRegistrations(
+		fakeDailyStoreForRegistrationTest{}, nil, observer, logger,
+	)
+
+	if len(refusals) == 0 {
+		t.Fatal("no refusals returned with a nil ClickHouse connection -- " +
+			"buildDailyWorker would start a worker that computes nothing")
+	}
+	if len(native) != 0 || len(postBridge) != 0 {
+		t.Fatalf("native=%d postBridge=%d families registered with a nil connection, want 0/0",
+			len(native), len(postBridge))
+	}
+	seen := make(map[string]struct{}, len(refusals))
+	for _, refusal := range refusals {
+		if refusal.family == "" {
+			t.Errorf("refusal %#v has no family name -- the startup error could not name it", refusal)
+		}
+		if refusal.err == nil {
+			t.Errorf("refusal for %q carries a nil error -- the startup error could not say why", refusal.family)
+		}
+		if _, duplicate := seen[refusal.family]; duplicate {
+			t.Errorf("family %q reported refused twice", refusal.family)
+		}
+		seen[refusal.family] = struct{}{}
+	}
+
+	// Every families.json family this wiring is responsible for must be
+	// accounted for exactly once: registered, or reported refused. A family
+	// that is neither is the silent gap this ticket exists to close.
+	for _, family := range []string{
+		"team_wellbeing", "repo_user_commit", "incident", "deploy", "cicd",
+		"file_hotspots", "file_risk_hotspots", "ai_governance", "ai_impact",
+		"work_graph_edges", "ai_workflow", "testops_risk",
+		"work_item_attribution", "testops_pipeline", "testops_test",
+		"testops_coverage", "review_edges", "compounding_risk",
+		"work_item_state", "work_item", "work_item_estimate",
+	} {
+		if _, refused := seen[family]; !refused {
+			t.Errorf(
+				"family %q was neither registered nor reported refused with a nil "+
+					"connection -- it would be silently absent from a started worker "+
+					"with no Python bridge behind it (CHAOS-3092)",
+				family,
+			)
+		}
+	}
+}
+
 // TestDailyNativeFamilyRegistrationsObservesRefusalForDeletedPythonFamilies is
 // CHAOS-5342 (found during #2317's r1 review, delete-unowned-daily-families):
 // CHAOS-3092/CHAOS-5311/CHAOS-5312/CHAOS-5313/CHAOS-5309 deleted
@@ -254,7 +325,7 @@ func TestDailyNativeFamilyRegistrationsObservesRefusalForDeletedPythonFamilies(t
 
 	// nil connection fails every native executor's own `conn != nil` check,
 	// refusing construction for the whole registry.
-	native, _, _ := dailyNativeFamilyRegistrations(fakeDailyStoreForRegistrationTest{}, nil, observer, logger)
+	native, _, _, _ := dailyNativeFamilyRegistrations(fakeDailyStoreForRegistrationTest{}, nil, observer, logger)
 
 	for _, family := range []string{"team_wellbeing", "cicd", "incident", "deploy"} {
 		if _, stillRegistered := native[family]; stillRegistered {

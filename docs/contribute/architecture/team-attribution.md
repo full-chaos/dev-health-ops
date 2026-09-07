@@ -926,10 +926,17 @@ metrics.daily_dispatch (Go, go_default/river)
   → Python compute_work_item_team_attributions / write_work_item_team_attributions
 ```
 
-`HTTPCompatibilityExecutor` (`internal/jobs/metrics/daily/compatibility_http.go`) is a thin, fixed
-bridge: it posts `{operation, run_id, partition_id}` to one hardcoded internal path and treats
-anything other than an HTTP 2xx with `{"status": "success"|"skipped"}` as a failure. It carries no
-executable, command, or credential — the server side decides which reviewed Python computation runs.
+`HTTPCompatibilityExecutor` (`internal/jobs/metrics/daily/compatibility_http.go`) was a thin, fixed
+bridge: it posted `{operation, run_id, partition_id}` to one hardcoded internal path and treated
+anything other than an HTTP 2xx with `{"status": "success"|"skipped"}` as a failure. It carried no
+executable, command, or credential — the server side decided which reviewed Python computation ran.
+
+> **Deleted 2026-09-07 (CHAOS-3092, PR-A).** The chain above no longer exists in any form:
+> `compatibility_http.go`, the `daily.CompatibilityExecutor` interface, `NewHTTPCompatibilityExecutor`,
+> the `ComputePartition` call in `PartitionHandler.Work`, and the Python route
+> `POST /internal/worker/daily-metrics/v1/execute` are all removed. `daily.NewPartitionHandler` no
+> longer takes a compatibility executor at all. Read §0.7 below for the current state; everything in
+> §0.6 is retained only as the record of how it used to work.
 
 **`internal/jobs/metrics/daily/families.json` is a planning document, not executable config.**
 It lists `work_item_attribution` with `"port": "pending"`, which reads as if the attribution family

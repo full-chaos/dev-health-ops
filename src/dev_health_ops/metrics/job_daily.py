@@ -224,7 +224,6 @@ async def run_daily_metrics_job(
     provider: str = "auto",
     org_id: str,
     on_write_starting: Callable[[], None] | None = None,
-    skip_families: set[str] | None = None,
 ) -> dict[date, list[str]]:
     """Run the daily metrics compute+write pipeline.
 
@@ -242,58 +241,28 @@ async def run_daily_metrics_job(
     until CHAOS-5234/CHAOS-3092/CHAOS-5309 deleted their Python
     compute+write+zero-rows-note outright -- see their entries below.
 
-    ``skip_families`` (CHAOS-4276) names families.json families a native Go
-    executor already computed and wrote for this (org, day, repo) scope --
-    this job must neither recompute nor rewrite them. ``None`` or an empty
-    set is a no-op: every family computes and writes exactly as it did
-    before this parameter existed. Only families with a Go native executor
-    AND a live Python fallback still check this set (``work_item`` CHAOS-4283
-    and ``work_item_state`` CHAOS-4278 -- both BLOCKED from outright deletion
-    because job_work_items.py's run_work_items_sync_job, an unrelated
-    full-backfill sync job, still calls their compute functions directly);
-    naming any other family here has no effect. ``benchmarking`` CHAOS-4288
-    was NEVER checked in this set within THIS function -- it was moved to
-    ``run_daily_metrics_finalize``'s own skip_families gate by CHAOS-5194
-    before this docstring paragraph was last touched, and that gate is
-    itself now gone too (CHAOS-4288 deleted the Python compute entirely;
-    see the comment at the old call site below). ``file_hotspots``/
-    ``file_risk_hotspots`` (CHAOS-4277) and ``ai_impact`` (CHAOS-4280) had
-    their Python compute+write deleted outright rather than gated
-    (CHAOS-5234/CHAOS-3092); ``team_wellbeing`` (CHAOS-4276), ``incident``
-    (CHAOS-4269/CHAOS-4295), ``cicd`` (CHAOS-4292) followed the same
-    outright-deletion path (CHAOS-5234/CHAOS-3092, this batch); CHAOS-4279
-    deleted ``review_edges``' Python compute+write outright too (same
-    shape as file_hotspots/ai_impact above), so it no longer checks this
-    set either. ``deploy`` (CHAOS-4293) had the same write-only-skip shape
-    too, plus a zero-rows note, until CHAOS-5309 deleted its Python
-    compute+write+note outright, so it no longer checks this set either.
-    ``work_item_attribution`` (CHAOS-5233) also no longer checks this set
-    -- unlike work_item/work_item_state above, THIS function's own call to
-    its compute (compute_work_item_team_attributions) is deleted outright,
-    even though the function itself survives elsewhere (job_work_items.py's
-    run_work_items_sync_job still calls it directly) -- see the deletion
-    ledger in test_job_daily_skip_families_structural_guard.py.
-    ``work_item_estimate`` (CHAOS-5323) no longer checks this set either --
-    unlike work_item/work_item_state, its job_work_items.py caller was ALSO
-    deleted (no live backfill caller left anywhere), so it has no straddle
-    at all: compute_estimate_coverage_metrics_daily itself is gone from the
-    codebase. ``repo_user_commit`` (CHAOS-4275) and ``compounding_risk``
-    REPO scope (CHAOS-4287) no longer check this set either -- CHAOS-5308
-    deleted compute_daily_metrics and ``_write_compounding_risk_for_day``
-    outright (see their own test_*_compute_and_write_are_deleted_from_
-    job_daily tests). CHAOS-5245 deleted testops_pipeline/testops_test/
-    testops_coverage/testops_risk's Python compute entirely (their native
-    Go executors, CHAOS-4284/CHAOS-4294, have no Python fallback left) --
-    those four names no longer appear here at all, not even as a no-op.
-
-    ``compounding_risk``'s TEAM-scope rows used to be emitted once per
-    org/day from ``run_daily_metrics_finalize``, uncovered by this set since
-    the Go finalize handler has no per-family registration to skip them
-    with -- CHAOS-5084 deleted that Python compute too (CompoundingRiskTeam
-    Executor, native Go, is the sole writer of TEAM-scope rows now, same as
-    REPO scope above).
+    CHAOS-3092 (2026-09-07): this function used to accept a ``skip_families``
+    parameter (CHAOS-4276) naming families.json families a native Go
+    executor already computed and wrote for this (org, day, repo) scope, so
+    this job would neither recompute nor rewrite them. The parameter is
+    deleted now: it existed solely to serve ``worker_metrics.py``'s
+    ``execute_daily_metrics`` HTTP bridge route (the Go daily worker's
+    Python compatibility fallback, deleted outright by this same ticket --
+    every daily family is native Go now), and by the time this change
+    landed nothing in this function's BODY read it any more either -- every
+    family that ever checked it (``work_item``/``work_item_state``
+    CHAOS-4283/CHAOS-4278, ``team_wellbeing`` CHAOS-4276, ``cicd``
+    CHAOS-4292, ``deploy`` CHAOS-4293, ``file_hotspots``/
+    ``file_risk_hotspots`` CHAOS-4277, ``ai_impact`` CHAOS-4280,
+    ``review_edges`` CHAOS-4279, ``repo_user_commit`` CHAOS-4275,
+    ``compounding_risk`` REPO scope CHAOS-4287, ``work_item_attribution``
+    CHAOS-5233, ``work_item_estimate`` CHAOS-5323) had already had its
+    Python compute+write deleted outright in an earlier CHAOS-5234/
+    CHAOS-3092 batch, per chris's standing rule: "once go is in main that
+    does the same thing, skip flags are pointless." See
+    tests/metrics/test_job_daily_skip_families.py's module docstring for
+    the full per-family history.
     """
-    skip_families = skip_families or set()
     db_url = db_url or os.getenv("DATABASE_URI") or os.getenv("DATABASE_URL")
     if not db_url:
         raise ValueError("Database URI is required (pass --db or set DATABASE_URI).")
@@ -918,7 +887,6 @@ async def run_daily_metrics_finalize(
     day: date,
     org_id: str,
     sink: str = "auto",
-    skip_families: set[str] | None = None,
 ) -> None:
     """Run only the IC finalize logic (IC metrics + landscape rolling).
 
@@ -1029,17 +997,21 @@ async def run_daily_metrics_finalize(
     # the sibling comment in run_daily_metrics_job (this function's old call
     # site, CHAOS-5194) for the reachability analysis. The native
     # BenchmarkingFinalizeExecutor has no Python fallback left; this
-    # function no longer names "benchmarking" in skip_families at all.
+    # function no longer names "benchmarking" in a skip set at all.
     # `computed_at`/the `skip_families` normalisation that used to feed that
     # call are gone too. Benchmarking was the LAST body-level consumer of
     # `skip_families` here (ic_finalize/team_cognitive_load/
     # compounding_risk_team/team_complexity had each already lost theirs to
-    # earlier PRs, per the reachability analysis two paragraphs down) --
-    # `skip_families` stays on this function's SIGNATURE regardless, purely
-    # for calling-convention parity with worker_metrics.py's generic
-    # finalize dispatch (it passes the same Go-sourced skip set to every
-    # finalize-scope Python entry point uniformly), but nothing in this
-    # function's BODY reads it anymore.
+    # earlier PRs, per the reachability analysis two paragraphs down).
+    # CHAOS-3092 (2026-09-07): the `skip_families` PARAMETER itself is now
+    # deleted from this function's signature too -- it stayed on the
+    # signature past this point only for calling-convention parity with
+    # worker_metrics.py's generic finalize dispatch (the Go daily worker's
+    # Python compatibility bridge, deleted outright by this same ticket);
+    # with that bridge gone, nothing calls this function with a non-empty
+    # skip set (nothing ever called it with one at all, per the reachability
+    # analysis above), so the dead parameter is removed rather than kept
+    # unused.
 
     # CHAOS-4365 finalize-step fix: this used to be where team-scope
     # compounding_risk_daily, team_cognitive_load_daily, AND

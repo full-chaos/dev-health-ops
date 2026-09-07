@@ -99,12 +99,15 @@ func checkedInSchedules() []Schedule {
 		// state, so retirement meant deleting the kinds entirely, not wiring a
 		// fixed-schedule fanout for them (which was investigated and reverted;
 		// see git history). daily_metrics_fanout below already performs every
-		// write both families would have performed, via its existing Python
-		// compatibility bridge (daily.HTTPCompatibilityExecutor ->
+		// write both families would have performed. At the TIME of that
+		// ruling it did so via the Python compatibility bridge
+		// (daily.HTTPCompatibilityExecutor ->
 		// /internal/worker/daily-metrics/v1/execute -> _run_daily_direct ->
-		// run_daily_metrics_job, ops/src/dev_health_ops/metrics/job_daily.py).
-		// That single function unconditionally computes and writes, on every
-		// partition call:
+		// run_daily_metrics_job); CHAOS-3092 (PR-A) has since deleted that
+		// bridge outright and every family below is a native Go executor, so
+		// the ruling holds for a different reason than it originally did.
+		// The bridge's single function unconditionally computed and wrote, on
+		// every partition call:
 		//   - team_wellbeing -> team_metrics_daily: this call site is DELETED
 		//     now (CHAOS-5311/CHAOS-5234/CHAOS-3092) -- TeamWellbeingExecutor
 		//     (native Go) is the only writer.

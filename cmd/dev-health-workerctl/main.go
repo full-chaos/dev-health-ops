@@ -1131,8 +1131,10 @@ func dispatchMetricsDailyFinalize(
 	// codex review round 3 on daily-redrive (CHAOS-4358) established the bar
 	// this mirrors: an operator authorizing a repeat execution must state in
 	// their own words what they verified, no default, no generic hardcoded
-	// string. Finalize is not a mechanical retry either -- CompatibilityExecutor.Finalize
-	// writes user_metrics_daily/ic_landscape_rolling_30d directly, so the
+	// string. Finalize is not a mechanical retry either -- the finalize-scope
+	// native families (ic_finalize and its siblings; CHAOS-3092 PR-A' deleted
+	// the CompatibilityExecutor.Finalize call this comment used to name)
+	// write user_metrics_daily/ic_landscape_rolling_30d directly, so the
 	// evidence an operator should state here is that the ORIGINAL finalize
 	// never durably wrote (e.g. no completion fence, no rows for the run's
 	// target_day yet) rather than the partition-redrive concern about
@@ -1140,7 +1142,7 @@ func dispatchMetricsDailyFinalize(
 	//
 	// codex review (CHAOS-4389, P1): finalization_status='failed' does NOT
 	// mean finalize never ran -- FinalizeHandler.Work sets it both when the
-	// compatibility call itself failed AND when it SUCCEEDED (writing real
+	// native finalize families themselves failed AND when they SUCCEEDED (writing real
 	// user_metrics_daily/compounding_risk_daily/team_cognitive_load_daily
 	// rows) but the bookkeeping CompleteFinalize write failed afterward.
 	// --all-complete's bulk sweep only ever redrives the provably-safe

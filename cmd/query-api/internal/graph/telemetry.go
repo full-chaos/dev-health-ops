@@ -74,11 +74,23 @@ func mustCounter(name, description string) metric.Int64Counter {
 // telemetry that looks like coverage but measures nothing, the same
 // "invisible fallback" class of defect this file's own package doc
 // warns about.
-func startFeatureFlagsSpan(ctx context.Context) (context.Context, func(outcome string)) {
+//
+// The org-scoping span sweep (following CapacityForecast/
+// CapacityForecasts/ThroughputForecast's CHAOS-5349 r1 P2 precedent, see
+// forecast_resolver_telemetry_test.go) moved this span's start to BEFORE
+// FeatureFlags's authorization guard, so an org-scoping rejection is
+// counted as "denied" instead of producing no span at all. finish now
+// takes optional extra span attributes so a denial can carry a
+// denial_reason (and org_id where one is already in scope) without
+// widening the low-cardinality "outcome" counter label.
+func startFeatureFlagsSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	featureFlagsCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.featureFlags")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "featureFlags resolver error")
 		}
@@ -89,7 +101,8 @@ func startFeatureFlagsSpan(ctx context.Context) (context.Context, func(outcome s
 
 // recordFeatureFlagsOutcome increments the outcome counter. outcome is
 // one of "ok" (a real, non-degraded result), "degraded" (the
-// FEATURE_FLAG_NOT_MATERIALIZED path), or "error".
+// FEATURE_FLAG_NOT_MATERIALIZED path), "denied" (an org-scoping
+// rejection), or "error".
 func recordFeatureFlagsOutcome(outcome string) {
 	featureFlagsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -99,11 +112,14 @@ func recordFeatureFlagsOutcome(outcome string) {
 // span before the ClickHouse query, finish only once real resolver work
 // completes" contract, so a hung or never-returning query still shows up
 // as traffic received.
-func startReviewEdgesSpan(ctx context.Context) (context.Context, func(outcome string)) {
+func startReviewEdgesSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	reviewEdgesCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.reviewEdges")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "reviewEdges resolver error")
 		}
@@ -113,9 +129,11 @@ func startReviewEdgesSpan(ctx context.Context) (context.Context, func(outcome st
 }
 
 // recordReviewEdgesOutcome increments the outcome counter. outcome is
-// one of "ok" or "error" -- reviewEdges has no degraded-result path
-// (unlike featureFlags; see reviewedges package's doc comment), so
-// "degraded" is not part of this operation's outcome vocabulary.
+// one of "ok", "denied" (an org-scoping rejection -- the span now starts
+// before the auth guard, org-scoping sweep), or "error" -- reviewEdges
+// has no degraded-result path (unlike featureFlags; see reviewedges
+// package's doc comment), so "degraded" is not part of this operation's
+// outcome vocabulary.
 func recordReviewEdgesOutcome(outcome string) {
 	reviewEdgesOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -124,11 +142,14 @@ func recordReviewEdgesOutcome(outcome string) {
 // cognitiveLoad resolver (CHAOS-4369 Wave 3) -- same "count and start the
 // span before the ClickHouse query/queries, finish only once real
 // resolver work completes" contract.
-func startCognitiveLoadSpan(ctx context.Context) (context.Context, func(outcome string)) {
+func startCognitiveLoadSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	cognitiveLoadCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.cognitiveLoad")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "cognitiveLoad resolver error")
 		}
@@ -138,9 +159,11 @@ func startCognitiveLoadSpan(ctx context.Context) (context.Context, func(outcome 
 }
 
 // recordCognitiveLoadOutcome increments the outcome counter. outcome is
-// one of "ok" or "error" -- like reviewEdges (unlike featureFlags),
-// cognitiveLoad has no degraded-result path, so "degraded" is not part of
-// this operation's outcome vocabulary.
+// one of "ok", "denied" (an org-scoping rejection -- the span now starts
+// before the auth guard, org-scoping sweep), or "error" -- like
+// reviewEdges (unlike featureFlags), cognitiveLoad has no
+// degraded-result path, so "degraded" is not part of this operation's
+// outcome vocabulary.
 func recordCognitiveLoadOutcome(outcome string) {
 	cognitiveLoadOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -149,11 +172,14 @@ func recordCognitiveLoadOutcome(outcome string) {
 // the complexityTimeseries resolver (CHAOS-4369 Wave 3) -- same "count and
 // start the span before the ClickHouse query, finish only once real
 // resolver work completes" contract.
-func startComplexityTimeseriesSpan(ctx context.Context) (context.Context, func(outcome string)) {
+func startComplexityTimeseriesSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	complexityTimeseriesCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.complexityTimeseries")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "complexityTimeseries resolver error")
 		}
@@ -163,10 +189,11 @@ func startComplexityTimeseriesSpan(ctx context.Context) (context.Context, func(o
 }
 
 // recordComplexityTimeseriesOutcome increments the outcome counter.
-// outcome is one of "ok" or "error" -- complexityTimeseries has no
-// degraded-result path (unlike featureFlags; see complexitytimeseries
-// package's doc comment), so "degraded" is not part of this operation's
-// outcome vocabulary.
+// outcome is one of "ok", "denied" (an org-scoping rejection -- the span
+// now starts before the auth guard, org-scoping sweep), or "error" --
+// complexityTimeseries has no degraded-result path (unlike featureFlags;
+// see complexitytimeseries package's doc comment), so "degraded" is not
+// part of this operation's outcome vocabulary.
 func recordComplexityTimeseriesOutcome(outcome string) {
 	complexityTimeseriesOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -175,11 +202,14 @@ func recordComplexityTimeseriesOutcome(outcome string) {
 // hotspots resolver (CHAOS-4369 Wave 3) -- same "count and start the
 // span before the ClickHouse query, finish only once real resolver work
 // completes" contract.
-func startHotspotsSpan(ctx context.Context) (context.Context, func(outcome string)) {
+func startHotspotsSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	hotspotsCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.hotspots")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "hotspots resolver error")
 		}
@@ -189,9 +219,11 @@ func startHotspotsSpan(ctx context.Context) (context.Context, func(outcome strin
 }
 
 // recordHotspotsOutcome increments the outcome counter. outcome is one
-// of "ok" or "error" -- hotspots has no degraded-result path (unlike
-// featureFlags; see hotspots package's doc comment), so "degraded" is
-// not part of this operation's outcome vocabulary.
+// of "ok", "denied" (an org-scoping rejection -- the span now starts
+// before the auth guard, org-scoping sweep), or "error" -- hotspots has
+// no degraded-result path (unlike featureFlags; see hotspots package's
+// doc comment), so "degraded" is not part of this operation's outcome
+// vocabulary.
 func recordHotspotsOutcome(outcome string) {
 	hotspotsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -205,11 +237,14 @@ func recordHotspotsOutcome(outcome string) {
 // devhealth_query_api_operating_review_fetch_swallowed_total counter
 // (declared in that package, not here -- see its doc comment for why)
 // measures the finer, per-table swallow granularity this span cannot see.
-func startOperatingReviewSpan(ctx context.Context) (context.Context, func(outcome string)) {
+func startOperatingReviewSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	operatingReviewCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.operatingReview")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "operatingReview resolver error")
 		}
@@ -219,11 +254,12 @@ func startOperatingReviewSpan(ctx context.Context) (context.Context, func(outcom
 }
 
 // recordOperatingReviewOutcome increments the outcome counter. outcome is
-// "ok" or "error" at THIS span's granularity -- a per-table swallow inside
-// operatingreview.Resolve does not surface as "error" here (Resolve
-// itself does not fail when a table's fetch is swallowed; see
-// operatingreview's package doc comment), only a genuine top-level
-// failure (e.g. a nil client) does.
+// "ok", "denied" (an org-scoping rejection -- the span now starts before
+// the auth guard, org-scoping sweep), or "error" at THIS span's
+// granularity -- a per-table swallow inside operatingreview.Resolve does
+// not surface as "error" here (Resolve itself does not fail when a
+// table's fetch is swallowed; see operatingreview's package doc
+// comment), only a genuine top-level failure (e.g. a nil client) does.
 func recordOperatingReviewOutcome(outcome string) {
 	operatingReviewOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -235,11 +271,14 @@ func recordOperatingReviewOutcome(outcome string) {
 // featureFlags) -- callers check result.DegradedReason and call
 // finish("degraded") rather than finish("ok"), same as startFeatureFlagsSpan's
 // call site.
-func startWorkGraphEdgesSpan(ctx context.Context) (context.Context, func(outcome string)) {
+func startWorkGraphEdgesSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	workGraphEdgesCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.workGraphEdges")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "workGraphEdges resolver error")
 		}
@@ -250,18 +289,23 @@ func startWorkGraphEdgesSpan(ctx context.Context) (context.Context, func(outcome
 
 // recordWorkGraphEdgesOutcome increments the outcome counter. outcome is
 // one of "ok" (a real, non-degraded result), "degraded"
-// (MEMBERSHIP_NOT_MATERIALIZED), or "error".
+// (MEMBERSHIP_NOT_MATERIALIZED), "denied" (an org-scoping rejection --
+// the span now starts before the auth guard, org-scoping sweep), or
+// "error".
 func recordWorkGraphEdgesOutcome(outcome string) {
 	workGraphEdgesOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
 
 // startWorkGraphFlowSpan is startWorkGraphEdgesSpan's counterpart for the
 // workGraphFlow resolver -- same degraded-result outcome vocabulary.
-func startWorkGraphFlowSpan(ctx context.Context) (context.Context, func(outcome string)) {
+func startWorkGraphFlowSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	workGraphFlowCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.workGraphFlow")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "workGraphFlow resolver error")
 		}
@@ -271,7 +315,8 @@ func startWorkGraphFlowSpan(ctx context.Context) (context.Context, func(outcome 
 }
 
 // recordWorkGraphFlowOutcome increments the outcome counter -- one of
-// "ok", "degraded", or "error".
+// "ok", "degraded", "denied" (an org-scoping rejection -- the span now
+// starts before the auth guard, org-scoping sweep), or "error".
 func recordWorkGraphFlowOutcome(outcome string) {
 	workGraphFlowOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -279,11 +324,14 @@ func recordWorkGraphFlowOutcome(outcome string) {
 // startWorkGraphArtifactsSpan is startWorkGraphEdgesSpan's counterpart for
 // the workGraphArtifacts resolver -- same degraded-result outcome
 // vocabulary.
-func startWorkGraphArtifactsSpan(ctx context.Context) (context.Context, func(outcome string)) {
+func startWorkGraphArtifactsSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	workGraphArtifactsCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.workGraphArtifacts")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "workGraphArtifacts resolver error")
 		}
@@ -293,7 +341,8 @@ func startWorkGraphArtifactsSpan(ctx context.Context) (context.Context, func(out
 }
 
 // recordWorkGraphArtifactsOutcome increments the outcome counter -- one of
-// "ok", "degraded", or "error".
+// "ok", "degraded", "denied" (an org-scoping rejection -- the span now
+// starts before the auth guard, org-scoping sweep), or "error".
 func recordWorkGraphArtifactsOutcome(outcome string) {
 	workGraphArtifactsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -308,11 +357,14 @@ func recordWorkGraphArtifactsOutcome(outcome string) {
 // visible via the analytics-package-level counter instead -- the two are
 // deliberately not merged into one vocabulary, see that file's doc
 // comment for why).
-func startAnalyticsSpan(ctx context.Context) (context.Context, func(outcome string)) {
+func startAnalyticsSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
 	analyticsCallCounter.Add(ctx, 1)
 	spanCtx, span := tracer.Start(ctx, "query-api.analytics")
-	return spanCtx, func(outcome string) {
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
 		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
 		if outcome == "error" {
 			span.SetStatus(codes.Error, "analytics resolver error")
 		}
@@ -322,7 +374,11 @@ func startAnalyticsSpan(ctx context.Context) (context.Context, func(outcome stri
 }
 
 // recordAnalyticsOutcome increments the outcome counter. outcome is one
-// of "ok" or "error" -- see startAnalyticsSpan's doc comment for why
+// of "ok", "denied" (an org-scoping rejection -- the span now starts
+// before the auth guard, org-scoping sweep; this operation is reached by
+// three registered documents, flowMatrix/investmentBreakdown/
+// investmentFull, all sharing this one resolver, so the fix covers all
+// three), or "error" -- see startAnalyticsSpan's doc comment for why
 // "degraded" is not part of this vocabulary.
 func recordAnalyticsOutcome(outcome string) {
 	analyticsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))

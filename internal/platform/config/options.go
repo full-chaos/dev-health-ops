@@ -280,11 +280,6 @@ var optionRegistry = []Option{
 		Kind: KindString, Group: GroupRoutes,
 		Usage: "path to investment_areas.yaml; required when github/work-items is enabled",
 	},
-	{
-		Flag: "pagerduty-webhook-transport", Env: "PAGERDUTY_WEBHOOK_TRANSPORT", Kind: KindString,
-		Default: PagerDutyTransportCelery, Group: GroupRoutes,
-		Usage: "owner of the PagerDuty webhook stream: celery or river",
-	},
 
 	// Operational bridge.
 	{

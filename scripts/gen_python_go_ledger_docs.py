@@ -531,14 +531,9 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "corrected 2026-09-06 (CHAOS-5320): NOT a dead shim, but for a different reason than before — `api/webhooks/router.py`'s `process_webhook_event` import and `api/billing/router.py`'s `send_billing_notification`/`.delay(...)` call site (both gated behind `route_requires_celery`) are DELETED; `route_requires_celery` itself is deleted (job_routes.py). `system_tasks.py`'s only remaining live importer is `workers/tasks.py`'s barrel re-export, which registers its `@celery_app.task`-decorated functions with the Celery app at import time for the worker process — unrelated to whether any router still dispatches to them.",
         "ticket": "CHAOS-4439 (dead worker modules) -- the router-coordination caveat from the prior entry no longer applies",
     },
-    "system_webhooks.py": {
-        "category": "a",
-        "evidence": "corrected 2026-09-06 (CHAOS-5320 confirmation-round F6): process_webhook_event (the prior citation's import) is deleted along with the webhook HTTP bridge -- worker_operational.py:177 now imports CanonicalIncidentIngestionDisabledError/_canonical_incident_ingestion_allowed instead (unrelated to webhook dispatch), and pagerduty.py:40 imports process_pagerduty_webhook_event (the still-live, deliberately-unaffected pagerduty stream) -- both live imports, still category a.",
-        "ticket": "n/a",
-    },
     "task_utils.py": {
         "category": "c",
-        "evidence": "imported by live files (sync_units, reference_discovery, team_autoimport, work_graph_tasks, system_webhooks) and dead ones — shared credential/cache helpers",
+        "evidence": "imported by live files (sync_units, reference_discovery, team_autoimport, work_graph_tasks) and dead ones — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it",
         "ticket": "n/a",
     },
     "tasks.py": {

@@ -53,7 +53,6 @@ data:
   # defaults to replicas: 0 in go-workers.yaml, so a fresh apply ACCEPTS
   # PagerDuty webhooks into the durable outbox but nothing drains it until
   # scaled: kubectl scale deployment/dev-health-go-stream-pagerduty --replicas=1
-  PAGERDUTY_WEBHOOK_TRANSPORT: "river"
   OTEL_ENABLED: "true"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4317"
   OTEL_SERVICE_NAME: "dev-health-ops"

@@ -437,75 +437,30 @@ func TestProductionRunnerConfigsPreservePythonStreamContracts(t *testing.T) {
 	}
 }
 
-// TestPagerDutyConsumerRefusesToRaceCelery is the CUT-04 codex HIGH-3
-// regression. The Python ingress still writes the stream entry AND dispatches
-// its Celery task, which reconciles and XDELs the same entry. Constructing a Go
-// consumer alongside it lets both reconcile one event and lets Python delete an
-// entry pending in the Go group; the two receipts are not shared (Valkey vs
-// PostgreSQL). Exactly one runtime may own the stream, chosen by one switch.
-func TestPagerDutyConsumerRefusesToRaceCelery(t *testing.T) {
+// TestPagerDutyConsumerIsTheOnlyOwnerOfTheStream replaces
+// TestPagerDutyConsumerRefusesToRaceCelery and
+// TestPagerDutyTransportDefaultsToCelery (CHAOS-4105). Those two pinned a
+// two-runtime ownership switch: while Python's Celery task also consumed
+// pagerduty-webhooks:*, constructing a Go consumer alongside it let both
+// reconcile one event and let Python XDEL an entry pending in the Go group,
+// so exactly one runtime could own the stream and PAGERDUTY_WEBHOOK_TRANSPORT
+// chose which.
+//
+// That task, the ingress .delay that fed it and the flag itself are deleted.
+// There is one runtime, so the property worth pinning is the inverse: the
+// handler must construct on its dependencies alone, never refuse on a
+// configuration gate that no longer exists.
+func TestPagerDutyConsumerIsTheOnlyOwnerOfTheStream(t *testing.T) {
 	t.Parallel()
-	for _, test := range []struct {
-		name      string
-		transport string
-		wantErr   bool
-	}{
-		{name: "celery owns the stream", transport: config.PagerDutyTransportCelery, wantErr: true},
-		{name: "unset defaults to celery", transport: "", wantErr: true},
-		{name: "river owns the stream", transport: config.PagerDutyTransportRiver},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			storage := &productionStreamStorage{
-				bridge: operationalBridgeSettings{
-					baseURL:   "https://api.internal",
-					token:     secrets.NewValue("test-bridge-token"),
-					timeout:   time.Second,
-					transport: test.transport,
-				},
-			}
-			_, err := storage.Handler(pagerdutyHandlerKind, nil)
-			if test.wantErr {
-				// ErrInvalidConfig stops the process rather than leaving it
-				// live: a profile/owner contradiction is operator error.
-				if !errors.Is(err, streamrunner.ErrInvalidConfig) {
-					t.Fatalf("handler error = %v, want the ownership refusal", err)
-				}
-				return
-			}
-			// With River owning the stream the gate is open; construction still
-			// fails here only because this fake storage has no domain pool.
-			if errors.Is(err, streamrunner.ErrInvalidConfig) {
-				t.Fatal("river transport was refused by the ownership gate")
-			}
-		})
+	storage := &productionStreamStorage{}
+	_, err := storage.Handler(pagerdutyHandlerKind, nil)
+	if errors.Is(err, streamrunner.ErrInvalidConfig) {
+		t.Fatal("the pagerduty handler still refuses on an ownership gate")
 	}
-}
-
-// TestPagerDutyTransportDefaultsToCelery pins the fail-safe direction: an unset
-// or unrecognized value must never hand ownership to the runtime that is not
-// yet cut over.
-func TestPagerDutyTransportDefaultsToCelery(t *testing.T) {
-	t.Parallel()
-	cfg, err := config.Load(config.Spec{
-		Service: "dev-health-stream-runner", Profile: "ingest",
-		LookupEnv: func(string) (string, bool) { return "", false },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.PagerDutyWebhookTransport != config.PagerDutyTransportCelery {
-		t.Fatalf("default transport = %q, want celery", cfg.PagerDutyWebhookTransport)
-	}
-	if _, err := config.Load(config.Spec{
-		Service: "dev-health-stream-runner", Profile: "ingest",
-		LookupEnv: func(key string) (string, bool) {
-			if key == "PAGERDUTY_WEBHOOK_TRANSPORT" {
-				return "kafka", true
-			}
-			return "", false
-		},
-	}); err == nil {
-		t.Fatal("unrecognized transport was accepted")
+	// This fake storage has no ClickHouse connection and no domain pool, so
+	// construction must still fail -- as a missing dependency, which is the
+	// condition that keeps the readiness gate honest.
+	if !errors.Is(err, errStreamDependencyUnavailable) {
+		t.Fatalf("handler error = %v, want the dependency refusal", err)
 	}
 }

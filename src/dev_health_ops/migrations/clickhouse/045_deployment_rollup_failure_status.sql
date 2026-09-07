@@ -16,7 +16,7 @@
 -- deployment_daily_rollup rows are intentionally left untouched: no in-app
 -- reader consumes that rollup today (DORA computes change-failure-rate
 -- natively in Go, directly from the deployments table -- see
--- internal/jobs/metrics/remaining/dora_native.go; the Python job_dora.py this
+-- internal/jobs/metrics/remaining/dora_native.go -- the Python job_dora.py this
 -- comment originally described was deleted at CHAOS-5336), and the next sync
 -- repopulates current partitions. The MV definition below is byte-for-byte
 -- the org-scoped 027 definition with only the failure countIf widened.

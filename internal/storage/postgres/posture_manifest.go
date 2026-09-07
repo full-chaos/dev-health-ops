@@ -138,11 +138,32 @@ func CheckPostureManifestLockstep(ctx context.Context, pool *pgxpool.Pool, binar
 		return PostureManifestLockstepResult{BinaryDigest: binaryDigest, Lockstep: true}, nil
 	}
 
+	// codex review round 1 (P2, fixed): the latest-row lookup and the
+	// own-row lookup used to be two independent queries, so a migrate run
+	// could commit BETWEEN them -- the latest digest read by the first query
+	// could be superseded by the time the second query ran, producing a
+	// transient false-stale refusal on a binary that was actually current
+	// the instant it was checked. One query, one round trip, one snapshot:
+	// no window for another transaction to land in between. The secondary
+	// `manifest_digest` sort key makes the "latest" row deterministic even
+	// on the (practically unreachable, applied_at has microsecond
+	// resolution) chance two rows share the same applied_at.
+	const latestAndOwnQuery = `
+WITH latest AS (
+	SELECT manifest_digest, applied_at
+	FROM public.` + PostureManifestAppliedTable + `
+	ORDER BY applied_at DESC, manifest_digest DESC
+	LIMIT 1
+)
+SELECT
+	latest.manifest_digest,
+	latest.applied_at,
+	EXISTS (SELECT 1 FROM public.` + PostureManifestAppliedTable + ` WHERE manifest_digest = $1) AS own_applied
+FROM latest`
 	var latestDigest string
 	var latestAppliedAt time.Time
-	err := pool.QueryRow(
-		ctx, `SELECT manifest_digest, applied_at FROM public.`+PostureManifestAppliedTable+` ORDER BY applied_at DESC LIMIT 1`,
-	).Scan(&latestDigest, &latestAppliedAt)
+	var ownApplied bool
+	err := pool.QueryRow(ctx, latestAndOwnQuery, binaryDigest).Scan(&latestDigest, &latestAppliedAt, &ownApplied)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PostureManifestLockstepResult{BinaryDigest: binaryDigest, Lockstep: true}, nil
 	}
@@ -154,18 +175,10 @@ func CheckPostureManifestLockstep(ctx context.Context, pool *pgxpool.Pool, binar
 			BinaryDigest: binaryDigest, AppliedDigest: latestDigest, AppliedAt: latestAppliedAt, Lockstep: true,
 		}, nil
 	}
-
-	var ownAppliedAt time.Time
-	err = pool.QueryRow(
-		ctx, `SELECT applied_at FROM public.`+PostureManifestAppliedTable+` WHERE manifest_digest = $1`, binaryDigest,
-	).Scan(&ownAppliedAt)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
+	if !ownApplied {
 		return PostureManifestLockstepResult{
 			BinaryDigest: binaryDigest, AppliedDigest: latestDigest, AppliedAt: latestAppliedAt, Lockstep: true,
 		}, nil
-	case err != nil:
-		return PostureManifestLockstepResult{}, ErrUnavailable
 	}
 	return PostureManifestLockstepResult{
 		BinaryDigest: binaryDigest, AppliedDigest: latestDigest, AppliedAt: latestAppliedAt, Lockstep: false,

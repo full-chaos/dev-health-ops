@@ -240,6 +240,7 @@ func ApplyPinnedMigrations(
 			applied_at timestamptz NOT NULL DEFAULT now(),
 			migrate_build text NOT NULL
 		)`); err != nil {
+			logMigrationStageFailure(ctx, options.Logger, "create posture manifest table", err)
 			return MigrationResult{}, migrationStageError("create posture manifest table")
 		}
 	}
@@ -258,6 +259,7 @@ func ApplyPinnedMigrations(
 			ON CONFLICT (manifest_digest) DO UPDATE SET applied_at = EXCLUDED.applied_at, migrate_build = EXCLUDED.migrate_build`,
 			options.PostureManifestDigest, buildID,
 		); err != nil {
+			logMigrationStageFailure(ctx, options.Logger, "stamp posture manifest applied", err)
 			return MigrationResult{}, migrationStageError("stamp posture manifest applied")
 		}
 	}
@@ -278,6 +280,25 @@ func ApplyPinnedMigrations(
 
 func migrationStageError(stage string) error {
 	return fmt.Errorf("%w during %s", ErrMigrationFailed, stage)
+}
+
+// logMigrationStageFailure logs a stage's underlying driver error before it
+// is discarded by migrationStageError (codex review finding, CHAOS-5437
+// round 1, P2): every OTHER migrationStageError call site in this function
+// discards its underlying error too, an established (if not ideal) pattern
+// this change does not attempt to rewrite wholesale -- but chris's standing
+// rule is that a swallowed error on a TOUCHED failure path is a review
+// finding, and CHAOS-5437's own two new stages (creating/stamping the
+// posture manifest table) are exactly that. The caller (cmd/dev-health-
+// worker-migrate) already runs its own logger through slog.NewJSONHandler
+// against stderr, so this reaches the operator's deploy log without needing
+// ApplyPinnedMigrations' return value to carry more than the bounded stage
+// name it already does.
+func logMigrationStageFailure(ctx context.Context, logger *slog.Logger, stage string, err error) {
+	if logger == nil || err == nil {
+		return
+	}
+	logger.ErrorContext(ctx, "migration stage failed", "stage", stage, "error", err.Error())
 }
 
 // CheckSchema is read-only and requires the exact pinned migration prefix.

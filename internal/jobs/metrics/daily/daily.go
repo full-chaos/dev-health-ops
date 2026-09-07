@@ -797,6 +797,50 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 	for _, name := range handler.nativeFamilyNames {
 		executor := handler.nativeFamilies[name]
 		if executor == nil {
+			// CHAOS-3092 (PR-A, r1 finding): a name in nativeFamilyNames
+			// with no executor behind it is a HARD FAILURE, not a skip.
+			// This branch used to `continue` silently, which was defensible
+			// only while the Python compatibility bridge computed whatever
+			// this handler did not: the family landed in neither `computed`
+			// nor `incomplete`, so the partition completed 'succeeded' with
+			// NO writer for it and nothing in the telemetry said so. With
+			// the bridge deleted that is the exact silent-success shape
+			// this whole change exists to remove, so it is now reported and
+			// held exactly like a refusal.
+			//
+			// SetNativeFamilies makes this unreachable from the current
+			// constructor path (it derives nativeFamilyNames from the map
+			// it was handed, and cmd/dev-health-worker fails worker
+			// construction on any executor that could not be built), so
+			// this is a defensive invariant rather than a live bug. It is
+			// enforced anyway because "unreachable today" is exactly how
+			// the pre-bridge fail-open path survived as long as it did.
+			if handler.nativeFamilyLogger != nil {
+				handler.nativeFamilyLogger.Error(
+					"native metrics.daily family has NO registered executor; the "+
+						"partition is held incomplete -- nothing would write this "+
+						"family's rows, and there is no Python compatibility bridge "+
+						"left to fall back to (CHAOS-3092)",
+					"family", name,
+					"reason", "native_executor_missing",
+					"organization_id", run.OrganizationID,
+					"target_day", run.TargetDay,
+					"partition_id", partition.ID,
+					"repo_ids", partition.RepoIDs,
+					"run_id", run.ID,
+				)
+			}
+			if handler.nativeObserver != nil {
+				_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
+					name, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+				)
+			}
+			// Blocked as well as incomplete: a family with no writer at all
+			// is not a trustworthy input, so anything declaring `after` on
+			// it must not run natively against a stale snapshot either --
+			// the same rule blockedNativeDependency applies to a refusal.
+			blocked[name] = struct{}{}
+			incomplete = append(incomplete, name)
 			continue
 		}
 		if dependency, isBlocked := handler.blockedNativeDependency(name, blocked); isBlocked {

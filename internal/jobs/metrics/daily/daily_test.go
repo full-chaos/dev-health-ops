@@ -138,6 +138,71 @@ func TestPartitionNativeFamilySuccessCompletesWithNoBridgeCall(t *testing.T) {
 // TestPreBridgeNativeFamilyRefusalFailsThePartitionLoudly for the new
 // contract's own test, same fixture shape.
 
+// TestPreBridgeNilExecutorHoldsThePartitionIncomplete is the permanent form
+// of the red-first probe luna's r1 round on #2357 used to find this gap.
+//
+// Before the fix, `computeNativeFamilies` skipped a nil pre-bridge executor
+// with a bare `continue`: the family appeared in neither `computed` nor
+// `incomplete`, so `Work` returned nil and the partition completed
+// 'succeeded' with NO writer for that family and nothing in the telemetry
+// naming it. That was survivable only while the Python compatibility bridge
+// computed whatever this handler did not; CHAOS-3092 (PR-A) deleted that
+// bridge, which turns the same code into exactly the silent-success shape
+// the ticket exists to remove.
+//
+// Not reachable from the current constructor path -- SetNativeFamilies
+// derives nativeFamilyNames from the map it is handed, and
+// cmd/dev-health-worker now fails worker construction on any executor it
+// could not build. Pinned anyway: "unreachable today" is precisely how the
+// pre_bridge fail-open path survived as long as it did, and this test is
+// what makes a future reintroduction fail loudly instead of silently.
+func TestPreBridgeNilExecutorHoldsThePartitionIncomplete(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingNativeFamilyObserver{}
+	logger := &recordingRefusalLogger{}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": nil}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFamilyObserver(observer)
+	handler.SetNativeFamilyLogger(logger)
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to wrap ErrPreBridgeFamilyIncomplete for a family "+
+			"registered with a nil executor -- nothing writes its rows and no bridge remains", workErr)
+	}
+	if store.partitionCompletions != 0 {
+		t.Fatalf("partition completions=%d, want 0 -- a family with no executor must never let "+
+			"the partition complete 'succeeded'", store.partitionCompletions)
+	}
+	if store.releasesWithReason != 1 || store.releaseReason != jobruntime.ReasonPreBridgeFamilyIncomplete.String() {
+		t.Fatalf("releasesWithReason=%d reason=%q, want 1/%q", store.releasesWithReason, store.releaseReason, jobruntime.ReasonPreBridgeFamilyIncomplete.String())
+	}
+
+	if len(observer.calls) != 1 || observer.calls[0].family != "team_wellbeing" ||
+		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused || observer.calls[0].rowsWritten != 0 {
+		t.Fatalf("observations=%#v, want one Refused/0-rows call for team_wellbeing", observer.calls)
+	}
+
+	logger.mu.Lock()
+	errorCalls := append([]recordingRefusalLogCall(nil), logger.calls...)
+	logger.mu.Unlock()
+	if len(errorCalls) != 1 {
+		t.Fatalf("error log calls=%d, want exactly 1 naming the family", len(errorCalls))
+	}
+	if !errorCalls[0].hasArg("family", "team_wellbeing") || !errorCalls[0].hasArg("reason", "native_executor_missing") {
+		t.Errorf("error log %#v must name the family and the reason -- a counter alone never says "+
+			"WHICH family had no executor", errorCalls[0])
+	}
+}
+
 // TestPartitionLogsWhichFamiliesRanPerPartition is CHAOS-3092 (PR-A)'s
 // observability gate for the partition path. With the Python bridge deleted,
 // the registered native families are the ONLY writers of a partition's rows,

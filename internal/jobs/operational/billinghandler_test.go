@@ -1,9 +1,13 @@
 package operational
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -83,12 +87,21 @@ func (owners *fakeOwners) LoadOrgOwner(context.Context, string) (OwnerContact, e
 type fakeSender struct {
 	sent []EmailMessage
 	err  error
+	// recordAsSentDespiteError marks the message as sent even though err is
+	// still returned -- the shape of "the provider accepted the message,
+	// then the response timed out": the provider actually received it, the
+	// caller just never learned that. Left false, err alone (the ordinary
+	// case) never records a send.
+	recordAsSentDespiteError bool
 }
 
 func (sender *fakeSender) Name() string { return "fake" }
 
 func (sender *fakeSender) Send(_ context.Context, message EmailMessage) error {
 	if sender.err != nil {
+		if sender.recordAsSentDespiteError {
+			sender.sent = append(sender.sent, message)
+		}
 		return sender.err
 	}
 	sender.sent = append(sender.sent, message)
@@ -914,4 +927,318 @@ func TestAppBaseURLDistinguishesAbsentFromEmpty(t *testing.T) {
 			t.Fatalf("base = %q", base)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// CHAOS-5399 regression pin. FAILS at this commit's parent.
+// ---------------------------------------------------------------------------
+
+// TestAmbiguousProviderResultProducesExactlyOneSendAcrossTwoAttempts is the
+// CHAOS-5399 red/green pin. At the fix parent, deliver() treated every Send
+// error identically as "nothing was sent" and released the claim; a retry
+// then claimed and sent again, so a provider that accepted a message and
+// then merely failed to confirm it (a timed-out HTTP response, a lost SMTP
+// connection after DATA) produced two emails for one notification.
+func TestAmbiguousProviderResultProducesExactlyOneSendAcrossTwoAttempts(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{
+		// "Accepted, then the response timed out": the provider genuinely
+		// received the message (recorded in sent), but Send still reports
+		// failure, and the failure is ambiguous rather than a clean
+		// rejection.
+		err: &AmbiguousSendError{
+			Err: errors.New("resend API response uncertain: context deadline exceeded"),
+		},
+		recordAsSentDespiteError: true,
+	}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	// Attempt 1: ambiguous result. The claim must NOT be released -- doing
+	// so is exactly what lets a retry duplicate a message that may already
+	// be out.
+	err := handler.Work(context.Background(), billingExecution())
+	if err == nil {
+		t.Fatal("an ambiguous send was reported as success")
+	}
+	if !hasCategory(err, jobruntime.CategoryRetryable) {
+		t.Fatalf("classified as %v, want retryable", err)
+	}
+	if fence.releases != 0 {
+		t.Fatalf("the claim was released after an ambiguous result (releases=%d); "+
+			"a retry can now send a duplicate", fence.releases)
+	}
+
+	// Attempt 2: this job's own retry meets the claim attempt 1 deliberately
+	// left held -- exactly what a real `UPDATE ... WHERE claimed_at IS
+	// NULL` reports the second time (claimed, not completed, not released).
+	claimedAt := handler.now()
+	fence.claim = ClaimResult{ClaimedAt: &claimedAt}
+	err = handler.Work(context.Background(), billingExecution())
+	if err == nil {
+		t.Fatal("a retry meeting the still-held ambiguous claim reported success")
+	}
+	if !hasCategory(err, jobruntime.CategoryRetryable) {
+		t.Fatalf("classified as %v, want retryable", err)
+	}
+
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent %d messages across two handler attempts, want exactly 1 -- "+
+			"the ambiguous first attempt may already have delivered it", len(sender.sent))
+	}
+}
+
+// TestAmbiguousProviderResultIsDistinctFromAnOrdinaryRejection guards the fix
+// above from over-reaching: a genuinely clean rejection (no AmbiguousSendError)
+// must still release and retry exactly as before -- otherwise every ordinary
+// transient failure would stall behind an unreleased claim until it went
+// stale, which is a much worse regression than the bug being fixed.
+func TestAmbiguousProviderResultIsDistinctFromAnOrdinaryRejection(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{err: errors.New("resend API rejected the message: status 422")}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	err := handler.Work(context.Background(), billingExecution())
+	if !hasCategory(err, jobruntime.CategoryRetryable) {
+		t.Fatalf("classified as %v, want retryable", err)
+	}
+	if fence.releases != 1 {
+		t.Fatalf("claim released %d times, want exactly 1 -- a clean rejection must "+
+			"still free the row for a real retry", fence.releases)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CHAOS-5399 r1 (codex round 1, P1) regression pin.
+// ---------------------------------------------------------------------------
+
+// TestAmbiguousProviderResultSnoozesPastStaleness is the r1 P1 pin: this job
+// kind's max_attempts is 4 (contracts/jobs/v1/registry.json) with
+// bounded_exponential_jitter backoff -- comfortably under StaleClaimThreshold
+// (15m). At the r1 fix parent, the ambiguous branch returned a plain
+// jobruntime.Retryable, which consumes the job's bounded attempt budget the
+// same as any ordinary failure. Every follow-up attempt within that budget
+// meets the still-fresh, held claim and is suppressed as a duplicate
+// (reportLostClaim's non-stale branch) -- so all 4 attempts are consumed
+// WITHOUT the claim ever reaching staleness, River discards the job
+// permanently, and nothing ever runs Work() for this notification again: the
+// claim stays held forever with no automated path to an operator alert.
+func TestAmbiguousProviderResultSnoozesPastStaleness(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{
+		err:                      &AmbiguousSendError{Err: errors.New("resend API response uncertain: timeout")},
+		recordAsSentDespiteError: true,
+	}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	err := handler.Work(context.Background(), billingExecution())
+	if !hasCategory(err, jobruntime.CategoryRetryable) {
+		t.Fatalf("classified as %v, want retryable", err)
+	}
+	delay, snoozed := jobruntime.SnoozeDelay(err)
+	if !snoozed {
+		t.Fatal("an ambiguous result was a plain Retryable, not a snoozed retry -- " +
+			"it will consume this job kind's bounded attempt budget (4, all well " +
+			"under the 15m staleness threshold) and can never reach the staleness alert")
+	}
+	if delay <= StaleClaimThreshold {
+		t.Fatalf("snooze delay = %v, want strictly more than StaleClaimThreshold (%v) -- "+
+			"the follow-up attempt must land AFTER the claim is genuinely stale",
+			delay, StaleClaimThreshold)
+	}
+}
+
+// TestAmbiguousTimeoutCauseDoesNotLeakPastTheSnoozeMarker is the r2 P1 pin.
+// At the r2 fix parent, the ambiguous branch passed deliverErr straight into
+// jobruntime.RetryableAfter with its cause chain intact. jobruntime's own
+// classify() checks errors.Is(err, context.DeadlineExceeded) BEFORE it ever
+// inspects the RetryableAfter snooze marker -- and the single most common
+// ambiguous shape (an http.Client response timeout) wraps exactly that
+// cause, via resendEmailSender.Send's `fmt.Errorf("resend API response
+// uncertain: %w", err)`. TestAmbiguousProviderResultSnoozesPastStaleness
+// above used a plain errors.New("...timeout") string for its
+// AmbiguousSendError, which never reproduced this: only a REAL
+// context.DeadlineExceeded in the chain triggers classify's early branch.
+// This test uses that real shape.
+func TestAmbiguousTimeoutCauseDoesNotLeakPastTheSnoozeMarker(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{
+		err: &AmbiguousSendError{
+			// The exact shape resendEmailSender.Send produces on a real
+			// client-side response timeout.
+			Err: fmt.Errorf("resend API response uncertain: %w",
+				fmt.Errorf("Post %q: %w", "https://api.resend.com/emails", context.DeadlineExceeded)),
+		},
+		recordAsSentDespiteError: true,
+	}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	err := handler.Work(context.Background(), billingExecution())
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("Work()'s returned error still satisfies errors.Is(..., context.DeadlineExceeded) -- " +
+			"jobruntime.classify checks exactly this BEFORE it looks for the RetryableAfter " +
+			"snooze marker, so this would silently downgrade to an ordinary attempt-consuming " +
+			"CategoryTimeout retry instead of snoozing past staleness")
+	}
+	delay, snoozed := jobruntime.SnoozeDelay(err)
+	if !snoozed || delay <= StaleClaimThreshold {
+		t.Fatalf("SnoozeDelay() = (%v, %v), want a delay > %v", delay, snoozed, StaleClaimThreshold)
+	}
+}
+
+// TestAmbiguousOutcomeDuringShutdownLogsAWarning is the r3 residual pin
+// (team-lead ruling: the residual itself -- jobruntime.classify's
+// ctx.Err()-cancellation check running before the RetryableAfter snooze
+// marker check, which this handler cannot fix locally -- is accepted, but
+// it must be OBSERVABLE, not only commented. When an ambiguous outcome is
+// classified while the caller's context is already done (a shutdown/deploy
+// drain), the handler must emit a WARN log record naming the outcome class
+// and the possible snooze bypass, so an operator can see it happened.
+func TestAmbiguousOutcomeDuringShutdownLogsAWarning(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{
+		err:                      &AmbiguousSendError{Err: errors.New("resend API response uncertain: timeout")},
+		recordAsSentDespiteError: true,
+	}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the worker context is already done, as during a shutdown/drain
+
+	if err := handler.Work(ctx, billingExecution()); err == nil {
+		t.Fatal("Work() = nil, want the ambiguous send's error")
+	}
+	if !strings.Contains(logs.String(), "billing.ambiguous_outcome_during_shutdown") {
+		t.Fatalf("no billing.ambiguous_outcome_during_shutdown WARN record found in log output: %s",
+			logs.String())
+	}
+	if !strings.Contains(logs.String(), `"claim_outcome":"ambiguous"`) {
+		t.Fatalf("WARN record is missing the outcome class: %s", logs.String())
+	}
+}
+
+// TestAmbiguousOutcomeWithALiveContextDoesNotLogTheShutdownWarning guards the
+// test above from over-reaching: the WARN is specifically about a DONE
+// context, not every ambiguous outcome.
+func TestAmbiguousOutcomeWithALiveContextDoesNotLogTheShutdownWarning(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
+	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{
+		err:                      &AmbiguousSendError{Err: errors.New("resend API response uncertain: timeout")},
+		recordAsSentDespiteError: true,
+	}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	if err := handler.Work(context.Background(), billingExecution()); err == nil {
+		t.Fatal("Work() = nil, want the ambiguous send's error")
+	}
+	if strings.Contains(logs.String(), "billing.ambiguous_outcome_during_shutdown") {
+		t.Fatalf("the shutdown WARN fired with a live, undone context: %s", logs.String())
+	}
+}
+
+// TestSMTPExplicitRejectionAfterDataIsNotAmbiguous is the r1 P1 pin for
+// emailsender.go: an explicit SMTP rejection reply (e.g. "550 rejected")
+// received after DATA's terminator is a DEFINITE, stated non-send -- no
+// different from Mail/Rcpt/Data being rejected earlier -- and must release
+// the claim for a real retry, not stall it behind FenceOutcomeAmbiguous.
+func TestSMTPExplicitRejectionAfterDataIsNotAmbiguous(t *testing.T) {
+	server := newFakeSMTPServer(t, "reject")
+	defer server.listener.Close()
+	host, port := splitHostPort(t, server.addr())
+
+	sender := &smtpEmailSender{from: "billing@example.test", host: host, port: port}
+	err := sender.Send(context.Background(), EmailMessage{
+		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
+	})
+	if err == nil {
+		t.Fatal("Send() = nil, want the explicit rejection error")
+	}
+	if _, ambiguous := isAmbiguous(err); ambiguous {
+		t.Fatalf("Send() = %v classified ambiguous; an explicit SMTP rejection reply "+
+			"IS the server's definite answer, not a lost acknowledgement", err)
+	}
+}
+
+// TestResendKnownRejectionSurvivesABodyReadFailure is the r1 P1 pin: the
+// status code alone is the whole diagnosis for a non-2xx response. A body
+// read failure on TOP of an already-known 4xx must not promote it to
+// ambiguous -- the body was never needed to classify a definite rejection in
+// the first place.
+func TestResendKnownRejectionSurvivesABodyReadFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "1000")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte("{")) // truncated: body read will fail
+		}))
+	defer server.Close()
+	t.Setenv("RESEND_API_BASE_URL", server.URL)
+
+	sender := &resendEmailSender{
+		from: "billing@example.test", apiKey: "k",
+		client: &http.Client{Timeout: 5 * time.Second},
+	}
+	err := sender.Send(context.Background(), EmailMessage{
+		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
+	})
+	if err == nil {
+		t.Fatal("Send() = nil, want the 422 rejection")
+	}
+	if _, ambiguous := isAmbiguous(err); ambiguous {
+		t.Fatalf("Send() = %v classified ambiguous; a KNOWN 4xx needs nothing from "+
+			"the body to classify, so a body read failure on top of it changes nothing", err)
+	}
+}
+
+// TestResendTLSHandshakeFailureIsNotAmbiguous is the r1 P1 pin: a TLS
+// handshake failure happens before the HTTP request is ever written, so no
+// bytes reached the server -- a clean non-send, same as a refused dial. The
+// old net.OpError/net.DNSError pattern-matching missed this shape entirely
+// (a certificate failure surfaces as neither).
+func TestResendTLSHandshakeFailureIsNotAmbiguous(t *testing.T) {
+	// httptest.NewTLSServer's certificate is not trusted by a default
+	// http.Client, so the handshake fails deterministically before any HTTP
+	// request can be written.
+	server := httptest.NewTLSServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("the handler must never run -- the handshake should fail first")
+		}))
+	defer server.Close()
+	t.Setenv("RESEND_API_BASE_URL", server.URL)
+
+	sender := &resendEmailSender{
+		from: "billing@example.test", apiKey: "k",
+		client: &http.Client{Timeout: 5 * time.Second},
+	}
+	err := sender.Send(context.Background(), EmailMessage{
+		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
+	})
+	if err == nil {
+		t.Fatal("Send() = nil, want a TLS handshake failure")
+	}
+	if _, ambiguous := isAmbiguous(err); ambiguous {
+		t.Fatalf("Send() = %v classified ambiguous; a TLS handshake failure happens "+
+			"before any HTTP request byte is written, so this is a clean non-send", err)
+	}
 }

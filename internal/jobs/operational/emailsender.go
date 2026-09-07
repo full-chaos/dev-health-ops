@@ -13,6 +13,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/smtp"
 	"net/textproto"
 	"os"
@@ -43,6 +44,32 @@ import (
 // ErrEmailProviderUnsupported is a configuration fault, not a per-message one:
 // the process is set up to send mail it cannot send.
 var ErrEmailProviderUnsupported = errors.New("operational email provider is unsupported")
+
+// AmbiguousSendError marks a Send failure where the message may already have
+// reached the recipient's mail infrastructure despite the caller never
+// learning that -- Resend accepting the HTTP request and then the response
+// timing out, a Resend 5xx (which happens AFTER the request was received),
+// or an SMTP connection lost after DATA's terminator was written but before
+// the final reply came back. CHAOS-5399: the billing handler used to treat
+// every Send error identically as "nothing was sent" and release its claim
+// for a retry, which can duplicate an email that already went out. An
+// AmbiguousSendError must never be handled that way -- see
+// BillingHandler.deliver.
+//
+// ProviderMessageID carries the provider's own id when the sender obtained
+// one before the ambiguity arose. It is usually empty: today neither sender
+// gets an id on an inconclusive path (Resend only returns one in a fully
+// decoded 2xx body, and SMTP has no concept of one at all), but the field
+// exists so a provider that CAN report one on an ambiguous outcome has
+// somewhere to put it, and so the failure-site log line's shape does not
+// need to change if one later does.
+type AmbiguousSendError struct {
+	Err               error
+	ProviderMessageID string
+}
+
+func (e *AmbiguousSendError) Error() string { return e.Err.Error() }
+func (e *AmbiguousSendError) Unwrap() error { return e.Err }
 
 // EmailMessage is one outbound message.
 type EmailMessage struct {
@@ -204,37 +231,133 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 	}
 	request.Header.Set("Authorization", "Bearer "+sender.apiKey)
 	request.Header.Set("Content-Type", "application/json")
+
+	// CHAOS-5399 r1 (codex P1): pattern-matching specific transport error
+	// SHAPES (a *net.OpError with Op=="dial", a *net.DNSError) to decide
+	// "never reached the network" missed TLS handshake failures entirely --
+	// a peer closing mid-handshake surfaces as a bare io.EOF, which matches
+	// neither pattern and was wrongly classified ambiguous even though no
+	// HTTP request byte had been written yet. httptrace.ClientTrace's
+	// WroteRequest hook is the actual, documented signal for "did the
+	// request reach the point of being fully written to the connection" --
+	// it fires synchronously as part of RoundTrip, so by the time Do()
+	// returns, wroteRequest/wroteRequestErr reflect the FINAL attempt
+	// (net/http retries once internally on a dead reused connection, which
+	// would re-invoke this same hook before Do() returns).
+	var wroteRequest bool
+	var wroteRequestErr error
+	trace := &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			wroteRequest = true
+			wroteRequestErr = info.Err
+		},
+	}
+	request = request.WithContext(httptrace.WithClientTrace(request.Context(), trace))
+
 	response, err := sender.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("resend API unreachable: %w", err)
+		if !wroteRequest {
+			// The request was never fully written to the wire at all -- a
+			// DNS failure, a refused or timed-out dial, or (the case the
+			// old net.OpError-based check missed) a TLS handshake that
+			// never completed. No bytes reached Resend.
+			return fmt.Errorf("resend API unreachable: %w", err)
+		}
+		if wroteRequestErr != nil {
+			// The write itself failed partway through. Some bytes reached
+			// the wire, but not necessarily a complete, parseable request --
+			// unlike the "never written" case above, this leaves genuine
+			// doubt rather than ruling the send out.
+			return &AmbiguousSendError{
+				Err: fmt.Errorf("resend API request write incomplete: %w", err),
+			}
+		}
+		// The full request WAS written -- Resend had everything it needed to
+		// act on it -- and only the response never came back (a timeout, a
+		// reset while waiting, etc). CHAOS-5399: this must not be treated as
+		// "nothing was sent".
+		return &AmbiguousSendError{
+			Err: fmt.Errorf("resend API response uncertain: %w", err),
+		}
 	}
 	defer response.Body.Close()
 	// Bounded read: an unbounded error body from a third party must not be
 	// able to grow this worker's memory.
 	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
-	if readErr != nil {
-		return fmt.Errorf("resend API response unreadable: %w", readErr)
+	// Best-effort only: never let a read/parse failure on a body we don't
+	// even need decide the outcome for a status code that already does.
+	messageID := bestEffortResendMessageID(raw)
+
+	// CHAOS-5399 r1 (codex P1): status code is checked BEFORE trusting a body
+	// read failure. The previous ordering treated ANY readErr as ambiguous
+	// regardless of status -- but a already-known rejection (4xx) needs
+	// nothing from the body to classify; only the 2xx path below actually
+	// depends on it (to rule out an embedded error object).
+	if response.StatusCode >= 500 {
+		// A 5xx is Resend's OWN infrastructure failing AFTER it accepted the
+		// HTTP request; it does not rule out the message having been queued
+		// or sent before that failure. Ambiguous, same reasoning as a
+		// pre-response timeout, regardless of whether the body was readable.
+		return &AmbiguousSendError{
+			Err:               fmt.Errorf("resend API returned a server error: status %d", response.StatusCode),
+			ProviderMessageID: messageID,
+		}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		// The status code is the whole diagnosis and carries no recipient or
-		// key material; the body may echo either, so it is not logged.
+		// A 4xx (or any other non-5xx, non-2xx) is Resend explicitly
+		// refusing the request -- bad auth, validation, rate limiting. This
+		// is a clean, definite non-send: the status code alone is the whole
+		// diagnosis, and a body-read failure on top of it changes nothing.
+		// The body may echo the recipient or key material, so it is not
+		// logged.
 		return fmt.Errorf("resend API rejected the message: status %d", response.StatusCode)
 	}
-	// Python checked for an error object even on a 2xx, because some SDK
-	// versions returned one instead of raising. Same check here.
+	// From here the status is 2xx, where the body is load-bearing: it is
+	// what would reveal an embedded error object (Python checked for one
+	// even on a 2xx, because some SDK versions returned one instead of
+	// raising -- same check here).
+	if readErr != nil {
+		// The status line and headers arrived (2xx), so the request DID
+		// reach Resend and it reported acceptance; only the body -- which
+		// is what would confirm or rule out an embedded error object --
+		// was lost. Ambiguous, not a rejection.
+		return &AmbiguousSendError{
+			Err:               fmt.Errorf("resend API response unreadable: %w", readErr),
+			ProviderMessageID: messageID,
+		}
+	}
 	var decoded struct {
 		ID    string          `json:"id"`
 		Error json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return fmt.Errorf("resend API response invalid: %w", err)
+		// A 2xx status with an unparseable body: the transport-level send
+		// succeeded, but the body cannot be trusted. Ambiguous, not a clean
+		// success.
+		return &AmbiguousSendError{Err: fmt.Errorf("resend API response invalid: %w", err)}
 	}
 	if len(decoded.Error) > 0 && string(decoded.Error) != "null" {
+		// A 2xx wrapping an explicit error object IS a definite rejection --
+		// Resend told us, unambiguously, that it did not send.
 		return errors.New("resend API returned an error object")
 	}
 	slog.InfoContext(ctx, "billing notification: resend accepted the message",
 		"message_id", decoded.ID, "subject", message.Subject)
 	return nil
+}
+
+// bestEffortResendMessageID extracts an "id" field from a raw Resend
+// response body, ignoring any decode failure. It exists only to enrich an
+// ambiguous-outcome log line with a provider id when one happens to be
+// present -- it is never used to decide whether a send succeeded.
+func bestEffortResendMessageID(raw []byte) string {
+	var partial struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &partial); err != nil {
+		return ""
+	}
+	return partial.ID
 }
 
 func (sender *resendEmailSender) endpoint() string {
@@ -311,12 +434,35 @@ func (sender *smtpEmailSender) Send(ctx context.Context, message EmailMessage) e
 			slog.WarnContext(ctx, "billing notification: smtp data close failed after a write error",
 				"error", closeErr)
 		}
+		// Unlike a failed Close below, a failed Write means the terminating
+		// "." was never sent at all -- an SMTP server does not commit a DATA
+		// transaction it never saw the end of, so a connection lost mid-body
+		// leaves nothing for the server to have accepted. Definite non-send.
 		return fmt.Errorf("smtp message write failed: %w", err)
 	}
 	if err := writer.Close(); err != nil {
-		// Closing the DATA writer is what commits the message; a failure here
-		// means it was NOT accepted and must not be reported as sent.
-		return fmt.Errorf("smtp message was not accepted: %w", err)
+		// Closing the DATA writer sends the terminating "." and then reads
+		// the server's final reply via textproto.Reader.ReadResponse.
+		//
+		// CHAOS-5399 r1 (codex P1): a *textproto.Error here means the reply
+		// WAS received and it was an explicit rejection (e.g. "550
+		// rejected") -- a definite, stated non-send, no different from
+		// Mail/Rcpt/Data being rejected earlier. It is every OTHER error
+		// shape (io.EOF, io.ErrUnexpectedEOF, a network read failure or
+		// timeout) that means the reply was never seen at all: the
+		// terminator may already be on the wire, and the server may commit
+		// a message the instant it reads it, before a dropped connection
+		// or a client-side read timeout ever lets the "250 OK" back
+		// (correcting this comment's previous claim that ANY Close failure
+		// meant the message was "NOT accepted" -- that conflated the two
+		// cases).
+		var rejection *textproto.Error
+		if errors.As(err, &rejection) {
+			return fmt.Errorf("smtp message was rejected: %w", err)
+		}
+		return &AmbiguousSendError{
+			Err: fmt.Errorf("smtp response to the message was not received: %w", err),
+		}
 	}
 	if err := client.Quit(); err != nil {
 		// The message is already committed by the successful DATA close

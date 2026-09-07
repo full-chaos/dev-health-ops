@@ -104,19 +104,13 @@ Edges include a confidence score (0.0 - 1.0):
 
 ## CLI Usage
 
-CHAOS-5303 r1 (P2): `builder.py` used to have its own standalone
-`python -m work_graph.builder ...` CLI, undocumented anywhere outside this
-file and receiving no Go pre-step coverage. It has been deleted -- it
-duplicated the CLI below with a strictly smaller flag set. Build the work
-graph via the tracked, documented entry point instead
-(`work_graph/runner.py`'s `run_work_graph_build`, wired to `dev-hops
-work-graph build` -- see `docs/operate/runbooks/operator-commands.md`, which
-already lists this as **legacy**, direct Python compute that bypasses the
-worker's own dispatch/idempotency; prefer `workgraph trigger` where possible):
-
-```bash
-dev-hops work-graph build --db "clickhouse://localhost:9000/default"
-```
+CHAOS-4924: `dev-hops work-graph build` (`work_graph/runner.py`'s
+`run_work_graph_build`) and its earlier standalone
+`python -m work_graph.builder ...` predecessor (deleted under CHAOS-5303 r1
+P2) are BOTH gone. `WorkGraphBuilder.build()` had shrunk to a 0-stats no-op
+by the time either CLI was deleted -- every stage it drove was already
+ported natively. Trigger a build via the worker's own dispatch instead:
+`workerctl workgraph trigger` (see `docs/operate/runbooks/operator-commands.md`).
 
 ## Module Structure
 

@@ -95,26 +95,17 @@ var outputPathPatterns = []*regexp.Regexp{
 // TestExplicitCorpusPathsAreStillNeeded below deletes the excuse when the
 // generator starts declaring its own path.
 var explicitCorpusPaths = map[string]string{
-	// Declares its output as an argparse `--out` default of
-	// /tmp/build_scope_parity_table.json, so no repo-relative constant exists to
-	// match -- but it takes --stdout and its corpus is committed beside it.
-	"generate_build_scope_parity_table.py": "build_scope_parity_table.json",
-	// Its corpus is a GO PACKAGE's testdata, so it lives beside the package that
-	// loads it rather than in tests/fixtures/ -- ordinary Go layout, and not
-	// something to bend for this guard. No Path(__file__)-relative declaration can
-	// name it, because the file is not beside the generator.
+	// CHAOS-4924 removed generate_build_scope_parity_table.py's and
+	// generate_scope_grammar_corpus.py's entries here -- both generators were
+	// deleted outright (their workgraph.build scope-gate subject was retired),
+	// see liveDataGenerators above for the full detail.
 	//
-	// Naming it here makes it GUARDED rather than excused: the ratchet's surface
-	// shrinks by one instead of the corpus being permitted to rot. The generator
-	// runs fine and takes --stdout, so excludedGenerators would be the wrong map
-	// (its self-check demands a missingModule).
-	"generate_scope_grammar_corpus.py": "../../internal/pythonparity/scopeparity/testdata/corpus_seed1.json",
-	// Declares its output as a bare `REPO_ROOT / "tests" / "fixtures" / "..."`
-	// path built inside main(), not a module-level Path(__file__)-relative
-	// constant -- so no pattern matches, but it takes --stdout (CHAOS-5084's
-	// oracle: internal/teamresolve vs the real _repo_to_team_map_for_
-	// compounding_risk) and its corpus is committed beside it.
-	"generate_teamresolve_python_golden.py": "teamresolve_python_golden.json",
+	// CHAOS-5308/CHAOS-3092 removed generate_teamresolve_python_golden.py's
+	// entry -- the generator itself is deleted (its oracle,
+	// _repo_to_team_map_for_compounding_risk, has zero production callers
+	// once repo_user_commit/compounding_risk's Python deletion lands; the
+	// frozen tests/fixtures/teamresolve_python_golden.json and Go's own
+	// internal/teamresolve/golden_test.go stay, they need no live Python).
 }
 
 func declaredOutputPath(source []byte) (string, bool) {
@@ -245,6 +236,38 @@ var liveDataGenerators = map[string]struct {
 	// integration test that already reads them is the regression guard going
 	// forward, no live Python needed. Same precedent as CHAOS-5249's issue_pr_
 	// links generator retirement.
+	//
+	// A third CHAOS-4924 generator, tests/fixtures/generate_build_scope_parity_
+	// table.py, is not listed here because it was never routed through this
+	// map -- it was fully discoverable via explicitCorpusPaths and ran fine.
+	// It was DELETED outright, along with its own dedicated rot guard
+	// (cmd/dev-health-worker/workgraph_scope_rot_guard_test.go), for the same
+	// reason: its `_production_window_digest` anchored on `def
+	// run_work_graph_build(`, which this PR deletes from work_graph_tasks.py,
+	// and its `_admit` reference called `worker_workgraph._scope_arguments(
+	// "workgraph.build", ...)`, a kind this PR also removes from that
+	// function's allowed set -- so every case would trivially become RAISES
+	// regardless of scope shape, collapsing the corpus's entire measurement
+	// axis rather than reporting reference drift. tests/fixtures/build_scope_
+	// parity_table.json stays as a frozen fixture: cmd/dev-health-worker/
+	// workgraph_scope_parity_test.go's TestBuildScopeMatchesTheBridgeAdmission
+	// still diffs the (already-native) issue-pr-links pre-step's window
+	// parser against it, which needs no live Python.
+	//
+	// A FOURTH CHAOS-4924 generator, tests/fixtures/generate_scope_grammar_
+	// corpus.py, was ALSO DELETED for the identical reason: its own docstring
+	// says the corpus exists to measure "the workgraph.build scope gate", and
+	// its `_admit` reference (line ~339) called the same now-retired
+	// `worker_workgraph._scope_arguments("workgraph.build", ...)`. It was
+	// routed through explicitCorpusPaths (removed above), not this map. Its
+	// frozen corpus (internal/pythonparity/scopeparity/testdata/corpus_seed1.
+	// json) stays: scopeparity_test.go's own tests only exercise the
+	// package's Compare() comparator logic against synthetic adapters, using
+	// the corpus purely as realistic-shaped sample data -- no production
+	// adapter is wired through it (confirmed: nothing outside this package
+	// and this guard imports internal/pythonparity/scopeparity), so those
+	// tests need no live Python and are unaffected by the frozen file no
+	// longer being regenerated.
 }
 
 // TestLiveDataGeneratorsGenuinelyNeedClickHouse deletes the excuse the moment

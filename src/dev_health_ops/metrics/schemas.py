@@ -1118,25 +1118,11 @@ class InvestmentExplanationRecord:
     org_id: str = ""
 
 
-@dataclass(frozen=True)
-class DailyMetricsResult:
-    day: date
-    repo_metrics: list[RepoMetricsDailyRecord]
-    user_metrics: list[UserMetricsDailyRecord]
-    commit_metrics: list[CommitMetricsRecord]
-
-    # Optional expanded outputs (may be empty depending on available inputs).
-    team_metrics: list[TeamMetricsDailyRecord] = field(default_factory=list)
-    file_metrics: list[FileMetricsRecord] = field(default_factory=list)
-    work_item_metrics: list[WorkItemMetricsDailyRecord] = field(default_factory=list)
-    work_item_user_metrics: list[WorkItemUserMetricsDailyRecord] = field(
-        default_factory=list
-    )
-    work_item_cycle_times: list[WorkItemCycleTimeRecord] = field(default_factory=list)
-    work_item_state_durations: list[WorkItemStateDurationDailyRecord] = field(
-        default_factory=list
-    )
-    review_edges: list[ReviewEdgeDailyRecord] = field(default_factory=list)
+# CHAOS-5308/CHAOS-3092: DailyMetricsResult is deleted -- it was
+# compute_daily_metrics' (compute.py) sole return type, and that function is
+# now deleted too (RepoUserCommitExecutor, native Go, is the only writer of
+# repo_metrics_daily/user_metrics_daily/commit_metrics). rg confirmed
+# compute.py:647 was DailyMetricsResult's only constructor anywhere.
 
 
 @dataclass(frozen=True)

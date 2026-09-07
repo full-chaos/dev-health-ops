@@ -97,18 +97,13 @@ class _FakeGitHubProvider:
 def _patch_common(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(job, "ClickHouseMetricsSink", _FakeClickHouseSink)
     monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
-    monkeypatch.setattr(
-        job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])
-    )
-    # CHAOS-5323/CHAOS-3092: no compute_estimate_coverage_metrics_daily to
-    # patch here anymore -- job_work_items.py no longer imports it at all
-    # (deleted alongside its own compute function).
-    monkeypatch.setattr(
-        job, "compute_work_item_team_attributions", lambda **_kwargs: []
-    )
-    monkeypatch.setattr(
-        job, "compute_work_item_state_durations_daily", lambda **_kwargs: []
-    )
+    # CHAOS-5310/CHAOS-5321/CHAOS-5323/CHAOS-3092 (R6): no
+    # compute_work_item_metrics_daily / compute_work_item_team_attributions /
+    # compute_work_item_state_durations_daily / compute_estimate_coverage_
+    # metrics_daily to patch here anymore -- job_work_items.py no longer
+    # calls any of them (their call sites in run_work_items_sync_job's
+    # per-day loop are deleted; native Go executors + providersync ingest
+    # derivation own these tables now). Nothing left to neutralize.
     monkeypatch.setattr(job, "parse_github_projects_v2_env", lambda: [])
 
 
@@ -537,13 +532,7 @@ def test_provider_all_with_repo_name_scopes_both_providers(
     monkeypatch.setattr(
         job, "_build_gitlab_work_client", lambda **_kwargs: ("gl-token", None)
     )
-    monkeypatch.setattr(job, "_build_jira_work_client", lambda **_kwargs: object())
     monkeypatch.setattr(job, "_build_linear_work_client", lambda **_kwargs: object())
-    monkeypatch.setattr(
-        job,
-        "fetch_jira_work_items_with_extras",
-        lambda **_kwargs: ([], [], [], [], [], []),
-    )
     monkeypatch.setattr(
         "dev_health_ops.metrics.work_items.fetch_synthetic_work_items",
         lambda **_kwargs: ([], []),

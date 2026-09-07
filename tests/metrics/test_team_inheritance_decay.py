@@ -311,7 +311,15 @@ def test_no_lookup_without_org_or_items(org_id: str, items: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# Downgrade telemetry (standing order: the decay signature is never silent)
+# CHAOS-5321/CHAOS-3092 (R6): the downgrade-telemetry tests that used to live
+# here (_report_attribution_downgrades/_load_prior_primary_attributions and
+# their _attribution()/counter fixture helpers) are deleted -- both functions
+# are gone from job_work_items.py, their only caller (the
+# compute_work_item_team_attributions call site) deleted alongside them. See
+# team_attribution_telemetry.py for the corresponding ATTRIBUTION_DOWNGRADES_
+# TOTAL removal. _RecordingCounter stays: test_persistent_read_failure_is_
+# counted_not_silent below reuses it for the unrelated, still-live
+# STORED_EDGE_LOAD_FAILURES_TOTAL counter.
 # --------------------------------------------------------------------------
 
 
@@ -325,172 +333,6 @@ class _RecordingCounter:
 
     def inc(self, amount: float = 1) -> None:
         self.increments.append(self._pending)
-
-
-def _attribution(
-    work_item_id: str,
-    source: str,
-    *,
-    team_id: str | None,
-    is_primary: int = 1,
-    provider: str = "github",
-) -> Any:
-    from dev_health_ops.metrics.schemas import WorkItemTeamAttributionRecord
-
-    return WorkItemTeamAttributionRecord(
-        work_item_id=work_item_id,
-        provider=provider,
-        source=source,
-        is_primary=is_primary,
-        confidence="high",
-        evidence="",
-        computed_at=NOW,
-        team_id=team_id,
-        team_name=("Fullchaos" if team_id else None),
-        org_id=ORG,
-    )
-
-
-@pytest.fixture
-def counter(monkeypatch: pytest.MonkeyPatch) -> _RecordingCounter:
-    import dev_health_ops.metrics.job_work_items as job
-
-    recording = _RecordingCounter()
-    monkeypatch.setattr(job, "ATTRIBUTION_DOWNGRADES_TOTAL", recording)
-    return recording
-
-
-def test_downgrade_is_counted_and_warned(
-    counter: _RecordingCounter, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The decay signature: an item whose primary attribution came from a real
-    team source resolves to `unassigned` on a later run."""
-    import logging
-
-    from dev_health_ops.metrics.job_work_items import _report_attribution_downgrades
-
-    prior = {DEPENDENT_ID: ("linked_issue", "github")}
-    new = [_attribution(DEPENDENT_ID, "unassigned", team_id=None)]
-
-    with caplog.at_level(logging.WARNING):
-        assert _report_attribution_downgrades(prior, new) == 1
-
-    assert counter.increments == [
-        {"provider": "github", "previous_source": "linked_issue"}
-    ]
-    assert any(
-        "DOWNGRADED" in r.message or "DOWNGRADED" in r.getMessage()
-        for r in caplog.records
-    )
-    assert any(DEPENDENT_ID in r.getMessage() for r in caplog.records)
-
-
-def test_recovery_is_not_a_downgrade(counter: _RecordingCounter) -> None:
-    """unassigned -> teamed is the fix working, not a data loss."""
-    from dev_health_ops.metrics.job_work_items import _report_attribution_downgrades
-
-    # An item with no prior TEAMED attribution is absent from `prior` by
-    # construction (the loader filters team-less rows out).
-    assert (
-        _report_attribution_downgrades(
-            {}, [_attribution(DEPENDENT_ID, "linked_issue", team_id="fullchaos")]
-        )
-        == 0
-    )
-    assert counter.increments == []
-
-
-def test_precedence_change_between_teamed_sources_is_not_a_downgrade(
-    counter: _RecordingCounter,
-) -> None:
-    """linked_issue -> native_team keeps a team; nothing was lost."""
-    from dev_health_ops.metrics.job_work_items import _report_attribution_downgrades
-
-    prior = {DEPENDENT_ID: ("linked_issue", "github")}
-    new = [_attribution(DEPENDENT_ID, "native_team", team_id="fullchaos")]
-
-    assert _report_attribution_downgrades(prior, new) == 0
-    assert counter.increments == []
-
-
-def test_teamless_row_with_no_team_id_counts_as_a_downgrade(
-    counter: _RecordingCounter,
-) -> None:
-    """A row can name a source but carry no team; that is still a loss."""
-    from dev_health_ops.metrics.job_work_items import _report_attribution_downgrades
-
-    prior = {DEPENDENT_ID: ("native_team", "linear")}
-    new = [_attribution(DEPENDENT_ID, "repo_ownership", team_id=None)]
-
-    assert _report_attribution_downgrades(prior, new) == 1
-    assert counter.increments == [
-        {"provider": "github", "previous_source": "native_team"}
-    ]
-
-
-def test_non_primary_rows_are_ignored(counter: _RecordingCounter) -> None:
-    """compute stamps every candidate; only the primary is the attribution."""
-    from dev_health_ops.metrics.job_work_items import _report_attribution_downgrades
-
-    prior = {DEPENDENT_ID: ("linked_issue", "github")}
-    new = [_attribution(DEPENDENT_ID, "unassigned", team_id=None, is_primary=0)]
-
-    assert _report_attribution_downgrades(prior, new) == 0
-    assert counter.increments == []
-
-
-def test_prior_loader_ignores_teamless_and_stale_rows() -> None:
-    """Only a row that actually carried a team can be downgraded FROM, and the
-    query must use the latest-primary fence -- without it an older candidate
-    masquerades as the current attribution and manufactures a phantom
-    downgrade."""
-    from dev_health_ops.metrics.job_work_items import (
-        _load_prior_primary_attributions,
-    )
-
-    rows = [
-        {
-            "work_item_id": DEPENDENT_ID,
-            "source": "linked_issue",
-            "provider": "github",
-            "team_id": "fullchaos",
-        },
-        {
-            "work_item_id": "ghpr:other#1",
-            "source": "unassigned",
-            "provider": "github",
-            "team_id": "",
-        },
-    ]
-
-    class _Sink:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, Any]]] = []
-
-        def query_dicts(self, sql: str, params: dict[str, Any]):
-            self.calls.append((sql, params))
-            return rows
-
-    sink = _Sink()
-    prior = _load_prior_primary_attributions(sink, ORG, [DEPENDENT_ID, "ghpr:other#1"])
-
-    assert prior == {DEPENDENT_ID: ("linked_issue", "github")}
-    sql, params = sink.calls[0]
-    assert "FROM work_item_team_attributions FINAL" in sql
-    assert "is_primary = 1" in sql
-    assert "max(computed_at)" in sql
-    assert params["ids"] == sorted([DEPENDENT_ID, "ghpr:other#1"])
-
-
-def test_prior_loader_degrades_when_the_store_is_unavailable() -> None:
-    from dev_health_ops.metrics.job_work_items import (
-        _load_prior_primary_attributions,
-    )
-
-    assert (
-        _load_prior_primary_attributions(_FakeSink(fail=True), ORG, [DEPENDENT_ID])
-        == {}
-    )
 
 
 # --------------------------------------------------------------------------

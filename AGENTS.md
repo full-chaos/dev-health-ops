@@ -175,8 +175,10 @@ There is ONE row-comparison vocabulary in this repo:
 exclusions that need a written reason and must actually match something). Three
 boundaries sit on it: row-vs-row oracle pairs in `internal/providersync`,
 write-vs-readback in that package's readback pairs, and store-vs-store whole
-TABLE parity in
-[`internal/testsupport/computeparity`](internal/testsupport/computeparity).
+TABLE parity, which was `internal/testsupport/computeparity` -- retired
+(CHAOS-5336) along with dora/capacity, its only two callers; see
+`contracts/compute-parity/v1/README.md` §4 for the recipe a future two-sided
+family should follow to recreate this boundary.
 
 If you are about to write a comparison rule -- how to encode a value, when two
 values are equal, how an exclusion is declared -- it already exists. A second
@@ -185,8 +187,10 @@ one is the defect CHAOS-3092 P0 was created to remove.
 Field completeness comes from the row TYPE, never a hand-written column list:
 the SELECT is derived by reflection, so adding a column to the struct adds it to
 the query and the diff in one edit. Fixtures are producer-derived and stores are
-built from the real migration chain
-([`scripts/worker/compute_parity_fixtures.py`](scripts/worker/compute_parity_fixtures.py)).
+built from the real migration chain -- `scripts/worker/compute_parity_fixtures.py`
+was the concrete example (RETIRED, CHAOS-5336, with `job_dora.py`/`job_capacity.py`
+and its two Go callers; see `contracts/compute-parity/v1/README.md` §4 for the
+recipe a future two-sided family should follow with its own producer script).
 Operational health is a SEPARATE claim with disjoint verdicts
 ([`scripts/worker/compare_runtime_observations.py`](scripts/worker/compare_runtime_observations.py));
 nothing compares product rows in Python. How-to:

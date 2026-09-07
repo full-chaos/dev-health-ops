@@ -158,9 +158,11 @@ func pythonCommand(ctx context.Context, python, dsn, root string) *exec.Cmd {
 	//
 	// Reachability: this package is test support. Its only non-test importer is
 	// internal/testsupport/oraclecompare, which is also test support; no
-	// production binary links it. (Note this is a WEAKER claim than
-	// internal/testsupport/computeparity makes for the same rule -- that one is
-	// importable only from _test.go files, and its argv comes from checked-in
+	// production binary links it. (Note this was a WEAKER claim than
+	// internal/testsupport/computeparity made for the same rule -- that one
+	// (now retired, CHAOS-5336: its two callers, dora/capacity's Python-producer
+	// parity tests, were deleted along with the Python they compared against)
+	// was importable only from _test.go files, and its argv came from checked-in
 	// test code rather than an environment variable. Stating the difference
 	// rather than reusing its wording.)
 	//

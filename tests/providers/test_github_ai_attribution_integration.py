@@ -167,12 +167,10 @@ def test_github_work_items_sync_writes_ai_attribution_with_org_id(
 
     monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
     monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
-    monkeypatch.setattr(
-        job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])
-    )
-    monkeypatch.setattr(
-        job, "compute_work_item_state_durations_daily", lambda **_kwargs: []
-    )
+    # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): no compute_work_item_metrics_daily
+    # / compute_work_item_state_durations_daily to patch here anymore --
+    # job_work_items.py no longer calls either (native Go executors +
+    # providersync ingest derivation own these tables now).
     monkeypatch.setattr(job, "parse_github_projects_v2_env", lambda: [])
     monkeypatch.setattr(
         job,
@@ -279,12 +277,10 @@ def _run_github_work_items_with_credentials(
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
     monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
-    monkeypatch.setattr(
-        job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])
-    )
-    monkeypatch.setattr(
-        job, "compute_work_item_state_durations_daily", lambda **_kwargs: []
-    )
+    # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): no compute_work_item_metrics_daily
+    # / compute_work_item_state_durations_daily to patch here anymore --
+    # job_work_items.py no longer calls either (native Go executors +
+    # providersync ingest derivation own these tables now).
     monkeypatch.setattr(job, "parse_github_projects_v2_env", lambda: [])
     monkeypatch.setattr(
         job,
@@ -386,12 +382,10 @@ def test_github_attribution_subject_id_is_bare_pr_number_joins_pr_number(
 
     monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
     monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
-    monkeypatch.setattr(
-        job, "compute_work_item_metrics_daily", lambda **_kwargs: ([], [], [])
-    )
-    monkeypatch.setattr(
-        job, "compute_work_item_state_durations_daily", lambda **_kwargs: []
-    )
+    # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): no compute_work_item_metrics_daily
+    # / compute_work_item_state_durations_daily to patch here anymore --
+    # job_work_items.py no longer calls either (native Go executors +
+    # providersync ingest derivation own these tables now).
     monkeypatch.setattr(job, "parse_github_projects_v2_env", lambda: [])
     monkeypatch.setattr(
         job,

@@ -565,9 +565,8 @@ FROM work_item_cycle_times WHERE org_id = ?`, orgA,
 	// CHAOS-5323/CHAOS-3092: "estimate_coverage_metrics_daily matches the
 	// python golden" used to live here -- deleted, not fixed, because its
 	// data source is gone by this PR's own design: the shared golden
-	// generator (tests/fixtures/generate_daily_work_item_python_golden.py)
-	// no longer calls compute_estimate_coverage_metrics_daily (deleted
-	// entirely), so `golden.EstimateCoverage` is now permanently empty and
+	// generator script no longer calls compute_estimate_coverage_metrics_daily
+	// (deleted entirely), so `golden.EstimateCoverage` is now permanently empty and
 	// this subtest could only ever fail the moment the native Go executor
 	// wrote a single real row. Go-vs-Python parity for this family still has
 	// dedicated, non-redundant coverage:

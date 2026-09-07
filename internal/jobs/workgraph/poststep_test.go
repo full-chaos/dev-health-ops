@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
 type recordingPostStep struct {
@@ -22,20 +25,17 @@ func (step *recordingPostStep) Run(context.Context, Claim) (map[string]any, erro
 	return step.fragment, step.err
 }
 
-// TestPostStepsRunAfterTheBridgeAndPreStepsBeforeIt is the whole point of the
-// second seam, so it is asserted on the observed sequence rather than inferred
-// from where the call sits in the source.
-//
-// If a post-step ran before the executor it would be a pre-step with a
-// different name, and the defect it exists to prevent — Python overwriting a
-// deliberately divergent value — would be back with no test failing.
-func TestPostStepsRunAfterTheBridgeAndPreStepsBeforeIt(t *testing.T) {
+// TestPostStepsRunAfterPreSteps is the whole point of the second seam, so it
+// is asserted on the observed sequence rather than inferred from where the
+// call sits in the source. Before CHAOS-4924 this also ordered post-steps
+// against the Python bridge in between; there is no bridge left on Build, so
+// the sequence is just preSteps then postSteps now.
+func TestPostStepsRunAfterPreSteps(t *testing.T) {
 	var sequence []string
 	store := &fakeStore{claim: testClaim(time.Minute)}
 
 	handler, err := NewBuildHandler(
 		store,
-		sequencingExecutor{sequence: &sequence},
 		[]NativePreStep{&recordingPreStep{name: "mapping", sequence: &sequence}},
 		[]NativePostStep{&recordingPostStep{name: "edges", sequence: &sequence}},
 		nil,
@@ -47,7 +47,7 @@ func TestPostStepsRunAfterTheBridgeAndPreStepsBeforeIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []string{"prestep:mapping", "executor", "poststep:edges"}
+	want := []string{"prestep:mapping", "poststep:edges"}
 	if len(sequence) != len(want) {
 		t.Fatalf("sequence %v, want %v", sequence, want)
 	}
@@ -58,17 +58,18 @@ func TestPostStepsRunAfterTheBridgeAndPreStepsBeforeIt(t *testing.T) {
 	}
 }
 
-// TestAPostStepFailureFailsTheBuild. The bridge has already written by this
-// point, so the rows exist carrying PYTHON's values. That is a wrong answer
-// that looks healthy, not a missing one, and reporting success would leave the
-// build indistinguishable from one where the native policy applied.
-func TestAPostStepFailureFailsTheBuild(t *testing.T) {
+// TestAPostStepFailureFailsTheBuildPermanently. CHAOS-4924 cutover: a
+// post-step failure classifies exactly like a pre-step failure now (no
+// bridge means no half-applied Python write to worry about) — Permanent for
+// a non-transient error, never Ambiguous. Before the cutover this was
+// Ambiguous because the bridge had already written Python's values by the
+// time a post-step ran; that reasoning no longer applies with no bridge.
+func TestAPostStepFailureFailsTheBuildPermanently(t *testing.T) {
 	var sequence []string
 	store := &fakeStore{claim: testClaim(time.Minute)}
 
 	handler, err := NewBuildHandler(
 		store,
-		sequencingExecutor{sequence: &sequence},
 		nil,
 		[]NativePostStep{&recordingPostStep{
 			name: "edges", sequence: &sequence, err: errors.New("clickhouse refused the batch"),
@@ -78,15 +79,18 @@ func TestAPostStepFailureFailsTheBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
-	if err := handler.Work(context.Background(), buildExecution()); err == nil {
-		t.Fatal("a post-step failure was reported as a successful build; the rows carry " +
-			"Python's values and nothing would say so")
+	workErr := handler.Work(context.Background(), buildExecution())
+	if workErr == nil {
+		t.Fatal("a post-step failure was reported as a successful build")
+	}
+	if !strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf("Work = %v, want category %s", workErr, jobruntime.CategoryPermanent)
 	}
 	if store.completions != 0 {
 		t.Errorf("completions=%d, want 0 — the build must not complete", store.completions)
 	}
-	if store.ambiguous != 1 {
-		t.Errorf("ambiguous=%d, want 1 — a step that writes in batches may have written some rows",
+	if store.ambiguous != 0 {
+		t.Errorf("ambiguous=%d, want 0 -- Build never has a half-applied bridge write to repair",
 			store.ambiguous)
 	}
 }
@@ -95,22 +99,23 @@ func TestAPostStepFailureFailsTheBuild(t *testing.T) {
 // wiring bug that silently skips ported compute.
 func TestANilPostStepIsRefused(t *testing.T) {
 	if _, err := NewBuildHandler(
-		&fakeStore{}, blockingExecutor{}, nil, []NativePostStep{nil},
-		nil,
+		&fakeStore{}, nil, []NativePostStep{nil}, nil,
 	); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("a nil post-step was accepted, got %v", err)
 	}
 }
 
-// TestPostStepEvidenceIsMergedUnderItsName, and does not displace the
-// executor's own keys — the Python payload stays authoritative.
+// TestPostStepEvidenceIsMergedUnderItsName. There is no bridge payload to
+// displace anymore (CHAOS-4924) -- the base evidence is the "{}" sentinel
+// buildHandler.work uses precisely so a fragment-only build still persists
+// its fragments (mergePreStepEvidence returns an empty base UNCHANGED, which
+// would otherwise silently drop every fragment).
 func TestPostStepEvidenceIsMergedUnderItsName(t *testing.T) {
 	var sequence []string
 	store := &fakeStore{claim: testClaim(time.Minute)}
 
 	handler, err := NewBuildHandler(
 		store,
-		sequencingExecutor{sequence: &sequence, evidence: []byte(`{"outcome":"ok"}`)},
 		nil,
 		[]NativePostStep{&recordingPostStep{
 			name: "edges", sequence: &sequence, fragment: map[string]any{"edges_written": 3},
@@ -127,9 +132,6 @@ func TestPostStepEvidenceIsMergedUnderItsName(t *testing.T) {
 	var payload map[string]any
 	if err := json.Unmarshal(store.lastEvidence, &payload); err != nil {
 		t.Fatalf("decode evidence: %v", err)
-	}
-	if payload["outcome"] != "ok" {
-		t.Errorf("the executor's own key was lost: %v", payload)
 	}
 	fragment, present := payload["edges"].(map[string]any)
 	if !present {

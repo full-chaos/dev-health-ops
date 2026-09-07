@@ -16,7 +16,7 @@ type goldenCase struct {
 	Result map[string]string `json:"result"`
 }
 
-// goldenUUID reproduces tests/fixtures/generate_teamresolve_python_golden.py's
+// goldenUUID reproduces the now-deleted generate_teamresolve_python_golden.py's
 // _make_uuid exactly: uuid.uuid5(NAMESPACE_URL, f"teamresolve-golden:{tag}").
 // Go's uuid.NewSHA1(uuid.NameSpaceURL, ...) is the established
 // pythonparity-equivalent form for CPython's uuid.uuid5 over NAMESPACE_URL
@@ -43,7 +43,7 @@ func (f fixedPatternResolver) ResolveRepo(repoName string) (teamID, teamName str
 }
 
 // TestResolveFromOwnershipMapMatchesFrozenPythonGolden re-derives, in Go,
-// each case tests/fixtures/generate_teamresolve_python_golden.py builds
+// each case the now-deleted generate_teamresolve_python_golden.py built
 // (same tags, same UUID derivation), calls ResolveFromOwnershipMap, and
 // compares field-for-field against the frozen JSON that the REAL
 // `_repo_to_team_map_for_compounding_risk` produced for the identical case.

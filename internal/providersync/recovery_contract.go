@@ -27,6 +27,19 @@ var clickHouseRetryProvenSafeSurfaces = func() []string {
 		// wherever it drifts, which is no longer identical to the Python
 		// proven-safe registry's own membership.
 		"estimate_coverage_metrics_daily",
+		// CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): same shape, same reason --
+		// work_item_cycle_times/work_item_metrics_daily/work_item_user_
+		// metrics_daily/work_item_state_durations_daily/work_item_team_
+		// attributions all left LinearExpiredLeaseRetryDestinations() (their
+		// Python compute is deleted entirely), but each stays a proven-safe
+		// RETRY TARGET: native Go executors (daily-partition path) plus this
+		// package's own ingest-time derivation are real writers now, and
+		// none of these tables' RMT/argMax dedup shape changed.
+		"work_item_cycle_times",
+		"work_item_metrics_daily",
+		"work_item_user_metrics_daily",
+		"work_item_state_durations_daily",
+		"work_item_team_attributions",
 	)
 	slices.Sort(surfaces)
 	return surfaces

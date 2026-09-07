@@ -284,37 +284,6 @@ def test_gitlab_provider_drains_usage_observations(monkeypatch) -> None:
     assert usage[0]["request_count"] == 1
 
 
-def test_jira_provider_drains_usage_observations() -> None:
-    from dev_health_ops.providers.jira.provider import JiraProvider
-
-    recorder = UsageRecorder(resolver=JIRA_USAGE_RESOLVER)
-    recorder.record(
-        transport="rest",
-        operation="GET /rest/api/3/search/jql",
-        headers={},
-        rate_limit={"remaining": "90"},
-        status=200,
-    )
-
-    client = MagicMock()
-    client.iter_issues.return_value = iter([])
-    client.iter_issue_comments.return_value = iter([])
-    client.close.return_value = None
-    client.drain_usage_observations.side_effect = recorder.drain
-
-    provider = JiraProvider(client=client)
-    ctx = IngestionContext(
-        window=IngestionWindow(updated_since=datetime(2025, 1, 1, tzinfo=timezone.utc)),
-        limit=1,
-    )
-    batch = provider.ingest(ctx)
-
-    usage = batch.observations["provider_usage"]
-    assert len(usage) == 1
-    assert usage[0]["route_family"] == "jira_jql"
-    assert usage[0]["dimension"] == "search"
-
-
 # ---------------------------------------------------------------------------
 # Linear per-POST counting
 # ---------------------------------------------------------------------------

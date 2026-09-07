@@ -15,15 +15,19 @@ below. The original gate's shape (for history):
 3. Every OTHER family is unaffected by skip_families naming team_wellbeing --
    naming a family with no native executor has no effect at all.
 
-CHAOS-4275 (repo_user_commit) added a SECOND, differently-shaped gate: unlike
-team_wellbeing, `compute_daily_metrics` is still called even when
-"repo_user_commit" is in skip_families, because `result.repo_metrics` is a
-live in-process input to `_write_compounding_risk_for_day` a few lines
-later and compounding_risk has no other source for it -- only the WRITE is
-skipped. A codex adversarial review on the Go port caught that this gate was
-entirely missing in an earlier revision (the native executor and this
-unconditional write both fired for every partition); these tests pin the
-fixed contract the same way the team_wellbeing tests above pin theirs.
+CHAOS-4275 (repo_user_commit) used to have a SECOND, differently-shaped
+write-only gate: unlike team_wellbeing, `compute_daily_metrics` stayed
+called even when "repo_user_commit" was in skip_families, because
+`result.repo_metrics` was a live in-process input to
+`_write_compounding_risk_for_day` a few lines later and compounding_risk had
+no other source for it -- only the WRITE was skipped. CHAOS-5308/CHAOS-3092
+later superseded this write-only gate with outright DELETION of the
+compute+write (and compounding_risk's own REPO-scope compute+write right
+alongside it, since repo_metrics was its only remaining Python-side
+consumer) -- see
+test_repo_user_commit_compute_and_write_are_deleted_from_job_daily and
+test_compounding_risk_compute_and_write_are_deleted_from_job_daily below
+(replacing the write-only-skip tests this paragraph used to describe).
 
 CHAOS-4293 (deploy) used to have the SAME shape as repo_user_commit:
 `deploy_metrics` was still computed when "deploy" was in skip_families,
@@ -54,12 +58,12 @@ straight from "always runs" to "deleted outright," no intermediate
 skip-gated stage).
 
 CHAOS-4277 (file_hotspots + file_risk_hotspots) originally added the SAME
-write-only gate shape as repo_user_commit: `compute_file_hotspots`/
+write-only gate shape repo_user_commit used to have: `compute_file_hotspots`/
 `compute_file_risk_hotspots` were still called (neither `all_file_metrics`
 nor `all_file_hotspots` feeds anything else downstream, so this was a
 deliberate "smallest diff over the reviewed precedent" choice, not a hard
-requirement the way repo_user_commit's compounding_risk dependency is), but
-`write_file_metrics`/`write_file_hotspot_daily` were gated. This gate was
+requirement the way repo_user_commit's compounding_risk dependency used to
+be), but `write_file_metrics`/`write_file_hotspot_daily` were gated. This gate was
 caught MISSING ENTIRELY during cross-lane review (lane-4293's codex round
 flagged the same class on a sibling port, which pointed back at this PR) --
 the native Go executor and this unconditional write would otherwise both
@@ -73,10 +77,13 @@ test_file_hotspots_compute_and_write_are_deleted_from_job_daily and
 test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily below,
 the runtime counterparts of the structural guard in
 tests/metrics/test_job_daily_skip_families_structural_guard.py. CHAOS-5233
-(work_item_attribution), CHAOS-5309 (deploy), and CHAOS-5323
-(work_item_estimate) apply the same rule to three more families -- see
+(work_item_attribution), CHAOS-5309 (deploy), CHAOS-5308 (repo_user_commit +
+compounding_risk repo scope), and CHAOS-5323 (work_item_estimate) apply the
+same rule to more families -- see
 test_work_item_attribution_compute_and_write_are_deleted_from_job_daily,
-test_deploy_compute_and_write_are_deleted_from_job_daily, and
+test_deploy_compute_and_write_are_deleted_from_job_daily,
+test_repo_user_commit_compute_and_write_are_deleted_from_job_daily,
+test_compounding_risk_compute_and_write_are_deleted_from_job_daily, and
 test_work_item_estimate_compute_and_write_are_deleted_from_job_daily below.
 """
 
@@ -154,26 +161,6 @@ class _FakeLoader:
         }
         return [commit_row], [], []
 
-    async def load_cicd_data(self, *a: Any, **k: Any) -> tuple[list, list]:
-        # One in-window pipeline run for REPO_ID. CHAOS-5234/CHAOS-3092
-        # deleted cicd's own compute+write outright (see
-        # test_cicd_compute_and_write_are_deleted_from_job_daily below) --
-        # there is no more cicd skip test for this row to distinguish
-        # "computed nothing" from "computed something and just didn't
-        # write it" for. pipeline_rows (this loader's return value) still
-        # feeds active_repos elsewhere in run_daily_metrics_job, which is
-        # why this fixture data stays non-empty rather than being trimmed
-        # to `[], []`.
-        pipeline_row = {
-            "repo_id": REPO_ID,
-            "run_id": "run-1",
-            "status": "success",
-            "queued_at": None,
-            "started_at": datetime(2025, 12, 18, 9, 0, tzinfo=timezone.utc),
-            "finished_at": datetime(2025, 12, 18, 9, 10, tzinfo=timezone.utc),
-        }
-        return [pipeline_row], []
-
     async def load_incidents(self, *a: Any, **k: Any) -> list:
         return []
 
@@ -203,11 +190,6 @@ class _FakeLoaderWithWorkItem(_FakeLoader):
         return [item], []
 
 
-class _NullResolver:
-    def resolve(self, *a: Any, **k: Any) -> tuple[None, None]:
-        return (None, None)
-
-
 def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     monkeypatch.setattr(job_daily, "ClickHouseMetricsSink", lambda db_url: sink)
 
@@ -220,11 +202,22 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
         return None
 
     monkeypatch.setattr(job_daily, "init_team_resolver", _noop_init_team_resolver)
-    monkeypatch.setattr(job_daily, "get_team_resolver", _NullResolver)
-    monkeypatch.setattr(
-        job_daily, "build_repo_pattern_resolver", lambda *a, **k: _NullResolver()
-    )
-    monkeypatch.setattr(job_daily, "load_identity_resolver", lambda *a, **k: None)
+    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-5310/CHAOS-5321: no
+    # get_team_resolver to neutralize here anymore -- job_daily.py no
+    # longer imports or calls it at all (its only local consumer,
+    # `team_resolver = get_team_resolver()`, is deleted: every family that
+    # used the local -- team_wellbeing, work_item and siblings -- has had
+    # its compute+write deleted outright now; monkeypatch.setattr on a
+    # nonexistent attribute raises). _NullResolver, this monkeypatch's own
+    # replacement value, is deleted with it -- it had no other caller.
+    # CHAOS-5308/CHAOS-3092: no build_repo_pattern_resolver to neutralize
+    # here anymore -- its only consumer was repo_team_resolver, deleted
+    # alongside repo_user_commit's and team_wellbeing's compute+write
+    # (monkeypatch.setattr on a nonexistent attribute raises).
+    # CHAOS-5308/CHAOS-3092: no load_identity_resolver to neutralize here
+    # anymore -- its only consumer was compute_daily_metrics' identity_
+    # resolver argument, deleted alongside repo_user_commit's compute+write
+    # (monkeypatch.setattr on a nonexistent attribute raises).
     monkeypatch.setattr(job_daily, "discover_repos", lambda **k: [])
     # CHAOS-5234/CHAOS-3092: no build_governance_rows_for_day to neutralize
     # here anymore -- job_daily.py no longer calls it at all (deleted, not
@@ -240,13 +233,15 @@ def _neutralize_daily_job(monkeypatch: Any, *, sink: Any, loader: Any) -> None:
     # its Python compute is deleted entirely (it was already unreachable
     # from this function since CHAOS-5194 relocated the call site to
     # run_daily_metrics_finalize).
-    monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", lambda **k: 0)
+    # CHAOS-5308/CHAOS-3092: no _write_compounding_risk_for_day to neutralize
+    # here anymore -- job_daily.py no longer calls it at all (deleted, not
+    # skip-gated; see CHAOS-5233's shape for work_item_attribution).
 
 
 @pytest.mark.asyncio
 async def test_skip_families_none_is_a_noop(monkeypatch: Any) -> None:
     sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
     await job_daily.run_daily_metrics_job(
         db_url="clickhouse://test",
@@ -257,18 +252,23 @@ async def test_skip_families_none_is_a_noop(monkeypatch: Any) -> None:
         skip_families=None,
     )
 
-    # CHAOS-5234/CHAOS-3092: team_wellbeing's compute+write is deleted
-    # outright now (see test_team_wellbeing_compute_and_write_are_deleted_
-    # from_job_daily below), so "team_metrics" can no longer serve as this
-    # test's no-op signal -- repo_metrics (repo_user_commit, still a real
-    # skip-gated family) takes its place.
-    assert "repo_metrics" in sink.write_calls
+    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+    # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+    # compute+write are ALL deleted outright now (see their own
+    # test_*_compute_and_write_are_deleted_from_job_daily tests below), so
+    # none of "team_metrics"/"repo_metrics"/"write_review_edges"/
+    # "write_work_item_metrics" can serve as this test's no-op signal any
+    # more -- compounding_risk can't either (this fixture has no PR/review
+    # data for it to compute from). No family in this file's fixture writes
+    # anything unconditional any more; the no-op assertion is now genuinely
+    # "nothing was written".
+    assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
 async def test_skip_families_empty_set_is_a_noop(monkeypatch: Any) -> None:
     sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
     await job_daily.run_daily_metrics_job(
         db_url="clickhouse://test",
@@ -279,7 +279,18 @@ async def test_skip_families_empty_set_is_a_noop(monkeypatch: Any) -> None:
         skip_families=set(),
     )
 
-    assert "repo_metrics" in sink.write_calls
+    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+    # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+    # compute+write are ALL deleted outright now (see their own
+    # test_*_compute_and_write_are_deleted_from_job_daily tests below) --
+    # test_team_wellbeing_in_skip_families_writes_nothing and
+    # test_team_wellbeing_skip_does_not_affect_other_families (which used to
+    # follow here, pinning the now-superseded write-only-skip gate) are
+    # removed with it; "team_metrics"/"repo_metrics"/"write_review_edges"/
+    # "write_work_item_metrics" can no longer serve as write signals either.
+    # No family in this file's fixture writes anything unconditional any
+    # more; the no-op assertion is now genuinely "nothing was written".
+    assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -306,7 +317,7 @@ async def test_team_wellbeing_compute_and_write_are_deleted_from_job_daily(
     (tests/metrics/test_team_metrics_daily_repo_id_live.py, also deleted).
     """
     sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
     assert not hasattr(job_daily, "compute_team_wellbeing_metrics_daily"), (
         "compute_team_wellbeing_metrics_daily must not be imported into "
@@ -340,9 +351,13 @@ async def test_team_wellbeing_compute_and_write_are_deleted_from_job_daily(
         )
         assert "team_metrics" not in sink.write_calls
         assert "write_team_metrics" not in sink.write_calls
-        # repo_metrics (unrelated family, same partition) must be entirely
-        # unaffected by the deletion.
-        assert "repo_metrics" in sink.write_calls
+        # CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321: repo_metrics,
+        # review_edges, AND work_item are also deleted now (repo_user_
+        # commit's compute+write, review_edges' compute+write, work_item's
+        # compute+write) -- nothing in this fixture writes anything
+        # unconditional any more, so "nothing else was written" is itself
+        # the proof the team_wellbeing deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -364,7 +379,7 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
     left in job_daily.py to check skip_families for this family at all --
     naming it here is still a no-op, for a different reason than before."""
     sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
     await job_daily.run_daily_metrics_job(
         db_url="clickhouse://test",
@@ -375,78 +390,73 @@ async def test_skip_families_naming_unrelated_family_has_no_effect(
         skip_families={"file_hotspots"},
     )
 
-    # CHAOS-5234/CHAOS-3092/CHAOS-5309: cicd's AND deploy's compute+write are
-    # both deleted outright now (see test_cicd_compute_and_write_are_deleted_
-    # from_job_daily and test_deploy_compute_and_write_are_deleted_from_
-    # job_daily below), so neither can serve as the "real, non-empty row"
-    # unrelated-family control the way the codex round-4 (CHAOS-4292)
-    # finding originally wanted -- the repo_metrics assertion above is the
-    # surviving "unrelated write still happens at all" control.
-    assert "repo_metrics" in sink.write_calls
+    # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-5309/CHAOS-4279/CHAOS-5310/
+    # CHAOS-5321: team_wellbeing's, cicd's, deploy's, repo_user_commit's,
+    # review_edges', AND work_item's compute+write are ALL deleted outright
+    # now (see their own test_*_compute_and_write_are_deleted_from_job_daily
+    # tests below), so nothing in this fixture writes anything unconditional
+    # any more -- "nothing else was written" is itself the proof the
+    # file_hotspots skip didn't perturb anything.
+    assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
-async def test_repo_user_commit_in_skip_families_writes_nothing_but_still_computes(
+async def test_repo_user_commit_compute_and_write_are_deleted_from_job_daily(
     monkeypatch: Any,
 ) -> None:
-    """Unlike team_wellbeing, compute_daily_metrics must still run when
-    repo_user_commit is skipped -- result.repo_metrics feeds
-    _write_compounding_risk_for_day (compounding_risk has no other source
-    for it, and is not yet ported). Only the three writes are gated."""
-    compute_calls: list[Any] = []
-    original = job_daily.compute_daily_metrics
+    """CHAOS-5234/CHAOS-3092 close condition 3 (CHAOS-5308).
 
-    def _spy(*args: Any, **kwargs: Any) -> Any:
-        compute_calls.append((args, kwargs))
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(job_daily, "compute_daily_metrics", _spy)
-
+    repo_user_commit used to have the write-only-skip shape pinned by
+    test_repo_user_commit_in_skip_families_writes_nothing_but_still_computes /
+    test_repo_user_commit_skip_does_not_affect_other_families (both replaced
+    by this test): compute_daily_metrics stayed called even when
+    "repo_user_commit" was in skip_families, because result.repo_metrics fed
+    _write_compounding_risk_for_day (compounding_risk had no other source
+    for it) -- only the three writes were skipped. RepoUserCommitExecutor
+    being native (CHAOS-4275) superseded that: the compute+writes are
+    deleted entirely now, not skip-gated -- same rule as CHAOS-5233's
+    work_item_attribution and CHAOS-5309's deploy, but unlike those cases,
+    compute_daily_metrics itself is ALSO deleted (from compute.py, along
+    with DailyMetricsResult in schemas.py and commit_size_bucket): rg
+    confirmed zero production callers outside this call site. Deleting it
+    also deleted compounding_risk's REPO-scope compute+write in the same
+    PR -- see test_compounding_risk_compute_and_write_are_deleted_from_
+    job_daily below -- since result.repo_metrics was its only remaining
+    Python-side consumer.
+    """
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
 
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_families={"repo_user_commit"},
+    assert not hasattr(job_daily, "compute_daily_metrics"), (
+        "compute_daily_metrics must not be imported into job_daily.py's "
+        "module namespace at all"
     )
 
-    assert len(compute_calls) == 1
-    assert "repo_metrics" not in sink.write_calls
-    assert "write_user_metrics" not in sink.write_calls
-    assert "write_commit_metrics" not in sink.write_calls
-
-
-@pytest.mark.asyncio
-async def test_repo_user_commit_skip_does_not_affect_other_families(
-    monkeypatch: Any,
-) -> None:
-    """Naming repo_user_commit in skip_families must not perturb any other
-    family's write path."""
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_families={"repo_user_commit"},
-    )
-
-    # CHAOS-5234/CHAOS-3092/CHAOS-5309/CHAOS-4279: this used
-    # "write_deploy_metrics", then review_edges, as its unrelated-family
-    # control; review_edges' own write is now deleted outright too
-    # (CHAOS-4279). compounding_risk cannot take its place either -- the
-    # base _FakeLoader has no PR/review data for it to compute from, so it
-    # writes nothing regardless of skip_families. work_item, fed by
-    # _FakeLoaderWithWorkItem, is the first still-live family in this file
-    # with real fixture data of its own -- switched loader accordingly.
-    assert "write_work_item_metrics" in sink.write_calls
+    for skip_families in (None, {"repo_user_commit"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_families=skip_families,
+        )
+        assert "repo_metrics" not in sink.write_calls
+        assert "write_user_metrics" not in sink.write_calls
+        assert "write_commit_metrics" not in sink.write_calls
+        # CHAOS-5234/CHAOS-3092/CHAOS-5309/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+        # this used "write_deploy_metrics", then review_edges, then
+        # work_item, as its unrelated-family control -- all four had their
+        # own compute+write deleted in this same PR/sibling PRs, so none can
+        # serve as this control any more. compounding_risk cannot take their
+        # place either: the fixture has no PR/review data for it to compute
+        # from, so its own write is never reached. repo_user_commit is now
+        # the ONLY family in this file's fixture that produces an
+        # unconditional write with real data -- with it named in
+        # skip_families, this assertion is genuinely "no other family
+        # writes anything" rather than a positive different-family check.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -464,13 +474,13 @@ async def test_deploy_compute_and_write_are_deleted_from_job_daily(
     same rule as CHAOS-5233's work_item_attribution, but unlike that case,
     compute_deploy_metrics_daily itself is ALSO deleted (from
     compute_deployments.py): rg confirmed job_daily.py was its only real
-    caller. The sibling constant DEPLOYMENT_FAILURE_STATUSES in the same
-    module is NOT touched -- it has a real, separate caller
-    (compute_dora.py, still Python) plus its own dedicated test coverage in
-    test_job_dora.py.
+    caller. CHAOS-5336: the sibling constant DEPLOYMENT_FAILURE_STATUSES,
+    whose only other caller was compute_dora.py, is now genuinely orphaned --
+    compute_deployments.py (its defining module) is deleted outright along
+    with compute_dora.py, not left behind as a dead single-constant file.
     """
     sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
     assert not hasattr(job_daily, "compute_deploy_metrics_daily"), (
         "compute_deploy_metrics_daily must not be imported into "
@@ -488,12 +498,15 @@ async def test_deploy_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_deploy_metrics" not in sink.write_calls
-        # Unrelated families/writes are unaffected by the deletion.
-        # NOTE: this test originally (main/#2318) also asserted "team_metrics"
-        # in sink.write_calls here -- team_wellbeing's own write is ALSO
-        # deleted outright by this same merge (CHAOS-5311/CHAOS-3092), so
-        # that assertion is dropped rather than merged in false.
-        assert "repo_metrics" in sink.write_calls
+        # NOTE: this test originally also asserted "team_metrics"/
+        # "repo_metrics"/"write_review_edges"/"write_work_item_metrics" in
+        # sink.write_calls here as unrelated-family controls --
+        # team_wellbeing's (CHAOS-5311/CHAOS-3092), repo_user_commit's
+        # (CHAOS-5308), review_edges' (CHAOS-4279), AND work_item's
+        # (CHAOS-5310/CHAOS-5321) writes are ALL deleted outright now, so
+        # nothing else is left to write -- "nothing else was written" is
+        # itself the proof the deploy deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -520,13 +533,16 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
     generate_daily_cicd_python_golden.py, both also deleted in this PR) plus
     its own dedicated tests (tests/metrics/test_cicd_daily_recompute_dedup_
     live.py, deleted, and tests/metrics/test_compute_delivery_ops.py's cicd
-    test function, removed). pipeline_rows (loader.load_cicd_data) itself is
-    NOT touched -- it also feeds active_repos, verified via rg that this
-    compute call was its only OTHER reader.
+    test function, removed). pipeline_rows/deployment_rows are now ALSO
+    deleted (CHAOS-5308): cicd's own compute (this PR's sibling) and
+    active_repos' deployment reader are both deleted, so the
+    loader.load_cicd_data call site in job_daily.py had no remaining
+    consumer for either return value -- and DataLoader.load_cicd_data itself
+    (all three backends: base Protocol, sqlalchemy, clickhouse) is deleted
+    with it, since its only real caller was that dead call site
+    (tests/metrics/test_clickhouse_org_scope.py's dedicated test of it is
+    also deleted in this PR).
     """
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-
     assert not hasattr(job_daily, "compute_cicd_metrics_daily"), (
         "compute_cicd_metrics_daily must not be imported into job_daily.py's "
         "module namespace at all"
@@ -540,17 +556,17 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
         "caller has reappeared, this assertion should be removed and "
         "explained, not silently loosened"
     )
+    # CHAOS-5308/CHAOS-3092: no record_metrics_family_zero_rows spy here
+    # anymore -- job_daily.py no longer imports it at all (its only caller,
+    # the _note_family_zero_rows helper, is deleted: cicd/deploy/incident,
+    # every family that used to feed it, have all had their compute+write+
+    # zero-rows-note deleted outright now).
 
-    zero_rows_calls: list[tuple[str, str]] = []
-
-    def _spy_record(*, family: str, cause: str) -> None:
-        zero_rows_calls.append((family, cause))
-
-    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
+    sink = _RecordingSink("clickhouse://test")
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
     for skip_families in (None, {"cicd"}):
         sink.write_calls = []
-        zero_rows_calls.clear()
         await job_daily.run_daily_metrics_job(
             db_url="clickhouse://test",
             day=DAY,
@@ -560,10 +576,14 @@ async def test_cicd_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_cicd_metrics" not in sink.write_calls
-        assert not any(family == "cicd" for family, _cause in zero_rows_calls)
-        # repo_metrics/deploy (unrelated families, same partition) must be
-        # entirely unaffected by the deletion.
-        assert "repo_metrics" in sink.write_calls
+        # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+        # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+        # writes are also deleted outright now, so none of "team_metrics"/
+        # "repo_metrics"/"write_review_edges"/"write_work_item_metrics" has a
+        # subject left to serve as the unrelated-family control -- "nothing
+        # else was written" is itself the proof the cicd deletion didn't
+        # perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -598,7 +618,7 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
 
     for skip_families in (None, {"file_hotspots"}):
         sink = _RecordingSink("clickhouse://test")
-        _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+        _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
         await job_daily.run_daily_metrics_job(
             db_url="clickhouse://test",
@@ -610,8 +630,14 @@ async def test_file_hotspots_compute_and_write_are_deleted_from_job_daily(
         )
 
         assert "write_file_metrics" not in sink.write_calls
-        # Unrelated families/writes are unaffected by the deletion.
-        assert "repo_metrics" in sink.write_calls
+        # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+        # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+        # writes are also deleted outright now, so none of "team_metrics"/
+        # "repo_metrics"/"write_review_edges"/"write_work_item_metrics" has a
+        # subject left to serve as the unrelated-family control -- "nothing
+        # else was written" is itself the proof the file_hotspots deletion
+        # didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -657,7 +683,7 @@ async def test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily(
 
     for skip_families in (None, {"file_risk_hotspots"}):
         sink = _RecordingSink("clickhouse://test")
-        _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+        _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
         await job_daily.run_daily_metrics_job(
             db_url="clickhouse://test",
@@ -669,112 +695,76 @@ async def test_file_risk_hotspots_compute_and_write_are_deleted_from_job_daily(
         )
 
         assert "write_file_hotspot_daily" not in sink.write_calls
-        # Unrelated families/writes are unaffected by the deletion.
-        assert "repo_metrics" in sink.write_calls
+        # CHAOS-5234/CHAOS-3092/CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+        # team_wellbeing's, repo_user_commit's, review_edges', AND work_item's
+        # writes are also deleted outright now, so none of "team_metrics"/
+        # "repo_metrics"/"write_review_edges"/"write_work_item_metrics" has a
+        # subject left to serve as the unrelated-family control -- "nothing
+        # else was written" is itself the proof the file_risk_hotspots
+        # deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
-async def test_compounding_risk_not_skipped_writes_repo_rows(
+async def test_compounding_risk_compute_and_write_are_deleted_from_job_daily(
     monkeypatch: Any,
 ) -> None:
-    """Baseline for the skip test below: WITHOUT compounding_risk in
-    skip_families the per-partition repo-scope writer runs, so the "never
-    called" assertion below is because of the gate, not because the fixture
-    never reaches that call site."""
-    calls: list[dict[str, Any]] = []
+    """CHAOS-5234/CHAOS-3092 close condition 3 (CHAOS-5308).
 
-    def _spy(**kwargs: Any) -> int:
-        calls.append(kwargs)
-        return 0
-
+    compounding_risk (REPO scope) used to have the cicd/team_wellbeing
+    whole-call-skip shape pinned by
+    test_compounding_risk_not_skipped_writes_repo_rows /
+    test_compounding_risk_in_skip_families_writes_nothing /
+    test_compounding_risk_skip_does_not_perturb_other_families (all three
+    replaced by this test): when "compounding_risk" was in skip_families,
+    job_daily.py must not call _write_compounding_risk_for_day at all (it
+    writes straight to the sinks, nothing else in this function consumes
+    its output). CompoundingRiskExecutor being native (CHAOS-4287)
+    superseded that: the call is deleted entirely now, not skip-gated.
+    _write_compounding_risk_for_day itself is ALSO deleted -- rg confirmed
+    job_daily.py was its only real caller. build_compounding_risk_rows_
+    for_day (compounding_risk.py) is ALSO deleted: its other real caller,
+    job_compounding_risk.py's own standalone `dev-hops metrics
+    compounding-risk` CLI backfill job, is itself deleted whole (with its
+    own private helper, _fetch_repo_metrics_for_day) -- no straddle, no
+    remaining Python producer of this family at any scope. This deletion
+    rides alongside
+    repo_user_commit's own compute+write deletion in the same PR -- see
+    test_repo_user_commit_compute_and_write_are_deleted_from_job_daily
+    above -- since result.repo_metrics was compounding_risk's only
+    remaining Python-side input. TEAM-scope compounding_risk_team
+    (CHAOS-5084) is a separate family, already deleted, unaffected.
+    """
     sink = _RecordingSink("clickhouse://test")
-    # AFTER _neutralize_daily_job: that helper stubs
-    # _write_compounding_risk_for_day itself, so a spy installed before it is
-    # silently overwritten and the assertions below pass vacuously.
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-    monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", _spy)
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_families=None,
+    assert not hasattr(job_daily, "_write_compounding_risk_for_day"), (
+        "_write_compounding_risk_for_day must not be imported into "
+        "job_daily.py's module namespace at all"
     )
+    # CHAOS-5308/CHAOS-3092: no record_metrics_family_zero_rows spy here
+    # anymore -- job_daily.py no longer imports it at all (its only caller,
+    # the _note_family_zero_rows helper, is deleted).
 
-    assert len(calls) == 1
-    assert calls[0]["org_id"] == ORG_ID
-
-
-@pytest.mark.asyncio
-async def test_compounding_risk_in_skip_families_writes_nothing(
-    monkeypatch: Any,
-) -> None:
-    """CHAOS-4287: when the Go dispatcher reports compounding_risk already
-    computed and wrote this partition's REPO-scope rows, this job must not
-    call _write_compounding_risk_for_day at all.
-
-    The whole call is gated rather than only the write because nothing else
-    in run_daily_metrics_job consumes its output -- it writes straight to the
-    sinks -- which makes this the cicd/team_wellbeing shape rather than
-    repo_user_commit's write-only skip. And, as for cicd, no zero-rows note
-    may fire for the family under the skip: that would be a false
-    "no_rows_computed" DEGRADE signal on every native-executor partition
-    regardless of how many rows Go actually wrote."""
-    calls: list[dict[str, Any]] = []
-
-    def _spy(**kwargs: Any) -> int:
-        calls.append(kwargs)
-        return 0
-
-    zero_rows_calls: list[tuple[str, str]] = []
-
-    def _spy_record(*, family: str, cause: str) -> None:
-        zero_rows_calls.append((family, cause))
-
-    sink = _RecordingSink("clickhouse://test")
-    # AFTER _neutralize_daily_job, for the same reason as the baseline above --
-    # otherwise `calls == []` would hold whether or not the gate exists.
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-    monkeypatch.setattr(job_daily, "_write_compounding_risk_for_day", _spy)
-    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_families={"compounding_risk"},
-    )
-
-    assert calls == []
-    assert not any(
-        family.startswith("compounding_risk") for family, _cause in zero_rows_calls
-    )
-
-
-@pytest.mark.asyncio
-async def test_compounding_risk_skip_does_not_perturb_other_families(
-    monkeypatch: Any,
-) -> None:
-    """Naming compounding_risk in skip_families must not change any other
-    family's writes -- the gate is one `if` around one call site, and the
-    families around it (repo_metrics, deploy) must be untouched."""
-    sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
-
-    await job_daily.run_daily_metrics_job(
-        db_url="clickhouse://test",
-        day=DAY,
-        backfill_days=1,
-        provider="auto",
-        org_id=ORG_ID,
-        skip_families={"compounding_risk"},
-    )
-
-    assert "repo_metrics" in sink.write_calls
+    for skip_families in (None, {"compounding_risk"}):
+        sink.write_calls = []
+        await job_daily.run_daily_metrics_job(
+            db_url="clickhouse://test",
+            day=DAY,
+            backfill_days=1,
+            provider="auto",
+            org_id=ORG_ID,
+            skip_families=skip_families,
+        )
+        assert "write_compounding_risk_daily" not in sink.write_calls
+        # CHAOS-5234/CHAOS-3092/CHAOS-4279/CHAOS-5310/CHAOS-5321:
+        # team_wellbeing's, cicd's, review_edges', AND work_item's writes are
+        # also deleted outright now, so none of "team_metrics"/
+        # "write_cicd_metrics"/"write_review_edges"/"write_work_item_metrics"
+        # has a subject left to serve as the unrelated-family control --
+        # "nothing else was written" is itself the proof the
+        # compounding_risk deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 # CHAOS-4279 deleted review_edges' Python compute entirely
@@ -803,27 +793,31 @@ async def test_compounding_risk_skip_does_not_perturb_other_families(
 
 
 @pytest.mark.asyncio
-async def test_work_item_attribution_compute_and_write_are_deleted_from_job_daily(
+async def test_work_item_family_compute_and_write_are_deleted_from_job_daily(
     monkeypatch: Any,
 ) -> None:
-    """CHAOS-5233/CHAOS-3092 close condition 3.
+    """CHAOS-5233/CHAOS-5310/CHAOS-5321/CHAOS-3092 close condition 3.
 
     Chris's ruling (verbatim, twice): "work_item_attribution python doesn't
     need a skip, it just needs to be deleted" / "once go is in main that
-    does the same thing, skip flags are pointless." Unlike every other
-    family in this file, work_item_attribution gets NO skip_families
-    handling at all -- its daily compute+write call is gone from
-    run_daily_metrics_job entirely, in every mode. This is the RUNTIME
-    counterpart to test_every_native_daily_family_has_a_skip_families_branch
-    (renamed structural guard, tests/metrics/
+    does the same thing, skip flags are pointless." work_item,
+    work_item_attribution, work_item_state, and work_item_estimate get NO
+    skip_families handling at all -- their daily compute+write calls are
+    gone from run_daily_metrics_job entirely, in every mode. This is the
+    RUNTIME counterpart to
+    test_every_native_daily_family_has_a_skip_families_branch (renamed
+    structural guard, tests/metrics/
     test_job_daily_skip_families_structural_guard.py), which proves the same
     thing at the source level.
 
-    compute_work_item_team_attributions itself is NOT deleted from the
-    codebase -- job_work_items.py's run_work_items_sync_job (a full-backfill
-    sync job, unrelated to this function) still calls it directly, as do its
-    own dedicated unit tests and the live-Python oracle comparator. Only
-    run_daily_metrics_job's own call is gone.
+    R6: unlike the original CHAOS-5233 shape (where compute_work_item_team_
+    attributions stayed alive for job_work_items.py's run_work_items_sync_job
+    caller), team-lead's later ruling established that caller is reachable
+    but not a production writer (prod Celery stopped 2026-08-19, so none of
+    its three Python callers execute in production) -- so run_daily_metrics_
+    job's call sites for ALL FOUR of these families are deleted the same way,
+    even though work_item_attribution's function-body deletion (unlike
+    work_item_estimate's) is tracked separately, see CHAOS-5310/5321.
     """
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
@@ -832,8 +826,20 @@ async def test_work_item_attribution_compute_and_write_are_deleted_from_job_dail
         "compute_work_item_team_attributions must not be imported into "
         "job_daily.py's module namespace at all"
     )
+    assert not hasattr(job_daily, "compute_work_item_metrics_daily"), (
+        "compute_work_item_metrics_daily must not be imported into "
+        "job_daily.py's module namespace at all"
+    )
+    assert not hasattr(job_daily, "compute_work_item_state_durations_daily"), (
+        "compute_work_item_state_durations_daily must not be imported into "
+        "job_daily.py's module namespace at all"
+    )
 
-    for skip_families in (None, {"work_item_attribution"}):
+    for skip_families in (
+        None,
+        {"work_item_attribution"},
+        {"work_item", "work_item_state"},
+    ):
         sink.write_calls = []
         await job_daily.run_daily_metrics_job(
             db_url="clickhouse://test",
@@ -844,13 +850,10 @@ async def test_work_item_attribution_compute_and_write_are_deleted_from_job_dail
             skip_families=skip_families,
         )
         assert "write_work_item_team_attributions" not in sink.write_calls
-        # work_item must be entirely unaffected by the deletion -- it shares
-        # the same `if work_items:` block and the same attribution_context,
-        # but neither reads work_item_attribution's output. (work_item_estimate
-        # used to be asserted here too, but CHAOS-5323 deleted its own
-        # compute+write from this same block -- see the dedicated test
-        # below.)
-        assert "write_work_item_metrics" in sink.write_calls
+        assert "write_work_item_metrics" not in sink.write_calls
+        assert "write_work_item_user_metrics" not in sink.write_calls
+        assert "write_work_item_cycle_times" not in sink.write_calls
+        assert "write_work_item_state_durations" not in sink.write_calls
         assert "write_estimate_coverage_metrics" not in sink.write_calls
 
 
@@ -900,11 +903,8 @@ async def test_work_item_estimate_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_estimate_coverage_metrics" not in sink.write_calls
-        # work_item/work_item_attribution must be entirely unaffected by the
-        # deletion -- they share the same `if work_items:` block and the
-        # same attribution_context, but neither reads work_item_estimate's
-        # output.
-        assert "write_work_item_metrics" in sink.write_calls
+        # CHAOS-5310/CHAOS-3092: work_item's own compute+write is ALSO
+        # deleted from this same block now (R6) -- no longer asserted present.
 
 
 @pytest.mark.asyncio
@@ -938,15 +938,16 @@ async def test_ai_governance_compute_and_write_are_deleted_from_job_daily(
         )
         assert "write_ai_policy_events" not in sink.write_calls
         assert "write_ai_governance_coverage_daily" not in sink.write_calls
-        # work_item (unrelated family, same partition) must be entirely
-        # unaffected by the deletion. (Was cicd, then deploy, then
-        # review_edges -- all three had their own compute+write deleted in
-        # this same PR/sibling PRs, so none can serve as this control any
-        # more; compounding_risk can't either, the base _FakeLoader has no
-        # PR/review data for it to compute from. work_item, fed by
-        # _FakeLoaderWithWorkItem, is the first still-live family in this
-        # file with real fixture data of its own.)
-        assert "write_work_item_metrics" in sink.write_calls
+        # Unrelated-family control: was cicd, then deploy, then review_edges,
+        # then work_item, then repo_user_commit itself -- this same PR
+        # (CHAOS-5308) deletes repo_user_commit's own compute+write, so
+        # "repo_metrics" is gone too now, alongside every other family this
+        # comment previously tried; compounding_risk can't stand in either,
+        # the fixture has no PR/review data for it to compute from. Nothing
+        # in this fixture writes anything unconditional any more -- "nothing
+        # else was written" is itself the proof the ai_governance deletion
+        # didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -987,15 +988,16 @@ async def test_ai_impact_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_ai_impact_metrics" not in sink.write_calls
-        # work_item (unrelated family, same partition) must be entirely
-        # unaffected by the deletion. (Was cicd, then deploy, then
-        # review_edges -- all three had their own compute+write deleted in
-        # this same PR/sibling PRs, so none can serve as this control any
-        # more; compounding_risk can't either, the base _FakeLoader has no
-        # PR/review data for it to compute from. work_item, fed by
-        # _FakeLoaderWithWorkItem, is the first still-live family in this
-        # file with real fixture data of its own.)
-        assert "write_work_item_metrics" in sink.write_calls
+        # Unrelated-family control: was cicd, then deploy, then review_edges,
+        # then work_item, then repo_user_commit itself -- this same PR
+        # (CHAOS-5308) deletes repo_user_commit's own compute+write, so
+        # "repo_metrics" is gone too now, alongside every other family this
+        # comment previously tried; compounding_risk can't stand in either,
+        # the fixture has no PR/review data for it to compute from. Nothing
+        # in this fixture writes anything unconditional any more -- "nothing
+        # else was written" is itself the proof the ai_impact deletion didn't
+        # perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -1030,7 +1032,7 @@ async def test_incident_compute_and_write_are_deleted_from_job_daily(
     unrelated).
     """
     sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
     assert not hasattr(job_daily, "compute_incident_metrics_daily"), (
         "compute_incident_metrics_daily must not be imported into "
@@ -1047,17 +1049,12 @@ async def test_incident_compute_and_write_are_deleted_from_job_daily(
         "deliberate caller has reappeared, this assertion should be removed "
         "and explained, not silently loosened"
     )
-
-    zero_rows_calls: list[tuple[str, str]] = []
-
-    def _spy_record(*, family: str, cause: str) -> None:
-        zero_rows_calls.append((family, cause))
-
-    monkeypatch.setattr(job_daily, "record_metrics_family_zero_rows", _spy_record)
+    # CHAOS-5308/CHAOS-3092: no record_metrics_family_zero_rows spy here
+    # anymore -- job_daily.py no longer imports it at all (its only caller,
+    # the _note_family_zero_rows helper, is deleted).
 
     for skip_families in (None, {"incident"}):
         sink.write_calls = []
-        zero_rows_calls.clear()
         await job_daily.run_daily_metrics_job(
             db_url="clickhouse://test",
             day=DAY,
@@ -1067,10 +1064,12 @@ async def test_incident_compute_and_write_are_deleted_from_job_daily(
             skip_families=skip_families,
         )
         assert "write_incident_metrics" not in sink.write_calls
-        assert not any(family == "incident" for family, _cause in zero_rows_calls)
-        # repo_metrics/deploy (unrelated families, same partition) must be
-        # entirely unaffected by the deletion.
-        assert "repo_metrics" in sink.write_calls
+        # CHAOS-5308/CHAOS-4279/CHAOS-5310/CHAOS-5321: repo_user_commit's,
+        # review_edges', AND work_item's writes are also deleted outright
+        # now (sibling PRs merged into this same tree), so none of them can
+        # serve as this control any more -- "nothing else was written" is
+        # itself the proof the incident deletion didn't perturb anything.
+        assert sink.write_calls == []
 
 
 @pytest.mark.asyncio
@@ -1103,7 +1102,7 @@ async def test_work_graph_edges_compute_and_write_are_deleted_from_job_daily(
     confirmed zero remaining callers of any of them.
     """
     sink = _RecordingSink("clickhouse://test")
-    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoader())
+    _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())
 
     assert not hasattr(job_daily, "extract_review_deployment_incident_edges"), (
         "extract_review_deployment_incident_edges must not be imported into "
@@ -1127,9 +1126,12 @@ async def test_work_graph_edges_compute_and_write_are_deleted_from_job_daily(
         assert "write_work_graph_pr_review_outcome_edges" not in sink.write_calls
         assert "write_work_graph_pr_deployment_edges" not in sink.write_calls
         assert "write_work_graph_deployment_incident_edges" not in sink.write_calls
-        # repo_metrics/deploy (unrelated families, same partition) must be
-        # entirely unaffected by the deletion. (Was cicd -- CHAOS-5312/
-        # CHAOS-5234/CHAOS-3092 deleted cicd's own compute+write in a
-        # sibling PR merged into this same tree, so it can no longer serve
-        # as this control.)
-        assert "repo_metrics" in sink.write_calls
+        # Unrelated families/writes are unaffected by the deletion. (Was
+        # cicd, then repo_metrics, then review_edges, then work_item --
+        # CHAOS-5312/CHAOS-5234/CHAOS-3092 deleted cicd's own compute+write,
+        # CHAOS-5308 deleted repo_user_commit's, CHAOS-4279 deleted
+        # review_edges', and CHAOS-5310/CHAOS-5321 deleted work_item's, all
+        # in sibling PRs merged into this same tree, so none can serve as
+        # this control any more -- "nothing else was written" is itself the
+        # proof the work_graph_edges deletion didn't perturb anything.)
+        assert sink.write_calls == []

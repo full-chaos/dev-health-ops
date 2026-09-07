@@ -143,6 +143,19 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # internal/jobs/workgraph/issuecommitedges, issuepredges, and prcommit
     # (each gained its first integration-tagged test, the repo_id-as-string
     # bind fix's regression test). 48 -> 51.
+    # CHAOS-5359 added internal/jobs/investment's first //go:build integration
+    # file (hierarchycascade_integration_test.go, one Materializer.Run
+    # end-to-end test against a real ClickHouse container): 51 -> 52. The
+    # package's chquery/chwrite/categorize subpackages were already counted
+    # separately; the package ROOT itself had no integration-tagged file
+    # before this.
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely (52 ->
+    # 51): its two -tags=integration files were dora/capacity's
+    # Python-producer parity harness, deleted along with job_dora.py/
+    # job_capacity.py/compute_dora.py -- with both callers gone, the
+    # package's own machinery had no importer left anywhere in the repo
+    # either, so the whole package was deleted, not just its integration
+    # files.
     # CURRENT TOTAL: 51. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
@@ -150,5 +163,6 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
+    assert "  RUN  internal/jobs/investment" in result.stdout
     assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
     assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

@@ -56,12 +56,20 @@ type MaterializeComponentInput struct {
 	// edge dict, which units.Edge (the stripped type BuildComponents groups)
 	// does not carry. The caller builds this once from the same
 	// []chquery.EdgeRow FetchWorkGraphEdges returned.
-	EdgeRepoIDs  map[string]string
-	PRChurn      map[string]float64
-	CommitChurn  map[string]float64
-	ActiveHours  map[string]float64
-	ParentTitles map[string]string
-	EpicTitles   map[string]string
+	EdgeRepoIDs map[string]string
+	// CascadeRepoID/CascadeRepoSource (CHAOS-5359) is the issue-hierarchy
+	// cascade's result for THIS component, computed by the caller once,
+	// org-wide, via computeRepoHierarchyCascade -- nil/"" when the component's
+	// own edges already resolved a repo, or when the cascade found no signal
+	// either. Applied ONLY as a fallback: collectSingleRepoID's own-edges
+	// result always wins when both exist.
+	CascadeRepoID     *uuid.UUID
+	CascadeRepoSource string
+	PRChurn           map[string]float64
+	CommitChurn       map[string]float64
+	ActiveHours       map[string]float64
+	ParentTitles      map[string]string
+	EpicTitles        map[string]string
 	// FromTS/ToTS is the run's window (config.from_ts/to_ts). A component
 	// whose computed time bounds fall entirely outside it is skipped, same
 	// as materialize.py:1335-1336.
@@ -180,6 +188,16 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 	}
 
 	repoID := collectSingleRepoID(input.Component.Edges, input.EdgeRepoIDs)
+	var repoSource *string
+	switch {
+	case repoID != nil:
+		source := RepoSourceOwnEdges
+		repoSource = &source
+	case input.CascadeRepoID != nil:
+		repoID = input.CascadeRepoID
+		source := input.CascadeRepoSource
+		repoSource = &source
+	}
 	provider := collectProvider(issueNodeIDs, input.WorkItems)
 	labelType, labelName := units.ResolveWorkUnitLabel(units.ResolveWorkUnitLabelInput{
 		IssueIDs: issueNodeIDs, PRIDs: prNodeIDs, CommitIDs: commitNodeIDs,
@@ -192,6 +210,7 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 		FromTS:                   bounds.Start,
 		ToTS:                     bounds.End,
 		RepoID:                   repoID,
+		RepoSource:               repoSource,
 		Provider:                 provider,
 		EffortMetric:             effort.Metric,
 		EffortValue:              effort.Value,
@@ -210,9 +229,18 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 		PRChurn: input.PRChurn, CommitChurn: input.CommitChurn, ActiveHours: input.ActiveHours,
 		EffortMetric: effort.Metric, EffortValue: effort.Value,
 	})
+	// CHAOS-5359: sankeycoverage.go prefers work_unit_repo_effort's repo_id
+	// over work_unit_investments' the moment ANY row exists for this
+	// work_unit_id -- and AllocateRepoEffort always returns at least one row,
+	// even its bottom "empty" tier (RepoID nil). So a cascade that patched
+	// only the investment row above would be permanently shadowed here: the
+	// empty-tier row already "exists" and wins the query's `wure.work_unit_id
+	// != ''` check regardless of its own repo_id being NULL. The cascade must
+	// therefore also override THIS row when it is the empty tier -- the one
+	// case with no per-repo signal of its own to defer to.
 	repoEffortRecords := make([]chwrite.RepoEffortRecord, len(allocations))
 	for i, allocation := range allocations {
-		repoEffortRecords[i] = chwrite.RepoEffortRecord{
+		record := chwrite.RepoEffortRecord{
 			WorkUnitID:       unitID,
 			RepoID:           allocation.RepoID,
 			EffortMetric:     effort.Metric,
@@ -220,6 +248,14 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 			AllocationWeight: allocation.AllocationWeight,
 			AllocationSource: allocation.AllocationSource,
 		}
+		if allocation.AllocationSource == units.AllocationSourceEmpty && input.CascadeRepoID != nil {
+			source := input.CascadeRepoSource
+			record.RepoID = input.CascadeRepoID
+			record.RepoSource = &source
+			record.AllocationWeight = 1.0
+			record.AllocationSource = units.AllocationSourceHierarchyCascade
+		}
+		repoEffortRecords[i] = record
 	}
 
 	return MaterializeComponentResult{Investment: investment, RepoEffort: repoEffortRecords, Bundle: bundle}, nil

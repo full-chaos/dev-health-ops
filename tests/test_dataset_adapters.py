@@ -236,7 +236,6 @@ def test_gitlab_code_datasets_call_project_processor_with_explicit_flags(
     [
         ("github", "full-chaos/dev-health", {"repo_name": "full-chaos/dev-health"}),
         ("gitlab", "123", {"repo_name": "123"}),
-        ("jira", "OPS", {"jira_project_keys": ["OPS"]}),
         ("linear", "TEAM", {"repo_name": "TEAM"}),
     ],
 )
@@ -368,7 +367,7 @@ def test_linear_provider_name_scoped_source_stays_visible_to_provider() -> None:
 
 def test_work_item_derivative_dataset_uses_same_work_item_path() -> None:
     ctx = _context(
-        provider="jira", dataset_key="work-item-comments", source_external_id="ENG"
+        provider="linear", dataset_key="work-item-comments", source_external_id="ENG"
     )
 
     with patch(
@@ -377,7 +376,7 @@ def test_work_item_derivative_dataset_uses_same_work_item_path() -> None:
         run_dataset_unit(ctx, _runtime())
 
     work_items.assert_called_once()
-    assert work_items.call_args.kwargs["jira_project_keys"] == ["ENG"]
+    assert work_items.call_args.kwargs["repo_name"] == "ENG"
 
 
 def test_gitlab_feature_flags_route_to_existing_feature_flag_sync() -> None:

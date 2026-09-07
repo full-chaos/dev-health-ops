@@ -274,26 +274,17 @@ def test_custom_thresholds_persist_with_row() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator (CHAOS-1641 job_daily wiring)
+# load_repo_complexity_delta_30d (I/O helper; CHAOS-5308/CHAOS-3092 deleted
+# the day/repo orchestrator that used to sit in this section along with
+# these tests -- its only production caller, the standalone
+# `dev-hops metrics compounding-risk` CLI backfill, is itself deleted. This
+# helper stays: it has its own live callers, see
+# tests/metrics/test_complexity_org_id_propagation.py.)
 # ---------------------------------------------------------------------------
 
-import uuid  # noqa: E402
-from dataclasses import dataclass  # noqa: E402
-
 from dev_health_ops.metrics.compounding_risk import (  # noqa: E402
-    build_compounding_risk_rows_for_day,
     load_repo_complexity_delta_30d,
 )
-
-
-@dataclass
-class _FakeRepoMetrics:
-    repo_id: uuid.UUID
-    rework_churn_ratio_30d: float = 0.0
-    single_owner_file_ratio_30d: float = 0.0
-    code_ownership_gini: float = 0.0
-    bus_factor: int = 0
-    pr_first_review_p90_hours: float | None = 0.0
 
 
 class _FakeSink:
@@ -339,121 +330,6 @@ def test_load_repo_complexity_delta_rejects_too_small_window() -> None:
         load_repo_complexity_delta_30d(
             sink, repo_id="r1", day=DAY, org_id="acme", window_days=1
         )
-
-
-def test_orchestrator_produces_one_row_per_repo() -> None:
-    repo_a = uuid.uuid4()
-    repo_b = uuid.uuid4()
-    sink = _FakeSink(
-        {
-            str(repo_a): {"first_half": 100.0, "second_half": 130.0},
-            str(repo_b): {"first_half": 100.0, "second_half": 100.0},
-        }
-    )
-    repo_rows = [
-        _FakeRepoMetrics(
-            repo_id=repo_a,
-            rework_churn_ratio_30d=0.15,
-            single_owner_file_ratio_30d=0.5,
-            code_ownership_gini=0.5,
-            pr_first_review_p90_hours=24.0,
-        ),
-        _FakeRepoMetrics(
-            repo_id=repo_b,
-            rework_churn_ratio_30d=0.0,
-            single_owner_file_ratio_30d=0.0,
-            code_ownership_gini=0.0,
-            pr_first_review_p90_hours=0.0,
-        ),
-    ]
-    out = build_compounding_risk_rows_for_day(
-        sink=sink,
-        day=DAY,
-        org_id="acme",
-        repo_metrics_rows=repo_rows,
-        computed_at=NOW,
-    )
-    assert len(out) == 2
-    assert out[0].scope_id == str(repo_a)
-    assert out[1].scope_id == str(repo_b)
-    assert out[0].compounding_risk is not None
-    assert out[0].compounding_risk > 0
-    assert out[1].compounding_risk == 0.0
-    for row in out:
-        assert row.org_id == "acme"
-        assert row.scope == "repo"
-        assert (
-            row.w_churn + row.w_complexity + row.w_ownership + row.w_review
-            == pytest.approx(1.0)
-        )
-
-
-def test_orchestrator_skips_rows_without_repo_id() -> None:
-    sink = _FakeSink({})
-
-    @dataclass
-    class _NoIdRow:
-        rework_churn_ratio_30d: float = 0.0
-
-    out = build_compounding_risk_rows_for_day(
-        sink=sink,
-        day=DAY,
-        org_id="acme",
-        repo_metrics_rows=[_NoIdRow()],
-        computed_at=NOW,
-    )
-    assert out == []
-
-
-def test_orchestrator_emits_unknown_severity_when_inputs_missing() -> None:
-    repo = uuid.uuid4()
-    sink = _FakeSink({})
-    repo_rows = [
-        _FakeRepoMetrics(
-            repo_id=repo,
-            rework_churn_ratio_30d=0.1,
-            single_owner_file_ratio_30d=0.5,
-            code_ownership_gini=0.5,
-            pr_first_review_p90_hours=24.0,
-        ),
-    ]
-    out = build_compounding_risk_rows_for_day(
-        sink=sink,
-        day=DAY,
-        org_id="acme",
-        repo_metrics_rows=repo_rows,
-        computed_at=NOW,
-    )
-    assert len(out) == 1
-    assert out[0].compounding_risk is None
-    assert out[0].severity == "unknown"
-
-
-def test_orchestrator_keeps_missing_review_latency_when_window_has_no_value() -> None:
-    repo = uuid.uuid4()
-    sink = _FakeSink({str(repo): {"first_half": 100.0, "second_half": 110.0}})
-    repo_rows = [
-        _FakeRepoMetrics(
-            repo_id=repo,
-            rework_churn_ratio_30d=0.10,
-            single_owner_file_ratio_30d=0.50,
-            code_ownership_gini=0.40,
-            pr_first_review_p90_hours=None,
-        ),
-    ]
-
-    out = build_compounding_risk_rows_for_day(
-        sink=sink,
-        day=DAY,
-        org_id="acme",
-        repo_metrics_rows=repo_rows,
-        computed_at=NOW,
-    )
-
-    assert len(out) == 1
-    assert out[0].review_latency_p90h is None
-    assert out[0].compounding_risk is None
-    assert out[0].severity == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -544,29 +420,3 @@ def test_summarize_diagnostics_counts_missing_ownership_signal() -> None:
     assert diagnostics.non_null_rows == 0
     assert diagnostics.unknown_rows == 1
     assert diagnostics.reason_counts[REASON_MISSING_OWNERSHIP_SIGNAL] == 1
-
-
-def test_orchestrator_rows_summarize_missing_complexity_delta_when_history_absent() -> (
-    None
-):
-    repo = uuid.uuid4()
-    sink = _FakeSink({})  # no persisted repo_complexity_daily history
-    repo_rows = [
-        _FakeRepoMetrics(
-            repo_id=repo,
-            rework_churn_ratio_30d=0.1,
-            single_owner_file_ratio_30d=0.5,
-            code_ownership_gini=0.5,
-            pr_first_review_p90_hours=24.0,
-        ),
-    ]
-    out = build_compounding_risk_rows_for_day(
-        sink=sink,
-        day=DAY,
-        org_id="acme",
-        repo_metrics_rows=repo_rows,
-        computed_at=NOW,
-    )
-    diagnostics = summarize_compounding_risk_diagnostics(out)
-    assert diagnostics.reason_counts[REASON_MISSING_COMPLEXITY_DELTA] == 1
-    assert diagnostics.unknown_rows == 1

@@ -55,6 +55,11 @@ EXPECTED_PACKAGES = {
     # explicit platform LLM_PROVIDER, only the none/mock kill-switch
     # beats org BYO) holds against llmorgsettings.Store.ResolveUsableProvider
     # over a REAL Postgres container, not a fake resolver.
+    # CHAOS-5359: the package root's first //go:build integration file,
+    # hierarchycascade_integration_test.go -- proves the repo-hierarchy
+    # cascade's Materializer.Run end-to-end wiring, and the sankeycoverage.go
+    # repo-resolution expression it feeds, against a real ClickHouse.
+    "internal/jobs/investment",
     "internal/jobs/investment/categorize",
     "internal/jobs/investment/chquery",
     # CHAOS-4441: the ClickHouse writer for investment.materialize's three
@@ -124,7 +129,6 @@ EXPECTED_PACKAGES = {
     # ClickHouse container and reads system.tables directly, so a fake
     # connection cannot prove the population it asserts.
     "internal/testsupport/chschema",
-    "internal/testsupport/computeparity",
     "internal/testsupport/containers",
 }
 
@@ -411,6 +415,18 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5358 added THREE new -tags=integration packages in one PR:
     # internal/jobs/workgraph/issuecommitedges, issuepredges, and prcommit.
     # 48 -> 51.
+    # CHAOS-5359 added internal/jobs/investment's first //go:build
+    # integration file: 51 -> 52.
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely (52 ->
+    # 51): its two -tags=integration files
+    # (capacity_table_parity_integration_test.go,
+    # dora_table_parity_integration_test.go) were dora/capacity's
+    # Python-producer parity harness, deleted along with job_dora.py/
+    # job_capacity.py/compute_dora.py and scripts/worker/
+    # compute_parity_fixtures.py -- with both callers gone the package's
+    # own machinery (computeparity.go/computeparity_test.go, neither
+    # integration-tagged) had no importer left anywhere in the repo either,
+    # so the whole package was deleted, not just its two integration files.
     # CURRENT TOTAL: 51 -- the one number to bump when a new
     # -tags=integration package is added.
     assert "51 package(s) discovered, 0 denylisted, 51 will run" in result.stdout
@@ -466,6 +482,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # the SAME already-discovered package -- no further count change.
     # CHAOS-5358 added THREE new packages in one PR: internal/jobs/workgraph/
     # issuecommitedges, issuepredges, and prcommit. 48 -> 51.
+    # CHAOS-5359 added internal/jobs/investment: 51 -> 52.
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely: 52 ->
+    # 51 (see the "package(s) discovered" comment above for why the whole
+    # package, not just its two integration files, was deleted). FLATTENED
+    # includes the providersync shard-1 package, same as every other count
+    # in this comment block.
     # CURRENT TOTAL: 51 -- the one number to bump.
     assert len(flattened) == len(set(flattened)) == 51
     assert set(flattened) == EXPECTED_PACKAGES
@@ -483,7 +505,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
         )
     }
     assert set(estimated) == {1, 2, 3}
-    assert abs(estimated[2] - estimated[3]) <= 1
+    # CHAOS-5336 removed internal/testsupport/computeparity's 50s package.
+    # Every prior package-count change in this file's history (see the
+    # "LPT re-balanced shards 2/3" notes above) kept the greedy LPT
+    # algorithm's shards 2/3 within 1s of each other; removing this
+    # specific-sized item pushes it to 777s/775s, 2s apart -- LPT balance
+    # is not guaranteed monotonic under item removal, this is the
+    # algorithm's actual output, not a bug in this PR's diff. Loosening the
+    # tolerance to reflect it rather than silently widening it further:
+    # re-tighten if a future change brings the gap back under 1s.
+    assert abs(estimated[2] - estimated[3]) <= 2
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()
@@ -1707,6 +1738,30 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5045 (GitHub TestOps duplicate report ingestion): +5 top-level
     # (1319 -> 1324), integration-tagged UNCHANGED at 152.
     #
+    # 2026-09-06, CHAOS-5323/CHAOS-3092 (work_item_estimate Python compute
+    # deletion, merged into this branch from delete-work-item-estimate-
+    # python-compute): -1 top-level (1324 -> 1323),
+    # TestGitHubEstimateCoverageMatchesLivePythonProduction deleted along
+    # with compute_estimate_coverage_metrics_daily and its oracle_pairs
+    # scripts (fully native, no remaining Python caller). Integration-tagged
+    # UNCHANGED at 152.
+    #
+    # 2026-09-06, CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6, work_item/work_item_
+    # attribution/work_item_state Python compute deletion): -1 top-level
+    # (1323 -> 1322), TestGitHubWorkItemTeamAttributionsMatchLivePython
+    # ProductionAcrossDays deleted -- its CHAOS-3494 write-amplification
+    # differential pin asserted compute_work_item_team_attributions was
+    # still called inside job_work_items.py's day loop before comparing
+    # anything, which is unrepresentable once that call site (and the
+    # function) is deleted (native Go executor + providersync ingest
+    # derivation are the sole producers now). The 20 other affected
+    # providersync tests (4 providers x {metrics-daily, user-metrics-daily,
+    # cycle-times, team-attributions, state-durations}, plus the backstop
+    # and jira-route tests that reuse a pair id with their own cases) were
+    # RENAMED (Live -> Frozen) or had their case sets frozen in place, never
+    # added or removed, so they do not move this count. Integration-tagged
+    # UNCHANGED at 152.
+    #
     # This PR ships NO production change. Two designs were attempted and both
     # were withdrawn after adversarial review found a P1 in each:
     #   r1: bounding the report window on the run's updated_at silently and
@@ -1743,7 +1798,17 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # raw-"relates"-to-canonical-"relates_to" vocabulary fix in
     # jira_work_items_rows.go; both parse/build in-memory rows only, so the
     # integration-tagged count stays 152.
-    assert len(expected_provider_tests) == 1325
+    # CHAOS-5310/CHAOS-5321/CHAOS-3092 (work_item/work_item_attribution/
+    # work_item_state full deletion, rebuilt onto main post-#2321-squash,
+    # 2026-09-06): -1 top-level (1325 -> 1324), integration-tagged UNCHANGED
+    # at 152. The CHAOS-3494 multiday differential test
+    # (TestGitHubWorkItemsCompositionMultidayMatchesLivePythonProduction) is
+    # retired -- its own Python producer (compute_work_item_team_attributions)
+    # is deleted, and its sibling top-level oracle tests already convert to
+    # the frozen comparator IN PLACE (same test names, no count change from
+    # that half of the diff).
+    assert len(expected_provider_tests) == 1324
+
     assert len(expected_integration_tests) == 152
     assert expected_integration_tests < expected_provider_tests
 
@@ -1760,7 +1825,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1325
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1324
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1839,6 +1904,10 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # CHAOS-5358 added THREE new packages in one PR: internal/jobs/workgraph/
     # issuecommitedges, issuepredges, and prcommit. 47 -> 50 (51 discovered -
     # 1 for the providersync shard-1 package).
+    # CHAOS-5359 added internal/jobs/investment: 50 -> 51 (52 discovered - 1
+    # for the providersync shard-1 package).
+    # CHAOS-5336 removed internal/testsupport/computeparity entirely: 51 ->
+    # 50 (51 discovered - 1 for the providersync shard-1 package).
     # CURRENT TOTAL: 50 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
     assert len(selected_packages) == len(set(selected_packages)) == 50
@@ -1858,7 +1927,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1325
+    assert len(selected_tests) == len(set(selected_tests)) == 1324
     assert set(selected_tests) == expected_tests
 
 

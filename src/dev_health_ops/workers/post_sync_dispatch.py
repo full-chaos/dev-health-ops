@@ -235,14 +235,17 @@ def _dispatch_post_sync_tasks(
             )
 
     if has_git or has_work_items:
-        build_kwargs: dict[str, Any] = {"org_id": org_id}
-        graph_from_date = work_graph_from_date or from_date
-        if graph_from_date is not None:
-            build_kwargs["from_date"] = graph_from_date
-        graph_to_date = work_graph_to_date or to_date
-        if graph_to_date is not None:
-            build_kwargs["to_date"] = graph_to_date
-
+        # `run_work_graph_build` (the Celery-dispatched Python build task) was
+        # deleted under CHAOS-4924: prod Celery has been stopped since
+        # 2026-08-19, so this chain fired nowhere in production, and the
+        # Python compute it ran was already a 0-stats no-op (every stage
+        # ported natively). The Go worker is the only live orchestrator now,
+        # and it already creates `workgraph.build` requests after a sync on
+        # its own, independent of this chain --
+        # `cmd/dev-health-worker/sync_dispatch.go:273-310`'s
+        # `workGraphPostSyncWriter.StartRequestTx`, registered live at
+        # `sync_dispatch.go:455`. Nothing replaces the deleted link; the Go
+        # writer already is the replacement.
         materialize_kwargs: dict[str, Any] = {"org_id": org_id}
         if from_date is not None:
             materialize_kwargs["from_date"] = from_date
@@ -251,23 +254,16 @@ def _dispatch_post_sync_tasks(
 
         # Every link below the chain head must be immutable so a parent's return
         # value is not injected as a positional arg into the next task.
-        build_sig = celery_app.signature(
-            "dev_health_ops.workers.tasks.run_work_graph_build",
-            kwargs=build_kwargs,
-            queue="metrics",
-            immutable=True,
-        )
         materialize_sig = celery_app.signature(
             "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
             kwargs=materialize_kwargs,
             queue="default",
             immutable=True,
         )
-        chain_sigs = [build_sig, materialize_sig]
+        chain_sigs = [materialize_sig]
         if complexity_sig is not None:
             chain_sigs.insert(0, complexity_sig)
         chain(*chain_sigs).apply_async()
-        dispatched.append("run_work_graph_build")
         dispatched.append("dispatch_investment_materialize_partitioned")
 
     if has_git or has_dora:

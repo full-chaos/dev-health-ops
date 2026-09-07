@@ -495,74 +495,16 @@ class TestGlobalFlagsPropagateToSubparsers:
 
 
 class TestCLIPlumbing:
-    def test_investment_materialize_preserves_root_llm_arguments(self):
+    def test_investment_materialize_subcommand_removed(self):
+        """CHAOS-5173: `dev-hops investment materialize` is deleted entirely --
+        a direct-Python-compute CLI entry point separate from the
+        `investment.materialize` River kind (NATIVE since CHAOS-4441).
+        `dev-health-workerctl investment trigger` is the only CLI path now.
+        This pins the removal instead of stale root/leaf-argument-plumbing
+        assertions, matching test_grafana_subcommand_removed above."""
         parser = build_parser()
-        args = parser.parse_args(
-            [
-                "-l",
-                "openai",
-                "-m",
-                "gpt-4o-mini",
-                "--llm-api-key",
-                "sk-inline",
-                "--llm-base-url",
-                "https://llm.invalid/v1",
-                "--llm-concurrency",
-                "1",
-                "investment",
-                "materialize",
-            ]
-        )
-
-        assert args.llm_provider == "openai"
-        assert args.model == "gpt-4o-mini"
-        assert args.llm_api_key == "sk-inline"
-        assert args.llm_base_url == "https://llm.invalid/v1"
-        assert args.llm_concurrency == 1
-
-    def test_investment_materialize_accepts_leaf_llm_arguments(self):
-        parser = build_parser()
-        args = parser.parse_args(
-            [
-                "investment",
-                "materialize",
-                "--llm-api-key",
-                "sk-leaf",
-                "--llm-base-url",
-                "https://leaf.invalid/v1",
-                "--llm-concurrency",
-                "1",
-            ]
-        )
-
-        assert args.llm_api_key == "sk-leaf"
-        assert args.llm_base_url == "https://leaf.invalid/v1"
-        assert args.llm_concurrency == 1
-
-    def test_investment_materialize_preserves_root_db_arguments(self):
-        parser = build_parser()
-        postgres_dsn = "postgresql+asyncpg://pg:pg@localhost:5432/devhealth"
-        clickhouse_dsn = "clickhouse://ch:ch@localhost:8123/default"
-        args = parser.parse_args(
-            [
-                "--db",
-                postgres_dsn,
-                "--analytics-db",
-                clickhouse_dsn,
-                "investment",
-                "materialize",
-            ]
-        )
-
-        assert args.db == postgres_dsn
-        assert args.analytics_db == clickhouse_dsn
-
-    def test_investment_materialize_accepts_deprecated_db_alias(self):
-        parser = build_parser()
-        clickhouse_dsn = "clickhouse://ch:ch@localhost:8123/default"
-        args = parser.parse_args(["investment", "materialize", "--db", clickhouse_dsn])
-
-        assert args.analytics_db == clickhouse_dsn
+        with pytest.raises(SystemExit):
+            parser.parse_args(["investment", "materialize"])
 
     def test_load_dotenv_expands_compose_interpolation(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CLICKHOUSE_URI", raising=False)

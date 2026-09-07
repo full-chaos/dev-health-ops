@@ -61,7 +61,7 @@ async def test_resolve_capacity_forecast_returns_result(
 
     with (
         patch(
-            "dev_health_ops.metrics.job_capacity.load_throughput_from_sink",
+            "dev_health_ops.metrics.capacity_queries.load_throughput_from_sink",
             new_callable=AsyncMock,
             return_value=mock_history,
         ),
@@ -70,7 +70,7 @@ async def test_resolve_capacity_forecast_returns_result(
             return_value=mock_sink,
         ),
         patch(
-            "dev_health_ops.metrics.job_capacity.get_backlog_from_sink",
+            "dev_health_ops.metrics.capacity_queries.get_backlog_from_sink",
             new_callable=AsyncMock,
             return_value=50,
         ),
@@ -107,7 +107,7 @@ async def test_resolve_capacity_forecast_no_history_returns_none(mock_context):
 
     with (
         patch(
-            "dev_health_ops.metrics.job_capacity.load_throughput_from_sink",
+            "dev_health_ops.metrics.capacity_queries.load_throughput_from_sink",
             new_callable=AsyncMock,
             return_value=mock_history,
         ),

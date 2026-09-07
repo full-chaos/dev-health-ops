@@ -55,10 +55,12 @@ SCRATCH database — never the dev ``default``.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -85,6 +87,7 @@ from dev_health_ops.api.services.configuration.team_discovery import (
     GitLabDiscoveryResult,
 )
 from dev_health_ops.metrics.schemas import ProjectRecord
+from dev_health_ops.models.work_items import WorkItem
 from dev_health_ops.providers.gitlab.normalize import gitlab_issue_to_work_item
 from dev_health_ops.providers.identity import IdentityResolver
 from dev_health_ops.providers.status_mapping import StatusMapping
@@ -121,6 +124,41 @@ _PROTECTED_DATABASES = frozenset({"", "default"})
 
 def _catalog_id(org_id: str, numeric_id: str) -> str:
     return f"{org_id}:gitlab:{numeric_id}"
+
+
+_JIRA_SHAPED_WORK_ITEM_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "jira_shaped_work_items"
+    / "canonical_work_item.json"
+)
+
+
+def _frozen_jira_work_item(
+    *, key: str, project_key: str, org_id: str, updated_at: datetime
+) -> WorkItem:
+    """A Jira-shaped WorkItem, loaded from a frozen fixture (CHAOS-5329, R24).
+
+    The fixture is the real output of the (now-deleted) Python Jira
+    normalizer, captured once before deletion -- see
+    ``tests/fixtures/jira_shaped_work_items/canonical_work_item.json``.
+    ``work_item_id``/``title`` are direct 1:1 passthroughs of ``key`` in the
+    real producer (``work_item_id=f"jira:{key}"``, ``title=issue.key``), and
+    ``project_key``/``org_id``/``updated_at`` were already caller-supplied
+    overrides in the pre-deletion code this replaces -- substituting them
+    here is not re-implementing the producer's logic, it is exactly what the
+    original call site already did via ``dataclasses.replace``.
+    """
+    data = json.loads(_JIRA_SHAPED_WORK_ITEM_FIXTURE.read_text())
+    data["created_at"] = datetime.fromisoformat(data["created_at"])
+    return WorkItem(
+        work_item_id=f"jira:{key}",
+        title=key,
+        project_key=project_key,
+        org_id=org_id,
+        updated_at=updated_at,
+        **data,
+    )
 
 
 def _scratch_database(dsn: str) -> str:
@@ -901,9 +939,9 @@ async def test_oracle_measures_a_jira_project_referenced_only_by_key(
     """CHAOS-3380 round 3 (Codex MEDIUM) acceptance-set counterexample: Jira.
 
     Before this fix, ``referenced`` filtered on ``project_id != ''`` alone --
-    but ``providers/jira/normalize.canonical_jira_issue_to_work_item`` NEVER
-    sets ``project_id`` (it stays empty for every Jira row; the raw key lives
-    in ``project_key`` only). So no Jira work item was EVER referenced, and
+    but the (now-deleted, CHAOS-5329) Python Jira normalizer NEVER set
+    ``project_id`` (it stayed empty for every Jira row; the raw key lived in
+    ``project_key`` only). So no Jira work item was EVER referenced, and
     ``project_subject_gaps(provider="jira", ...)`` would unconditionally
     raise ``OracleNotMeasured`` -- a latent bug this ticket's own fix
     (reading BOTH columns on the reference side) surfaced and closed. This
@@ -911,44 +949,24 @@ async def test_oracle_measures_a_jira_project_referenced_only_by_key(
     a real catalog row, measures with NO ``path_match_unverified`` (Jira
     matches via the native key-to-key arm, an authoritative match, not the
     mutable path-compatibility one) and NO "missing" gap. "name_mismatch"
-    is expected and orthogonal: ``atlassian.JiraIssue`` (the real producer's
-    input type) carries no project-name field at all, so
-    ``work_items.project_name`` is always empty for Jira, same latent gap in
-    the WORK-ITEM producer this file's GitLab tests already document -- not
-    a catalog defect and not what this test exists to prove.
+    is expected and orthogonal: the real producer's input type carried no
+    project-name field at all, so ``work_items.project_name`` is always empty
+    for Jira, same latent gap in the WORK-ITEM producer this file's GitLab
+    tests already document -- not a catalog defect and not what this test
+    exists to prove.
+
+    The Jira-shaped row below is loaded from a frozen fixture (CHAOS-5329,
+    R24) rather than built by the real producer, which no longer exists --
+    ``tests/fixtures/jira_shaped_work_items/canonical_work_item.json``,
+    captured by running the real (then still-present)
+    ``canonical_jira_issue_to_work_item`` once. See that fixture's sibling
+    capture recipe in ``providers/jira/normalize.py``'s git history.
     """
-    from atlassian import JiraIssue
-
-    from dev_health_ops.providers.jira.normalize import (
-        canonical_jira_issue_to_work_item,
-    )
-
     org_id = f"chaos-3380-jira-key-{uuid.uuid4().hex[:10]}"
     now = datetime.now(timezone.utc)
     try:
-        identity = MagicMock(spec=IdentityResolver)
-        identity.resolve.side_effect = lambda **kwargs: "user:dev@example.com"
-        status_mapping = MagicMock(spec=StatusMapping)
-        status_mapping.normalize_status.return_value = "in_progress"
-        status_mapping.normalize_type.return_value = "task"
-        issue = JiraIssue(
-            cloud_id="cloud-live",
-            key="ASK-1",
-            project_key="ASK",
-            issue_type="Task",
-            status="In Progress",
-            created_at=now.isoformat(),
-            updated_at=now.isoformat(),
-        )
-        jira_item = replace(
-            canonical_jira_issue_to_work_item(
-                issue=issue,
-                status_mapping=status_mapping,
-                identity=identity,
-                repo_id=None,
-            ),
-            org_id=org_id,
-            updated_at=now,
+        jira_item = _frozen_jira_work_item(
+            key="ASK-1", project_key="ASK", org_id=org_id, updated_at=now
         )
         assert jira_item.project_id in (None, "")
         assert jira_item.project_key == "ASK"

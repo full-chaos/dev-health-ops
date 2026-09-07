@@ -187,7 +187,7 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4277 (Done)",
     },
     "work_item": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- pre_bridge, ordered after `work_item_attribution` by families.json's `after` edge; reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ports `compute_work_items.py:1075 compute_work_item_metrics_daily`",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- pre_bridge, ordered after `work_item_attribution` by families.json's `after` edge; reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ported `compute_work_item_metrics_daily` (compute_work_items.py), deleted entirely by CHAOS-5310/CHAOS-3092 (fully native, no remaining Python caller)",
         "ticket": "CHAOS-4283",
     },
     "work_item_estimate": {
@@ -195,11 +195,11 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4283",
     },
     "work_item_attribution": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_attribution_native_executor.go` -- pre_bridge; ports `compute_work_items.py:1189 compute_work_item_team_attributions`, the FULL daily compute (distinct from §3's native staleness-only backstop of the same table). Runs before its three readers via families.json's `after` edges",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_attribution_native_executor.go` -- pre_bridge; ported `compute_work_item_team_attributions` (compute_work_items.py), the FULL daily compute (distinct from §3's native staleness-only backstop of the same table), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller). Runs before its three readers via families.json's `after` edges",
         "ticket": "CHAOS-4283",
     },
     "work_item_state": {
-        "citation": "Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads",
+        "citation": "Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads; ported `compute_work_item_state_durations_daily` (compute_work_item_state_durations.py), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller)",
         "ticket": "CHAOS-4278 (Done)",
     },
     "review_edges": {
@@ -299,21 +299,30 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4286 (Done)",
     },
     "compounding_risk": {
-        # CHAOS-4287: the ticket and this citation both said :502, which is
-        # inside _repo_to_team_map_for_compounding_risk, not the writer. The
-        # writer is :568 (REPO scope, post_bridge). TEAM scope is now its own
-        # entry below, "compounding_risk_team" (CHAOS-5084) -- see that row
-        # and internal/jobs/metrics/daily/families.json's phase_notes for both.
-        "citation": "Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, native)",
-        "ticket": "CHAOS-4287",
+        # CHAOS-5308: `_write_compounding_risk_for_day` (job_daily.py) --
+        # the Python REPO-scope writer this citation used to name -- is
+        # deleted outright, along with its own orchestrator
+        # (build_compounding_risk_rows_for_day, compounding_risk.py) and the
+        # standalone `dev-hops metrics compounding-risk` CLI backfill
+        # (job_compounding_risk.py) that was its last other caller.
+        # CompoundingRiskExecutor (Go) is the sole writer of REPO-scope
+        # compounding_risk_daily rows now, no Python fallback left. TEAM
+        # scope is its own family entry below, "compounding_risk_team"
+        # (CHAOS-5084) -- see that row and
+        # internal/jobs/metrics/daily/families.json's phase_notes for both.
+        "citation": "Go: `internal/jobs/metrics/daily/compounding_risk_native_executor.go` (`CompoundingRiskExecutor`)",
+        "ticket": "CHAOS-4287/CHAOS-5308 (Done)",
     },
     "compounding_risk_team": {
         # CHAOS-5084: the TEAM-scope half of compounding_risk, split into its
         # own family entry because it is a SEPARATE finalize-scope writer to
         # the SAME table (compounding_risk_daily) -- see the "compounding_risk"
         # row above and families.json's phase_notes for both.
-        "citation": "Python: `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, now native, finalize scope)",
-        "ticket": "CHAOS-5084",
+        # `_write_compounding_risk_team_rows_for_day` (job_daily.py) is
+        # deleted outright -- CompoundingRiskTeamExecutor (Go) is the sole
+        # writer of TEAM-scope rows now, no Python fallback left.
+        "citation": "Go: `internal/jobs/metrics/daily/compounding_risk_team_native_executor.go` (`CompoundingRiskTeamExecutor`)",
+        "ticket": "CHAOS-5084 (Done)",
     },
     "team_cognitive_load": {
         # CHAOS-5141: fully native, no Python remainder at all. The
@@ -443,15 +452,17 @@ REMAINING_EXECUTOR_LEDGER: dict[str, dict[str, str]] = {
 # ---------------------------------------------------------------------------
 WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
     "workgraph.build": {
-        "executor": "COMPAT-Python (narrow native pre/post-step)",
+        "executor": "NATIVE",
         "citation": (
-            "Go: `internal/jobs/workgraph/prestep.go` (issue-PR edge mapping, runs BEFORE the "
-            "bridge) + one `poststep.go` edge type (runs AFTER); Python: `worker_workgraph.py:367 "
-            'execute` (LLM categorization -- "Python owns 100% of the compute" per prestep.go\'s '
-            "own doc comment)"
+            "Go: `internal/jobs/workgraph/handler.go`'s `buildHandler` runs the full "
+            "`buildPreStepOrder()` sequence (issue<->PR/issue<->commit/PR<->commit edges, "
+            "flag-guards, operational-incident, issue<->issue edges) natively, no bridge call "
+            "at all. Python's `WorkGraphBuilder.build()` "
+            "(`src/dev_health_ops/work_graph/builder.py`) is DELETED -- every stage it used to "
+            "run was already a 0-stats no-op by the time of this cutover"
         ),
-        "route": "bridge -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case still takes the HTTP `executor`",
-        "ticket": "CHAOS-4924 (six remaining sub-builders + cutover)",
+        "route": "river, native -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case takes no executor at all",
+        "ticket": "CHAOS-4924 (cutover landed)",
     },
     "investment.materialize": {
         "executor": "NATIVE",

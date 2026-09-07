@@ -84,33 +84,46 @@ def test_inventory_row_count_matches_the_baseline():
     was a phantom row for a route CHAOS-5320's own earlier deletion had
     already removed from the served application -- the inventory row was
     never cleaned up until now.
-    = 369, -1 REST under CHAOS-3092 (PR-A): `POST /internal/worker/daily-metrics/v1/execute`,
-    the daily-metrics Python compatibility bridge. Deleted WITH its row in the
-    same change, so this one was never a phantom -- the route and the row went
-    together, which is the shape this baseline is supposed to see.
-    = 368, -1 REST under CHAOS-5353: `POST /api/internal/worker-operational/billing`.
-    Unlike the webhook row above this one was NOT a phantom either -- the route
-    was live and served right up to this change. It is removed because the
-    route itself is deleted: the Go BillingHandler now owns the completion
-    fence, the owner lookup, the seven renderings and the provider send, so
-    nothing posts to that bridge any more.
+    = 369, -1 REST under CHAOS-3092 (PR-A): `POST /internal/worker/
+    daily-metrics/v1/execute`, the daily-metrics Python compatibility bridge.
+    Deleted WITH its row in the same change, so this one was never a phantom --
+    the route and the row went together, which is the shape this baseline is
+    supposed to see.
+    = 368, -1 REST under CHAOS-4105: `POST /api/internal/worker-operational/
+    pagerduty` is deleted with the route itself, the same way. The Go stream
+    consumer reconciles PagerDuty webhooks natively, so nothing calls the
+    bridge route and it no longer exists to profile.
+    = 367, -1 REST under CHAOS-5353: `POST /api/internal/worker-operational/
+    billing`, deleted the same way again. The Go BillingHandler owns the
+    completion fence, the owner lookup, the seven renderings and the provider
+    send, so nothing posts to that bridge any more.
+    = 366. All three decrements are real and INDEPENDENT: three different
+    worker-bridge routes, removed by three different changes that landed as
+    two merges. No one -1 subsumes another, and a merge keeping only one or
+    two of them silently re-admits a deleted route to the baseline.
 
-    MERGE HAZARD, recorded because it nearly landed silently: PR-A and
-    CHAOS-5353 each removed ONE row and each edited these asserts from 310/369
-    to 309/368 independently. The numeric lines were then textually IDENTICAL
-    on both sides, so git auto-merged them with no conflict and produced 309 --
-    a number neither branch's author intended for the merged tree, and one row
-    too many. Only the prose above conflicted, which is what surfaced it. When
-    two branches each decrement the same baseline, RECOUNT from the inventory
-    rather than trusting the merge.
+    MERGE HAZARD, recorded because it has now nearly landed silently TWICE.
+    Each of the three changes edited these same asserts, and each was correct
+    in isolation. Twice the resulting numeric lines were textually IDENTICAL
+    on both sides of a merge -- once because two branches subtracted 1 from
+    the same starting value, and once because two branches reached the same
+    figure from different starting values by coincidence. Identical lines do
+    not conflict, so git merged them silently and produced a count that was
+    right for neither branch and one route too high. Both times only the
+    surrounding PROSE conflicted, which is the sole reason it was noticed;
+    had the wording happened to match, a wrong baseline would have shipped
+    green. **When two branches each touch a counted baseline, RECOUNT from
+    contracts/auth/v1/endpoint-profiles.ops.json. Never subtract from either
+    side's number, and never trust a clean merge here -- the absence of a
+    conflict marker on these lines is not evidence that they are right.**
     """
     inventory = checker.load_json(_INVENTORY_PATH)
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 308, len(rest)
+    assert len(rest) == 307, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 367, len(rows)
+    assert len(rows) == 366, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -135,12 +148,14 @@ def test_classification_summary_matches_the_baseline():
     # phantom row (see test_inventory_row_count_matches_the_baseline) was
     # itself classified protected. - 1 under CHAOS-3092 (PR-A): the deleted
     # daily-metrics bridge route was protected too (worker bridge bearer).
-    # = 341, - 1 under CHAOS-5353: the deleted worker-operational/billing row,
-    # also protected (bridge-token gated). Every worker bridge route is
-    # classified protected, so each such deletion lands here. See the merge
-    # hazard note in test_inventory_row_count_matches_the_baseline: both
-    # branches wrote 341 independently; the merged tree is 340.
-    assert len(protected) == 340, len(protected)
+    # - 1 under CHAOS-4105: so was the deleted worker-operational/pagerduty
+    # row, and - 1 under CHAOS-5353 for the deleted worker-operational/billing
+    # row. Every worker-bridge route is classified protected, so each such
+    # deletion lands here too. All three decrements apply; see the merge
+    # hazard note in test_inventory_row_count_matches_the_baseline for why
+    # none of them subsumes another, and why this number is recounted rather
+    # than derived.
+    assert len(protected) == 339, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

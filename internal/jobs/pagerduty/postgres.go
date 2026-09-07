@@ -122,3 +122,40 @@ func (store *PostgresReceiptStore) Complete(ctx context.Context, claim ReceiptCl
 	}
 	return nil
 }
+
+// Assert reports whether this process still holds the receipt. It is the
+// fence the effect sinks call before every ClickHouse send: a reconciler
+// whose lease was stolen past its expiry must stop writing, because the new
+// holder is writing the same rows.
+//
+// It is deliberately a fresh read rather than a cached decision -- the whole
+// point is to observe a steal that happened after the claim was taken.
+func (store *PostgresReceiptStore) Assert(ctx context.Context, claim ReceiptClaim) error {
+	if store == nil || store.pool == nil || store.now == nil ||
+		claim.ReceiptID == "" || claim.Token == "" {
+		return errUnavailable
+	}
+	var token *uuid.UUID
+	var status string
+	var expires *time.Time
+	err := store.pool.QueryRow(ctx,
+		`SELECT status, claim_token, lease_expires_at FROM public.worker_job_runs
+WHERE job_kind=$1 AND idempotency_key=$2`, receiptKind, claim.ReceiptID,
+	).Scan(&status, &token, &expires)
+	if err != nil {
+		return errUnavailable
+	}
+	if status != "running" || token == nil || token.String() != claim.Token {
+		return errReceiptLeaseLost
+	}
+	if expires == nil || !expires.After(store.now().UTC()) {
+		return errReceiptLeaseLost
+	}
+	return nil
+}
+
+// errReceiptLeaseLost is transient by design: the delivery is still in the
+// stream, and a later reclaim past the lease may reconcile it successfully.
+// It must never become a PermanentError -- losing a lease says nothing about
+// whether the event is processable.
+var errReceiptLeaseLost = errors.New("pagerduty receipt lease is no longer held")

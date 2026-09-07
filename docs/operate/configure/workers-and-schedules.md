@@ -154,16 +154,19 @@ a bug and re-discover it from scratch.
   this ticket, `deploy/helm/dev-health/values.yaml` defaulted `worker.enabled`,
   `workerIngest.enabled`, `workerExternalIngest.enabled`,
   `workerHeavy.enabled`, and `beat.enabled` to `true` and `goWorkers.enabled`
-  to `false`, with `PAGERDUTY_WEBHOOK_TRANSPORT` defaulting to `celery`;
+  to `false`, with a `PAGERDUTY_WEBHOOK_TRANSPORT` switch defaulting to
+  `celery`;
   `deploy/kubernetes/beat.yaml` and `worker.yaml` were the matching plain
   manifests. Chris's ruling on CHAOS-4195 was delete, not archive (unlike the
   compose surfaces above, which have no equivalent live-vs-checked-in
   divergence to preserve): the Celery Helm templates and Kubernetes manifests
   are gone, `goWorkers.enabled` and `deploy/kubernetes/go-workers.yaml`'s
-  presence in `kustomization.yaml` now default to `true`, and
-  `PAGERDUTY_WEBHOOK_TRANSPORT` defaults to `river`. Helm/Kubernetes now agree
-  with the compose reality this page describes: Go/River primary, no Celery
-  fleet to opt out of.
+  presence in `kustomization.yaml` now default to `true`. Helm/Kubernetes now
+  agree with the compose reality this page describes: Go/River primary, no
+  Celery fleet to opt out of. `PAGERDUTY_WEBHOOK_TRANSPORT` itself is gone
+  (CHAOS-4105): it chose between two runtimes consuming the PagerDuty webhook
+  stream, and the Python one no longer exists, so there is nothing left to
+  choose.
 
 ## PostgreSQL requirements
 

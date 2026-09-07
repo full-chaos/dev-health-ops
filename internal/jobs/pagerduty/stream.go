@@ -1,6 +1,8 @@
-// Package pagerduty provides the dormant, crash-safe admission boundary for
-// PagerDuty Redis Stream entries. It deliberately relies on streamrunner for
-// ACK-after-commit and never changes the current Celery route.
+// Package pagerduty is the live, crash-safe consumer for PagerDuty Redis
+// Stream entries: it admits a delivery, takes a durable receipt, reconciles
+// the canonical rows natively, and relies on streamrunner for
+// ACK-after-commit. CHAOS-4105 deleted the Python route it used to defer to,
+// so there is no longer a second runtime consuming this stream.
 package pagerduty
 
 import (
@@ -68,8 +70,14 @@ func (claim ReceiptClaim) Proceed() bool { return claim.State == ReceiptClaimed 
 // Reconciler must commit the locked graph mutation before it returns nil. The
 // receipt ID is stable across stream redelivery, allowing that mutation to
 // deduplicate the narrow crash window after a durable write but before ACK.
+//
+// The claim is passed with the event (CHAOS-4105) because the native
+// reconciler writes ClickHouse directly and its effect sinks re-assert the
+// lease before every send. While reconciliation was an HTTP call to Python
+// the claim was not needed here: Python owned its own transaction and this
+// process could not have fenced it anyway.
 type Reconciler interface {
-	Reconcile(context.Context, Event) error
+	Reconcile(context.Context, Event, ReceiptClaim) error
 }
 
 // errReceiptInFlight keeps an entry pending without spending its permanent
@@ -97,7 +105,7 @@ func (handler *Handler) Handle(ctx context.Context, message streamrunner.Message
 	}
 	event, err := parse(message)
 	if err != nil {
-		return &streamrunner.PermanentError{Reason: "pagerduty_schema_invalid"}
+		return &streamrunner.PermanentError{Reason: reasonSchemaInvalid}
 	}
 	claim, err := handler.receipts.Begin(ctx, event.ReceiptID)
 	if err != nil {
@@ -115,10 +123,10 @@ func (handler *Handler) Handle(ctx context.Context, message streamrunner.Message
 		// let a later reclaim past the lease decide.
 		return errReceiptInFlight
 	}
-	if err := handler.reconciler.Reconcile(ctx, event); err != nil {
+	if err := handler.reconciler.Reconcile(ctx, event, claim); err != nil {
 		// Release before returning so the retry does not have to wait out the
-		// lease. A permanent bridge verdict still releases: the runner writes
-		// the dead-letter record, and a receipt left running would block the
+		// lease. A permanent verdict still releases: the runner writes the
+		// dead-letter record, and a receipt left running would block the
 		// terminal outcome from ever being re-evaluated.
 		if releaseErr := handler.receipts.Release(ctx, claim); releaseErr != nil {
 			return fmt.Errorf("release pagerduty receipt: %w", releaseErr)

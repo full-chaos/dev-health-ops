@@ -325,3 +325,16 @@ module = [
   "_go_registered_documents",
 ]
 ignore_missing_imports = true
+
+# internal/providersync/testdata/pagerduty_webhook_goldens/capture.py is a
+# frozen provenance artifact (CHAOS-4105), not live code. It statically
+# imports the Python webhook reconciler its goldens were captured from --
+# a module the same ticket deleted -- because naming the exact function and
+# fixtures the frozen JSON came from is the entire reason the file is kept.
+# It is deliberately not runnable again and cannot type-check; exempting it
+# is more honest than rewriting the import into a dynamic form that hides
+# the same fact from the checker.
+[[tool.mypy.overrides]]
+module = ["internal.providersync.testdata.pagerduty_webhook_goldens.capture"]
+ignore_errors = true
+ignore_missing_imports = true

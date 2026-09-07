@@ -322,7 +322,6 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "OTEL_SAMPLE_RATE",
         "OTEL_SERVICE_NAME",
         "PAGERDUTY_SUBDOMAIN",
-        "PAGERDUTY_WEBHOOK_TRANSPORT",
         "PAGER_DUTY_CLIENT_ID",
         "PAGER_DUTY_REDIRECT_URI",
         "PAGER_DUTY_SECRET",

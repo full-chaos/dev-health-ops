@@ -236,3 +236,41 @@ func TestReplayReportIncompleteDistinguishesTheTwoNilScopeCases(t *testing.T) {
 		}
 	}
 }
+
+// TestCollapseBacklogReportsWhichRowsWereSkippedAndWhy is the r2 P2 fix.
+// LoadError was captured and never read: the report showed a count of
+// unreadable rows with no row id and no cause, which tells an operator that
+// something is outstanding but not what to do about it.
+func TestCollapseBacklogReportsWhichRowsWereSkippedAndWhy(t *testing.T) {
+	at := time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
+	first := backlogRow("org-1", "github", "acme/api", at, nil)
+	first.LoadFailed, first.LoadError = true, "connection reset by peer"
+	second := backlogRow("org-1", "github", "acme/api", at, nil)
+	second.LoadFailed, second.LoadError = true, "connection reset by peer"
+	third := backlogRow("org-1", "github", "acme/api", at, nil)
+	third.LoadFailed, third.LoadError = true, "decode bridge scope: unexpected end of JSON input"
+
+	groups := CollapseBacklog([]BacklogRow{first, second, third})
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d", len(groups))
+	}
+	group := groups[0]
+	if group.Skipped != 3 || len(group.SkippedBridgeIDs) != 3 {
+		t.Fatalf("skipped = %d ids = %v", group.Skipped, group.SkippedBridgeIDs)
+	}
+	for _, row := range []BacklogRow{first, second, third} {
+		if !slices.Contains(group.SkippedBridgeIDs, row.BridgeID) {
+			t.Fatalf("bridge id %s missing from the skipped list", row.BridgeID)
+		}
+	}
+	// Two distinct causes across three rows: the report must carry both, and
+	// must not repeat the shared one -- a grain whose fifty rows all hit one
+	// connection reset should read as one cause, not fifty.
+	causes := dedupeErrors(group.SkippedErrors)
+	if len(causes) != 2 {
+		t.Fatalf("deduped causes = %v, want the two distinct ones", causes)
+	}
+	if !slices.Contains(causes, "connection reset by peer") {
+		t.Fatalf("causes = %v", causes)
+	}
+}

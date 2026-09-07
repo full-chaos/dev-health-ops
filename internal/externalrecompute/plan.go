@@ -14,11 +14,14 @@ package externalrecompute
 // docs/architecture/external-ingest-bounded-recompute.md.
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // D7: record-kind -> job-category routing, mirroring the Python module's
@@ -229,10 +232,54 @@ func containsAny(values, candidates []string) bool {
 	return false
 }
 
+// ErrInvalidCapEnv is returned by ValidateCapEnv for a bound the operator set
+// but that this process cannot honour.
+var ErrInvalidCapEnv = errors.New("external recompute: invalid cap environment variable")
+
+// ValidateCapEnv refuses, at startup, any bounded-recompute cap that is set but
+// unusable. It is the loud half of the pair whose quiet half is envIntAtLeastOne.
+//
+// WHY REFUSING BEATS DEFAULTING. Both cap variables exist to BOUND fan-out. A
+// value this process cannot parse -- or one that parses below 1 -- means the
+// operator asked for a bound and we do not know which. Falling back to the
+// default then silently recomputes MORE than they asked for, in the widening
+// direction, with no signal: exactly how "EXTERNAL_INGEST_RECOMPUTE_MAX_BACKFILL_DAYS
+// = ' 3 '" quietly became 14 days before the r1 fix. Refusing at startup turns
+// an operator typo into an attributable failure at deploy time instead of a
+// silently over-wide recompute discovered weeks later, which is the same class
+// of invisible failure this whole ticket exists to end.
+//
+// The message names the VARIABLE and the rule, never the value -- the same
+// convention jobcontract's validation messages follow, so a malformed value can
+// never be echoed into a log.
+func ValidateCapEnv() error {
+	for _, name := range []string{envMaxBackfillDays, envMaxFanoutRepos} {
+		raw := os.Getenv(name)
+		if raw == "" {
+			// Unset is not an error: the checked-in default is the intended
+			// bound when an operator expresses no preference.
+			continue
+		}
+		parsed, ok := pythonInt(raw)
+		if !ok {
+			return fmt.Errorf("%w: %s is set but is not an integer", ErrInvalidCapEnv, name)
+		}
+		if parsed < 1 {
+			return fmt.Errorf("%w: %s must be at least 1", ErrInvalidCapEnv, name)
+		}
+	}
+	return nil
+}
+
 // envIntAtLeastOne mirrors the Python module's _env_int + max(1, ...) pairing:
 // an unset, blank or unparseable value falls back to the default, and the
 // result is never below 1 (a zero cap would mean "recompute nothing", which is
 // never what an operator setting a bound intends).
+//
+// The fallback is kept so this function stays total and the planner stays pure
+// and testable by value. It is NOT the production tolerance for a bad value:
+// ValidateCapEnv above refuses such a value at startup, so no live process can
+// reach this fallback with a cap the operator set and we could not read.
 func envIntAtLeastOne(name string, fallback int) int {
 	parsed, ok := pythonInt(os.Getenv(name))
 	if !ok {
@@ -262,12 +309,34 @@ func envIntAtLeastOne(name string, fallback int) int {
 // CPython's underscore rule is "single underscores between digits only" -- not
 // leading, not trailing, not doubled, and not adjacent to a sign -- so those
 // are rejected here rather than stripped.
+//
+// TWO DELIBERATE NON-MATCHES, both in the safe direction now that ValidateCapEnv
+// refuses at startup rather than defaulting (r2 measured both):
+//
+//   - NON-ASCII DECIMAL DIGITS. int("\u0663") is 3 in CPython; this returns
+//     false. Go's strconv has no notion of Unicode decimal digits, and an
+//     Arabic-Indic numeral in a deployment environment variable is not a case
+//     worth hand-rolling a Nd-category decoder for.
+//   - VALUES OUTSIDE machine int. int() is arbitrary-precision, so a
+//     1000-digit cap parses there; strconv.Atoi refuses it here.
+//
+// Both used to matter because an unparsed value silently became the DEFAULT --
+// the widening direction, invisible. They no longer do: ValidateCapEnv turns
+// either into a named startup refusal, so the operator is told their value was
+// not understood instead of quietly getting a wider bound than they asked for.
 func pythonInt(raw string) (int, bool) {
-	// CPython's int() strips str.strip()'s whitespace set. Go's TrimSpace is
-	// narrower (unicode.IsSpace omits 0x1c-0x1f), so those four are added
-	// explicitly -- the same divergence internal/jobs/investment/scope.go
-	// documents for its own Python-parity strip.
-	trimmed := strings.Trim(raw, " \t\n\v\f\r\x1c\x1d\x1e\x1f\u0085\u00a0")
+	// int()'s whitespace set is Py_UNICODE_ISSPACE, which is what Go's
+	// unicode.IsSpace implements -- NOT str.strip()'s set.
+	//
+	// r1's fix trimmed 0x1c-0x1f as well, borrowing the note in
+	// internal/jobs/investment/scope.go. That note is correct for str.strip()
+	// and WRONG here, and r2 caught the difference: measured against a real
+	// python3, int("\x1c3") REJECTS while int("\xa03") and int("\x853")
+	// return 3. Trimming the separators made this function accept a value
+	// CPython refuses. unicode.IsSpace draws exactly the right line -- it
+	// includes NBSP and NEL (both realistic copy-paste damage in a .env file)
+	// and excludes the four file/group/record/unit separators.
+	trimmed := strings.TrimFunc(raw, unicode.IsSpace)
 	if trimmed == "" {
 		return 0, false
 	}

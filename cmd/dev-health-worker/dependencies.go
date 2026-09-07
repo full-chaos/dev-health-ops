@@ -791,9 +791,14 @@ func configureWorkerDependenciesWithSources(
 	// in the stream runner, because the enqueue seams it needs (the job
 	// registry, the daily store/publisher, the work-graph request writer) exist
 	// only in this process.
-	if drain := newExternalRecomputeDrain(
+	drain, drainErr := newExternalRecomputeDrain(
 		dependencies.database, dependencies.runtimeRegistry, logger,
-	); drain != nil {
+	)
+	if drainErr != nil {
+		dependencies.close()
+		return nil, dependencyUnavailable("external_recompute_drain_unavailable")
+	}
+	if drain != nil {
 		components = append(components, drain)
 	}
 	// CHAOS-4029: the execution-liveness self-probe. Constructed only now that

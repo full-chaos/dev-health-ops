@@ -165,6 +165,12 @@ func NewDrain(
 	if pool == nil || enqueuer == nil || logger == nil || cfg.validate() != nil {
 		return nil, ErrInvalidConfig
 	}
+	// A cap the operator set but that cannot be honoured stops the consumer
+	// being built at all, rather than being quietly replaced by the default.
+	// See ValidateCapEnv for why refusing is the safer direction here.
+	if err := ValidateCapEnv(); err != nil {
+		return nil, err
+	}
 	return &Drain{
 		pool: pool, enqueuer: enqueuer, config: cfg, logger: logger,
 		now: func() time.Time { return time.Now().UTC() },
@@ -614,13 +620,13 @@ func decodeBridgeScope(raw []byte, orgID, bridgeID string) (PlanScope, bool, err
 			"%w: unsupported external recompute bridge payload (version %d kind %q)",
 			ErrPermanent, payload.BridgeVersion, payload.BridgeKind)
 	}
-	windowStart, err := parseOptionalBridgeTime(payload.WindowStartedAt)
+	windowStart, err := parseUTCBridgeTime("windowStartedAt", payload.WindowStartedAt)
 	if err != nil {
-		return PlanScope{}, false, fmt.Errorf("%w: %w", ErrPermanent, err)
+		return PlanScope{}, false, err
 	}
-	windowEnd, err := parseOptionalBridgeTime(payload.WindowEndedAt)
+	windowEnd, err := parseUTCBridgeTime("windowEndedAt", payload.WindowEndedAt)
 	if err != nil {
-		return PlanScope{}, false, fmt.Errorf("%w: %w", ErrPermanent, err)
+		return PlanScope{}, false, err
 	}
 	return PlanScope{
 		OrgID:       orgID,
@@ -744,6 +750,48 @@ ON CONFLICT (id) DO NOTHING`,
 		}
 	}
 	return nil
+}
+
+// parseUTCBridgeTime enforces the bridge payload's UTC contract AT THE READER,
+// which is the only boundary that can enforce it.
+//
+// PlanRecompute takes UTC calendar dates where the Python planner takes the
+// calendar date in the producer's offset, so the two disagree about which day
+// to recompute for any offset-bearing window (2026-06-26T00:30+05:00 is day
+// 26 there and day 25 here). That divergence is deliberate -- everything
+// downstream is UTC-dated, and honouring a producer's local date would name a
+// day daily_metrics_runs does not have.
+//
+// It was previously guarded only by a test on the WRITER: the sole dispatcher
+// formats .UTC(), so every payload it emits ends in "Z". r2 pointed out that
+// this constrains that writer and nothing else -- a hand-written row, a
+// restored backup, or a future producer can carry an offset, and
+// time.Parse(RFC3339Nano) accepts it happily. The reader then silently picks a
+// different day than the Python planner would, with nothing to notice it.
+//
+// So a non-zero offset is REFUSED here rather than normalised. Normalising
+// would be silent, and silence about which day got recomputed is the exact
+// failure class this ticket exists to end; refusal marks the row bridge_failed
+// with its cause and leaves the batch rows visible as failed.
+func parseUTCBridgeTime(field string, raw *string) (*time.Time, error) {
+	if raw == nil || *raw == "" {
+		return nil, nil
+	}
+	value, err := time.Parse(time.RFC3339Nano, *raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: parse external recompute bridge %s: %w",
+			ErrPermanent, field, err)
+	}
+	if _, offset := value.Zone(); offset != 0 {
+		// The field name and the rule, never the value: a payload string is
+		// tenant-adjacent data and does not belong in a log line.
+		return nil, fmt.Errorf(
+			"%w: external recompute bridge %s must be a UTC instant; a non-zero "+
+				"offset would select a different recompute day than the planner's "+
+				"UTC calendar arithmetic assumes", ErrPermanent, field)
+	}
+	utc := value.UTC()
+	return &utc, nil
 }
 
 var recomputeJobLogNamespace = uuid.MustParse("2f0f6ad6-6c8a-5a4e-9f2d-6b3c1a9e4d70")

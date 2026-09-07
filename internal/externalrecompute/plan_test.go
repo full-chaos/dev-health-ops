@@ -14,8 +14,10 @@ package externalrecompute
 // to agree with the Python one case for case while both are live.
 
 import (
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -434,5 +436,59 @@ func TestPlanUsesUTCCalendarDatesNotProducerOffsets(t *testing.T) {
 	}
 	if plan.BackfillDays != 1 {
 		t.Fatalf("backfill days = %d, want 1 (both instants fall on one UTC day)", plan.BackfillDays)
+	}
+}
+
+// TestValidateCapEnvRefusesAnUnusableBound is the startup half of the r1 P1-a
+// fix (team-lead ruling: never silently default).
+//
+// envIntAtLeastOne still falls back so the planner stays pure and total, but no
+// live process may reach that fallback with a cap the operator SET and we could
+// not read: defaulting there recomputes more than they asked for, silently, in
+// the widening direction. The error names the variable and the rule and never
+// the value, matching jobcontract's validation-message convention so a
+// malformed value cannot be echoed into a log.
+func TestValidateCapEnvRefusesAnUnusableBound(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		backfill string
+		fanout   string
+		wantErr  bool
+		wantName string
+	}{
+		"both unset":        {"", "", false, ""},
+		"both valid":        {"7", "20", false, ""},
+		"padded is valid":   {" 7 ", "1_0", false, ""},
+		"backfill garbage":  {"soon", "20", true, envMaxBackfillDays},
+		"fanout garbage":    {"7", "lots", true, envMaxFanoutRepos},
+		"backfill zero":     {"0", "20", true, envMaxBackfillDays},
+		"fanout negative":   {"7", "-1", true, envMaxFanoutRepos},
+		"backfill fraction": {"3.5", "20", true, envMaxBackfillDays},
+	} {
+		t.Setenv(envMaxBackfillDays, testCase.backfill)
+		t.Setenv(envMaxFanoutRepos, testCase.fanout)
+		err := ValidateCapEnv()
+		if testCase.wantErr {
+			if err == nil {
+				t.Fatalf("%s: expected a refusal", name)
+			}
+			if !errors.Is(err, ErrInvalidCapEnv) {
+				t.Fatalf("%s: error %v does not wrap ErrInvalidCapEnv", name, err)
+			}
+			if !strings.Contains(err.Error(), testCase.wantName) {
+				t.Fatalf("%s: error %q does not name the variable", name, err)
+			}
+			// The offending VALUE must never appear -- naming it is how a
+			// secret-shaped env value ends up in a log.
+			for _, value := range []string{testCase.backfill, testCase.fanout} {
+				if value != "" && value != "7" && value != "20" &&
+					strings.Contains(err.Error(), value) {
+					t.Fatalf("%s: error %q echoed the value %q", name, err, value)
+				}
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: unexpected refusal %v", name, err)
+		}
 	}
 }

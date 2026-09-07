@@ -71,8 +71,14 @@ type CollapsedGroup struct {
 	// are deliberately absent from JobIDs: an unreadable row must survive to
 	// be retried, not be retired as though it had been drained.
 	Skipped int
-	Oldest  time.Time
-	Newest  time.Time
+	// SkippedBridgeIDs and SkippedErrors name WHICH rows were skipped and why.
+	// Reporting only a count told an operator that something in this grain is
+	// outstanding, but not which row or what went wrong -- a number with no
+	// next step (r2 P2).
+	SkippedBridgeIDs []string
+	SkippedErrors    []string
+	Oldest           time.Time
+	Newest           time.Time
 }
 
 // CollapseBacklog folds backlog rows into one widest plan per (org, source
@@ -104,6 +110,10 @@ func CollapseBacklog(rows []BacklogRow) []CollapsedGroup {
 			// NOT added to JobIDs: retiring a row whose scope we failed to
 			// read would drop its recompute for good.
 			group.Skipped++
+			group.SkippedBridgeIDs = append(group.SkippedBridgeIDs, row.BridgeID)
+			if row.LoadError != "" {
+				group.SkippedErrors = append(group.SkippedErrors, row.LoadError)
+			}
 		} else {
 			group.JobIDs = append(group.JobIDs, row.JobID)
 		}
@@ -240,12 +250,16 @@ type ReplayGroupReport struct {
 	// SkippedRows are rows in this grain left un-retired because their scope
 	// could not be read. A non-zero value means this grain is NOT fully
 	// drained, however healthy the rest of the report looks.
-	SkippedRows  int      `json:"skipped_rows,omitempty"`
-	CappedDays   bool     `json:"capped_days"`
-	CappedRepos  bool     `json:"capped_repos"`
-	DailyRunIDs  []string `json:"daily_run_ids,omitempty"`
-	InvestmentID string   `json:"investment_request_id,omitempty"`
-	Error        string   `json:"error,omitempty"`
+	SkippedRows int `json:"skipped_rows,omitempty"`
+	// SkippedBridgeIDs and SkippedErrors say WHICH rows and WHY, so the count
+	// above is actionable rather than merely alarming.
+	SkippedBridgeIDs []string `json:"skipped_bridge_ids,omitempty"`
+	SkippedErrors    []string `json:"skipped_errors,omitempty"`
+	CappedDays       bool     `json:"capped_days"`
+	CappedRepos      bool     `json:"capped_repos"`
+	DailyRunIDs      []string `json:"daily_run_ids,omitempty"`
+	InvestmentID     string   `json:"investment_request_id,omitempty"`
+	Error            string   `json:"error,omitempty"`
 }
 
 // ReplayReport is the whole run's outcome.
@@ -299,23 +313,25 @@ func Replay(
 	for _, group := range CollapseBacklog(backlog) {
 		plan := PlanRecompute(group.Scope, now)
 		groupReport := ReplayGroupReport{
-			OrgID:          group.OrgID,
-			SourceSystem:   group.SourceSystem,
-			SourceInstance: group.SourceInstance,
-			Rows:           group.Rows,
-			IngestionIDs:   len(group.IngestionIDs),
-			Oldest:         group.Oldest.UTC(),
-			Newest:         group.Newest.UTC(),
-			Trigger:        plan.Trigger,
-			Day:            planDayString(plan),
-			BackfillDays:   plan.BackfillDays,
-			FromDate:       planDateString(plan.FromDate),
-			ToDate:         planDateString(plan.ToDate),
-			RepoIDs:        len(plan.RepoIDs),
-			TeamIDs:        len(plan.TeamIDs),
-			CappedDays:     plan.CappedDays,
-			CappedRepos:    plan.CappedRepos,
-			SkippedRows:    group.Skipped,
+			OrgID:            group.OrgID,
+			SourceSystem:     group.SourceSystem,
+			SourceInstance:   group.SourceInstance,
+			Rows:             group.Rows,
+			IngestionIDs:     len(group.IngestionIDs),
+			Oldest:           group.Oldest.UTC(),
+			Newest:           group.Newest.UTC(),
+			Trigger:          plan.Trigger,
+			Day:              planDayString(plan),
+			BackfillDays:     plan.BackfillDays,
+			FromDate:         planDateString(plan.FromDate),
+			ToDate:           planDateString(plan.ToDate),
+			RepoIDs:          len(plan.RepoIDs),
+			TeamIDs:          len(plan.TeamIDs),
+			CappedDays:       plan.CappedDays,
+			CappedRepos:      plan.CappedRepos,
+			SkippedRows:      group.Skipped,
+			SkippedBridgeIDs: group.SkippedBridgeIDs,
+			SkippedErrors:    dedupeErrors(group.SkippedErrors),
 		}
 		if dryRun {
 			report.Groups = append(report.Groups, groupReport)
@@ -398,6 +414,15 @@ func replayGroup(
 	}
 	committed = true
 	return enqueued, nil
+}
+
+// dedupeErrors collapses repeats so a grain whose fifty rows all failed on the
+// same connection reset reports one cause, not fifty copies of it.
+func dedupeErrors(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return sortedUnique(values)
 }
 
 func retireBacklogRows(ctx context.Context, tx pgx.Tx, jobIDs []uuid.UUID) error {

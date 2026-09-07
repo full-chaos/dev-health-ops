@@ -75,6 +75,16 @@ func dispatchExternalRecomputeReplay(
 	if runtime == nil || runtime.pools == nil || runtime.pools.Domain == nil || runtime.registry == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
+	// Refuse before reading a single row if a cap the operator set cannot be
+	// honoured: a replay is a bulk, one-shot enqueue across every org in the
+	// backlog, so running it under a silently-widened bound is the worst place
+	// to discover the typo. Same rule the worker applies at startup.
+	if err := externalrecompute.ValidateCapEnv(); err != nil {
+		slog.Default().LogAttrs(ctx, slog.LevelError,
+			"workerctl external recompute replay: refusing an unusable cap",
+			slog.Any("error", err))
+		return writeError(stderr, "invalid_request")
+	}
 
 	// Each construction failure names WHICH collaborator failed and carries the
 	// cause. The stderr code stays the bounded `operator_backend_unavailable`

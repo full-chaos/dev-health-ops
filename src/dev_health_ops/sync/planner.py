@@ -466,8 +466,12 @@ def seed_reference_discovery_run(
     discovery -- routed through the SAME native-Go-collector-or-Python-
     bridge seam (``TeamCatalogDiscoveryExecutor``) every sync-time dispatch
     uses -- without planning a full unit set of its own (the legacy backfill
-    path fetches work items itself via ``run_work_items_sync_job``, not
-    through River units). The returned run has ``total_units=0``; the
+    path used to fetch work items itself via ``run_work_items_sync_job``,
+    not through River units; CHAOS-5351 deleted that path -- the backfill
+    tool now dispatches through River units like everything else, via
+    :func:`plan_sync_run`, which arms this same reference-discovery ledger
+    row unconditionally for every mode). The returned run has
+    ``total_units=0``; the
     existing zero-unit dispatch/finalize outbox chain (proven idempotent,
     see lane-4431's 2026-08-29 close-out) carries it from PLANNED to a
     terminal ``sync_runs.status`` on its own once reference discovery
@@ -1340,10 +1344,13 @@ def _is_linear_work_item_family(provider: str, dataset_key: str) -> bool:
 # CHAOS-2721 (AD-3): work-item-family plan-time collapse
 # ---------------------------------------------------------------------------
 #
-# The five work-item-family datasets are all produced by a SINGLE
+# The five work-item-family datasets used to all be produced by a SINGLE
 # ``run_work_items_sync_job`` crawl (labels/projects/history/comments are
-# bookkeeping over the same issue crawl). Emitting one unit per dataset re-ran
-# the full ingest 5x. The planner instead emits ONE composite unit (canonical
+# bookkeeping over the same issue crawl); CHAOS-5351 deleted that job, and the
+# native provider-sync route now produces them per-provider instead, but the
+# "one issue crawl, five bookkeeping datasets" shape is unchanged. Emitting
+# one unit per dataset re-ran the full ingest 5x. The planner instead emits
+# ONE composite unit (canonical
 # ``dataset_key="work-items"``) carrying a boolean ``family_dataset_<key>`` flag
 # per participating dataset; the worker fans those back out into per-dataset
 # watermarks + audit metadata on success. GitHub's activated Go route is the

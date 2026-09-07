@@ -47,24 +47,31 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # CHAOS-5233: work_item_attribution's daily compute deleted from
     # job_daily.py -- the native Go executor (WorkItemAttributionExecutor,
     # #2246/CHAOS-5078) is the only writer of work_item_team_attributions
-    # for a daily partition now. compute_work_item_team_attributions itself
-    # is NOT deleted from the codebase (job_work_items.py's
-    # run_work_items_sync_job still calls it for an unrelated full-backfill
-    # sync job), only job_daily.py's own reference to it.
+    # for a daily partition now. At the time, compute_work_item_team_
+    # attributions itself was NOT deleted from the codebase (job_work_items.py's
+    # run_work_items_sync_job still called it for an unrelated full-backfill
+    # sync job), only job_daily.py's own reference to it -- CHAOS-5351 later
+    # deleted run_work_items_sync_job itself (verified via
+    # `rg --hidden -n 'def compute_work_item_team_attributions'`: zero
+    # definitions anywhere in the codebase now), so this function IS ALSO
+    # fully deleted as of that ticket, same as ai_governance/file_hotspots/
+    # file_risk_hotspots/ai_impact/team_wellbeing/cicd below.
     "work_item_attribution": "compute_work_item_team_attributions",
     # CHAOS-5234: ai_governance's daily compute deleted from job_daily.py --
     # the native Go executor (AIGovernanceExecutor, CHAOS-4285) is the only
     # writer of ai_policy_events/ai_governance_coverage_daily for a daily
-    # partition now. Unlike work_item_attribution, build_governance_rows_
-    # for_day itself was ALSO deleted (from audit/ai_governance/loaders.py)
-    # -- codegraph_explore + rg confirmed job_daily.py was its only real
-    # caller.
+    # partition now. Unlike work_item_attribution AT THE TIME (CHAOS-5351
+    # later also deleted compute_work_item_team_attributions, see that
+    # entry's own comment above), build_governance_rows_for_day itself was
+    # ALSO deleted (from audit/ai_governance/loaders.py) -- codegraph_explore
+    # + rg confirmed job_daily.py was its only real caller.
     "ai_governance": "build_governance_rows_for_day",
     # CHAOS-5234: file_hotspots's daily compute deleted from job_daily.py --
     # the native Go executor (FileHotspotsExecutor, CHAOS-4277) is the only
     # writer of file_metrics_daily for a daily partition now. Unlike
-    # work_item_attribution above, compute_file_hotspots itself IS ALSO
-    # deleted from the codebase (src/dev_health_ops/metrics/hotspots.py,
+    # work_item_attribution above AT THE TIME (see that entry's own comment
+    # -- CHAOS-5351 later also deleted it), compute_file_hotspots itself IS
+    # ALSO deleted from the codebase (src/dev_health_ops/metrics/hotspots.py,
     # removed whole-file): its only other callers were golden-fixture
     # generators and unit tests, never a real production caller -- a
     # correction to an earlier pass on this same family, which left the
@@ -83,8 +90,9 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # CHAOS-5234: ai_impact's daily compute deleted from job_daily.py -- the
     # native Go executor (AIImpactExecutor, CHAOS-4280) is the only writer
     # of ai_impact_metrics_daily for a daily partition now. Unlike
-    # work_item_attribution, compute_ai_impact_metrics_daily itself is ALSO
-    # deleted (from metrics/ai_impact.py) -- codegraph_explore + rg confirmed
+    # work_item_attribution AT THE TIME (see that entry's own comment --
+    # CHAOS-5351 later also deleted it), compute_ai_impact_metrics_daily
+    # itself is ALSO deleted (from metrics/ai_impact.py) -- codegraph_explore + rg confirmed
     # its only real callers, once job_daily.py's own reference was removed,
     # were its Go bit-exact oracle rot guard
     # (TestAIImpactMatchesLivePythonProduction +

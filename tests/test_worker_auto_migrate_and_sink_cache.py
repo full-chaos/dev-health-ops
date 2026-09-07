@@ -5,8 +5,10 @@ has been removed entirely from workers/celery_app.py. Migrations are a
 deploy/init-step concern (dev-hops migrate postgres|clickhouse).
 
 CHAOS-2268: the ClickHouse sink's ambient ``ensure_tables()`` calls (reached
-from Celery tasks via run_work_items_sync_job and friends) also ran SQL
-migrations. ``ensure_schema()`` now honours AUTO_RUN_MIGRATIONS=false (set on
+from Celery tasks -- at the time, via run_work_items_sync_job and friends;
+CHAOS-5351 later deleted that function, native provider-sync is the only
+work-items ingest path now -- and other Celery-dispatched tasks) also ran
+SQL migrations. ``ensure_schema()`` now honours AUTO_RUN_MIGRATIONS=false (set on
 worker/beat/api in compose, which gate on the one-shot ``migrate`` service);
 the CLI bypasses the flag with ``force=True``.
 """

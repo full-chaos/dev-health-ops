@@ -38,8 +38,12 @@ def _build_row(case: dict[str, Any]) -> dict[str, Any]:
         milestone=milestone,
         repo_full_name=case["repo_full_name"],
     )
-    # run_work_items_sync_job owns the tenant stamp immediately before the
-    # sink write; include that real outer producer boundary in this row oracle.
+    # The tenant stamp (org_id) is applied by the outer producer immediately
+    # before the sink write, not by github_milestone_to_sprint itself -- at
+    # the time this oracle was written, the outer producer was
+    # run_work_items_sync_job (CHAOS-5351 deleted it; native providersync is
+    # the only producer now). Stamp it here too, so this row oracle matches
+    # the real row shape a caller actually sees.
     row = dataclasses.replace(row, org_id=case["org_id"])
     return dataclasses.asdict(row)
 

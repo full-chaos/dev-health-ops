@@ -772,15 +772,19 @@ async def test_work_item_estimate_compute_and_write_are_deleted_from_job_daily(
     compute+write call is gone from run_daily_metrics_job entirely, in
     every mode.
 
-    Unlike work_item_attribution, compute_estimate_coverage_metrics_daily
+    Unlike work_item_attribution AT THE TIME, compute_estimate_coverage_metrics_daily
     itself is ALSO deleted from the codebase (compute_work_items.py):
     job_work_items.py's run_work_items_sync_job call site is deleted too.
-    Team-lead's ruling: unlike compute_work_item_team_attributions's
-    genuinely live backfill-job caller, run_work_items_sync_job is itself a
+    Team-lead's ruling (at the time): unlike compute_work_item_team_attributions's
+    then-live backfill-job caller, run_work_items_sync_job is itself a
     legacy Python path (no Go job kind dispatches it; Go providersync is
     the native work-items writer), so it did not justify keeping this one
     function alive. Its own dedicated unit tests, fixture golden generator,
-    and live-Python oracle comparator are also deleted.
+    and live-Python oracle comparator are also deleted. CHAOS-5351 later
+    deleted run_work_items_sync_job itself, so this contrast no longer
+    applies -- compute_work_item_team_attributions is ALSO now fully
+    deleted (see tests/metrics/test_job_daily_skip_families_structural_
+    guard.py's work_item_attribution entry).
     """
     sink = _RecordingSink("clickhouse://test")
     _neutralize_daily_job(monkeypatch, sink=sink, loader=_FakeLoaderWithWorkItem())

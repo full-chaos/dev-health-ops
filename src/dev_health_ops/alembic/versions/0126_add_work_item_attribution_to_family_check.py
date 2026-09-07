@@ -9,8 +9,8 @@ shipped Go-native (0123 seeded its ``worker_job_routes`` row for the same
 reason), but the Postgres ``ck_remaining_metric_run_family`` CHECK constraint
 on ``remaining_metric_runs`` -- created in 0058, narrowed in 0110 -- was never
 updated to include it. No migration in this history ever added it (checked:
-`rg -ln ck_remaining_metric_run_family alembic/versions` returns only 0058
-and 0110).
+`rg -ln ck_remaining_metric_run_family src/dev_health_ops/alembic/versions`
+returns only 0058 and 0110).
 
 The result is a deterministic, silent failure: every StartRunTx INSERT for
 family="work_item_attribution" violates this CHECK constraint

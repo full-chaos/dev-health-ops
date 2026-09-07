@@ -1,0 +1,58 @@
+{
+  "case": "incident_triggered_hydrated",
+  "event_type": "incident.triggered",
+  "event_id": "evt-incident_triggered_hydrated",
+  "org_id": "org-4105",
+  "provider_instance_id": "acme",
+  "occurred_at": "2026-07-17T12:00:00Z",
+  "received_at": "2026-07-17T12:00:05Z",
+  "hydrated_via_rest": true,
+  "payload": {
+    "event": {
+      "id": "evt-incident_triggered_hydrated",
+      "event_type": "incident.triggered",
+      "occurred_at": "2026-07-17T12:00:00Z",
+      "data": {
+        "id": "PINC9",
+        "type": "incident"
+      }
+    }
+  },
+  "rows": [
+    {
+      "table": "operational_incidents",
+      "columns": {
+        "org_id": "org-4105",
+        "provider": "pagerduty",
+        "provider_instance_id": "acme",
+        "source_entity_type": "incident",
+        "external_id": "PINC9",
+        "source_version_at": "2026-07-17T12:00:00Z",
+        "id": "80aec49ff5f7e21bbf6000ddf314363b3bb29c274e730a038d053eec62c40c11",
+        "source_id": null,
+        "source_url": "https://acme.pagerduty.com/incidents/PINC9",
+        "source_event_at": "2026-07-17T12:00:00Z",
+        "source_event_id": "evt-incident_triggered_hydrated",
+        "observed_at": "2026-07-17T12:00:05Z",
+        "last_synced": "2026-07-17T12:00:05Z",
+        "raw_status": "triggered",
+        "raw_severity": null,
+        "raw_priority": null,
+        "normalized_status": "open",
+        "normalized_severity": null,
+        "normalized_priority": null,
+        "relationship_provenance": null,
+        "relationship_confidence": null,
+        "service_id": null,
+        "service_external_id": null,
+        "escalation_policy_id": null,
+        "title": "Hydrated from the REST API",
+        "description": null,
+        "started_at": "2026-07-17T11:59:00Z",
+        "resolved_at": null,
+        "is_deleted": false,
+        "deleted_at": null
+      }
+    }
+  ]
+}

@@ -71,7 +71,25 @@ SELECT
 	relation IS NOT NULL AND NOT has_table_privilege($1, relation, 'SELECT') AS missing_select,
 	relation IS NOT NULL AND allow_insert AND NOT has_table_privilege($1, relation, 'INSERT') AS missing_insert,
 	relation IS NOT NULL AND allow_update AND NOT has_table_privilege($1, relation, 'UPDATE') AS missing_update,
-	relation IS NOT NULL AND allow_delete AND NOT has_table_privilege($1, relation, 'DELETE') AS missing_delete
+	relation IS NOT NULL AND allow_delete AND NOT has_table_privilege($1, relation, 'DELETE') AS missing_delete,
+	-- CHAOS-5436: rolePostureQuery's required_tables predicate refuses on
+	-- EITHER direction of mismatch (a required privilege absent, OR a
+	-- table-wide privilege held that the manifest does not allow), but
+	-- until now this diagnostic only ever asked the first question. A role
+	-- holding INSERT/UPDATE/DELETE the manifest marks NOT allowed, or ANY
+	-- one of the seven privileges no RequiredTables entry can ever declare
+	-- (TRUNCATE/REFERENCES/TRIGGER/MAINTAIN, unconditionally forbidden by
+	-- TablePrivilege's own doc comment), is exactly the CHAOS-5436 shape:
+	-- CheckRolePosture correctly refuses, and this used to read "0 gaps."
+	relation IS NOT NULL AND NOT allow_insert AND has_table_privilege($1, relation, 'INSERT') AS excess_insert,
+	relation IS NOT NULL AND NOT allow_update AND has_table_privilege($1, relation, 'UPDATE') AS excess_update,
+	relation IS NOT NULL AND NOT allow_delete AND has_table_privilege($1, relation, 'DELETE') AS excess_delete,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'TRUNCATE') AS excess_truncate,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'REFERENCES') AS excess_references,
+	relation IS NOT NULL AND has_table_privilege($1, relation, 'TRIGGER') AS excess_trigger,
+	relation IS NOT NULL
+		AND current_setting('server_version_num')::integer >= 170000
+		AND has_table_privilege($1, relation, 'MAINTAIN') AS excess_maintain
 FROM resolved
 ORDER BY table_name
 `
@@ -173,6 +191,50 @@ FROM resolved
 ORDER BY table_name
 `
 
+// diagnoseOtherRelationsExcessQuery is diagnoseColumnScopedExcessQuery's
+// counterpart for CHAOS-5436's second blind spot: a privilege held on a
+// public-schema relation the posture does not mention AT ALL (neither
+// RequiredTables nor ColumnScoped) was invisible to every diagnostic query
+// in this file, even though it is exactly what rolePostureQuery's own
+// other_public_relations predicate refuses on -- the same eight-privilege
+// sweep as diagnoseColumnScopedExcessQuery (table-wide only; a column-level
+// grant on an undeclared relation remains something only CheckRolePosture
+// itself proves, via has_any_column_privilege -- see DiagnoseRolePosture's
+// doc comment for the full list of routes this file does not cover).
+const diagnoseOtherRelationsExcessQuery = `
+WITH declared(table_name) AS (
+	SELECT DISTINCT * FROM unnest($2::text[])
+), other AS (
+	SELECT class.oid, class.relname
+	FROM pg_catalog.pg_class AS class
+	JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
+	WHERE namespace.nspname = 'public'
+		AND class.relkind IN ('r', 'p', 'v', 'm', 'f')
+		AND NOT EXISTS (SELECT 1 FROM declared WHERE declared.table_name = class.relname)
+)
+SELECT
+	relname,
+	has_table_privilege($1, oid, 'SELECT') AS excess_select,
+	has_table_privilege($1, oid, 'INSERT') AS excess_insert,
+	has_table_privilege($1, oid, 'UPDATE') AS excess_update,
+	has_table_privilege($1, oid, 'DELETE') AS excess_delete,
+	has_table_privilege($1, oid, 'TRUNCATE') AS excess_truncate,
+	has_table_privilege($1, oid, 'REFERENCES') AS excess_references,
+	has_table_privilege($1, oid, 'TRIGGER') AS excess_trigger,
+	current_setting('server_version_num')::integer >= 170000
+		AND has_table_privilege($1, oid, 'MAINTAIN') AS excess_maintain
+FROM other
+WHERE has_table_privilege($1, oid, 'SELECT')
+	OR has_table_privilege($1, oid, 'INSERT')
+	OR has_table_privilege($1, oid, 'UPDATE')
+	OR has_table_privilege($1, oid, 'DELETE')
+	OR has_table_privilege($1, oid, 'TRUNCATE')
+	OR has_table_privilege($1, oid, 'REFERENCES')
+	OR has_table_privilege($1, oid, 'TRIGGER')
+	OR (current_setting('server_version_num')::integer >= 170000 AND has_table_privilege($1, oid, 'MAINTAIN'))
+ORDER BY relname
+`
+
 // DiagnoseRolePosture re-checks a RolePosture's requirements individually
 // (tables, column-scoped privileges, AND required sequences) and returns
 // the subset the connected login does not currently satisfy, PLUS
@@ -244,7 +306,29 @@ func DiagnoseRolePosture(
 		gaps = append(gaps, sequenceGaps...)
 	}
 
+	otherGaps, err := diagnoseOtherRelationsExcess(ctx, pool, expectedRole, declaredTableNames(posture))
+	if err != nil {
+		return nil, err
+	}
+	gaps = append(gaps, otherGaps...)
+
 	return gaps, nil
+}
+
+// declaredTableNames is every table name a RolePosture mentions by any
+// route (table-wide or column-scoped) -- the "declared" set
+// diagnoseOtherRelationsExcess must exclude, mirroring rolePostureQuery's
+// own other_public_relations predicate, which excludes exactly this same
+// union (domain_authorization.go's other_public_relations CTE).
+func declaredTableNames(posture RolePosture) []string {
+	names := make([]string, 0, len(posture.RequiredTables)+len(posture.ColumnScoped))
+	for _, table := range posture.RequiredTables {
+		names = append(names, table.TableName)
+	}
+	for _, column := range posture.ColumnScoped {
+		names = append(names, column.TableName)
+	}
+	return names
 }
 
 func diagnoseTablePosture(
@@ -276,9 +360,13 @@ func diagnoseTablePosture(
 		var (
 			tableName                                                                string
 			tableMissing, missingSelect, missingInsert, missingUpdate, missingDelete bool
+			excessInsert, excessUpdate, excessDelete                                 bool
+			excessTruncate, excessReferences, excessTrigger, excessMaintain          bool
 		)
 		if err := rows.Scan(
 			&tableName, &tableMissing, &missingSelect, &missingInsert, &missingUpdate, &missingDelete,
+			&excessInsert, &excessUpdate, &excessDelete,
+			&excessTruncate, &excessReferences, &excessTrigger, &excessMaintain,
 		); err != nil {
 			return nil, ErrUnavailable
 		}
@@ -301,6 +389,38 @@ func diagnoseTablePosture(
 		}
 		if len(missing) > 0 {
 			gaps = append(gaps, PostureGap{TableName: tableName, Missing: missing})
+		}
+		// CHAOS-5436: reported as a SEPARATE gap from Missing above, never
+		// merged into the same PostureGap -- every consumer of this slice
+		// (posture_gate.go's checkTablePosture, reconciler's
+		// logCoordinatorPostureGaps) partitions gaps by "len(Excess) > 0" to
+		// decide whether one is a missing-privilege or excess-privilege
+		// finding, an exclusive test that would silently drop whichever half
+		// lost if a single gap carried both.
+		var excess []string
+		if excessInsert {
+			excess = append(excess, "INSERT")
+		}
+		if excessUpdate {
+			excess = append(excess, "UPDATE")
+		}
+		if excessDelete {
+			excess = append(excess, "DELETE")
+		}
+		if excessTruncate {
+			excess = append(excess, "TRUNCATE")
+		}
+		if excessReferences {
+			excess = append(excess, "REFERENCES")
+		}
+		if excessTrigger {
+			excess = append(excess, "TRIGGER")
+		}
+		if excessMaintain {
+			excess = append(excess, "MAINTAIN")
+		}
+		if len(excess) > 0 {
+			gaps = append(gaps, PostureGap{TableName: tableName, Excess: excess})
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -389,6 +509,71 @@ func diagnoseColumnPosture(
 		}
 		if missing {
 			gaps = append(gaps, PostureGap{TableName: tableName, ColumnName: columnName, Missing: []string{privilege}})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, ErrUnavailable
+	}
+	return gaps, nil
+}
+
+// diagnoseOtherRelationsExcess is diagnoseOtherRelationsExcessQuery's Go
+// side: any public-schema relation this posture never mentions at all, on
+// which the role holds any table-wide privilege, is reported as an excess
+// gap naming that relation. See diagnoseOtherRelationsExcessQuery's doc
+// comment for what this does and does not cover.
+func diagnoseOtherRelationsExcess(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	expectedRole string,
+	declaredTables []string,
+) ([]PostureGap, error) {
+	rows, err := pool.Query(ctx, diagnoseOtherRelationsExcessQuery, expectedRole, declaredTables)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+
+	var gaps []PostureGap
+	for rows.Next() {
+		var (
+			tableName                                                       string
+			excessSelect, excessInsert, excessUpdate, excessDelete          bool
+			excessTruncate, excessReferences, excessTrigger, excessMaintain bool
+		)
+		if err := rows.Scan(
+			&tableName, &excessSelect, &excessInsert, &excessUpdate, &excessDelete,
+			&excessTruncate, &excessReferences, &excessTrigger, &excessMaintain,
+		); err != nil {
+			return nil, ErrUnavailable
+		}
+		var excess []string
+		if excessSelect {
+			excess = append(excess, "SELECT")
+		}
+		if excessInsert {
+			excess = append(excess, "INSERT")
+		}
+		if excessUpdate {
+			excess = append(excess, "UPDATE")
+		}
+		if excessDelete {
+			excess = append(excess, "DELETE")
+		}
+		if excessTruncate {
+			excess = append(excess, "TRUNCATE")
+		}
+		if excessReferences {
+			excess = append(excess, "REFERENCES")
+		}
+		if excessTrigger {
+			excess = append(excess, "TRIGGER")
+		}
+		if excessMaintain {
+			excess = append(excess, "MAINTAIN")
+		}
+		if len(excess) > 0 {
+			gaps = append(gaps, PostureGap{TableName: tableName, Excess: excess})
 		}
 	}
 	if err := rows.Err(); err != nil {

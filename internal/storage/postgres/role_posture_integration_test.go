@@ -221,6 +221,118 @@ func TestCheckRolePostureReturnsErrPostureRefusedForCHAOS5435Shape(t *testing.T)
 	}
 }
 
+// TestDiagnoseRolePostureReportsCHAOS5436ExcessOnRequiredTable pins fix #3:
+// DiagnoseRolePosture, run against the exact role/posture
+// TestCheckRolePostureReturnsErrPostureRefusedForCHAOS5435Shape proves
+// CheckRolePosture refuses, must name the excess UPDATE instead of
+// reporting zero gaps -- CHAOS-5436's actual diagnosability defect: an
+// operator running the diagnostic on a real refusal was told "nothing is
+// wrong."
+func TestDiagnoseRolePostureReportsCHAOS5436ExcessOnRequiredTable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	roleConn, role, _, _, stalePosture := chaos5435RoleFixture(t, ctx)
+	const table = "external_ingest_recompute_jobs"
+
+	gaps, err := DiagnoseRolePosture(ctx, roleConn, role, stalePosture)
+	if err != nil {
+		t.Fatalf("DiagnoseRolePosture: %v", err)
+	}
+	var found *PostureGap
+	for i := range gaps {
+		if gaps[i].TableName == table && len(gaps[i].Excess) > 0 {
+			found = &gaps[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("DiagnoseRolePosture did not report the excess UPDATE on %s -- "+
+			"exactly CHAOS-5436's blindness (CheckRolePosture refuses, diagnostics reads 0 gaps); got gaps: %+v",
+			table, gaps)
+	}
+	if !containsString(found.Excess, "UPDATE") {
+		t.Errorf("expected the excess gap to name UPDATE specifically, got %+v", found.Excess)
+	}
+	if line := found.String(); !strings.Contains(line, table) || !strings.Contains(line, "UPDATE") {
+		t.Errorf("PostureGap.String() should name the table and the excess privilege, got %q", line)
+	}
+}
+
+// TestDiagnoseRolePostureCatchesExcessOnAnUndeclaredRelation is CHAOS-5436's
+// second blind spot: a privilege on a relation the posture never mentions
+// at all (neither RequiredTables nor ColumnScoped) used to be invisible to
+// DiagnoseRolePosture even though rolePostureQuery's own
+// other_public_relations predicate already refuses on it.
+func TestDiagnoseRolePostureCatchesExcessOnAnUndeclaredRelation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	})
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const password = "chaos_5436_undeclared_password"
+	role, err := containers.RoleName("chaos_5436_undeclared", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+	for _, statement := range []string{
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
+		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
+		"CREATE ROLE " + role + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + password + "'",
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + role,
+		"GRANT USAGE ON SCHEMA public TO " + role,
+		"CREATE TABLE public.chaos_5436_declared (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.chaos_5436_undeclared (id uuid PRIMARY KEY)",
+		"GRANT SELECT ON TABLE public.chaos_5436_declared TO " + role,
+		// Never declared in the posture below at all -- not RequiredTables,
+		// not ColumnScoped.
+		"GRANT SELECT ON TABLE public.chaos_5436_undeclared TO " + role,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+
+	posture := RolePosture{
+		RequiredTables: []TablePrivilege{{TableName: "chaos_5436_declared"}},
+	}
+	roleConn := connectAs(t, ctx, instance.URI, role, password)
+
+	gaps, err := DiagnoseRolePosture(ctx, roleConn, role, posture)
+	if err != nil {
+		t.Fatalf("DiagnoseRolePosture: %v", err)
+	}
+	var found *PostureGap
+	for i := range gaps {
+		if gaps[i].TableName == "chaos_5436_undeclared" && len(gaps[i].Excess) > 0 {
+			found = &gaps[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("DiagnoseRolePosture did not report the excess grant on the undeclared relation; got gaps: %+v", gaps)
+	}
+	if !containsString(found.Excess, "SELECT") {
+		t.Errorf("expected the excess gap to name SELECT specifically, got %+v", found.Excess)
+	}
+}
+
 func TestCheckRolePostureAttributionRejectsTheOtherRolesPrivileges(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

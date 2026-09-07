@@ -40,13 +40,20 @@ func TestDiagnoseRolePostureNamesTheGapAndNeverLeaksConnectionMaterial(t *testin
 	coordinator := connectAs(t, ctx, uri, roles.coordinator, grantCoordinatorPass)
 
 	// Missing-table gap: a table the posture requires that was never
-	// created. This is exactly CHAOS-3142's shape -- a synthetic posture is
-	// used here (rather than dropping a table the harness's other suites
-	// depend on) purely to isolate the missing-table path.
+	// created. This is exactly CHAOS-3142's shape. Built on the FULL real
+	// CoordinatorPosture() plus one extra synthetic entry, not a bare
+	// single-table posture: CHAOS-5436's diagnoseOtherRelationsExcess now
+	// reports every real grant the coordinator role legitimately holds
+	// outside whatever posture is passed in as an "excess on an undeclared
+	// relation" gap, so a posture smaller than the role's true manifest
+	// would drown this test's one expected gap in dozens of spurious ones.
 	const missingTable = "table_that_does_not_exist_for_this_test"
-	tableGaps, err := DiagnoseRolePosture(ctx, coordinator, roles.coordinator, RolePosture{
-		RequiredTables: []TablePrivilege{{TableName: missingTable, AllowUpdate: true}},
-	})
+	missingTablePosture := CoordinatorPosture()
+	missingTablePosture.RequiredTables = append(
+		missingTablePosture.RequiredTables,
+		TablePrivilege{TableName: missingTable, AllowUpdate: true},
+	)
+	tableGaps, err := DiagnoseRolePosture(ctx, coordinator, roles.coordinator, missingTablePosture)
 	if err != nil {
 		t.Fatalf("DiagnoseRolePosture (missing table): %v", err)
 	}
@@ -55,7 +62,10 @@ func TestDiagnoseRolePostureNamesTheGapAndNeverLeaksConnectionMaterial(t *testin
 	}
 
 	// Missing-privilege gap: a real, existing coordinator table with one
-	// privilege the posture requires actually revoked.
+	// privilege the posture requires actually revoked. Uses the FULL
+	// CoordinatorPosture(), for the same reason as the missing-table case
+	// above -- CoordinatorPosture() already requires UPDATE on
+	// worker_job_outbox (see its own doc comment), so no override is needed.
 	if _, err := admin.Exec(ctx,
 		"REVOKE UPDATE ON TABLE public.worker_job_outbox FROM "+roles.coordinator,
 	); err != nil {
@@ -70,9 +80,7 @@ func TestDiagnoseRolePostureNamesTheGapAndNeverLeaksConnectionMaterial(t *testin
 			t.Errorf("restore worker_job_outbox UPDATE: %v", err)
 		}
 	})
-	privilegeGaps, err := DiagnoseRolePosture(ctx, coordinator, roles.coordinator, RolePosture{
-		RequiredTables: []TablePrivilege{{TableName: "worker_job_outbox", AllowUpdate: true}},
-	})
+	privilegeGaps, err := DiagnoseRolePosture(ctx, coordinator, roles.coordinator, CoordinatorPosture())
 	if err != nil {
 		t.Fatalf("DiagnoseRolePosture (missing privilege): %v", err)
 	}

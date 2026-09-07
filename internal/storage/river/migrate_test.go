@@ -455,6 +455,7 @@ func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T
 		"DO $$ BEGIN IF to_regclass('public.worker_job_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.worker_job_runs TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_concurrency_leases') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_instances') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.worker_posture_manifest_applied') IS NOT NULL THEN GRANT SELECT ON TABLE public.worker_posture_manifest_applied TO \"domain_runtime\"; END IF; END $$",
 		"GRANT USAGE ON SCHEMA public TO \"queue_runtime\"",
 		"REVOKE CREATE ON SCHEMA public FROM \"queue_runtime\"",
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM \"queue_runtime\"",

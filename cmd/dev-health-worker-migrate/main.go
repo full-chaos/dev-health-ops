@@ -96,6 +96,21 @@ func execute(
 		coordinatorRole = value
 	}
 	coordinatorTableGrants, coordinatorColumnGrants, coordinatorSequences := coordinatorGrants()
+	// CHAOS-5437: postureManifestDigest is the SAME value every go-* runtime
+	// binary recomputes at startup (postgres.PostureManifestDigest()) --
+	// stamping it here is what lets each of them prove, without a live
+	// database round trip through anything but this one small table,
+	// whether it is running a posture manifest older than the one this
+	// migrate run just applied. migrateBuildID prefers the binary's real
+	// commit; Commit is "unknown" only on a build with no ldflags AND no VCS
+	// info available to debug.ReadBuildInfo (see internal/platform/version),
+	// in which case the manifest digest itself is the honest fallback
+	// identity -- it is what changes, and it is always present.
+	postureManifestDigest := postgresstore.PostureManifestDigest()
+	migrateBuildID := version.Current(serviceName).Commit
+	if migrateBuildID == "" || migrateBuildID == "unknown" {
+		migrateBuildID = "manifest:" + postureManifestDigest
+	}
 	migrationOptions := riverstore.MigrationOptions{
 		Schema:                  schema,
 		DomainRole:              domainRole,
@@ -104,6 +119,8 @@ func execute(
 		CoordinatorGrants:       coordinatorTableGrants,
 		CoordinatorColumnGrants: coordinatorColumnGrants,
 		CoordinatorSequences:    coordinatorSequences,
+		PostureManifestDigest:   postureManifestDigest,
+		PostureManifestBuildID:  migrateBuildID,
 	}
 	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil ||
 		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole {

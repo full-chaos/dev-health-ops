@@ -764,6 +764,14 @@ func domainPosture() RolePosture {
 			// Expiring process liveness is domain-owned. The operator reads only
 			// bounded worker-instance counts through its domain pool.
 			{"worker_instances", true, true, true},
+			// CHAOS-5437: go-worker-migrate stamps the applied posture-manifest
+			// digest here (internal/storage/river/migrate.go); every go-*
+			// runtime binary reads it back at startup
+			// (CheckPostureManifestLockstep) to refuse readiness if a newer
+			// manifest has already been migrated than the one this binary
+			// declares. SELECT-only -- the domain role never writes this table,
+			// only go-worker-migrate's own admin/migration identity does.
+			{"worker_posture_manifest_applied", false, false, false},
 		},
 		ColumnScoped: []ColumnPrivilege{
 			{"worker_job_completion_fences", "completion_key", "SELECT"},

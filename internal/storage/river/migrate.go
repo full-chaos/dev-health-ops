@@ -85,8 +85,32 @@ type MigrationOptions struct {
 	// coordinator may use. Each receives USAGE only; all other sequence
 	// privileges remain revoked.
 	CoordinatorSequences []string
-	Logger               *slog.Logger
+	// PostureManifestDigest is the sha256 hex digest CHAOS-5437's lockstep
+	// guard stamps into worker_posture_manifest_applied on every run
+	// (postgres.PostureManifestDigest() -- injected the same way
+	// CoordinatorGrants is, since this package cannot import
+	// internal/storage/postgres). Optional: empty skips the table entirely,
+	// so every pre-existing caller that does not set it (the large body of
+	// integration tests exercising ApplyPinnedMigrations directly) behaves
+	// exactly as before.
+	PostureManifestDigest string
+	// PostureManifestBuildID identifies the migrate binary that applied
+	// PostureManifestDigest, for operator debugging only -- never compared
+	// programmatically. Ignored when PostureManifestDigest is empty; when
+	// PostureManifestDigest is set and this is empty, PostureManifestDigest
+	// itself is used as the build identity.
+	PostureManifestBuildID string
+	Logger                 *slog.Logger
 }
+
+// postureManifestAppliedTable mirrors postgres.PostureManifestAppliedTable's
+// string value. It cannot be imported (see the CoordinatorGrants doc comment
+// on why this package never imports internal/storage/postgres); the two are
+// kept honest by internal/storage/river's own integration test, which
+// creates this table via ApplyPinnedMigrations and then reads it back
+// through postgres.CheckPostureManifestLockstep -- a name mismatch would
+// make that call see no applied row at all and fail the test.
+const postureManifestAppliedTable = "worker_posture_manifest_applied"
 
 // columnGrantablePrivileges is PostgreSQL's closed set of column-level
 // privileges. DELETE and TRUNCATE are not column-grantable at all, so a caller
@@ -204,8 +228,38 @@ func ApplyPinnedMigrations(
 		return MigrationResult{}, migrationStageError("begin privilege transaction")
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// CHAOS-5437: created before applyRuntimeGrants, in the SAME transaction,
+	// so the grant statement below (guarded by to_regclass, like every other
+	// grant in this file) sees the table as already existing on the very
+	// first run -- DDL is visible to later statements in the same
+	// transaction. This table is Go-migrate's own schema, never Alembic's:
+	// nothing outside ApplyPinnedMigrations creates or writes it.
+	if options.PostureManifestDigest != "" {
+		if _, err := tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS public.`+postureManifestAppliedTable+` (
+			manifest_digest text PRIMARY KEY,
+			applied_at timestamptz NOT NULL DEFAULT now(),
+			migrate_build text NOT NULL
+		)`); err != nil {
+			return MigrationResult{}, migrationStageError("create posture manifest table")
+		}
+	}
 	if err := applyRuntimeGrants(ctx, tx, options); err != nil {
 		return MigrationResult{}, migrationStageError("apply runtime grants")
+	}
+	if options.PostureManifestDigest != "" {
+		buildID := options.PostureManifestBuildID
+		if buildID == "" {
+			buildID = options.PostureManifestDigest
+		}
+		if _, err := tx.Exec(
+			ctx,
+			`INSERT INTO public.`+postureManifestAppliedTable+` (manifest_digest, applied_at, migrate_build)
+			VALUES ($1, now(), $2)
+			ON CONFLICT (manifest_digest) DO UPDATE SET applied_at = EXCLUDED.applied_at, migrate_build = EXCLUDED.migrate_build`,
+			options.PostureManifestDigest, buildID,
+		); err != nil {
+			return MigrationResult{}, migrationStageError("stamp posture manifest applied")
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return MigrationResult{}, migrationStageError("commit transaction")
@@ -498,6 +552,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.worker_job_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.worker_job_runs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_concurrency_leases') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_instances') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO " + domainRole + "; END IF; END $$",
+		// CHAOS-5437: SELECT-only -- this migration is the table's only
+		// writer (the CREATE TABLE + upsert above, same transaction).
+		"DO $$ BEGIN IF to_regclass('public." + postureManifestAppliedTable + "') IS NOT NULL THEN GRANT SELECT ON TABLE public." + postureManifestAppliedTable + " TO " + domainRole + "; END IF; END $$",
 		"GRANT USAGE ON SCHEMA public TO " + queueRole,
 		"REVOKE CREATE ON SCHEMA public FROM " + queueRole,
 		"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM " + queueRole,

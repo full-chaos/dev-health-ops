@@ -216,6 +216,16 @@ func TestInitWithServiceNameInstallsTheSDKProviderNotTheNoop(t *testing.T) {
 // still wins over the fallback whenever it IS set -- a caller passing its
 // own default must never be able to accidentally override an operator's
 // explicit OTEL_SERVICE_NAME configuration.
+//
+// PR #2369's r1 codex review (finding 3) correctly noted this test alone
+// cannot catch a mutant that ignores `defaultName` entirely (it only checks
+// component.provider != nil, not what name actually reached the exporter) --
+// this package has no way to read a *sdktrace.TracerProvider's Resource back
+// out (no exported getter). The value-level check that closes that gap lives
+// in cmd/query-api/main_otel_export_integration_test.go
+// (TestOrgScopingDenialSpanReachesARealOTLPCollector), which reads the
+// service.name resource attribute off REAL OTLP wire traffic -- proven to
+// catch the exact ignores-defaultName mutant by running it there.
 func TestInitWithServiceNameFallsBackToItsOwnDefaultNameOnly(t *testing.T) {
 	t.Setenv("OTEL_ENABLED", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:0")

@@ -48,14 +48,16 @@ import (
 // span it receives for the test to inspect.
 type stubTraceCollector struct {
 	coltracepb.UnimplementedTraceServiceServer
-	mu    sync.Mutex
-	spans []*tracepb.Span
+	mu            sync.Mutex
+	spans         []*tracepb.Span
+	resourceSpans []*tracepb.ResourceSpans
 }
 
 func (s *stubTraceCollector) Export(_ context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, rs := range req.GetResourceSpans() {
+		s.resourceSpans = append(s.resourceSpans, rs)
 		for _, ss := range rs.GetScopeSpans() {
 			s.spans = append(s.spans, ss.GetSpans()...)
 		}
@@ -69,6 +71,27 @@ func (s *stubTraceCollector) received() []*tracepb.Span {
 	out := make([]*tracepb.Span, len(s.spans))
 	copy(out, s.spans)
 	return out
+}
+
+// receivedResourceAttr reads a resource-level attribute (e.g. "service.name")
+// off the first ResourceSpans received -- CHAOS-5408/CHAOS-5423 PR #2369's r1
+// review, finding 3: nothing previously verified InitWithServiceName's
+// fallback name actually reaches an exporter's resource attributes over the
+// wire; a mutant ignoring the `defaultName` argument entirely still passed
+// every other test. This reads it off REAL OTLP wire traffic, not a
+// constructed object, so it cannot be satisfied by a mutant that builds the
+// right-looking Go struct without the resource attribute actually landing.
+func (s *stubTraceCollector) receivedResourceAttr(key string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, rs := range s.resourceSpans {
+		for _, kv := range rs.GetResource().GetAttributes() {
+			if kv.GetKey() == key {
+				return kv.GetValue().GetStringValue(), true
+			}
+		}
+	}
+	return "", false
 }
 
 func spanAttr(span *tracepb.Span, key string) (string, bool) {
@@ -153,5 +176,23 @@ func TestOrgScopingDenialSpanReachesARealOTLPCollector(t *testing.T) {
 	}
 	if reason, _ := spanAttr(span, "denial_reason"); reason != "org_mismatch" {
 		t.Errorf("denial_reason attribute = %q, want org_mismatch", reason)
+	}
+	// r1 review finding 2 (PR #2369): the org_id attribute must be the
+	// AUTHENTICATED claims.OrgID ("org-authorized"), never the
+	// client-requested orgID argument ("org-requested-different") -- a
+	// mutant that swapped the two would otherwise pass unnoticed, since
+	// this is the only assertion in the whole PR checking the org_id
+	// VALUE end to end over real OTLP wire traffic.
+	if orgID, _ := spanAttr(span, "org_id"); orgID != "org-authorized" {
+		t.Errorf("org_id attribute = %q, want org-authorized (the authenticated claim, not the requested orgID argument)", orgID)
+	}
+
+	// r1 review finding 3 (PR #2369): OTEL_SERVICE_NAME was deliberately
+	// left unset above -- this proves InitWithServiceName's fallback name
+	// argument (otelServiceName) genuinely reaches the resource attributes
+	// of a real exported ResourceSpans, not just that *some* provider got
+	// installed.
+	if serviceName, _ := collector.receivedResourceAttr("service.name"); serviceName != otelServiceName {
+		t.Errorf("resource service.name attribute = %q, want %q", serviceName, otelServiceName)
 	}
 }

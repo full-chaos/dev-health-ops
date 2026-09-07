@@ -19,6 +19,12 @@ func TestHandlerCompletesReceiptOnlyAfterReconcile(t *testing.T) {
 	if err != nil || !reconciler.called || !receipts.completed {
 		t.Fatalf("handle=%v called=%t completed=%t", err, reconciler.called, receipts.completed)
 	}
+	// The reconciler fences every ClickHouse write on this token. Handing it
+	// a zero claim would leave production writing rows with nothing proving
+	// this process still owns the receipt.
+	if reconciler.claim.Token != "claim" || reconciler.claim.ReceiptID != "pagerduty:binding:evt-1" {
+		t.Fatalf("handler passed claim %+v", reconciler.claim)
+	}
 }
 
 func TestHandlerLeavesReceiptIncompleteForStreamRetry(t *testing.T) {
@@ -119,9 +125,17 @@ func (s *receiptStore) Release(_ context.Context, _ ReceiptClaim) error {
 type reconciler struct {
 	called bool
 	err    error
+	// claim records what the handler handed over. The handler must pass the
+	// claim it actually took, token and all: the native reconciler fences
+	// every ClickHouse write on that token, so a zero claim here would mean
+	// production writes with no fence at all.
+	claim ReceiptClaim
 }
 
-func (r *reconciler) Reconcile(context.Context, Event) error { r.called = true; return r.err }
+func (r *reconciler) Reconcile(_ context.Context, _ Event, claim ReceiptClaim) error {
+	r.called, r.claim = true, claim
+	return r.err
+}
 
 // TestParseAcceptsEveryZeroOffsetTimestampTheProducerCanEmit is the codex
 // round-2 HIGH-1 regression. The accepted set is defined by what a zero UTC

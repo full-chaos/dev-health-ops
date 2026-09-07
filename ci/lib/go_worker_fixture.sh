@@ -240,7 +240,6 @@ start_worker_stack() {
       --domain-transaction-pooler=false \
       --operational-bridge-url="http://127.0.0.1:${API_PORT}" \
       --operational-bridge-allow-insecure=true \
-      --pagerduty-webhook-transport=celery \
       --log-level=info
   ) >"${worker_log_file}" 2>&1 &
   WORKER_PID="$!"

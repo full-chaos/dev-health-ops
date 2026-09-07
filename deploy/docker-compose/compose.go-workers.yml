@@ -51,7 +51,6 @@ x-go-worker-flag:
   bridge-insecure: &flag-bridge-insecure "--operational-bridge-allow-insecure=${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}"
   # Exactly one runtime owns the PagerDuty webhook stream. Celery keeps it
   # until the route flips at cutover (CUT-14/18).
-  pagerduty-transport: &flag-pagerduty-transport "--pagerduty-webhook-transport=${PAGERDUTY_WEBHOOK_TRANSPORT:-celery}"
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
 # Credentials only. Everything else moved into `command:` above.
@@ -228,7 +227,6 @@ services:
       # see the anchor's own comment above for why.
       - *flag-bridge-url-heavy
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     environment: &go-worker-env
       <<: *go-worker-env-base
@@ -272,7 +270,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     # codex review (PR #1938, independent post-cap review): the shared
     # &go-worker anchor's own depends_on now includes metrics-api
@@ -308,7 +305,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     # codex review (PR #1938, independent post-cap review): the shared
     # &go-worker anchor's own depends_on now includes metrics-api
@@ -351,7 +347,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     # codex review (PR #1938, independent post-cap review): the shared
     # &go-worker anchor's own depends_on now includes metrics-api
@@ -383,7 +378,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     # codex review (PR #1938, independent post-cap review): the shared
     # &go-worker anchor's own depends_on now includes metrics-api
@@ -416,7 +410,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     # codex review (PR #1938, independent post-cap review): the shared
     # &go-worker anchor's own depends_on now includes metrics-api
@@ -450,7 +443,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     # codex review (PR #1938, independent post-cap review): the shared
     # &go-worker anchor's own depends_on now includes metrics-api
@@ -483,7 +475,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     # codex review (PR #1938, independent post-cap review): the shared
     # &go-worker anchor's own depends_on now includes metrics-api
@@ -518,7 +509,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     # codex review (PR #1938, independent post-cap review): the shared
     # &go-worker anchor's own depends_on now includes metrics-api

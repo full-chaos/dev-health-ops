@@ -329,7 +329,7 @@ it.
 | `ingest` (internal product events) | NATIVE | `internal/streamhandlers/`; `cmd/dev-health-stream-runner/dependencies.go:10` profile list | -- |
 | `product-telemetry` | NATIVE -- a real separate handler, not folded into `ingest` (scheduler still names it `process-product-telemetry-streams`, `internal/scheduler/fixed/inventory.go:535`, but it's dispatched via the `ingest` binary's `productTelemetryHandlerKind`, `dependencies.go:60,199,521-522`) | `internal/streamhandlers/product_telemetry.go:52-58` | -- |
 | `external` | NATIVE | `dependencies.go:10` | -- |
-| `pagerduty` | PARTIAL -- Go stream shell native, Python compute (per the 2026-08-28 snapshot, not independently re-verified this pass) | `dependencies.go:10`; `internal/jobs/pagerduty/compatibility.go` | CHAOS-4105 (Backlog) |
+| `pagerduty` | NATIVE -- CHAOS-4105 ported the locked-graph reconciliation to Go; the handler writes the canonical rows through the providersync PagerDuty effect sinks and the Python compute is deleted | `dependencies.go:10`; `internal/jobs/pagerduty/reconcile_native.go`; `internal/providersync/pagerduty_webhook_reconcile.go` | -- |
 
 ## SCHEDULER / RECONCILER / OPERATOR
 

@@ -426,7 +426,7 @@ func buildDailyWorker(
 			if candidate, ok := observer.(remaining.DORAObserver); ok {
 				doraObserver = candidate
 			}
-			executor, executorErr := remaining.NewDORAExecutor(context.Background(), metricsClickHouse, doraObserver)
+			executor, executorErr := remaining.NewDORAExecutor(context.Background(), metricsClickHouse, doraObserver, logger)
 			if executorErr != nil {
 				logger.Error(
 					"dora native executor refused; the dora kind will not be "+
@@ -466,7 +466,7 @@ func buildDailyWorker(
 				capacityObserver = candidate
 			}
 			executor, executorErr := remaining.NewCapacityExecutor(
-				context.Background(), metricsClickHouse, capacityObserver)
+				context.Background(), metricsClickHouse, capacityObserver, logger)
 			if executorErr != nil {
 				logger.Error(
 					"capacity native executor refused; the capacity kind will "+

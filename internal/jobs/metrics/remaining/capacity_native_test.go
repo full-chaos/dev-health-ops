@@ -14,7 +14,7 @@ import (
 )
 
 func TestCapacityExecutorFailsClosedWithoutAConnection(t *testing.T) {
-	if _, err := NewCapacityExecutor(context.Background(), nil, nil); err == nil {
+	if _, err := NewCapacityExecutor(context.Background(), nil, nil, nil); err == nil {
 		t.Fatal("a nil connection must refuse, not degrade to the bridge")
 	}
 }

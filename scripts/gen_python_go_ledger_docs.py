@@ -164,12 +164,12 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "metrics.remaining.capacity": {
         "producer": "`internal/scheduler/fixed/inventory.go:197` (capacity_forecast_weekly_fanout)",
         "trigger": "schedule (WeeklyAt Mon 04:00 UTC)",
-        "gate": "ClickHouse schema check in `NewCapacityExecutor` (`internal/jobs/metrics/remaining/capacity_native.go:87`)",
+        "gate": "ClickHouse schema check in `NewCapacityExecutor` (`internal/jobs/metrics/remaining/capacity_native.go:94`)",
         "writer": "Go `internal/jobs/metrics/remaining/capacity_native_clickhouse.go:243`",
         "tables": "`capacity_forecasts`",
         "evidence": "argued — code read; wired `cmd/dev-health-worker/daily.go:359-393,401-410`",
         "state": "native",
-        "ticket": "n/a — Python `_run_capacity` (`worker_metrics.py:1752`) is dead code, see worker-file dead-code child ticket",
+        "ticket": "n/a — Python `job_capacity.py` (`run_capacity_forecast`) and its `worker_metrics.py` `_run_capacity` dead-code caller are both DELETED entirely (CHAOS-5336); no live Python producer remains",
     },
     "metrics.remaining.complexity": {
         "producer": "`internal/scheduler/fixed/inventory.go:58` (complexity_daily_fanout)",
@@ -184,12 +184,12 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
     "metrics.remaining.dora": {
         "producer": "`internal/scheduler/fixed/inventory.go:147` (dora_daily_fanout)",
         "trigger": "schedule (DailyAt 02:15 UTC) + post-sync",
-        "gate": "ordering/schema checks in `NewDORAExecutor` (`internal/jobs/metrics/remaining/dora_native.go:100`)",
+        "gate": "ordering/schema checks in `NewDORAExecutor` (`internal/jobs/metrics/remaining/dora_native.go:108`)",
         "writer": "Go `internal/jobs/metrics/remaining/dora_native_clickhouse.go:379`",
         "tables": "`dora_metrics_daily`",
         "evidence": "argued — wired `daily.go:315-353,415-427`",
         "state": "native",
-        "ticket": "n/a — Python `_run_dora` (`worker_metrics.py:1797`) is dormant/dead",
+        "ticket": "n/a — Python `job_dora.py` (`run_dora_metrics_job`) and its `worker_metrics.py` `_run_dora` dead-code caller are both DELETED entirely (CHAOS-5336); no live Python producer remains",
     },
     "metrics.remaining.membership_backfill": {
         "producer": "`internal/scheduler/fixed/inventory.go:176` (membership_backfill_daily_fanout)",

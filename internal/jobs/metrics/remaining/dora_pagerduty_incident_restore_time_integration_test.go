@@ -154,7 +154,7 @@ INSERT INTO repos (id, repo, org_id, last_synced) VALUES (toUUID(?), 'full-chaos
 	}
 	partitionID := deterministicPartitionID(run.ID, 1)
 
-	executor, err := NewDORAExecutor(ctx, conn, nil)
+	executor, err := NewDORAExecutor(ctx, conn, nil, nil)
 	if err != nil {
 		t.Fatalf("NewDORAExecutor: %v", err)
 	}

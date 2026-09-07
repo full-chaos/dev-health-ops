@@ -1298,7 +1298,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		claims, err := verifier.Verify(token)
+		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
+		claims, err := verifier.Verify(verifyCtx, token)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -1362,4 +1363,15 @@ func bearerToken(header string) (string, bool) {
 		return "", false
 	}
 	return token, true
+}
+
+// envelopeRequestID reads the caller-supplied correlation id, the same
+// header name (internal/auth/httpapi.RequestIDHeader) that package's own
+// RequestID middleware uses -- query-api mounts no such middleware today,
+// so this is deliberately just a header read, not a generated fallback:
+// principal.Verify's CHAOS-5443 rejection log treats a missing id as an
+// empty field rather than fabricating one that would look like a real
+// correlation id but correlate nothing.
+func envelopeRequestID(r *http.Request) string {
+	return r.Header.Get("X-Request-Id")
 }

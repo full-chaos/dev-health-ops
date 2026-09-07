@@ -1,6 +1,7 @@
 package principal
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -113,7 +114,7 @@ func TestVerifierMatchesLivePythonIssuedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
-	claims, err := v.Verify(result.Token)
+	claims, err := v.Verify(context.Background(), result.Token)
 	if err != nil {
 		t.Fatalf("Verify: real Python-issued envelope was rejected: %v", err)
 	}

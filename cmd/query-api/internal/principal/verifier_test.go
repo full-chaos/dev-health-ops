@@ -1,6 +1,7 @@
 package principal
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -103,7 +104,7 @@ func TestVerify_ValidEnvelopeRoundTrips(t *testing.T) {
 	token := signEnvelope(t, priv, testKID, baseClaims())
 
 	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
-	claims, err := v.Verify(token)
+	claims, err := v.Verify(context.Background(), token)
 	if err != nil {
 		t.Fatalf("Verify: unexpected error: %v", err)
 	}
@@ -126,7 +127,7 @@ func TestVerify_RejectsWrongAudience(t *testing.T) {
 	token := signEnvelope(t, priv, testKID, claims)
 
 	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
-	if _, err := v.Verify(token); err == nil {
+	if _, err := v.Verify(context.Background(), token); err == nil {
 		t.Fatal("Verify: expected error for wrong audience, got nil")
 	}
 }
@@ -139,7 +140,7 @@ func TestVerify_RejectsWrongIssuer(t *testing.T) {
 	token := signEnvelope(t, priv, testKID, claims)
 
 	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
-	if _, err := v.Verify(token); err == nil {
+	if _, err := v.Verify(context.Background(), token); err == nil {
 		t.Fatal("Verify: expected error for wrong issuer, got nil")
 	}
 }
@@ -154,7 +155,7 @@ func TestVerify_RejectsExpiredEnvelope(t *testing.T) {
 	token := signEnvelope(t, priv, testKID, claims)
 
 	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
-	if _, err := v.Verify(token); err == nil {
+	if _, err := v.Verify(context.Background(), token); err == nil {
 		t.Fatal("Verify: expected error for expired envelope, got nil")
 	}
 }
@@ -167,7 +168,7 @@ func TestVerify_RejectsMissingExpiry(t *testing.T) {
 	token := signEnvelope(t, priv, testKID, claims)
 
 	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
-	if _, err := v.Verify(token); err == nil {
+	if _, err := v.Verify(context.Background(), token); err == nil {
 		t.Fatal("Verify: expected error for missing exp, got nil")
 	}
 }
@@ -180,7 +181,7 @@ func TestVerify_RejectsUnsupportedSchemaVersion(t *testing.T) {
 	token := signEnvelope(t, priv, testKID, claims)
 
 	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
-	_, err := v.Verify(token)
+	_, err := v.Verify(context.Background(), token)
 	if err == nil {
 		t.Fatal("Verify: expected error for unsupported schema version, got nil")
 	}
@@ -195,7 +196,7 @@ func TestVerify_RejectsUnknownKID(t *testing.T) {
 	token := signEnvelope(t, priv, "some-other-kid", baseClaims())
 
 	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
-	if _, err := v.Verify(token); err == nil {
+	if _, err := v.Verify(context.Background(), token); err == nil {
 		t.Fatal("Verify: expected error for unknown kid, got nil")
 	}
 }
@@ -209,7 +210,7 @@ func TestVerify_RejectsTokenSignedByAnotherKey(t *testing.T) {
 	token := signEnvelope(t, otherPriv, testKID, baseClaims())
 
 	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
-	if _, err := v.Verify(token); err == nil {
+	if _, err := v.Verify(context.Background(), token); err == nil {
 		t.Fatal("Verify: expected error for signature from a non-published key, got nil")
 	}
 }
@@ -247,7 +248,7 @@ func TestVerify_RejectsAlgConfusion(t *testing.T) {
 	}
 
 	v := mustVerifier(t, jwksPath, testIssuer, testAudience)
-	if _, err := v.Verify(token); err == nil {
+	if _, err := v.Verify(context.Background(), token); err == nil {
 		t.Fatal("Verify: expected error for alg=none, got nil")
 	}
 }

@@ -220,7 +220,8 @@ func buildInvestmentExplainRoute() (handler http.HandlerFunc, cleanup func(), ok
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		claims, err := verifier.Verify(token)
+		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
+		claims, err := verifier.Verify(verifyCtx, token)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

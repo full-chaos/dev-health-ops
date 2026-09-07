@@ -2,10 +2,26 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrPostureRefused reports that rolePostureQuery RAN SUCCESSFULLY and
+// returned authorized=false: the calling role's live PostgreSQL grants
+// disagree with its declared RolePosture manifest -- some required
+// privilege is missing, some undeclared privilege is held in excess, or
+// both. rolePostureQuery's single boolean does not say which; a caller that
+// needs to know calls DiagnoseRolePosture next (see its doc comment).
+//
+// This is deliberately distinct from a query that never RAN at all
+// (connection refused, auth failure, context deadline) -- those are a
+// completely different incident from "the database answered and the
+// answer was no," and before CHAOS-5435 both collapsed into the identical,
+// un-actionable ErrUnavailable. Wraps ErrUnavailable so every existing
+// errors.Is(err, ErrUnavailable) readiness caller keeps working unchanged.
+var ErrPostureRefused = errors.New("postgres: role posture refused (live grants disagree with the declared manifest)")
 
 // rolePostureQuery proves the connected identity holds exactly ONE role's
 // declared semantic-runtime posture: the required_table_privileges and
@@ -1129,16 +1145,31 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 		return err
 	}
 	var authorized bool
-	if err := pool.QueryRow(
+	err := pool.QueryRow(
 		ctx, rolePostureQuery,
 		expectedRole, riverSchema,
 		tableNames, allowInserts, allowUpdates,
 		columnTables, columnNames, columnPrivileges,
 		allowDeletes, posture.RequiredSequences,
-	).Scan(&authorized); err != nil || !authorized {
-		return ErrUnavailable
+	).Scan(&authorized)
+	switch {
+	case err != nil:
+		// The query never produced an answer at all: connection refused, auth
+		// failure, context deadline, a driver-level fault. %w on the driver
+		// error (never the DSN this pool was built from -- Config.URI is
+		// deliberately excluded from every error path in this package) keeps
+		// this branch distinguishable from ErrPostureRefused below while
+		// staying readiness-compatible via errors.Is(err, ErrUnavailable).
+		return fmt.Errorf("%w: querying role posture: %v", ErrUnavailable, err)
+	case !authorized:
+		// The query ran and answered "no": this role's own grants do not
+		// match its declared posture. A completely different incident from
+		// the case above, and a role name is a checked-in runtime identifier
+		// (config, not connection material), so it is always safe to log.
+		return fmt.Errorf("%w: %w for role %q", ErrUnavailable, ErrPostureRefused, expectedRole)
+	default:
+		return nil
 	}
-	return nil
 }
 
 // validateParallelArrayLengths reports a descriptive, non-ErrUnavailable

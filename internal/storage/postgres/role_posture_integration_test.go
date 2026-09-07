@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -119,6 +120,104 @@ func TestCheckRolePostureAcceptsAnArbitrarySyntheticPosture(t *testing.T) {
 	}
 	if err := CheckRolePosture(ctx, roleConn, role, schema, posture); err != nil {
 		t.Fatalf("CheckRolePosture did not recover after revoking the excess UPDATE: %v", err)
+	}
+}
+
+// chaos5435RoleFixture reproduces CHAOS-5435's exact incident shape: a
+// domain-shaped role holds SELECT+INSERT+UPDATE on
+// external_ingest_recompute_jobs (the live grant after 165eed2e91's migrate
+// ran), while stalePosture -- the shape a worker binary built before
+// 165eed2e91/#2361 would still declare -- says AllowUpdate=false for that
+// table. Shared by the CheckRolePosture and DiagnoseRolePosture regression
+// tests below so both exercise the identical role and grant state.
+func chaos5435RoleFixture(t *testing.T, ctx context.Context) (roleConn *pgxpool.Pool, role, password, instanceURI string, stalePosture RolePosture) {
+	t.Helper()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	})
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		fixturePassword = "chaos_5435_posture_password"
+		schema          = "chaos_5435_river"
+		table           = "external_ingest_recompute_jobs"
+	)
+	roleName, err := containers.RoleName("chaos_5435_domain", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, roleName, t.Logf) })
+	for _, statement := range []string{
+		"REVOKE TEMPORARY ON DATABASE " + dbName + " FROM PUBLIC",
+		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
+		"CREATE ROLE " + roleName + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + fixturePassword + "'",
+		"GRANT CONNECT ON DATABASE " + dbName + " TO " + roleName,
+		"GRANT USAGE ON SCHEMA public TO " + roleName,
+		"CREATE SCHEMA " + schema,
+		"CREATE TABLE public." + table + " (id bigint PRIMARY KEY, status text)",
+		// The live grant after 165eed2e91's migrate ran: the domain role
+		// really holds SELECT+INSERT+UPDATE.
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public." + table + " TO " + roleName,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+
+	posture := RolePosture{
+		RequiredTables: []TablePrivilege{
+			{TableName: table, AllowInsert: true, AllowUpdate: false, AllowDelete: false},
+		},
+	}
+	conn := connectAs(t, ctx, instance.URI, roleName, fixturePassword)
+	return conn, roleName, fixturePassword, instance.URI, posture
+}
+
+// TestCheckRolePostureReturnsErrPostureRefusedForCHAOS5435Shape pins fix #2:
+// CheckRolePosture must return a distinct, non-driver-error sentinel
+// (ErrPostureRefused, wrapping ErrUnavailable) when rolePostureQuery itself
+// succeeded and answered "no" -- never the same opaque error a genuine
+// connection failure produces (see
+// TestDomainAuthorizationRejectsMissingOrUnavailablePool for that branch).
+// Before this fix, both incidents were IDENTICAL, un-actionable
+// ErrUnavailable values, which is exactly what left CHAOS-5435's crash loop
+// with no diagnosable signal beyond the check name.
+func TestCheckRolePostureReturnsErrPostureRefusedForCHAOS5435Shape(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	roleConn, role, password, instanceURI, stalePosture := chaos5435RoleFixture(t, ctx)
+
+	err := CheckRolePosture(ctx, roleConn, role, "chaos_5435_river", stalePosture)
+	if err == nil {
+		t.Fatal("CheckRolePosture unexpectedly authorized the excess UPDATE -- test setup is not exercising CHAOS-5435's shape")
+	}
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("CheckRolePosture() error = %v, want it to satisfy errors.Is(_, ErrUnavailable)", err)
+	}
+	if !errors.Is(err, ErrPostureRefused) {
+		t.Fatalf("CheckRolePosture() error = %v, want it to satisfy errors.Is(_, ErrPostureRefused) -- "+
+			"the query answered, it did not fail to run", err)
+	}
+	for _, secret := range []string{password, instanceURI} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("CheckRolePosture leaked connection material: %v", err)
+		}
 	}
 }
 

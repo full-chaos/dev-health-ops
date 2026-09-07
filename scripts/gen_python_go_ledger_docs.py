@@ -123,11 +123,11 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "producer": "`internal/syncdispatchruntime/native_post_sync.go:230-232` (`workGraph.StartRequestTx`)",
         "trigger": "post-sync",
         "gate": "`plan.Investment` (`native_post_sync.go:610`, set when `git \\|\\| hasWorkItems`)",
-        "writer": "Go handler orchestrates only (`internal/jobs/workgraph/handler.go:24-68,146-151`); compute is Python `work_graph_tasks.py:172-278` -> `materialize_investments()` (`src/dev_health_ops/work_graph/investment/materialize.py:1169-1854`)",
+        "writer": "Go-native. `cmd/dev-health-worker/workgraph.go` `buildNativeInvestmentExecutor` constructs `investment.NewNativeExecutor` (`internal/jobs/investment/nativeexecutor.go:58`) over a ClickHouse reader/writer, and `addWorkgraphWorker`'s materialize case REFUSES the kind (`errWorkerDependencyUnavailable`) when that executor is nil rather than falling back -- the HTTP compatibility variant was deleted by CHAOS-3092 (#2352). The interface it satisfies is still NAMED `workgraph.CompatibilityExecutor`; that is a legacy type name, not a Python seam.",
         "tables": "ClickHouse `work_unit_investments`, `work_unit_repo_effort`, `work_unit_investment_quotes` (`src/dev_health_ops/metrics/sinks/clickhouse/investment.py:117-186`)",
-        "evidence": "argued — code read, not re-executed this session",
-        "state": "bridge",
-        "ticket": "CHAOS-4441 (workgraph subsystem gap)",
+        "evidence": "argued \u2014 code read; `rg` over `cmd/dev-health-worker/workgraph.go` and `internal/jobs/workgraph` finds no HTTP compatibility executor and no bridge POST for this kind",
+        "state": "native",
+        "ticket": "n/a \u2014 native since CHAOS-4441/#2227; CHAOS-3092 (#2352) deleted the dead HTTP variant. The Python `materialize_investments()` compute still exists behind the Celery `work_graph_tasks.py` task (migration-state keeps `rollback_route=celery` for this kind), which is its own deletion ticket.",
     },
     # --- metrics daily family ---------------------------------------------
     "metrics.daily_dispatch": {
@@ -336,11 +336,11 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "producer": "`internal/scheduler/fixed/producers.go:826` (startGraphBuild) + `native_post_sync.go:222` (`workGraph.StartRequestTx`)",
         "trigger": "post-sync + fixed-schedule prerequisite (before membership projection)",
         "gate": "none found",
-        "writer": "Go request/ledger plumbing only (`internal/jobs/workgraph/postgres.go:69,105,135,185`); compute is Python `worker_workgraph.py:367 execute` (fenced subprocess-per-request, LLM categorization)",
+        "writer": "Go-native, entirely. `NewBuildHandler` takes NO executor argument at all (`internal/jobs/workgraph/handler.go`, CHAOS-4924): every stage is a native pre-step (`workgraphBuildPreSteps`, `cmd/dev-health-worker/workgraph.go`) plus Go request/ledger plumbing (`internal/jobs/workgraph/postgres.go`). The absence of a bridge is STRUCTURAL -- a compile-time fact, not a runtime nil-check -- because Python's remaining `build()` compute was already a 0-stats no-op before the cutover.",
         "tables": "`public.work_graph_execution_requests`, `public.work_graph_execution_ledger` (Go); LLM categorization outcome + evidence (Python)",
-        "evidence": "argued — rg over `internal/` finds zero graph-construction compute, only dispatcher/request/ledger state-machine code",
-        "state": "bridge",
-        "ticket": "CHAOS-4441 (workgraph subsystem gap)",
+        "evidence": "argued \u2014 code read; `buildHandler` has no CompatibilityExecutor FIELD, so a bridge call cannot be reintroduced without changing the type",
+        "state": "native",
+        "ticket": "n/a \u2014 native since CHAOS-4924; CHAOS-3092 (#2352) deleted the dead workgraph HTTP executor and `ExecutorPythonCompatibility`. `worker_workgraph.py`'s `/execute` route survives with no Go caller left for this kind -- its own deletion ticket.",
     },
 }
 

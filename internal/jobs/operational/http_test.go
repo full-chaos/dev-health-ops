@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// TestHTTPDispatcherClassifiesBridgeResultContract exercises post()'s
+// status-code/body classification directly, including a TWO-success-status
+// call (mirroring the deleted DispatchWebhook's "success"/"skipped" pair --
+// CHAOS-5320 removed the only caller with more than one success status, but
+// the underlying post() mechanism stays generic and must stay correct for
+// it, not just for DispatchBilling/DispatchHeartbeat's single-status calls).
 func TestHTTPDispatcherClassifiesBridgeResultContract(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -39,14 +45,15 @@ func TestHTTPDispatcherClassifiesBridgeResultContract(t *testing.T) {
 				}),
 			}
 			dispatcher, err := NewHTTPDispatcher(client, HTTPDispatcherConfig{
-				WebhookEndpoint:   "https://api.internal.example/webhook",
 				HeartbeatEndpoint: "https://api.internal.example/heartbeat",
 				BearerToken:       "test-token",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = dispatcher.DispatchWebhook(context.Background(), WebhookDelivery{ID: webhookID})
+			err = dispatcher.post(context.Background(), "https://api.internal.example/webhook", map[string]string{
+				"delivery_id": webhookID,
+			}, "success", "skipped")
 			if (err != nil) != test.wantError || errors.Is(err, ErrDispatchPermanent) != test.permanent {
 				t.Fatalf("error=%v permanent=%v", err, errors.Is(err, ErrDispatchPermanent))
 			}
@@ -62,7 +69,6 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 
 func TestHTTPDispatcherRequiresBoundedTimeoutAndDeployableEndpoint(t *testing.T) {
 	config := HTTPDispatcherConfig{
-		WebhookEndpoint:   "https://api.internal.example/worker/webhook",
 		HeartbeatEndpoint: "https://api.internal.example/worker/heartbeat",
 		BearerToken:       "test-token",
 	}
@@ -72,7 +78,12 @@ func TestHTTPDispatcherRequiresBoundedTimeoutAndDeployableEndpoint(t *testing.T)
 	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err != nil {
 		t.Fatalf("internal TLS endpoint rejected: %v", err)
 	}
-	config.WebhookEndpoint = "http://api:8080/worker/webhook"
+	// CHAOS-5320/CHAOS-5353 left the heartbeat as the only endpoint on this
+	// dispatcher, so the endpoint-validation ladder below now exercises it
+	// rather than the deleted billing one. The property under test is
+	// unchanged: validInternalEndpoint's scheme/host rules, including that
+	// the insecure opt-in widens service-DNS names but never public ones.
+	config.HeartbeatEndpoint = "http://api:8080/worker/heartbeat"
 	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err == nil {
 		t.Fatal("unencrypted service-DNS endpoint accepted")
 	}
@@ -80,7 +91,7 @@ func TestHTTPDispatcherRequiresBoundedTimeoutAndDeployableEndpoint(t *testing.T)
 	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err != nil {
 		t.Fatalf("explicit internal service-DNS endpoint rejected: %v", err)
 	}
-	config.WebhookEndpoint = "http://api.example.com/worker/webhook"
+	config.HeartbeatEndpoint = "http://api.example.com/worker/heartbeat"
 	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err == nil {
 		t.Fatal("public unencrypted endpoint accepted with internal opt-in")
 	}

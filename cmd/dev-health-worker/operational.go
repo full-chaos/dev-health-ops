@@ -62,7 +62,6 @@ func buildOperationalWorker(
 	dispatcher, err := operational.NewHTTPDispatcher(
 		&http.Client{Timeout: cfg.OperationalBridgeTimeout},
 		operational.HTTPDispatcherConfig{
-			WebhookEndpoint:       baseURL + "/api/internal/worker-operational/webhook",
 			HeartbeatEndpoint:     baseURL + "/api/internal/worker-operational/heartbeat",
 			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
 			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
@@ -144,7 +143,7 @@ func buildOperationalWorker(
 			}
 			registered = append(registered, adapter.Spec())
 		case jobcontract.KindWebhookDelivery:
-			handler, handlerErr := operational.NewWebhookHandler(store, dispatcher)
+			handler, handlerErr := operational.NewWebhookHandler(store)
 			if handlerErr != nil {
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}

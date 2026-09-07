@@ -52,7 +52,7 @@ func (observer *recordingRemainingLeaseObserver) ObserveRemainingMetricsLeaseRel
 // three sites reach ReleasePartition at all is pinned, unchanged by this
 // ticket except for adding the one case that had no coverage before it
 // (LoadRun error): TestPartitionHandlerRejectsCrossFamilyExecution
-// (validation mismatch), TestPartitionHandlerLeaseLossCancelsCompatibility
+// (validation mismatch), TestPartitionHandlerLeaseLossCancelsExecutor
 // (lease loss), and TestPartitionHandlerReleasesClaimOnLoadRunFailure
 // (LoadRun error, added by this ticket) in handler_test.go. What this test
 // adds is what ReleasePartition itself does once reached: recording is

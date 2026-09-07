@@ -27,7 +27,7 @@ func TestPartitionHandlerRejectsCrossFamilyExecution(t *testing.T) {
 		claim: handlerClaim(),
 	}
 	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](
-		store, &handlerCompatibility{}, "capacity",
+		store, &handlerExecutor{}, "capacity",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -47,9 +47,9 @@ func TestPartitionHandlerRenewsAndCompletesWithBoundedEvidence(t *testing.T) {
 		},
 		claim: handlerClaim(),
 	}
-	compatibility := &handlerCompatibility{delay: 80 * time.Millisecond}
+	executor := &handlerExecutor{delay: 80 * time.Millisecond}
 	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](
-		store, compatibility, "capacity",
+		store, executor, "capacity",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -85,9 +85,9 @@ func TestPartitionHandlerClassifiesAnInvalidStateComputeFailureAsPermanent(t *te
 		claim: handlerClaim(),
 	}
 	wrapped := fmt.Errorf("%w: partition %s scope: unexpected end of JSON input", ErrInvalidState, handlerPartitionID)
-	compatibility := &handlerCompatibility{computeErr: jobruntime.WithSafeCause(wrapped)}
+	executor := &handlerExecutor{computeErr: jobruntime.WithSafeCause(wrapped)}
 	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](
-		store, compatibility, "capacity",
+		store, executor, "capacity",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -131,9 +131,9 @@ func TestPartitionHandlerKeepsAGenuinelyTransientComputeFailureRetryable(t *test
 		},
 		claim: handlerClaim(),
 	}
-	compatibility := &handlerCompatibility{computeErr: errors.New("dial tcp: connection refused")}
+	executor := &handlerExecutor{computeErr: errors.New("dial tcp: connection refused")}
 	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](
-		store, compatibility, "capacity",
+		store, executor, "capacity",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -158,9 +158,9 @@ func TestPartitionHandlerRecordsAZeroRowCompletionDistinctly(t *testing.T) {
 		claim: handlerClaim(),
 	}
 	zero := 0
-	compatibility := &handlerCompatibility{delay: 5 * time.Millisecond, rowsWritten: &zero}
+	executor := &handlerExecutor{delay: 5 * time.Millisecond, rowsWritten: &zero}
 	handler, err := NewPartitionHandler[jobruntime.RemainingReleaseImpactArgs](
-		store, compatibility, "release_impact",
+		store, executor, "release_impact",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestCompatibilityCompletionResult(t *testing.T) {
 
 // CHAOS-4002: handler.go has a third releaseClaim discard site (LoadRun
 // failure) that TestPartitionHandlerRejectsCrossFamilyExecution (validation
-// mismatch) and TestPartitionHandlerLeaseLossCancelsCompatibility (lease loss
+// mismatch) and TestPartitionHandlerLeaseLossCancelsExecutor (lease loss
 // during work) do not exercise -- this was the one release site with no
 // existing coverage at all before this ticket.
 func TestPartitionHandlerReleasesClaimOnLoadRunFailure(t *testing.T) {
@@ -199,7 +199,7 @@ func TestPartitionHandlerReleasesClaimOnLoadRunFailure(t *testing.T) {
 		loadRunErr: ErrUnavailable,
 	}
 	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](
-		store, &handlerCompatibility{}, "capacity",
+		store, &handlerExecutor{}, "capacity",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestPartitionHandlerReleasesClaimOnLoadRunFailure(t *testing.T) {
 	}
 }
 
-func TestPartitionHandlerLeaseLossCancelsCompatibility(t *testing.T) {
+func TestPartitionHandlerLeaseLossCancelsExecutor(t *testing.T) {
 	store := &handlerStore{
 		run: Run{
 			ID: handlerRunID, OrganizationID: handlerOrgID,
@@ -219,19 +219,19 @@ func TestPartitionHandlerLeaseLossCancelsCompatibility(t *testing.T) {
 		claim:       handlerClaim(),
 		failRenewal: true,
 	}
-	compatibility := &handlerCompatibility{waitForCancellation: true}
+	executor := &handlerExecutor{waitForCancellation: true}
 	handler, err := NewPartitionHandler[jobruntime.RemainingCapacityArgs](
-		store, compatibility, "capacity",
+		store, executor, "capacity",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = handler.Work(t.Context(), capacityExecution())
 	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) ||
-		!compatibility.canceled || store.completions != 0 || store.releases != 1 {
+		!executor.canceled || store.completions != 0 || store.releases != 1 {
 		t.Fatalf(
 			"lease loss=%v canceled=%t completions=%d releases=%d",
-			err, compatibility.canceled, store.completions, store.releases,
+			err, executor.canceled, store.completions, store.releases,
 		)
 	}
 }
@@ -327,7 +327,7 @@ func (store *handlerStore) ReleasePartition(context.Context, Claim) error {
 	return nil
 }
 
-type handlerCompatibility struct {
+type handlerExecutor struct {
 	delay               time.Duration
 	waitForCancellation bool
 	canceled            bool
@@ -341,7 +341,7 @@ type handlerCompatibility struct {
 	rowsWritten *int
 }
 
-func (executor *handlerCompatibility) ComputePartition(
+func (executor *handlerExecutor) ComputePartition(
 	ctx context.Context,
 	_ Run,
 	_ Partition,

@@ -14,7 +14,6 @@ from dev_health_ops.workers.job_routes import (
     WorkerJobRouteError,
     _locked_route_statement,
     resolve_worker_job_route,
-    route_requires_celery,
     route_requires_outbox,
 )
 
@@ -39,7 +38,14 @@ def _policy(route: str = "celery") -> tuple[MigrationJob, ...]:
     )
 
 
-def test_default_route_is_celery_and_does_not_stage_river(engine) -> None:
+def test_celery_rollback_route_is_rejected_as_drift(engine) -> None:
+    """CHAOS-5320: the Celery dispatch plane is gone fleet-wide (CHAOS-4054
+    step 4; prod Celery stopped 2026-08-19). A row still on the historical
+    ``celery`` rollback route is no longer a legal alternate to the checked-in
+    policy route -- it must raise the same as a missing/paused/drifted row,
+    since nothing would ever process work staged behind it (see
+    0125_promote_worker_job_routes_off_celery_rollback, which promotes every
+    checked-in kind's row off ``celery`` ahead of this being live)."""
     with Session(engine) as session, session.begin():
         session.add(
             WorkerJobRoute(
@@ -50,12 +56,11 @@ def test_default_route_is_celery_and_does_not_stage_river(engine) -> None:
         Session(engine) as session,
         patch(
             "dev_health_ops.workers.job_routes.load_migration_jobs",
-            return_value=_policy(),
+            return_value=_policy("river"),
         ),
     ):
-        route = resolve_worker_job_route(session, KIND)
-    assert route_requires_celery(route)
-    assert not route_requires_outbox(route)
+        with pytest.raises(WorkerJobRouteError):
+            resolve_worker_job_route(session, KIND)
 
 
 @pytest.mark.parametrize("transport", ("shadow", "river_canary", "river"))
@@ -77,7 +82,6 @@ def test_executable_route_selects_outbox_without_implicit_celery(
     ):
         route = resolve_worker_job_route(session, KIND)
     assert route_requires_outbox(route)
-    assert route_requires_celery(route) is (transport == "shadow")
 
 
 def test_missing_paused_and_drifted_routes_fail_closed(engine) -> None:

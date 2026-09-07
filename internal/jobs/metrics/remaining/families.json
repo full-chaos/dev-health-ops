@@ -12,7 +12,7 @@
       "replay": "generation_replace",
       "route_key": "metrics.remaining.complexity",
       "route": "river",
-      "rollback_route": "celery",
+      "rollback_route": "none",
       "historical_limitation": "Only persisted git_files and git_blame contents can be scanned; missing historical contents are skipped and max_files remains a hard bound.",
       "parity_state": "native_python_orchestrator_deleted",
       "port": "go"
@@ -27,7 +27,7 @@
       "replay": "append_latest_generation",
       "route_key": "metrics.remaining.dora",
       "route": "river",
-      "rollback_route": "celery",
+      "rollback_route": "none",
       "historical_limitation": "Only already-synced canonical deployments and incidents are eligible; no provider API reconstruction is performed.",
       "parity_state": "native_python_orchestrator_deleted",
       "port": "go"
@@ -42,7 +42,7 @@
       "replay": "append_latest_generation",
       "route_key": "metrics.remaining.release_impact",
       "route": "river",
-      "rollback_route": "celery",
+      "rollback_route": "none",
       "historical_limitation": "The existing seven-day late-data recomputation window and retained telemetry buckets define the recoverable history.",
       "parity_state": "native_python_orchestrator_deleted",
       "port": "go"
@@ -57,7 +57,7 @@
       "replay": "generation_replace",
       "route_key": "metrics.remaining.capacity",
       "route": "river",
-      "rollback_route": "celery",
+      "rollback_route": "none",
       "historical_limitation": "The configured throughput history window remains authoritative; deterministic replay additionally requires a persisted generation seed.",
       "parity_state": "native_python_orchestrator_deleted",
       "port": "go"
@@ -72,7 +72,7 @@
       "replay": "append_latest_generation",
       "route_key": "metrics.remaining.recommendations",
       "route": "river",
-      "rollback_route": "celery",
+      "rollback_route": "none",
       "historical_limitation": "Evaluation only reads finalized persisted daily metric partitions and preserves explicit non-fired tombstones.",
       "parity_state": "inventory_only",
       "port": "go"
@@ -87,7 +87,7 @@
       "replay": "completion_marker_generation",
       "route_key": "metrics.remaining.membership_backfill",
       "route": "river",
-      "rollback_route": "celery",
+      "rollback_route": "none",
       "historical_limitation": "The full current work graph is projected from existing persisted investments; components without a current persisted categorization are skipped and no LLM is invoked.",
       "parity_state": "inventory_only",
       "port": "go"

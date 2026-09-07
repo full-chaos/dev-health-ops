@@ -16,7 +16,6 @@ import (
 const maxResponseBytes = 4 * 1024
 
 type HTTPDispatcherConfig struct {
-	WebhookEndpoint       string
 	HeartbeatEndpoint     string
 	BearerToken           string
 	AllowInsecureInternal bool
@@ -26,12 +25,14 @@ type bridgeResponse struct {
 	Status string `json:"status"`
 }
 
-// HTTPDispatcher is the production bridge to the internal provider and email
-// services during coexistence. Only durable identities and bounded routing
-// metadata cross the boundary; the services reload authoritative rows.
+// HTTPDispatcher is the production bridge to the internal operational
+// services. Only bounded, non-identifying metadata crosses the boundary.
+//
+// It is heartbeat-only now: CHAOS-5320 deleted the webhook bridge and
+// CHAOS-5353 the billing one, so `system.heartbeat`'s telemetry POST is the
+// last call that still leaves this process for the Python API.
 type HTTPDispatcher struct {
 	client            *http.Client
-	webhookEndpoint   string
 	heartbeatEndpoint string
 	token             string
 }
@@ -39,12 +40,11 @@ type HTTPDispatcher struct {
 func NewHTTPDispatcher(client *http.Client, config HTTPDispatcherConfig) (*HTTPDispatcher, error) {
 	if client == nil || client.Timeout < 100*time.Millisecond || client.Timeout > 30*time.Second ||
 		strings.TrimSpace(config.BearerToken) == "" ||
-		!validInternalEndpoint(config.WebhookEndpoint, config.AllowInsecureInternal) ||
 		!validInternalEndpoint(config.HeartbeatEndpoint, config.AllowInsecureInternal) {
 		return nil, errors.New("operational HTTP dispatcher configuration is invalid")
 	}
 	return &HTTPDispatcher{
-		client: client, webhookEndpoint: config.WebhookEndpoint,
+		client:            client,
 		heartbeatEndpoint: config.HeartbeatEndpoint,
 		token:             config.BearerToken,
 	}, nil
@@ -54,14 +54,6 @@ func (dispatcher *HTTPDispatcher) DispatchHeartbeat(ctx context.Context, schedul
 	return dispatcher.post(ctx, dispatcher.heartbeatEndpoint, map[string]string{
 		"scheduled_for": scheduledFor.UTC().Format(time.RFC3339),
 	}, "ok")
-}
-
-func (dispatcher *HTTPDispatcher) DispatchWebhook(ctx context.Context, delivery WebhookDelivery) error {
-	return dispatcher.post(ctx, dispatcher.webhookEndpoint, map[string]string{
-		"delivery_id": delivery.ID,
-		"provider":    delivery.Provider,
-		"event_type":  delivery.EventType,
-	}, "success", "skipped")
 }
 
 func (dispatcher *HTTPDispatcher) post(

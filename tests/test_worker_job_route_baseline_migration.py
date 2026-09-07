@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 
 from dev_health_ops.workers.job_contracts import load_registry
 from dev_health_ops.workers.job_contracts.registry import load_migration_jobs
-from dev_health_ops.workers.job_routes import resolve_worker_job_route
+from dev_health_ops.workers.job_routes import (
+    WorkerJobRouteError,
+    resolve_worker_job_route,
+)
 
 
 def _create_pre_0064_schema(connection: sa.Connection) -> None:
@@ -105,11 +108,17 @@ def test_0064_keeps_its_historical_kinds_at_the_safe_celery_baseline() -> None:
             # pinned set, so removing or misspelling an entry here fails
             # loudly instead of silently narrowing what gets checked.
             assert retired_since_0064 <= set(migration._KINDS)
+            # CHAOS-5320: the Celery dispatch plane is gone fleet-wide, so
+            # resolve_worker_job_route now rejects a celery-transport row as
+            # drift instead of accepting it -- 0064's seed lands every kind on
+            # celery, and no kind's CURRENT checked-in policy route is celery
+            # anymore, so every one of these must raise, not resolve.
             with Session(bind=connection) as session:
                 for kind in migration._KINDS:
                     if kind in retired_since_0064:
                         continue
-                    assert resolve_worker_job_route(session, kind) == "celery"
+                    with pytest.raises(WorkerJobRouteError):
+                        resolve_worker_job_route(session, kind)
 
             _downgrade(migration, connection)
             assert connection.execute(

@@ -1201,6 +1201,46 @@ that does not declare them. Either way the fleet refuses to start, which is the
 safe direction — but it is a deploy-time cause with a startup-time symptom, and
 the two look unrelated.
 
+### A posture-manifest change is a lockstep migrate + worker deploy (CHAOS-5437)
+
+A change to any runtime role's declared posture manifest (`domainPosture` /
+`queuePosture` / `coordinatorPosture` in
+`internal/storage/postgres/domain_authorization.go`) is a stricter version of
+"two images have to move together" above: it is not enough for the *right*
+images to eventually run, they have to be *lockstep with the migrate that
+last ran*. On 2026-09-07, `#2361`/`165eed2e91` widened a grant and its
+matching manifest entry in one commit. `go-worker-migrate`
+(`cmd/dev-health-worker-migrate`, the `go-river-migrate` Compose service) ran
+from a current image and applied the wider grant; `go-worker-heavy`,
+`go-worker-ops`, `go-scheduler`, `go-reconciler`, and three stream runners
+were still running images built *before* that commit. Their compiled-in
+manifest declared the narrower grant, so `CheckRolePosture`'s excess-privilege
+catch-all refused every one of them — two crash-looped, five sat `not_ready`
+for hours (one, 9h) with **no crash loop and no alert**, because nothing
+asserted image freshness against the migrate that last ran.
+
+The fix has three parts:
+
+* `go-worker-migrate` stamps a sha256 digest of the manifest it just applied
+  (`postgres.PostureManifestDigest()`) into `worker_posture_manifest_applied`
+  on every run, keyed by digest so re-running with the same manifest just
+  bumps `applied_at`.
+* Every `go-*` binary recomputes the identical digest from its own
+  compiled-in posture at startup and gates readiness on
+  `posture_manifest_lockstep` (`internal/platform/postureguard`): if a
+  *different* digest is now the most recently applied one **and** this
+  binary's own digest was applied at an earlier time, it refuses with an
+  ERROR naming both digests and "rebuild/redeploy this image" instead of the
+  opaque `PostgreSQL readiness check failed` the incident produced — plus a
+  `dev_health_worker_posture_manifest_mismatch{service}` gauge. A binary whose
+  digest was never recorded as applied (it may simply be ahead of the last
+  migrate run) is not refused here; the existing `domain_postgres` missing-grant
+  check already covers that direction.
+* `deploy/go-workers/check_go_containers.sh` is the operator-facing check for
+  an already-running Compose project: it compares every `go-*` service
+  container's image ID (never a tag — see the "compare binaries, not tags"
+  lesson from the incident) and names the odd ones out.
+
 ### An `.env` edit can move a pool out from under a running worker
 
 Compose derives a config hash from the environment. Editing `.env` therefore

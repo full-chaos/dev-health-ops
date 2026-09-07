@@ -31,7 +31,6 @@ subsystem exists to tell apart (the same reasoning
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -43,8 +42,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dev_health_ops.models.go_api_registry import ProofRun, RoutingState
 
 from .go_api_registry import register_candidate_build
-
-logger = logging.getLogger(__name__)
 
 __all__ = [
     "ENABLEMENT_PROOF_STAGE",

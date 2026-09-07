@@ -34,6 +34,12 @@ func fetchRegistryPayload(t *testing.T, handler http.HandlerFunc) registryPayloa
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("GET /registry: Content-Type = %q, want application/json", got)
 	}
+	// The declared type must be honoured, not guessed at (GHAS Semgrep
+	// flagged the direct ResponseWriter write; the real vector for a JSON
+	// endpoint is sniffing, and this is what closes it).
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("GET /registry: X-Content-Type-Options = %q, want nosniff", got)
+	}
 	var payload registryPayload
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("GET /registry: body is not JSON: %v (body=%q)", err, rec.Body.String())

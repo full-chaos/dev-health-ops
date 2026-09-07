@@ -109,6 +109,13 @@ func newRegistryHandler(schemaDigest string, digestByOperation map[string]string
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		// This body is a marshalled struct of repo-derived digests -- never
+		// HTML and never caller-supplied -- so the XSS-escaping advice a
+		// scanner attaches to a direct ResponseWriter.Write does not apply
+		// here. What DOES apply is content sniffing: nosniff makes a browser
+		// honour the declared type instead of guessing one, which closes the
+		// vector without pretending this endpoint renders a template.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 	}

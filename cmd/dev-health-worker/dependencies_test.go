@@ -2503,6 +2503,55 @@ func TestUnrelatedStartupFaultDoesNotStealTheContractReason(t *testing.T) {
 	}
 }
 
+// TestOperationalDispatcherMisconfigurationReasonSurvivesComposition pins
+// CHAOS-5384's codex r1 F1: composeErr can already name its own specific
+// cause -- here, buildOperationalHTTPDispatcher's own
+// operational_http_dispatcher_misconfigured dependencyFailure -- but the
+// composition-failure branch used to flatten EVERY composeErr to the bare
+// "worker_family_composition_failed" reason regardless of what it actually
+// carried. An operator with a genuinely misconfigured operational HTTP
+// bridge URL for an enabled kind (billing_notification or heartbeat) saw
+// only the generic composition reason in the final structured error, never
+// the specific misconfiguration reason the intermediate log line already
+// had. Same preserve-don't-flatten shape CHAOS-5034 already applies to
+// startupErr just above this branch.
+func TestOperationalDispatcherMisconfigurationReasonSurvivesComposition(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return &fakeWorkerDatabase{}, nil
+	}
+	sources.buildOperational = func(
+		config.Config, workerDatabase, *jobruntime.Registry,
+		jobruntime.Observer, *slog.Logger, *river.Workers,
+	) (workerFamily, error) {
+		return workerFamily{}, dependencyUnavailable("operational_http_dispatcher_misconfigured")
+	}
+	sources.buildDaily = nil
+	sources.buildReports = nil
+	sources.buildProviderSync = nil
+	sources.buildSyncCoordinator = nil
+	sources.buildWorkgraph = nil
+
+	_, err := configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{Queues: []string{"heartbeat"}, RiverDatabaseSchema: "river"},
+		health.NewRegistry(time.Second),
+		sources,
+	)
+	var failure dependencyFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("configure error = %v, want a reason-carrying dependencyFailure", err)
+	}
+	if failure.DependencyReason() != "operational_http_dispatcher_misconfigured" {
+		t.Fatalf(
+			"reason = %q, want the family builder's own operational_http_dispatcher_misconfigured "+
+				"reason to survive, not a flattened worker_family_composition_failed",
+			failure.DependencyReason(),
+		)
+	}
+}
+
 // TestComposedWorkerWithSurvivingHandlerStillNamesTheShutdownViolation covers a
 // worker that composes with a surviving executable handler and a violated
 // shutdown contract, and asserts the specific reason survives.

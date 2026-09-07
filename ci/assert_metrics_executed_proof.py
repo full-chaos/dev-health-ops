@@ -239,8 +239,13 @@ TEAM_DAY_FAMILIES: dict[str, str] = {
 # scope_id against live_repo_ids, so this shape keeps the SAME dead-id oracle
 # family_readback has (CHAOS-4263) rather than trading it away for a looser
 # org-only check. Team-scope rows are deliberately NOT proven here: they are
-# still written by Python from run_daily_metrics_finalize, so counting them
-# would make this gate pass on the Python path alone.
+# written by a DIFFERENT family in a DIFFERENT scope (compounding_risk_team,
+# run-scoped, from the finalize handler), so counting them would let this
+# gate pass with the repo-scope partition path dead. The original reason was
+# that those rows came from Python's run_daily_metrics_finalize; CHAOS-5084
+# ported that writer to a native finalize executor and CHAOS-3092 (PR-A)
+# deleted the bridge entirely, but the scope pin stays for the reason above
+# -- proving compounding_risk_team is a separate gate, not this one.
 SCOPE_ID_REPO_FAMILIES: dict[str, str] = {
     "compounding_risk": "compounding_risk_daily",
 }
@@ -405,8 +410,9 @@ def scope_id_repo_readback(
 
     Two differences from family_readback, both load-bearing:
 
-    * ``scope = 'repo'`` is pinned. The table holds team-scope rows too, and
-      those are still written by Python from ``run_daily_metrics_finalize`` --
+    * ``scope = 'repo'`` is pinned. The table holds team-scope rows too,
+      written by the run-scoped ``compounding_risk_team`` finalize family
+      (native since CHAOS-5084) rather than by this partition-scope family --
       counting them would let this gate pass with the native repo path dead.
     * ``scope_id`` is a String, not a UUID, so the repo-id set is bound as
       ``Array(String)`` rather than ``Array(UUID)``.

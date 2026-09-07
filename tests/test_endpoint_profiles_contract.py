@@ -66,7 +66,7 @@ _GRAPHQL_KINDS = ("graphql_field", "graphql_mutation", "graphql_subscription")
 
 
 def test_inventory_row_count_matches_the_baseline():
-    """369 rows = 310 REST + 59 GraphQL. A different number here is a finding
+    """368 rows = 309 REST + 59 GraphQL. A different number here is a finding
     to reconcile, not an adjustment to make quietly.
 
     Was 361 (303 + 58) under source-text discovery. The move to enumerating
@@ -84,20 +84,33 @@ def test_inventory_row_count_matches_the_baseline():
     was a phantom row for a route CHAOS-5320's own earlier deletion had
     already removed from the served application -- the inventory row was
     never cleaned up until now.
-    = 369, -1 REST under CHAOS-5353: `POST /api/internal/worker-operational/billing`.
-    Unlike the webhook row above this one was NOT a phantom -- the route was
-    live and served right up to this change. It is removed because the route
-    itself is deleted: the Go BillingHandler now owns the completion fence,
-    the owner lookup, the seven renderings and the provider send, so nothing
-    posts to that bridge any more.
+    = 369, -1 REST under CHAOS-3092 (PR-A): `POST /internal/worker/daily-metrics/v1/execute`,
+    the daily-metrics Python compatibility bridge. Deleted WITH its row in the
+    same change, so this one was never a phantom -- the route and the row went
+    together, which is the shape this baseline is supposed to see.
+    = 368, -1 REST under CHAOS-5353: `POST /api/internal/worker-operational/billing`.
+    Unlike the webhook row above this one was NOT a phantom either -- the route
+    was live and served right up to this change. It is removed because the
+    route itself is deleted: the Go BillingHandler now owns the completion
+    fence, the owner lookup, the seven renderings and the provider send, so
+    nothing posts to that bridge any more.
+
+    MERGE HAZARD, recorded because it nearly landed silently: PR-A and
+    CHAOS-5353 each removed ONE row and each edited these asserts from 310/369
+    to 309/368 independently. The numeric lines were then textually IDENTICAL
+    on both sides, so git auto-merged them with no conflict and produced 309 --
+    a number neither branch's author intended for the merged tree, and one row
+    too many. Only the prose above conflicted, which is what surfaced it. When
+    two branches each decrement the same baseline, RECOUNT from the inventory
+    rather than trusting the merge.
     """
     inventory = checker.load_json(_INVENTORY_PATH)
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 309, len(rest)
+    assert len(rest) == 308, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 368, len(rows)
+    assert len(rows) == 367, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -120,11 +133,14 @@ def test_classification_summary_matches_the_baseline():
     # 339 + 3 subscriptions + 3 /graphql transport rows - 2 docstring phantoms
     # = 343, - 1 under CHAOS-5320: the deleted worker-operational/webhook
     # phantom row (see test_inventory_row_count_matches_the_baseline) was
-    # itself classified protected.
-    # = 342, - 1 under CHAOS-5353: the deleted worker-operational/billing row,
-    # also protected (bridge-token gated). Both deletions land here because
-    # every worker-operational bridge route is classified protected.
-    assert len(protected) == 341, len(protected)
+    # itself classified protected. - 1 under CHAOS-3092 (PR-A): the deleted
+    # daily-metrics bridge route was protected too (worker bridge bearer).
+    # = 341, - 1 under CHAOS-5353: the deleted worker-operational/billing row,
+    # also protected (bridge-token gated). Every worker bridge route is
+    # classified protected, so each such deletion lands here. See the merge
+    # hazard note in test_inventory_row_count_matches_the_baseline: both
+    # branches wrote 341 independently; the merged tree is 340.
+    assert len(protected) == 340, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

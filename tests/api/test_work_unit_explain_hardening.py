@@ -9,21 +9,17 @@ Covers:
 from __future__ import annotations
 
 import inspect
-import os
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-explain-hardening")
-os.environ.setdefault("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
+import pytest
+from fastapi.testclient import TestClient
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-from dev_health_ops.api.auth.router import get_current_user  # noqa: E402
-from dev_health_ops.api.main import app  # noqa: E402
-from dev_health_ops.api.services.auth import AuthenticatedUser  # noqa: E402
-from dev_health_ops.llm.errors import LLMAuthError, LLMRateLimitError  # noqa: E402
-from dev_health_ops.llm.providers.base import CompletionResult  # noqa: E402
-from tests.api.test_work_unit_explain import _sample_investment  # noqa: E402
+from dev_health_ops.api.auth.router import get_current_user
+from dev_health_ops.api.main import app
+from dev_health_ops.api.services.auth import AuthenticatedUser
+from dev_health_ops.llm.errors import LLMAuthError, LLMRateLimitError
+from dev_health_ops.llm.providers.base import CompletionResult
+from tests.api.test_work_unit_explain import _sample_investment
 
 # ---------------------------------------------------------------------------
 # Shared auth override
@@ -36,6 +32,20 @@ _FAKE_USER = AuthenticatedUser(
     role="member",
     is_superuser=False,
 )
+
+
+@pytest.fixture(autouse=True)
+def _live_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide backend secrets for this module's requests only.
+
+    Values are set per-test via monkeypatch (auto-reverted at teardown), never
+    at import time -- an import-time os.environ.setdefault here would leak
+    CLICKHOUSE_URI process-globally and activate every CLICKHOUSE_URI-gated
+    ``tests/**/*_live.py`` suite during collection (CHAOS-5350/ticket (z)).
+    """
+    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-for-explain-hardening")
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
 
 
 class _FailingProvider:

@@ -1,0 +1,18 @@
+{
+  "app_base_url": "https://app.example.test/",
+  "attributes": {
+    "days_remaining": 0,
+    "tier": "  Équipe  ",
+    "trial_end_date": "2026-10-01"
+  },
+  "case": "unicode",
+  "email_type": "trial_expiring",
+  "expected_html": "<!doctype html>\n<html lang=\"en\">\n  <body>\n    <h1>Your Équipe trial ends in 0 days</h1>\n    <p>Hi Björn Åberg-O'Neill,</p>\n    <p>Your Équipe trial for Élan Systèmes — München 日本支店 ends on 2026-10-01.</p>\n    <p>When your trial ends, you will lose access to advanced analytics dashboards, organization-wide collaboration insights, and priority support features.</p>\n    <p><a href=\"https://app.example.test/billing\">Add a payment method</a> to keep your Équipe access.</p>\n  </body>\n</html>\n",
+  "expected_subject": "Your Équipe trial ends in 0 days",
+  "expected_to_address": "bjorn@example.test",
+  "owner": {
+    "email": "bjorn@example.test",
+    "full_name": "Björn Åberg-O'Neill",
+    "org_name": "Élan Systèmes — München 日本支店"
+  }
+}

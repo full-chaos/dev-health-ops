@@ -520,12 +520,15 @@ async def run_daily_metrics_job(
         # daily/work_item_cycle_times for a daily partition.
         # `compute_work_item_metrics_daily` ITSELF is also deleted (from
         # compute_work_items.py) -- its only other caller,
-        # job_work_items.py's run_work_items_sync_job, is reachable but not a
-        # production writer: prod Celery has been stopped since 2026-08-19,
-        # so nothing in production dispatches it (R6). That call site is
-        # deleted in the same PR; run_work_items_sync_job itself stays for
-        # its other, unrelated work (compute_work_item_engine_destinations_
-        # daily) pending its own follow-up deletion ticket.
+        # job_work_items.py's run_work_items_sync_job, was reachable but not
+        # a production writer: prod Celery had been stopped since
+        # 2026-08-19, so nothing in production dispatched it (R6). That call
+        # site was deleted in the same PR; run_work_items_sync_job itself
+        # stayed for its other, unrelated work
+        # (compute_work_item_engine_destinations_daily) pending its own
+        # follow-up deletion ticket -- CHAOS-5351 later deleted both
+        # run_work_items_sync_job and compute_work_item_engine_destinations_
+        # daily outright, closing that ticket.
         #
         # CHAOS-5321/CHAOS-3092: work_item_attribution's daily compute is
         # ALSO fully deleted (was already not called here, see git history --
@@ -533,8 +536,9 @@ async def run_daily_metrics_job(
         # attributions` itself is now deleted too, for the same R6 reason as
         # work_item above: WorkItemAttributionExecutor (native Go) is the
         # only writer of work_item_team_attributions, and its remaining
-        # Python caller (run_work_items_sync_job) is unreachable in
-        # production since the 2026-08-19 Celery stop.
+        # Python caller (run_work_items_sync_job) was unreachable in
+        # production since the 2026-08-19 Celery stop, then deleted outright
+        # by CHAOS-5351.
         #
         # CHAOS-5323/CHAOS-3092: work_item_estimate's daily compute+write was
         # already deleted (its own compute function is gone too, see git
@@ -546,8 +550,9 @@ async def run_daily_metrics_job(
         # CHAOS-4278) is the only writer of work_item_state_durations_daily
         # for a daily partition now. `compute_work_item_state_durations_
         # daily` itself is deleted too, for the same R6 reason: its
-        # remaining Python caller (run_work_items_sync_job) is unreachable
-        # in production since the 2026-08-19 Celery stop.
+        # remaining Python caller (run_work_items_sync_job) was unreachable
+        # in production since the 2026-08-19 Celery stop, then deleted
+        # outright by CHAOS-5351.
 
         # CHAOS-4279: this job no longer calls compute_review_edges_daily
         # (src/dev_health_ops/metrics/reviews.py) or names "review_edges" in

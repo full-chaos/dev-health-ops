@@ -140,17 +140,20 @@ func TestJiraDerivedSurfacesMatchLivePythonProduction(t *testing.T) {
 		}, nil)
 }
 
-func TestJiraEngineDestinationsMatchLivePythonProduction(t *testing.T) {
+// CHAOS-5351: frozen for the same reason as the three TestGitHubEngine*
+// tests in github_work_item_engine_destinations_oracle_test.go -- see that
+// file's comment. Captured 2026-09-07 with the same cases this test builds.
+func TestJiraEngineDestinationsMatchFrozenPythonProduction(t *testing.T) {
 	cases := jiraDerivedOracleCases(githubWorkItemEngineOracleCases())
-	compareRowsAgainstPythonOracle(t, "jira/work-items/issue-type-metrics", cases,
+	compareRowsAgainstFrozenOracle(t, "jira_work-items_issue-type-metrics", cases,
 		func(t *testing.T, input map[string]any) githubIssueTypeMetricsColumns {
 			return newGitHubIssueTypeMetricsColumns(jiraEngineOracleResult(t, input).IssueTypeMetricsDaily)
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "jira/work-items/investment-classifications", cases,
+	compareRowsAgainstFrozenOracle(t, "jira_work-items_investment-classifications", cases,
 		func(t *testing.T, input map[string]any) githubInvestmentClassificationColumns {
 			return newGitHubInvestmentClassificationColumns(jiraEngineOracleResult(t, input).InvestmentClassificationsDaily)
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "jira/work-items/investment-metrics", cases,
+	compareRowsAgainstFrozenOracle(t, "jira_work-items_investment-metrics", cases,
 		func(t *testing.T, input map[string]any) githubInvestmentMetricsColumns {
 			return newGitHubInvestmentMetricsColumns(jiraEngineOracleResult(t, input).InvestmentMetricsDaily)
 		}, nil)

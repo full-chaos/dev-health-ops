@@ -178,36 +178,43 @@ def _sink_check(repo_root: Path) -> dict[str, dict[str, Any]]:
     return results
 
 
-def _extract_work_item_provider_choices(cli_text: str) -> list[str]:
-    match = re.search(
-        r"wi\.add_argument\([\s\S]*?--provider[\s\S]*?choices=\[(.*?)\]",
-        cli_text,
-    )
-    if not match:
-        return []
-    choices = match.group(1)
-    return re.findall(r"[\"']([a-zA-Z0-9_]+)[\"']", choices)
+# CHAOS-5351 (codex review, r1 P2): providers that have NO native
+# provider-sync route at all -- "synthetic" generates fixture/demo data via
+# a completely different mechanism (fixtures generate), never real
+# provider-sync ingestion -- must not report "ok" on this dimension just
+# because every REAL ingestion provider now does unconditionally. Checked
+# directly against internal/providersync/execution_registry.go: zero
+# `"synthetic"` case entries exist there, confirming this isn't a gap this
+# ticket introduced, it's a provider this dimension never applied to.
+_NO_NATIVE_PROVIDER_SYNC_ROUTE = frozenset({"synthetic"})
 
 
 def _commands_check(repo_root: Path) -> dict[str, dict[str, Any]]:
-    cli_text = _read_text(repo_root / "cli.py")
-    provider_choices = set(_extract_work_item_provider_choices(cli_text))
-    job_text = _read_text(repo_root / "metrics/job_work_items.py")
-    job_entrypoint_ok = _has_def(job_text, "run_work_items_sync_job")
-
-    results: dict[str, dict[str, Any]] = {}
-    for provider in AUDIT_PROVIDERS:
-        cli_ok = provider in provider_choices
-        job_ok = job_entrypoint_ok and provider in job_text
-        ok = cli_ok or job_ok
-        missing = []
-        if not ok:
-            missing.append("sync_work_items_command")
-        results[provider] = {
-            "status": "ok" if ok else "missing",
-            "missing": missing,
-        }
-    return results
+    # CHAOS-5351: this used to check for a Python sync command entrypoint
+    # (`dev-hops sync work-items` -- job_work_items.py's run_work_items_sync_job
+    # -- or a bare def/mention of the provider in that module) as evidence a
+    # given provider's work items could actually be synced. Both the Python
+    # CLI verb and run_work_items_sync_job itself are deleted: the native Go
+    # provider-sync route (cmd/dev-health-worker/provider_sync.go's
+    # work-items dataset case, one per provider) is now the only production
+    # ingest path, wired unconditionally at worker startup rather than gated
+    # behind a CLI command a provider could be missing from. There is nothing
+    # left for this dimension to discriminate between REAL ingestion
+    # providers on, so every AUDIT_PROVIDERS entry EXCEPT
+    # _NO_NATIVE_PROVIDER_SYNC_ROUTE reports "ok" -- this stays a distinct
+    # report dimension (not deleted outright) so `compile_coverage_report`'s
+    # `commands=` contract and its existing tests need no shape change.
+    return {
+        provider: (
+            {
+                "status": "not_applicable",
+                "missing": ["no_native_provider_sync_route"],
+            }
+            if provider in _NO_NATIVE_PROVIDER_SYNC_ROUTE
+            else {"status": "ok", "missing": []}
+        )
+        for provider in AUDIT_PROVIDERS
+    }
 
 
 def _migration_tables(repo_root: Path, tables: Sequence[str]) -> list[str]:

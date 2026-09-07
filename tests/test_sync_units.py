@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import ast
-import inspect
 import json
 import logging
 import uuid
@@ -320,28 +318,17 @@ def _outbox_unit_keys(session):
     }
 
 
-def test_linear_backfill_retry_surface_contract_matches_work_item_write_fences():
-    from dev_health_ops.metrics import job_work_items
-    from dev_health_ops.workers import sync_units
-
-    surface_labels = set()
-    tree = ast.parse(inspect.getsource(job_work_items.run_work_items_sync_job))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name):
-            continue
-        if node.func.id != "_ensure_unit_lease_for_write":
-            continue
-        if not node.args:
-            continue
-        label = node.args[0]
-        if isinstance(label, ast.Constant) and isinstance(label.value, str):
-            surface_labels.add(label.value)
-
-    assert (
-        surface_labels == sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES
-    )
+# CHAOS-5351: test_linear_backfill_retry_surface_contract_matches_work_item_write_fences
+# used to live here, AST-parsing job_work_items.run_work_items_sync_job's own
+# source for _ensure_unit_lease_for_write(...) call labels and asserting they
+# matched sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES. It is
+# deleted along with run_work_items_sync_job -- there is no longer a Python
+# function body to parse. The write-surfaces registry contract itself is
+# unaffected (it is a proven-safe-retry property of the ClickHouse tables,
+# not of which process writes them) and stays covered by
+# test_linear_backfill_retry_enabled_in_production_surface_registry below and
+# the other tests in this file that reference
+# sync_units._LINEAR_BACKFILL_WORK_ITEM_IN_BAND_WRITE_SURFACES directly.
 
 
 def test_linear_backfill_retry_enabled_in_production_surface_registry():

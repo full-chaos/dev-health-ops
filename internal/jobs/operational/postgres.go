@@ -58,12 +58,16 @@ func (store *PostgresStore) LoadBilling(ctx context.Context, id string) (Billing
 		return BillingNotification{}, ErrDeliveryInvalid
 	}
 	var notification BillingNotification
+	// CHAOS-5353: `attributes` joins the projection now that Go renders the
+	// email itself. It is the same JSONB column Python read; nothing about
+	// the row's shape changed, only which runtime reads it.
+	var attributes []byte
 	err = store.pool.QueryRow(ctx, `
-		SELECT id::text, org_id::text, notification_type, idempotency_key
+		SELECT id::text, org_id::text, notification_type, idempotency_key, attributes
 		FROM public.billing_notifications WHERE id = $1`, parsed,
 	).Scan(
 		&notification.ID, &notification.OrganizationID,
-		&notification.NotificationType, &notification.IdempotencyKey,
+		&notification.NotificationType, &notification.IdempotencyKey, &attributes,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return BillingNotification{}, ErrDeliveryNotFound
@@ -71,5 +75,6 @@ func (store *PostgresStore) LoadBilling(ctx context.Context, id string) (Billing
 	if err != nil {
 		return BillingNotification{}, errors.New("billing store is unavailable")
 	}
+	notification.Attributes = append([]byte(nil), attributes...)
 	return notification, nil
 }

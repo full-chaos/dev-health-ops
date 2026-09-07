@@ -192,7 +192,22 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # NOT removed: the stream is still there and is still the handoff, so the
     # row is flipped dormant_go -> native_go and kept, matching how every
     # other natively-consumed stream surface in this file is carried.
-    # = 84, - 2 removed under CHAOS-5296: the external-ingest recompute Celery
+    # = 81, - 1 removed under CHAOS-5353: the celery_task:system_ops.py row
+    # for send_billing_notification. That task WAS the compute body behind
+    # operational.billing_notification's HTTP compatibility bridge, and its
+    # own deletion_evidence_requirement ("deleted once registry kind
+    # operational.billing_notification no longer routes through the HTTP
+    # compatibility bridge") is exactly what that PR satisfies: the Go
+    # BillingHandler now owns the completion fence, the owner-email lookup,
+    # all seven email renderings and the provider send, so the task, its
+    # fence helpers, billing_emails.py and the /billing route are all
+    # deleted outright -- no re-anchor target exists. The registry_kind row
+    # for the kind itself is KEPT and flipped python_compatibility ->
+    # native_go, the same treatment CHAOS-5320 gave
+    # operational.webhook_delivery's row and CHAOS-4105 gave the pagerduty
+    # stream surface.
+    # = 80.
+    # = 80, - 2 removed under CHAOS-5296: the external-ingest recompute Celery
     # bridge is replaced by a native Go consumer
     # (internal/externalrecompute/drain.go) in the same change that repoints
     # its writer at that consumer, so BOTH the
@@ -204,10 +219,15 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # calls schedule_or_coalesce, so that surface keeps a live producer and
     # belongs to CHAOS-4427, not here; it is only re-anchored after the file
     # shrank.
-    # = 79. CHAOS-4105 and CHAOS-5296 removed disjoint sets of rows and landed
-    # independently; this count is the union of both deletions, not either one
-    # alone.
-    assert inventory["row_count"] == 79
+    # = 78. THREE independent tickets removed disjoint sets of rows and landed
+    # separately: CHAOS-4105's -3 (pagerduty), CHAOS-5353's -1 (billing), and
+    # CHAOS-5296's -2 (external-ingest recompute). This figure is RECOUNTED
+    # from contracts/jobs/v1/transitional-inventory.json on the merged tree --
+    # len(rows) == 78 == 80 - 2 -- not derived from any one branch's number,
+    # which is the merge hazard tests/test_endpoint_profiles_contract.py's note
+    # describes: each branch's arithmetic is correct against its own base and
+    # wrong against the union.
+    assert inventory["row_count"] == 78
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():
@@ -338,30 +358,32 @@ def test_every_acceptance_test_id_points_at_a_real_test_function():
         )
 
 
-def test_billing_rows_point_at_the_billing_bridge_test():
+def test_billing_rows_point_at_a_real_billing_acceptance_test():
     """Regression guard for a Codex MED-3 finding: the billing dispatch rows
     previously pointed at unrelated tests (e.g. tests/test_sync_units.py for
-    the API call site row). The billing-related rows whose surface text
-    names "billing" must all point at the real operational-bridge billing
-    test.
+    the API call site row). Any row whose surface text names "billing" must
+    point at a test that actually exercises the billing surface.
 
-    CHAOS-5320: the round-3/round-4 API call site and cross-file forwarding
-    rows (billing/router.py's POST /webhooks/stripe, billing_edge.py's
-    forwarding POST /api/v1/billing/webhooks/stripe) are REMOVED, not
-    reduced to 2 by accident -- send_billing_notification.delay (the celery
-    dispatch site that made those two endpoints celery-relevant) is deleted,
-    so neither endpoint routes to any celery surface anymore. The 2 that
-    remain -- the celery_task itself (system_ops.py's send_billing_notification,
-    still live via worker_operational.py's internal-bridge .run() call, per
-    team-lead's ruling) and the registry_kind row -- both still need this
-    same acceptance test."""
+    CHAOS-5353: only the registry_kind row survives. The celery_task row for
+    send_billing_notification is REMOVED, not reduced to 1 by accident --
+    the task, its fence helpers, billing_emails.py and the
+    /api/internal/worker-operational/billing route are all deleted, so no
+    Python billing surface remains to inventory. The acceptance test moves
+    with it: the old bridge test asserted the durable reference crossing the
+    HTTP boundary, which no longer happens at all, so the row now points at
+    the test proving that route is gone rather than merely unused.
+    """
     inventory = checker.load_inventory(_INVENTORY_PATH)
     billing_rows = [r for r in inventory["rows"] if "billing" in r["surface"].lower()]
-    assert len(billing_rows) == 2, billing_rows
+    assert len(billing_rows) == 1, billing_rows
+    assert billing_rows[0]["class"] == "registry_kind", billing_rows[0]
+    assert billing_rows[0]["current_implementation_state"] == "native_go", billing_rows[
+        0
+    ]
     for row in billing_rows:
         assert row["acceptance_test_id"] == (
             "tests/api/test_worker_operational_bridge.py"
-            "::test_internal_bridge_passes_only_durable_billing_reference"
+            "::test_internal_bridge_no_longer_exposes_a_billing_route"
         ), row
 
 

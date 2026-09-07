@@ -1,0 +1,16 @@
+{
+  "app_base_url": "https://app.example.test/",
+  "attributes": {
+    "tier": "Team"
+  },
+  "case": "ascii",
+  "email_type": "subscription_cancelled",
+  "expected_html": "<!doctype html>\n<html lang=\"en\">\n  <body>\n    <h1>Subscription Cancelled</h1>\n    <p>Hi Dana Reed,</p>\n    <p>Northwind Analytics subscription (Team plan) has been cancelled. Access reverts to Community tier.</p>\n  </body>\n</html>\n",
+  "expected_subject": "Subscription cancelled",
+  "expected_to_address": "owner@example.test",
+  "owner": {
+    "email": "owner@example.test",
+    "full_name": "Dana Reed",
+    "org_name": "Northwind Analytics"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "app_base_url": "https://app.example.test/",
+  "attributes": {
+    "amount_cents": 123456,
+    "currency": "eur",
+    "invoice_url": "https://invoice.example.test/in_é"
+  },
+  "case": "unicode",
+  "email_type": "invoice_receipt",
+  "expected_html": "<!doctype html>\n<html lang=\"en\">\n  <body>\n    <h1>Invoice for Élan Systèmes — München 日本支店</h1>\n    <p>Hi Björn Åberg-O'Neill,</p>\n    <p>Your invoice for Élan Systèmes — München 日本支店 — 1234.56 EUR has been paid.</p>\n    <p>View it here: https://invoice.example.test/in_é</p>\n  </body>\n</html>\n",
+  "expected_subject": "Invoice receipt",
+  "expected_to_address": "bjorn@example.test",
+  "owner": {
+    "email": "bjorn@example.test",
+    "full_name": "Björn Åberg-O'Neill",
+    "org_name": "Élan Systèmes — München 日本支店"
+  }
+}

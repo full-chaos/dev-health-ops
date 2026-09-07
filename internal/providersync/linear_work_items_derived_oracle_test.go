@@ -79,19 +79,22 @@ func TestLinearWorkItemMetricTripletMatchesLivePythonProduction(t *testing.T) {
 		}, nil)
 }
 
-func TestLinearWorkItemEngineDestinationsMatchLivePythonProduction(t *testing.T) {
+// CHAOS-5351: frozen for the same reason as the three TestGitHubEngine*
+// tests in github_work_item_engine_destinations_oracle_test.go -- see that
+// file's comment. Captured 2026-09-07 with the same cases this test builds.
+func TestLinearWorkItemEngineDestinationsMatchFrozenPythonProduction(t *testing.T) {
 	cases := linearizeWorkItemOracleCases(githubDerivedOracleCases())
-	compareRowsAgainstPythonOracle(t, "linear/work-items/issue-type-metrics", cases,
+	compareRowsAgainstFrozenOracle(t, "linear_work-items_issue-type-metrics", cases,
 		func(t *testing.T, input map[string]any) githubIssueTypeMetricsColumns {
 			issueTypes, _, _ := buildGitHubWorkItemEngineOracleRows(t, input)
 			return newGitHubIssueTypeMetricsColumns(issueTypes)
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "linear/work-items/investment-classifications", cases,
+	compareRowsAgainstFrozenOracle(t, "linear_work-items_investment-classifications", cases,
 		func(t *testing.T, input map[string]any) githubInvestmentClassificationColumns {
 			_, classifications, _ := buildGitHubWorkItemEngineOracleRows(t, input)
 			return newGitHubInvestmentClassificationColumns(classifications)
 		}, nil)
-	compareRowsAgainstPythonOracle(t, "linear/work-items/investment-metrics", cases,
+	compareRowsAgainstFrozenOracle(t, "linear_work-items_investment-metrics", cases,
 		func(t *testing.T, input map[string]any) githubInvestmentMetricsColumns {
 			_, _, metrics := buildGitHubWorkItemEngineOracleRows(t, input)
 			return newGitHubInvestmentMetricsColumns(metrics)

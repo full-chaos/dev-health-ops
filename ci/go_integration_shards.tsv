@@ -136,11 +136,24 @@
 # every other entry in this file -- re-time if a faster reference becomes
 # available, and re-time regardless if either integration test file gains
 # more tests.
+# cmd/query-api (CHAOS-5349): weight raised 15 -> 110. The package gained
+# capacity_forecast_seeded_integration_test.go, FOUR Testcontainers-backed
+# tests that each take a fresh ClickHouse container AND apply the real
+# migration chain via chschema.Apply -- the same container-plus-migrations
+# shape as internal/testsupport/chschema and internal/jobs/workgraph/edges
+# above, so the weight scales with TEST COUNT, not with assertions.
+# MEASURED DIRECTLY on bigboy (arm64 compute host, not a local run needing
+# the 2x scale-up other entries apply):
+# `go test -tags=integration -count=1 -run TestCapacityForecast ./cmd/query-api/`
+# reported 106.763s package time for the four new tests. Rounded up to 110
+# for headroom, and the pre-existing route/readyz integration tests in this
+# package are inside that number since the run compiled and linked the whole
+# package. Re-time it if this file gains tests.
 shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
 cmd/dev-health-workerctl	13
-cmd/query-api	15
+cmd/query-api	110
 cmd/query-api/internal/analytics	22
 cmd/query-api/internal/hotspots	26
 cmd/query-api/internal/investmentexplain	41

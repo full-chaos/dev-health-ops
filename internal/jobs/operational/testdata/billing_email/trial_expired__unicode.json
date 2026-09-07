@@ -1,0 +1,16 @@
+{
+  "app_base_url": "https://app.example.test/",
+  "attributes": {
+    "tier": "Entreprise ★"
+  },
+  "case": "unicode",
+  "email_type": "trial_expired",
+  "expected_html": "<!doctype html>\n<html lang=\"en\">\n  <body>\n    <h1>Your Entreprise ★ trial has ended</h1>\n    <p>Hi Björn Åberg-O'Neill,</p>\n    <p>Your Entreprise ★ trial for Élan Systèmes — München 日本支店 has ended, and your organization has been moved back to the Community tier.</p>\n    <p>You no longer have access to advanced analytics dashboards, organization-wide collaboration insights, and priority support features.</p>\n    <p><a href=\"https://app.example.test/billing\">Upgrade now</a> to restore your Entreprise ★ features.</p>\n  </body>\n</html>\n",
+  "expected_subject": "Your Entreprise ★ trial has ended",
+  "expected_to_address": "bjorn@example.test",
+  "owner": {
+    "email": "bjorn@example.test",
+    "full_name": "Björn Åberg-O'Neill",
+    "org_name": "Élan Systèmes — München 日本支店"
+  }
+}

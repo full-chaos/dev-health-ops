@@ -1,0 +1,18 @@
+{
+  "app_base_url": "https://app.example.test/",
+  "attributes": {
+    "amount_cents": 7,
+    "attempt_count": 3,
+    "currency": "gbp"
+  },
+  "case": "unicode",
+  "email_type": "payment_failed",
+  "expected_html": "<!doctype html>\n<html lang=\"en\">\n  <body>\n    <h1>Payment Issue</h1>\n    <p>Hi Björn Åberg-O'Neill,</p>\n    <p>Payment of 0.07 GBP failed for Élan Systèmes — München 日本支店. This is attempt 3. Please update your payment method.</p>\n  </body>\n</html>\n",
+  "expected_subject": "Invoice payment failed",
+  "expected_to_address": "bjorn@example.test",
+  "owner": {
+    "email": "bjorn@example.test",
+    "full_name": "Björn Åberg-O'Neill",
+    "org_name": "Élan Systèmes — München 日本支店"
+  }
+}

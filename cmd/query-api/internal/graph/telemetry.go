@@ -38,6 +38,12 @@ var (
 	workGraphArtifactsOutcomeCounter   = mustCounter("devhealth_query_api_work_graph_artifacts_outcome_total", "workGraphArtifacts resolver outcomes, by result")
 	analyticsCallCounter               = mustCounter("devhealth_query_api_analytics_calls_total", "analytics resolver invocations")
 	analyticsOutcomeCounter            = mustCounter("devhealth_query_api_analytics_outcome_total", "analytics resolver outcomes, by result")
+	capacityForecastCallCounter        = mustCounter("devhealth_query_api_capacity_forecast_calls_total", "capacityForecast resolver invocations")
+	capacityForecastOutcomeCounter     = mustCounter("devhealth_query_api_capacity_forecast_outcome_total", "capacityForecast resolver outcomes, by result")
+	capacityForecastsCallCounter       = mustCounter("devhealth_query_api_capacity_forecasts_calls_total", "capacityForecasts resolver invocations")
+	capacityForecastsOutcomeCounter    = mustCounter("devhealth_query_api_capacity_forecasts_outcome_total", "capacityForecasts resolver outcomes, by result")
+	throughputForecastCallCounter      = mustCounter("devhealth_query_api_throughput_forecast_calls_total", "throughputForecast resolver invocations")
+	throughputForecastOutcomeCounter   = mustCounter("devhealth_query_api_throughput_forecast_outcome_total", "throughputForecast resolver outcomes, by result")
 
 	tracer = otel.Tracer("github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph")
 )
@@ -320,4 +326,95 @@ func startAnalyticsSpan(ctx context.Context) (context.Context, func(outcome stri
 // "degraded" is not part of this vocabulary.
 func recordAnalyticsOutcome(outcome string) {
 	analyticsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startCapacityForecastSpan is startFeatureFlagsSpan's counterpart for the
+// capacityForecast resolver (CHAOS-5349) -- same "count and start the span
+// before the ClickHouse queries, finish only once real resolver work
+// completes" contract.
+//
+// This operation has a THIRD outcome the others do not: "empty". Python
+// returns null for a scope with no throughput history and for one with no
+// positive item target, and both are tolerated results rather than errors
+// (see the capacityforecast package's doc comment). Counting them as "ok"
+// would make a resolver that answers null for every request in an org
+// indistinguishable, in the metrics, from one that is working -- which is
+// the one question an operator actually asks about this field.
+func startCapacityForecastSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	capacityForecastCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.capacityForecast")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "capacityForecast resolver error")
+		}
+		span.End()
+		recordCapacityForecastOutcome(outcome)
+	}
+}
+
+// recordCapacityForecastOutcome increments the outcome counter. outcome is
+// one of "ok", "empty", "denied" or "error".
+//
+// "denied" is an authorization rejection, and it is counted because the span now
+// starts BEFORE the auth guard (CHAOS-5349 r1 P2). Without it a caller whose
+// envelope carries no org produced no span and no counter, making "called and
+// rejected" indistinguishable from "never called". "empty" is its own value for
+// the same reason -- see startCapacityForecastSpan.
+func recordCapacityForecastOutcome(outcome string) {
+	capacityForecastOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startCapacityForecastsSpan is startFeatureFlagsSpan's counterpart for the
+// capacityForecasts resolver (CHAOS-5349), the persisted-row connection.
+func startCapacityForecastsSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	capacityForecastsCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.capacityForecasts")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "capacityForecasts resolver error")
+		}
+		span.End()
+		recordCapacityForecastsOutcome(outcome)
+	}
+}
+
+// recordCapacityForecastsOutcome increments the outcome counter. outcome is
+// one of "ok", "empty", "denied" or "error". An empty CONNECTION is a
+// successful query that matched no rows, which four independent filters can
+// each cause, and separating it from "ok" is what makes "the filters are wrong"
+// visible without a log dive; "denied" is an authorization rejection, counted
+// because the span starts before the auth guard (CHAOS-5349 r1 P2).
+func recordCapacityForecastsOutcome(outcome string) {
+	capacityForecastsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startThroughputForecastSpan is startFeatureFlagsSpan's counterpart for the
+// throughputForecast resolver (CHAOS-5349).
+func startThroughputForecastSpan(ctx context.Context) (context.Context, func(outcome string)) {
+	throughputForecastCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.throughputForecast")
+	return spanCtx, func(outcome string) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "throughputForecast resolver error")
+		}
+		span.End()
+		recordThroughputForecastOutcome(outcome)
+	}
+}
+
+// recordThroughputForecastOutcome increments the outcome counter. outcome is
+// one of "ok", "empty", "denied" or "error". "denied" is an authorization
+// rejection, counted because the span starts before the auth guard
+// (CHAOS-5349 r1 P2).
+//
+// "empty" here does NOT mean a null response -- this resolver never returns
+// null for an empty scope, it returns a structured no-estimate payload
+// (forecastId "no-history"). It means that payload was the answer, which is
+// the distinction the null-vs-payload design exists to make and which would
+// be erased by counting it as "ok".
+func recordThroughputForecastOutcome(outcome string) {
+	throughputForecastOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }

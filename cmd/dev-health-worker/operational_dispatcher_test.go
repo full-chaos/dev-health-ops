@@ -52,9 +52,13 @@ func TestBuildOperationalHTTPDispatcher_WebhookOnlyConstructsNone_HelperContract
 // contracts/jobs/v1/registry.json puts billing_notification and
 // webhook_delivery on the SAME "webhooks" queue, so a real worker selecting
 // that queue always presents buildOperationalHTTPDispatcher with BOTH kinds
-// together, never webhook_delivery alone. A correctly configured bridge must
-// still construct a dispatcher in that shape.
-func TestBuildOperationalHTTPDispatcher_BillingAndWebhookTogetherConstructsOne(t *testing.T) {
+// together, never webhook_delivery alone. Since CHAOS-5353 NEITHER of those
+// two kinds routes through the HTTP bridge any more -- billing renders and
+// sends natively, and CHAOS-5320 deleted the webhook leg -- so this shape must
+// now construct NO dispatcher at all. That is the point of the lazy build: a
+// worker serving only natively-handled kinds cannot fail on a bridge URL it
+// never uses.
+func TestBuildOperationalHTTPDispatcher_BillingAndWebhookTogetherConstructsNone(t *testing.T) {
 	specs := []jobruntime.HandlerSpec{
 		{Kind: jobcontract.KindBillingNotification},
 		{Kind: jobcontract.KindWebhookDelivery},
@@ -68,16 +72,39 @@ func TestBuildOperationalHTTPDispatcher_BillingAndWebhookTogetherConstructsOne(t
 	if err != nil {
 		t.Fatalf("unexpected error = %v", err)
 	}
-	if dispatcher == nil {
-		t.Fatal("dispatcher = nil, want a constructed dispatcher for the real billing+webhook queue shape")
+	if dispatcher != nil {
+		t.Fatalf("dispatcher = %#v, want nil: neither billing nor webhook uses "+
+			"the HTTP bridge any more", dispatcher)
 	}
 }
 
-// An enabled billing kind still needs the HTTP bridge; an empty bridge URL
-// must fail fast with a bounded reason rather than default to an empty,
-// silently-invalid endpoint.
-func TestBuildOperationalHTTPDispatcher_BillingWithEmptyURLFails(t *testing.T) {
+// The counterpart to the above, and the reason it is safe: a billing-only
+// worker must no longer fail on an EMPTY bridge URL, because it never touches
+// the bridge. Before CHAOS-5353 this same configuration was required to fail
+// fast; now requiring it would make a natively-served worker refuse to start
+// over a setting it does not use.
+func TestBuildOperationalHTTPDispatcher_BillingWithEmptyURLNoLongerFails(t *testing.T) {
 	specs := []jobruntime.HandlerSpec{{Kind: jobcontract.KindBillingNotification}}
+	cfg := config.Config{
+		OperationalBridgeURL:     "",
+		OperationalBridgeToken:   secrets.NewValue("test-token"),
+		OperationalBridgeTimeout: time.Second,
+	}
+	dispatcher, err := buildOperationalHTTPDispatcher(cfg, specs, discardLogger())
+	if err != nil {
+		t.Fatalf("a billing-only worker must not fail on an unused bridge URL, got %v", err)
+	}
+	if dispatcher != nil {
+		t.Fatalf("dispatcher = %#v, want nil", dispatcher)
+	}
+}
+
+// The failure path CHAOS-5384 added is still live, just anchored on the kind
+// that genuinely still needs the bridge: an enabled HEARTBEAT with an empty
+// bridge URL must fail fast with a bounded reason rather than default to an
+// empty, silently-invalid endpoint.
+func TestBuildOperationalHTTPDispatcher_HeartbeatWithEmptyURLFails(t *testing.T) {
+	specs := []jobruntime.HandlerSpec{{Kind: jobcontract.KindHeartbeat}}
 	cfg := config.Config{
 		OperationalBridgeURL:     "",
 		OperationalBridgeToken:   secrets.NewValue("test-token"),
@@ -85,7 +112,7 @@ func TestBuildOperationalHTTPDispatcher_BillingWithEmptyURLFails(t *testing.T) {
 	}
 	dispatcher, err := buildOperationalHTTPDispatcher(cfg, specs, discardLogger())
 	if err == nil {
-		t.Fatal("expected an error for an enabled billing kind with an empty bridge URL")
+		t.Fatal("expected an error for an enabled heartbeat kind with an empty bridge URL")
 	}
 	if dispatcher != nil {
 		t.Fatalf("dispatcher = %#v, want nil on failure", dispatcher)

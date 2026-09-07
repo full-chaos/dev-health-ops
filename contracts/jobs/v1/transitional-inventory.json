@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 78,
+  "row_count": 77,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -287,36 +287,12 @@
       "notes": "registry kind sync.team_autoimport"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:89",
-      "surface": "run_investment_materialize",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 89
-      },
-      "queue_or_cadence": "metrics",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "investment.materialize"
-      },
-      "target_kind_id": "kind:investment.materialize",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
-      "deletion_evidence_requirement": "Deleted once registry kind `investment.materialize` no longer routes through the HTTP compatibility bridge.",
-      "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "registry kind investment.materialize; actual bridge is cmd/dev-health-worker/workgraph.go (gap 4.7)"
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:204",
+      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:94",
       "surface": "run_investment_materialize_chunk",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 204
+        "line": 94
       },
       "queue_or_cadence": "metrics",
       "dispatches": "self (chord header)",
@@ -335,12 +311,12 @@
       "notes": "registry kind investment.chunk retired under CHAOS-4438 (dead Go shell, zero producer) -- registry kind investment.chunk"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:352",
+      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:242",
       "surface": "finalize_investment_materialize_partitioned",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 352
+        "line": 242
       },
       "queue_or_cadence": "metrics",
       "dispatches": "self (chord callback)",
@@ -359,12 +335,12 @@
       "notes": "registry kind investment.finalize retired under CHAOS-4438 (dead Go shell, zero producer) -- registry kind investment.finalize"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:426",
+      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:316",
       "surface": "dispatch_investment_materialize_partitioned",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 426
+        "line": 316
       },
       "queue_or_cadence": "default",
       "dispatches": "run_investment_materialize_chunk (chord)",
@@ -383,12 +359,12 @@
       "notes": "registry kind investment.dispatch retired under CHAOS-4438 (dead Go shell, zero producer) -- registry kind investment.dispatch"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:588",
+      "id": "celery_task:src/dev_health_ops/workers/work_graph_tasks.py:478",
       "surface": "run_membership_backfill",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 588
+        "line": 478
       },
       "queue_or_cadence": "metrics",
       "dispatches": "self",
@@ -743,12 +719,12 @@
       "notes": "CHAOS-5254: daily-metrics dropped from this chain (Celery run_daily_metrics has zero live producer via this post-sync path -- workers/metrics_daily.py's task stays, per CHAOS-5296). CHAOS-4924: run_work_graph_build (build_sig) also dropped -- deleted outright; the Go worker's own post-sync writer (cmd/dev-health-worker/sync_dispatch.go:273-310) already creates workgraph.build requests independent of this chain."
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:577",
+      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:467",
       "surface": "chord(header,callback).apply_async",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 577
+        "line": 467
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_investment_materialize_chunk -> finalize_investment_materialize_partitioned",
@@ -767,12 +743,12 @@
       "notes": ""
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:561",
+      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:451",
       "surface": "celery_app.signature (chord builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 561
+        "line": 451
       },
       "queue_or_cadence": "n/a",
       "dispatches": "run_investment_materialize_chunk",
@@ -788,15 +764,15 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chord at work_graph_tasks.py:577"
+      "notes": "feeds chord at work_graph_tasks.py:467"
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:567",
+      "id": "call_site_literal:src/dev_health_ops/workers/work_graph_tasks.py:457",
       "surface": "celery_app.signature (chord builder)",
       "class": "call_site_literal",
       "source": {
         "file": "src/dev_health_ops/workers/work_graph_tasks.py",
-        "line": 567
+        "line": 457
       },
       "queue_or_cadence": "n/a",
       "dispatches": "finalize_investment_materialize_partitioned",
@@ -812,7 +788,7 @@
       "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "feeds chord at work_graph_tasks.py:577"
+      "notes": "feeds chord at work_graph_tasks.py:467"
     },
     {
       "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:218",
@@ -1137,7 +1113,7 @@
         "line": 12
       },
       "queue_or_cadence": "investment / heavy",
-      "dispatches": "run_investment_materialize",
+      "dispatches": "investment.NewNativeExecutor",
       "dispatch_mechanism": "job_registry_descriptor",
       "owner_role": "primary",
       "target_owner": {
@@ -1145,12 +1121,12 @@
         "value": "investment.materialize"
       },
       "target_kind_id": "kind:investment.materialize",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `investment.materialize` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
+      "compatibility_dependency": "None. CHAOS-3092 (leftovers) deleted the HTTP compatibility bridge outright: worker_workgraph.py's POST /execute route, its request/scope model, its subprocess runner (worker_workgraph_runner.py), and the plain (unchunked) Celery task it called (work_graph_tasks.py's run_investment_materialize). cmd/dev-health-worker/workgraph.go's buildNativeInvestmentExecutor wires investment.NewNativeExecutor (internal/jobs/investment/nativeexecutor.go) as the workgraph.CompatibilityExecutor implementation, calling it in-process -- no HTTP round trip. POST .../executions/{id}/repair is kept: the operator escape hatch for an ambiguous native-executor outcome (dev-health-workerctl workgraph repair).",
+      "deletion_evidence_requirement": "Satisfied. registry.json kind `investment.materialize` resolves to a concrete non-HTTP-bridge handler (buildNativeInvestmentExecutor -> investment.NewNativeExecutor); the compatibility runner import is removed from the Python API. Note: materialize_investments() itself (materialize.py:1169) is retained -- still reachable via the separate dispatch_investment_materialize_partitioned/run_investment_materialize_chunk chord (post_sync_dispatch.py, external_ingest/recompute.py); its removal is CHAOS-4767, not this row.",
       "acceptance_test_id": "tests/workers/test_work_graph_river_contracts.py",
-      "notes": "handler_owner metadata drift | Orchestrator resolution: real current executor is cmd/dev-health-worker/workgraph.go (HTTP compatibility bridge), not internal/jobs/investment; registry.json handler_owner metadata is stale (gap 4.7, fix owned by CUT-13)."
+      "notes": "gap 4.7 resolved by this change: registry.json's handler_owner (internal/jobs/investment) now matches the real executor exactly, with no HTTP compatibility bridge left to describe."
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:44",

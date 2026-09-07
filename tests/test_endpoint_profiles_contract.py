@@ -97,22 +97,29 @@ def test_inventory_row_count_matches_the_baseline():
     billing`, deleted the same way again. The Go BillingHandler owns the
     completion fence, the owner lookup, the seven renderings and the provider
     send, so nothing posts to that bridge any more.
-    = 366. All three decrements are real and INDEPENDENT: three different
-    worker-bridge routes, removed by three different changes that landed as
-    two merges. No one -1 subsumes another, and a merge keeping only one or
-    two of them silently re-admits a deleted route to the baseline.
+    = 366, -1 REST under CHAOS-3092 (leftovers): `POST /internal/worker/
+    workgraph/v1/execute`, the workgraph Python compatibility bridge
+    investment.materialize used -- deleted WITH its row in the same change
+    (investment.materialize's River kind is entirely native,
+    cmd/dev-health-worker/workgraph.go's buildNativeInvestmentExecutor; POST
+    .../executions/{id}/repair is kept, re-anchored to its new line, since it
+    stays live).
+    = 365. All four decrements are real and INDEPENDENT: four different
+    worker-bridge routes, removed by four different changes landing across
+    three merges. No one -1 subsumes another, and a merge keeping only some
+    of them silently re-admits a deleted route to the baseline.
 
-    MERGE HAZARD, recorded because it has now nearly landed silently TWICE.
-    Each of the three changes edited these same asserts, and each was correct
-    in isolation. Twice the resulting numeric lines were textually IDENTICAL
-    on both sides of a merge -- once because two branches subtracted 1 from
-    the same starting value, and once because two branches reached the same
-    figure from different starting values by coincidence. Identical lines do
-    not conflict, so git merged them silently and produced a count that was
-    right for neither branch and one route too high. Both times only the
-    surrounding PROSE conflicted, which is the sole reason it was noticed;
-    had the wording happened to match, a wrong baseline would have shipped
-    green. **When two branches each touch a counted baseline, RECOUNT from
+    MERGE HAZARD, recorded because it has now nearly landed silently more
+    than once. Each change edited these same asserts, and each was correct
+    in isolation. More than once the resulting numeric lines were textually
+    IDENTICAL on both sides of a merge -- because two branches subtracted 1
+    from the same starting value, or reached the same figure from different
+    starting values by coincidence. Identical lines do not conflict, so git
+    merged them silently and produced a count that was right for neither
+    branch. Every time, only the surrounding PROSE conflicted, which is the
+    sole reason it was noticed; had the wording happened to match, a wrong
+    baseline would have shipped green. **When two branches each touch a
+    counted baseline, RECOUNT from
     contracts/auth/v1/endpoint-profiles.ops.json. Never subtract from either
     side's number, and never trust a clean merge here -- the absence of a
     conflict marker on these lines is not evidence that they are right.**
@@ -121,9 +128,9 @@ def test_inventory_row_count_matches_the_baseline():
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 307, len(rest)
+    assert len(rest) == 306, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 366, len(rows)
+    assert len(rows) == 365, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -150,12 +157,13 @@ def test_classification_summary_matches_the_baseline():
     # daily-metrics bridge route was protected too (worker bridge bearer).
     # - 1 under CHAOS-4105: so was the deleted worker-operational/pagerduty
     # row, and - 1 under CHAOS-5353 for the deleted worker-operational/billing
-    # row. Every worker-bridge route is classified protected, so each such
-    # deletion lands here too. All three decrements apply; see the merge
-    # hazard note in test_inventory_row_count_matches_the_baseline for why
-    # none of them subsumes another, and why this number is recounted rather
-    # than derived.
-    assert len(protected) == 339, len(protected)
+    # row. - 1 under CHAOS-3092 (leftovers): so was the deleted workgraph
+    # POST /execute route. Every worker-bridge route is classified protected,
+    # so each such deletion lands here too. All four decrements apply; see
+    # the merge hazard note in test_inventory_row_count_matches_the_baseline
+    # for why none of them subsumes another, and why this number is
+    # recounted rather than derived.
+    assert len(protected) == 338, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

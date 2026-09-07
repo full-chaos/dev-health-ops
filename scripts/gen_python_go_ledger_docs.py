@@ -127,7 +127,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "tables": "ClickHouse `work_unit_investments`, `work_unit_repo_effort`, `work_unit_investment_quotes` (`src/dev_health_ops/metrics/sinks/clickhouse/investment.py:117-186`)",
         "evidence": "argued \u2014 code read; `rg` over `cmd/dev-health-worker/workgraph.go` and `internal/jobs/workgraph` finds no HTTP compatibility executor and no bridge POST for this kind",
         "state": "native",
-        "ticket": "n/a \u2014 native since CHAOS-4441/#2227; CHAOS-3092 (#2352) deleted the dead HTTP variant. The Python `materialize_investments()` compute still exists behind the Celery `work_graph_tasks.py` task (migration-state keeps `rollback_route=celery` for this kind), which is its own deletion ticket.",
+        "ticket": "n/a \u2014 native since CHAOS-4441/#2227; CHAOS-3092 (#2352) deleted the dead HTTP variant, and CHAOS-3092 (leftovers) deleted `worker_workgraph.py`'s POST /execute route plus the plain (unchunked) Celery task it called (`run_investment_materialize`) -- migration-state.json's `rollback_route` for this kind is now `none`, not `celery`. The Python `materialize_investments()` compute itself is retained: still reachable via the separate `dispatch_investment_materialize_partitioned` -> `run_investment_materialize_chunk` chord (`post_sync_dispatch.py`, `external_ingest/recompute.py`); CHAOS-4767 owns its removal.",
     },
     # --- metrics daily family ---------------------------------------------
     "metrics.daily_dispatch": {
@@ -340,7 +340,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "tables": "`public.work_graph_execution_requests`, `public.work_graph_execution_ledger` (Go); LLM categorization outcome + evidence (Python)",
         "evidence": "argued \u2014 code read; `buildHandler` has no CompatibilityExecutor FIELD, so a bridge call cannot be reintroduced without changing the type",
         "state": "native",
-        "ticket": "n/a \u2014 native since CHAOS-4924; CHAOS-3092 (#2352) deleted the dead workgraph HTTP executor and `ExecutorPythonCompatibility`. `worker_workgraph.py`'s `/execute` route survives with no Go caller left for this kind -- its own deletion ticket.",
+        "ticket": "n/a \u2014 native since CHAOS-4924; CHAOS-3092 (#2352) deleted the dead workgraph HTTP executor and `ExecutorPythonCompatibility`. `worker_workgraph.py`'s POST /execute route (this kind never actually reached it -- see investment.materialize's own ticket note) was itself deleted under CHAOS-3092 (leftovers); no compatibility route remains in this file at all.",
     },
 }
 
@@ -568,7 +568,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "work_graph_tasks.py": {
         "category": "a",
-        "evidence": "imported inline worker_workgraph.py:147, dispatched by worker_workgraph_router routes",
+        "evidence": "CHAOS-3092 (leftovers) deleted worker_workgraph.py's inline import of this module along with the plain run_investment_materialize task it called -- the module stays live via tasks.py's top-level import and the dispatch_investment_materialize_partitioned/run_investment_materialize_chunk chord, dispatched from post_sync_dispatch.py and external_ingest/recompute.py",
         "ticket": "n/a",
     },
 }

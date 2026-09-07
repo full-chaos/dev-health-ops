@@ -15,10 +15,14 @@ def test_every_current_work_graph_and_investment_entrypoint_has_one_river_target
     # the Go worker already creates `workgraph.build` requests after a sync
     # independent of any Celery entrypoint
     # (`cmd/dev-health-worker/sync_dispatch.go:273-310`'s
-    # `workGraphPostSyncWriter.StartRequestTx`).
-    assert RIVER_CONTRACT_TARGETS == {
-        "run_investment_materialize": "investment.materialize",
-    }
+    # `workGraphPostSyncWriter.StartRequestTx`). `run_investment_materialize`
+    # (the plain, unchunked task) was REMOVED under CHAOS-3092 (leftovers):
+    # it was only ever called by worker_workgraph.py's now-deleted POST
+    # /execute route, and investment.materialize's River kind is entirely
+    # native (cmd/dev-health-worker/workgraph.go's
+    # buildNativeInvestmentExecutor) -- no Celery-only entrypoint remains to
+    # claim a River target, so the map is empty.
+    assert RIVER_CONTRACT_TARGETS == {}
     registry = load_registry()
     assert {contract.kind for contract in registry.contracts}.issuperset(
         RIVER_CONTRACT_TARGETS.values()

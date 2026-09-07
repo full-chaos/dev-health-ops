@@ -21,10 +21,15 @@ logger = logging.getLogger(__name__)
 # future River target.
 #
 # CHAOS-4438 removed dispatch_investment_materialize_partitioned/
-# run_investment_materialize_chunk/finalize_investment_materialize_partitioned:
-RIVER_CONTRACT_TARGETS = {
-    "run_investment_materialize": "investment.materialize",
-}
+# run_investment_materialize_chunk/finalize_investment_materialize_partitioned.
+# CHAOS-3092 (leftovers) removed run_investment_materialize itself: it was
+# the plain (unchunked) Celery task the now-deleted worker_workgraph.py
+# POST /execute route called to run investment.materialize's compute --
+# investment.materialize's River kind is entirely native
+# (cmd/dev-health-worker/workgraph.go's buildNativeInvestmentExecutor), so
+# nothing dispatches this task any more. This map is empty until a future
+# kind needs it again.
+RIVER_CONTRACT_TARGETS: dict[str, str] = {}
 
 
 def _llm_concurrency(value: object | None = None) -> int:
@@ -84,121 +89,6 @@ def _investment_chunk_scope_id(run_id: str, chunk_index: int) -> uuid.UUID:
     return uuid.uuid5(
         uuid.NAMESPACE_URL, f"dev-health:investment:{run_id}:{chunk_index}"
     )
-
-
-@celery_app.task(
-    bind=True,
-    max_retries=2,
-    queue="metrics",
-    name="dev_health_ops.workers.tasks.run_investment_materialize",
-)
-def run_investment_materialize(
-    self,
-    db_url: str | None = None,
-    from_date: str | None = None,
-    to_date: str | None = None,
-    window_days: int = 30,
-    repo_ids: list[str] | None = None,
-    team_ids: list[str] | None = None,
-    llm_provider: str = "auto",
-    llm_model: str | None = None,
-    llm_concurrency: int | None = None,
-    force: bool = False,
-    org_id: str = "",
-    allow_unscoped: bool = False,
-    llm_batch_mode: str | None = None,
-    llm_batch_min_items: int | None = None,
-    llm_batch_poll_interval_seconds: float | None = None,
-    llm_batch_timeout_seconds: float | None = None,
-) -> dict:
-    """Materialize investment distributions from work graph.
-
-    Args:
-        db_url: Database connection string
-        from_date: Start date (ISO format)
-        to_date: End date (ISO format)
-        window_days: Days window for default date range
-        repo_ids: Optional list of repository IDs to filter
-        team_ids: Optional list of team IDs to filter
-        llm_provider: LLM provider (auto|openai|anthropic)
-        llm_model: Optional specific LLM model
-        llm_concurrency: Maximum concurrent LLM categorizations
-        force: Force recomputation even if cached
-        org_id: Organization scope for work-graph/investment queries
-        allow_unscoped: Allow real LLM materialization without an org scope
-
-    Returns:
-        dict with materialization status and stats
-    """
-
-    from dev_health_ops.llm import LLMAuthError, LLMError, resolve_provider_name
-    from dev_health_ops.llm.credentials import resolve_llm_credentials
-    from dev_health_ops.work_graph.investment.materialize import (
-        MaterializeConfig,
-        materialize_investments,
-        resolve_llm_batch_min_items,
-        resolve_llm_batch_mode,
-        resolve_llm_batch_poll_interval_seconds,
-        resolve_llm_batch_timeout_seconds,
-    )
-
-    db_url = db_url or _get_db_url()
-    parsed_from, parsed_to = _parse_materialize_window(
-        from_date=from_date,
-        to_date=to_date,
-        window_days=window_days,
-    )
-
-    logger.info(
-        "Starting investment materialize task: from=%s to=%s repos=%s teams=%s",
-        parsed_from.isoformat(),
-        parsed_to.isoformat(),
-        repo_ids or "all",
-        team_ids or "all",
-    )
-
-    try:
-        resolved_provider = resolve_provider_name(llm_provider, org_id=org_id or None)
-        llm_credentials = resolve_llm_credentials(
-            resolved_provider, org_id=org_id or None
-        )
-        config = MaterializeConfig(
-            dsn=db_url,
-            from_ts=parsed_from,
-            to_ts=parsed_to,
-            repo_ids=repo_ids,
-            llm_provider=resolved_provider,
-            persist_evidence_snippets=True,
-            llm_model=llm_model,
-            llm_api_key=llm_credentials.api_key,
-            llm_base_url=llm_credentials.base_url,
-            llm_concurrency=_llm_concurrency(llm_concurrency),
-            team_ids=team_ids,
-            force=force,
-            org_id=org_id or None,
-            allow_unscoped=allow_unscoped,
-            llm_batch_mode=resolve_llm_batch_mode(llm_batch_mode),
-            llm_batch_min_items=resolve_llm_batch_min_items(llm_batch_min_items),
-            llm_batch_poll_interval_seconds=resolve_llm_batch_poll_interval_seconds(
-                llm_batch_poll_interval_seconds
-            ),
-            llm_batch_timeout_seconds=resolve_llm_batch_timeout_seconds(
-                llm_batch_timeout_seconds
-            ),
-        )
-        stats = run_async(materialize_investments(config))
-        return {"status": "success", "stats": stats}
-    except LLMAuthError as exc:
-        logger.error("Investment materialize task failed with LLM auth error: %s", exc)
-        raise
-    except LLMError as exc:
-        logger.error(
-            "Investment materialize task failed with classified LLM error: %s", exc
-        )
-        raise
-    except Exception as exc:
-        logger.exception("Investment materialize task failed: %s", exc)
-        raise self.retry(exc=exc, countdown=120 * (2**self.request.retries))
 
 
 @celery_app.task(

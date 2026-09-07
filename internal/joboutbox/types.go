@@ -35,8 +35,8 @@ var (
 	// a live delivery is fine and logs it; the sync dispatcher treats it as
 	// the signal that recovery -- not another republish -- owns the row.
 	ErrDeliveryAlreadyTerminal = errors.New("worker outbox delivery is already terminal")
-	ErrRiverInsert          = errors.New("worker outbox River insert failed")
-	errInjectedCrash        = errors.New("injected worker outbox crash")
+	ErrRiverInsert             = errors.New("worker outbox River insert failed")
+	errInjectedCrash           = errors.New("injected worker outbox crash")
 )
 
 const (

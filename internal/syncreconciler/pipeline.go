@@ -515,7 +515,12 @@ func (pipeline *MutationPipeline) Step(
 		// their own durable reason, so the line is a convenience; in shadow
 		// mode it is the only record that exists, which is why it is emitted
 		// on selection rather than on write.
-		if sweepErr == nil && sweepResult.Candidates > 0 {
+		// A pass that selected nothing but deferred rows is NOT a quiet pass:
+		// it means joboutbox.StrandRepair is actively holding units this sweep
+		// would otherwise destroy, and an operator reading only `candidates`
+		// would see a zero and conclude the strand was gone. Logged on either
+		// non-zero, so the deferral is visible on its own.
+		if sweepErr == nil && (sweepResult.Candidates > 0 || sweepResult.DeferredToRepair > 0) {
 			slog.Warn(
 				"syncreconciler.unreclaimable_sweep_selected",
 				"mode", string(sweepResult.Mode),
@@ -531,6 +536,10 @@ func (pipeline *MutationPipeline) Step(
 				// and looking at one.
 				"unit_id_sample", sampleIdentifiers(sweepResult.UnitIDs),
 				"unit_id_sample_truncated", len(sweepResult.UnitIDs) > sweepReportSample,
+				// Units this pass refused to select because the outbox
+				// delivery budget is not spent and joboutbox.StrandRepair
+				// still owns them.
+				"deferred_to_repair", sweepResult.DeferredToRepair,
 			)
 		}
 		if sweepErr == nil {

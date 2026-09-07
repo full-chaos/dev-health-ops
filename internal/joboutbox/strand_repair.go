@@ -18,6 +18,12 @@ const (
 	strandRecoveryCode   = "daily_strand_rearmed"
 	strandRecoveryDetail = "terminal delivery rearmed while domain work was unfinished"
 
+	// providerUnitShapeName is the shape whose rearms are reported
+	// individually (ProviderUnitRearms) rather than only in aggregate. It is
+	// compared by value in stepShape, so it is a named constant rather than a
+	// string literal repeated at the registration site and the comparison.
+	providerUnitShapeName = "provider_unit"
+
 	dispositionRearm       = "rearm"
 	dispositionSkipJobLive = "skip_job_live"
 
@@ -82,6 +88,21 @@ type StrandRepairResult struct {
 	// check costs one bounded query and proves that claim rather than
 	// assuming it.
 	RetiredKindObservations []RetiredKindObservation
+	// ProviderUnitRearms names every sync.provider_unit row this pass rearmed,
+	// in addition to counting it in Rearmed.
+	//
+	// The other three shapes recover a daily-metrics or work-graph strand,
+	// where the domain row itself carries the whole story and the aggregate
+	// counter is enough. A provider-unit strand is different: it is the
+	// restore-window class CHAOS-4097 describes, where every durable trace of
+	// WHY the delivery died is River's fixed "dev-health job failed
+	// [retryable]" string (internal/jobruntime/errors.go safeError), so the
+	// unit id at the moment of recovery is the only handle an operator gets
+	// for correlating a rearm back to the incident that caused it. Reported
+	// as identities rather than logged here for the same reason
+	// RetiredKindObservations is: this package stays DB-only, and
+	// ReconcilerLoop is the layer that holds a logger.
+	ProviderUnitRearms []ProviderUnitRearm
 	// RetiredKindObservationsTruncated (r2 finding F3, P2, codex,
 	// CHAOS-4438): true when the observation query returned exactly
 	// retiredKindsObservationCap rows -- meaning there may be MORE retired-
@@ -121,6 +142,17 @@ type RetiredKindObservation struct {
 	OutboxID       string
 	JobKind        string
 	OrganizationID string
+}
+
+// ProviderUnitRearm is one sync.provider_unit outbox row this pass returned to
+// 'pending'. DedupeKey is 'sync.provider_unit:<unit id>', so it carries the
+// unit identity without this struct having to re-derive it; RiverJobID is the
+// dead delivery that was deleted in the same transaction, which is what ties
+// the log line to the discarded job an operator is looking at.
+type ProviderUnitRearm struct {
+	OutboxID   string
+	DedupeKey  string
+	RiverJobID int64
 }
 
 // StrandRepair rearms a daily-metrics or work-graph outbox row whose River
@@ -212,6 +244,7 @@ func NewStrandRepair(
 			newStrandShape("partition", repairStrandedPartitionSQL, jobTable),
 			newStrandShape("finalize", repairStrandedFinalizeSQL, jobTable),
 			newStrandShape("workgraph", repairStrandedWorkGraphSQL, jobTable),
+			newStrandShape(providerUnitShapeName, repairStrandedProviderUnitSQL, jobTable),
 		},
 	}, nil
 }
@@ -258,6 +291,10 @@ func (repair *StrandRepair) Step(
 		result.SkippedClaimLive += shapeResult.SkippedClaimLive
 		result.SkippedClaimSettled += shapeResult.SkippedClaimSettled
 		result.SkippedRaceLost += shapeResult.SkippedRaceLost
+		// Same rule as every counter above: these name rows whose rearm
+		// already COMMITTED in stepShape's phase-3 transaction, so a later
+		// shape's error must not erase them.
+		result.ProviderUnitRearms = append(result.ProviderUnitRearms, shapeResult.ProviderUnitRearms...)
 		if err != nil {
 			return result, err
 		}
@@ -395,15 +432,28 @@ func (repair *StrandRepair) stepShape(
 
 	// Phase 3 -- lock, re-prove, and rearm on the queue pool. Same
 	// reasoning: `result` already carries phases 1-2's real counts.
-	rearmed, lost, err := repair.rearm(ctx, shape.lock, now, limit, approved)
+	rearmedRows, lost, err := repair.rearm(ctx, shape.lock, now, limit, approved)
 	// confirmation pass 3 finding (P3, codex, CHAOS-4438): rearm can now
 	// return a non-zero `lost` alongside its own write-loop error (an
 	// observation of another transaction's already-committed race, preserved
 	// for the same reason as every other seam here) -- accumulate BEFORE
 	// checking err, not after, or this call site silently re-introduces the
 	// exact discard the callee was just fixed to avoid, one layer up.
-	result.Rearmed += rearmed
+	result.Rearmed += len(rearmedRows)
 	result.SkippedRaceLost += lost
+	// Identities are reported for the provider-unit shape only -- see
+	// StrandRepairResult.ProviderUnitRearms for why that shape and not the
+	// other three. Populated from the SAME slice Rearmed is counted from, so
+	// the two can never disagree about how many rows this pass recovered.
+	if shape.name == providerUnitShapeName {
+		for _, row := range rearmedRows {
+			result.ProviderUnitRearms = append(result.ProviderUnitRearms, ProviderUnitRearm{
+				OutboxID:   row.outboxID,
+				DedupeKey:  row.dedupeKey,
+				RiverJobID: row.riverJobID,
+			})
+		}
+	}
 	if err != nil {
 		return result, fmt.Errorf("shape %q: rearm: %w", shape.name, err)
 	}
@@ -510,7 +560,7 @@ func (repair *StrandRepair) rearm(
 	now time.Time,
 	limit int,
 	approved []strandCandidate,
-) (int, int, error) {
+) ([]strandCandidate, int, error) {
 	ids := make([]string, 0, len(approved))
 	jobIDs := make([]int64, 0, len(approved))
 	for _, candidate := range approved {
@@ -519,12 +569,12 @@ func (repair *StrandRepair) rearm(
 	}
 	tx, err := repair.beginQueue(ctx)
 	if err != nil || tx == nil {
-		return 0, 0, classifyStrandError(err)
+		return nil, 0, classifyStrandError(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	rows, err := tx.Query(ctx, query, now.UTC(), limit, ids, jobIDs)
 	if err != nil || rows == nil {
-		return 0, 0, classifyStrandError(err)
+		return nil, 0, classifyStrandError(err)
 	}
 	defer rows.Close()
 	locked := make([]strandCandidate, 0, len(approved))
@@ -533,7 +583,7 @@ func (repair *StrandRepair) rearm(
 		if err := rows.Scan(&found.outboxID, &found.riverJobID, &found.jobKind,
 			&found.dedupeKey, &found.disposition); err != nil ||
 			!uuidPattern.MatchString(found.outboxID) || found.riverJobID <= 0 {
-			return 0, 0, ErrUnavailable
+			return nil, 0, ErrUnavailable
 		}
 		// The locked re-read must still agree the delivery is terminal. A row
 		// that turned live between the survey and the lock is dropped -- and
@@ -544,7 +594,7 @@ func (repair *StrandRepair) rearm(
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, 0, classifyStrandError(rows.Err())
+		return nil, 0, classifyStrandError(rows.Err())
 	}
 	// Anything approved that did not come back rearmable lost a race: another
 	// replica took the row, or the delivery stopped being terminal.
@@ -563,17 +613,17 @@ func (repair *StrandRepair) rearm(
 	// a candidate at all next time), so discarding it here means it is
 	// permanently undercounted, not just delayed.
 	lost := len(approved) - len(locked)
-	rearmed := 0
+	rearmed := make([]strandCandidate, 0, len(locked))
 	for _, found := range locked {
 		deleted, err := repair.client.JobDeleteTx(ctx, tx, found.riverJobID)
 		if err != nil || deleted == nil || deleted.ID != found.riverJobID {
-			return 0, lost, classifyStrandError(err)
+			return nil, lost, classifyStrandError(err)
 		}
 		// The delete must have removed a terminal row. Re-checking the returned
 		// state closes the window between the predicate and the delete: a job
 		// that became runnable in between must not be removed.
 		if !terminalRiverState(deleted.State) {
-			return 0, lost, ErrUnavailable
+			return nil, lost, ErrUnavailable
 		}
 		command, err := tx.Exec(ctx, `
 			UPDATE public.worker_job_outbox
@@ -584,16 +634,16 @@ func (repair *StrandRepair) rearm(
 			WHERE id = $1 AND status = 'delivered'`,
 			found.outboxID, now.UTC(), strandRecoveryCode, strandRecoveryDetail)
 		if err != nil || command.RowsAffected() != 1 {
-			return 0, lost, classifyStrandError(err)
+			return nil, lost, classifyStrandError(err)
 		}
-		rearmed++
+		rearmed = append(rearmed, found)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		// Same reasoning: the commit failing rolls back every rearm this
-		// transaction attempted (rearmed correctly stays 0), but has no
+		// transaction attempted (rearmed correctly returns nil), but has no
 		// bearing on the OTHER transactions' already-committed changes that
 		// `lost` observed.
-		return 0, lost, classifyStrandError(err)
+		return nil, lost, classifyStrandError(err)
 	}
 	return rearmed, lost, nil
 }
@@ -672,12 +722,17 @@ const claimStateSQL = `
 // Every query selects on DOMAIN state and reports a disposition rather than
 // filtering, so a refusal is counted instead of vanishing.
 //
-// Safety here comes from the domain row, not from the job state. That is why
-// these accept a `completed` delivery where the provider-unit repair accepts
-// only `discarded`: CHAOS-3991 strands work by making a job report SUCCESS, so
-// requiring a failed-looking job would miss every row this repair exists for.
-// The authoritative domain row is what proves the work never finished, and no
-// rearm happens without it.
+// Safety in the three DAILY/WORK-GRAPH shapes below comes from the domain row,
+// not from the job state. That is why they accept a `completed` delivery where
+// both provider-unit repairs accept only `discarded`/`cancelled`: CHAOS-3991
+// strands work by making a job report SUCCESS, so requiring a failed-looking
+// job would miss every row those shapes exist for. The authoritative domain row
+// is what proves the work never finished, and no rearm happens without it.
+//
+// repairStrandedProviderUnitSQL (further down) deliberately does NOT inherit
+// that: a provider unit's domain row cannot distinguish "the handler ACKed
+// without finishing" from "the handler never ran", so a completed delivery is
+// left to the SyncRunUnit CAS. See that query's own comment.
 //
 // Only TERMINAL River deliveries are rearmed. A job River may still rescue is
 // non-terminal by definition, so the stale-but-not-yet-rescuable window is
@@ -891,6 +946,130 @@ const repairStrandedWorkGraphSQL = `
 				AND request.lease_expires_at IS NULL
 			)
 		)
+		%s
+	ORDER BY outbox.delivered_at, outbox.id
+	%s
+	LIMIT $2::int
+`
+
+// The provider-unit shape recovers the strand lane-sync-diag measured on
+// sync run 115e6246: a delivered outbox row whose River delivery went
+// TERMINAL while the unit sat 'dispatching' with no lease and no attempt, so
+// nothing in the system could reach it again. The concrete instance was a
+// Postgres restore -- five River attempts burned inside a 77-second window 16
+// minutes after the restore, all five recorded as the fixed safeError string
+// "dev-health job failed [retryable]" -- but the shape is general: any
+// transport-side death that spends River's budget before the handler ever
+// claims the unit lands here.
+//
+// # Why the dispatcher's own redispatch does not already fix this
+//
+// internal/syncdispatchruntime/claim_units.go re-claims the stale
+// 'dispatching' unit every countdown and republishes it, and
+// internal/joboutbox/producer.go's ON CONFLICT DO NOTHING then finds the
+// existing row, agrees on kind/version/payload_hash, and returns nil --
+// without looking at `status`. The row is 'delivered', which the relay's claim
+// SQL (repository.go) will never pick up again, so each republish is a
+// no-op reported as a success. Production reached 624 of them on one run.
+// Rearming the row to 'pending' is the only thing that puts a fresh,
+// executable delivery in front of the unit.
+//
+// # Disjointness, which is a correctness requirement here and not a nicety
+//
+// THREE paths can act on a provider-unit outbox row, and they must not
+// overlap, because two of them RECOVER work and one DESTROYS it:
+//
+//  1. internal/joboutbox.TerminalDeliveryRepair -- River's unhandled-kind
+//     rescue path. Requires state 'discarded' AND `attempt < max_attempts`
+//     AND the last River error to be the literal rescue sentinel.
+//  2. THIS shape -- the transport-death path. Requires 'cancelled', or
+//     'discarded' with River's budget SPENT (`attempt >= max_attempts`),
+//     which is the exact complement of (1)'s attempt predicate; 'cancelled'
+//     is free because (1) matches 'discarded' only.
+//  3. internal/syncreconciler.UnreclaimableSweep -- the destroy path, which
+//     terminalizes the unit as failed. Its
+//     selectTerminalDeliveryStatesSQL takes 'cancelled' at any attempt, or
+//     'discarded' with the budget spent: the SAME River states this shape
+//     takes.
+//
+// (2) and (3) are therefore NOT separated by River state, and cannot be: they
+// are separated by `outbox.attempt_count < outbox.max_attempts` here and its
+// complement in the sweep's own outbox read. attempt_count is the right clock
+// because it is the only one that SURVIVES a rearm -- neither this repair's
+// UPDATE nor TerminalDeliveryRepair's resets it, while `unit.attempts` stays 0
+// for a unit no handler ever claimed (which is precisely the population both
+// (2) and (3) select) and so separates nothing. Recovery gets the row while a
+// delivery budget remains; once it is spent the sweep may destroy it, and the
+// sweep is the last resort its own documentation already claims it is.
+//
+// Ordering the two loops is explicitly NOT relied on: they run in different
+// reconcile passes, and unreclaimable_sweep.go's own doc comment refuses
+// timing arguments for exactly this reason -- they stop being true during an
+// incident, which is when both paths are live at once.
+//
+// # Bound
+//
+// `outbox.attempt_count < outbox.max_attempts` also bounds recovery itself. A
+// unit whose replacement delivery dies the same way is rearmed again on the
+// next pass, but only until the outbox row's own delivery budget (5, from the
+// descriptor) is spent -- so a permanently broken transport costs at most a
+// handful of retries, not an unbounded rearm loop that the sweep could never
+// break into. This is the "requeue into a void" failure the work-graph shape's
+// comment above guards against, in its bounded form.
+//
+// # Identity
+//
+// The unit is bound four ways -- the envelope's domain type, the domain id
+// cast to uuid behind a format guard (never a text cast of unit.id, which is
+// not sargable against the primary key: CHAOS-4092 turned exactly that into a
+// 9.5h crash loop in a sibling repair), the org, and the derived dedupe key --
+// mirroring repairProviderUnitTerminalDeliverySQL rather than inventing a
+// second convention for the same table.
+//
+// A 'completed' delivery reports skip_job_live rather than being filtered out.
+// For this shape that counter reads "the delivery is not in a rearmable
+// terminal state", which is wider than its name suggests but keeps the
+// refusal COUNTED instead of vanishing, per this file's standing rule. It is
+// also the fail-closed direction: a completed delivery means the handler ACKed
+// the job, and the SyncRunUnit CAS -- not this repair -- owns what happens
+// next.
+const repairStrandedProviderUnitSQL = `
+	SELECT outbox.id::text, job.id, outbox.job_kind, outbox.dedupe_key,
+		CASE
+			WHEN job.state::text NOT IN ('discarded', 'cancelled') THEN 'skip_job_live'
+			ELSE 'rearm'
+		END AS disposition
+	FROM public.worker_job_outbox AS outbox
+	JOIN public.sync_run_units AS unit
+		ON unit.id = CASE
+			WHEN (outbox.args #>> '{domain,id}') ~
+				'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+			THEN (outbox.args #>> '{domain,id}')::uuid
+			ELSE NULL
+		END
+		AND unit.org_id = outbox.args ->> 'organization_id'
+	JOIN public.sync_runs AS run
+		ON run.id = unit.sync_run_id
+		AND run.org_id = unit.org_id
+	JOIN %s AS job
+		ON job.id = outbox.river_job_id
+	WHERE outbox.job_kind = 'sync.provider_unit'
+		AND outbox.status = 'delivered'
+		AND outbox.river_job_id IS NOT NULL
+		AND outbox.args #>> '{domain,type}' = 'sync_run_unit'
+		AND outbox.dedupe_key = 'sync.provider_unit:' || unit.id::text
+		AND outbox.attempt_count < outbox.max_attempts
+		AND job.finalized_at IS NOT NULL
+		AND (
+			job.state::text <> 'discarded'
+			OR job.attempt >= job.max_attempts
+		)
+		AND unit.status = 'dispatching'
+		AND unit.attempts = 0
+		AND unit.lease_owner IS NULL
+		AND unit.lease_expires_at IS NULL
+		AND (unit.available_at IS NULL OR unit.available_at <= $1)
+		AND run.status IN ('planned', 'dispatching', 'running')
 		%s
 	ORDER BY outbox.delivered_at, outbox.id
 	%s

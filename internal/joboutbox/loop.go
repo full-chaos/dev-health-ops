@@ -147,6 +147,7 @@ type ReconcilerLoop struct {
 	strandClaimsLive             uint64
 	strandClaimsSettled          uint64
 	strandRaceLost               uint64
+	providerUnitStrandsRearmed   uint64
 	claimed                      uint64
 	delivered                    uint64
 	retried                      uint64
@@ -346,6 +347,7 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	loop.strandClaimsLive += nonNegativeUint(result.StrandClaimsLive)
 	loop.strandClaimsSettled += nonNegativeUint(result.StrandClaimsSettled)
 	loop.strandRaceLost += nonNegativeUint(result.StrandRaceLost)
+	loop.providerUnitStrandsRearmed += nonNegativeUint(len(result.ProviderUnitRearms))
 	loop.claimed += nonNegativeUint(result.Claimed)
 	loop.delivered += nonNegativeUint(result.Delivered)
 	loop.retried += nonNegativeUint(result.Retried)
@@ -382,6 +384,22 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	if result.RetiredKindObservationsTruncated {
 		loop.logger().ErrorContext(
 			ctx, "retired job kind observation query hit its cap -- more rows may exist than were logged this tick",
+		)
+	}
+	// One line PER REARM, not a per-tick total. A provider-unit strand is the
+	// restore-window class where River's durable error row is the fixed
+	// "dev-health job failed [retryable]" string and carries no cause at all,
+	// so this line is frequently the only record that ties a specific unit to
+	// the incident window that broke it. Logged outside the lock, same as the
+	// retired-kind lines above, and at INFO rather than WARN: a rearm is this
+	// loop doing its job, and the condition to alert on is the sweep's
+	// candidate gauge, not a successful recovery.
+	for _, rearm := range result.ProviderUnitRearms {
+		loop.logger().InfoContext(
+			ctx, "provider unit strand rearmed after a terminal river delivery",
+			"outbox_id", rearm.OutboxID,
+			"dedupe_key", rearm.DedupeKey,
+			"river_job_id", rearm.RiverJobID,
 		)
 	}
 	if err == nil {
@@ -517,6 +535,7 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	strandClaimsLive := loop.strandClaimsLive
 	strandClaimsSettled := loop.strandClaimsSettled
 	strandRaceLost := loop.strandRaceLost
+	providerUnitStrandsRearmed := loop.providerUnitStrandsRearmed
 	claimed := loop.claimed
 	delivered := loop.delivered
 	retried := loop.retried
@@ -553,6 +572,13 @@ func (loop *ReconcilerLoop) WritePrometheus(output io.Writer) error {
 	// two-replica contest reports a successful zero pass and the contention
 	// is invisible.
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_strand_race_lost_total", "Strand candidates that no longer matched under the phase-3 lock.", strandRaceLost)
+	// Broken out of strands_rearmed_total on purpose. The other three shapes
+	// recover a daily-metrics/work-graph strand; this one recovers a provider
+	// unit whose River delivery died in transport, and it is the series an
+	// operator reads against sync_dispatch_unreclaimable_candidates to tell
+	// "recovery is handling the strand" from "the sweep is about to destroy
+	// it". Buried inside the aggregate those two are indistinguishable.
+	writeReconcilerCounter(&text, "worker_outbox_reconciler_provider_unit_strands_rearmed_total", "Provider-unit deliveries rearmed after their River job went terminal while the unit was still dispatching.", providerUnitStrandsRearmed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_claimed_total", "Outbox rows claimed by the reconciler.", claimed)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_delivered_total", "Outbox rows delivered to River by the reconciler.", delivered)
 	writeReconcilerCounter(&text, "worker_outbox_reconciler_retried_total", "Outbox rows scheduled for relay retry by the reconciler.", retried)

@@ -479,9 +479,12 @@ func TestUnreclaimableSweepYieldsToAConcurrentDispatcherTouch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	candidates, err := sweep.selectUnreclaimable(ctx, tx, now, 100)
+	candidates, deferred, err := sweep.selectUnreclaimable(ctx, tx, now, 100)
 	if err != nil {
 		t.Fatalf("select: %v", err)
+	}
+	if deferred != 0 {
+		t.Fatalf("deferredToRepair = %d, want 0 -- neither fixture row has outbox delivery budget left", deferred)
 	}
 	if len(candidates) != 2 {
 		t.Fatalf("selected %d candidates, want 2", len(candidates))
@@ -734,7 +737,13 @@ func seedSweepDelivery(
 	// A spent budget by default. For a discarded job that is what makes it
 	// unrecoverable and therefore sweepable; for every other state the column
 	// is not read at all.
-	return seedSweepDeliveryWithBudget(t, ctx, pool, unitID, jobState, jobError, 5, 5)
+	// outboxAttemptCount 5 of 5 = the OUTBOX delivery budget is SPENT, which
+	// is what puts the row on this sweep's side of the boundary with
+	// joboutbox.StrandRepair's provider-unit shape (see
+	// selectPublishedDedupeKeysSQL). Every caller of this helper is asserting
+	// sweep behavior, so the spent budget is the right default; a caller that
+	// wants the repair-owned half asks for it explicitly.
+	return seedSweepDeliveryWithBudget(t, ctx, pool, unitID, jobState, jobError, 5, 5, 5)
 }
 
 // seedSweepDeliveryWithBudget exists so a test can put a discarded job on
@@ -750,6 +759,7 @@ func seedSweepDeliveryWithBudget(
 	jobError string,
 	attempt int,
 	maxAttempts int,
+	outboxAttemptCount int,
 ) int64 {
 	t.Helper()
 	var jobID int64
@@ -783,8 +793,9 @@ func seedSweepDeliveryWithBudget(
 			priority, max_attempts, scheduled_at, status, next_attempt_at,
 			attempt_count, river_job_id, delivered_at
 		) VALUES ($1, 'sync.provider_unit', 1, '{}'::jsonb, $2, 'sync',
-			1, 5, now(), 'delivered', now(), 1, $3, now())`,
+			1, 5, now(), 'delivered', now(), $4, $3, now())`,
 		unreclaimableDedupeKey(unitID), "sha256:"+strings.Repeat("0", 64), jobID,
+		outboxAttemptCount,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -953,6 +964,49 @@ func TestUnreclaimableSweepSparesAUnitWhoseDeliveryWasRearmed(t *testing.T) {
 	}
 }
 
+// A delivered row whose OUTBOX delivery budget is not spent belongs to
+// joboutbox.StrandRepair's provider-unit shape, which will rearm it, not to
+// this sweep, which would destroy it. The two select the SAME River states by
+// design (cancelled at any attempt, discarded with River's budget spent), so
+// attempt_count on the outbox row is the only thing separating them.
+//
+// RED CONTROL: before selectPublishedDedupeKeysSQL projected
+// delivery_budget_remaining, this row was an ordinary dead delivery and the
+// sweep terminalized it -- destroying a unit a restore blip had merely
+// knocked over, which is the exact outcome lane-sync-diag measured on sync
+// run 115e6246 and the reason the repair shape exists. Candidates must be 0
+// and DeferredToRepair 1: "recovery owns this" and "nothing to do" are
+// different findings and must not report identically.
+func TestUnreclaimableSweepDefersAUnitWhoseOutboxDeliveryBudgetRemains(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(81)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	// River's budget IS spent (5/5 discarded), so this row is squarely in the
+	// states this sweep takes -- only the outbox attempt_count of 1 of 5, the
+	// production shape lane-sync-diag measured, holds it back.
+	seedSweepDeliveryWithBudget(t, ctx, pool, unit, "discarded",
+		"dev-health job failed [retryable]", 5, 5, 1)
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 0 || result.Terminalized != 0 {
+		t.Fatalf("result = %+v, want the repair-owned delivery left alone", result)
+	}
+	if result.DeferredToRepair != 1 {
+		t.Fatalf("DeferredToRepair = %d, want 1 -- the refusal must be counted, not silently dropped",
+			result.DeferredToRepair)
+	}
+	if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "dispatching" {
+		t.Fatalf("unit status = %q, want it untouched for the repair to rearm", status)
+	}
+}
+
 // THE CAS, executed rather than argued.
 //
 // The liveness proof is taken on the queue-control pool, outside the domain
@@ -1058,7 +1112,7 @@ func TestUnreclaimableSweepLeavesRecoverableDiscardedDeliveriesToTheOutboxRepair
 			// The exact error the outbox repair keys on, so the row is a genuine
 			// candidate for it rather than being excluded for some other reason.
 			seedSweepDeliveryWithBudget(t, ctx, pool, unit, "discarded",
-				"Stuck job rescued by JobRescuer", testCase.attempt, testCase.maxAttempts)
+				"Stuck job rescued by JobRescuer", testCase.attempt, testCase.maxAttempts, 5)
 
 			result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
 			if err != nil {

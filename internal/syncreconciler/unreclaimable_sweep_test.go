@@ -218,6 +218,33 @@ func TestUnreclaimableReasonNamesThePairAndTheCondition(t *testing.T) {
 	}
 }
 
+// The complement of joboutbox's repairStrandedProviderUnitSQL, pinned by text
+// on THIS side of the boundary too.
+//
+// The two select the same River states by construction (cancelled at any
+// attempt, discarded with River's budget spent), so the outbox delivery budget
+// is the only thing that separates recovery from destruction. Losing this
+// projection compiles and passes every behavioural test that does not have a
+// Postgres container -- which in CI is all of them for this package -- so it is
+// asserted here, ungated, rather than only in the integration suite.
+func TestSweepOutboxReadCarriesTheRepairDisjointnessPredicate(t *testing.T) {
+	if !strings.Contains(selectPublishedDedupeKeysSQL, "attempt_count < max_attempts") {
+		t.Fatal("selectPublishedDedupeKeysSQL lost its delivery-budget predicate; without it this sweep " +
+			"destroys the units joboutbox.StrandRepair's provider-unit shape is about to recover")
+	}
+	if !strings.Contains(selectPublishedDedupeKeysSQL, "delivery_budget_remaining") {
+		t.Fatal("selectPublishedDedupeKeysSQL no longer projects delivery_budget_remaining; " +
+			"partitionPublishedUnits scans three columns and would fail to bind")
+	}
+	// The projection must stay scoped to a delivered row. A pending row has no
+	// delivery to reason about at all and is already excluded by
+	// delivered_job_id; letting the budget column answer `true` for it would
+	// make the deferral counter report rows this sweep never considered.
+	if !strings.Contains(selectPublishedDedupeKeysSQL, "status = 'delivered' AND attempt_count < max_attempts") {
+		t.Fatal("selectPublishedDedupeKeysSQL's budget predicate is no longer scoped to a delivered row")
+	}
+}
+
 func TestUnreclaimableDedupeKeyMatchesTheProducer(t *testing.T) {
 	// The producer writes sync.provider_unit:<unit id>; a drift here would
 	// silently stop the outbox filter from ever matching, and the sweep would

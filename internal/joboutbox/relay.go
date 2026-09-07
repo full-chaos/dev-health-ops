@@ -52,12 +52,16 @@ type StepResult struct {
 	// RetiredKindObservationsTruncated: see
 	// StrandRepairResult.RetiredKindObservationsTruncated (r2 finding F3).
 	RetiredKindObservationsTruncated bool
-	Claimed                          int
-	Deferred                         int
-	Delivered                        int
-	Retried                          int
-	Dead                             int
-	LeaseLost                        int
+	// ProviderUnitRearms: see StrandRepairResult.ProviderUnitRearms. Relayed
+	// unmodified for the same reason RetiredKindObservations is --
+	// ReconcilerLoop is the only layer in this chain that holds a logger.
+	ProviderUnitRearms []ProviderUnitRearm
+	Claimed            int
+	Deferred           int
+	Delivered          int
+	Retried            int
+	Dead               int
+	LeaseLost          int
 }
 
 // Relay is a single bounded reconciliation step. Process lifecycle and polling
@@ -240,6 +244,7 @@ func (relay *Relay) stepRecovery(ctx context.Context, now time.Time, limit int) 
 		result.StrandRaceLost = rearmed.SkippedRaceLost
 		result.RetiredKindObservations = rearmed.RetiredKindObservations
 		result.RetiredKindObservationsTruncated = rearmed.RetiredKindObservationsTruncated
+		result.ProviderUnitRearms = rearmed.ProviderUnitRearms
 		if err != nil {
 			// Same naming as the terminal-delivery seam above; strandRepair's
 			// own error already names its shape (see stepShape), this adds

@@ -243,6 +243,16 @@ type UnreclaimableSweepResult struct {
 	// pass and the write was abandoned. It is distinct from a zero
 	// Terminalized, which is also what a pass with nothing to do returns.
 	DeclinedRouteChange bool
+	// DeferredToRepair counts units this pass declined to select because
+	// joboutbox.StrandRepair's provider-unit shape still owns them -- their
+	// outbox delivery budget is not spent (see selectPublishedDedupeKeysSQL).
+	//
+	// It is reported rather than dropped for the same reason every other
+	// refusal in this file is: without it, "recovery is handling this strand"
+	// and "the sweep found nothing" are the same observation, and telling
+	// those apart is the whole point of the shadow-mode reporting this file
+	// already had to add once after shipping without it.
+	DeferredToRepair int
 }
 
 // routeFence is the durable route's identity at one instant: which transport
@@ -475,11 +485,12 @@ func (sweep *UnreclaimableSweep) Step(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	candidates, err := sweep.selectUnreclaimable(ctx, tx, now, limit)
+	candidates, deferredToRepair, err := sweep.selectUnreclaimable(ctx, tx, now, limit)
 	if err != nil {
 		return UnreclaimableSweepResult{}, err
 	}
 	result.Candidates = len(candidates)
+	result.DeferredToRepair = deferredToRepair
 	seenRuns := make(map[string]struct{}, len(candidates))
 	seenPairs := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
@@ -663,7 +674,7 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 	tx pgx.Tx,
 	now time.Time,
 	limit int,
-) ([]unreclaimableCandidate, error) {
+) ([]unreclaimableCandidate, int, error) {
 	ageCutoff := now.Add(-sweep.config.Age)
 	idleCutoff := now.Add(-sweep.config.Idle)
 	selected := make([]unreclaimableCandidate, 0, limit)
@@ -671,12 +682,16 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 	cursorCreatedAt := time.Time{}
 	cursorID := "00000000-0000-0000-0000-000000000000"
 	scanned := 0
+	// Accumulated across pages, like `scanned`: a candidate deferred to
+	// joboutbox.StrandRepair on page 1 is still deferred once page 3 fills the
+	// selection, and a per-page value would report only the last page's.
+	deferredToRepair := 0
 	for len(selected) < limit && scanned < unreclaimableMaximumScan {
 		page, err := scanUnreclaimablePage(
 			ctx, tx, ageCutoff, idleCutoff, cursorCreatedAt, cursorID, limit,
 		)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if len(page) == 0 {
 			break
@@ -684,13 +699,14 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 		scanned += len(page)
 		last := page[len(page)-1]
 		cursorCreatedAt, cursorID = last.createdAt, last.id
-		unpublished, delivered, err := partitionPublishedUnits(ctx, tx, page)
+		unpublished, delivered, pageDeferred, err := partitionPublishedUnits(ctx, tx, page)
+		deferredToRepair += pageDeferred
 		if err != nil {
-			return nil, err
+			return nil, deferredToRepair, err
 		}
 		dead, err := sweep.deadDeliveries(ctx, delivered)
 		if err != nil {
-			return nil, err
+			return nil, deferredToRepair, err
 		}
 		for _, candidate := range unpublished {
 			if !sweep.unroutable(candidate) {
@@ -711,7 +727,7 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 			break
 		}
 	}
-	return selected, nil
+	return selected, deferredToRepair, nil
 }
 
 // riverOwnsProviderUnits reads the DURABLE transport route.
@@ -962,9 +978,40 @@ func scanUnreclaimablePage(
 // no proof", which is dropped. A row rearmed back to 'pending' by
 // internal/joboutbox.TerminalDeliveryRepair is precisely that case: a
 // replacement delivery is on its way and the unit is not ours to destroy.
+//
+// delivery_budget_remaining is the SECOND half of that same principle, and it
+// is a correctness predicate, not an optimisation.
+//
+// internal/joboutbox/strand_repair.go's repairStrandedProviderUnitSQL recovers
+// exactly the population this sweep destroys -- a 'delivered' outbox row whose
+// River job is cancelled, or discarded with its attempt budget spent, while the
+// unit is still 'dispatching' with no lease and no attempt (lane-sync-diag's
+// sync run 115e6246: a Postgres restore burned all five River attempts in a
+// 77-second window before the handler ever claimed the unit). River state
+// cannot separate the two paths, because they select the same River states by
+// design; `unit.attempts` cannot either, because it is 0 for every candidate
+// this sweep selects at all (see selectUnreclaimableCandidatesSQL above).
+//
+// `attempt_count < max_attempts` on the OUTBOX row is what separates them. It
+// is the only clock that survives a rearm -- neither strand_repair's UPDATE nor
+// TerminalDeliveryRepair's resets attempt_count -- so it expresses "recovery
+// still has a delivery to spend on this unit" and its complement expresses
+// "recovery is out of road". A row with budget left belongs to the repair and
+// is NOT ours to destroy; once the budget is spent this sweep is the last
+// resort, which is what the doc comment on selectTerminalDeliveryStatesSQL
+// below has always claimed it is.
+//
+// Ordering the two loops would be the wrong fix for the same reason
+// selectTerminalDeliveryStatesSQL gives: they run in different reconcile
+// passes, and a timing argument stops being true during an incident -- which is
+// exactly when both are live.
 const selectPublishedDedupeKeysSQL = `
 SELECT dedupe_key,
-	CASE WHEN status = 'delivered' THEN river_job_id END AS delivered_job_id
+	CASE WHEN status = 'delivered' THEN river_job_id END AS delivered_job_id,
+	CASE
+		WHEN status = 'delivered' AND attempt_count < max_attempts THEN true
+		ELSE false
+	END AS delivery_budget_remaining
 FROM public.worker_job_outbox
 WHERE dedupe_key = ANY($1)
 `
@@ -977,39 +1024,48 @@ WHERE dedupe_key = ANY($1)
 // A published row with no usable river_job_id belongs to NEITHER slice: it is
 // dropped outright. That is the fail-closed default the original filter had,
 // and it is kept -- absence of proof is not proof of death.
+//
+// A published row whose DELIVERY BUDGET is not yet spent also belongs to
+// neither slice, for the stronger reason given on selectPublishedDedupeKeysSQL:
+// it is joboutbox.StrandRepair's to recover, not this sweep's to destroy. That
+// one is COUNTED (deferredToRepair) rather than merely dropped -- a refusal
+// this sweep cannot tell apart from "nothing to do" is the exact failure mode
+// this file records twice already.
 func partitionPublishedUnits(
 	ctx context.Context,
 	tx pgx.Tx,
 	page []unreclaimableCandidate,
-) (unpublished []unreclaimableCandidate, delivered []unreclaimableCandidate, err error) {
+) (unpublished []unreclaimableCandidate, delivered []unreclaimableCandidate, deferredToRepair int, err error) {
 	keys := make([]string, 0, len(page))
 	for _, candidate := range page {
 		keys = append(keys, unreclaimableDedupeKey(candidate.id))
 	}
 	rows, err := tx.Query(ctx, selectPublishedDedupeKeysSQL, keys)
 	if err != nil {
-		return nil, nil, sweepUnavailable(sweepStepOutboxQuery, err)
+		return nil, nil, 0, sweepUnavailable(sweepStepOutboxQuery, err)
 	}
 	defer rows.Close()
 	type publication struct {
-		jobID int64
-		known bool
+		jobID           int64
+		known           bool
+		budgetRemaining bool
 	}
 	published := make(map[string]publication, len(keys))
 	for rows.Next() {
 		var key string
 		var jobID *int64
-		if err := rows.Scan(&key, &jobID); err != nil {
-			return nil, nil, sweepUnavailable(sweepStepOutboxScan, err)
+		var budgetRemaining bool
+		if err := rows.Scan(&key, &jobID, &budgetRemaining); err != nil {
+			return nil, nil, 0, sweepUnavailable(sweepStepOutboxScan, err)
 		}
-		record := publication{}
+		record := publication{budgetRemaining: budgetRemaining}
 		if jobID != nil && *jobID > 0 {
-			record = publication{jobID: *jobID, known: true}
+			record = publication{jobID: *jobID, known: true, budgetRemaining: budgetRemaining}
 		}
 		published[key] = record
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, sweepUnavailable(sweepStepOutboxRows, err)
+		return nil, nil, 0, sweepUnavailable(sweepStepOutboxRows, err)
 	}
 	unpublished = make([]unreclaimableCandidate, 0, len(page))
 	delivered = make([]unreclaimableCandidate, 0, len(page))
@@ -1023,10 +1079,16 @@ func partitionPublishedUnits(
 		if !record.known {
 			continue
 		}
+		if record.budgetRemaining {
+			// joboutbox.StrandRepair's provider-unit shape owns this row while
+			// its outbox delivery budget lasts. Counted, not silently dropped.
+			deferredToRepair++
+			continue
+		}
 		candidate.delivery = terminalDelivery{dedupeKey: key, jobID: record.jobID}
 		delivered = append(delivered, candidate)
 	}
-	return unpublished, delivered, nil
+	return unpublished, delivered, deferredToRepair, nil
 }
 
 // The liveness read. state is compared as text so this file never has to

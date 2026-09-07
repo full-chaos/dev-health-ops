@@ -861,7 +861,14 @@ func configureWorkerDependenciesWithSources(
 		if errors.As(dependencies.startupErr, &namedStartup) && namedStartup.reason != "" {
 			return nil, dependencies.startupErr
 		}
-		return nil, dependencyUnavailable("worker_family_composition_failed")
+		// CHAOS-5384 (codex r1 F1): composeErr can ALREADY name its own specific
+		// cause (e.g. a family builder's own dependencyFailure, such as
+		// operational_http_dispatcher_misconfigured) -- preserveDependencyReason
+		// keeps that instead of flattening every composition failure to the same
+		// bare "worker_family_composition_failed" reason, the same
+		// preserve-don't-flatten shape CHAOS-5034 already applies just above for
+		// startupErr.
+		return nil, preserveDependencyReason(composeErr, "worker_family_composition_failed")
 	}
 	for name, source := range active.metricsSource {
 		if err := registry.RegisterMetrics(name, source); err != nil {

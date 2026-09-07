@@ -28,7 +28,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 
 	// Baseline: the real schema must BUILD, or the assertions below would pass
 	// for a guard that refuses everything.
-	if _, err := NewCapacityExecutor(ctx, conn, nil); err != nil {
+	if _, err := NewCapacityExecutor(ctx, conn, nil, nil); err != nil {
 		t.Fatalf("the real migrated schema must be accepted: %v", err)
 	}
 
@@ -39,7 +39,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		); err != nil {
 			t.Fatalf("stage the stale schema: %v", err)
 		}
-		_, err := NewCapacityExecutor(ctx, fresh, nil)
+		_, err := NewCapacityExecutor(ctx, fresh, nil, nil)
 		if err == nil {
 			t.Fatal(
 				"a database missing a column the backlog query reads was accepted; " +
@@ -100,7 +100,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 			}
 		}
 
-		_, err = NewCapacityExecutor(ctx, fresh, nil)
+		_, err = NewCapacityExecutor(ctx, fresh, nil, nil)
 		if err == nil {
 			t.Fatal(
 				"a plain MergeTree was accepted for a table this code reads with " +
@@ -131,7 +131,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		if err := fresh.Exec(ctx, "DROP TABLE capacity_forecasts"); err != nil {
 			t.Fatalf("stage the stale schema: %v", err)
 		}
-		_, err := NewCapacityExecutor(ctx, fresh, nil)
+		_, err := NewCapacityExecutor(ctx, fresh, nil, nil)
 		if err == nil {
 			t.Fatal("a database with no capacity_forecasts table was accepted")
 		}

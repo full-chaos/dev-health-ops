@@ -31,7 +31,6 @@ x-go-worker-flag:
   bridge-insecure: &flag-bridge-insecure "--operational-bridge-allow-insecure=${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}"
   # Exactly one runtime owns the PagerDuty webhook stream. Celery keeps it
   # until the route flips at cutover (CUT-14/18).
-  pagerduty-transport: &flag-pagerduty-transport "--pagerduty-webhook-transport=${PAGERDUTY_WEBHOOK_TRANSPORT:-celery}"
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
 x-go-worker: &go-worker
@@ -105,7 +104,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     stop_grace_period: 7260s
   go-worker-ops:
@@ -126,7 +124,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     stop_grace_period: 960s
   go-worker-sync:
@@ -147,7 +144,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     stop_grace_period: 960s
   # Split from the sync worker: a combined service cannot start while provider
@@ -170,7 +166,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     stop_grace_period: 960s
   go-reconciler:
@@ -189,7 +184,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -211,7 +205,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -234,7 +227,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -256,7 +248,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -278,7 +269,6 @@ services:
       - *flag-domain-pooler
       - *flag-bridge-url
       - *flag-bridge-insecure
-      - *flag-pagerduty-transport
       - *flag-log-level
     environment:
       <<: *go-worker-env-base

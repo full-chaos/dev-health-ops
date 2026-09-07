@@ -1,0 +1,60 @@
+{
+  "case": "service_updated",
+  "event_type": "service.updated",
+  "event_id": "evt-service_updated",
+  "org_id": "org-4105",
+  "provider_instance_id": "acme",
+  "occurred_at": "2026-07-17T12:00:00Z",
+  "received_at": "2026-07-17T12:00:05Z",
+  "hydrated_via_rest": false,
+  "payload": {
+    "event": {
+      "id": "evt-service_updated",
+      "event_type": "service.updated",
+      "occurred_at": "2026-07-17T12:00:00Z",
+      "data": {
+        "id": "PSVC1",
+        "type": "service",
+        "name": "payments-api",
+        "description": "Payments public API (v2)",
+        "html_url": "https://acme.pagerduty.com/services/PSVC1",
+        "created_at": "2026-01-04T09:00:00Z"
+      }
+    }
+  },
+  "rows": [
+    {
+      "table": "operational_services",
+      "columns": {
+        "org_id": "org-4105",
+        "provider": "pagerduty",
+        "provider_instance_id": "acme",
+        "source_entity_type": "service",
+        "external_id": "PSVC1",
+        "source_version_at": "2026-07-17T12:00:00Z",
+        "id": "eddbc505c10cbcee8b5d31281ad454136e48a7c2881e1e5c73b00da4e3519fef",
+        "source_id": null,
+        "source_url": "https://acme.pagerduty.com/services/PSVC1",
+        "source_event_at": "2026-07-17T12:00:00Z",
+        "source_event_id": "evt-service_updated",
+        "observed_at": "2026-07-17T12:00:05Z",
+        "last_synced": "2026-07-17T12:00:05Z",
+        "raw_status": null,
+        "raw_severity": null,
+        "raw_priority": null,
+        "normalized_status": null,
+        "normalized_severity": null,
+        "normalized_priority": null,
+        "relationship_provenance": null,
+        "relationship_confidence": null,
+        "name": "payments-api",
+        "description": null,
+        "service_type": "technical",
+        "owning_team_id": null,
+        "escalation_policy_id": null,
+        "is_deleted": false,
+        "deleted_at": null
+      }
+    }
+  ]
+}

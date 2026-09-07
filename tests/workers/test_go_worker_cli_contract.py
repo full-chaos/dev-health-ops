@@ -362,7 +362,6 @@ _CONFIGMAP_BACKED_FLAGS = {
     "--queue-database-role": "RIVER_QUEUE_DATABASE_ROLE",
     "--operational-bridge-url": "WORKER_OPERATIONAL_BRIDGE_URL",
     "--operational-bridge-allow-insecure": "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
-    "--pagerduty-webhook-transport": "PAGERDUTY_WEBHOOK_TRANSPORT",
 }
 
 
@@ -374,11 +373,12 @@ def test_kubernetes_args_never_shadow_the_configmap() -> None:
     argument therefore renders the ConfigMap inert for that key: editing it
     changes nothing.
 
-    ``PAGERDUTY_WEBHOOK_TRANSPORT`` is the sharp case. Both runtimes read it,
-    and the contract is that exactly one owns the webhook stream. If a
-    ConfigMap edit flipped the Python API to ``river`` while a hard-coded Go
-    argument kept ``celery``, the stream would have two owners reconciling and
-    deleting each other's entries.
+    ``PAGERDUTY_WEBHOOK_TRANSPORT`` used to be the sharp case here -- both
+    runtimes read it and exactly one could own the webhook stream, so a
+    ConfigMap edit that a hard-coded Go argument overrode would have given the
+    stream two owners. CHAOS-4105 deleted the Python consumer and the flag
+    with it. The remaining keys are ordinary tuning surfaces, and the property
+    is unchanged: a hard-coded argument makes the ConfigMap inert.
     """
     configmap = yaml.safe_load(
         (_REPO_ROOT / "deploy" / "kubernetes" / "configmap.yaml").read_text(

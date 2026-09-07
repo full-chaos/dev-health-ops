@@ -1356,8 +1356,9 @@ def run_work_items_sync_job(
         # daily, compute_work_item_team_attributions, and compute_work_item_
         # state_durations_daily -- and the calls to them that used to live
         # here -- are DELETED entirely. Team-lead's ruling (R6): this
-        # function is reachable (dataset_adapters.py/backfill/runner.py/
-        # system_webhooks.py) but not a production WRITER for these three
+        # function is reachable (dataset_adapters.py/backfill/runner.py, and
+        # system_webhooks.py until CHAOS-4105 deleted that file) but not a
+        # production WRITER for these three
         # families -- prod Celery has been stopped since 2026-08-19, so the
         # only two Celery-dispatched paths (run_sync_unit ->
         # run_dataset_unit -> _run_work_item_dataset, and

@@ -20,7 +20,6 @@ import sys
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from dataclasses import replace as dataclass_replace
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic as _monotonic
 from typing import Annotated, Any, Literal
@@ -39,7 +38,6 @@ from dev_health_ops.api.internal.worker_auth import (
 from dev_health_ops.db import require_clickhouse_uri
 from dev_health_ops.metrics.prometheus import (
     DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL,
-    DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS,
     DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS,
     DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL,
     DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING,
@@ -116,52 +114,24 @@ def _runner_max_concurrency() -> int:
 _RUNNER_CONCURRENCY_SEMAPHORE = asyncio.Semaphore(_runner_max_concurrency())
 
 
-# ---------------------------------------------------------------------------
-# CHAOS-4316: progress-based liveness bound on ComputePartition.
-#
-# runWithLeaseRenewal (Go, internal/jobs/metrics/daily/daily.go) renews the
-# partition's lease on a fixed ticker purely because RenewPartition (a cheap
-# PG UPDATE) succeeds -- independent of whether this bridge is making any
-# real progress. The Go HTTP client deliberately sets no Client.Timeout
-# either. So this process is the only place a hang can ever be observed and
-# bounded: it is the "fixed, killable process boundary" worker_metrics_runner
-# already exists to be (see that module's docstring), and it already emits a
-# real per-repo progress signal (_emit_progress) that today is only read
-# AFTER the subprocess exits, to decide safe_to_retry. The watchdog below is
-# the first thing that reads it WHILE the subprocess is still alive.
-#
-# Both bounds are derived from the partition's own repo_count, never a flat
-# wall-clock number (standing rule: timeouts never fix capacity races) -- a
-# 1-repo partition is reclaimed quickly, a 40-repo partition gets
-# proportionally longer. Scoped to worker_kind == "daily" and
-# operation == "partition" only: that is the sole compatibility path with a
-# real progress signal today (same scope _CompatibilityProcessFailure's
-# existing safe_to_retry rule already uses). Finalize and every
-# remaining-metrics family have no progress instrumentation -- a bound there
-# would be a guess, not a derived value; tracked as CHAOS-4331.
-_PROGRESS_STALL_BASE_SECONDS_ENV = (
-    "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS"
-)
-_PROGRESS_STALL_PER_REPO_SECONDS_ENV = (
-    "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS"
-)
-_PROGRESS_STALL_HARD_CEILING_MULTIPLIER_ENV = (
-    "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER"
-)
-
-# Defaults derived from the 2026-08-26 incident's own timeline (a single
-# partition sat silent for 74 minutes before a human killed it by hand): a
-# 120s grace period covers ClickHouse connect + the first repo's setup before
-# any progress line is expected, 90s per additional repo covers a
-# pagination-heavy repo's worst observed per-repo compute time with headroom,
-# and a 3x multiplier on the resulting window is the hard ceiling backstop
-# for a partition that trickles just enough progress to dodge the interval
-# check. All three are env-tunable, not blessed as universal constants.
-_DEFAULT_PROGRESS_STALL_BASE_SECONDS = 120.0
-_DEFAULT_PROGRESS_STALL_PER_REPO_SECONDS = 90.0
-_DEFAULT_PROGRESS_STALL_HARD_CEILING_MULTIPLIER = 3.0
-
-_PROGRESS_STALL_WATCHDOG_POLL_SECONDS = 1.0
+# CHAOS-3092 (2026-09-07): the progress-based liveness bound on
+# ComputePartition (CHAOS-4316) is deleted from here. It existed only to
+# bound a hung daily "partition" bridge subprocess -- runWithLeaseRenewal
+# (Go, internal/jobs/metrics/daily/daily.go) renewed the partition's lease
+# on a fixed ticker independent of whether this bridge was making real
+# progress, and the Go HTTP client deliberately set no Client.Timeout, so
+# this process was the only place such a hang could ever be observed and
+# bounded. The Go daily worker's Python compatibility bridge (the
+# execute_daily_metrics route) is gone outright now -- every daily family is
+# native Go -- so there is no daily "partition" subprocess left for this
+# watchdog to watch. Deleted along with it: _watch_progress_stall,
+# _progress_stall_watchdog_enabled, _progress_stall_window_seconds,
+# _progress_hard_ceiling_seconds, the _PROGRESS_STALL_*_ENV names and their
+# defaults, _PROGRESS_STALL_WATCHDOG_POLL_SECONDS, _configured_positive_
+# float_env (its only callers), _read_cgroup_oom_kill_count and
+# _OOM_RSS_FALLBACK_FRACTION (used only by this watchdog's own OOM
+# disambiguation), and the liveness_watched/stall_reason_holder/
+# last_progress_holder wiring inside _run_compatibility_process_locked.
 
 # CHAOS-4264's own memory-limit env key/default, duplicated (not imported)
 # rather than shared with worker_metrics_runner.py: that module already
@@ -170,23 +140,6 @@ _PROGRESS_STALL_WATCHDOG_POLL_SECONDS = 1.0
 # by convention -- both are small, stable, and reviewed together.
 _RUNNER_MEMORY_LIMIT_ENV_KEY = "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES"
 _RUNNER_DEFAULT_MEMORY_LIMIT_BYTES = 640 * 1024 * 1024
-# Fraction of the configured memory limit that counts as "near enough to the
-# ceiling to call it OOM" when the authoritative memcg signal
-# (/sys/fs/cgroup/memory.events) is unavailable (non-Linux, cgroup v1, no
-# permission) -- a fallback, not the primary signal (team-lead direction,
-# CHAOS-4316: the OOM label must come from the memcg signal where available).
-_OOM_RSS_FALLBACK_FRACTION = 0.9
-
-
-def _configured_positive_float_env(key: str, default: float) -> float:
-    raw = os.environ.get(key, "").strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        return default
-    return value if value > 0 else default
 
 
 def _configured_runner_memory_limit_bytes() -> int:
@@ -198,69 +151,6 @@ def _configured_runner_memory_limit_bytes() -> int:
     except ValueError:
         return _RUNNER_DEFAULT_MEMORY_LIMIT_BYTES
     return value if value > 0 else _RUNNER_DEFAULT_MEMORY_LIMIT_BYTES
-
-
-def _progress_stall_watchdog_enabled() -> bool:
-    """True unless the base stall window was explicitly set to "0".
-
-    On by default for the same reason the Go backstop is (team-lead ruling
-    2026-08-26): deployed configuration never sets these env vars, so an
-    opt-in design would silently never activate. A window of exactly 0 is
-    not a usable value on its own (it would kill a child before it could
-    ever emit a first progress line), so it is reserved as the explicit,
-    deliberate opt-out signal instead -- any other value, including one
-    that fails to parse, leaves the watchdog enabled with its normal
-    (default or configured) window.
-    """
-    raw = os.environ.get(_PROGRESS_STALL_BASE_SECONDS_ENV, "").strip()
-    if not raw:
-        return True
-    try:
-        return float(raw) != 0
-    except ValueError:
-        return True
-
-
-def _progress_stall_window_seconds(repo_count: int) -> float:
-    base = _configured_positive_float_env(
-        _PROGRESS_STALL_BASE_SECONDS_ENV, _DEFAULT_PROGRESS_STALL_BASE_SECONDS
-    )
-    per_repo = _configured_positive_float_env(
-        _PROGRESS_STALL_PER_REPO_SECONDS_ENV, _DEFAULT_PROGRESS_STALL_PER_REPO_SECONDS
-    )
-    return base + per_repo * max(repo_count, 0)
-
-
-def _progress_hard_ceiling_seconds(repo_count: int) -> float:
-    multiplier = _configured_positive_float_env(
-        _PROGRESS_STALL_HARD_CEILING_MULTIPLIER_ENV,
-        _DEFAULT_PROGRESS_STALL_HARD_CEILING_MULTIPLIER,
-    )
-    return _progress_stall_window_seconds(repo_count) * multiplier
-
-
-def _read_cgroup_oom_kill_count() -> int | None:
-    """Read this container's own cgroup v2 ``memory.events`` oom_kill count.
-
-    CHAOS-4264: Docker's OOMKilled flag only tracks PID 1, so a memcg kill of
-    a child this process spawned is invisible to ``docker inspect``.
-    ``memory.events`` IS visible -- the api process and every runner
-    subprocess it spawns share one cgroup, so a real memcg OOM anywhere in
-    this container increments the same counter this reads. Returns None (not
-    0) when the file is unavailable (cgroup v1, non-Linux, no permission) so
-    callers can tell "definitely zero kills" apart from "signal not
-    observable here" and fall back to the RSS heuristic only in the latter
-    case.
-    """
-    try:
-        with open("/sys/fs/cgroup/memory.events", encoding="ascii") as handle:
-            for line in handle:
-                parts = line.split()
-                if len(parts) == 2 and parts[0] == "oom_kill":
-                    return int(parts[1])
-    except (FileNotFoundError, PermissionError, OSError, ValueError):
-        return None
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -638,39 +528,6 @@ class _StrictRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class DailyMetricsExecutionRequest(_StrictRequest):
-    operation: Literal["partition", "finalize"]
-    run_id: uuid.UUID
-    partition_id: uuid.UUID | None = None
-    # CHAOS-4276: families a NativeFamilyExecutor already computed and wrote
-    # for this partition on the Go side -- run_daily_metrics_job must not
-    # recompute or rewrite them. Empty/omitted is a no-op, byte-identical to
-    # every request before this field existed.
-    skip_families: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_operation_identity(self) -> DailyMetricsExecutionRequest:
-        if (self.operation == "partition") != (self.partition_id is not None):
-            raise ValueError("partition_id must be supplied only for partition")
-        # CHAOS-4290: finalize accepts skip_families too, for the same reason
-        # partition does -- a NativeFinalizeFamilyExecutor that already wrote a
-        # finalize-scope family must stop this bridge recomputing it.
-        #
-        # This branch is UNREACHABLE TODAY and is labelled so deliberately
-        # rather than left looking like live protection: `operation` is
-        # Literal["partition", "finalize"], so both members now accept the
-        # field and no third value can reach here. It is kept as the guard a
-        # THIRD operation would need -- adding one to the Literal without
-        # deciding its skip_families policy would otherwise let it inherit
-        # acceptance silently. A reader should not mistake it for a check that
-        # currently rejects anything.
-        if self.operation not in ("partition", "finalize") and self.skip_families:
-            raise ValueError(  # pragma: no cover - see comment above
-                "skip_families must be supplied only for partition or finalize"
-            )
-        return self
-
-
 class RemainingMetricsExecutionRequest(_StrictRequest):
     operation: Literal["partition"]
     run_id: uuid.UUID
@@ -757,13 +614,6 @@ class _Execution:
     scope: dict[str, Any]
     scope_digest: str
     generation_seed: int | None = None
-    # CHAOS-4276: families a NativeFamilyExecutor already computed on the Go
-    # side, from DailyMetricsExecutionRequest.skip_families. Deliberately NOT
-    # part of _execution_id's identity digest (an orchestration hint about
-    # WHO computes a family, not part of the durable scope being computed) --
-    # attached via dataclasses.replace after _load_daily_execution builds the
-    # rest of _Execution from durable Postgres state.
-    skip_families: tuple[str, ...] = ()
 
 
 def _execution_process_payload(execution: _Execution) -> dict[str, Any]:
@@ -780,7 +630,6 @@ def _execution_process_payload(execution: _Execution) -> dict[str, Any]:
         "claim_token": str(execution.claim_token),
         "scope": execution.scope,
         "generation_seed": execution.generation_seed,
-        "skip_families": list(execution.skip_families),
     }
 
 
@@ -796,15 +645,9 @@ def _execution_from_process_payload(payload: object) -> _Execution:
         "claim_token",
         "scope",
         "generation_seed",
-        "skip_families",
     }
     if not isinstance(payload, dict) or set(payload) != expected_fields:
         raise ValueError("metric compatibility process input is invalid")
-    raw_skip_families = payload["skip_families"]
-    if not isinstance(raw_skip_families, list) or not all(
-        isinstance(value, str) for value in raw_skip_families
-    ):
-        raise ValueError("metric compatibility process skip_families is invalid")
     worker_kind = payload["worker_kind"]
     operation = payload["operation"]
     if worker_kind not in {"daily", "remaining"} or operation not in {
@@ -866,13 +709,12 @@ def _execution_from_process_payload(payload: object) -> _Execution:
             "scope": scope,
             "claim_token": claim_token,
         }
-    execution = _execution_from_row(
+    return _execution_from_row(
         worker_kind=worker_kind,
         operation=operation,
         row=row,
         partition_id=partition_id,
     )
-    return dataclass_replace(execution, skip_families=tuple(raw_skip_families))
 
 
 def _canonical_json(value: Any) -> str:
@@ -961,67 +803,6 @@ def _execution_from_row(
         scope_digest=digest,
         generation_seed=seed,
     )
-
-
-async def _load_daily_execution(
-    session: AsyncSession, request: DailyMetricsExecutionRequest
-) -> _Execution:
-    if request.operation == "partition":
-        result = await session.execute(
-            text(
-                """
-                SELECT r.id AS run_id, r.org_id, r.target_day, r.generation,
-                       p.repo_ids, p.claim_token
-                FROM daily_metrics_runs AS r
-                JOIN daily_metrics_partitions AS p ON p.run_id = r.id
-                WHERE r.id = CAST(:run_id AS uuid)
-                  AND p.id = CAST(:partition_id AS uuid)
-                  AND r.status = 'running'
-                  AND p.status = 'running'
-                  AND p.lease_expires_at > statement_timestamp()
-                FOR UPDATE OF r, p
-                """
-            ),
-            {
-                "run_id": str(request.run_id),
-                "partition_id": str(request.partition_id),
-            },
-        )
-        row = result.mappings().first()
-        partition_id = request.partition_id
-    else:
-        result = await session.execute(
-            text(
-                """
-                SELECT r.id AS run_id, r.org_id, r.target_day, r.generation,
-                       r.finalization_claim_token AS claim_token
-                FROM daily_metrics_runs AS r
-                WHERE r.id = CAST(:run_id AS uuid)
-                  AND r.status = 'running'
-                  AND r.finalization_status = 'running'
-                  AND r.finalization_lease_expires_at > statement_timestamp()
-                FOR UPDATE OF r
-                """
-            ),
-            {"run_id": str(request.run_id)},
-        )
-        row = result.mappings().first()
-        partition_id = None
-    if row is None:
-        raise HTTPException(
-            status_code=409, detail="Daily metrics lease is absent or expired"
-        )
-    try:
-        return _execution_from_row(
-            worker_kind="daily",
-            operation=request.operation,
-            row=row,
-            partition_id=partition_id,
-        )
-    except (AttributeError, TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=409, detail="Daily metrics durable scope is invalid"
-        ) from exc
 
 
 async def _load_remaining_execution(
@@ -1705,82 +1486,6 @@ async def _mark_succeeded(
     )
 
 
-async def _run_daily_direct(
-    execution: _Execution,
-    *,
-    on_progress: Callable[[int, int], None] | None = None,
-) -> dict[str, Any]:
-    from dev_health_ops.metrics.job_daily import (
-        run_daily_metrics_finalize,
-        run_daily_metrics_job,
-    )
-
-    db_url = require_clickhouse_uri()
-    target_day = date.fromisoformat(str(execution.scope["target_day"]))
-    if execution.operation == "finalize":
-        await run_daily_metrics_finalize(
-            db_url=db_url,
-            day=target_day,
-            org_id=execution.organization_id,
-            sink="clickhouse",
-            skip_families=set(execution.skip_families),
-        )
-        return {"operation": "finalize", "target_day": target_day.isoformat()}
-
-    repo_ids = [uuid.UUID(value) for value in execution.scope["repo_ids"]]
-    # CHAOS-4246: run_daily_metrics_job degrades (never raises) on a family
-    # that computed zero rows for the day -- collect that per repo so a
-    # partition that reports "succeeded" still carries which families, if
-    # any, produced nothing. families_zero_rows is deliberately NOT used to
-    # fail the partition (zero rows is often a legitimate quiet day); it is
-    # surfaced so staleness is visible in the execution result instead of
-    # silently indistinguishable from a fully-populated run.
-    families_zero_rows: dict[str, list[str]] = {}
-    repo_count = len(repo_ids)
-    for index, repo_id in enumerate(repo_ids):
-        # CHAOS-4264: one repo_id at a time -- each run_daily_metrics_job call
-        # loads and releases only that repo's source rows, so a partition's
-        # peak working set does not scale with repo_count.
-        #
-        # on_write_starting fires INSIDE run_daily_metrics_job, immediately
-        # before its first ClickHouse write for this repo -- not after the
-        # call returns. A repo-level "finished" signal is too coarse: codex
-        # review (CHAOS-4264 R1) correctly flagged that a kill between the
-        # first write block and the function's return would still land rows
-        # while reporting zero progress, so a killed-mid-write execution
-        # could be misclassified safe_to_retry. Firing at the write boundary
-        # instead means "no progress at all" only ever means "definitely
-        # wrote nothing" -- any write attempt, even a single one, is treated
-        # as unsafe-to-blindly-retry (ambiguous), exactly as before this
-        # ticket.
-        def _mark_progress() -> None:
-            if on_progress is not None:
-                on_progress(index + 1, repo_count)
-
-        zero_rows_by_day = await run_daily_metrics_job(
-            db_url=db_url,
-            day=target_day,
-            backfill_days=1,
-            repo_id=repo_id,
-            sink="clickhouse",
-            provider="auto",
-            org_id=execution.organization_id,
-            on_write_starting=_mark_progress,
-            skip_families=set(execution.skip_families) or None,
-        )
-        for day, families in zero_rows_by_day.items():
-            if families:
-                families_zero_rows[f"{repo_id}:{day.isoformat()}"] = families
-    result: dict[str, Any] = {
-        "operation": "partition",
-        "target_day": target_day.isoformat(),
-        "repo_count": repo_count,
-    }
-    if families_zero_rows:
-        result["families_zero_rows"] = families_zero_rows
-    return result
-
-
 async def _run_recommendations(
     execution: _Execution, scope: RecommendationsScope
 ) -> dict[str, Any]:
@@ -1855,8 +1560,13 @@ async def _run_execution_direct(
     *,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
-    if execution.worker_kind == "daily":
-        return await _run_daily_direct(execution, on_progress=on_progress)
+    # CHAOS-3092: this used to dispatch worker_kind == "daily" to
+    # _run_daily_direct too -- deleted outright, the Go daily worker no
+    # longer has a Python compatibility fallback to call. `on_progress` is
+    # kept on the signature (accepted, currently unused) rather than
+    # threaded further: it was _run_daily_direct's own per-repo progress
+    # hook, and no surviving family under _run_remaining_direct reports
+    # progress at all.
     if execution.worker_kind == "remaining":
         return await _run_remaining_direct(execution)
     raise RuntimeError("metric compatibility worker kind is not allowlisted")
@@ -2110,56 +1820,6 @@ async def _poll_peak_rss_bytes(
         await asyncio.sleep(interval_seconds)
 
 
-async def _watch_progress_stall(
-    process: asyncio.subprocess.Process,
-    repo_count: int,
-    last_progress_holder: list[float],
-    started_at: float,
-    stall_reason_holder: list[str | None],
-    *,
-    interval_seconds: float = _PROGRESS_STALL_WATCHDOG_POLL_SECONDS,
-) -> None:
-    """Kill the runner subprocess if it stops reporting progress (CHAOS-4316).
-
-    Runs alongside ``_poll_peak_rss_bytes`` on the same event loop, so a hang
-    inside the subprocess (the thing being watched) cannot block this task --
-    both read completely independent state (``/proc``, and the timestamp
-    ``on_progress`` below writes). Two independent bounds, both derived from
-    ``repo_count``, never a flat wall-clock number:
-
-    - ``stall``: no progress line since ``last_progress_holder[0]`` (updated
-      by the caller's ``on_progress`` callback) for
-      ``_progress_stall_window_seconds(repo_count)``. Covers the observed
-      incident exactly: zero progress ever, silent for the whole window.
-    - ``timeout``: total elapsed time since ``started_at`` exceeds
-      ``_progress_hard_ceiling_seconds(repo_count)`` regardless of whether
-      progress keeps trickling in -- the backstop for a partition that
-      resets the stall clock just often enough to dodge it forever.
-
-    Writes its verdict into ``stall_reason_holder`` (the same
-    mutable-one-element-list pattern ``_poll_peak_rss_bytes`` already uses,
-    for the same reason: the caller cancels this task, and a cancelled
-    coroutine's return value is never seen) and terminates the process via
-    the existing ``_terminate_compatibility_process`` -- no new kill
-    mechanism, this only decides WHEN to call the one that already exists.
-    """
-    stall_window = _progress_stall_window_seconds(repo_count)
-    hard_ceiling = _progress_hard_ceiling_seconds(repo_count)
-    while True:
-        await asyncio.sleep(interval_seconds)
-        if process.returncode is not None:
-            return
-        now = _monotonic()
-        if now - started_at >= hard_ceiling:
-            stall_reason_holder[0] = "timeout"
-        elif now - last_progress_holder[0] >= stall_window:
-            stall_reason_holder[0] = "stalled"
-        else:
-            continue
-        await _terminate_compatibility_process(process)
-        return
-
-
 async def _run_compatibility_process(execution: _Execution) -> dict[str, Any]:
     # CHAOS-4264: bound aggregate concurrency BEFORE spawning -- see
     # _RUNNER_CONCURRENCY_SEMAPHORE for why a per-process RLIMIT_AS alone
@@ -2255,29 +1915,18 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         await _terminate_compatibility_process(process)
         raise RuntimeError("metric compatibility process pipes are unavailable")
     started_at = _monotonic()
-    # CHAOS-4316: only the daily "partition" operation carries a real
-    # per-repo progress signal (see the module-level comment above
-    # _PROGRESS_STALL_BASE_SECONDS_ENV) -- repo_count is 0 for every other
-    # operation, which _watch_progress_stall below is only started for when
-    # this is nonzero-eligible (guarded by the same worker_kind/operation
-    # check as safe_to_retry further down).
-    liveness_watched = (
-        execution.worker_kind == "daily"
-        and execution.operation == "partition"
-        and _progress_stall_watchdog_enabled()
-    )
-    repo_count = len(execution.scope.get("repo_ids") or []) if liveness_watched else 0
-    last_progress_holder = [started_at]
-    stall_reason_holder: list[str | None] = [None]
+    # CHAOS-3092: this used to gate a `liveness_watched`/progress-stall
+    # watchdog on worker_kind == "daily" and operation == "partition" --
+    # deleted outright along with the watchdog itself (see the module-level
+    # comment near the top of this file). `on_progress` stays `None`
+    # unconditionally: _read_bounded_process_stream still detects a
+    # "progress" line for `progress_seen` below (read from the stdout bytes
+    # after the process exits), it just no longer reacts to one in real
+    # time.
     stdout_task = asyncio.create_task(
         _read_bounded_process_stream(
             process.stdout,
             _MAX_COMPATIBILITY_PROCESS_BYTES,
-            on_progress=(
-                (lambda: last_progress_holder.__setitem__(0, _monotonic()))
-                if liveness_watched
-                else None
-            ),
         )
     )
     # CHAOS-4543: draining stderr (not just reading it after exit) avoids the
@@ -2305,23 +1954,6 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
     rss_task = asyncio.create_task(
         _poll_peak_rss_bytes(process, peak_rss_holder, rss_kill_holder)
     )
-    stall_task: asyncio.Task[None] | None = None
-    oom_kill_before = _read_cgroup_oom_kill_count()
-    if liveness_watched:
-        stall_task = asyncio.create_task(
-            _watch_progress_stall(
-                process,
-                repo_count,
-                last_progress_holder,
-                started_at,
-                stall_reason_holder,
-                # Read the module global at call time, not bound as the
-                # function's default at definition time, so tests can
-                # monkeypatch a fast poll interval and have it actually take
-                # effect (a bound default would ignore the patch).
-                interval_seconds=_PROGRESS_STALL_WATCHDOG_POLL_SECONDS,
-            )
-        )
     peak_thread_count_holder = [0]
     pids_task = asyncio.create_task(
         _poll_peak_child_thread_count(process.pid, process, peak_thread_count_holder)
@@ -2349,8 +1981,6 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
         if not rss_task.done():
             rss_task.cancel()
-        if stall_task is not None and not stall_task.done():
-            stall_task.cancel()
         if not pids_task.done():
             pids_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -2366,15 +1996,6 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
             # mechanism; see tests/api/dev/test_terminal_frames.py for the
             # same established pattern in this codebase).
             await rss_task
-        if stall_task is not None:
-            with contextlib.suppress(asyncio.CancelledError):
-                # Same CodeQL py/ineffectual-statement false positive as
-                # await rss_task above (dismissed at the GitHub
-                # code-scanning API level, alert #2155): the await blocks
-                # until the watchdog reacts to cancel(), guaranteeing its
-                # final state is visible before the classification below
-                # reads it -- the discarded return value is not the point.
-                await stall_task
         with contextlib.suppress(asyncio.CancelledError):
             # Same cancel-then-await pattern as rss_task immediately above,
             # for the same reason: guarantees peak_thread_count_holder's
@@ -2401,17 +2022,18 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         if peak_thread_count_holder[0] > 0:
             _record_per_child_pids_cost(peak_thread_count_holder[0])
 
+    # CHAOS-3092: this used to also track `progress_seen` (any "progress"
+    # NDJSON line seen in stdout) to feed the now-deleted worker_kind ==
+    # "daily" branches of `safe_to_retry` below -- removed along with them,
+    # since nothing reads it any more. Only the outcome line still matters.
     lines = [line for line in stdout.split(b"\n") if line.strip()]
-    progress_seen = False
     outcome_line: bytes | None = None
     for line in lines:
         try:
             parsed = json.loads(line)
         except (TypeError, json.JSONDecodeError):
             continue
-        if isinstance(parsed, dict) and "progress" in parsed:
-            progress_seen = True
-        elif isinstance(parsed, dict) and "outcome" in parsed:
+        if isinstance(parsed, dict) and "outcome" in parsed:
             outcome_line = line
 
     # CHAOS-4543: decode+log the child's captured stderr once, here, for
@@ -2496,11 +2118,17 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
         # lines from arriving (the child stalls while thrashing/allocating
         # right before it dies), and the memory diagnosis is the more
         # specific, more actionable one when both would otherwise apply.
-        safe_to_retry = (
-            execution.worker_kind == "daily"
-            and execution.operation == "partition"
-            and not progress_seen
-        )
+        #
+        # CHAOS-3092: safe_to_retry is unconditionally False now -- it used
+        # to require worker_kind == "daily" and operation == "partition"
+        # (only _run_daily_direct's "partition" branch ever wired real
+        # per-scope write evidence through on_write_starting), but that
+        # bridge path is deleted outright and this function is reached only
+        # by the remaining-metrics dispatch, which never reports progress at
+        # all (treating silence as "definitely wrote nothing" there would be
+        # a fabricated safety claim, not an observed one -- codex R2 on
+        # CHAOS-4264).
+        safe_to_retry = False
         DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL.labels(
             reason="resource_exhausted"
         ).inc()
@@ -2515,100 +2143,22 @@ async def _run_compatibility_process_locked(execution: _Execution) -> dict[str, 
             safe_to_retry=safe_to_retry,
         )
 
-    if stall_reason_holder[0] is not None:
-        # CHAOS-4316: this exit is OURS -- the liveness watchdog decided the
-        # child was silent too long and killed it via the same
-        # _terminate_compatibility_process every other kill path uses.
-        # safe_to_retry reuses the EXACT existing rule below (progress_seen
-        # computed from the same lines, scoped the same way) rather than a
-        # new one: zero progress ever observed is safe to hand straight back
-        # to River, any partial progress stays ambiguous, unchanged from
-        # CHAOS-4264's contract.
-        silence_seconds = _monotonic() - last_progress_holder[0]
-        oom_kill_after = _read_cgroup_oom_kill_count()
-        memcg_oom = (
-            oom_kill_before is not None
-            and oom_kill_after is not None
-            and oom_kill_after > oom_kill_before
-        )
-        rss_near_limit = peak_rss_holder[0] >= (
-            _configured_runner_memory_limit_bytes() * _OOM_RSS_FALLBACK_FRACTION
-        )
-        # Team-lead direction (CHAOS-4316): the memcg signal is authoritative
-        # when observable; RSS-vs-limit is a fallback only for when it is
-        # not (non-Linux, cgroup v1, no permission) -- never the other way
-        # around, since a busy-but-not-yet-OOM process can sit near the
-        # limit without ever being killed for memory.
-        if memcg_oom:
-            local_reason = "oom"
-        elif oom_kill_before is None or oom_kill_after is None:
-            local_reason = "oom" if rss_near_limit else stall_reason_holder[0]
-        else:
-            local_reason = stall_reason_holder[0]
-        DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL.labels(reason=local_reason).inc()
-        DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS.labels(
-            reason=local_reason
-        ).observe(silence_seconds)
-        DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL.labels(
-            reason="progress_stalled"
-        ).inc()
-        safe_to_retry = (
-            execution.worker_kind == "daily"
-            and execution.operation == "partition"
-            and not progress_seen
-        )
-        raise _CompatibilityProcessFailure(
-            f"metric compatibility process {stall_reason_holder[0]} -- no "
-            f"progress for {silence_seconds:.1f}s",
-            reason="progress_stalled",
-            safe_to_retry=safe_to_retry,
-        )
+    # CHAOS-3092: the CHAOS-4316 progress-stall watchdog's own classification
+    # branch (`if stall_reason_holder[0] is not None: ...`, reason=
+    # "progress_stalled") is deleted from here -- stall_reason_holder no
+    # longer exists (see the module-level comment near the top of this
+    # file), so this exit path can no longer occur.
 
     # CHAOS-4264: a non-zero exit is classified instead of collapsed into one
-    # generic RuntimeError. safe_to_retry additionally requires
-    # worker_kind == "daily" AND operation == "partition" (codex R2 + R3):
-    # only _run_daily_direct's "partition" branch wires on_write_starting
-    # through job_daily.py, so it is the only path with real per-scope
-    # write evidence. Every remaining-metrics family this file still
-    # dispatches (capacity/complexity/dora/recommendations/
-    # membership_backfill -- release_impact deleted, CHAOS-5234: its
-    # native Go executor is the only writer now, this endpoint never
-    # reaches it) never reports progress at all -- treating that silence
-    # as "definitely wrote
-    # nothing" would be a fabricated safety claim, not an observed one
-    # (codex R2). The daily "finalize" branch is the same trap (codex R3):
-    # run_daily_metrics_finalize writes user_metrics_daily and
-    # ic_landscape_rolling_30d directly with no progress callback of its
-    # own, so a kill after its first write would ALSO report zero progress
-    # despite having written rows, if worker_kind alone gated this. Both
-    # non-partition paths stay ambiguous unconditionally, exactly as before
-    # this ticket.
+    # generic RuntimeError.
     #
-    # CHAOS-4319 (considered, NOT applied): an earlier version of this
-    # change also dropped `not progress_seen` for daily/partition, reasoning
-    # that every table run_daily_metrics_job writes is an append-only
-    # MergeTree table readers dedup by design (platform contract), so a
-    # repeated write should be a harmless duplicate. Codex round-1 review
-    # falsified that premise: file_metrics_daily (the file_hotspots family)
-    # IS append-only, but its readers (api/queries/heatmap.py's
-    # fetch_hotspot_risk, and its sibling code-hotspots query) `SUM(...)`
-    # over the raw rows with no `argMax`/`computed_at` dedup at all -- a
-    # retry-caused duplicate row silently inflates hotspot/churn scores, not
-    # a "harmless duplicate a reader already collapses." Proving the
-    # append-only+reader-dedup property per table (team-lead's CHAOS-4319 GO
-    # condition 1) is real work spanning every family in families.json and
-    # every reader of every table it writes -- out of this ticket's scope.
-    # `not progress_seen` stays required here; CHAOS-4319's durable-truth
-    # fix (Go-side FailPartitionPermanently + the state-aware classification
-    # above) still fully closes the "silently discarded" bug on its own --
-    # a progress-having failure now durably persists failed_permanent
-    # (visible, with a reason and telemetry) the FIRST time it lands
-    # ambiguous, rather than looping through 5 guaranteed 409s first.
-    safe_to_retry = (
-        execution.worker_kind == "daily"
-        and execution.operation == "partition"
-        and not progress_seen
-    )
+    # CHAOS-3092: safe_to_retry is unconditionally False now -- see the RSS
+    # branch above for why. This was already true independent of that
+    # deletion for every path this function still reaches (the
+    # remaining-metrics dispatch never reports progress), so behavior here
+    # is unchanged; only the now-impossible worker_kind == "daily" condition
+    # is gone.
+    safe_to_retry = False
     deterministic = False
     if return_code < 0:
         reason = "process_signaled"
@@ -2799,25 +2349,6 @@ async def _execute(
         if rows_written is not None:
             response["rows_written"] = rows_written
     return response
-
-
-@router.post("/daily-metrics/v1/execute")
-async def execute_daily_metrics(
-    request: DailyMetricsExecutionRequest,
-    session: Annotated[AsyncSession, Depends(get_postgres_session_dep)],
-    connection: Request,
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict[str, Any]:
-    authorize_worker_bridge(authorization)
-    execution = await _load_daily_execution(session, request)
-    if request.skip_families:
-        # CHAOS-4276: an orchestration hint from the Go dispatcher, not part
-        # of the durable scope _load_daily_execution reads from Postgres --
-        # attached here, after the execution identity is already fixed.
-        execution = dataclass_replace(
-            execution, skip_families=tuple(request.skip_families)
-        )
-    return await _execute(session, execution, connection)
 
 
 @router.post("/remaining-metrics/v1/execute")

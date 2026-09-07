@@ -7,9 +7,10 @@ daily family (``file_hotspots`` included, a SUM-aggregated table with no
 dedup on replay) on top of whatever the Go worker's own compatibility-bridge
 call had already written for the same (org, day, repo) scope. The bare CLI
 path never passed ``skip_families`` the way ``worker_metrics.py``'s HTTP
-bridge does (see that module's ``skip_families`` handling), so any day the
-worker had already touched got recomputed a second time in Python underneath
-it.
+bridge used to (that bridge, and the ``skip_families`` parameter itself, are
+both deleted outright now -- CHAOS-3092, every daily family is native Go),
+so any day the worker had already touched got recomputed a second time in
+Python underneath it.
 
 Both verbs now enqueue through ``dev-health-workerctl metrics daily-start``
 instead, which dispatches through the SAME ``StartRunTx`` coordinator

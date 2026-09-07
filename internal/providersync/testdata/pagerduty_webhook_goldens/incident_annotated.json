@@ -1,0 +1,107 @@
+{
+  "case": "incident_annotated",
+  "event_type": "incident.annotated",
+  "event_id": "evt-incident_annotated",
+  "org_id": "org-4105",
+  "provider_instance_id": "acme",
+  "occurred_at": "2026-07-17T12:00:00Z",
+  "received_at": "2026-07-17T12:00:05Z",
+  "hydrated_via_rest": false,
+  "payload": {
+    "event": {
+      "id": "evt-incident_annotated",
+      "event_type": "incident.annotated",
+      "occurred_at": "2026-07-17T12:00:00Z",
+      "data": {
+        "id": "PNOTE1",
+        "type": "incident_note",
+        "content": "Rolling back the deploy",
+        "created_at": "2026-07-17T12:00:01Z",
+        "incident": {
+          "id": "PINC1",
+          "type": "incident",
+          "title": "Payments unavailable",
+          "status": "triggered",
+          "urgency": "high",
+          "created_at": "2026-07-17T11:58:00Z",
+          "html_url": "https://acme.pagerduty.com/incidents/PINC1",
+          "service": {
+            "id": "PSVC1",
+            "summary": "payments-api"
+          },
+          "priority": {
+            "id": "PPRI1",
+            "summary": "P1"
+          }
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "table": "operational_incidents",
+      "columns": {
+        "org_id": "org-4105",
+        "provider": "pagerduty",
+        "provider_instance_id": "acme",
+        "source_entity_type": "incident",
+        "external_id": "PINC1",
+        "source_version_at": "2026-07-17T12:00:00Z",
+        "id": "bfd4ff5c3cbb0ed080952f8dea59814462c28bc704b8862e81279d783bcc3939",
+        "source_id": null,
+        "source_url": "https://acme.pagerduty.com/incidents/PINC1",
+        "source_event_at": "2026-07-17T12:00:00Z",
+        "source_event_id": "evt-incident_annotated",
+        "observed_at": "2026-07-17T12:00:05Z",
+        "last_synced": "2026-07-17T12:00:05Z",
+        "raw_status": "triggered",
+        "raw_severity": "high",
+        "raw_priority": "P1",
+        "normalized_status": "open",
+        "normalized_severity": "high",
+        "normalized_priority": "high",
+        "relationship_provenance": null,
+        "relationship_confidence": null,
+        "service_id": "eddbc505c10cbcee8b5d31281ad454136e48a7c2881e1e5c73b00da4e3519fef",
+        "service_external_id": "PSVC1",
+        "escalation_policy_id": null,
+        "title": "Payments unavailable",
+        "description": null,
+        "started_at": "2026-07-17T11:58:00Z",
+        "resolved_at": null,
+        "is_deleted": false,
+        "deleted_at": null
+      }
+    },
+    {
+      "table": "operational_incident_notes",
+      "columns": {
+        "org_id": "org-4105",
+        "provider": "pagerduty",
+        "provider_instance_id": "acme",
+        "source_entity_type": "note",
+        "external_id": "PNOTE1",
+        "source_version_at": "2026-07-17T12:00:00Z",
+        "id": "194b6ee7562d7666d71259295705ef799271f124211e557333d24d8a16e45c68",
+        "source_id": null,
+        "source_url": null,
+        "source_event_at": "2026-07-17T12:00:00Z",
+        "source_event_id": "evt-incident_annotated",
+        "observed_at": "2026-07-17T12:00:05Z",
+        "last_synced": "2026-07-17T12:00:05Z",
+        "raw_status": null,
+        "raw_severity": null,
+        "raw_priority": null,
+        "normalized_status": null,
+        "normalized_severity": null,
+        "normalized_priority": null,
+        "relationship_provenance": null,
+        "relationship_confidence": null,
+        "incident_id": "bfd4ff5c3cbb0ed080952f8dea59814462c28bc704b8862e81279d783bcc3939",
+        "body": "Rolling back the deploy",
+        "author_user_id": null,
+        "created_at": "2026-07-17T12:00:01Z"
+      }
+    }
+  ]
+}

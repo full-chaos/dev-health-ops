@@ -936,8 +936,10 @@ enqueued in either environment.
 CHAOS-4243 investigated wiring a fixed-schedule entry for each (matching
 `complexity_daily_fanout`/`release_impact_daily_fanout`/
 `recommendations_daily_fanout`/`membership_backfill_daily_fanout`'s pattern)
-and rejected it: `daily_metrics_fanout`'s existing Python compatibility
-bridge (`daily.HTTPCompatibilityExecutor` →
+and rejected it: `daily_metrics_fanout`'s then-existing Python compatibility
+bridge (deleted 2026-09-07 by CHAOS-3092 PR-A; this paragraph records the state
+at the time of the CHAOS-4243 ruling, not today's)
+(`daily.HTTPCompatibilityExecutor` →
 `/internal/worker/daily-metrics/v1/execute` → `_run_daily_direct` →
 `run_daily_metrics_job`,
 `ops/src/dev_health_ops/metrics/job_daily.py:729-1446`) already computes and

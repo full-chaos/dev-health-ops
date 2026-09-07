@@ -1,8 +1,9 @@
 // Package repouser is the native Go port of the repo_user_commit family
 // (CHAOS-4275) -- the first family to leave metrics.daily's whole-partition
-// HTTP compatibility bridge (internal/jobs/metrics/daily/compatibility_http.go),
-// and the reference implementation the other 20 families in
-// internal/jobs/metrics/daily/families.json are meant to copy.
+// HTTP compatibility bridge, and the reference implementation the other 20
+// families in internal/jobs/metrics/daily/families.json copied. That bridge
+// is now deleted outright (CHAOS-3092 PR-A, along with compatibility_http.go
+// and the Python route behind it): every family in that file is native.
 //
 // The Python authority is src/dev_health_ops/metrics/compute.py:149
 // (compute_daily_metrics), plus three small helper kernels it depends on for

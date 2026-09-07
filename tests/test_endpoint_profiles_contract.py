@@ -66,7 +66,7 @@ _GRAPHQL_KINDS = ("graphql_field", "graphql_mutation", "graphql_subscription")
 
 
 def test_inventory_row_count_matches_the_baseline():
-    """369 rows = 310 REST + 59 GraphQL. A different number here is a finding
+    """368 rows = 309 REST + 59 GraphQL. A different number here is a finding
     to reconcile, not an adjustment to make quietly.
 
     Was 361 (303 + 58) under source-text discovery. The move to enumerating
@@ -84,14 +84,27 @@ def test_inventory_row_count_matches_the_baseline():
     was a phantom row for a route CHAOS-5320's own earlier deletion had
     already removed from the served application -- the inventory row was
     never cleaned up until now.
+    = 369, -1 REST under CHAOS-3092 (PR-A): `POST /internal/worker/
+    daily-metrics/v1/execute`, the daily-metrics Python compatibility bridge.
+    Deleted WITH its row in the same change, so this one was never a phantom --
+    the route and the row went together, which is the shape this baseline is
+    supposed to see.
+    = 368, -1 REST under CHAOS-4105: `POST /api/internal/worker-operational/
+    pagerduty` is deleted with the route itself, the same way. The Go stream
+    consumer reconciles PagerDuty webhooks natively, so nothing calls the
+    bridge route and it no longer exists to profile.
+    = 367. Both decrements are real and INDEPENDENT: PR-A and this PR each
+    removed a different worker-bridge route, and the two landed as one merge.
+    Neither side's -1 subsumes the other -- a merge that kept only one number
+    would silently re-admit a deleted route to the baseline.
     """
     inventory = checker.load_json(_INVENTORY_PATH)
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 310, len(rest)
+    assert len(rest) == 308, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 369, len(rows)
+    assert len(rows) == 367, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -114,8 +127,13 @@ def test_classification_summary_matches_the_baseline():
     # 339 + 3 subscriptions + 3 /graphql transport rows - 2 docstring phantoms
     # = 343, - 1 under CHAOS-5320: the deleted worker-operational/webhook
     # phantom row (see test_inventory_row_count_matches_the_baseline) was
-    # itself classified protected.
-    assert len(protected) == 342, len(protected)
+    # itself classified protected. - 1 under CHAOS-3092 (PR-A): the deleted
+    # daily-metrics bridge route was protected too (worker bridge bearer).
+    # - 1 under CHAOS-4105: so was the deleted worker-operational/pagerduty
+    # row, for the same reason. Both decrements apply; see
+    # test_inventory_row_count_matches_the_baseline on why neither subsumes
+    # the other.
+    assert len(protected) == 340, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

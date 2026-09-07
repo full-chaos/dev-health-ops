@@ -74,8 +74,10 @@ computeparity.Table{
     OrderBy:     "org_id, repo_id, day, metric_name",
     SemanticKey: []string{"org_id", "repo_id", "day", "metric_name"},
     Exclusions: map[string]string{
-        "computed_at": "job_dora stamps datetime.now(UTC) once per job run; it " +
-            "carries no product meaning and differs on every execution",
+        "computed_at": "job_dora (deleted, CHAOS-5336) stamped datetime.now(UTC) " +
+            "once per job run; it carried no product meaning and differed on " +
+            "every execution -- the native DORAExecutor stamps the same way, " +
+            "once per partition (dora_native.go)",
     },
     Repeat: computeparity.AppendDuplicates,
 }
@@ -94,10 +96,12 @@ it excused.
 | `AppendDuplicates` | keeps the key set, accumulates rows |
 | `ReplaceWindow` | keeps the key set and count, values may move |
 
-`metrics.dora` is `AppendDuplicates`: `dora_metrics_daily` is a plain
-`MergeTree` and `job_dora` never deletes, so a replay appends a second copy.
-That is the kind's real behaviour. A port that quietly became idempotent is a
-difference worth failing on, not a tidier implementation to wave through.
+`metrics.dora` was `AppendDuplicates` while it still had a Python side:
+`dora_metrics_daily` is a plain `MergeTree` and neither `job_dora` (deleted,
+CHAOS-5336) nor the native `DORAExecutor` that replaced it deletes, so a
+replay appends a second copy. That was, and remains, the kind's real
+behaviour. A port that quietly became idempotent is a difference worth
+failing on, not a tidier implementation to wave through.
 
 ### 4. Seed from producers, never by hand
 
@@ -170,9 +174,12 @@ satisfy the guard while proving nothing — the exact degradation the guard
 exists to prevent, re-entering through its own input. Calling a Python run
 "go" now changes nothing.
 
-`dora_table_parity_integration_test.go` is a comparator **self-test** and says
-so in its name: both sides run Python because the Go DORA executor is slice R1.
-It asserts the guard REFUSES that pair.
+`dora_table_parity_integration_test.go` **was** a comparator **self-test** and
+said so in its name: both sides ran Python, back when the Go DORA executor was
+still slice R1. It asserted the guard REFUSES that pair. The file was deleted
+with `job_dora.py` once DORA's native port landed (CHAOS-5336, see §4) --
+kept here as the worked example a future two-sided kind's own self-test
+should follow.
 
 Symlinks are resolved, so two names for the same file are one implementation.
 The guard stops there: it does **not** hash executable contents or detect a
@@ -186,8 +193,10 @@ one side at the native executor, is caught.
 A comparator that has not been shown to fail has not been shown to work.
 `internal/testsupport/computeparity` ships the three controls the slice was
 accepted on — a mutated row, a dropped row, and a float nudged by one ULP —
-both as unit tests and against real rows in
-`dora_table_parity_integration_test.go`. Port them for your kind.
+as unit tests, and (before its CHAOS-5336 deletion alongside `job_dora.py`,
+see §4) exercised them against real rows in
+`dora_table_parity_integration_test.go`. Port the same three controls for
+your kind.
 
 Two of those controls failed on first run for reasons that were bugs in the
 *controls*: one formatted the `{"t","v"}` envelope instead of its leaf, and one

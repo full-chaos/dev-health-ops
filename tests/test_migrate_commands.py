@@ -172,8 +172,8 @@ class TestPostgresUpgrade:
         )
         scripts = ScriptDirectory.from_config(cfg)
 
-        assert set(scripts.get_heads()) == {"0066", "0125"}
-        assert scripts.get_revision("application_schema@head").revision == "0125"
+        assert set(scripts.get_heads()) == {"0066", "0126"}
+        assert scripts.get_revision("application_schema@head").revision == "0126"
         assert _database_has_revision(cfg, ("0096",), "0065")
         assert not _database_has_revision(cfg, ("0096",), "0066")
 

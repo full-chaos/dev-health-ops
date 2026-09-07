@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
@@ -1009,6 +1010,29 @@ func buildUnreclaimableSweep(
 	if err != nil {
 		return nil, err
 	}
+	// The RESOLVED mode, logged once at startup.
+	//
+	// Until this line, the only way to learn which mode a deployment was
+	// running in was to read the body of a WARN the sweep emits solely when it
+	// has candidates -- so a shadow deployment with nothing stranded and an
+	// active one were indistinguishable, and a deployment that had silently
+	// never been configured looked exactly like one an operator had chosen
+	// shadow for. Every production deployment was in that state: `rg
+	// SYNC_UNRECLAIMABLE_SWEEP` over the whole repo hit only definition sites,
+	// so the safety net had been observation-only since it shipped and nothing
+	// said so.
+	//
+	// `source` distinguishes an explicit choice from the compiled default,
+	// because those need different operator responses: the first is a decision
+	// to re-examine, the second is a shape nobody has looked at.
+	source := "default"
+	if strings.TrimSpace(cfg.UnreclaimableSweepMode) != "" {
+		source = "configured"
+	}
+	slog.Info("syncreconciler.unreclaimable_sweep_mode_resolved",
+		slog.String("mode", string(mode)),
+		slog.String("source", source),
+	)
 	if mode == syncreconciler.SweepModeOff {
 		return nil, nil
 	}

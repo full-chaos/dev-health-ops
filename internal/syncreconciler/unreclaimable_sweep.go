@@ -177,9 +177,19 @@ type SweepMode string
 const (
 	// SweepModeOff disables the sweep outright.
 	SweepModeOff SweepMode = "off"
-	// SweepModeShadow selects and reports without writing. The default, so
-	// every deployment gets would-terminalize observability at zero write risk
-	// and with no activation step.
+	// SweepModeShadow selects and reports without writing.
+	//
+	// It remains the COMPILED default of ParseSweepMode("") -- deliberately, so
+	// a binary run with no configuration at all cannot destroy work -- but it
+	// is no longer what ships: every deploy shape in this repo now sets
+	// SYNC_UNRECLAIMABLE_SWEEP=active for dev-health-reconciler. The original
+	// justification for shadow-by-default, "every deployment gets
+	// would-terminalize observability at zero write risk", turned out to be
+	// only half implemented in practice: no deploy shape ever set a VALUE, so
+	// every deployment was in shadow by accident rather than by choice, and the
+	// observability half had nothing acting on it. Sync run 115e6246's 17 units
+	// were selected and reported every second for thirteen hours and never
+	// terminalized.
 	SweepModeShadow SweepMode = "shadow"
 	// SweepModeActive permits terminalization.
 	//
@@ -187,6 +197,19 @@ const (
 	// provider units for this deployment. That assertion used to be a separate
 	// environment variable; collapsing it into the mode keeps one knob instead
 	// of two saying the same thing (CHAOS-4020).
+	//
+	// That declaration is now UNCONDITIONALLY TRUE. CHAOS-3092 deleted the
+	// Celery provider-unit compute outright -- there is no consumer left to
+	// serve a provider unit in any deployment, so there is no deployment for
+	// which the assertion could be false. It is therefore the shipped value in
+	// every deploy shape here, not an operator opt-in, and an operator who
+	// wants the old behaviour sets SYNC_UNRECLAIMABLE_SWEEP=shadow (or off)
+	// explicitly.
+	//
+	// Active does NOT mean the sweep is the first thing to reach a strand.
+	// joboutbox.StrandRepair's provider-unit shape recovers a row while its
+	// outbox delivery budget lasts and this sweep only takes it once that is
+	// spent -- see selectPublishedDedupeKeysSQL below.
 	SweepModeActive SweepMode = "active"
 )
 

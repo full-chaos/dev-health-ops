@@ -638,6 +638,14 @@ config:
   SYNC_UNIT_EXPIRED_LEASE_RETRY_BACKOFF_SECONDS: "60"
   SYNC_DISPATCH_REDISPATCH_COUNTDOWN: "60"
   SYNC_OUTBOX_CLAIM_TIMEOUT_SECONDS: "300"
+  # CHAOS-3092 made this unconditionally true: no Celery consumer serves
+  # provider units in any deployment, because that compute is deleted. The
+  # shipped default is therefore active rather than shadow -- shadow selects
+  # the strand and refuses to write, which is what left sync run 115e6246's 17
+  # units unreachable for thirteen hours while the sweep logged them every
+  # second. Set SYNC_UNRECLAIMABLE_SWEEP=shadow (or off) to override; the flag
+  # --unreclaimable-sweep still beats this.
+  SYNC_UNRECLAIMABLE_SWEEP: "active"
   SYNC_WATERMARK_OVERLAP: "0"
   SYNC_BUDGET_BUCKET_LIMITS: '{"github:rest_core":250,"github:graphql_cost":500,"github:contents_blob":100,"github:secondary_abuse_risk":25,"linear:graphql_cost":500}'
   SYNC_BUDGET_DEFAULT_LIMIT: "1000000"

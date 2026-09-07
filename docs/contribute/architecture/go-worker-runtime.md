@@ -667,11 +667,36 @@ group, not only the one that executes it.**
 
 ### A safety net has an off state, and the off state is invisible
 
-The unreclaimable sweep runs in one of three modes — `off`, `shadow`
-(default), or `active` — set by `--unreclaimable-sweep` with
-`SYNC_UNRECLAIMABLE_SWEEP` as the environment fallback. An unrecognised value
-is rejected rather than defaulted, because `active` is an assertion about the
-deployment and a typo must not quietly become one.
+The unreclaimable sweep runs in one of three modes — `off`, `shadow`, or
+`active` — set by `--unreclaimable-sweep` with `SYNC_UNRECLAIMABLE_SWEEP` as the
+environment fallback. An unrecognised value is rejected rather than defaulted,
+because `active` is an assertion about the deployment and a typo must not
+quietly become one.
+
+**`active` is the shipped value, and `shadow` is only the compiled fallback.**
+Every deploy shape in this repo — the go-workers compose overlay, the
+docker-compose and swarm stacks, the Helm values, the Kubernetes ConfigMap, both
+`.env.example` files — sets `SYNC_UNRECLAIMABLE_SWEEP=active` for
+`dev-health-reconciler`. `ParseSweepMode("")` still answers `shadow` so a binary
+run with no configuration at all cannot destroy work, but nothing ships in that
+state any more.
+
+That changed because the original justification for shadow-by-default — "every
+deployment gets would-terminalize observability at zero write risk" — was only
+half true in practice. No deploy shape ever set a value, so every deployment was
+in shadow *by accident*, and the observability half had nothing acting on it:
+sync run `115e6246`'s 17 stranded units were selected and reported every second
+for thirteen hours and never terminalized. The assertion `active` encodes ("no
+Celery consumer serves provider units for this deployment") is also now
+unconditionally true — CHAOS-3092 deleted that compute outright — so there is no
+deployment for which it could be false.
+
+The reconciler logs the resolved mode once at startup
+(`syncreconciler.unreclaimable_sweep_mode_resolved`, with `mode` and a `source`
+of `configured` or `default`). Before that line, the only way to learn a
+deployment's mode was to read the body of a WARN the sweep emits solely when it
+has candidates — so an unconfigured deployment and a deliberately-shadowed one
+were indistinguishable.
 
 `off` returns a nil sweep, so the pipeline never calls it. That is the correct
 mitigation for a broken sweep and it is also a trap: a merged fix looks deployed

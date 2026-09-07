@@ -392,6 +392,14 @@ services:
     environment:
       <<: *go-worker-env-base
       COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}
+      # CHAOS-3092 made "no Celery consumer serves provider units" true of
+      # every deployment, which is exactly the assertion SweepModeActive
+      # encodes -- so the sweep ships ACTIVE here rather than as an operator
+      # opt-in. Shadow, its former default, selects the strand and refuses to
+      # write: sync run 115e6246's 17 units were logged as candidates every
+      # second for thirteen hours and never terminalized. Override with
+      # SYNC_UNRECLAIMABLE_SWEEP=shadow (or off) in the environment.
+      SYNC_UNRECLAIMABLE_SWEEP: ${SYNC_UNRECLAIMABLE_SWEEP:-active}
     stop_grace_period: 60s
 
   go-scheduler:

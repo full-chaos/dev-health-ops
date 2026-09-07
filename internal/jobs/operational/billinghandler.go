@@ -127,13 +127,99 @@ func (handler *BillingHandler) Work(
 		return handler.reportLostClaim(ctx, logger, claim, now)
 	}
 
-	// Everything from here to the send runs with a claim HELD. Every exit --
-	// error or deliberate drop -- must release it, or a retry meeting the
-	// still-fresh, unresolved claim would report a duplicate for an email
-	// that was never attempted. `deliver` funnels all of them through one
-	// return value so no path can skip the release below.
+	// Everything from here to the send runs with a claim HELD. Every exit
+	// that knows nothing was sent -- error or deliberate drop -- must
+	// release it, or a retry meeting the still-fresh, unresolved claim would
+	// report a duplicate for an email that was never attempted. `deliver`
+	// funnels all of them through one return value so no path can skip the
+	// release below. The one deliberate exception is FenceOutcomeAmbiguous
+	// (CHAOS-5399): there, whether something was sent is exactly what is NOT
+	// known, and releasing would risk the opposite mistake -- a retry
+	// duplicating a message that already went out.
 	sent, outcome, deliverErr := handler.deliver(ctx, logger, notification)
 	if deliverErr != nil {
+		if outcome == FenceOutcomeAmbiguous {
+			if ctx.Err() != nil {
+				// CHAOS-5399 r3 residual, made OBSERVABLE rather than only
+				// commented (chris's telemetry rule): the worker's context is
+				// already done (a shutdown/deploy drain) at the exact moment
+				// this ambiguous outcome is being classified.
+				// jobruntime.classify checks errors.Is(ctx.Err(),
+				// context.Canceled) directly against this LIVE context,
+				// independent of what this function returns below -- so the
+				// RetryableAfter snooze this branch is about to request can be
+				// bypassed regardless. The claim still stays held either way
+				// (duplicate-send safety is unaffected); what can be lost is
+				// only the guaranteed, timely path to the staleness alert.
+				// Filed as CHAOS-5455 against jobruntime -- classify's
+				// ctx.Err() check running before the snooze-marker check is a
+				// pre-existing ordering defect, not something this handler can
+				// fix locally.
+				logger.WarnContext(ctx,
+					"billing.ambiguous_outcome_during_shutdown",
+					"error", deliverErr, "ctx_err", ctx.Err(),
+					"claim_outcome", string(FenceOutcomeAmbiguous),
+					"note", "the RetryableAfter snooze past StaleClaimThreshold may be "+
+						"bypassed by jobruntime.classify's ctx.Err()-cancellation check; "+
+						"the claim stays held regardless")
+			}
+			// CHAOS-5399: do NOT release. The provider result is genuinely
+			// unknown -- the message may already be out -- so releasing
+			// would let a retry send a duplicate exactly the way an
+			// unresolved crash would. Retaining the claim means a later
+			// attempt meets a still-held, uncompleted claim and
+			// reportLostClaim suppresses it as a duplicate instead of
+			// sending again.
+			//
+			// CHAOS-5399 r1 (codex P1): plain Retryable is wrong here. This
+			// job kind's max_attempts is 4 (contracts/jobs/v1/registry.json),
+			// with bounded_exponential_jitter backoff that finishes in well
+			// under StaleClaimThreshold (15m) -- an ordinary Retryable
+			// return would burn attempts 2-4 doing nothing but bouncing off
+			// the duplicate_suppressed branch, River would then discard the
+			// job entirely, and NOTHING would ever run Work() for this
+			// notification again: the claim stays held forever with no
+			// automated path to the staleness alert at all. RetryableAfter
+			// schedules the one follow-up attempt to land AFTER
+			// StaleClaimThreshold has genuinely elapsed, so it reaches
+			// FenceOutcomeStaleClaim (Permanent, operator-visible)
+			// deterministically -- and its snooze does NOT consume the
+			// job's bounded attempt budget, so this costs nothing against
+			// the normal retry allowance for attempt 1 itself.
+			//
+			// CHAOS-5399 r2 (codex P1): deliverErr is passed by TEXT, not by
+			// %w-wrapping (errors.New(deliverErr.Error()), not deliverErr
+			// itself) -- deliberately severing its cause chain here.
+			// jobruntime.classify checks errors.Is(err, context.DeadlineExceeded)
+			// BEFORE it ever inspects the RetryableAfter snooze marker; the
+			// most common ambiguous shape (an http.Client response timeout)
+			// wraps exactly that, so passing the chain through would have
+			// classify silently take the CategoryTimeout branch instead --
+			// an ordinary retry that DOES consume the attempt budget,
+			// defeating this whole fix. All the descriptive detail already
+			// reached the log line above; only the jobruntime-facing error
+			// needs flattening.
+			//
+			// KNOWN RESIDUAL (CHAOS-5399 r3, codex NOT CLEAN, accepted as-is,
+			// tracked as CHAOS-5455 -- see the PR body): classify also checks
+			// errors.Is(ctx.Err(), context.Canceled) directly against the
+			// LIVE context, independent of whatever error this function
+			// returns. If the worker process is draining (a deploy) at the
+			// exact moment an ambiguous Send() result is being handled, that
+			// check wins regardless of the flattening above, and the
+			// snooze is bypassed the same way the DeadlineExceeded one was
+			// -- but only for that compound, narrow race. It does NOT
+			// reopen the duplicate-send bug this ticket fixes: the claim is
+			// still never released for FenceOutcomeAmbiguous, unconditionally,
+			// above and regardless of this branch's outcome; the only
+			// degraded property in this one compound case is the
+			// GUARANTEED, timely path to the staleness alert, not
+			// duplicate-send safety. A local fix is not possible here --
+			// jobruntime.classify's ctx.Err() check cannot be influenced by
+			// this function's return value -- and jobruntime/errors.go is
+			// shared framework code well outside this ticket's blast radius.
+			return jobruntime.RetryableAfter(errors.New(deliverErr.Error()), AmbiguousReconciliationDelay)
+		}
 		handler.releaseClaim(ctx, logger, notification.ID, outcome)
 		if outcome == FenceOutcomePermanentDrop {
 			return jobruntime.Permanent(deliverErr)
@@ -234,8 +320,23 @@ func (handler *BillingHandler) deliver(
 	if err := handler.sender.Send(ctx, EmailMessage{
 		To: owner.Email, Subject: rendered.Subject, HTML: rendered.HTML,
 	}); err != nil {
+		var ambiguous *AmbiguousSendError
+		if errors.As(err, &ambiguous) {
+			// CHAOS-5399: an ambiguous provider result -- e.g. Resend
+			// accepted the request and the response timed out, or an SMTP
+			// connection dropped after DATA but before the final reply --
+			// is NOT "nothing was sent". Every path logs at the failure
+			// site with its outcome class; this one additionally carries
+			// the provider message id when the sender had one.
+			logger.ErrorContext(ctx,
+				"billing notification: the provider result is ambiguous; the claim will "+
+					"NOT be released, to avoid sending a message that may already be out",
+				"error", err, "provider_message_id", ambiguous.ProviderMessageID,
+				"claim_outcome", string(FenceOutcomeAmbiguous))
+			return false, FenceOutcomeAmbiguous, err
+		}
 		logger.ErrorContext(ctx, "billing notification: the provider rejected the message",
-			"error", err)
+			"error", err, "claim_outcome", string(FenceOutcomeReleasedForRetry))
 		return false, FenceOutcomeReleasedForRetry, err
 	}
 	return true, FenceOutcomeSent, nil

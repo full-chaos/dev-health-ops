@@ -36,6 +36,17 @@ import (
 // operator, exactly as the Python implementation left it.
 const StaleClaimThreshold = 900 * time.Second
 
+// AmbiguousReconciliationDelay is how long the billing handler snoozes the
+// single follow-up attempt after an ambiguous provider result (CHAOS-5399).
+// It is deliberately StaleClaimThreshold PLUS a margin, not merely equal to
+// it: the follow-up attempt's own now() must land strictly past the
+// threshold measured from the original claim time, and a margin absorbs
+// scheduler jitter so the comparison in ClaimResult.Stale is never a
+// near-miss. See BillingHandler.Work for why a plain retry (which consumes
+// this job kind's bounded attempt budget and would exhaust it long before
+// StaleClaimThreshold) cannot be used here instead.
+const AmbiguousReconciliationDelay = StaleClaimThreshold + 2*time.Minute
+
 // FenceOutcome is the closed vocabulary of billing-fence results, carried on
 // every billing log line as claim_outcome. It is the same set the retired
 // Python `BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL` counter labelled, so
@@ -81,6 +92,18 @@ const (
 	// recorded completion; this names that case instead of hiding it inside
 	// the ordinary success count.
 	FenceOutcomeNoOwner FenceOutcome = "no_owner"
+	// FenceOutcomeAmbiguous means the provider's Send result could not be
+	// classified as sent or not-sent (CHAOS-5399): an HTTP response that
+	// timed out or a 5xx after Resend accepted the request, or an SMTP
+	// connection lost after DATA was written but before the final reply.
+	// The claim is deliberately NEVER released for this outcome -- doing so
+	// would let a retry send a message that may already be out. Resolution
+	// happens the same way an unresolved crash already does: a later
+	// attempt meets the still-held claim and is suppressed as a duplicate
+	// (FenceOutcomeDuplicateSuppressed) until either it completes some other
+	// way or StaleClaimThreshold passes and it surfaces as
+	// FenceOutcomeStaleClaim for an operator.
+	FenceOutcomeAmbiguous FenceOutcome = "ambiguous"
 )
 
 // ClaimResult describes one claim attempt. Claimed true means this caller won

@@ -54,31 +54,26 @@ class FakeSqlSink:
 # already dead (the Go worker's native CapacityExecutor is the only live
 # batch path, confirmed via cmd/dev-health-worker/daily.go's unconditional
 # executor construction). run_capacity_forecast had no other live caller and
-# is deleted with it; discover_team_scopes/load_throughput_from_sink/
-# get_backlog_from_sink are re-exported from capacity_queries.py (still live:
-# the GraphQL capacity resolver calls compute_capacity.forecast_capacity
-# directly, a separate epic per team-lead's CHAOS-5336 ruling) -- the tests
-# below import from there now instead of through job_capacity's re-export.
-
-
-@pytest.mark.asyncio
-async def test_discover_team_scopes_filters_clickhouse_by_org_id() -> None:
-    """Given an org-scoped sink, When discovering scopes, Then query filters org."""
-    from dev_health_ops.metrics.capacity_queries import discover_team_scopes
-
-    sink = FakeClickHouseSink()
-    sink.org_id = "org-1"
-    sink.client.query.return_value = SimpleNamespace(
-        result_rows=[("team-a", "scope-a")]
-    )
-
-    result = await discover_team_scopes(sink)
-
-    assert result == [("team-a", "scope-a")]
-    query = sink.client.query.call_args.args[0]
-    params = sink.client.query.call_args.kwargs["parameters"]
-    assert "org_id = {org_id:String}" in query
-    assert params == {"org_id": "org-1"}
+# is deleted with it; load_throughput_from_sink/get_backlog_from_sink moved to
+# capacity_queries.py, and the tests below import from there now instead of
+# through job_capacity's re-export.
+#
+# CHAOS-5349: discover_team_scopes is GONE, and its test with it. It was the
+# last survivor of the deleted scheduler -- an unbounded sweep of the whole
+# tree (rg --hidden --no-ignore, .git excluded) found exactly three
+# references: its own definition, this test, and a doc comment in
+# internal/jobs/metrics/remaining/capacity_native_clickhouse.go that cites it
+# by name as the source of a query the Go worker already ports. Zero callers
+# in src/.
+#
+# The other three tests in this file are NOT deleted with it. They cover
+# load_throughput_from_sink, get_backlog_from_sink and
+# resolve_capacity_forecasts -- all three still LIVE, all three the Python
+# capacity resolver's own tenant-isolation coverage. Deleting the whole file
+# because one of its four tests went dead would have removed org-scoping
+# proof from three live paths, which is the opposite of what CHAOS-5349 is
+# for. See tests/api/graphql/test_go_served_resolver_python_deletion_
+# structural_guard.py for what this ticket may and may not delete, and why.
 
 
 @pytest.mark.asyncio

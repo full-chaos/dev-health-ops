@@ -124,34 +124,3 @@ async def get_backlog_from_sink(
     if rows:
         return int(rows[0].get("wip_count_end_of_day") or 0)
     return 0
-
-
-async def discover_team_scopes(
-    sink: CapacityQuerySink,
-) -> list[tuple[str | None, str | None]]:
-    backend = sink.backend_type
-    org_id = str(getattr(sink, "org_id", "") or "")
-
-    if backend == "clickhouse":
-        org_filter = "AND org_id = {org_id:String}" if org_id else ""
-    else:
-        org_filter = "AND org_id = :org_id" if org_id else ""
-    params = {"org_id": org_id} if org_id else {}
-
-    query = f"""
-        SELECT DISTINCT team_id, work_scope_id
-        FROM work_item_metrics_daily FINAL
-        WHERE day >= today() - 30
-        {org_filter}
-    """
-
-    rows = await asyncio.to_thread(sink.query_dicts, query, params)
-    return [
-        (
-            str(row.get("team_id")) if row.get("team_id") is not None else None,
-            str(row.get("work_scope_id"))
-            if row.get("work_scope_id") is not None
-            else None,
-        )
-        for row in rows
-    ]

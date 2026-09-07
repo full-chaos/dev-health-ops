@@ -95,9 +95,7 @@ def mock_route_failure(monkeypatch):
         enqueue_calls.append((args, kwargs))
 
     monkeypatch.setattr(webhook_router, "_persist_webhook_delivery", fake_persist)
-    monkeypatch.setattr(
-        webhook_router, "get_postgres_session", lambda: _FakeSessionCtx()
-    )
+    monkeypatch.setattr(webhook_router, "get_postgres_session", _FakeSessionCtx)
     monkeypatch.setattr(webhook_router, "resolve_worker_job_route", fake_resolve)
     monkeypatch.setattr(webhook_router, "enqueue_worker_job", fake_enqueue)
     return enqueue_calls

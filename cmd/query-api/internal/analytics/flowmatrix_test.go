@@ -652,41 +652,49 @@ func TestCompileFlowMatrix_TeamRepo_UseInvestmentFalse_StillRejectsActiveFilters
 // path, which cannot express a filter at all.
 func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_HonoursFilters(t *testing.T) {
 	useInvestment := true
-	req := FlowMatrixRequest{
-		Dimension:     DimensionTeam,
-		Measure:       MeasureCount,
-		StartDate:     mustDate(t, "2026-01-01"),
-		EndDate:       mustDate(t, "2026-01-31"),
-		MaxNodes:      50,
-		MaxEdges:      200,
-		UseInvestment: &useInvestment,
-	}
-	filters := &model.FilterInput{
-		Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputRepo, Ids: []string{"repo-1"}},
-	}
-	nodes, edges, err := CompileFlowMatrix(req, "org-1", 30, filters)
-	if err != nil {
-		t.Fatalf("expected the investment path to honour (not reject) an active filter, got error: %v", err)
-	}
-	// translateFilters' scope.level=repo default branch (filtertranslation.go)
-	// emits this exact fragment against defaultFilterColumns().Repo -- assert
-	// the real shape, not just "compiling succeeded", so a future change that
-	// silently drops the filter clause while still returning no error is
-	// caught here too.
-	const wantClause = "AND repo_id IN {scope_ids:Array(String)}"
-	for _, q := range []struct {
-		name     string
-		sql      string
-		bindings []clickhouse.Binding
-	}{{"nodes", nodes.sql, nodes.bindings}, {"edges", edges.sql, edges.bindings}} {
-		if !strings.Contains(q.sql, wantClause) {
-			t.Errorf("%s SQL missing translated filter clause %q, got: %s", q.name, wantClause, q.sql)
-		}
-		got := bindingMap(q.bindings)
-		ids, ok := got["scope_ids"].([]string)
-		if !ok || len(ids) != 1 || ids[0] != "repo-1" {
-			t.Errorf("%s scope_ids binding = %v, want [repo-1]", q.name, got["scope_ids"])
-		}
+	// Codex round chaos-5426-chord F-1 (P3, non-blocking): the original
+	// version of this test only exercised DimensionTeam, leaving REPO's own
+	// investment-mode filter path unpinned -- table-driven over both
+	// dimensions closes that gap.
+	for _, dim := range []Dimension{DimensionTeam, DimensionRepo} {
+		t.Run(string(dim), func(t *testing.T) {
+			req := FlowMatrixRequest{
+				Dimension:     dim,
+				Measure:       MeasureCount,
+				StartDate:     mustDate(t, "2026-01-01"),
+				EndDate:       mustDate(t, "2026-01-31"),
+				MaxNodes:      50,
+				MaxEdges:      200,
+				UseInvestment: &useInvestment,
+			}
+			filters := &model.FilterInput{
+				Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputRepo, Ids: []string{"repo-1"}},
+			}
+			nodes, edges, err := CompileFlowMatrix(req, "org-1", 30, filters)
+			if err != nil {
+				t.Fatalf("expected the investment path to honour (not reject) an active filter, got error: %v", err)
+			}
+			// translateFilters' scope.level=repo default branch (filtertranslation.go)
+			// emits this exact fragment against defaultFilterColumns().Repo -- assert
+			// the real shape, not just "compiling succeeded", so a future change that
+			// silently drops the filter clause while still returning no error is
+			// caught here too.
+			const wantClause = "AND repo_id IN {scope_ids:Array(String)}"
+			for _, q := range []struct {
+				name     string
+				sql      string
+				bindings []clickhouse.Binding
+			}{{"nodes", nodes.sql, nodes.bindings}, {"edges", edges.sql, edges.bindings}} {
+				if !strings.Contains(q.sql, wantClause) {
+					t.Errorf("%s SQL missing translated filter clause %q, got: %s", q.name, wantClause, q.sql)
+				}
+				got := bindingMap(q.bindings)
+				ids, ok := got["scope_ids"].([]string)
+				if !ok || len(ids) != 1 || ids[0] != "repo-1" {
+					t.Errorf("%s scope_ids binding = %v, want [repo-1]", q.name, got["scope_ids"])
+				}
+			}
+		})
 	}
 }
 

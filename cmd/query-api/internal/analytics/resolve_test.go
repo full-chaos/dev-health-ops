@@ -295,7 +295,21 @@ func TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT(t
 
 func TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject(t *testing.T) {
 	client := &routingFakeClient{}
-	client.on("work_item_cycle_times AS wct FINAL", &fakeRowScanner{})
+	// CHAOS-5426: TEAM + this exact real call shape (flowMatrix.useInvestment
+	// AND batch.useInvestment both true) now routes through
+	// compileFlowMatrixInvestmentDimension, reading work_unit_investments
+	// (LatestWorkUnitInvestmentsSource) via investmentContextFor's team
+	// join -- not the old work_item_cycle_times fixed template. Seed a real
+	// row on each of the nodes/edges query (distinguished by their own
+	// GROUP BY shape, since both share the "work_unit_investments" text and
+	// a shared fakeRowScanner would arity-mismatch across the two differently
+	// -shaped scans) and assert a node comes back, so this test proves a
+	// genuine successful investment-source round trip, not just "the
+	// swallowed-execute-error path also returns non-nil".
+	client.on("GROUP BY node_id", &fakeRowScanner{rows: [][]any{
+		{"TEAM", "team-a", 3.0},
+	}})
+	client.on("GROUP BY source, target", &fakeRowScanner{})
 
 	fmUseInvestment := true
 	batch := model.AnalyticsRequestInput{
@@ -315,6 +329,9 @@ func TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject(
 	}
 	if result.FlowMatrix == nil {
 		t.Fatal("expected a non-nil FlowMatrixResult")
+	}
+	if len(result.FlowMatrix.Nodes) == 0 {
+		t.Fatal("expected a real node from the investment source, got none -- either the query never fired or it fell back to the swallowed-error empty path")
 	}
 }
 
@@ -504,10 +521,15 @@ func TestResolve_FlowMatrixDegradation_IsReported(t *testing.T) {
 	// real client that records a constant string carrying no cause.
 	// The fake being easier than the dependency is what makes the test
 	// measure the fake. (Lane A's codex P1, same class.)
-	driverErr := errors.New("code: 60, message: Table default.work_item_cycle_times does not exist")
+	// CHAOS-5426: TEAM + an explicit flowMatrix.useInvestment=true now
+	// routes through compileFlowMatrixInvestmentDimension, which reads
+	// work_unit_investments (LatestWorkUnitInvestmentsSource), not
+	// work_item_cycle_times -- match key updated to the table this
+	// request's compiled nodes/edges SQL actually names.
+	driverErr := errors.New("code: 60, message: Table default.work_unit_investments does not exist")
 	boom := &fakeOperationError{operation: "query", cause: driverErr}
 	client := &routingFakeClient{}
-	client.onErr("work_item_cycle_times", boom)
+	client.onErr("work_unit_investments", boom)
 
 	type report struct {
 		phase string
@@ -734,10 +756,16 @@ func TestResolveSankey_ArgMaxGuardFiresOnAutoRoutedNodesEdges(t *testing.T) {
 // TestResolveFlowMatrix_ArgMaxGuard is CHAOS-4759 codex round-2 P1's
 // regression lock for resolveFlowMatrix: THEME (auto-routes to the
 // investment source when useInvestment is unset) must fire the guard;
-// TEAM (never routes to the investment source regardless of the flag,
-// per CompileFlowMatrix's own switch) must NOT -- a blanket "always fire"
-// fix would be just as wrong as never firing, so both directions are
-// pinned in one test.
+// TEAM with useInvestment left UNSET (TEAM is not in
+// resolveUseInvestment's auto-route set, unlike THEME) must NOT -- a
+// blanket "always fire" fix would be just as wrong as never firing, so
+// both directions are pinned in one test. CHAOS-5426: TEAM with an
+// EXPLICIT useInvestment=true DOES now route to the investment source
+// and DOES fire this guard (flowMatrixUsesInvestmentSource no longer
+// hard-excludes TEAM/REPO, only WORK_TYPE) -- that case is covered by
+// TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject
+// and TestResolve_FlowMatrixDegradation_IsReported, not here; this test
+// is specifically about the unset-flag default.
 func TestResolveFlowMatrix_ArgMaxGuard(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

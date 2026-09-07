@@ -245,7 +245,7 @@ func TestOrderingContractGuardMatchesTheDeployedSchema(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			test.configure(t)
-			_, err := NewDORAExecutor(ctx, stores[test.schema], nil)
+			_, err := NewDORAExecutor(ctx, stores[test.schema], nil, nil)
 			switch {
 			case test.wantBuild && err != nil:
 				t.Fatalf(
@@ -623,7 +623,7 @@ func TestAPartiallyMigratedSchemaIsRefused(t *testing.T) {
 	// The configured contract AGREES with incidents. Under a guard that checked
 	// only incidents this construction succeeded.
 	t.Setenv(operationalOrderingContractEnv, "2")
-	_, err = NewDORAExecutor(ctx, partial, nil)
+	_, err = NewDORAExecutor(ctx, partial, nil, nil)
 	if err == nil {
 		t.Fatal(
 			"a partially migrated schema was accepted. The projection reads " +

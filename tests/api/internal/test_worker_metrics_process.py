@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import logging
 import os
@@ -48,10 +47,20 @@ def _execution() -> worker_metrics._Execution:
 
 
 def _daily_execution() -> worker_metrics._Execution:
-    """A daily/partition execution -- the only worker_kind whose progress
-    signal is real (CHAOS-4264 codex R2: safe_to_retry requires
-    worker_kind == "daily" because only _run_daily_direct wires
-    on_write_starting through job_daily.py)."""
+    """A daily/partition execution.
+
+    CHAOS-3092 (2026-09-07): worker_kind == "daily" no longer flows through
+    _run_compatibility_process at all in production -- the Go daily
+    worker's Python compatibility bridge (execute_daily_metrics,
+    _load_daily_execution, _run_daily_direct) is deleted outright, every
+    daily family being native Go now. Kept as a test fixture: it still
+    exercises the shared subprocess-classification machinery
+    (_run_compatibility_process_locked, _CompatibilityProcessFailure) with a
+    worker_kind value distinct from "remaining", which several tests below
+    still use to prove that machinery is worker_kind-agnostic. Historically
+    (CHAOS-4264 codex R2) this was "the only worker_kind whose progress
+    signal is real"; safe_to_retry is unconditionally False now regardless
+    of worker_kind (see _run_compatibility_process_locked)."""
     scope = {"target_day": "2026-08-24", "repo_ids": []}
     digest = worker_metrics._scope_digest(scope)
     run_id = uuid.UUID("44444444-4444-4444-8444-444444444444")
@@ -80,10 +89,12 @@ def _daily_execution() -> worker_metrics._Execution:
 
 
 def _daily_finalize_execution() -> worker_metrics._Execution:
-    """A daily/finalize execution. CHAOS-4264 codex R3: run_daily_metrics_
-    finalize writes user_metrics_daily/ic_landscape_rolling_30d directly
-    with no progress callback of its own -- worker_kind == "daily" alone is
-    not enough; safe_to_retry must also require operation == "partition"."""
+    """A daily/finalize execution.
+
+    CHAOS-3092 (2026-09-07): see _daily_execution's docstring -- this
+    worker_kind/operation combination no longer flows through
+    _run_compatibility_process in production either; kept as a fixture for
+    the same reason. safe_to_retry is unconditionally False now."""
     scope = {"target_day": "2026-08-24", "repo_ids": []}
     digest = worker_metrics._scope_digest(scope)
     run_id = uuid.UUID("88888888-8888-4888-8888-888888888888")
@@ -229,6 +240,12 @@ def test_metric_process_payload_round_trips_only_durable_execution_fields() -> N
     execution = _execution()
     payload = worker_metrics._execution_process_payload(execution)
 
+    # CHAOS-3092: "skip_families" is deleted from this set -- the field
+    # existed only to serve the Go daily worker's now-fully-deleted Python
+    # compatibility bridge (execute_daily_metrics). The sibling test that
+    # used to round-trip a non-empty skip_families value
+    # (test_metric_process_payload_round_trips_a_non_empty_skip_families)
+    # is deleted with it.
     assert set(payload) == {
         "worker_kind",
         "operation",
@@ -240,28 +257,12 @@ def test_metric_process_payload_round_trips_only_durable_execution_fields() -> N
         "claim_token",
         "scope",
         "generation_seed",
-        "skip_families",
     }
     assert worker_metrics._execution_from_process_payload(payload) == execution
     with pytest.raises(ValueError, match="input is invalid"):
         worker_metrics._execution_from_process_payload(
             {**payload, "callable": "os.system"}
         )
-
-
-def test_metric_process_payload_round_trips_a_non_empty_skip_families() -> None:
-    """CHAOS-4276: skip_families must survive the subprocess boundary
-    round-trip, not just default to empty -- the field this ticket added is
-    exactly the one the earlier round-trip test does not exercise with a
-    non-default value."""
-    execution = dataclasses.replace(
-        _daily_execution(), skip_families=("team_wellbeing",)
-    )
-    payload = worker_metrics._execution_process_payload(execution)
-    assert payload["skip_families"] == ["team_wellbeing"]
-    round_tripped = worker_metrics._execution_from_process_payload(payload)
-    assert round_tripped == execution
-    assert round_tripped.skip_families == ("team_wellbeing",)
 
 
 def test_metric_runner_encodes_a_fixed_bounded_outcome() -> None:
@@ -618,15 +619,21 @@ async def test_metric_compatibility_process_classifies_resource_exhausted_with_p
 
 
 @pytest.mark.asyncio
-async def test_metric_compatibility_process_classifies_signal_kill_with_no_progress_as_safe_to_retry(
+async def test_metric_compatibility_process_signal_kill_with_no_progress_is_not_safe_to_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No progress line was ever emitted, and the process was killed by a
-    signal (the actual CHAOS-4264 production shape: SIGKILL, return_code<0)
-    -- this must be safe to hand straight back to River, not parked in the
-    ambiguous state a human has to repair. Uses a daily execution: only the
-    daily path has real per-scope write evidence (codex R2), so it is the
-    only worker_kind that can ever be safe_to_retry."""
+    signal (the actual CHAOS-4264 production shape: SIGKILL, return_code<0).
+
+    CHAOS-4264 originally made this safe to hand straight back to River
+    (skipping the ambiguous state) ONLY for a daily/partition execution --
+    the sole worker_kind with real per-scope write evidence (codex R2).
+    CHAOS-3092 (2026-09-07): that daily bridge path is deleted outright
+    (every daily family is native Go now), so safe_to_retry is
+    unconditionally False for every execution this function can still
+    reach -- including this once-True daily case, kept as a fixture to pin
+    the new behavior explicitly rather than relying only on
+    test_metric_compatibility_process_remaining_metrics_never_safe_to_retry."""
     monkeypatch.setattr(
         worker_metrics,
         "_COMPATIBILITY_RUNNER_COMMAND",
@@ -639,7 +646,7 @@ async def test_metric_compatibility_process_classifies_signal_kill_with_no_progr
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
         await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "process_signaled"
-    assert excinfo.value.safe_to_retry is True
+    assert excinfo.value.safe_to_retry is False
 
 
 @pytest.mark.asyncio
@@ -653,7 +660,11 @@ async def test_metric_compatibility_process_remaining_metrics_never_safe_to_retr
     would be indistinguishable from "wrote one repo's rows then crashed" --
     a fabricated safety claim, not an observed one. Even a signal-killed
     remaining execution with zero progress lines must stay unsafe to
-    auto-retry (safe_to_retry requires worker_kind == "daily")."""
+    auto-retry. CHAOS-3092: safe_to_retry is unconditionally False now (the
+    daily bridge path this used to carve an exception out for is deleted
+    outright), so this is no longer a worker_kind-specific rule -- kept as
+    its own test since it exercises the family this function actually
+    dispatches to in production today."""
     monkeypatch.setattr(
         worker_metrics,
         "_COMPATIBILITY_RUNNER_COMMAND",
@@ -675,10 +686,12 @@ async def test_metric_compatibility_process_daily_finalize_never_safe_to_retry(
 ) -> None:
     """Codex R3 finding (CHAOS-4264): run_daily_metrics_finalize writes
     user_metrics_daily and ic_landscape_rolling_30d directly with no
-    progress callback -- worker_kind == "daily" alone is not a safe gate.
-    A signal-killed finalize with zero progress lines must stay unsafe to
-    auto-retry (safe_to_retry additionally requires operation ==
-    "partition")."""
+    progress callback -- worker_kind == "daily" alone was never a safe gate,
+    finalize also needed operation == "partition". CHAOS-3092: the daily
+    bridge path is deleted outright now, so safe_to_retry is unconditionally
+    False regardless of worker_kind/operation -- a signal-killed finalize
+    with zero progress lines still must stay unsafe to auto-retry, now for
+    the simpler reason that nothing is ever safe_to_retry any more."""
     monkeypatch.setattr(
         worker_metrics,
         "_COMPATIBILITY_RUNNER_COMMAND",
@@ -723,9 +736,14 @@ async def test_metric_compatibility_process_progress_then_signal_kill_is_not_saf
 
 
 @pytest.mark.asyncio
-async def test_metric_compatibility_process_generic_failure_with_no_progress_is_safe_to_retry(
+async def test_metric_compatibility_process_generic_failure_with_no_progress_is_not_safe_to_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """CHAOS-4264 originally authorized safe_to_retry here for a
+    daily/partition execution with zero progress lines. CHAOS-3092
+    (2026-09-07): the daily bridge path is deleted outright, so
+    safe_to_retry is unconditionally False now -- kept as a fixture pinning
+    the new behavior on this once-True case."""
     monkeypatch.setattr(
         worker_metrics,
         "_COMPATIBILITY_RUNNER_COMMAND",
@@ -734,7 +752,7 @@ async def test_metric_compatibility_process_generic_failure_with_no_progress_is_
     with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
         await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "process_failed"
-    assert excinfo.value.safe_to_retry is True
+    assert excinfo.value.safe_to_retry is False
 
 
 @pytest.mark.asyncio
@@ -885,7 +903,10 @@ async def test_metric_compatibility_process_classifies_testops_row_cap_as_determ
         await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "resource_exhausted"
     assert excinfo.value.deterministic is True
-    assert excinfo.value.safe_to_retry is True  # zero progress emitted before the raise
+    # CHAOS-3092: unconditionally False now (was True here pre-CHAOS-3092,
+    # since zero progress was emitted before the raise on a daily/partition
+    # execution) -- the daily bridge path is deleted outright.
+    assert excinfo.value.safe_to_retry is False
 
 
 @pytest.mark.asyncio
@@ -917,361 +938,3 @@ async def test_metric_compatibility_process_generic_memory_error_is_not_determin
         await worker_metrics._run_compatibility_process(_daily_execution())
     assert excinfo.value.reason == "resource_exhausted"
     assert excinfo.value.deterministic is False
-
-
-# --------------------------------------------------------------------------
-# CHAOS-4264: per-repo streaming for the daily partition path.
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_run_daily_direct_computes_one_repo_at_a_time_and_reports_progress(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The falsifier for CHAOS-4264 item 1(b): a partition's repo_ids are
-    computed one at a time (each run_daily_metrics_job call scoped to a
-    single repo_id, its source rows released before the next call starts),
-    not loaded all at once -- and on_progress fires after each one, in
-    order, so the parent can tell how far a killed execution got."""
-    repo_ids = [uuid.uuid4() for _ in range(3)]
-    calls: list[uuid.UUID | None] = []
-    progress: list[tuple[int, int]] = []
-
-    async def fake_run_daily_metrics_job(*, repo_id, on_write_starting=None, **_kwargs):
-        calls.append(repo_id)
-        if on_write_starting is not None:
-            on_write_starting()
-        return {}
-
-    import dev_health_ops.metrics.job_daily as job_daily_module
-
-    monkeypatch.setattr(
-        job_daily_module, "run_daily_metrics_job", fake_run_daily_metrics_job
-    )
-    scope = {
-        "target_day": "2026-08-25",
-        "repo_ids": [str(value) for value in repo_ids],
-    }
-    digest = worker_metrics._scope_digest(scope)
-    run_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
-    partition_id = uuid.UUID("22222222-2222-4222-8222-222222222222")
-    execution = worker_metrics._Execution(
-        id=worker_metrics._execution_id(
-            worker_kind="daily",
-            operation="partition",
-            run_id=run_id,
-            partition_id=partition_id,
-            family="daily",
-            generation="fixed-schedule:daily_metrics_fanout:2026-08-25T01:00:00Z",
-            scope_digest=digest,
-        ),
-        worker_kind="daily",
-        operation="partition",
-        run_id=run_id,
-        partition_id=partition_id,
-        organization_id="55555555-5555-4555-8555-555555555555",
-        family="daily",
-        generation="fixed-schedule:daily_metrics_fanout:2026-08-25T01:00:00Z",
-        claim_token=uuid.UUID("33333333-3333-4333-8333-333333333333"),
-        scope=scope,
-        scope_digest=digest,
-    )
-    monkeypatch.setattr(
-        worker_metrics, "require_clickhouse_uri", lambda: "clickhouse://test"
-    )
-    result = await worker_metrics._run_daily_direct(
-        execution, on_progress=lambda index, total: progress.append((index, total))
-    )
-    assert calls == repo_ids, (
-        "expected one run_daily_metrics_job call per repo_id, in order"
-    )
-    assert progress == [(1, 3), (2, 3), (3, 3)]
-    assert result["repo_count"] == 3
-
-
-@pytest.mark.asyncio
-async def test_run_daily_direct_reports_progress_before_a_repo_crashes_mid_write(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Codex R1 finding (CHAOS-4264): progress must fire at the write
-    BOUNDARY, not only on a repo's successful completion -- otherwise a
-    kill/crash after writes started but before run_daily_metrics_job returns
-    would report zero progress despite having written rows. This proves
-    on_progress observes the crashed repo's write-starting signal before the
-    exception propagates out of _run_daily_direct."""
-    repo_ids = [uuid.uuid4(), uuid.uuid4()]
-    progress: list[tuple[int, int]] = []
-
-    async def fake_run_daily_metrics_job(*, repo_id, on_write_starting=None, **_kwargs):
-        if on_write_starting is not None:
-            on_write_starting()
-        if repo_id == repo_ids[0]:
-            raise RuntimeError("simulated crash after the first write began")
-        return {}
-
-    import dev_health_ops.metrics.job_daily as job_daily_module
-
-    monkeypatch.setattr(
-        job_daily_module, "run_daily_metrics_job", fake_run_daily_metrics_job
-    )
-    scope = {"target_day": "2026-08-25", "repo_ids": [str(value) for value in repo_ids]}
-    digest = worker_metrics._scope_digest(scope)
-    run_id = uuid.UUID("11111111-1111-4111-8111-111111111112")
-    partition_id = uuid.UUID("22222222-2222-4222-8222-222222222223")
-    execution = worker_metrics._Execution(
-        id=worker_metrics._execution_id(
-            worker_kind="daily",
-            operation="partition",
-            run_id=run_id,
-            partition_id=partition_id,
-            family="daily",
-            generation="chaos-4264-progress-boundary-test",
-            scope_digest=digest,
-        ),
-        worker_kind="daily",
-        operation="partition",
-        run_id=run_id,
-        partition_id=partition_id,
-        organization_id="55555555-5555-4555-8555-555555555555",
-        family="daily",
-        generation="chaos-4264-progress-boundary-test",
-        claim_token=uuid.UUID("33333333-3333-4333-8333-333333333334"),
-        scope=scope,
-        scope_digest=digest,
-    )
-    monkeypatch.setattr(
-        worker_metrics, "require_clickhouse_uri", lambda: "clickhouse://test"
-    )
-    with pytest.raises(RuntimeError, match="simulated crash"):
-        await worker_metrics._run_daily_direct(
-            execution, on_progress=lambda index, total: progress.append((index, total))
-        )
-    assert progress == [(1, 2)], (
-        "the crashed repo's write-starting signal must still have fired"
-    )
-
-
-# --------------------------------------------------------------------------
-# CHAOS-4316: progress-based liveness bound on ComputePartition. Prod
-# incident (deploy-4 readback, 2026-08-26): a hung worker_metrics_runner
-# child on api-2 held a partition `executing` for 74 minutes with no
-# progress and no wall-clock bound, pinning that replica's only slot. These
-# tests use tiny, monkeypatched stall windows/poll interval so the whole
-# suite runs in well under a second while proving the SAME mechanism that
-# would fire on a real multi-minute hang.
-# --------------------------------------------------------------------------
-
-
-def _set_tiny_stall_env(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    base_seconds: float = 0.3,
-    per_repo_seconds: float = 0.0,
-    hard_ceiling_multiplier: float = 3.0,
-) -> None:
-    monkeypatch.setenv(
-        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS", str(base_seconds)
-    )
-    monkeypatch.setenv(
-        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS",
-        str(per_repo_seconds),
-    )
-    monkeypatch.setenv(
-        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER",
-        str(hard_ceiling_multiplier),
-    )
-    # The watchdog's own poll interval is not env-configurable (it is a
-    # constant sized for production, not a knob operators should tune) --
-    # monkeypatch the module attribute directly so these tests still run
-    # fast. worker_metrics._run_compatibility_process_locked reads this at
-    # call time (not as a bound default), so the patch takes effect.
-    monkeypatch.setattr(worker_metrics, "_PROGRESS_STALL_WATCHDOG_POLL_SECONDS", 0.01)
-
-
-@pytest.mark.asyncio
-async def test_metric_compatibility_process_stalled_child_is_killed_and_safe_to_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The falsifier for CHAOS-4316: a child that reads its input and then
-    reports ZERO progress, forever, must be killed within the derived stall
-    window rather than holding the slot indefinitely (today's bug on
-    origin/main -- runWithLeaseRenewal has nothing that would ever return
-    here). Zero progress ever observed -> safe_to_retry."""
-    _set_tiny_stall_env(monkeypatch)
-    monkeypatch.setattr(
-        worker_metrics,
-        "_COMPATIBILITY_RUNNER_COMMAND",
-        _runner_command("import json, sys, time; json.load(sys.stdin); time.sleep(60)"),
-    )
-    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
-        await worker_metrics._run_compatibility_process(_daily_execution())
-    assert excinfo.value.reason == "progress_stalled"
-    assert excinfo.value.safe_to_retry is True
-
-
-@pytest.mark.asyncio
-async def test_metric_compatibility_process_stalled_after_progress_is_not_safe_to_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Same stall, but one repo's progress line already arrived -- must stay
-    conservative (ambiguous-eligible), matching CHAOS-4264's existing
-    safe_to_retry contract exactly (this ticket reuses that rule verbatim,
-    it does not introduce a new one). Writes the NDJSON progress line
-    directly (the exact wire shape worker_metrics_runner._emit_progress
-    produces) rather than importing that module, so this test's timing
-    depends only on bare subprocess startup, not dev_health_ops's own
-    (heavy, ~0.5-1s) import chain."""
-    _set_tiny_stall_env(monkeypatch)
-    monkeypatch.setattr(
-        worker_metrics,
-        "_COMPATIBILITY_RUNNER_COMMAND",
-        _runner_command(
-            "import json, sys, time\n"
-            "json.load(sys.stdin)\n"
-            "sys.__stdout__.write(json.dumps({'progress': {'repo_index': 1, 'repo_count': 2}}) + chr(10))\n"
-            "sys.__stdout__.flush()\n"
-            "time.sleep(60)\n"
-        ),
-    )
-    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
-        await worker_metrics._run_compatibility_process(_daily_execution())
-    assert excinfo.value.reason == "progress_stalled"
-    assert excinfo.value.safe_to_retry is False
-
-
-@pytest.mark.asyncio
-async def test_metric_compatibility_process_liveness_kill_only_scoped_to_daily_partition(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A remaining-metrics family (no progress instrumentation, CHAOS-4331 is
-    the follow-up to add one) must NOT be killed by this watchdog -- there is
-    no signal to derive a bound from, and a guessed one would be exactly the
-    anti-pattern this ticket avoids. Uses a bounded sleep (not 60s) so the
-    test still finishes quickly while proving no liveness kill occurred."""
-    _set_tiny_stall_env(monkeypatch, base_seconds=0.02)
-    monkeypatch.setattr(
-        worker_metrics,
-        "_COMPATIBILITY_RUNNER_COMMAND",
-        _runner_command(
-            "import json, sys, time; json.load(sys.stdin); time.sleep(0.2); "
-            "raise SystemExit(1)"
-        ),
-    )
-    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
-        await worker_metrics._run_compatibility_process(_execution())
-    assert excinfo.value.reason == "process_failed", (
-        "a remaining-metrics execution must fall through to the ordinary "
-        "CHAOS-4264 exit-code classification, never progress_stalled"
-    )
-
-
-@pytest.mark.asyncio
-async def test_metric_compatibility_process_hard_ceiling_fires_despite_trickling_progress(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The backstop half of CHAOS-4316: a child that emits progress often
-    enough to dodge the per-interval stall check must still be reclaimed by
-    the hard ceiling (base * multiplier) rather than running unbounded
-    forever. Distinguishable from a real stall in the local Prometheus
-    counter's reason label (wire-level reason to Go is progress_stalled
-    either way -- Go's retry decision does not need the finer cut). Writes
-    the NDJSON progress line directly (see the sibling test above) so the
-    0.03s emit interval is not swamped by dev_health_ops's own import time."""
-    _set_tiny_stall_env(
-        monkeypatch, base_seconds=0.3, hard_ceiling_multiplier=2.0
-    )  # hard ceiling = 0.6s
-    before = worker_metrics.DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL.labels(
-        reason="timeout"
-    )._value.get()
-    silence_before = (
-        worker_metrics.DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS.labels(
-            reason="timeout"
-        )._sum.get()
-    )
-    monkeypatch.setattr(
-        worker_metrics,
-        "_COMPATIBILITY_RUNNER_COMMAND",
-        _runner_command(
-            "import json, sys, time\n"
-            "json.load(sys.stdin)\n"
-            "while True:\n"
-            "    sys.__stdout__.write(json.dumps({'progress': {'repo_index': 1, 'repo_count': 1}}) + chr(10))\n"
-            "    sys.__stdout__.flush()\n"
-            "    time.sleep(0.03)\n"  # well under the 0.3s stall window
-        ),
-    )
-    with pytest.raises(worker_metrics._CompatibilityProcessFailure) as excinfo:
-        await worker_metrics._run_compatibility_process(_daily_execution())
-    assert excinfo.value.reason == "progress_stalled"
-    assert excinfo.value.safe_to_retry is False  # progress was seen
-    after = worker_metrics.DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL.labels(
-        reason="timeout"
-    )._value.get()
-    assert after == before + 1, (
-        "the hard-ceiling kill must be counted with reason='timeout', "
-        "distinct from an ordinary interval stall"
-    )
-    silence_after = (
-        worker_metrics.DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS.labels(
-            reason="timeout"
-        )._sum.get()
-    )
-    assert silence_after > silence_before, (
-        "child-silence-seconds must be labeled by reason (codex review P2) "
-        "so 'stalled' and 'timeout' samples are queryable separately, "
-        "matching the metric's own help text"
-    )
-
-
-def test_liveness_ceiling_derived_from_repo_count_not_a_flat_number() -> None:
-    """Standing rule: timeouts never fix capacity races. Both bounds must
-    scale with the partition's own repo_count, never be a fixed constant."""
-    small = worker_metrics._progress_stall_window_seconds(1)
-    large = worker_metrics._progress_stall_window_seconds(20)
-    assert large > small
-    assert worker_metrics._progress_hard_ceiling_seconds(
-        1
-    ) > worker_metrics._progress_stall_window_seconds(1)
-
-
-def test_progress_stall_watchdog_enabled_by_default() -> None:
-    """Team-lead ruling 2026-08-26: on by default, since deployed
-    configuration never sets DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_
-    SECONDS -- an opt-in design would silently never activate in prod."""
-    assert worker_metrics._progress_stall_watchdog_enabled() is True
-
-
-def test_progress_stall_watchdog_explicit_zero_opts_out(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS", "0")
-    assert worker_metrics._progress_stall_watchdog_enabled() is False
-
-
-@pytest.mark.asyncio
-async def test_metric_compatibility_process_explicit_opt_out_never_kills_a_stalled_child(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Even with a stall window tiny enough to kill within milliseconds,
-    forcing _progress_stall_watchdog_enabled() False must let a
-    zero-progress child run to its own completion -- proves the opt-out
-    actually disables the watchdog's wiring (liveness_watched), not just
-    the env-lookup helper tested in isolation above. The tiny window is
-    the point: if the opt-out wiring were broken, the child would be
-    killed well before its own (deliberately longer) sleep completes."""
-    _set_tiny_stall_env(monkeypatch, base_seconds=0.02)
-    monkeypatch.setattr(
-        worker_metrics, "_progress_stall_watchdog_enabled", lambda: False
-    )
-    monkeypatch.setattr(
-        worker_metrics,
-        "_COMPATIBILITY_RUNNER_COMMAND",
-        _runner_command(
-            "import json, sys, time\n"
-            "json.load(sys.stdin)\n"
-            "time.sleep(0.15)\n"
-            "print(json.dumps({'outcome': {'family': 'daily', 'rows': 0}}))\n"
-        ),
-    )
-    result = await worker_metrics._run_compatibility_process(_daily_execution())
-    assert result == {"family": "daily", "rows": 0}

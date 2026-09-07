@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -297,4 +299,155 @@ func (failingPreStep) Name() string { return "failing" }
 
 func (s failingPreStep) Run(context.Context, Claim) (map[string]any, error) {
 	return nil, s.err
+}
+
+// classifyingExecutor returns a fixed pre-classified error, so the handler's
+// own retry/ambiguous branch is exercised without a network or a concrete
+// CompatibilityExecutor implementation at all. Moved here from the deleted
+// compatibility_classification_test.go (CHAOS-3092: the HTTP bridge executor
+// these tests were written alongside is gone, but the classification
+// contract they cover -- ErrCompatibilityNotSent/Refused/Unknown, defined in
+// handler.go -- is still live for any executor, including the native
+// investment one).
+type classifyingExecutor struct{ err error }
+
+func (executor classifyingExecutor) Execute(context.Context, Claim) ([]byte, error) {
+	return nil, executor.err
+}
+
+func TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		err  error
+	}{
+		{name: "not sent", err: fmt.Errorf("%w: status=0 dial tcp: connect: connection refused", ErrCompatibilityNotSent)},
+		{name: "refused", err: fmt.Errorf("%w: status=%d bad token", ErrCompatibilityRefused, http.StatusUnauthorized)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			// Materialize, not Build: this classification lives entirely in
+			// the bridge path, and Build has no bridge since CHAOS-4924.
+			store := &fakeStore{claim: testMaterializeClaim(time.Second)}
+			handler, err := NewMaterializeHandler(store, classifyingExecutor{err: testCase.err}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			workErr := handler.Work(context.Background(), materializeExecution())
+			if workErr == nil {
+				t.Fatal("Work succeeded, want a retryable failure")
+			}
+			if !strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+				t.Fatalf("Work = %v, want category %s", workErr, jobruntime.CategoryRetryable)
+			}
+			if strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
+				t.Fatalf("Work = %v, must not be Permanent", workErr)
+			}
+			// The whole point: this request must NOT be parked in a state
+			// only a human /repair call can leave.
+			if store.ambiguous != 0 {
+				t.Fatalf("ambiguous releases = %d, want 0", store.ambiguous)
+			}
+			if store.completions != 0 {
+				t.Fatalf("completions = %d, want 0", store.completions)
+			}
+		})
+	}
+}
+
+func TestHandlerReleasesUnknownAmbiguousWithTheClassifiedDetail(t *testing.T) {
+	executeErr := fmt.Errorf("%w: status=%d bridge exploded", ErrCompatibilityUnknown, http.StatusInternalServerError)
+	// Materialize, not Build: see TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous.
+	store := &fakeStore{claim: testMaterializeClaim(time.Second)}
+	handler, err := NewMaterializeHandler(store, classifyingExecutor{err: executeErr}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workErr := handler.Work(context.Background(), materializeExecution())
+	if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
+		t.Fatalf("Work = %v, want category %s", workErr, jobruntime.CategoryPermanent)
+	}
+	if store.ambiguous != 1 {
+		t.Fatalf("ambiguous releases = %d, want 1", store.ambiguous)
+	}
+	// The fixed literal is exactly what made 22 ledger rows indistinguishable
+	// from each other. The detail that reaches the store must now name the
+	// classification, the status, and the executor's own text.
+	detail := store.lastAmbiguousDetail
+	if detail == "compatibility execution outcome is unknown" {
+		t.Fatalf("ledger detail is still the fixed literal: %q", detail)
+	}
+	for _, want := range []string{"outcome is unknown", "status=500", "bridge exploded"} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("ledger detail %q is missing %q", detail, want)
+		}
+	}
+	if length := utf8.RuneCountInString(detail); length == 0 || length > maxAmbiguousDetailBytes {
+		t.Fatalf("ledger detail length = %d, want 1..%d", length, maxAmbiguousDetailBytes)
+	}
+}
+
+// A pre-step failure is not a classified bridge outcome, so it keeps today's
+// ambiguous release -- but it must still produce a NON-EMPTY detail, because
+// PostgresStore.transition rejects an empty one outright.
+func TestAmbiguousDetailIsNeverEmptyOrOverBound(t *testing.T) {
+	if detail := compatibilityAmbiguousDetail(nil); detail == "" {
+		t.Fatal("a nil error produced an empty ledger detail")
+	}
+	if detail := compatibilityAmbiguousDetail(errors.New("\x00\x01\x02")); detail == "" {
+		t.Fatal("an all-control-character error produced an empty ledger detail")
+	}
+	long := compatibilityAmbiguousDetail(errors.New(strings.Repeat("verbose ", 4096)))
+	if len(long) > maxAmbiguousDetailBytes {
+		t.Fatalf("ledger detail is %d bytes, over the %d bound", len(long), maxAmbiguousDetailBytes)
+	}
+	if !utf8.ValidString(long) {
+		t.Fatal("ledger detail is not valid UTF-8 after truncation")
+	}
+}
+
+func TestSanitizeDetailStripsControlCharactersAndCutsOnRuneBoundaries(t *testing.T) {
+	if got := sanitizeDetail("a\nb\tc", 64); got != "a b c" {
+		t.Fatalf("sanitizeDetail = %q, want %q", got, "a b c")
+	}
+	if got := sanitizeDetail("   ", 64); got != "" {
+		t.Fatalf("sanitizeDetail of whitespace = %q, want empty", got)
+	}
+	// Every rune here is 3 bytes; a naive byte cut would split one and
+	// produce invalid UTF-8.
+	multibyte := strings.Repeat("字", 40)
+	for _, limit := range []int{1, 2, 3, 4, 7, 11, 100} {
+		got := sanitizeDetail(multibyte, limit)
+		if len(got) > limit {
+			t.Fatalf("sanitizeDetail(limit=%d) = %d bytes", limit, len(got))
+		}
+		if !utf8.ValidString(got) {
+			t.Fatalf("sanitizeDetail(limit=%d) = %q, not valid UTF-8", limit, got)
+		}
+	}
+	if got := sanitizeDetail("anything", 0); got != "" {
+		t.Fatalf("sanitizeDetail(limit=0) = %q, want empty", got)
+	}
+}
+
+// The three sentinels must stay distinguishable from each other. A refactor
+// that made any two of them the same value, or that dropped the ErrUnavailable
+// wrapping, would silently restore the collapse this ticket removes.
+func TestClassificationSentinelsAreDistinctAndWrapErrUnavailable(t *testing.T) {
+	sentinels := map[string]error{
+		"not sent": ErrCompatibilityNotSent,
+		"refused":  ErrCompatibilityRefused,
+		"unknown":  ErrCompatibilityUnknown,
+	}
+	for name, sentinel := range sentinels {
+		if !errors.Is(sentinel, ErrUnavailable) {
+			t.Fatalf("%s does not wrap ErrUnavailable", name)
+		}
+		for otherName, other := range sentinels {
+			if name == otherName {
+				continue
+			}
+			if errors.Is(sentinel, other) {
+				t.Fatalf("%s is indistinguishable from %s", name, otherName)
+			}
+		}
+	}
 }

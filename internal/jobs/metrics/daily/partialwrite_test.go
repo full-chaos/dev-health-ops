@@ -34,20 +34,23 @@ func (o *recordingObserver) ObserveDailyMetricsNativeFamily(
 	return nil
 }
 
-// TestPartialWriteIsSkippedNotFailedOpen pins the distinction codex r1 on #2235
-// (F2) found missing.
+// TestPartialWriteReportsItsTrueRowCountAndHoldsThePartition pins the
+// distinction codex r1 on #2235 (F2) found missing.
 //
-// Fail-open is correct when a native family wrote NOTHING: the compatibility
-// bridge computes it instead. It is wrong when the family already wrote rows,
-// because the output tables are append-only MergeTrees with no version column,
-// so a bridge write does not replace those rows -- it duplicates them. And the
-// duplication is undetectable downstream: argMax-style reads still return a
-// sane latest value, only the row count grows.
+// The two failure modes used to DIVERGE at the partition level: a family
+// that wrote NOTHING fell open to the Python compatibility bridge, while a
+// family that had already written rows could not, because the output tables
+// are append-only MergeTrees with no version column -- a bridge write would
+// duplicate rather than replace, undetectably (argMax-style reads still
+// return a sane latest value, only the row count grows).
 //
-// So the two failure modes must diverge, and this test pins both directions
-// rather than only the new one -- a test that checked only ErrPartialWrite
-// would pass even if ordinary failures had accidentally stopped failing open.
-func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
+// CHAOS-5243 first collapsed that divergence at the partition level (both
+// hold the partition incomplete), and CHAOS-3092 (PR-A) then deleted the
+// bridge entirely, so there is nothing left to fall open to in either case.
+// What still diverges, and what this test pins in both directions, is the
+// OBSERVED outcome and row count: PartialWrite reports the executor's TRUE
+// count, an ordinary Refused reports 0.
+func TestPartialWriteReportsItsTrueRowCountAndHoldsThePartition(t *testing.T) {
 	t.Run("partial write is skipped and reports its TRUE row count", func(t *testing.T) {
 		observer := &recordingObserver{}
 		handler := &PartitionHandler{
@@ -62,12 +65,8 @@ func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
 			nativeFamiliesNow: time.Now,
 		}
 
-		skip, err := handler.computeNativeFamilies(context.Background(), Run{ID: "r"}, Partition{ID: "p"})
+		err := handler.computeNativeFamilies(context.Background(), Run{ID: "r"}, Partition{ID: "p"})
 
-		if len(skip) != 1 || skip[0] != "benchmarking" {
-			t.Fatalf("skip = %v, want [benchmarking] -- the bridge must NOT recompute a family "+
-				"whose rows are already in append-only tables", skip)
-		}
 		if observer.outcome != jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite {
 			t.Errorf("outcome = %q, want %q", observer.outcome,
 				jobruntime.DailyMetricsNativeFamilyOutcomePartialWrite)
@@ -76,8 +75,8 @@ func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
 			t.Errorf("rows = %d, want 1234 -- reporting 0 understates what landed, which is "+
 				"exactly the number needed to judge duplication", observer.rows)
 		}
-		// CHAOS-5078 codex round 3: a partial write must also hold the
-		// PARTITION incomplete, not only skip the family from the bridge.
+		// CHAOS-5078 codex round 3: a partial write must hold the PARTITION
+		// incomplete.
 		if !errors.Is(err, ErrPreBridgeFamilyIncomplete) {
 			t.Fatalf("err = %v, want it to wrap ErrPreBridgeFamilyIncomplete", err)
 		}
@@ -94,17 +93,14 @@ func TestPartialWriteIsSkippedNotFailedOpen(t *testing.T) {
 			nativeFamiliesNow: time.Now,
 		}
 
-		skip, err := handler.computeNativeFamilies(context.Background(), Run{ID: "r"}, Partition{ID: "p"})
+		err := handler.computeNativeFamilies(context.Background(), Run{ID: "r"}, Partition{ID: "p"})
 
 		// CHAOS-5243 (chris, "it should fail loudly so we find it"): the
 		// CHAOS-4276 fail-open-to-Python-bridge path for an ORDINARY
-		// (non-partial) refusal is DELETED. A family that wrote nothing is
-		// now treated the same as one that wrote SOMETHING and then
-		// failed: excluded from the bridge's recompute and held incomplete.
-		if len(skip) != 1 || skip[0] != "benchmarking" {
-			t.Fatalf("skip = %v, want [benchmarking] -- an ordinary refusal is now excluded "+
-				"from the bridge's recompute too, same as a partial write", skip)
-		}
+		// (non-partial) refusal is DELETED, and CHAOS-3092 (PR-A) deleted
+		// the bridge it pointed at. A family that wrote nothing is treated
+		// the same as one that wrote SOMETHING and then failed: the
+		// partition is held incomplete.
 		if observer.outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
 			t.Errorf("outcome = %q, want %q -- the OUTCOME stays distinguished from PartialWrite "+
 				"(nothing was written), only the partition-level disposition changed",

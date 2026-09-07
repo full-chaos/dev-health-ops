@@ -15,13 +15,6 @@ const (
 	// ExecutorNativeGo means a Go CompleteRouteHandler for the pair is
 	// compiled into this module and owns fetch, normalization, and effects.
 	ExecutorNativeGo ExecutorKind = "native_go"
-	// ExecutorPythonCompatibility means the pair is served by the bounded
-	// API-side compatibility endpoint described in TRD §10.2: Go keeps lease,
-	// status, completion, and watermark ownership and sends only bounded
-	// identifiers plus its claim context — never credentials, URLs, module
-	// names, or provider payloads. No pair is registered under this kind yet
-	// because that endpoint does not exist; a later lane owns it.
-	ExecutorPythonCompatibility ExecutorKind = "python_compatibility"
 	// ExecutorNone means no Go-owned executor exists for the pair.
 	ExecutorNone ExecutorKind = "none"
 )

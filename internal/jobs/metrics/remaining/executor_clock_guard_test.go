@@ -317,7 +317,7 @@ func TestTheRealConstructorsAssignAWorkingClock(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("DORA", func(t *testing.T) {
-		executor, err := NewDORAExecutor(ctx, conn, nil)
+		executor, err := NewDORAExecutor(ctx, conn, nil, nil)
 		if err != nil {
 			t.Fatalf("construct: %v", err)
 		}
@@ -340,7 +340,7 @@ func TestTheRealConstructorsAssignAWorkingClock(t *testing.T) {
 	})
 
 	t.Run("Capacity", func(t *testing.T) {
-		executor, err := NewCapacityExecutor(ctx, conn, nil)
+		executor, err := NewCapacityExecutor(ctx, conn, nil, nil)
 		if err != nil {
 			t.Fatalf("construct: %v", err)
 		}

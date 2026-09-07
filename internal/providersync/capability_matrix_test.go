@@ -54,7 +54,7 @@ func TestProviderMatrixCoversEveryConfiguredPair(t *testing.T) {
 			t.Fatalf("incomplete matrix entry %q: %+v", key, pair)
 		}
 		switch pair.GoExecutor {
-		case ExecutorNativeGo, ExecutorPythonCompatibility, ExecutorNone:
+		case ExecutorNativeGo, ExecutorNone:
 		default:
 			t.Fatalf("%s executor=%q", key, pair.GoExecutor)
 		}
@@ -423,11 +423,6 @@ func TestProviderMatrixExecutorRegistryIsHonest(t *testing.T) {
 			if _, ok := handlers[key]; !ok {
 				t.Errorf("%s claims native_go without a complete-route handler", key)
 			}
-		case ExecutorPythonCompatibility:
-			t.Errorf(
-				"%s claims python_compatibility, but the bounded compatibility "+
-					"endpoint (TRD §10.2) does not exist yet", key,
-			)
 		}
 	}
 	for key := range handlers {

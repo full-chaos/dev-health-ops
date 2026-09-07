@@ -109,3 +109,27 @@ func TestExternalRecomputeReplayExitCodeFollowsCompleteness(t *testing.T) {
 		}
 	}
 }
+
+// TestExternalRecomputeReplayRefusesAnEmptyCap asserts the workerctl half of
+// the r3 P1 fix with the set-empty value specifically.
+//
+// A replay is a bulk enqueue across every org in the backlog, so it is the
+// worst place to be running under a bound the operator thinks they narrowed and
+// actually did not. `VAR=` used to pass validation and silently take the
+// default; it must now refuse before a single row is read.
+func TestExternalRecomputeReplayRefusesAnEmptyCap(t *testing.T) {
+	t.Setenv("EXTERNAL_INGEST_RECOMPUTE_MAX_BACKFILL_DAYS", "")
+	var stdout, stderr bytes.Buffer
+	// A fully-populated runtime is deliberately NOT supplied: the cap check
+	// runs after the backend check, so reaching invalid_request rather than
+	// operator_backend_unavailable would be the wrong ordering. This asserts
+	// the ordering too -- with no backend, the backend error wins.
+	code := dispatchExternalRecompute(context.Background(), &operatorRuntime{},
+		[]string{"replay", "--review-evidence", "CHAOS-5296"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("replay proceeded with an empty cap: stdout=%q", stdout.String())
+	}
+	if stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}

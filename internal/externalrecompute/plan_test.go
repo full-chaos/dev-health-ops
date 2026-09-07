@@ -16,6 +16,7 @@ package externalrecompute
 import (
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -455,7 +456,11 @@ func TestValidateCapEnvRefusesAnUnusableBound(t *testing.T) {
 		wantErr  bool
 		wantName string
 	}{
-		"both unset":        {"", "", false, ""},
+		// "both set empty" now REFUSES and lives in the r3 test below. This
+		// row previously read "both unset" and used t.Setenv(name, "") to mean
+		// it -- which sets the variable to empty rather than unsetting it, so
+		// the case asserted the wrong thing and passed only because the bug it
+		// should have caught was present. Genuine absence is covered there.
 		"both valid":        {"7", "20", false, ""},
 		"padded is valid":   {" 7 ", "1_0", false, ""},
 		"backfill garbage":  {"soon", "20", true, envMaxBackfillDays},
@@ -490,5 +495,77 @@ func TestValidateCapEnvRefusesAnUnusableBound(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: unexpected refusal %v", name, err)
 		}
+	}
+}
+
+// TestValidateCapEnvDistinguishesAbsentFromEmpty is the r3 P1 fix.
+//
+// os.Getenv returns "" for both an unset variable and one set to nothing, and
+// the refusal used to skip on that empty string. So `VAR=` -- an empty
+// assignment in a .env file, a k8s env entry with no value, a --set that
+// resolved to nothing -- bypassed the refusal entirely and silently took the
+// default. It is the most common way an operator gets a variable wrong, and it
+// defeated the exact contract the refusal exists to enforce.
+//
+// Absent still legitimately means "use the checked-in default"; present-but-
+// empty is an operator who set the variable and supplied nothing, which is
+// ambiguous and must be loud.
+func TestValidateCapEnvDistinguishesAbsentFromEmpty(t *testing.T) {
+	t.Run("absent is accepted and yields the default", func(t *testing.T) {
+		t.Setenv(envMaxBackfillDays, "placeholder")
+		os.Unsetenv(envMaxBackfillDays)
+		t.Setenv(envMaxFanoutRepos, "placeholder")
+		os.Unsetenv(envMaxFanoutRepos)
+		if err := ValidateCapEnv(); err != nil {
+			t.Fatalf("absent variables must be accepted, got %v", err)
+		}
+		if got := envIntAtLeastOne(envMaxBackfillDays, defaultMaxBackfillDays); got != defaultMaxBackfillDays {
+			t.Fatalf("absent cap = %d, want the default %d", got, defaultMaxBackfillDays)
+		}
+	})
+
+	for name, testCase := range map[string]struct {
+		backfill, fanout string
+		wantRefusedName  string
+	}{
+		"backfill set empty":  {"", "20", envMaxBackfillDays},
+		"fanout set empty":    {"7", "", envMaxFanoutRepos},
+		"both set empty":      {"", "", envMaxBackfillDays},
+		"backfill whitespace": {"   ", "20", envMaxBackfillDays},
+		"fanout tab only":     {"7", "\t", envMaxFanoutRepos},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(envMaxBackfillDays, testCase.backfill)
+			t.Setenv(envMaxFanoutRepos, testCase.fanout)
+			err := ValidateCapEnv()
+			if err == nil {
+				t.Fatal("a set-but-unusable cap was accepted; it would silently take the default")
+			}
+			if !errors.Is(err, ErrInvalidCapEnv) {
+				t.Fatalf("error %v does not wrap ErrInvalidCapEnv", err)
+			}
+			if !strings.Contains(err.Error(), testCase.wantRefusedName) {
+				t.Fatalf("error %q does not name the offending variable", err)
+			}
+		})
+	}
+
+	t.Run("valid values are accepted", func(t *testing.T) {
+		t.Setenv(envMaxBackfillDays, "7")
+		t.Setenv(envMaxFanoutRepos, "20")
+		if err := ValidateCapEnv(); err != nil {
+			t.Fatalf("valid caps refused: %v", err)
+		}
+	})
+}
+
+// TestNewDrainRefusesAnEmptyCap asserts the worker-side path once with the
+// set-empty value specifically: the refusal is only worth anything if the
+// component that consumes these caps actually declines to be built.
+func TestNewDrainRefusesAnEmptyCap(t *testing.T) {
+	t.Setenv(envMaxBackfillDays, "")
+	_, err := NewDrain(nil, nil, DefaultDrainConfig(), nil)
+	if err == nil {
+		t.Fatal("NewDrain accepted an empty cap")
 	}
 }

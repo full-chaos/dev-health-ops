@@ -254,11 +254,24 @@ var ErrInvalidCapEnv = errors.New("external recompute: invalid cap environment v
 // never be echoed into a log.
 func ValidateCapEnv() error {
 	for _, name := range []string{envMaxBackfillDays, envMaxFanoutRepos} {
-		raw := os.Getenv(name)
-		if raw == "" {
-			// Unset is not an error: the checked-in default is the intended
+		raw, present := os.LookupEnv(name)
+		if !present {
+			// ABSENT is not an error: the checked-in default is the intended
 			// bound when an operator expresses no preference.
+			//
+			// PRESENT-BUT-EMPTY is a different thing entirely and is refused
+			// below. os.Getenv cannot tell the two apart -- it returns "" for
+			// both -- and this loop used to skip on that empty string, so
+			// `EXTERNAL_INGEST_RECOMPUTE_MAX_BACKFILL_DAYS=` in a .env file, a
+			// k8s env entry with no value, or a --set that resolved to nothing
+			// sailed past the refusal and silently took the default. That is
+			// the single most common way an operator gets a variable wrong,
+			// and it defeated the exact contract this function exists to
+			// enforce (r3 P1).
 			continue
+		}
+		if raw == "" {
+			return fmt.Errorf("%w: %s is set to an empty value", ErrInvalidCapEnv, name)
 		}
 		parsed, ok := pythonInt(raw)
 		if !ok {
@@ -280,6 +293,14 @@ func ValidateCapEnv() error {
 // and testable by value. It is NOT the production tolerance for a bad value:
 // ValidateCapEnv above refuses such a value at startup, so no live process can
 // reach this fallback with a cap the operator set and we could not read.
+//
+// os.Getenv, not os.LookupEnv, is deliberate here. Python's _env_int does
+// `raw = os.getenv(name); if not raw: return default`, which treats set-empty
+// and unset identically -- so matching it keeps the two planners agreeing on
+// every input. The stricter present-but-empty rule lives ONLY in
+// ValidateCapEnv, which is a Go-side safety layer with no Python counterpart:
+// refusing at startup is an addition to the contract, not a reinterpretation
+// of it, so it must not leak into the parity-faithful path.
 func envIntAtLeastOne(name string, fallback int) int {
 	parsed, ok := pythonInt(os.Getenv(name))
 	if !ok {

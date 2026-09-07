@@ -1235,10 +1235,11 @@ _CONTENT_CHECKERS = {
 
 # A closed, curated allowlist of task names that may legitimately be the
 # exclusive ("primary") owner of a `task:` target_kind_id -- these are the
-# six standalone Celery tasks the TRD gap analysis calls out as needing
-# their own native/removal decision with no Beat entry, registry kind, or
+# standalone Celery tasks the TRD gap analysis calls out as needing their
+# own native/removal decision with no Beat entry, registry kind, or
 # transport route already claiming them (see STANDALONE_PRIMARY in the
-# inventory generator). Deliberately NOT derived from "every discovered
+# inventory generator). It was six; process_pagerduty_webhook_event got its
+# decision (CHAOS-4105: ported to Go, task deleted) and left with its row. Deliberately NOT derived from "every discovered
 # Celery task name": that set has 46 members today, and an unclaimed one
 # (e.g. run_complexity_job) is not automatically a valid primary-ownership
 # target just because it happens to exist (Codex round-2 MED-1).
@@ -1246,7 +1247,6 @@ TRD_MAPPED_TASK_TARGETS = frozenset(
     {
         "health_check",
         "sync_team_drift",
-        "process_pagerduty_webhook_event",
         "flush_external_ingest_recompute",
         "run_daily_metrics",
         "dispatch_external_ingest_recompute_bridge",

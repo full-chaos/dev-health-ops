@@ -626,7 +626,6 @@ config:
   #    an operator scales stream-pagerduty -- staged, not lost, but scale it
   #    before relying on PagerDuty delivery:
   #    kubectl scale deployment/<release>-go-stream-pagerduty --replicas=1
-  PAGERDUTY_WEBHOOK_TRANSPORT: "river"
   PROVIDER_SYNC_QUEUES_ENABLED: "true"
   SYNC_COST_CLASS_QUEUES: "true"
   HIDE_MIGRATED_CHILD_CONFIGS: "true"

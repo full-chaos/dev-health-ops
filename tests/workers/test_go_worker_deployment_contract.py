@@ -53,10 +53,13 @@ _KUBERNETES_CONFIGMAP = _KUBERNETES / "configmap.yaml"
 _KUBERNETES_SECRETS = _KUBERNETES / "secrets.yaml"
 _KUBERNETES_API = _KUBERNETES / "api.yaml"
 
-# CHAOS-3076: the PagerDuty stream runner forwards reconciliation to the Python
-# worker bridge, so a renderer that declares the process without this wiring
-# produces a service that can never construct its handler (missing endpoint or
-# insecure opt-in) or is rejected with 401 (missing token).
+# CHAOS-3076 declared this wiring because the PagerDuty stream runner forwarded
+# reconciliation to the Python worker bridge. CHAOS-4105 made reconciliation
+# native, so the runner no longer reads the bridge endpoint or token; the
+# variables stay on the process because the shared worker image still resolves
+# them for the billing and heartbeat bridges (CHAOS-5353 owns their removal).
+# What is gone is PAGERDUTY_WEBHOOK_TRANSPORT: it chose which of two runtimes
+# consumed the webhook stream, and there is only one runtime now.
 _PAGERDUTY_PROCESS = "stream-pagerduty"
 _PAGERDUTY_RUNTIME_PROFILE = "pagerduty"
 # Non-secret half of the contract. It cannot be driven from deployment.json:
@@ -64,23 +67,13 @@ _PAGERDUTY_RUNTIME_PROFILE = "pagerduty"
 # decodes the manifest with DisallowUnknownFields, so a `config_env` key there
 # would fail the Go contract check until the Go schema grows the field.
 _PAGERDUTY_CONFIG_ENV = {
-    "PAGERDUTY_WEBHOOK_TRANSPORT",
     "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
     "WORKER_OPERATIONAL_BRIDGE_URL",
 }
-# The API serves the bridge endpoint and owns the Celery dispatch decision, so
-# it needs the caller's token and the same transport selector.
-_API_BRIDGE_ENV = {
-    "PAGERDUTY_WEBHOOK_TRANSPORT",
-    "WORKER_OPERATIONAL_BRIDGE_TOKEN",
-}
-# Compose/Swarm still declare the unchanged Celery fleet, so their rendered
-# PAGERDUTY_WEBHOOK_TRANSPORT stays "celery" (matching the code's own
-# fail-safe default in webhook_transport.py / config.go, unrelated to this
-# ticket). Helm/Kubernetes deleted that fleet (CHAOS-4195) and now render
-# "river" explicitly -- there is no Celery consumer left for "celery" to name.
-_DEFAULT_WEBHOOK_TRANSPORT = "celery"
-_DEFAULT_K8S_HELM_WEBHOOK_TRANSPORT = "river"
+# The API serves the bridge endpoint, so it needs the caller's token. It no
+# longer owns a dispatch decision: CHAOS-4105 deleted the Celery task it used
+# to dispatch and the transport selector that gated it.
+_API_BRIDGE_ENV = {"WORKER_OPERATIONAL_BRIDGE_TOKEN"}
 # strconv.ParseBool's truthy spellings, lowercased.
 _TRUTHY = {"1", "t", "true"}
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -1243,7 +1236,6 @@ def test_compose_surfaces_render_complete_pagerduty_bridge_env(
         "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE": (
             "--operational-bridge-allow-insecure"
         ),
-        "PAGERDUTY_WEBHOOK_TRANSPORT": "--pagerduty-webhook-transport",
     }
     for name, service in services.items():
         environment = service["environment"]
@@ -1265,13 +1257,6 @@ def test_compose_surfaces_render_complete_pagerduty_bridge_env(
             ),
             f"{path.name}:{name}",
         )
-        assert (
-            _flag_variable_default(
-                arguments["--pagerduty-webhook-transport"],
-                "PAGERDUTY_WEBHOOK_TRANSPORT",
-            )
-            == _DEFAULT_WEBHOOK_TRANSPORT
-        )
 
 
 def test_kubernetes_pagerduty_deployment_resolves_complete_bridge_env() -> None:
@@ -1288,7 +1273,6 @@ def test_kubernetes_pagerduty_deployment_resolves_complete_bridge_env() -> None:
         assert not missing, f"{_GO_KUBERNETES.name}:{name} drops {sorted(missing)}"
 
     config = _load_yaml(_KUBERNETES_CONFIGMAP)["data"]
-    assert config["PAGERDUTY_WEBHOOK_TRANSPORT"] == _DEFAULT_K8S_HELM_WEBHOOK_TRANSPORT
     _assert_insecure_optin_covers_endpoint(
         config["WORKER_OPERATIONAL_BRIDGE_URL"],
         config["WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE"],
@@ -1344,9 +1328,6 @@ def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
     resolved = set(values["config"]) | set(values["secrets"]["data"])
     missing = _pagerduty_required_env() - resolved
     assert not missing, f"helm values drop {sorted(missing)}"
-    assert values["config"]["PAGERDUTY_WEBHOOK_TRANSPORT"] == (
-        _DEFAULT_K8S_HELM_WEBHOOK_TRANSPORT
-    )
     # An empty URL is auto-computed into the plaintext in-cluster API Service,
     # so the opt-in must hold for the derived endpoint as well.
     _assert_insecure_optin_covers_endpoint(
@@ -1361,22 +1342,19 @@ def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
 
 
 @pytest.mark.parametrize("path", [_PRODUCTION_COMPOSE, _SWARM_STACK])
-def test_api_service_carries_bridge_token_and_webhook_transport(path: Path) -> None:
-    """CHAOS-3076: the API authenticates bridge callers against the shared token
-    and decides the PagerDuty dispatch from the transport selector. Omitting
-    either leaves the bridge answering 401 or two runtimes consuming the same
-    webhook stream.
+def test_api_service_carries_bridge_token(path: Path) -> None:
+    """CHAOS-3076: the API authenticates bridge callers against the shared
+    token; omitting it leaves the bridge answering 401.
+
+    This used to also pin the PagerDuty transport selector, because the API
+    decided whether to dispatch the Celery task alongside its stream write.
+    CHAOS-4105 deleted that task and the selector: the API writes the stream
+    entry unconditionally and the Go consumer owns it.
     """
     environment = _load_yaml(path)["services"]["api"]["environment"]
 
     missing = _API_BRIDGE_ENV - set(environment)
     assert not missing, f"{path.name}:api drops {sorted(missing)}"
-    assert (
-        _compose_variable_default(
-            environment["PAGERDUTY_WEBHOOK_TRANSPORT"], "PAGERDUTY_WEBHOOK_TRANSPORT"
-        )
-        == _DEFAULT_WEBHOOK_TRANSPORT
-    )
     # The token must arrive from the environment, never as a committed literal.
     assert (
         _compose_variable_default(
@@ -1387,7 +1365,7 @@ def test_api_service_carries_bridge_token_and_webhook_transport(path: Path) -> N
     )
 
 
-def test_kubernetes_and_helm_api_carry_bridge_token_and_webhook_transport() -> None:
+def test_kubernetes_and_helm_api_carry_bridge_token() -> None:
     api = next(
         document
         for document in _load_yaml_documents(_KUBERNETES_API)

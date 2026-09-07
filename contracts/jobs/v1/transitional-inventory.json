@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 84,
+  "row_count": 81,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -471,30 +471,6 @@
       "deletion_evidence_requirement": "Deleted alongside Beat entry `phone-home-heartbeat` once its native replacement is proven.",
       "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
       "notes": "Formerly fed the phone-home-heartbeat Beat entry (crontab(0,0) UTC); that entry was deleted under CHAOS-4026 (2026-08-21) -- Go's own heartbeat cadence now calls this task's body via the worker_operational.py HTTP bridge instead. Re-anchored to the system.heartbeat registry_kind primary row (registry_kind:contracts/jobs/v1/registry.json:684), which this row already fed."
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/system_webhooks.py:53",
-      "surface": "process_pagerduty_webhook_event",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/system_webhooks.py",
-        "line": 53
-      },
-      "queue_or_cadence": "webhooks",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "native_process",
-        "value": "PagerDuty Go stream handler"
-      },
-      "target_kind_id": "task:process_pagerduty_webhook_event",
-      "current_implementation_state": "dormant_go",
-      "verification_status": "verified",
-      "compatibility_dependency": "internal/jobs/pagerduty Go package exists but is not constructed by any cmd/ binary (unreachable); Python direct `.delay` after stream write is the only live path today.",
-      "deletion_evidence_requirement": "internal/jobs/pagerduty wired into the external stream runner (CUT-04), passing Registry.ValidateStartup, with retry/dead-letter/idempotency parity proven against the existing Python receipt/canonical-incident behavior; POST /webhooks/pagerduty/{binding_id} write-then-`.delay` call site removed.",
-      "acceptance_test_id": "tests/workers/test_system_pagerduty_webhooks.py",
-      "notes": "internal/jobs/pagerduty package exists but unreachable from any cmd/ binary (gap 2.6) | Structural asymmetry vs the other 3 streams: no Python poll/Beat consumer exists for this stream at all -- it is write-then-.delay directly from the webhook handler. The Go package is dormant (compiles, not wired into any binary)."
     },
     {
       "id": "celery_task:src/dev_health_ops/workers/external_ingest_recompute.py:313",
@@ -1169,30 +1145,6 @@
       "notes": "grep-evading form; reconciler repair redrive"
     },
     {
-      "id": "call_site_getattr_indirection:src/dev_health_ops/api/webhooks/pagerduty.py:515",
-      "surface": "getattr(process_pagerduty_webhook_event,'delay')",
-      "class": "call_site_getattr_indirection",
-      "source": {
-        "file": "src/dev_health_ops/api/webhooks/pagerduty.py",
-        "line": 515
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "process_pagerduty_webhook_event",
-      "dispatch_mechanism": "getattr_indirection_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "PagerDuty Go stream handler"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "grep-evading form; POST /webhooks/pagerduty/{binding_id}"
-    },
-    {
       "id": "api_trigger_endpoint:src/dev_health_ops/api/admin/routers/teams.py:393",
       "surface": "POST /teams/trigger-drift-sync",
       "class": "api_trigger_endpoint",
@@ -1216,31 +1168,6 @@
       "acceptance_test_id": "tests/test_sync_units.py",
       "notes": "",
       "route_mount_prefix": ""
-    },
-    {
-      "id": "api_trigger_endpoint:src/dev_health_ops/api/webhooks/pagerduty.py:402",
-      "surface": "POST /webhooks/pagerduty/{binding_id}",
-      "class": "api_trigger_endpoint",
-      "source": {
-        "file": "src/dev_health_ops/api/webhooks/pagerduty.py",
-        "line": 402
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "process_pagerduty_webhook_event",
-      "dispatch_mechanism": "http_api_endpoint",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "PagerDuty Go stream handler"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/workers/test_system_pagerduty_webhooks.py",
-      "notes": "Go target unreachable from any cmd/ today",
-      "route_mount_prefix": "/webhooks/pagerduty"
     },
     {
       "id": "api_trigger_endpoint:src/dev_health_ops/api/graphql/resolvers/reports.py:619",
@@ -1868,15 +1795,15 @@
       "notes": "Go consumer name go-external-ingest, dependencies.go:367; groups match"
     },
     {
-      "id": "stream_surface:src/dev_health_ops/api/webhooks/pagerduty.py:351",
+      "id": "stream_surface:src/dev_health_ops/api/webhooks/pagerduty.py:341",
       "surface": "PagerDuty webhook event stream",
       "class": "stream_surface",
       "source": {
         "file": "src/dev_health_ops/api/webhooks/pagerduty.py",
-        "line": 351
+        "line": 341
       },
-      "queue_or_cadence": "no consumer group - direct dispatch after stream write",
-      "dispatches": "process_pagerduty_webhook_event (Python direct .delay) / internal/jobs/pagerduty (Go, dormant)",
+      "queue_or_cadence": "pagerduty-webhook-consumers",
+      "dispatches": "internal/jobs/pagerduty (Go stream consumer)",
       "dispatch_mechanism": "stream_consumer_group",
       "owner_role": "primary",
       "target_owner": {
@@ -1884,12 +1811,12 @@
         "value": "PagerDuty Go stream handler"
       },
       "target_kind_id": "stream:pagerduty_direct_dispatch",
-      "current_implementation_state": "dormant_go",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "Python direct write-then-.delay dispatch (no poll consumer).",
-      "deletion_evidence_requirement": "internal/jobs/pagerduty wired into a cmd/ binary (CUT-04), passing Registry.ValidateStartup, with retry/dead-letter/idempotency parity.",
-      "acceptance_test_id": "tests/workers/test_system_pagerduty_webhooks.py",
-      "notes": "asymmetric shape vs other 3 streams (no Beat/poll consumer in Python); Go package unreachable from any cmd/"
+      "compatibility_dependency": "None. CHAOS-4105 deleted the Python direct write-then-.delay dispatch; the Go consumer group is the only reader.",
+      "deletion_evidence_requirement": "None. The stream itself is the native transport, not a transitional surface: the ingress writes it and internal/jobs/pagerduty consumes it under a Postgres receipt.",
+      "acceptance_test_id": "tests/api/webhooks/test_pagerduty_binding_receiver.py",
+      "notes": "Reconciled natively by internal/jobs/pagerduty (CHAOS-4105); rows are written through the providersync PagerDuty effect sinks."
     },
     {
       "id": "sync_dispatch_transport_route:contracts/sync-dispatch/v1/transport-routes.json:5",

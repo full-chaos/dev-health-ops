@@ -86,7 +86,6 @@ def test_receiver_enqueues_a_verified_event_for_its_binding(
 ) -> None:
     # Given
     writes: list[tuple[str, dict[str, str]]] = []
-    dispatches: list[dict[str, str]] = []
     claims: list[tuple[tuple[str, ...], dict[str, object]]] = []
 
     class Redis:
@@ -98,13 +97,7 @@ def test_receiver_enqueues_a_verified_event_for_its_binding(
             writes.append((stream, fields))
             return "1-0"
 
-    class Task:
-        @staticmethod
-        def delay(**kwargs: str) -> None:
-            dispatches.append(kwargs)
-
     monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
-    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
     body = _body()
 
     # When
@@ -128,7 +121,10 @@ def test_receiver_enqueues_a_verified_event_for_its_binding(
         "payload",
     }
     assert writes[0][1]["raw_body_sha256"] == hashlib.sha256(body).hexdigest()
-    assert dispatches == [{"binding_id": _BINDING_ID, "stream_entry_id": "1-0"}]
+    # The stream write is the whole handoff. This used to also assert a Celery
+    # `.delay(...)` alongside it; CHAOS-4105 deleted that task, so the entry
+    # this write produces is consumed by the Go stream runner and by nothing
+    # else. The fields asserted above are that consumer's entire input.
     body_hash = hashlib.sha256(body).hexdigest()
     replay_key = pagerduty._replay_key(
         _BINDING_ID,
@@ -165,13 +161,7 @@ def test_receiver_accepts_the_official_no_timestamp_contract(
         def xadd(self, *_: object) -> str:
             return "1-0"
 
-    class Task:
-        @staticmethod
-        def delay(**_: str) -> None:
-            return None
-
     monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
-    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
 
     # When
     response = client.post(
@@ -312,13 +302,16 @@ def test_receiver_feature_gate_blocks_verified_events_before_enqueueing(
     assert response.status_code == 403
 
 
-def test_legacy_environment_route_cannot_enqueue_or_dispatch(
+def test_legacy_environment_route_cannot_enqueue(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Given
+    # Given: the unrouted legacy path. It must not reach the queue even when
+    # every legacy environment variable is set. This used to also assert that
+    # it dispatched no Celery task; CHAOS-4105 deleted that task, so reaching
+    # the stream is now the only way a delivery can be processed at all, and
+    # is therefore the whole property.
     body = _body()
     enqueued = False
-    dispatched = False
 
     class Redis:
         def xadd(self, *_: object) -> str:
@@ -326,19 +319,12 @@ def test_legacy_environment_route_cannot_enqueue_or_dispatch(
             enqueued = True
             return "1-0"
 
-    class Task:
-        @staticmethod
-        def delay(**_: str) -> None:
-            nonlocal dispatched
-            dispatched = True
-
     monkeypatch.setenv("PAGERDUTY_WEBHOOK_SECRET", _SECRET)
     monkeypatch.setenv("PAGERDUTY_WEBHOOK_ORG_ID", _Binding().org_id)
     monkeypatch.setenv(
         "PAGERDUTY_WEBHOOK_PROVIDER_INSTANCE_ID", _Binding().integration_source_id
     )
     monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
-    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
 
     # When
     response = client.post(
@@ -350,7 +336,6 @@ def test_legacy_environment_route_cannot_enqueue_or_dispatch(
     # Then
     assert response.status_code == 404
     assert enqueued is False
-    assert dispatched is False
 
 
 def test_receiver_rejects_a_cross_binding_subscription_mismatch(
@@ -399,14 +384,8 @@ def test_receiver_uses_the_route_uuid_before_comparing_the_subscription_header(
         def xadd(self, *_: object, **__: object) -> str:
             return "1-0"
 
-    class Task:
-        @staticmethod
-        def delay(**_: str) -> None:
-            return None
-
     monkeypatch.setattr(pagerduty, "_load_receivable_binding", load_by_id)
     monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
-    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
 
     # When
     response = client.post(
@@ -434,13 +413,7 @@ def test_receiver_accepts_any_valid_signature_among_multiple_candidates(
         def xadd(self, *_: object) -> str:
             return "1-0"
 
-    class Task:
-        @staticmethod
-        def delay(**_: str) -> None:
-            return None
-
     monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
-    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
 
     stale_signature = hmac.new(
         b"an-old-rotated-secret", body, hashlib.sha256
@@ -545,20 +518,32 @@ def test_receiver_rejects_a_revoked_binding_identically_to_an_unknown_one(
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize(
+    "stream_error",
+    [ValkeyError("stream unavailable"), KombuError("broker unavailable")],
+)
 def test_receiver_releases_the_replay_claim_when_the_stream_write_fails(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    stream_error: Exception, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given: the durable (non-expiring) replay claim succeeds but the
-    # subsequent Redis stream write raises a real Valkey error.
+    # subsequent Redis stream write raises. Both exception types _enqueue_event
+    # catches are exercised: KombuError used to be covered only through the
+    # Celery dispatch that CHAOS-4105 deleted, and would otherwise have been
+    # lost from coverage with it.
     body = _body()
     deleted: list[str] = []
+    xdel_calls: list[tuple[str, str]] = []
 
     class Redis:
         def set(self, *_: str, **__: object) -> bool:
             return True
 
         def xadd(self, *_: object) -> str:
-            raise ValkeyError("stream unavailable")
+            raise stream_error
+
+        def xdel(self, stream: str, entry_id: str) -> int:
+            xdel_calls.append((stream, entry_id))
+            return 1
 
         def delete(self, key: str) -> int:
             deleted.append(key)
@@ -582,57 +567,11 @@ def test_receiver_releases_the_replay_claim_when_the_stream_write_fails(
             pagerduty._replay_identity(_SUBSCRIPTION_ID, "pagey-event-1", body),
         )
     ]
-
-
-def test_receiver_recovers_the_stream_entry_and_replay_claim_when_dispatch_fails(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Given: the claim and stream write both succeed, but the Celery/Kombu
-    # broker dispatch that would consume the stream entry raises.
-    body = _body()
-    deleted: list[str] = []
-    xdel_calls: list[tuple[str, str]] = []
-
-    class Redis:
-        def set(self, *_: str, **__: object) -> bool:
-            return True
-
-        def xadd(self, *_: object) -> str:
-            return "1-0"
-
-        def xdel(self, stream: str, entry_id: str) -> int:
-            xdel_calls.append((stream, entry_id))
-            return 1
-
-        def delete(self, key: str) -> int:
-            deleted.append(key)
-            return 1
-
-    class Task:
-        @staticmethod
-        def delay(**_: str) -> None:
-            raise KombuError("broker unavailable")
-
-    monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
-    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
-
-    # When
-    response = client.post(
-        f"/api/v1/webhooks/pagerduty/{_BINDING_ID}",
-        content=body,
-        headers=_headers(body),
-    )
-
-    # Then: both the stream write and the replay claim are rolled back so a
-    # redelivered event can be reprocessed cleanly instead of being stuck.
-    assert response.status_code == 503
-    assert xdel_calls == [(f"pagerduty-webhooks:{_BINDING_ID}", "1-0")]
-    assert deleted == [
-        pagerduty._replay_key(
-            _BINDING_ID,
-            pagerduty._replay_identity(_SUBSCRIPTION_ID, "pagey-event-1", body),
-        )
-    ]
+    # The stream write never landed, so there is nothing to compensate. This
+    # pins the removal of _compensate_stream_write (CHAOS-4105): an XDEL here
+    # would be the receiver deleting an entry it did not create -- and on the
+    # success path, one the Go consumer may already hold pending.
+    assert xdel_calls == []
 
 
 def test_receiver_marks_a_candidate_ready_only_after_a_verified_pagey_ping(
@@ -781,57 +720,21 @@ def test_receiver_rejects_a_fully_authenticated_non_ping_receivable_event(
     assert response.status_code == 403
 
 
-@pytest.mark.parametrize(
-    "transport", [None, "celery", "CELERY", " celery ", "", "quantum"]
-)
-def test_receiver_dispatches_celery_unless_the_transport_names_river(
-    transport: str | None, client: TestClient, monkeypatch: pytest.MonkeyPatch
+def test_receiver_writes_the_stream_entry_and_leaves_it_for_the_go_consumer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Given: anything unset, empty, or unrecognised must fail safe to Celery.
+    # Given: this replaces the two PAGERDUTY_WEBHOOK_TRANSPORT tests that used
+    # to live here -- one pinning that anything unset, empty or unrecognised
+    # failed safe to a Celery dispatch, the other pinning that "river" left the
+    # entry alone. CHAOS-4105 deleted the Celery consumer and the transport
+    # switch that chose between the two runtimes, so there is nothing left to
+    # select and no fail-safe direction to pin.
+    #
+    # What survives is the property both tests existed to protect: exactly one
+    # consumer drains the entry. The receiver writes it and then leaves it
+    # completely alone -- no second dispatch, and above all no delete, because
+    # the Go consumer may already be holding it pending under its own receipt.
     writes: list[tuple[str, dict[str, str]]] = []
-    dispatches: list[dict[str, str]] = []
-
-    class Redis:
-        def set(self, *_: str, **__: object) -> bool:
-            return True
-
-        def xadd(self, stream: str, fields: dict[str, str], *_: object) -> str:
-            writes.append((stream, fields))
-            return "1-0"
-
-    class Task:
-        @staticmethod
-        def delay(**kwargs: str) -> None:
-            dispatches.append(kwargs)
-
-    if transport is None:
-        monkeypatch.delenv(pagerduty.WEBHOOK_TRANSPORT_ENV, raising=False)
-    else:
-        monkeypatch.setenv(pagerduty.WEBHOOK_TRANSPORT_ENV, transport)
-    monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
-    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
-    body = _body()
-
-    # When
-    response = client.post(
-        f"/api/v1/webhooks/pagerduty/{_BINDING_ID}",
-        content=body,
-        headers=_headers(body),
-    )
-
-    # Then
-    assert response.status_code == 202
-    assert writes[0][0] == f"pagerduty-webhooks:{_BINDING_ID}"
-    assert dispatches == [{"binding_id": _BINDING_ID, "stream_entry_id": "1-0"}]
-
-
-@pytest.mark.parametrize("transport", ["river", "RIVER", " river "])
-def test_receiver_leaves_the_stream_entry_to_river_without_dispatching_celery(
-    transport: str, client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Given: exactly one consumer may drain the stream entry.
-    writes: list[tuple[str, dict[str, str]]] = []
-    dispatched = False
     deleted: list[tuple[str, str]] = []
 
     class Redis:
@@ -845,15 +748,7 @@ def test_receiver_leaves_the_stream_entry_to_river_without_dispatching_celery(
         def xdel(self, stream: str, entry_id: str) -> None:
             deleted.append((stream, entry_id))
 
-    class Task:
-        @staticmethod
-        def delay(**_: str) -> None:
-            nonlocal dispatched
-            dispatched = True
-
-    monkeypatch.setenv(pagerduty.WEBHOOK_TRANSPORT_ENV, transport)
     monkeypatch.setattr(pagerduty, "get_redis_client", lambda: Redis())
-    monkeypatch.setattr(pagerduty, "process_pagerduty_webhook_event", Task())
     body = _body()
 
     # When
@@ -863,9 +758,8 @@ def test_receiver_leaves_the_stream_entry_to_river_without_dispatching_celery(
         headers=_headers(body),
     )
 
-    # Then: the durable handoff is still written, and left intact, for Go.
+    # Then: the durable handoff is written, and left intact, for Go.
     assert response.status_code == 202
     assert writes[0][0] == f"pagerduty-webhooks:{_BINDING_ID}"
     assert writes[0][1]["binding_id"] == _BINDING_ID
-    assert dispatched is False
     assert deleted == []

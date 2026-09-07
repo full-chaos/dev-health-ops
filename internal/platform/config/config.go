@@ -262,22 +262,7 @@ type Config struct {
 	// work-items paths above: no source-relative default in production, only
 	// the fixed image path docker/go-worker.Dockerfile copies it to.
 	WorkerRemainingComplexityConfigPath string
-
-	// PagerDutyWebhookTransport names the single owner of the PagerDuty webhook
-	// stream. The Python ingress dispatches its Celery task only while this is
-	// "celery"; the Go stream runner constructs its consumer only when it is
-	// "river". One switch, read by both runtimes, so the stream can never have
-	// two owners reconciling and deleting the same entries.
-	PagerDutyWebhookTransport string
 }
-
-// PagerDuty webhook transports. Celery is the default because it is what
-// production runs today: an unset or unrecognized value must never silently
-// hand ownership to the runtime that is not yet cut over.
-const (
-	PagerDutyTransportCelery = "celery"
-	PagerDutyTransportRiver  = "river"
-)
 
 // Load reads and validates explicit process arguments plus environment-backed
 // dependencies. A command argument and its environment fallback may not both
@@ -473,16 +458,6 @@ func Load(spec Spec) (Config, error) {
 	cfg.CoordinatorDatabaseMode, err = coordinatorDatabaseModeEnv(lookup)
 	if err != nil {
 		return Config{}, err
-	}
-	cfg.PagerDutyWebhookTransport = strings.ToLower(strings.TrimSpace(envOrDefault(
-		lookup, "PAGERDUTY_WEBHOOK_TRANSPORT", PagerDutyTransportCelery,
-	)))
-	if cfg.PagerDutyWebhookTransport != PagerDutyTransportCelery &&
-		cfg.PagerDutyWebhookTransport != PagerDutyTransportRiver {
-		return Config{}, fmt.Errorf(
-			"PAGERDUTY_WEBHOOK_TRANSPORT must be %s or %s",
-			PagerDutyTransportCelery, PagerDutyTransportRiver,
-		)
 	}
 	cfg.RiverDatabaseSchema = envOrDefault(lookup, "RIVER_DATABASE_SCHEMA", defaultRiverDatabaseSchema)
 	if err := validateIdentifier("RIVER_DATABASE_SCHEMA", cfg.RiverDatabaseSchema); err != nil {

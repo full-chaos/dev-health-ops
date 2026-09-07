@@ -172,7 +172,6 @@ services:
       # Exactly one runtime owns the PagerDuty webhook stream. This must stay
       # in lockstep with the Go overlay's value: `celery` here dispatches the
       # Celery task, `river` hands the stream to the Go runner (CUT-14/18).
-      PAGERDUTY_WEBHOOK_TRANSPORT: ${PAGERDUTY_WEBHOOK_TRANSPORT:-celery}
       # Schema is applied by the one-shot `migrate` service (gated via
       # depends_on) — the API must never run migrations itself (CHAOS-2304).
       AUTO_RUN_MIGRATIONS: "false"
@@ -340,7 +339,6 @@ services:
       LINEAR_API_KEY: ${LINEAR_API_KEY:-}
       LINEAR_TRUSTED_SCM_HOSTS: ${LINEAR_TRUSTED_SCM_HOSTS:-}
       WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
-      PAGERDUTY_WEBHOOK_TRANSPORT: ${PAGERDUTY_WEBHOOK_TRANSPORT:-celery}
       AUTO_RUN_MIGRATIONS: "false"
       DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES: ${DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES:-671088640}
       DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY: ${DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY:-1}

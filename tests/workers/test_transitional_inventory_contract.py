@@ -175,10 +175,25 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # POST /api/v1/billing/webhooks/stripe) -- none of the three routes to
     # any celery-relevant surface anymore, so none remain inventory-worthy.
     # The still-live pagerduty celery_task (process_pagerduty_webhook_event,
-    # a wholly separate stream, unaffected by this change) is re-anchored
+    # a wholly separate stream, unaffected by that change) is re-anchored
     # in place (line 254 -> 53) after the file shrank, not removed.
-    # = 84.
-    assert inventory["row_count"] == 84
+    # = 84, - 3 removed under CHAOS-4105, which ported the pagerduty webhook
+    # reconciliation to Go and deleted the Python side of it: the
+    # celery_task:system_webhooks.py:53 row (process_pagerduty_webhook_event
+    # -- the whole file went with it, it was 100% pagerduty after CHAOS-5320),
+    # the call_site_getattr_indirection:webhooks/pagerduty.py:515 row
+    # (getattr(..., 'delay'), deleted with the task), and the
+    # api_trigger_endpoint:webhooks/pagerduty.py:402 row (POST /webhooks/
+    # pagerduty/{binding_id}) -- that route survives and still writes the
+    # stream entry, but it no longer forwards to any celery surface, which is
+    # the only reason this inventory tracked it, exactly as CHAOS-5320 argued
+    # for its own three api_trigger_endpoint rows above.
+    # The fourth pagerduty row, stream_surface:webhooks/pagerduty.py:351, is
+    # NOT removed: the stream is still there and is still the handoff, so the
+    # row is flipped dormant_go -> native_go and kept, matching how every
+    # other natively-consumed stream surface in this file is carried.
+    # = 81.
+    assert inventory["row_count"] == 81
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

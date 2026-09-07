@@ -79,141 +79,53 @@ _RUNBOOK = (
 )
 
 
-def _credential_fragments(known_url: str) -> list[str]:
-    """Every literal substring of ``known_url`` that must never be printed.
+def _endpoint_label(url: str) -> str:
+    """A safe name for the endpoint, built from parsed parts only.
 
-    **This is the whole idea, and it took four review rounds to arrive at.**
-    Earlier versions tried to RECOGNISE a credential inside arbitrary text
-    with a regex, and each round found a character the pattern had not
-    anticipated:
+    **Nothing in this module ever prints a query-api URL.** Five review
+    rounds tried to make printing one safe -- first by matching the
+    credential's shape (four leaks, each a character class the previous
+    fix had not anticipated), then by deleting a known literal (which
+    still leaked on a URL with no ``//``, because the credential could not
+    be located to delete it, and still hid the host on a credential-free
+    URL whose path happened to contain a ``:``).
 
-    * r2: a ``/`` in the password (``alice:pa/ss@``).
-    * r3: a raw ``@`` in the password (``alice:s@cret@``), and an empty
-      username (``:secret@``).
-    * confirmation pass: whitespace -- space, tab, newline
-      (``alice:pa ss@``).
+    The lesson is that redaction is the wrong operation. A string that
+    cannot be parsed cannot be reasoned about safely, and one that CAN be
+    parsed does not need redacting -- its safe parts can simply be rebuilt.
+    So this constructs a label from ``scheme`` and ``hostname`` and never
+    touches the raw string.
 
-    Every fix added another character class, and every round found the next
-    one. Describing what a secret *looks like* cannot be made safe, because
-    the space of secrets is not describable.
+    ``scheme`` is emitted only when it is ``http``/``https``: for
+    ``alice:secret@host/path`` (no ``//``) ``urlsplit`` reads the scheme as
+    ``alice`` -- which IS the username -- so an allowlist is what keeps the
+    scheme itself from being the leak. Anything else is ``unparseable``.
 
-    So this does not look for a secret. The caller already HAS the URL, so
-    the credential is a known literal: parse it out and delete that exact
-    string. There is no character class left for a future round to defeat.
-
-    Returns the fragments longest-first, so the full userinfo span is
-    replaced before its component parts and a partial replacement cannot
-    strand a suffix.
-    """
-    fragments: set[str] = set()
-
-    userinfo = ""
-    try:
-        parts = urllib.parse.urlsplit(known_url)
-        netloc = parts.netloc
-        if "@" in netloc:
-            userinfo = netloc.rsplit("@", 1)[0]
-        if parts.username:
-            fragments.add(parts.username)
-            fragments.add(urllib.parse.unquote(parts.username))
-        if parts.password:
-            fragments.add(parts.password)
-            fragments.add(urllib.parse.unquote(parts.password))
-    except ValueError:
-        # A URL urlsplit refuses (e.g. a malformed port) still has to be
-        # redacted. Fall through to the positional derivation below, which
-        # reads the KNOWN url only -- never arbitrary text.
-        pass
-
-    if userinfo:
-        fragments.add(userinfo)
-
-    # ALWAYS also derive the span positionally from the RAW known url, not
-    # only when the parser found nothing. `urlsplit` silently STRIPS tab,
-    # newline and carriage return from a URL (a WHATWG-compliance security
-    # fix), so for `alice:pa\nss@host` it reports the password as `pass` --
-    # a literal that does not occur in the raw text and therefore redacts
-    # nothing. The parsed and positional spans are unioned so neither
-    # source's blind spot can leave a credential behind.
-    positional = ""
-    scheme_at = known_url.find("//")
-    if scheme_at != -1:
-        after = known_url[scheme_at + 2 :]
-        at = after.rfind("@")
-        if at != -1:
-            positional = after[:at]
-
-    # ...but only when it is plausibly CREDENTIAL material. A URL with no
-    # userinfo and an `@` in its path or query (`http://host/pkg@v2`) would
-    # otherwise have its host redacted, hiding the one thing the operator
-    # needs. `user:pass` always contains a `:`, and a bare `user@` is
-    # already covered by the parsed branch above, so requiring a `:` here
-    # separates the two cases exactly.
-    if positional and ":" in positional:
-        fragments.add(positional)
-        userinfo = userinfo or positional
-
-    if userinfo:
-        # `user:pass` split by hand as well: an exception may echo one half.
-        if ":" in userinfo:
-            user, _, password = userinfo.partition(":")
-            for piece in (user, password):
-                if piece:
-                    fragments.add(piece)
-                    fragments.add(urllib.parse.unquote(piece))
-
-    return sorted((f for f in fragments if f), key=len, reverse=True)
-
-
-def _redact_text(text: str, known_url: str | None = None) -> str:
-    """Remove ``known_url``'s credentials from free text, by literal match.
-
-    ``known_url`` is the URL the caller was operating on. Without it there
-    is nothing to redact BY, and this returns the text unchanged rather
-    than guessing -- guessing is precisely what kept failing. Every call
-    site in this module has the URL in hand, so every call passes it.
-    """
-    if not known_url:
-        return text
-    for fragment in _credential_fragments(known_url):
-        text = text.replace(fragment, "<redacted>")
-    return text
-
-
-def _redact_url(url: str) -> str:
-    """Return ``url`` with its userinfo replaced by ``<redacted>``.
-
-    Rebuilt from parsed components where possible, so the output stays a
-    well-formed, re-parseable URL that keeps the host and port visible --
-    an operator who cannot see which endpoint failed is barely better off
-    than one who saw a password.
+    The port is deliberately omitted: ``urlsplit(...).port`` raises on a
+    malformed one, which would be another failure path in the code whose
+    entire job is not to fail interestingly.
     """
     try:
         parts = urllib.parse.urlsplit(url)
-        # `.port` PARSES, and raises ValueError on a malformed one (":bad"),
-        # so it is read inside the guard -- a bad port must not turn a
-        # redaction call into a crash that prints the credential in a
-        # traceback (codex r2).
-        port = parts.port
-        hostname = parts.hostname
     except ValueError:
-        return _redact_text(url, url)
+        return "unparseable"
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return "unparseable"
+    return f"{parts.scheme}://{parts.hostname}"
 
-    if not parts.username and not parts.password:
-        return url
 
-    host = hostname or ""
-    # An IPv6 literal MUST keep its brackets: without them the result is not
-    # a parseable URL at all -- `urlsplit` raised
-    # "Port could not be cast to integer value as ':1:8080'" on this
-    # function's own output before this line existed (confirmation pass).
-    if ":" in host:
-        host = f"[{host}]"
-    if port:
-        host = f"{host}:{port}"
-    return urllib.parse.urlunsplit(
-        (parts.scheme, f"<redacted>@{host}", parts.path, parts.query, parts.fragment)
-    )
+def _transport_failure(exc: Exception) -> str:
+    """Describe a transport failure WITHOUT its message.
+
+    An HTTP client's exception text routinely embeds the URL it was given,
+    credentials and all, so ``str(exc)`` is never safe to print here. The
+    class name plus an HTTP status (when the exception carries one) is the
+    diagnostic content that matters, and neither can contain the URL.
+    """
+    code = getattr(exc, "code", None)
+    if code is not None:
+        return f"{exc.__class__.__name__} (HTTP {code})"
+    return exc.__class__.__name__
 
 
 class GoPlaneUnavailable(RuntimeError):
@@ -250,39 +162,47 @@ def _fetch_go_plane_registry(base_url: str) -> GoPlaneRegistry:
     # problem. An operator-supplied URL is exactly where that typo lives.
     if not base_url.lower().startswith(("http://", "https://")):
         raise GoPlaneUnavailable(
-            f"query-api URL must be http:// or https://, got {_redact_url(base_url)!r}"
+            "query-api URL must be http:// or https://; the configured "
+            "value is not (its raw text is deliberately not echoed -- it "
+            "may carry credentials)"
         )
     url = base_url.rstrip("/") + "/registry"
-    # Everything below quotes `shown`, never `url`: `url` may carry
-    # credentials in its userinfo and must not reach stderr.
-    shown = _redact_url(url)
+    # Every message below names `endpoint`, never `url`: a URL can carry
+    # credentials in its userinfo, and this module never prints one.
+    endpoint = _endpoint_label(base_url)
     try:
         with urllib.request.urlopen(url, timeout=_REGISTRY_TIMEOUT_SECONDS) as resp:
             if resp.status != 200:
-                raise GoPlaneUnavailable(f"{shown} returned HTTP {resp.status}")
+                raise GoPlaneUnavailable(
+                    f"{endpoint}/registry returned HTTP {resp.status}"
+                )
             payload = json.loads(resp.read().decode("utf-8"))
     except GoPlaneUnavailable:
         raise
     except urllib.error.HTTPError as exc:
         raise GoPlaneUnavailable(
-            f"{shown} returned HTTP {exc.code} -- a 404 usually means the "
+            f"{endpoint}/registry returned HTTP {exc.code} -- a 404 usually means the "
             "running query-api predates GET /registry, or its /query route "
             "is unmounted (CLICKHOUSE_URI / GO_API_REGISTRY_POSTGRES_URI / "
             "GO_API_ENVELOPE_* unset)"
         ) from exc
     except Exception as exc:
         raise GoPlaneUnavailable(
-            f"{shown} is unreachable: {_redact_text(str(exc), url)}"
+            f"{endpoint}/registry is unreachable: {_transport_failure(exc)}"
         ) from exc
 
     if not isinstance(payload, dict):
-        raise GoPlaneUnavailable(f"{shown} returned a non-object JSON body")
+        raise GoPlaneUnavailable(f"{endpoint}/registry returned a non-object JSON body")
     schema_digest = payload.get("schema_digest")
     if not isinstance(schema_digest, str) or not schema_digest:
-        raise GoPlaneUnavailable(f"{shown} returned no usable schema_digest")
+        raise GoPlaneUnavailable(
+            f"{endpoint}/registry returned no usable schema_digest"
+        )
     entries = payload.get("operations")
     if not isinstance(entries, list):
-        raise GoPlaneUnavailable(f"{shown} returned no usable operations list")
+        raise GoPlaneUnavailable(
+            f"{endpoint}/registry returned no usable operations list"
+        )
     operations: dict[str, str] = {}
     for entry in entries:
         if (
@@ -290,7 +210,9 @@ def _fetch_go_plane_registry(base_url: str) -> GoPlaneRegistry:
             or not isinstance(entry.get("operation"), str)
             or not isinstance(entry.get("document_digest"), str)
         ):
-            raise GoPlaneUnavailable(f"{shown} returned a malformed operations entry")
+            raise GoPlaneUnavailable(
+                f"{endpoint}/registry returned a malformed operations entry"
+            )
         operation = entry["operation"]
         if operation in operations:
             # Silently keeping the last one would let a malformed or
@@ -298,7 +220,7 @@ def _fetch_go_plane_registry(base_url: str) -> GoPlaneRegistry:
             # for the same operation -- and preflight 3 would then compare
             # against whichever copy happened to win (codex r1, P3).
             raise GoPlaneUnavailable(
-                f"{shown} lists operation {operation!r} more than once"
+                f"{endpoint}/registry lists operation {operation!r} more than once"
             )
         operations[operation] = entry["document_digest"]
     return GoPlaneRegistry(schema_digest=schema_digest, operations=operations)
@@ -515,6 +437,13 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
         try:
             go_digest = _fetch_go_plane_registry(base_url).schema_digest
         except GoPlaneUnavailable as exc:
+            # Safe by construction, and narrowly so: this catches only
+            # GoPlaneUnavailable, whose every message is built in this
+            # module from `_endpoint_label` (scheme + hostname) and
+            # `_transport_failure` (class name + status). A raw transport
+            # exception is never allowed to reach a caller, precisely so
+            # that this line cannot become a leak. The 15-vector leak table
+            # drives this path end to end.
             go_error = str(exc)
     else:
         go_error = "no --query-api-url and GO_API_QUERY_API_URL is unset"

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import urllib.parse as _urlparse
+import urllib.error
 from typing import Any
 
 import pytest
@@ -36,6 +36,11 @@ from _go_api_fake_query_api import FakeQueryAPI, registry_payload
 from dev_health_ops.api.graphql import go_api_cli
 from dev_health_ops.api.graphql.go_api_operation_catalog import catalog_entries
 from dev_health_ops.api.graphql.go_api_schema_digest import current_schema_digest
+
+
+def await_sync(coro):
+    """Run a coroutine from a sync test body."""
+    return asyncio.run(coro)
 
 
 def _enable(**overrides: Any) -> int:
@@ -200,24 +205,6 @@ def test_a_non_http_query_api_url_is_refused_before_opening_anything(
 
 
 # --- codex r1 fixes -------------------------------------------------------
-
-
-def test_url_credentials_never_reach_the_error_output(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A URL can carry `user:password@`, and this lane never prints credentials.
-
-    codex r1 (P2): `http://alice:super-secret@127.0.0.1:1` echoed the
-    password verbatim into stderr on the unreachable-host path.
-    """
-    assert _enable(query_api_url="http://alice:super-secret@127.0.0.1:1") == 2
-    err = capsys.readouterr().err
-    assert "super-secret" not in err
-    assert "alice" not in err
-    assert "<redacted>" in err
-    # Still diagnostic: the host must survive redaction, or the operator
-    # cannot tell which endpoint failed.
-    assert "127.0.0.1:1" in err
 
 
 def test_credentials_are_redacted_from_a_non_http_scheme_refusal(
@@ -466,126 +453,150 @@ async def test_status_text_mode_names_an_unreadable_sdl(
     assert "cannot compute the routing key" in out
 
 
-def test_a_malformed_port_does_not_crash_redaction() -> None:
-    """codex r2 P2: `.port` raises ValueError on `:bad`.
-
-    A redaction helper that raises turns a credential-bearing string into
-    an unhandled traceback -- which prints it anyway, via the exception.
-    """
-    out = go_api_cli._redact_url("http://alice:secret@example.com:bad/registry")
-    assert "secret" not in out
-
-
-# THE VECTOR TABLE. Every row was MEASURED leaking at some point in this
-# PR's four review rounds. The redactor no longer matches on the shape of a
-# secret at all -- it deletes the credential it was TOLD about -- but the
-# table stays as the regression record, and any future change must keep all
-# twelve green.
+# THE LEAK TABLE. Fifteen URL shapes, every one of which leaked a
+# credential at some point across five review rounds of this PR.
 #
-#   r1                 plain user:password
-#   r2                 '/' in password, malformed port, IPv6 host, %-encoded
-#   r3                 raw '@' in password, empty username, username only
-#   confirmation pass  space / newline / tab in password
+#   r1                'plain'
+#   r2                '/' in password, malformed port, IPv6 host, %-encoded
+#   r3                raw '@' in password, empty username, username only
+#   confirmation      space / tab / newline in password
+#   final pass        no scheme (no '//'), backslash separators
 #
-# Four consecutive rounds each found a character class the previous regex
-# had not anticipated. That is why the implementation stopped describing
-# secrets: the space of secrets is not describable.
-_REDACTION_VECTORS = [
-    ("plain", "http://alice:super-secret@host/registry", "super-secret"),
-    ("slash in password", "http://alice:pa/ss@host/registry", "pa/ss"),
-    ("raw @ in password", "http://alice:s@cret@host/registry", "s@cret"),
-    ("empty username", "http://:secret@host/registry", "secret"),
-    ("username only", "http://alice@host/registry", "alice"),
-    ("malformed port", "http://alice:secret@example.com:bad/registry", "secret"),
-    ("ipv6 host", "http://alice:secret@[::1]:8080/registry", "secret"),
-    ("percent encoded", "http://user:p%40ss@host/registry", "p%40ss"),
-    ("space in password", "http://alice:pa ss@host/registry", "pa ss"),
-    ("newline in password", "http://alice:pa\nss@host/registry", "pa\nss"),
-    ("tab in password", "http://alice:pa\tss@host/registry", "pa\tss"),
-    ("hash in password", "http://alice:pa#ss@host/registry", "pa#ss"),
-]
-
-# URLs carrying NO credentials. Over-redaction is a real defect too: the
-# host is the diagnostic, and hiding it leaves an operator unable to tell
-# which endpoint failed. The '@'-in-path and '@'-in-query rows are the ones
-# a naive "scrub to the last @" rule gets wrong.
-_NO_CREDENTIAL_URLS = [
-    "http://127.0.0.1:1/registry",
-    "http://host/registry?q=1",
-    "http://host/pkg@v2/x",
-    "http://host/r?to=a@b",
-    "https://query-api.internal:8080/registry",
+# The module no longer redacts anything: it never prints a query-api URL at
+# all, and builds its messages from `urlsplit`'s scheme and hostname only.
+# This table is the proof of that property, asserted end-to-end over every
+# path that can emit text -- not over a redaction helper, because there is
+# no longer one to test.
+#
+# Each row is (name, url, [substrings that must never appear anywhere]).
+_LEAK_VECTORS = [
+    ("plain", "http://alice:super-secret@host/registry", ["super-secret"]),
+    ("slash in password", "http://alice:pa/ss@host/registry", ["pa/ss"]),
+    ("raw @ in password", "http://alice:s@cret@host/registry", ["s@cret"]),
+    ("empty username", "http://:secret@host/registry", ["secret"]),
+    ("username only", "http://alice@host/registry", ["alice"]),
+    ("malformed port", "http://alice:secret@example.com:bad/registry", ["secret"]),
+    ("ipv6 host", "http://alice:secret@[::1]:8080/registry", ["secret"]),
+    ("percent encoded", "http://user:p%40ss@host/registry", ["p%40ss", "p@ss"]),
+    ("space in password", "http://alice:pa ss@host/registry", ["pa ss"]),
+    ("newline in password", "http://alice:pa\nss@host/registry", ["pa\nss"]),
+    ("tab in password", "http://alice:pa\tss@host/registry", ["pa\tss"]),
+    ("hash in password", "http://alice:pa#ss@host/registry", ["pa#ss"]),
+    # final pass, P1-1: no '//' at all, so nothing could locate the
+    # credential in order to delete it.
+    ("no scheme", "alice:secret@host:8080/path", ["secret"]),
+    ("backslash separators", "http:\\\\alice:secret@host:8080\\\\path", ["secret"]),
+    ("no scheme, slash in password", "alice:pa/ss@host/registry", ["pa/ss"]),
 ]
 
 
-@pytest.mark.parametrize(("name", "url", "secret"), _REDACTION_VECTORS)
-def test_redact_text_removes_the_secret(name: str, url: str, secret: str) -> None:
-    """The free-text path, given the URL it was operating on."""
-    redacted = go_api_cli._redact_text(f"{url} is unreachable", url)
-    assert secret not in redacted
-    assert "<redacted>" in redacted
+def _all_emitted_text(
+    capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> str:
+    captured = capsys.readouterr()
+    return captured.out + captured.err + caplog.text
 
 
-@pytest.mark.parametrize(("name", "url", "secret"), _REDACTION_VECTORS)
-def test_redact_url_removes_the_secret(name: str, url: str, secret: str) -> None:
-    redacted = go_api_cli._redact_url(url)
-    assert secret not in redacted
-    assert "<redacted>" in redacted
-
-
-@pytest.mark.parametrize("url", _NO_CREDENTIAL_URLS)
-def test_a_url_without_credentials_is_left_intact(url: str) -> None:
-    assert go_api_cli._redact_text(url, url) == url
-    assert go_api_cli._redact_url(url) == url
-
-
-@pytest.mark.parametrize(("name", "url", "secret"), _REDACTION_VECTORS)
-def test_redact_url_output_still_parses_and_keeps_host_and_port(
-    name: str, url: str, secret: str
+@pytest.mark.parametrize(("name", "url", "secrets"), _LEAK_VECTORS)
+def test_enable_never_emits_a_credential_on_any_path(
+    name: str,
+    url: str,
+    secrets: list[str],
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The redactor must not emit something a caller cannot re-parse.
+    """Drive the real `enable` command and read everything it emitted.
 
-    Before the IPv6 bracket fix, `http://alice:secret@[::1]:8080/` redacted
-    to `http://<redacted>@::1:8080/`, and `urlsplit` raised
-    "Port could not be cast to integer value as ':1:8080'" on this
-    function's OWN output (confirmation pass, P2).
-
-    Inputs that themselves do not parse are skipped -- the invariant is
-    that redaction preserves parseability, not that it repairs a malformed
-    URL.
+    End-to-end over stdout, stderr, logs AND the exception text, because a
+    credential reaching any of them is the same failure. Asserted per
+    secret with a direct `not in` -- no `or`.
     """
-    try:
-        original = _urlparse.urlsplit(url)
-        want_host, want_port = original.hostname, original.port
-    except ValueError:
-        pytest.skip("input URL is itself unparseable; nothing to preserve")
+    import logging
 
-    redacted = _urlparse.urlsplit(go_api_cli._redact_url(url))
-    assert redacted.hostname == want_host
-    assert redacted.port == want_port
+    with caplog.at_level(logging.DEBUG):
+        assert _enable(query_api_url=url) == 2
+
+    emitted = _all_emitted_text(capsys, caplog)
+    for secret in secrets:
+        assert secret not in emitted, (
+            f"{name}: {secret!r} reached output via `enable`:\n{emitted}"
+        )
 
 
-def test_redact_text_without_a_known_url_changes_nothing() -> None:
-    """No URL means nothing to redact BY, and guessing is what kept failing.
+@pytest.mark.parametrize(("name", "url", "secrets"), _LEAK_VECTORS)
+def test_status_never_emits_a_credential_on_any_path(
+    name: str,
+    url: str,
+    secrets: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The same, through `status`, whose whole job is to keep printing when
+    things are broken -- so it has the most output paths."""
+    import contextlib
+    import logging
 
-    Returning the text unchanged is the honest behaviour; every call site
-    in the module passes the URL, so this is a contract statement rather
-    than a live path.
+    import dev_health_ops.db as db_module
+
+    @contextlib.asynccontextmanager
+    async def dead_session():
+        raise RuntimeError("db down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db_module, "get_postgres_session", dead_session)
+
+    with caplog.at_level(logging.DEBUG):
+        assert (
+            await_sync(
+                go_api_cli._cmd_routing_status(
+                    argparse.Namespace(query_api_url=url, json=False)
+                )
+            )
+            == 0
+        )
+
+    emitted = _all_emitted_text(capsys, caplog)
+    for secret in secrets:
+        assert secret not in emitted, (
+            f"{name}: {secret!r} reached output via `status`:\n{emitted}"
+        )
+
+
+@pytest.mark.parametrize(("name", "url", "secrets"), _LEAK_VECTORS)
+def test_the_registry_fetch_exception_carries_no_credential(
+    name: str, url: str, secrets: list[str]
+) -> None:
+    """The exception TEXT itself, which callers format into their own
+    messages -- a leak here escapes through every one of them."""
+    with pytest.raises(go_api_cli.GoPlaneUnavailable) as excinfo:
+        go_api_cli._fetch_go_plane_registry(url)
+    message = str(excinfo.value)
+    for secret in secrets:
+        assert secret not in message, f"{name}: {secret!r} in the exception text"
+
+
+def test_the_endpoint_label_never_echoes_an_unparseable_url() -> None:
+    """A scheme that is not http(s) is never printed either.
+
+    For `alice:secret@host/path`, `urlsplit` reads the SCHEME as `alice` --
+    which is the username. Emitting the scheme unconditionally would make
+    the label itself the leak, so anything outside the allowlist collapses
+    to a fixed literal.
     """
-    text = "http://alice:secret@host/registry is unreachable"
-    assert go_api_cli._redact_text(text) == text
-
-
-def test_credential_fragments_are_ordered_longest_first() -> None:
-    """The full userinfo span must be replaced before its parts.
-
-    Otherwise replacing `alice` first can strand `:secret@` in the output.
-    """
-    fragments = go_api_cli._credential_fragments(
-        "http://alice:super-secret@host/registry"
+    assert go_api_cli._endpoint_label("alice:secret@host:8080/path") == "unparseable"
+    assert go_api_cli._endpoint_label("http://alice:secret@host/x") == "http://host"
+    assert go_api_cli._endpoint_label("https://a:b@example.com:8080/x") == (
+        "https://example.com"
     )
-    assert fragments == sorted(fragments, key=len, reverse=True)
-    assert "alice:super-secret" in fragments
+
+
+def test_transport_failure_never_includes_the_exception_message() -> None:
+    """`str(exc)` from an HTTP client routinely embeds the URL it was given."""
+    err = urllib.error.URLError("failed opening http://alice:secret@host/registry")
+    described = go_api_cli._transport_failure(err)
+    assert "secret" not in described
+    assert "URLError" in described
 
 
 @pytest.mark.asyncio

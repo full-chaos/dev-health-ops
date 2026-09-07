@@ -217,7 +217,7 @@ func (storage *productionStreamStorage) Handler(kind streamHandlerKind, observer
 		if err != nil {
 			return nil, err
 		}
-		dispatcher, err := externalrecompute.NewPostgresCompatibilityDispatcher(storage.domainPool)
+		dispatcher, err := externalrecompute.NewPostgresNativeDispatcher(storage.domainPool)
 		if err != nil {
 			return nil, err
 		}

@@ -881,15 +881,21 @@ func TestProductionOperationalBuilderConstructsNativeSyncCoverageRefresh(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 5 || components[0].Name() != "postgres-runtime-pools" ||
-		components[2].Name() != "self-probe-worker_execution_liveness" ||
-		components[3].Name() != "preclaim-readiness" ||
-		components[4].Name() != "river-workers" {
+	// 5 -> 6 under CHAOS-5296: the external-recompute drain is a lifecycle
+	// component of this process now. Naming each position rather than only
+	// counting is what makes an accidental reordering (which changes shutdown
+	// order) fail here instead of in production.
+	if len(components) != 6 || components[0].Name() != "postgres-runtime-pools" ||
+		components[1].Name() != "queue-health-monitor" ||
+		components[2].Name() != "external-recompute-drain" ||
+		components[3].Name() != "self-probe-worker_execution_liveness" ||
+		components[4].Name() != "preclaim-readiness" ||
+		components[5].Name() != "river-workers" {
 		t.Fatalf("production components = %#v", components)
 	}
-	queueWorkers, ok := components[4].(workerProcessComponent)
+	queueWorkers, ok := components[5].(workerProcessComponent)
 	if !ok || queueWorkers.presence == nil {
-		t.Fatalf("production queue lifecycle = %#v", components[4])
+		t.Fatalf("production queue lifecycle = %#v", components[5])
 	}
 	presence, ok := queueWorkers.presence.(*jobruntime.WorkerPresence)
 	if !ok || presence == nil {
@@ -2627,5 +2633,66 @@ func TestComposedWorkerWithSurvivingHandlerStillNamesTheShutdownViolation(t *tes
 	}
 	if !errors.Is(err, errWorkerDependencyUnavailable) {
 		t.Fatalf("configure error = %v, want the dependency sentinel to still match", err)
+	}
+}
+
+// TestWorkerRefusesToStartWithAnUnusableRecomputeCap is the load-bearing half
+// of the r1 P1-a fix (team-lead ruling 2026-09-07: never silently default).
+//
+// Before it, a cap the operator set but that this process could not parse fell
+// back to the checked-in default — silently recomputing MORE than they asked
+// for. Logging and carrying on would repeat this ticket's own failure shape: a
+// consumer that quietly does the wrong amount of work is indistinguishable from
+// one doing the right amount. The process refuses to start instead, so an
+// operator typo is an attributable deploy-time failure.
+func TestWorkerRefusesToStartWithAnUnusableRecomputeCap(t *testing.T) {
+	t.Setenv("EXTERNAL_INGEST_RECOMPUTE_MAX_BACKFILL_DAYS", "soon")
+	t.Chdir(filepath.Join("..", ".."))
+	runtimeRegistry, err := jobruntime.Load("contracts/jobs/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	domainPool, err := pgxpool.New(ctx, "postgresql://domain@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer domainPool.Close()
+	queuePool, err := pgxpool.New(ctx, "postgresql://queue@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer queuePool.Close()
+	database := &postgresWorkerDatabase{
+		pools: &postgres.RuntimePools{Domain: domainPool, QueueControl: queuePool},
+	}
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
+		return database, nil
+	}
+	sources.loadRuntimeRegistry = func(string) (*jobruntime.Registry, error) {
+		return runtimeRegistry, nil
+	}
+	components, err := configureWorkerDependenciesWithSources(
+		ctx,
+		config.Config{
+			Queues:                   []string{"coverage", "heartbeat", "retention", "webhooks"},
+			WorkerQueueConcurrency:   map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
+			RiverDatabaseSchema:      "river",
+			DomainDatabaseMaxConns:   4,
+			QueueDatabaseMaxConns:    2,
+			OperationalBridgeURL:     "http://localhost",
+			OperationalBridgeToken:   secrets.NewValue("test-bridge-token"),
+			OperationalBridgeTimeout: time.Second,
+		},
+		health.NewRegistry(time.Second),
+		sources,
+		slog.Default(),
+	)
+	if err == nil {
+		t.Fatalf("worker started with an unusable recompute cap: components = %d", len(components))
+	}
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("startup refusal = %v, want a dependency refusal", err)
 	}
 }

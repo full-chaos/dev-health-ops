@@ -197,7 +197,7 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # operational.billing_notification's HTTP compatibility bridge, and its
     # own deletion_evidence_requirement ("deleted once registry kind
     # operational.billing_notification no longer routes through the HTTP
-    # compatibility bridge") is exactly what this PR satisfies: the Go
+    # compatibility bridge") is exactly what that PR satisfies: the Go
     # BillingHandler now owns the completion fence, the owner-email lookup,
     # all seven email renderings and the provider send, so the task, its
     # fence helpers, billing_emails.py and the /billing route are all
@@ -206,12 +206,28 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # native_go, the same treatment CHAOS-5320 gave
     # operational.webhook_delivery's row and CHAOS-4105 gave the pagerduty
     # stream surface.
-    # = 80. CHAOS-4105's -3 and this -1 are INDEPENDENT: different surfaces,
-    # different tickets, landed as one merge. Recounted from
-    # contracts/jobs/v1/transitional-inventory.json rather than derived from
-    # either branch's figure -- see the merge hazard note in
-    # tests/test_endpoint_profiles_contract.py for why that matters here.
-    assert inventory["row_count"] == 80
+    # = 80.
+    # = 80, - 2 removed under CHAOS-5296: the external-ingest recompute Celery
+    # bridge is replaced by a native Go consumer
+    # (internal/externalrecompute/drain.go) in the same change that repoints
+    # its writer at that consumer, so BOTH the
+    # celery_task:external_ingest_recompute.py bridge row and the
+    # beat_entry:config.py dispatch-go-external-ingest-recompute-bridge row are
+    # deleted outright. The Beat row moves to retired_beat_entries with its
+    # evidence rather than vanishing. flush_external_ingest_recompute and its
+    # .apply_async site are NOT touched -- external_ingest/processor.py still
+    # calls schedule_or_coalesce, so that surface keeps a live producer and
+    # belongs to CHAOS-4427, not here; it is only re-anchored after the file
+    # shrank.
+    # = 78. THREE independent tickets removed disjoint sets of rows and landed
+    # separately: CHAOS-4105's -3 (pagerduty), CHAOS-5353's -1 (billing), and
+    # CHAOS-5296's -2 (external-ingest recompute). This figure is RECOUNTED
+    # from contracts/jobs/v1/transitional-inventory.json on the merged tree --
+    # len(rows) == 78 == 80 - 2 -- not derived from any one branch's number,
+    # which is the merge hazard tests/test_endpoint_profiles_contract.py's note
+    # describes: each branch's arithmetic is correct against its own base and
+    # wrong against the union.
+    assert inventory["row_count"] == 78
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():
@@ -232,7 +248,13 @@ def test_retired_beat_entries_are_evidenced_and_absent_from_source():
                 "and a local feature-stack PostgreSQL read-only audit found zero scheduled_jobs "
                 "rows with job_type='metrics'."
             ),
-        }
+        },
+        {
+            "name": "dispatch-go-external-ingest-recompute-bridge",
+            "cadence": "10s",
+            "reason": "Replaced by a native Go consumer, not merely stopped. The entry existed only to drain the Go stream runner's external-ingest recompute rows into the Python planner; CHAOS-5296 ships that consumer in Go (internal/externalrecompute/drain.go) and repoints the writer at it (NativeDrainTaskName) in the SAME change, so the Celery task has no writer and the Beat entry has no task.",
+            "evidence": "CHAOS-5296. The 30-day zero-legacy-enqueue window this row's predecessor asked for is satisfied by construction rather than by observation: the only code that could enqueue the legacy task -- PostgresCompatibilityDispatcher's INSERT of celery_task_name = 'dev_health_ops.workers.tasks.dispatch_external_ingest_recompute_bridge' -- was deleted in the same commit as the task and the Beat entry, so a legacy enqueue is not possible from any deployed version going forward. Rows written under the old name BEFORE the cutover are drained once, by hand, via `dev-health-workerctl external-recompute replay`; the live consumer cannot see them.",
+        },
     ]
     assert (
         checker.validate_retired_beat_entries(

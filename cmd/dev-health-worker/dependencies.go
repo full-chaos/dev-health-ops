@@ -784,6 +784,23 @@ func configureWorkerDependenciesWithSources(
 	if monitor := newQueueHealthMonitor(dependencies.queueTelemetry, logger); monitor != nil {
 		components = append(components, monitor)
 	}
+	// Native replacement for the deleted Beat task
+	// dispatch_external_ingest_recompute_bridge (CHAOS-5296). It reads the
+	// external-ingest recompute rows the stream runner writes and republishes
+	// them as ordinary daily-metrics and investment handoffs. Hosted here, not
+	// in the stream runner, because the enqueue seams it needs (the job
+	// registry, the daily store/publisher, the work-graph request writer) exist
+	// only in this process.
+	drain, drainErr := newExternalRecomputeDrain(
+		dependencies.database, dependencies.runtimeRegistry, logger,
+	)
+	if drainErr != nil {
+		dependencies.close()
+		return nil, dependencyUnavailable("external_recompute_drain_unavailable")
+	}
+	if drain != nil {
+		components = append(components, drain)
+	}
 	// CHAOS-4029: the execution-liveness self-probe. Constructed only now that
 	// dependencies.database is confirmed non-nil, so it has a real domain pool
 	// to probe. Assigning the already-captured livenessMonitor variable makes

@@ -479,6 +479,24 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 			Evidence: "CHAOS-3128 retirement decision: source audit found zero production " +
 				"writers; the local feature-stack PostgreSQL read-only audit found zero rows.",
 		},
+		{
+			Name:    "dispatch-go-external-ingest-recompute-bridge",
+			Cadence: EveryInterval(10 * time.Second),
+			Reason: "Replaced by a native Go consumer rather than merely stopped. This entry " +
+				"existed only to drain the Go stream runner's external-ingest recompute rows " +
+				"into the Python planner. CHAOS-4026 deliberately KEPT it because no native " +
+				"consumer existed -- the LegacyBeatInventory row that lived here until " +
+				"CHAOS-5296 asserted otherwise, and that claim was false for ~2.5 weeks while " +
+				"Celery was stopped and the Go writer kept producing rows nothing read. " +
+				"internal/externalrecompute/drain.go is that consumer; it claims the rows and " +
+				"enqueues metrics.daily_dispatch and investment.materialize directly.",
+			Evidence: "CHAOS-5296 (2026-09-07). The consumer, the domain role's UPDATE grant " +
+				"on external_ingest_recompute_jobs, the writer's repointing to " +
+				"externalrecompute.NativeDrainTaskName, and the deletion of the Celery task " +
+				"all land in one change, so no version exists that can enqueue the legacy " +
+				"task. Rows written under the old name before the cutover are drained once by " +
+				"`dev-health-workerctl external-recompute replay`.",
+		},
 		// CHAOS-4026 (2026-08-21): Celery is retired -- zero Python celery
 		// services have run in prod since the 2026-08-19 stop (owner
 		// ratification). The following 14 Beat entries and their Celery task
@@ -644,26 +662,6 @@ func LegacyBeatInventory() []LegacyEntry {
 			OwnerRef: "internal/syncreconciler",
 			Note: "The reconciler runs its own bounded loop. Re-expressing it as a queued " +
 				"job would put lease repair behind the queue it repairs.",
-		},
-		{
-			Name:     "dispatch-go-external-ingest-recompute-bridge",
-			Cadence:  EveryInterval(10 * time.Second),
-			Owner:    OwnerRemoved,
-			OwnerRef: "internal/externalrecompute",
-			// CHAOS-4057 (2026-08-21): this Note's "Native external recompute
-			// consumes the durable debounce state directly, so the entry is
-			// deleted rather than replaced" is FALSE -- no such native consumer
-			// exists (confirmed: the Go domain role has only SELECT/INSERT on
-			// external_ingest_recompute_jobs, so it cannot self-serve). This
-			// Beat entry and its Python task remain the sole reader of
-			// bridge_pending rows and were deliberately NOT deleted by
-			// CHAOS-4026 pending CHAOS-4057's port-vs-retire decision. Left
-			// verbatim (not corrected) here because CHAOS-4026 did not touch
-			// this row's content, only its position in this list -- correcting
-			// the claim belongs to whoever resolves CHAOS-4057.
-			Note: "Exists only to drain Go-authored compatibility bridge rows into the Python " +
-				"planner. Native external recompute consumes the durable debounce state directly, " +
-				"so the entry is deleted rather than replaced.",
 		},
 		{
 			Name:     "monitor-queue-depths",

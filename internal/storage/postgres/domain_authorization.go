@@ -712,7 +712,12 @@ func domainPosture() RolePosture {
 			{"dev_conversation_tombstones", true, false, false},
 			{"external_ingest_batch_payloads", false, false, true},
 			{"external_ingest_batches", false, true, true},
-			{"external_ingest_recompute_jobs", true, false, false},
+			// AllowUpdate since CHAOS-5296: the native external-recompute drain
+			// claims and terminalizes these rows itself (bridge_pending ->
+			// bridge_claimed -> bridge_dispatched/bridge_failed). Still no
+			// DELETE -- the ledger is dispatch evidence, and only retention
+			// removes it.
+			{"external_ingest_recompute_jobs", true, true, false},
 			{"external_ingest_rejections", true, false, false},
 			{"external_ingest_sources", false, false, false},
 			// Deliberately SELECT-only, and CHAOS-4209 KEPT it that way. The

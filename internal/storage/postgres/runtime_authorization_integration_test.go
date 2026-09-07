@@ -176,7 +176,9 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, INSERT ON TABLE public.daily_metrics_partition_recompute_events TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO " + runtimeAuthorizationDomainRole,
-		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_recompute_jobs, public.external_ingest_rejections TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_rejections TO " + runtimeAuthorizationDomainRole,
+		// CHAOS-5296: see domain_authorization_integration_test.go's twin line.
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.external_ingest_recompute_jobs TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + runtimeAuthorizationDomainRole,
 		// The domain role needs DELETE but explicitly NOT UPDATE here:
 		// PostgreSQL treats FOR UPDATE/FOR SHARE as UPDATE-class, and the

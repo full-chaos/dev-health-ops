@@ -160,7 +160,7 @@ cmd/query-api/internal/investmentexplain	41
 cmd/query-api/internal/routeswitch	5
 cmd/query-api/internal/workgraph	60
 internal/cacheinvalidation	2
-internal/externalrecompute	15
+internal/externalrecompute	30
 internal/joboperator	13
 internal/joboutbox	12
 internal/jobrescue	5

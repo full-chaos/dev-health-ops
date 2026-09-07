@@ -5,6 +5,7 @@ package externalrecompute
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestPostgresCompatibilityBridgeIsDeterministicAndDoesNotDuplicateBatchStatu
 			t.Fatal(err)
 		}
 	}
-	dispatcher, err := NewPostgresCompatibilityDispatcher(pool)
+	dispatcher, err := NewPostgresNativeDispatcher(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +135,104 @@ func TestPostgresCompatibilityBridgeIsDeterministicAndDoesNotDuplicateBatchStatu
 	}
 }
 
+// TestDispatchAlwaysWritesUTCWindowsWithAZuluOffset is what keeps the
+// deliberate UTC divergence in plan.go UNREACHABLE rather than merely unlikely
+// (r1 P1-b).
+//
+// The Go planner takes UTC calendar dates; the Python planner takes the
+// calendar date in the PRODUCER's offset. Those disagree for any payload
+// carrying a non-zero offset. They cannot disagree today because this
+// dispatcher is the only writer of a bridge payload anywhere in the tree and it
+// formats .UTC(), so every windowStartedAt/windowEndedAt ends in "Z".
+//
+// That is a property of one line of code, and a future producer emitting a
+// local offset would silently change which day gets recomputed. This test makes
+// that a build failure instead.
+func TestDispatchAlwaysWritesUTCWindowsWithAZuluOffset(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate Postgres: %v", err)
+		}
+	})
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	createCompatibilityTables(t, ctx, pool)
+
+	ingestionID := uuid.MustParse("44444444-5555-4666-8777-888888888888")
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO external_ingest_batches (
+			ingestion_id, org_id, source_system, source_instance,
+			recompute_status, recompute_scope, updated_at
+		) VALUES ($1,'org-1','github','Acme/API','pending','{}'::jsonb,now())
+	`, ingestionID); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := NewPostgresNativeDispatcher(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately offset-bearing inputs: +05:00 is the exact case that made
+	// the two planners disagree in review.
+	offset := time.FixedZone("plus5", 5*60*60)
+	start := time.Date(2026, 6, 25, 23, 30, 0, 0, offset)
+	end := time.Date(2026, 6, 26, 0, 30, 0, 0, offset)
+	if err := dispatcher.Dispatch(ctx, Claim{
+		ID: "external-ingest:recompute:pending|offset",
+		Scope: streamhandlers.ExternalRecomputeScope{
+			OrgID: "org-1", SourceSystem: "github", SourceInstance: "Acme/API",
+			IngestionID: ingestionID, RepoIDs: []string{"repo-a"},
+			RecordKinds: []string{"commit.v1"},
+			WindowStart: &start, WindowEnd: &end,
+		},
+		ingestionIDs: []string{ingestionID.String()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var raw []byte
+	if err := pool.QueryRow(ctx,
+		`SELECT recompute_scope FROM external_ingest_batches WHERE ingestion_id = $1`,
+		ingestionID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var scope bridgeScope
+	if err := json.Unmarshal(raw, &scope); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]*string{
+		"windowStartedAt": scope.WindowStartedAt,
+		"windowEndedAt":   scope.WindowEndedAt,
+	} {
+		if value == nil {
+			t.Fatalf("%s was not persisted", name)
+		}
+		if !strings.HasSuffix(*value, "Z") {
+			t.Fatalf("%s = %q: a bridge payload must carry a UTC instant. A "+
+				"non-Zulu offset here makes plan.go's UTC calendar-date "+
+				"arithmetic disagree with the Python planner about which day "+
+				"to recompute (r1 P1-b).", name, *value)
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, *value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, offsetSeconds := parsed.Zone(); offsetSeconds != 0 {
+			t.Fatalf("%s = %q has a non-zero zone offset", name, *value)
+		}
+	}
+}
+
 func createCompatibilityTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `
@@ -144,6 +243,9 @@ func createCompatibilityTables(t *testing.T, ctx context.Context, pool *pgxpool.
 			source_instance text NOT NULL,
 			recompute_status text NOT NULL,
 			recompute_scope jsonb NULL,
+			recompute_dispatched_at timestamptz NULL,
+			recompute_completed_at timestamptz NULL,
+			recompute_error text NULL,
 			updated_at timestamptz NOT NULL
 		);
 		CREATE TABLE external_ingest_recompute_jobs (

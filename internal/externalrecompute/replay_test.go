@@ -1,0 +1,276 @@
+package externalrecompute
+
+// replay_test.go covers the collapse rules, which are the whole correctness
+// argument for pointing the replay command at production: an operator draining
+// ~2.5 weeks of backlog needs to know that "collapse" widens coverage and never
+// narrows it.
+
+import (
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+func backlogRow(
+	org, system, instance string,
+	dispatchedAt time.Time,
+	scope *PlanScope,
+	ingestionIDs ...string,
+) BacklogRow {
+	return BacklogRow{
+		JobID:          uuid.New(),
+		BridgeID:       uuid.NewString(),
+		OrgID:          org,
+		SourceSystem:   system,
+		SourceInstance: instance,
+		DispatchedAt:   dispatchedAt,
+		Scope:          scope,
+		IngestionIDs:   ingestionIDs,
+	}
+}
+
+func TestCollapseBacklogUnionsScopeAndWidensWindow(t *testing.T) {
+	early := time.Date(2026, 8, 19, 3, 0, 0, 0, time.UTC)
+	late := time.Date(2026, 9, 6, 21, 0, 0, 0, time.UTC)
+	rows := []BacklogRow{
+		backlogRow("org-1", "github", "acme/api", early, &PlanScope{
+			OrgID:       "org-1",
+			RepoIDs:     []string{"repo-b", "repo-a"},
+			TeamIDs:     []string{"team-a"},
+			RecordKinds: []string{"commit.v1"},
+			WindowStart: timePtr(early.Add(-2 * time.Hour)),
+			WindowEnd:   timePtr(early),
+		}, "ing-1"),
+		backlogRow("org-1", "github", "acme/api", late, &PlanScope{
+			OrgID:       "org-1",
+			RepoIDs:     []string{"repo-c", "repo-a"},
+			RecordKinds: []string{"work_item.v1"},
+			WindowStart: timePtr(late.Add(-time.Hour)),
+			WindowEnd:   timePtr(late),
+		}, "ing-2"),
+	}
+
+	groups := CollapseBacklog(rows)
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d, want one per (org, system, instance)", len(groups))
+	}
+	group := groups[0]
+	if group.Rows != 2 || len(group.JobIDs) != 2 {
+		t.Fatalf("group rows = %d job ids = %d", group.Rows, len(group.JobIDs))
+	}
+	if !slices.Equal(group.Scope.RepoIDs, []string{"repo-a", "repo-b", "repo-c"}) {
+		t.Fatalf("repo ids = %v (must be the deduped union)", group.Scope.RepoIDs)
+	}
+	if !slices.Equal(group.Scope.TeamIDs, []string{"team-a"}) {
+		t.Fatalf("team ids = %v", group.Scope.TeamIDs)
+	}
+	if !slices.Equal(group.Scope.RecordKinds, []string{"commit.v1", "work_item.v1"}) {
+		t.Fatalf("record kinds = %v (must be the union, so kind gating sees both)", group.Scope.RecordKinds)
+	}
+	if !slices.Equal(group.IngestionIDs, []string{"ing-1", "ing-2"}) {
+		t.Fatalf("ingestion ids = %v", group.IngestionIDs)
+	}
+	// The widest window, not the newest row's: collapsing must cover every day
+	// any row in the group asked for, or the collapse silently loses coverage
+	// that a per-row replay would have had.
+	if !group.Scope.WindowStart.Equal(early.Add(-2 * time.Hour)) {
+		t.Fatalf("window start = %s", group.Scope.WindowStart)
+	}
+	if !group.Scope.WindowEnd.Equal(late) {
+		t.Fatalf("window end = %s", group.Scope.WindowEnd)
+	}
+	if !group.Oldest.Equal(early) || !group.Newest.Equal(late) {
+		t.Fatalf("age range = %s .. %s", group.Oldest, group.Newest)
+	}
+}
+
+func TestCollapseBacklogSeparatesSourceInstances(t *testing.T) {
+	at := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	scope := func(repo string) *PlanScope {
+		return &PlanScope{OrgID: "org-1", RepoIDs: []string{repo},
+			RecordKinds: []string{"commit.v1"}, WindowEnd: timePtr(at)}
+	}
+	groups := CollapseBacklog([]BacklogRow{
+		backlogRow("org-1", "github", "acme/api", at, scope("repo-a")),
+		backlogRow("org-1", "github", "acme/web", at, scope("repo-b")),
+		backlogRow("org-2", "github", "acme/api", at, scope("repo-c")),
+	})
+	if len(groups) != 3 {
+		t.Fatalf("groups = %d, want one per debounce grain", len(groups))
+	}
+	// D10: different source instances have disjoint repo/team scopes, so
+	// merging them would recompute each org's repositories under the other's
+	// window.
+	for _, group := range groups {
+		if len(group.Scope.RepoIDs) != 1 {
+			t.Fatalf("group %+v merged across grains", group)
+		}
+	}
+}
+
+func TestCollapseBacklogRetiresScopelessRowsWithoutWideningScope(t *testing.T) {
+	at := time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC)
+	rows := []BacklogRow{
+		backlogRow("org-1", "github", "acme/api", at, &PlanScope{
+			OrgID: "org-1", RepoIDs: []string{"repo-a"},
+			RecordKinds: []string{"commit.v1"}, WindowEnd: timePtr(at),
+		}, "ing-1"),
+		// Already-terminal or corrupt: no pending batch row still carries its
+		// bridge id. It must still be retired -- leaving it behind would strand
+		// a row nothing can ever consume -- but it must not contribute scope.
+		backlogRow("org-1", "github", "acme/api", at.Add(time.Hour), nil),
+	}
+	groups := CollapseBacklog(rows)
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d", len(groups))
+	}
+	group := groups[0]
+	if len(group.JobIDs) != 2 {
+		t.Fatalf("job ids = %d, want both rows retired", len(group.JobIDs))
+	}
+	if !slices.Equal(group.Scope.RepoIDs, []string{"repo-a"}) {
+		t.Fatalf("repo ids = %v", group.Scope.RepoIDs)
+	}
+	if !slices.Equal(group.IngestionIDs, []string{"ing-1"}) {
+		t.Fatalf("ingestion ids = %v", group.IngestionIDs)
+	}
+}
+
+// TestCollapsedPlanStaysBoundedAcrossAWideBacklog is the property an operator
+// actually needs before running this against production: collapsing weeks of
+// rows into one plan must not produce an unbounded recompute. The planner's own
+// caps apply to the collapsed scope exactly as they do to a single row's.
+func TestCollapsedPlanStaysBoundedAcrossAWideBacklog(t *testing.T) {
+	start := time.Date(2026, 8, 19, 0, 0, 0, 0, time.UTC)
+	rows := make([]BacklogRow, 0, 40)
+	for day := range 40 {
+		at := start.AddDate(0, 0, day)
+		repos := make([]string, 0, 3)
+		for index := range 3 {
+			repos = append(repos, uuid.NewSHA1(uuid.NameSpaceOID,
+				[]byte{byte(day), byte(index)}).String())
+		}
+		rows = append(rows, backlogRow("org-1", "github", "acme/api", at, &PlanScope{
+			OrgID: "org-1", RepoIDs: repos,
+			RecordKinds: []string{"commit.v1"},
+			WindowStart: timePtr(at), WindowEnd: timePtr(at),
+		}))
+	}
+	groups := CollapseBacklog(rows)
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d", len(groups))
+	}
+	plan := PlanRecompute(groups[0].Scope, start.AddDate(0, 0, 45))
+	if plan.BackfillDays != defaultMaxBackfillDays || !plan.CappedDays {
+		t.Fatalf("backfill days = %d capped = %v, want the cap to bind",
+			plan.BackfillDays, plan.CappedDays)
+	}
+	if len(plan.RepoIDs) != defaultMaxFanoutRepos || !plan.CappedRepos {
+		t.Fatalf("repo ids = %d capped = %v, want the fan-out cap to bind",
+			len(plan.RepoIDs), plan.CappedRepos)
+	}
+	if days := plan.DailyTargetDays(); len(days) != defaultMaxBackfillDays {
+		t.Fatalf("daily target days = %d, want the cap", len(days))
+	}
+}
+
+// TestCollapseBacklogNeverRetiresAnUnreadableRow is the r1 P2 fix.
+//
+// Before it, LoadBacklog swallowed a transient scope-read error, nilled the
+// scope, and the row was then retired by retireBacklogRows with nothing
+// enqueued -- a connection reset three weeks after the fact silently destroyed
+// that batch's recompute, and the report showed it as an ordinary "scopeless"
+// row. An unreadable row must survive to be retried.
+func TestCollapseBacklogNeverRetiresAnUnreadableRow(t *testing.T) {
+	at := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	readable := backlogRow("org-1", "github", "acme/api", at, &PlanScope{
+		OrgID: "org-1", RepoIDs: []string{"repo-a"},
+		RecordKinds: []string{"commit.v1"}, WindowEnd: timePtr(at),
+	}, "ing-1")
+	unreadable := backlogRow("org-1", "github", "acme/api", at.Add(time.Hour), nil)
+	unreadable.LoadFailed = true
+	unreadable.LoadError = "connection reset by peer"
+
+	groups := CollapseBacklog([]BacklogRow{readable, unreadable})
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d", len(groups))
+	}
+	group := groups[0]
+	if group.Rows != 2 || group.Skipped != 1 {
+		t.Fatalf("rows = %d skipped = %d", group.Rows, group.Skipped)
+	}
+	if len(group.JobIDs) != 1 || group.JobIDs[0] != readable.JobID {
+		t.Fatalf("job ids = %v, want only the readable row's", group.JobIDs)
+	}
+	for _, jobID := range group.JobIDs {
+		if jobID == unreadable.JobID {
+			t.Fatal("an unreadable row was queued for retirement")
+		}
+	}
+	// It must also not contribute scope: planning work from a row we could not
+	// read would be inventing coverage.
+	if !slices.Equal(group.Scope.RepoIDs, []string{"repo-a"}) {
+		t.Fatalf("repo ids = %v", group.Scope.RepoIDs)
+	}
+}
+
+// TestReplayReportIncompleteDistinguishesTheTwoNilScopeCases pins that a
+// legitimately terminal row and an unreadable one are counted apart. They look
+// identical in the data (both leave Scope nil) and mean opposite things: one is
+// finished, the other is outstanding work.
+func TestReplayReportIncompleteDistinguishesTheTwoNilScopeCases(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		report ReplayReport
+		want   bool
+	}{
+		"clean":          {ReplayReport{Rows: 3, Retired: 3}, false},
+		"scopeless only": {ReplayReport{Rows: 3, Retired: 3, ScopelessRows: 1}, false},
+		"unreadable row": {ReplayReport{Rows: 3, Retired: 2, UnreadableRows: 1}, true},
+		"failed group":   {ReplayReport{Rows: 3, Retired: 2, Failed: 1}, true},
+		"both":           {ReplayReport{UnreadableRows: 1, Failed: 1}, true},
+	} {
+		if got := testCase.report.Incomplete(); got != testCase.want {
+			t.Fatalf("%s: Incomplete() = %v, want %v", name, got, testCase.want)
+		}
+	}
+}
+
+// TestCollapseBacklogReportsWhichRowsWereSkippedAndWhy is the r2 P2 fix.
+// LoadError was captured and never read: the report showed a count of
+// unreadable rows with no row id and no cause, which tells an operator that
+// something is outstanding but not what to do about it.
+func TestCollapseBacklogReportsWhichRowsWereSkippedAndWhy(t *testing.T) {
+	at := time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
+	first := backlogRow("org-1", "github", "acme/api", at, nil)
+	first.LoadFailed, first.LoadError = true, "connection reset by peer"
+	second := backlogRow("org-1", "github", "acme/api", at, nil)
+	second.LoadFailed, second.LoadError = true, "connection reset by peer"
+	third := backlogRow("org-1", "github", "acme/api", at, nil)
+	third.LoadFailed, third.LoadError = true, "decode bridge scope: unexpected end of JSON input"
+
+	groups := CollapseBacklog([]BacklogRow{first, second, third})
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d", len(groups))
+	}
+	group := groups[0]
+	if group.Skipped != 3 || len(group.SkippedBridgeIDs) != 3 {
+		t.Fatalf("skipped = %d ids = %v", group.Skipped, group.SkippedBridgeIDs)
+	}
+	for _, row := range []BacklogRow{first, second, third} {
+		if !slices.Contains(group.SkippedBridgeIDs, row.BridgeID) {
+			t.Fatalf("bridge id %s missing from the skipped list", row.BridgeID)
+		}
+	}
+	// Two distinct causes across three rows: the report must carry both, and
+	// must not repeat the shared one -- a grain whose fifty rows all hit one
+	// connection reset should read as one cause, not fifty.
+	causes := dedupeErrors(group.SkippedErrors)
+	if len(causes) != 2 {
+		t.Fatalf("deduped causes = %v, want the two distinct ones", causes)
+	}
+	if !slices.Contains(causes, "connection reset by peer") {
+		t.Fatalf("causes = %v", causes)
+	}
+}

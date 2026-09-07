@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
@@ -16,6 +17,76 @@ _TEST_URI = os.getenv("METRIC_BRIDGE_POSTGRES_TEST_URI")
 pytestmark = pytest.mark.skipif(
     not _TEST_URI, reason="METRIC_BRIDGE_POSTGRES_TEST_URI is not configured"
 )
+
+
+# CHAOS-3092 (2026-09-07): these two helpers reproduce, for THIS TEST FILE
+# only, the exact SELECT ... FOR UPDATE + _execution_from_row shape that
+# worker_metrics._load_daily_execution (and the DailyMetricsExecutionRequest
+# it consumed) used to provide before both were deleted outright -- the Go
+# daily worker's Python compatibility bridge (execute_daily_metrics) has no
+# callers left, every daily family being native Go now. The redrive/repair
+# ledger surface these tests actually exercise
+# (_reserve_execution/_mark_ambiguous/_repair_execution/
+# _bulk_redrive_ambiguous_executions/_original_claim_is_active) all stay
+# live -- they still operate on historical daily ledger rows -- so these
+# tests are adjusted to seed and load those rows directly rather than
+# through the deleted route.
+async def _daily_partition_execution(
+    session: Any, run_id: uuid.UUID, partition_id: uuid.UUID
+) -> worker_metrics._Execution:
+    result = await session.execute(
+        text(
+            """
+            SELECT r.id AS run_id, r.org_id, r.target_day, r.generation,
+                   p.repo_ids, p.claim_token
+            FROM daily_metrics_runs AS r
+            JOIN daily_metrics_partitions AS p ON p.run_id = r.id
+            WHERE r.id = CAST(:run_id AS uuid)
+              AND p.id = CAST(:partition_id AS uuid)
+              AND r.status = 'running'
+              AND p.status = 'running'
+              AND p.lease_expires_at > statement_timestamp()
+            FOR UPDATE OF r, p
+            """
+        ),
+        {"run_id": str(run_id), "partition_id": str(partition_id)},
+    )
+    row = result.mappings().first()
+    assert row is not None, "daily metrics lease is absent or expired"
+    return worker_metrics._execution_from_row(
+        worker_kind="daily",
+        operation="partition",
+        row=row,
+        partition_id=partition_id,
+    )
+
+
+async def _daily_finalize_execution(
+    session: Any, run_id: uuid.UUID
+) -> worker_metrics._Execution:
+    result = await session.execute(
+        text(
+            """
+            SELECT r.id AS run_id, r.org_id, r.target_day, r.generation,
+                   r.finalization_claim_token AS claim_token
+            FROM daily_metrics_runs AS r
+            WHERE r.id = CAST(:run_id AS uuid)
+              AND r.status = 'running'
+              AND r.finalization_status = 'running'
+              AND r.finalization_lease_expires_at > statement_timestamp()
+            FOR UPDATE OF r
+            """
+        ),
+        {"run_id": str(run_id)},
+    )
+    row = result.mappings().first()
+    assert row is not None, "daily metrics finalize lease is absent or expired"
+    return worker_metrics._execution_from_row(
+        worker_kind="daily",
+        operation="finalize",
+        row=row,
+        partition_id=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -357,12 +428,7 @@ async def test_orphaned_executing_row_reports_ambiguous_once_original_claim_is_d
             )
             await session.commit()
 
-            request = worker_metrics.DailyMetricsExecutionRequest(
-                operation="partition",
-                run_id=run_id,
-                partition_id=partition_id,
-            )
-            execution = await worker_metrics._load_daily_execution(session, request)
+            execution = await _daily_partition_execution(session, run_id, partition_id)
             assert await worker_metrics._reserve_execution(session, execution) == (
                 "execute"
             )
@@ -390,7 +456,7 @@ async def test_orphaned_executing_row_reports_ambiguous_once_original_claim_is_d
             )
             await session.commit()
 
-            reclaimed = await worker_metrics._load_daily_execution(session, request)
+            reclaimed = await _daily_partition_execution(session, run_id, partition_id)
             assert reclaimed.id == execution.id
             with pytest.raises(HTTPException) as retry:
                 await worker_metrics._reserve_execution(session, reclaimed)
@@ -495,21 +561,11 @@ async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_partitions() ->
                 )
             await session.commit()
 
-            stale_request = worker_metrics.DailyMetricsExecutionRequest(
-                operation="partition",
-                run_id=stale_run_id,
-                partition_id=stale_partition_id,
+            stale_execution = await _daily_partition_execution(
+                session, stale_run_id, stale_partition_id
             )
-            live_request = worker_metrics.DailyMetricsExecutionRequest(
-                operation="partition",
-                run_id=live_run_id,
-                partition_id=live_partition_id,
-            )
-            stale_execution = await worker_metrics._load_daily_execution(
-                session, stale_request
-            )
-            live_execution = await worker_metrics._load_daily_execution(
-                session, live_request
+            live_execution = await _daily_partition_execution(
+                session, live_run_id, live_partition_id
             )
             assert await worker_metrics._reserve_execution(
                 session, stale_execution
@@ -553,8 +609,8 @@ async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_partitions() ->
 
             # RED baseline (true today, unchanged by this fix): the identical
             # identity is refused forever, never "skipped".
-            reclaimed_stale = await worker_metrics._load_daily_execution(
-                session, stale_request
+            reclaimed_stale = await _daily_partition_execution(
+                session, stale_run_id, stale_partition_id
             )
             with pytest.raises(HTTPException) as before:
                 await worker_metrics._reserve_execution(session, reclaimed_stale)
@@ -569,16 +625,16 @@ async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_partitions() ->
 
             # GREEN: the stale row is now retry_authorized, so the identical
             # identity actually executes instead of hitting the wall again.
-            reclaimed_stale_again = await worker_metrics._load_daily_execution(
-                session, stale_request
+            reclaimed_stale_again = await _daily_partition_execution(
+                session, stale_run_id, stale_partition_id
             )
             assert await worker_metrics._reserve_execution(
                 session, reclaimed_stale_again
             ) == ("execute")
 
             # The live-claim row is untouched: still ambiguous, still refused.
-            reclaimed_live = await worker_metrics._load_daily_execution(
-                session, live_request
+            reclaimed_live = await _daily_partition_execution(
+                session, live_run_id, live_partition_id
             )
             with pytest.raises(HTTPException) as still_refused:
                 await worker_metrics._reserve_execution(session, reclaimed_live)
@@ -650,12 +706,7 @@ async def test_finalize_execution_is_skipped_not_reexecuted_for_the_same_identit
             )
             await session.commit()
 
-            finalize_request = worker_metrics.DailyMetricsExecutionRequest(
-                operation="finalize", run_id=run_id
-            )
-            first_execution = await worker_metrics._load_daily_execution(
-                session, finalize_request
-            )
+            first_execution = await _daily_finalize_execution(session, run_id)
             assert await worker_metrics._reserve_execution(
                 session, first_execution
             ) == ("execute")
@@ -689,9 +740,7 @@ async def test_finalize_execution_is_skipped_not_reexecuted_for_the_same_identit
             )
             await session.commit()
 
-            reclaimed_execution = await worker_metrics._load_daily_execution(
-                session, finalize_request
-            )
+            reclaimed_execution = await _daily_finalize_execution(session, run_id)
             # Same identity: the reclaim did not change run_id, family,
             # generation, or scope_digest.
             assert reclaimed_execution.id == first_execution.id
@@ -791,12 +840,7 @@ async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_finalize() -> N
             )
             await session.commit()
 
-            finalize_request = worker_metrics.DailyMetricsExecutionRequest(
-                operation="finalize", run_id=run_id
-            )
-            execution = await worker_metrics._load_daily_execution(
-                session, finalize_request
-            )
+            execution = await _daily_finalize_execution(session, run_id)
             assert await worker_metrics._reserve_execution(session, execution) == (
                 "execute"
             )
@@ -824,9 +868,7 @@ async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_finalize() -> N
 
             # RED baseline (true before CHAOS-4409, reproduced here first):
             # the identical identity is refused forever, never "skipped".
-            reclaimed = await worker_metrics._load_daily_execution(
-                session, finalize_request
-            )
+            reclaimed = await _daily_finalize_execution(session, run_id)
             with pytest.raises(HTTPException) as before:
                 await worker_metrics._reserve_execution(session, reclaimed)
             assert before.value.status_code == 409
@@ -843,9 +885,7 @@ async def test_bulk_redrive_authorizes_retry_for_ambiguous_daily_finalize() -> N
             # wall again -- unblocking daily-finalize --run/--all-complete
             # for a run whose finalize ledger row was the thing stranding
             # it, not (only) the partition table.
-            reclaimed_again = await worker_metrics._load_daily_execution(
-                session, finalize_request
-            )
+            reclaimed_again = await _daily_finalize_execution(session, run_id)
             assert await worker_metrics._reserve_execution(
                 session, reclaimed_again
             ) == ("execute")
@@ -900,12 +940,7 @@ async def test_bulk_redrive_operation_scope_never_touches_the_other_operations_r
             )
             await session.commit()
 
-            finalize_request = worker_metrics.DailyMetricsExecutionRequest(
-                operation="finalize", run_id=run_id
-            )
-            execution = await worker_metrics._load_daily_execution(
-                session, finalize_request
-            )
+            execution = await _daily_finalize_execution(session, run_id)
             assert await worker_metrics._reserve_execution(session, execution) == (
                 "execute"
             )

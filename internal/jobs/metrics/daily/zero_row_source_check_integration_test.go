@@ -298,7 +298,7 @@ func TestPartitionHandlerWorkFlagsTestopsRiskWhenPipelineStabilityIsMissingDespi
 		run: Run{ID: runID, OrganizationID: orgID, Status: "running"},
 	}
 	observer := &recordingZeroRowsObserver{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +461,7 @@ func TestPartitionHandlerWorkFailsPermanentlyAndObservesZeroRowsWithSourceData(t
 		run: Run{ID: runID, OrganizationID: orgID, Status: "running"},
 	}
 	observer := &recordingZeroRowsObserver{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}

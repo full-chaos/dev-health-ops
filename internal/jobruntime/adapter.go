@@ -619,6 +619,17 @@ func (adapter *Adapter[T]) logCause(ctx context.Context, job *river.Job[T], choi
 // text a WithSafeCause-marked error along it carries, most-wrapped first.
 // Returns ok=false (log nothing) when the chain carries no opted-in cause at
 // all -- the default for any ordinary, unmarked handler error.
+// SafeCause returns the opted-in safe cause text on err's Unwrap chain, joined
+// oldest-last, and whether there was any.
+//
+// Exported so a caller OUTSIDE this package -- and a test of a handler that
+// opts in -- reads the cause through the SAME walk logCause uses, rather than
+// re-implementing it. A re-implementation is the failure this exists to
+// prevent: a handler test that walks the chain itself keeps passing after this
+// package changes how it collects causes, so it stops proving the cause ever
+// reaches a log at all.
+func SafeCause(err error) (string, bool) { return safeCauseChain(err) }
+
 func safeCauseChain(err error) (string, bool) {
 	var parts []string
 	seen := make(map[error]bool)

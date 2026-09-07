@@ -233,6 +233,133 @@ groups:
             repeating reclaim means the compatibility bridge is failing
             deterministically for a run, not recovering from an outage.
 
+      # CHAOS-4005's sweep publishes sync_dispatch_unreclaimable_candidates
+      # (a gauge: what it SELECTED on its last pass) and
+      # sync_dispatch_unreclaimable_terminalized_total (a counter: what it
+      # actually destroyed). The metric's own HELP text already describes this
+      # exact signature -- "non-zero in shadow mode means work it WOULD have
+      # terminalized" -- and nobody was watching it.
+      #
+      # What it costs to not watch it, measured: sync run 115e6246 held 17
+      # provider units in `dispatching` for THIRTEEN HOURS. The sweep selected
+      # all 17 every second and terminalized none, because no deploy shape
+      # ever set SYNC_UNRECLAIMABLE_SWEEP and the compiled default was shadow.
+      # Every tick logged `candidates=17 terminalized=0` at WARN and nothing
+      # read it. The deploy default is now `active`, but a deployment that is
+      # off, shadow, wedged on a route fence, or refused by a missing grant
+      # reproduces the same silence -- so the PAIR is what is alerted on, not
+      # either half.
+      #
+      # Why the pair and not the gauge alone: a healthy active sweep also
+      # shows a non-zero candidate gauge on the pass that finds work. The
+      # difference is that its terminalized counter MOVES. `increase(...) == 0`
+      # over the same window is what separates "recovering" from "watching".
+      #
+      # 15m over a 1h age gate: the sweep cannot select a unit until it has
+      # existed for DefaultUnreclaimableAge (1h) without an attempt, so
+      # anything it can see has already been stuck for an hour. A candidate
+      # that persists a further 15 minutes with nothing terminalized is not a
+      # pass in flight.
+      #
+      # The gauge reads zero on a pass the sweep could not run at all, exactly
+      # like a healthy idle system -- that failure mode is
+      # sync_dispatch_unreclaimable_sweep_failures_total's, and it has its own
+      # alert below rather than being folded in here, because the two need
+      # different operator actions (a grant or a route fence, versus a strand).
+      - alert: SyncDispatchUnreclaimableCandidatesNotTerminalizing
+        expr: |
+          (
+            max(sync_dispatch_unreclaimable_candidates) > 0
+            and
+            sum(increase(sync_dispatch_unreclaimable_terminalized_total[15m])) == 0
+          )
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Unreclaimable sync units are selected but never terminalized"
+          description: |
+            {{ $value | printf "%.0f" }} sync units have been selectable by the
+            unreclaimable sweep for over 15 minutes with nothing terminalized.
+            The sweep is seeing work it is not acting on: check the resolved
+            mode (`syncreconciler.unreclaimable_sweep_mode_resolved` at
+            reconciler startup) before assuming a code fault -- a deployment in
+            `shadow` reports exactly this shape by design. Also check whether
+            joboutbox.StrandRepair is recovering them instead
+            (worker_outbox_reconciler_provider_unit_strands_rearmed_total),
+            which is the healthy path and holds a unit back from the sweep
+            while its outbox delivery budget lasts.
+
+      # The sweep could not RUN. Distinct from the alert above, and it has to
+      # be: on a failed pass the candidate gauge reads zero, identically to a
+      # healthy idle system, so the strand alert above goes quiet at exactly
+      # the moment the safety net stops working. That is the metric's own
+      # documented trap ("read the pair") turned into a rule.
+      - alert: SyncDispatchUnreclaimableSweepFailing
+        expr: |
+          sum(increase(sync_dispatch_unreclaimable_sweep_failures_total[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "The unreclaimable sync sweep is failing its pass"
+          description: |
+            The sweep failed {{ $value | printf "%.0f" }} passes in the last
+            15 minutes. Its candidate gauge reads zero on a failed pass, so the
+            strand alert cannot fire while this is true. Most likely a missing
+            queue-role grant (the sweep reads River state on the queue-control
+            pool) or a control-plane route fence.
+
+      # The bounded form of sync run 115e6246's 624-attempt republish loop.
+      #
+      # That run's dispatch outbox row reached delivery_attempt 624 over
+      # thirteen hours because Producer.Publish reported every republish onto
+      # an already-'delivered' row as a SUCCESS -- the loop was invisible from
+      # the publish side entirely. The publish side now reports it
+      # (joboutbox.ErrDeliveryAlreadyTerminal), and joboutbox.StrandRepair's
+      # provider-unit shape recovers the row instead of leaving it stuck.
+      #
+      # DELIBERATELY expressed on the rearm counter, not on a raw
+      # delivery_attempt gauge: no such gauge exists. worker_job_outbox's
+      # attempt_count is a column, and the reconciler exports per-pass deltas
+      # rather than a max over rows, so an alert written against
+      # "worker_outbox_max_delivery_attempts" would be an unimplemented claim
+      # that never fires -- the exact failure mode the sweep's own shadow-mode
+      # observability had. The rearm counter measures the same pathology at the
+      # point it is now actionable: a rearm means a delivery died terminally
+      # while its unit was still undispatched, and a HEALTHY one is followed by
+      # the replacement delivery succeeding, so the count does not keep
+      # climbing.
+      #
+      # Threshold reasoning. The outbox delivery budget for sync.provider_unit
+      # is 5 (registry.json max_attempts) and StrandRepair stops rearming a row
+      # once it is spent, so one broken unit contributes at most 4 rearms
+      # before the unreclaimable sweep takes it. More than 20 in an hour is
+      # therefore either a broad transport failure (a database restore, a
+      # queue-role problem) or a rearm loop that is not converging -- both
+      # worth a page, neither reachable by a single unit retrying normally.
+      - alert: ProviderUnitStrandRearmsClimbing
+        expr: |
+          sum(increase(worker_outbox_reconciler_provider_unit_strands_rearmed_total[1h])) > 20
+        for: 30m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Provider-unit deliveries are being rearmed repeatedly"
+          description: |
+            {{ $value | printf "%.0f" }} provider-unit outbox rows were rearmed
+            after their River delivery went terminal in the last hour. One
+            restore blip costs a handful; a sustained rate means deliveries keep
+            dying before the handler ever claims the unit. The per-rearm log line
+            ("provider unit strand rearmed after a terminal river delivery")
+            names the outbox id, dedupe key and dead River job id, and
+            "dispatch_sync_run.publish_hit_terminal_delivery" names the units
+            whose republish landed on a delivery that was already dead -- those
+            two carry the delivery evidence, which is not exported as a metric.
+
       - alert: GoWorkerDomainStateMismatch
         expr: |
           sum by (domain_type) (increase(worker_domain_state_mismatch_total[5m])) > 0

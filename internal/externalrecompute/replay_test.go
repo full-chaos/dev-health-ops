@@ -175,3 +175,64 @@ func TestCollapsedPlanStaysBoundedAcrossAWideBacklog(t *testing.T) {
 		t.Fatalf("daily target days = %d, want the cap", len(days))
 	}
 }
+
+// TestCollapseBacklogNeverRetiresAnUnreadableRow is the r1 P2 fix.
+//
+// Before it, LoadBacklog swallowed a transient scope-read error, nilled the
+// scope, and the row was then retired by retireBacklogRows with nothing
+// enqueued -- a connection reset three weeks after the fact silently destroyed
+// that batch's recompute, and the report showed it as an ordinary "scopeless"
+// row. An unreadable row must survive to be retried.
+func TestCollapseBacklogNeverRetiresAnUnreadableRow(t *testing.T) {
+	at := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
+	readable := backlogRow("org-1", "github", "acme/api", at, &PlanScope{
+		OrgID: "org-1", RepoIDs: []string{"repo-a"},
+		RecordKinds: []string{"commit.v1"}, WindowEnd: timePtr(at),
+	}, "ing-1")
+	unreadable := backlogRow("org-1", "github", "acme/api", at.Add(time.Hour), nil)
+	unreadable.LoadFailed = true
+	unreadable.LoadError = "connection reset by peer"
+
+	groups := CollapseBacklog([]BacklogRow{readable, unreadable})
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d", len(groups))
+	}
+	group := groups[0]
+	if group.Rows != 2 || group.Skipped != 1 {
+		t.Fatalf("rows = %d skipped = %d", group.Rows, group.Skipped)
+	}
+	if len(group.JobIDs) != 1 || group.JobIDs[0] != readable.JobID {
+		t.Fatalf("job ids = %v, want only the readable row's", group.JobIDs)
+	}
+	for _, jobID := range group.JobIDs {
+		if jobID == unreadable.JobID {
+			t.Fatal("an unreadable row was queued for retirement")
+		}
+	}
+	// It must also not contribute scope: planning work from a row we could not
+	// read would be inventing coverage.
+	if !slices.Equal(group.Scope.RepoIDs, []string{"repo-a"}) {
+		t.Fatalf("repo ids = %v", group.Scope.RepoIDs)
+	}
+}
+
+// TestReplayReportIncompleteDistinguishesTheTwoNilScopeCases pins that a
+// legitimately terminal row and an unreadable one are counted apart. They look
+// identical in the data (both leave Scope nil) and mean opposite things: one is
+// finished, the other is outstanding work.
+func TestReplayReportIncompleteDistinguishesTheTwoNilScopeCases(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		report ReplayReport
+		want   bool
+	}{
+		"clean":          {ReplayReport{Rows: 3, Retired: 3}, false},
+		"scopeless only": {ReplayReport{Rows: 3, Retired: 3, ScopelessRows: 1}, false},
+		"unreadable row": {ReplayReport{Rows: 3, Retired: 2, UnreadableRows: 1}, true},
+		"failed group":   {ReplayReport{Rows: 3, Retired: 2, Failed: 1}, true},
+		"both":           {ReplayReport{UnreadableRows: 1, Failed: 1}, true},
+	} {
+		if got := testCase.report.Incomplete(); got != testCase.want {
+			t.Fatalf("%s: Incomplete() = %v, want %v", name, got, testCase.want)
+		}
+	}
+}

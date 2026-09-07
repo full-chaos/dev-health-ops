@@ -350,7 +350,21 @@ func (drain *Drain) drainOne(ctx context.Context, claim drainClaim) error {
 		// non-pending, so this stale claim completes without re-emitting jobs.
 		drain.logger.InfoContext(ctx, "external recompute row already terminal",
 			"bridge_id", claim.BridgeID, "org_id", claim.OrgID)
-		return drain.mark(ctx, claim.JobID, statusDispatched)
+		if err := drain.mark(ctx, claim.JobID, statusDispatched); err != nil {
+			// Without this the only output was the loop's generic "step
+			// failed", with no bridge id, job id or org -- an operator could
+			// see that something failed but not which row (r1 P2).
+			drain.logger.ErrorContext(ctx, "external recompute terminal mark failed",
+				"bridge_id", claim.BridgeID,
+				"job_id", claim.JobID.String(),
+				"org_id", claim.OrgID,
+				"source_system", claim.SourceSystem,
+				"source_instance", claim.SourceInstance,
+				"status", statusDispatched,
+				"error", err.Error())
+			return err
+		}
+		return nil
 	}
 
 	plan := PlanRecompute(*scope, drain.now())

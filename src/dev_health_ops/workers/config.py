@@ -49,10 +49,6 @@ late_ack_excluded_tasks = (
     # redelivery -- reuses the existing `default` queue, no task_queues/compose
     # change needed.
     "dev_health_ops.workers.tasks.flush_external_ingest_recompute",
-    # The Go compatibility bridge has its own persisted claim lease and
-    # deterministic ledger identity. Celery redelivery is not its retry
-    # mechanism, so keep it out of the global acks-late policy too.
-    "dev_health_ops.workers.tasks.dispatch_external_ingest_recompute_bridge",
 )
 task_annotations = {
     task_name: {"acks_late": False, "reject_on_worker_lost": False}

@@ -17,6 +17,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -233,13 +234,73 @@ func containsAny(values, candidates []string) bool {
 // result is never below 1 (a zero cap would mean "recompute nothing", which is
 // never what an operator setting a bound intends).
 func envIntAtLeastOne(name string, fallback int) int {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil {
+	parsed, ok := pythonInt(os.Getenv(name))
+	if !ok {
 		return fallback
 	}
 	return max(1, parsed)
+}
+
+// pythonInt accepts exactly what CPython's int(str) accepts, because this is a
+// PARITY seam: the same environment variable configures the Python planner and
+// this one, and a value one of them honours and the other silently ignores is
+// worse than a value neither honours.
+//
+// strconv.Atoi is NOT that function. It rejects two forms CPython accepts:
+//
+//	int(" 3 ")  == 3    strconv.Atoi(" 3 ")  -> error
+//	int("1_0")  == 10   strconv.Atoi("1_0")  -> error
+//
+// Both then fell through to the DEFAULT, which is the widening direction: an
+// operator who set EXTERNAL_INGEST_RECOMPUTE_MAX_BACKFILL_DAYS=" 3 " (a
+// trailing space in a .env file, or a YAML block scalar) got 14 days of
+// recompute instead of 3, silently, from a cap that exists to bound fan-out.
+// Surrounding whitespace is the realistic case; underscores are here because
+// CPython accepts them and matching the accepted syntax exactly is cheaper to
+// reason about than matching a subset of it.
+//
+// CPython's underscore rule is "single underscores between digits only" -- not
+// leading, not trailing, not doubled, and not adjacent to a sign -- so those
+// are rejected here rather than stripped.
+func pythonInt(raw string) (int, bool) {
+	// CPython's int() strips str.strip()'s whitespace set. Go's TrimSpace is
+	// narrower (unicode.IsSpace omits 0x1c-0x1f), so those four are added
+	// explicitly -- the same divergence internal/jobs/investment/scope.go
+	// documents for its own Python-parity strip.
+	trimmed := strings.Trim(raw, " \t\n\v\f\r\x1c\x1d\x1e\x1f\u0085\u00a0")
+	if trimmed == "" {
+		return 0, false
+	}
+	digits := trimmed
+	if digits[0] == '+' || digits[0] == '-' {
+		digits = digits[1:]
+	}
+	if digits == "" {
+		return 0, false
+	}
+	var builder strings.Builder
+	for index := 0; index < len(digits); index++ {
+		character := digits[index]
+		if character == '_' {
+			// Between digits only: an underscore at either end, or next to
+			// another underscore, is a syntax error in CPython too.
+			if index == 0 || index == len(digits)-1 || digits[index+1] == '_' {
+				return 0, false
+			}
+			continue
+		}
+		if character < '0' || character > '9' {
+			return 0, false
+		}
+		builder.WriteByte(character)
+	}
+	sign := ""
+	if trimmed[0] == '-' {
+		sign = "-"
+	}
+	parsed, err := strconv.Atoi(sign + builder.String())
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }

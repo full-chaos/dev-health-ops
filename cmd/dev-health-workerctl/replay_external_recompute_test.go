@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"context"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/externalrecompute"
 )
 
 func TestDispatchExternalRecomputeRejectsUnknownVerb(t *testing.T) {
@@ -79,6 +81,31 @@ func TestDispatchExternalRecomputeReplayNeedsABackend(t *testing.T) {
 		}
 		if stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 			t.Fatalf("%s: stderr=%q", name, stderr.String())
+		}
+	}
+}
+
+// TestExternalRecomputeReplayExitCodeFollowsCompleteness is the r1 P2 fix at
+// the command boundary: a replay that failed a group, or could not read a row,
+// left work behind and must not exit 0. A runbook step or a script reading only
+// the exit code would otherwise treat a partial drain as a finished one.
+func TestExternalRecomputeReplayExitCodeFollowsCompleteness(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		report externalrecompute.ReplayReport
+		want   bool
+	}{
+		"clean":          {externalrecompute.ReplayReport{Rows: 2, Retired: 2}, false},
+		"scopeless only": {externalrecompute.ReplayReport{Rows: 2, Retired: 2, ScopelessRows: 1}, false},
+		"failed group":   {externalrecompute.ReplayReport{Rows: 2, Retired: 1, Failed: 1}, true},
+		"unreadable row": {externalrecompute.ReplayReport{Rows: 2, Retired: 1, UnreadableRows: 1}, true},
+		// A dry run does no work by design, so it is never "incomplete" in the
+		// sense the exit code reports -- but it must still surface the counts.
+		"dry run with failures": {
+			externalrecompute.ReplayReport{DryRun: true, Rows: 2, UnreadableRows: 1}, true,
+		},
+	} {
+		if got := testCase.report.Incomplete(); got != testCase.want {
+			t.Fatalf("%s: Incomplete() = %v, want %v", name, got, testCase.want)
 		}
 	}
 }

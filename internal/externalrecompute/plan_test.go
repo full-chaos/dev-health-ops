@@ -341,3 +341,98 @@ func TestEnvOverrideRejectsZeroAndGarbage(t *testing.T) {
 		t.Fatalf("repo ids = %v", plan.RepoIDs)
 	}
 }
+
+// TestPythonIntAcceptsExactlyWhatCPythonAccepts is the fix for the r1 finding
+// that strconv.Atoi silently widened operator-set caps. Every vector below was
+// checked against a real `python3 -c "int(...)"` first; the two marked cases are
+// the ones Atoi got wrong, and each of them fell through to the DEFAULT cap,
+// which is the widening direction.
+func TestPythonIntAcceptsExactlyWhatCPythonAccepts(t *testing.T) {
+	for _, testCase := range []struct {
+		raw   string
+		value int
+		ok    bool
+	}{
+		{"3", 3, true},
+		{" 3 ", 3, true},  // Atoi rejected this; CPython returns 3
+		{"1_0", 10, true}, // Atoi rejected this; CPython returns 10
+		{"\t7\n", 7, true},
+		{"1_000", 1000, true},
+		{"+5", 5, true},
+		{"-5", -5, true},
+		{"0", 0, true},
+		{"", 0, false},
+		{"   ", 0, false},
+		{"x", 0, false},
+		{"3.5", 0, false},
+		{"_10", 0, false},  // CPython: leading underscore is a syntax error
+		{"10_", 0, false},  // trailing
+		{"1__0", 0, false}, // doubled
+		{"-_5", 0, false},  // adjacent to the sign
+		{"1 0", 0, false},  // interior space is not stripped by int()
+	} {
+		value, ok := pythonInt(testCase.raw)
+		if ok != testCase.ok || (ok && value != testCase.value) {
+			t.Fatalf("pythonInt(%q) = (%d, %v), want (%d, %v)",
+				testCase.raw, value, ok, testCase.value, testCase.ok)
+		}
+	}
+}
+
+// TestEnvOverrideHonoursAPaddedValue is the end-to-end form of the same defect:
+// a cap an operator set with a stray space must BIND, not fall back to the
+// default. This is the assertion that would have caught it.
+func TestEnvOverrideHonoursAPaddedValue(t *testing.T) {
+	t.Setenv(envMaxBackfillDays, " 3 ")
+	t.Setenv(envMaxFanoutRepos, "1_0")
+	repoIDs := make([]string, 0, 30)
+	for index := range 30 {
+		repoIDs = append(repoIDs, fmt.Sprintf("repo-%03d", index))
+	}
+	plan := PlanRecompute(planTestScope(func(scope *PlanScope) {
+		scope.RecordKinds = []string{"pull_request.v1"}
+		scope.RepoIDs = repoIDs
+		scope.WindowStart = timePtr(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC))
+		scope.WindowEnd = timePtr(time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC))
+	}), planTestNow())
+
+	if plan.BackfillDays != 3 {
+		t.Fatalf("backfill days = %d, want the operator's padded 3", plan.BackfillDays)
+	}
+	if len(plan.RepoIDs) != 10 {
+		t.Fatalf("repo ids = %d, want the operator's underscored 10", len(plan.RepoIDs))
+	}
+}
+
+// TestPlanUsesUTCCalendarDatesNotProducerOffsets records a DELIBERATE divergence
+// from the Python planner, found by r1.
+//
+// Python takes `window_end.date()` of an offset-aware datetime, which is the
+// calendar date in the PRODUCER's offset. This port converts to UTC first, so
+// 2026-06-26T00:30+05:00 is day 2026-06-25 here and 2026-06-26 there.
+//
+// Matching Python would be the worse behaviour, not the safer one: everything
+// downstream of this plan is UTC-dated -- daily_metrics_runs.target_day is a
+// UTC date and metrics.daily_dispatch computes a UTC day -- so honouring a
+// producer's local calendar date would recompute a day the metrics layer does
+// not have.
+//
+// The divergence is unreachable in production (see the companion test below),
+// but it is pinned rather than left implicit so a future change to either side
+// is a deliberate decision instead of a silent one.
+func TestPlanUsesUTCCalendarDatesNotProducerOffsets(t *testing.T) {
+	offset := time.FixedZone("plus5", 5*60*60)
+	plan := PlanRecompute(planTestScope(func(scope *PlanScope) {
+		scope.RecordKinds = []string{"pull_request.v1"}
+		scope.RepoIDs = []string{"repo-a"}
+		scope.WindowStart = timePtr(time.Date(2026, 6, 25, 23, 30, 0, 0, offset))
+		scope.WindowEnd = timePtr(time.Date(2026, 6, 26, 0, 30, 0, 0, offset))
+	}), planTestNow())
+
+	if got := plan.Day.Format(time.DateOnly); got != "2026-06-25" {
+		t.Fatalf("day = %s, want the UTC calendar date 2026-06-25", got)
+	}
+	if plan.BackfillDays != 1 {
+		t.Fatalf("backfill days = %d, want 1 (both instants fall on one UTC day)", plan.BackfillDays)
+	}
+}

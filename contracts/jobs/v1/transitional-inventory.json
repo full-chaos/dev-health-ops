@@ -551,12 +551,12 @@
       "notes": "transport-routes.json kind reference_discovery, route=river, rollback_route=celery; the deployed sync_dispatch_transport_routes row is transport='river', paused=false, generation=2 (a production dump on 2026-08-22 under CHAOS-4082 disproved this note's earlier claim that it was still 'celery'; 0049 seeds 'celery' and no migration flips it, but an operator applied it with `dev-health-workerctl routes apply`), so the native Go coordinator is the RUNNING route, not merely the checked-in one"
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:165",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:161",
       "surface": "dispatch-scheduled-syncs",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 165
+        "line": 161
       },
       "queue_or_cadence": "300s",
       "dispatches": "dispatch_scheduled_syncs",
@@ -575,12 +575,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:170",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:166",
       "surface": "reconcile-sync-dispatch",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 170
+        "line": 166
       },
       "queue_or_cadence": "60s",
       "dispatches": "reconcile_sync_dispatch",
@@ -599,12 +599,12 @@
       "notes": "checkedInReconcilerActivation.syncMutation=true activates the continuous Go reconcile loop; Celery Beat is not required for native sync-dispatch progress"
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:175",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:171",
       "surface": "monitor-queue-depths",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 175
+        "line": 171
       },
       "queue_or_cadence": "60s",
       "dispatches": "monitor_queue_depths",
@@ -623,12 +623,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:187",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:183",
       "surface": "prune-rate-limit-observations",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 187
+        "line": 183
       },
       "queue_or_cadence": "crontab(hour=5,minute=0) UTC",
       "dispatches": "prune_rate_limit_observations",
@@ -647,12 +647,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:196",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:192",
       "surface": "prune-external-ingest-batches",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 196
+        "line": 192
       },
       "queue_or_cadence": "crontab(hour=5,minute=15) UTC",
       "dispatches": "prune_external_ingest_batches",

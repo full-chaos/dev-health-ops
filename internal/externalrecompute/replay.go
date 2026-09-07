@@ -44,6 +44,14 @@ type BacklogRow struct {
 	// an already-terminal row that only needs its status corrected.
 	Scope        *PlanScope
 	IngestionIDs []string
+	// LoadFailed distinguishes "this row's scope could not be READ" from
+	// "this row has no pending scope left". Both leave Scope nil, and
+	// collapsing them is a data-loss bug: a transient connection reset while
+	// reading a row's scope would otherwise retire that row with no work
+	// enqueued, dropping the recompute permanently (r1 P2). A row marked here
+	// is reported and left alone for the next invocation.
+	LoadFailed bool
+	LoadError  string
 }
 
 // CollapsedGroup is the union of every backlog row for one debounce grain.
@@ -59,8 +67,12 @@ type CollapsedGroup struct {
 	JobIDs       []uuid.UUID
 	IngestionIDs []string
 	Rows         int
-	Oldest       time.Time
-	Newest       time.Time
+	// Skipped counts rows in this grain whose scope could not be read. They
+	// are deliberately absent from JobIDs: an unreadable row must survive to
+	// be retried, not be retired as though it had been drained.
+	Skipped int
+	Oldest  time.Time
+	Newest  time.Time
 }
 
 // CollapseBacklog folds backlog rows into one widest plan per (org, source
@@ -87,8 +99,14 @@ func CollapseBacklog(rows []BacklogRow) []CollapsedGroup {
 			groups[id] = group
 			order = append(order, id)
 		}
-		group.JobIDs = append(group.JobIDs, row.JobID)
 		group.Rows++
+		if row.LoadFailed {
+			// NOT added to JobIDs: retiring a row whose scope we failed to
+			// read would drop its recompute for good.
+			group.Skipped++
+		} else {
+			group.JobIDs = append(group.JobIDs, row.JobID)
+		}
 		if row.DispatchedAt.Before(group.Oldest) {
 			group.Oldest = row.DispatchedAt
 		}
@@ -184,11 +202,14 @@ LIMIT $4`, LegacyCeleryTaskName, statusPending, statusClaimed, limit)
 		scope, ingestionIDs, err := loadBridgeScope(ctx, pool, backlog[index].OrgID,
 			backlog[index].SourceSystem, backlog[index].SourceInstance, backlog[index].BridgeID)
 		if err != nil {
-			// A single corrupt payload must not stop the whole replay: it is
-			// left scope-less, which retires its row without enqueuing work for
-			// it, and the report's ScopelessRows count is what tells the
-			// operator to go look. Failing the run instead would mean one bad
-			// row from three weeks ago blocks every good one behind it.
+			// One unreadable row must not stop the whole replay -- a single bad
+			// payload from three weeks ago should not block every good row
+			// behind it -- but it must not be RETIRED either. Marking it
+			// LoadFailed keeps it out of the group's JobIDs, so the next
+			// invocation sees it again, and surfaces it in the report instead
+			// of hiding it in the scopeless count.
+			backlog[index].LoadFailed = true
+			backlog[index].LoadError = err.Error()
 			backlog[index].Scope = nil
 			continue
 		}
@@ -216,21 +237,38 @@ type ReplayGroupReport struct {
 	ToDate         string    `json:"to_date,omitempty"`
 	RepoIDs        int       `json:"repo_ids"`
 	TeamIDs        int       `json:"team_ids"`
-	CappedDays     bool      `json:"capped_days"`
-	CappedRepos    bool      `json:"capped_repos"`
-	DailyRunIDs    []string  `json:"daily_run_ids,omitempty"`
-	InvestmentID   string    `json:"investment_request_id,omitempty"`
-	Error          string    `json:"error,omitempty"`
+	// SkippedRows are rows in this grain left un-retired because their scope
+	// could not be read. A non-zero value means this grain is NOT fully
+	// drained, however healthy the rest of the report looks.
+	SkippedRows  int      `json:"skipped_rows,omitempty"`
+	CappedDays   bool     `json:"capped_days"`
+	CappedRepos  bool     `json:"capped_repos"`
+	DailyRunIDs  []string `json:"daily_run_ids,omitempty"`
+	InvestmentID string   `json:"investment_request_id,omitempty"`
+	Error        string   `json:"error,omitempty"`
 }
 
 // ReplayReport is the whole run's outcome.
 type ReplayReport struct {
-	DryRun        bool                `json:"dry_run"`
-	Rows          int                 `json:"rows"`
-	ScopelessRows int                 `json:"scopeless_rows"`
-	Groups        []ReplayGroupReport `json:"groups"`
-	Retired       int                 `json:"rows_retired"`
-	Failed        int                 `json:"groups_failed"`
+	DryRun bool `json:"dry_run"`
+	Rows   int  `json:"rows"`
+	// ScopelessRows are legitimately terminal: no pending batch row still
+	// carries their bridge id, so there is nothing left to enqueue for them.
+	ScopelessRows int `json:"scopeless_rows"`
+	// UnreadableRows could not have their scope READ. They are left untouched
+	// for a later invocation. Counted apart from ScopelessRows because the two
+	// look identical in the data and mean opposite things.
+	UnreadableRows int                 `json:"unreadable_rows"`
+	Groups         []ReplayGroupReport `json:"groups"`
+	Retired        int                 `json:"rows_retired"`
+	Failed         int                 `json:"groups_failed"`
+}
+
+// Incomplete reports whether this run left work behind, for any reason. The
+// command uses it to choose a non-zero exit: a replay that retired some rows
+// and failed on others must not look like a success to whoever ran it (r1 P2).
+func (report ReplayReport) Incomplete() bool {
+	return report.Failed > 0 || report.UnreadableRows > 0
 }
 
 // Replay collapses and drains the legacy backlog. dryRun stops before any
@@ -251,7 +289,10 @@ func Replay(
 	}
 	report := ReplayReport{DryRun: dryRun, Rows: len(backlog)}
 	for _, row := range backlog {
-		if row.Scope == nil {
+		switch {
+		case row.LoadFailed:
+			report.UnreadableRows++
+		case row.Scope == nil:
 			report.ScopelessRows++
 		}
 	}
@@ -274,6 +315,7 @@ func Replay(
 			TeamIDs:        len(plan.TeamIDs),
 			CappedDays:     plan.CappedDays,
 			CappedRepos:    plan.CappedRepos,
+			SkippedRows:    group.Skipped,
 		}
 		if dryRun {
 			report.Groups = append(report.Groups, groupReport)
@@ -288,7 +330,7 @@ func Replay(
 		}
 		groupReport.DailyRunIDs = enqueued.DailyRunIDs
 		groupReport.InvestmentID = enqueued.InvestmentRequestID
-		report.Retired += group.Rows
+		report.Retired += len(group.JobIDs)
 		report.Groups = append(report.Groups, groupReport)
 	}
 	return report, nil

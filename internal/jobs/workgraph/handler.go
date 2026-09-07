@@ -3,12 +3,39 @@ package workgraph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+)
+
+// The three sentinels below classify a CompatibilityExecutor.Execute failure
+// for runClaimedWork's retry/ambiguous split. They were coined alongside the
+// (now-deleted, CHAOS-3092) HTTP bridge executor but are executor-agnostic:
+// materializeHandler.work classifies ANY CompatibilityExecutor's error
+// against them, including the native investment executor's, so they live
+// here rather than with a specific implementation.
+var (
+	// ErrCompatibilityNotSent reports a failure that happened BEFORE any work
+	// could have started -- a wiring fault or local validation failure. There
+	// is no side effect to reconcile and no ambiguity to record.
+	ErrCompatibilityNotSent = fmt.Errorf("work graph compatibility request was never sent: %w", ErrUnavailable)
+	// ErrCompatibilityRefused reports an attempt the executor positively
+	// placed as declined without running: a retry is safe, since it will
+	// either be refused identically or succeed once the refused condition
+	// clears.
+	ErrCompatibilityRefused = fmt.Errorf("work graph compatibility request was refused by the bridge: %w", ErrUnavailable)
+	// ErrCompatibilityUnknown reports a failure that MAY have left a side
+	// effect. This is the only class that deserves the ambiguous release, and
+	// it is the default for anything an executor cannot positively place in
+	// one of the other two.
+	ErrCompatibilityUnknown = fmt.Errorf("work graph compatibility execution outcome is unknown: %w", ErrUnavailable)
 )
 
 // runClaimedWork is the claim/lease-renewal/complete skeleton shared by the
@@ -106,6 +133,42 @@ func compatibilityAmbiguousDetail(err error) string {
 		return fallback
 	}
 	return detail
+}
+
+// sanitizeDetail makes an arbitrary string safe to carry in an error that may
+// end up in the ledger's failure_detail column: control characters and
+// newlines become single spaces, runs of whitespace collapse, and the result
+// is cut to limit BYTES on a rune boundary so a multi-byte tail can never be
+// split into invalid UTF-8.
+func sanitizeDetail(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.Grow(min(len(value), limit))
+	pendingSpace := false
+	for _, symbol := range value {
+		if symbol == utf8.RuneError || !unicode.IsPrint(symbol) {
+			pendingSpace = builder.Len() > 0
+			continue
+		}
+		if unicode.IsSpace(symbol) {
+			pendingSpace = builder.Len() > 0
+			continue
+		}
+		if pendingSpace {
+			if builder.Len()+1+utf8.RuneLen(symbol) > limit {
+				return builder.String()
+			}
+			builder.WriteByte(' ')
+			pendingSpace = false
+		}
+		if builder.Len()+utf8.RuneLen(symbol) > limit {
+			return builder.String()
+		}
+		builder.WriteRune(symbol)
+	}
+	return builder.String()
 }
 
 func releaseAmbiguous(store Store, ctx context.Context, claim Claim, detail string) error {

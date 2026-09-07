@@ -1,12 +1,15 @@
 """Authenticated internal bridge invoked by LIVE Go operational handlers.
 
 CHAOS-4440: this module's own docstring previously said "dormant" — backwards.
-`operational.billing_notification`, `operational.webhook_delivery`, and
-`system.heartbeat` are registered and running in production today
-(`cmd/dev-health-worker/operational.go:120-167`); each route below is called
-from the Go handler that owns the durable row, the River attempt, and retry
-classification, while this bridge performs the compatibility side effect
-(email dispatch, webhook processing, telemetry POST) during coexistence. The
+`operational.billing_notification` and `system.heartbeat` are registered and
+running in production today (`cmd/dev-health-worker/operational.go`); each
+route below is called from the Go handler that owns the durable row, the
+River attempt, and retry classification, while this bridge performs the
+compatibility side effect (email dispatch, telemetry POST) during
+coexistence. CHAOS-5320 deleted the `/webhook` route this module used to
+carry (`operational.webhook_delivery`'s Python fallback) -- native Go
+handling (CHAOS-5318/5319/5320) plus its own explicit-ignore path fully
+replaced it, so no webhook delivery ever reaches this bridge anymore. The
 `/pagerduty` route is a different shape: it reconciles one Go-owned Valkey
 stream delivery per call rather than a durable Postgres row — see
 `PagerDutyDelivery` below.
@@ -28,7 +31,6 @@ from dev_health_ops.workers.system_ops import (
     phone_home_heartbeat,
     send_billing_notification,
 )
-from dev_health_ops.workers.system_webhooks import process_webhook_event
 
 router = APIRouter(prefix="/api/internal/worker-operational", include_in_schema=False)
 
@@ -50,12 +52,6 @@ PAGERDUTY_BRIDGE_STATUSES = frozenset(
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class WebhookReference(_StrictModel):
-    delivery_id: uuid.UUID
-    provider: str
-    event_type: str
 
 
 class BillingReference(_StrictModel):
@@ -113,19 +109,6 @@ def _bridge_result(result: object, *, success: frozenset[str]) -> dict[str, str]
 
 def _authorize(authorization: Annotated[str | None, Header()] = None) -> None:
     authorize_worker_bridge(authorization)
-
-
-@router.post("/webhook", dependencies=[])
-async def process_webhook_reference(
-    reference: WebhookReference,
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict:
-    _authorize(authorization)
-    result = await run_in_threadpool(
-        process_webhook_event.run,
-        durable_delivery_id=str(reference.delivery_id),
-    )
-    return _bridge_result(result, success=frozenset({"success", "skipped"}))
 
 
 @router.post("/billing", dependencies=[])

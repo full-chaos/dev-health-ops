@@ -1492,12 +1492,20 @@ func executableHeavyRegistry(
 		kind, _ := job["kind"].(string)
 		switch {
 		case strings.HasPrefix(kind, "metrics.daily_"):
+			// CHAOS-5320: the real checked-in rollback_route for these kinds
+			// is "none" now (celery is no longer resolvable fleet-wide), but
+			// this fixture deliberately exercises the plain go_default/river
+			// shape, which requires rollback=celery per
+			// validateMigrationPolicy's state table -- set it explicitly
+			// rather than relying on the base document's real value.
 			job["state"] = "go_default"
 			job["route"] = "river"
+			job["rollback_route"] = "celery"
 		case strings.HasPrefix(kind, "report.execute_"):
 			if promoteReports {
 				job["state"] = "go_default"
 				job["route"] = "river"
+				job["rollback_route"] = "celery"
 			} else {
 				job["state"] = "go_implemented"
 				job["route"] = "celery"

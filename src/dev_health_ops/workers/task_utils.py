@@ -248,19 +248,6 @@ def _invalidate_metrics_cache(day: str, org_id: str) -> None:
         logger.warning("Cache invalidation failed (non-fatal): %s", e)
 
 
-def _invalidate_sync_cache(sync_type: str, org_id: str) -> None:
-    """Invalidate GraphQL caches after data sync."""
-    try:
-        from dev_health_ops.core.cache import create_cache
-        from dev_health_ops.core.cache_invalidation import invalidate_on_sync_complete
-
-        cache = create_cache(ttl_seconds=300)
-        count = invalidate_on_sync_complete(cache, org_id, sync_type)
-        logger.info("Invalidated %d cache entries after %s sync", count, sync_type)
-    except Exception as e:
-        logger.warning("Cache invalidation failed (non-fatal): %s", e)
-
-
 def cron_next_run(
     cron_expr: str, base: datetime, tz_name: str | None = None
 ) -> datetime:

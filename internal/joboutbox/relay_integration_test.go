@@ -96,11 +96,40 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	// CHAOS-3033 (PR #1292, ee2141eca) moved every checked-in job kind except
-	// sync.provider_unit to state go_default / route river. provider_unit
-	// remains the sole canary at river_canary. This loop is a drift tripwire:
-	// it asserts the *current* checked-in policy shape, not the pre-cutover
-	// all-celery baseline, so a future accidental state/route edit in
-	// migration-state.json still fails loudly here.
+	// sync.provider_unit to state go_default / route river; provider_unit
+	// remains the sole canary at river_canary. CHAOS-5320: the Celery
+	// dispatch plane is gone fleet-wide (prod Celery stopped 2026-08-19), so
+	// celery is no longer a resolvable rollback route ANYWHERE -- every kind
+	// below celeryRemovedKinds moved from go_default/river/celery to
+	// celery_removed/river/none in that same change (3 kinds -- sync-coverage
+	// refresh, team-repo-ownership-derivation, work-item-attribution -- were
+	// already there, born native with no Celery predecessor at all). This
+	// loop is a drift tripwire: it asserts the *current* checked-in policy
+	// shape, not the pre-cutover all-celery baseline, so a future accidental
+	// state/route edit in migration-state.json still fails loudly here.
+	celeryRemovedKinds := map[string]bool{
+		jobcontract.KindSyncCoverageRefresh:          true,
+		jobcontract.KindTeamRepoOwnershipDerivation:  true,
+		jobcontract.KindRemainingWorkItemAttribution: true,
+		jobcontract.KindInvestmentMaterialize:        true,
+		jobcontract.KindDailyMetricsDispatch:         true,
+		jobcontract.KindDailyMetricsFinalize:         true,
+		jobcontract.KindDailyMetricsPartition:        true,
+		jobcontract.KindRemainingCapacity:            true,
+		jobcontract.KindRemainingComplexity:          true,
+		jobcontract.KindRemainingDORA:                true,
+		jobcontract.KindRemainingMembership:          true,
+		jobcontract.KindRemainingRecommendations:     true,
+		jobcontract.KindRemainingReleaseImpact:       true,
+		jobcontract.KindBillingNotification:          true,
+		jobcontract.KindWebhookDelivery:              true,
+		jobcontract.KindReportExecuteOnDemand:        true,
+		jobcontract.KindReportExecuteScheduled:       true,
+		jobcontract.KindTeamAutoimport:               true,
+		jobcontract.KindHeartbeat:                    true,
+		jobcontract.KindRetentionCleanup:             true,
+		jobcontract.KindWorkGraphBuild:               true,
+	}
 	for _, descriptor := range productionRegistry.Descriptors() {
 		if descriptor.Kind == jobcontract.KindSyncProviderUnit {
 			if descriptor.Route != "river_canary" || descriptor.MigrationState != "canary" || descriptor.RollbackRoute != "celery" || !descriptor.Executable() {
@@ -108,28 +137,9 @@ func TestGenericOutboxLiveFailureInjectionMatrix(t *testing.T) {
 			}
 			continue
 		}
-		if descriptor.Kind == jobcontract.KindSyncCoverageRefresh {
+		if celeryRemovedKinds[descriptor.Kind] {
 			if descriptor.Route != "river" || descriptor.MigrationState != "celery_removed" || descriptor.RollbackRoute != "none" || !descriptor.Executable() {
-				t.Fatalf("sync-coverage native-only policy drifted: %#v", descriptor)
-			}
-			continue
-		}
-		if descriptor.Kind == jobcontract.KindTeamRepoOwnershipDerivation {
-			// CHAOS-4365 item 1b: a brand-new Go-native post-sync Fanout
-			// writer with no Celery predecessor -- same native-only shape
-			// as sync.provider_unit's sync-coverage-refresh sibling above.
-			if descriptor.Route != "river" || descriptor.MigrationState != "celery_removed" || descriptor.RollbackRoute != "none" || !descriptor.Executable() {
-				t.Fatalf("team-repo-ownership-derivation native-only policy drifted: %#v", descriptor)
-			}
-			continue
-		}
-		if descriptor.Kind == jobcontract.KindRemainingWorkItemAttribution {
-			// CHAOS-3092 PR-B: another Go-native-only kind, same
-			// celery_removed/river/none shape as the two above -- the
-			// retired Python daily sweep it replaces was an unconditional
-			// full recompute, not a predecessor this kind rolls back to.
-			if descriptor.Route != "river" || descriptor.MigrationState != "celery_removed" || descriptor.RollbackRoute != "none" || !descriptor.Executable() {
-				t.Fatalf("work-item-attribution native-only policy drifted: %#v", descriptor)
+				t.Fatalf("%s celery_removed policy drifted: %#v", descriptor.Kind, descriptor)
 			}
 			continue
 		}
@@ -1445,6 +1455,13 @@ func integrationRouteRegistry(
 				descriptors[index].MigrationState = "go_default"
 			case "celery":
 				descriptors[index].MigrationState = "go_implemented"
+				// CHAOS-5320: production's checked-in RollbackRoute for a kind
+				// this override targets may itself now be "none" (celery
+				// promoted off the rollback route fleet-wide) -- a caller
+				// simulating the pre-cutover celery-routed shape needs a
+				// self-consistent descriptor, not one carrying today's
+				// RollbackRoute value.
+				descriptors[index].RollbackRoute = "celery"
 			}
 		}
 		byKind[descriptors[index].Kind] = descriptors[index]

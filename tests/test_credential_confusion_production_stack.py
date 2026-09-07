@@ -150,10 +150,17 @@ class TestWorkerBridgeRouteRejectsForeignCredentialClasses:
     silently swallowed.
     """
 
+    # CHAOS-5320 deleted the /webhook route this class used to exercise
+    # (operational.webhook_delivery's Python fallback) -- native Go handling
+    # fully replaced it. Retargeted to /billing, the surviving route with the
+    # same shape (bridge-token-gated, behind the same middleware stack): the
+    # security property under test (authorize_worker_bridge's behavior
+    # against a foreign credential class, independent of which route it
+    # gates) is unaffected by which operational route carries it.
     _BODY = {
-        "delivery_id": "00000000-0000-4000-8000-000000000012",
-        "provider": "github",
-        "event_type": "push",
+        "notification_id": "00000000-0000-4000-8000-000000000011",
+        "organization_id": "00000000-0000-4000-8000-000000000010",
+        "notification_type": "invoice_receipt",
     }
 
     @pytest.mark.parametrize(
@@ -167,7 +174,7 @@ class TestWorkerBridgeRouteRejectsForeignCredentialClasses:
         monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "the-real-bridge-secret")
         token = bearer_value if bearer_value is not None else _forged_ops_jwt()
         response = client.post(
-            "/api/internal/worker-operational/webhook",
+            "/api/internal/worker-operational/billing",
             headers={"Authorization": f"Bearer {token}"},
             json=self._BODY,
         )
@@ -178,11 +185,11 @@ class TestWorkerBridgeRouteRejectsForeignCredentialClasses:
     ) -> None:
         monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "the-real-bridge-secret")
         with patch(
-            "dev_health_ops.api.internal.worker_operational.process_webhook_event.run",
-            return_value={"status": "success"},
+            "dev_health_ops.api.internal.worker_operational.send_billing_notification.run",
+            return_value={"status": "sent"},
         ):
             response = client.post(
-                "/api/internal/worker-operational/webhook",
+                "/api/internal/worker-operational/billing",
                 headers={"Authorization": "Bearer the-real-bridge-secret"},
                 json=self._BODY,
             )

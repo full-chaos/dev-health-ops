@@ -163,12 +163,15 @@ func TestPostgresOperatorAuthenticationBackendAndAudit(t *testing.T) {
 	}
 	// CHAOS-3033 (PR #1292, ee2141eca) moved system.heartbeat (like every
 	// checked-in kind except sync.provider_unit) to state go_default / route
-	// river. This is a drift tripwire on the *current* checked-in policy, not
-	// the pre-cutover celery baseline: it still fails loudly if a future edit
-	// to migration-state.json silently changes heartbeat's routing.
+	// river; CHAOS-5320 moved it again to celery_removed/river/none (the
+	// Celery dispatch plane is gone fleet-wide, so celery is no longer a
+	// resolvable rollback route anywhere). This is a drift tripwire on the
+	// *current* checked-in policy, not either prior baseline: it still fails
+	// loudly if a future edit to migration-state.json silently changes
+	// heartbeat's routing.
 	heartbeat, ok := registry.Descriptor(jobcontract.KindHeartbeat)
-	if !ok || !heartbeat.Executable() || heartbeat.MigrationState != "go_default" || heartbeat.Route != "river" {
-		t.Fatalf("checked-in heartbeat policy = %#v, want go_default/river executable", heartbeat)
+	if !ok || !heartbeat.Executable() || heartbeat.MigrationState != "celery_removed" || heartbeat.Route != "river" {
+		t.Fatalf("checked-in heartbeat policy = %#v, want celery_removed/river executable", heartbeat)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobID := insertOperatorIntegrationJob(

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -94,6 +95,7 @@ type PostgresStore struct {
 	leaseObserver          jobruntime.RemainingMetricsLeaseObserver
 	openDayZeroRowObserver OpenDayZeroRowObserver
 	manualBackfillObserver ManualBackfillObserver
+	logger                 *slog.Logger
 }
 
 type PartitionPublisher interface {
@@ -167,7 +169,59 @@ func NewPostgresStore(
 	if len(observers) > 0 {
 		observer = observers[0]
 	}
-	return &PostgresStore{pool: pool, lease: defaultLease, now: time.Now, leaseObserver: observer}, nil
+	return &PostgresStore{
+		pool: pool, lease: defaultLease, now: time.Now, leaseObserver: observer,
+		logger: slog.Default(),
+	}, nil
+}
+
+// SetLogger wires an explicit logger for durable-state-unavailable warnings
+// (see wrapUnavailable). Optional: NewPostgresStore already defaults to
+// slog.Default(), matching the nil-tolerant discipline the package's other
+// executors use (ReleaseImpactExecutor et al.) -- a nil logger here is a
+// no-op rather than disabling every later logging call.
+func (store *PostgresStore) SetLogger(logger *slog.Logger) {
+	if logger != nil {
+		store.logger = logger
+	}
+}
+
+// wrapUnavailable turns an unexpected pgx/pool error into ErrUnavailable
+// while keeping errors.Is(_, ErrUnavailable) true for every existing caller
+// (%w), and preserving the underlying error text that ErrUnavailable's flat
+// sentinel used to discard. operation names the failing step (e.g. "begin
+// run tx", "insert partition") so the scheduler's existing "fixed schedule
+// failed" log line -- which only prints err.Error() -- carries enough detail
+// to diagnose a boot-storm failure without a second round of grant/SQL
+// replay (CHAOS: durable-state error was previously indistinguishable from
+// every other cause of ErrUnavailable). It also logs one Warn line here,
+// at the mapping site, with the same detail plus pool.Stat() -- acquiring a
+// connection under contention (e.g. a low WORKER_COORDINATOR_DATABASE_MAX_CONNS)
+// is the leading hypothesis for these failures, and the pool's own acquire
+// stats are cheap to read and gone the moment the pool is closed.
+func (store *PostgresStore) wrapUnavailable(ctx context.Context, operation string, err error, extra ...any) error {
+	store.logUnavailable(ctx, operation, err, extra...)
+	return fmt.Errorf("%w: %s: %v", ErrUnavailable, operation, err)
+}
+
+func (store *PostgresStore) logUnavailable(ctx context.Context, operation string, err error, extra ...any) {
+	logger := store.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	args := make([]any, 0, len(extra)+10)
+	args = append(args, "operation", operation, "error", err.Error())
+	args = append(args, extra...)
+	if store.pool != nil {
+		stat := store.pool.Stat()
+		args = append(args,
+			"pool_acquired_conns", stat.AcquiredConns(),
+			"pool_idle_conns", stat.IdleConns(),
+			"pool_total_conns", stat.TotalConns(),
+			"pool_max_conns", stat.MaxConns(),
+		)
+	}
+	logger.WarnContext(ctx, "remaining metrics durable state unavailable", args...)
 }
 
 // StartRun atomically persists a deterministic generation and every partition
@@ -179,7 +233,7 @@ func (store *PostgresStore) StartRun(ctx context.Context, request StartRunReques
 	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return Run{}, ErrUnavailable
+		return Run{}, store.wrapUnavailable(ctx, "begin run tx", err, "family", request.Family)
 	}
 	defer func() {
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -191,7 +245,7 @@ func (store *PostgresStore) StartRun(ctx context.Context, request StartRunReques
 		return Run{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return Run{}, ErrUnavailable
+		return Run{}, store.wrapUnavailable(ctx, "commit run tx", err, "family", request.Family)
 	}
 	return run, nil
 }
@@ -246,7 +300,7 @@ func (store *PostgresStore) StartRunTx(
 				"SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
 				"remaining_metrics_dora_day", request.OrganizationID+":"+day,
 			); err != nil {
-				return Run{}, ErrUnavailable
+				return Run{}, store.wrapUnavailable(ctx, "acquire dora day advisory lock", err, "family", request.Family)
 			}
 			covering, outputEvidence, found, err := store.loadRunCoveringDay(
 				ctx, tx, request.OrganizationID, request.Family, day, backfillDays,
@@ -273,7 +327,7 @@ func (store *PostgresStore) StartRunTx(
 					return Run{}, ErrInvalidState
 				}
 				if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
-					return Run{}, ErrUnavailable
+					return Run{}, store.wrapUnavailable(ctx, "mark run completion", err, "family", request.Family)
 				}
 				return covering, nil
 			}
@@ -339,10 +393,10 @@ VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, 'pending', $7, $7)
 ON CONFLICT DO NOTHING`,
 		runID, request.OrganizationID, request.Family, request.Generation, request.ScopeKey, request.GenerationSeed, now)
 	if err != nil {
-		return Run{}, false, ErrUnavailable
+		return Run{}, false, store.wrapUnavailable(ctx, "insert run", err, "family", request.Family)
 	}
 	if command.RowsAffected() == 0 {
-		run, err := loadStartedRun(ctx, tx, runID)
+		run, err := loadStartedRun(ctx, store, tx, runID, request.Family)
 		if err != nil {
 			return Run{}, false, err
 		}
@@ -355,10 +409,10 @@ ON CONFLICT DO NOTHING`,
 				return Run{}, false, ErrInvalidState
 			}
 			if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
-				return Run{}, false, ErrUnavailable
+				return Run{}, false, store.wrapUnavailable(ctx, "mark run completion", err, "family", request.Family)
 			}
 		}
-		if err := verifyStartedPartitions(ctx, tx, runID, request.Scopes); err != nil {
+		if err := verifyStartedPartitions(ctx, store, tx, runID, request.Scopes, request.Family); err != nil {
 			return Run{}, false, err
 		}
 		if err := publishStartedPartitions(
@@ -390,7 +444,7 @@ INSERT INTO public.remaining_metric_partitions
 VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 			partition.ID, runID, ordinal, scope, now)
 		if err != nil {
-			return Run{}, false, ErrUnavailable
+			return Run{}, false, store.wrapUnavailable(ctx, "insert partition", err, "family", request.Family)
 		}
 		if publisher != nil {
 			if err := publisher.PublishPartitionTx(
@@ -417,7 +471,7 @@ FROM public.remaining_metric_runs WHERE id = $1::uuid`, runID).Scan(
 		return Run{}, ErrInvalidState
 	}
 	if err != nil {
-		return Run{}, ErrUnavailable
+		return Run{}, store.wrapUnavailable(ctx, "load run", err)
 	}
 	return run, nil
 }
@@ -436,19 +490,19 @@ WHERE partition.run_id = $1::uuid AND partition.status IN ('pending', 'failed')
   AND run.status IN ('pending', 'running')
 ORDER BY partition.ordinal`, runID)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, store.wrapUnavailable(ctx, "query pending partitions", err)
 	}
 	defer rows.Close()
 	var result []Partition
 	for rows.Next() {
 		var partition Partition
 		if err := rows.Scan(&partition.ID, &partition.RunID, &partition.Ordinal, &partition.Scope); err != nil {
-			return nil, ErrUnavailable
+			return nil, store.wrapUnavailable(ctx, "scan pending partition", err)
 		}
 		result = append(result, partition)
 	}
-	if rows.Err() != nil {
-		return nil, ErrUnavailable
+	if err := rows.Err(); err != nil {
+		return nil, store.wrapUnavailable(ctx, "read pending partitions", err)
 	}
 	return result, nil
 }
@@ -501,7 +555,7 @@ SELECT id, run_id, ordinal, scope, claim_token FROM claimed`,
 		return nil, store.unclaimableReason(ctx, partitionID, now)
 	}
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, store.wrapUnavailable(ctx, "claim partition", err)
 	}
 	claim.LeaseDuration = store.lease
 	return &claim, nil
@@ -550,7 +604,7 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running'
       WHERE run.id = remaining_metric_partitions.run_id AND run.status = 'running'
   )`, now.Add(store.lease), now, claim.Partition.ID, claim.Partition.RunID, claim.Token)
 	if err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "renew partition", err)
 	}
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
@@ -565,7 +619,7 @@ func (store *PostgresStore) CompletePartition(ctx context.Context, claim Claim, 
 	now := store.now().UTC()
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "begin complete-partition tx", err)
 	}
 	defer func() {
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -583,7 +637,7 @@ WHERE id = $3::uuid AND run_id = $4::uuid AND status = 'running'
       WHERE run.id = remaining_metric_partitions.run_id AND run.status = 'running'
   )`, outputEvidence, now, claim.Partition.ID, claim.Partition.RunID, claim.Token)
 	if err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "complete partition", err)
 	}
 	if command.RowsAffected() != 1 {
 		return ErrLeaseLost
@@ -601,7 +655,7 @@ WHERE run.id = $2::uuid AND run.status = 'running'
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
   )`, now, claim.Partition.RunID)
 	if err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "complete run", err)
 	}
 	if runTransition.RowsAffected() == 1 {
 		completionKey, keyErr := joboutbox.CompletionKey(
@@ -611,11 +665,11 @@ WHERE run.id = $2::uuid AND run.status = 'running'
 			return ErrInvalidState
 		}
 		if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
-			return ErrUnavailable
+			return store.wrapUnavailable(ctx, "mark run completion", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "commit complete-partition tx", err)
 	}
 	return nil
 }
@@ -639,7 +693,7 @@ WHERE id = $2::uuid AND run_id = $3::uuid AND status = 'running'
       WHERE run.id = remaining_metric_partitions.run_id AND run.status = 'running'
   )`, now, claim.Partition.ID, claim.Partition.RunID, claim.Token)
 	if err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "release partition", err)
 	}
 	if command.RowsAffected() != 1 {
 		store.observeReleaseLost()
@@ -722,7 +776,7 @@ SELECT EXISTS (
       AND ($4 OR NOT coalesce(partition.output_evidence LIKE '%:rows_written=0', false))
 )`, organizationID, family, day, dayClosed, requireExactScope, scopeFilter).Scan(&exists)
 	if err != nil {
-		return false, ErrUnavailable
+		return false, store.wrapUnavailable(ctx, "query succeeded partition", err, "family", family)
 	}
 	return exists, nil
 }
@@ -793,7 +847,7 @@ LIMIT 1`, organizationID, family, day, minBackfillDays).Scan(
 		return Run{}, nil, false, nil
 	}
 	if err != nil {
-		return Run{}, nil, false, ErrUnavailable
+		return Run{}, nil, false, store.wrapUnavailable(ctx, "load run covering day", err, "family", family)
 	}
 	return run, outputEvidence, true, nil
 }
@@ -854,7 +908,7 @@ UPDATE public.remaining_metric_runs
 SET status = 'canceled', canceled_at = $1, updated_at = $1
 WHERE id = $2::uuid AND status IN ('pending', 'running')`, store.now().UTC(), runID)
 	if err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "cancel run", err)
 	}
 	if command.RowsAffected() > 1 {
 		return ErrInvalidState
@@ -880,7 +934,7 @@ WHERE run.id = $2::uuid AND run.status = 'running'
       WHERE partition.run_id = run.id AND partition.status <> 'succeeded'
   )`, now, runID)
 	if err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "finalize run", err)
 	}
 	if command.RowsAffected() == 1 {
 		return nil
@@ -966,7 +1020,7 @@ func cloneScopes(scopes []json.RawMessage) []json.RawMessage {
 	return cloned
 }
 
-func loadStartedRun(ctx context.Context, tx pgx.Tx, runID string) (Run, error) {
+func loadStartedRun(ctx context.Context, store *PostgresStore, tx pgx.Tx, runID, family string) (Run, error) {
 	var run Run
 	err := tx.QueryRow(ctx, `
 SELECT id::text, org_id::text, family, generation, scope_key, status, generation_seed
@@ -977,7 +1031,7 @@ FROM public.remaining_metric_runs WHERE id = $1::uuid`, runID).Scan(
 		return Run{}, ErrInvalidState
 	}
 	if err != nil {
-		return Run{}, ErrUnavailable
+		return Run{}, store.wrapUnavailable(ctx, "load started run", err, "family", family)
 	}
 	return run, nil
 }
@@ -994,13 +1048,15 @@ func sameRunSeed(run Run, request StartRunRequest) bool {
 	return *run.Seed == *request.GenerationSeed
 }
 
-func verifyStartedPartitions(ctx context.Context, tx pgx.Tx, runID string, scopes []json.RawMessage) error {
+func verifyStartedPartitions(
+	ctx context.Context, store *PostgresStore, tx pgx.Tx, runID string, scopes []json.RawMessage, family string,
+) error {
 	rows, err := tx.Query(ctx, `
 SELECT id::text, ordinal, scope
 FROM public.remaining_metric_partitions
 WHERE run_id = $1::uuid ORDER BY ordinal`, runID)
 	if err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "query started partitions", err, "family", family)
 	}
 	defer rows.Close()
 	expectedCount := 0
@@ -1010,7 +1066,7 @@ WHERE run_id = $1::uuid ORDER BY ordinal`, runID)
 		var persistedOrdinal int
 		var persisted json.RawMessage
 		if err := rows.Scan(&id, &persistedOrdinal, &persisted); err != nil {
-			return ErrUnavailable
+			return store.wrapUnavailable(ctx, "scan started partition", err, "family", family)
 		}
 		canonical, err := canonicalJSON(persisted)
 		if err != nil {
@@ -1024,7 +1080,7 @@ WHERE run_id = $1::uuid ORDER BY ordinal`, runID)
 		expectedOrdinal++
 	}
 	if err := rows.Err(); err != nil {
-		return ErrUnavailable
+		return store.wrapUnavailable(ctx, "read started partitions", err, "family", family)
 	}
 	if expectedCount != len(scopes) {
 		return fmt.Errorf("%w: partition count mismatch", ErrInvalidState)

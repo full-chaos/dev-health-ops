@@ -194,7 +194,11 @@ func openProductionStreamStorage(ctx context.Context, cfg config.Config, logger 
 }
 
 func (storage *productionStreamStorage) ClickHouseReady(ctx context.Context) error {
-	if storage == nil || storage.clickHouse == nil || storage.clickHouse.Ping(ctx) != nil {
+	if storage == nil || storage.clickHouse == nil {
+		return errStreamDependencyUnavailable
+	}
+	if err := storage.clickHouse.Ping(ctx); err != nil {
+		storage.logDependencyCheckFailure(ctx, "clickhouse", err)
 		return errStreamDependencyUnavailable
 	}
 	return nil
@@ -205,6 +209,7 @@ func (storage *productionStreamStorage) DomainPostgresReady(ctx context.Context)
 		return errStreamDependencyUnavailable
 	}
 	if err := postgres.CheckDomainAuthorization(ctx, storage.domainPool, storage.domainRole, storage.riverSchema); err != nil {
+		storage.logDependencyCheckFailure(ctx, "domain_postgres", err)
 		return errStreamDependencyUnavailable
 	}
 	return nil
@@ -219,9 +224,52 @@ func (storage *productionStreamStorage) PostureManifestLockstep(
 	return postgres.CheckPostureManifestLockstep(ctx, storage.domainPool, binaryDigest)
 }
 
+// logDependencyCheckFailure mirrors cmd/dev-health-worker/dependencies.go's
+// and cmd/dev-health-reconciler/dependencies.go's helper of the same name
+// (CHAOS-5435). health.Registry never surfaces a CheckFunc's returned error
+// anywhere -- before this, ClickHouseReady/DomainPostgresReady/ValkeyReady
+// each collapsed their underlying failure into the bare
+// errStreamDependencyUnavailable sentinel, so an operator saw only
+// failed_checks=<name> with no reason anywhere. On 2026-09-07
+// go-stream-ingest/-external/-pagerduty sat not_ready for 9 hours with no
+// logged cause because DomainPostgresReady's CheckDomainAuthorization error
+// was one of them (CHAOS-5454); ClickHouseReady's Ping and ValkeyReady's Do
+// are the same shape and are fixed in the same commit, chris's standing rule
+// that every touched failure path gets telemetry. err is always this
+// package's own postgres.CheckDomainAuthorization result, or the
+// driver/client library's own Ping/Do error -- codex r1 (CHAOS-5454) traced
+// pgx/clickhouse-go's own error paths and found they can include the
+// target host/address and the configured Postgres user/database or
+// ClickHouse auth_db name, never a password or a full DSN/URI. That is the
+// same class of address/role material CheckDomainAuthorization's own
+// ErrUnavailable wrapping already accepts logging (see this package's other
+// readiness paths and CHAOS-5435's precedent) -- still safe to log, just
+// not the stronger "no connection-string material at all" claim.
+//
+// Not shared via an internal package: CHAOS-5435 gave the worker and
+// reconciler each their own unexported copy of this method rather than one
+// shared helper -- their sentinel types and log message text are per-binary,
+// and extracting a shared helper would mean widening a currently-internal
+// type or threading a check-name/logger pair through a new exported seam for
+// three near-identical 10-line copies. This keeps the stream runner
+// consistent with that precedent instead of introducing a third shape.
+func (storage *productionStreamStorage) logDependencyCheckFailure(ctx context.Context, check string, err error) {
+	if storage == nil || storage.logger == nil || err == nil {
+		return
+	}
+	storage.logger.ErrorContext(ctx, "stream runner readiness dependency check failed",
+		"error_category", "dependency_unavailable",
+		"check", check,
+		"error", err.Error(),
+	)
+}
+
 func (storage *productionStreamStorage) ValkeyReady(ctx context.Context) error {
-	if storage == nil || storage.valkey == nil ||
-		storage.valkey.Do(ctx, storage.valkey.B().Ping().Build()).Error() != nil {
+	if storage == nil || storage.valkey == nil {
+		return errStreamDependencyUnavailable
+	}
+	if err := storage.valkey.Do(ctx, storage.valkey.B().Ping().Build()).Error(); err != nil {
+		storage.logDependencyCheckFailure(ctx, "valkey", err)
 		return errStreamDependencyUnavailable
 	}
 	return nil

@@ -29,7 +29,10 @@ def gitlab_token(monkeypatch):
 
 
 @pytest.fixture
-def mock_celery(monkeypatch):
+def mock_dispatch(monkeypatch):
+    """Isolates the endpoint tests from real persistence/routing (CHAOS-5320:
+    there is no Celery dispatch left to mock -- _dispatch_webhook_task routes
+    every delivery through _route_webhook_delivery's outbox enqueue only)."""
     calls = []
     webhook_router = importlib.import_module("dev_health_ops.api.webhooks.router")
 
@@ -37,18 +40,65 @@ def mock_celery(monkeypatch):
         return event.id
 
     async def fake_route(event, delivery_id):
-        return "celery"
+        calls.append({"durable_delivery_id": str(delivery_id)})
+        return "river"
 
-    def fake_delay(**kwargs):
-        calls.append(kwargs)
-
-    class FakeTask:
-        delay = staticmethod(fake_delay)
-
-    monkeypatch.setattr(webhook_router, "process_webhook_event", FakeTask())
     monkeypatch.setattr(webhook_router, "_persist_webhook_delivery", fake_persist)
     monkeypatch.setattr(webhook_router, "_route_webhook_delivery", fake_route)
     return calls
+
+
+class _FakeTxn:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _FakeAsyncSession:
+    def begin(self):
+        return _FakeTxn()
+
+    async def run_sync(self, fn):
+        return fn(None)
+
+
+class _FakeSessionCtx:
+    async def __aenter__(self):
+        return _FakeAsyncSession()
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+@pytest.fixture
+def mock_route_failure(monkeypatch):
+    """CHAOS-5320 confirmation-round F1 repro-as-test: exercises the REAL
+    _route_webhook_delivery (a fake DB session stands in for Postgres) with
+    resolve_worker_job_route raising WorkerJobRouteError -- the exact shape
+    the checked-in-policy-drift guard produces -- so enqueue_worker_job must
+    never be reached, proving the failure surfaces as a real error instead
+    of a false "accepted" with a silently dropped delivery."""
+    webhook_router = importlib.import_module("dev_health_ops.api.webhooks.router")
+    enqueue_calls = []
+
+    async def fake_persist(event):
+        return event.id
+
+    def fake_resolve(sync_session, kind):
+        raise webhook_router.WorkerJobRouteError(
+            "worker job route drifts from checked-in policy"
+        )
+
+    def fake_enqueue(*args, **kwargs):
+        enqueue_calls.append((args, kwargs))
+
+    monkeypatch.setattr(webhook_router, "_persist_webhook_delivery", fake_persist)
+    monkeypatch.setattr(webhook_router, "get_postgres_session", _FakeSessionCtx)
+    monkeypatch.setattr(webhook_router, "resolve_worker_job_route", fake_resolve)
+    monkeypatch.setattr(webhook_router, "enqueue_worker_job", fake_enqueue)
+    return enqueue_calls
 
 
 def _sign_github_payload(body: bytes, secret: str) -> str:
@@ -90,7 +140,7 @@ class TestGitHubWebhook:
         )
         assert response.status_code == 401
 
-    def test_accepts_valid_push_event(self, client, github_secret, mock_celery):
+    def test_accepts_valid_push_event(self, client, github_secret, mock_dispatch):
         payload = {"ref": "refs/heads/main", "commits": [{"id": "abc"}]}
         body = json.dumps(payload).encode()
         signature = _sign_github_payload(body, github_secret)
@@ -108,9 +158,9 @@ class TestGitHubWebhook:
         data = response.json()
         assert data["status"] == "accepted"
         assert data["event_id"] is not None
-        assert mock_celery == [{"durable_delivery_id": data["event_id"]}]
+        assert mock_dispatch == [{"durable_delivery_id": data["event_id"]}]
 
-    def test_accepts_pull_request_event(self, client, github_secret, mock_celery):
+    def test_accepts_pull_request_event(self, client, github_secret, mock_dispatch):
         payload = {
             "action": "opened",
             "pull_request": {"number": 42},
@@ -132,7 +182,7 @@ class TestGitHubWebhook:
         assert response.json()["status"] == "accepted"
 
     def test_returns_message_for_unsupported_event(
-        self, client, github_secret, mock_celery
+        self, client, github_secret, mock_dispatch
     ):
         payload = {"action": "created"}
         body = json.dumps(payload).encode()
@@ -151,6 +201,43 @@ class TestGitHubWebhook:
         data = response.json()
         assert data["status"] == "accepted"
         assert "not processed" in data["message"]
+
+    def test_route_failure_returns_503_not_accepted(
+        self, client, github_secret, mock_route_failure, caplog
+    ):
+        """CHAOS-5320 confirmation-round F1: a routing failure must never
+        be swallowed into a false "accepted" response with a silently
+        dropped delivery."""
+        payload = {"ref": "refs/heads/main", "commits": [{"id": "abc"}]}
+        body = json.dumps(payload).encode()
+        signature = _sign_github_payload(body, github_secret)
+
+        with caplog.at_level("ERROR", logger="dev_health_ops.api.webhooks.router"):
+            response = client.post(
+                "/api/v1/webhooks/github",
+                content=body,
+                headers={
+                    "X-GitHub-Event": "push",
+                    "X-GitHub-Delivery": "delivery-route-fail",
+                    "X-Hub-Signature-256": signature,
+                },
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"] != "accepted"
+        assert mock_route_failure == []
+
+        [message] = [
+            r.getMessage()
+            for r in caplog.records
+            if "route/enqueue failed" in r.getMessage()
+        ]
+        assert "provider=" in message
+        assert "event_type=" in message
+        assert "org_id=" in message
+        assert "kind=" in message
+        assert "webhook_event_id=" in message
+        assert "delivery_id=" in message
 
 
 class TestGitLabWebhook:
@@ -174,7 +261,7 @@ class TestGitLabWebhook:
         )
         assert response.status_code == 401
 
-    def test_accepts_valid_push_event(self, client, gitlab_token, mock_celery):
+    def test_accepts_valid_push_event(self, client, gitlab_token, mock_dispatch):
         payload = {
             "commits": [{"id": "abc123"}],
             "project": {"path_with_namespace": "group/project"},
@@ -192,7 +279,7 @@ class TestGitLabWebhook:
         assert response.status_code == 200
         assert response.json()["status"] == "accepted"
 
-    def test_accepts_merge_request_event(self, client, gitlab_token, mock_celery):
+    def test_accepts_merge_request_event(self, client, gitlab_token, mock_dispatch):
         payload = {
             "object_attributes": {"iid": 10, "action": "open"},
             "project": {"path_with_namespace": "org/repo"},
@@ -248,7 +335,7 @@ class TestJiraWebhook:
         )
         assert response.status_code == 401
 
-    def test_accepts_issue_created(self, client, jira_secret, mock_celery):
+    def test_accepts_issue_created(self, client, jira_secret, mock_dispatch):
         payload = {
             "webhookEvent": "jira:issue_created",
             "issue": {
@@ -267,7 +354,7 @@ class TestJiraWebhook:
         assert response.status_code == 200
         assert response.json()["status"] == "accepted"
 
-    def test_accepts_issue_updated(self, client, jira_secret, mock_celery):
+    def test_accepts_issue_updated(self, client, jira_secret, mock_dispatch):
         payload = {
             "webhookEvent": "jira:issue_updated",
             "issue": {"key": "PROJ-456", "fields": {"project": {"key": "PROJ"}}},
@@ -284,7 +371,7 @@ class TestJiraWebhook:
         assert response.status_code == 200
 
     def test_returns_message_for_unsupported_event(
-        self, client, jira_secret, mock_celery
+        self, client, jira_secret, mock_dispatch
     ):
         payload = {"webhookEvent": "jira:worklog_updated", "issue": {"key": "PROJ-789"}}
         body = json.dumps(payload).encode()

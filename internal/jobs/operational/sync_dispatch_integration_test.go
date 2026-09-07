@@ -430,6 +430,105 @@ func TestTriggerScopedSyncTwoActiveParentConfigsIsAmbiguous(t *testing.T) {
 	}
 }
 
+// TestTriggerScopedSyncJiraRoutesViaParentConfig covers CHAOS-5320's native
+// jira path -- resolved the same way as TestTriggerScopedSyncGithubRoutes
+// ViaParentConfig/...Gitlab..., verified live against the local fixture
+// stack that integration_sources.external_id for provider='jira' is exactly
+// the project key a real webhook payload's issue.fields.project.key
+// carries.
+func TestTriggerScopedSyncJiraRoutesViaParentConfig(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applySyncDispatchSchema(ctx, t, pool)
+	store := &PostgresStore{pool: pool}
+
+	insertIntegrationSource(ctx, t, pool, "org-3", "jira", "CHAOS", "Full Chaos")
+	parentConfigID := insertParentSyncConfig(ctx, t, pool, "org-3", "jira", true)
+
+	payload := []byte(`{"issue":{"key":"CHAOS-1","fields":{"project":{"key":"CHAOS","name":"Full Chaos"}}}}`)
+	result, err := store.TriggerScopedSync(ctx, "jira", "issue_updated", payload, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Processed || result.SyncConfigID != parentConfigID || result.OrgID != "org-3" {
+		t.Fatalf("result = %+v, want processed against the parent config %q", result, parentConfigID)
+	}
+}
+
+// TestTriggerScopedSyncJiraAmbiguousIntegrationSourceIsUnroutable covers two
+// different orgs both naming a jira project with the same key -- the exact
+// collision resolveWebhookSyncSource's doc comment names as the reason jira
+// identity must never be trusted at face value (the router's own
+// `org_id = project_key` extraction is a raw, untrusted hint here too).
+func TestTriggerScopedSyncJiraAmbiguousIntegrationSourceIsUnroutable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applySyncDispatchSchema(ctx, t, pool)
+	store := &PostgresStore{pool: pool}
+
+	insertIntegrationSource(ctx, t, pool, "org-a", "jira", "OPS", "Ops Team A")
+	insertIntegrationSource(ctx, t, pool, "org-b", "jira", "OPS", "Ops Team B")
+
+	payload := []byte(`{"issue":{"key":"OPS-1","fields":{"project":{"key":"OPS","name":"Ops Team A"}}}}`)
+	result, err := store.TriggerScopedSync(ctx, "jira", "issue_created", payload, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Processed || result.Reason != "webhook_sync_unroutable:ambiguous_integration_source" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+// TestTriggerScopedSyncJiraMissingProjectKeyIsUnroutable covers a payload
+// shape with no resolvable project identity at all -- resolveWebhookSyncSource
+// must fail loud (missing_repo_identity), never guess or fall back to a
+// broad/unscoped sync.
+func TestTriggerScopedSyncJiraMissingProjectKeyIsUnroutable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applySyncDispatchSchema(ctx, t, pool)
+	store := &PostgresStore{pool: pool}
+
+	payload := []byte(`{"issue":{"key":"CHAOS-1","fields":{}}}`)
+	result, err := store.TriggerScopedSync(ctx, "jira", "issue_updated", payload, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Processed || result.Reason != "webhook_sync_unroutable:missing_repo_identity" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 // TestTriggerScopedSyncChildConfigWinsOverParent covers the preference order
 // itself: when BOTH a child config and an org parent config exist, the child
 // wins (existing TestTriggerScopedSyncGithubCreatesOccurrenceAndManualTrigger

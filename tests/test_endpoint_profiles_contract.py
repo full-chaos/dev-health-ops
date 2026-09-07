@@ -66,7 +66,7 @@ _GRAPHQL_KINDS = ("graphql_field", "graphql_mutation", "graphql_subscription")
 
 
 def test_inventory_row_count_matches_the_baseline():
-    """370 rows = 311 REST + 59 GraphQL. A different number here is a finding
+    """369 rows = 310 REST + 59 GraphQL. A different number here is a finding
     to reconcile, not an adjustment to make quietly.
 
     Was 361 (303 + 58) under source-text discovery. The move to enumerating
@@ -80,14 +80,18 @@ def test_inventory_row_count_matches_the_baseline():
       -2 GraphQL -- `metrics` and `update_setting`, which are
          `@strawberry.field` examples inside a DOCSTRING and are not fields
          on the served schema at all.
+    = 370, -1 REST under CHAOS-5320: `POST /api/internal/worker-operational/webhook`
+    was a phantom row for a route CHAOS-5320's own earlier deletion had
+    already removed from the served application -- the inventory row was
+    never cleaned up until now.
     """
     inventory = checker.load_json(_INVENTORY_PATH)
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 311, len(rest)
+    assert len(rest) == 310, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 370, len(rows)
+    assert len(rows) == 369, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -107,8 +111,11 @@ def test_classification_summary_matches_the_baseline():
     rows = inventory["rows"]
     protected = [r for r in rows if r["classification"] == "protected"]
     public = [r for r in rows if r["classification"] == "public"]
-    # 339 + 3 subscriptions + 3 /graphql transport rows - 2 docstring phantoms.
-    assert len(protected) == 343, len(protected)
+    # 339 + 3 subscriptions + 3 /graphql transport rows - 2 docstring phantoms
+    # = 343, - 1 under CHAOS-5320: the deleted worker-operational/webhook
+    # phantom row (see test_inventory_row_count_matches_the_baseline) was
+    # itself classified protected.
+    assert len(protected) == 342, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

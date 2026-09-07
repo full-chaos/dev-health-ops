@@ -16,10 +16,10 @@ import (
 )
 
 // ComplexityExecutor is the NATIVE implementation of the complexity
-// remaining-metric kind (CHAOS-4291) -- the last kind still served through
-// the HTTP compatibility bridge (see cmd/dev-health-worker/daily.go's
-// KindRemainingComplexity case: every sibling kind already holds a native
-// executor there).
+// remaining-metric kind (CHAOS-4291) -- it was the last kind still served
+// through the HTTP compatibility bridge (see cmd/dev-health-worker/daily.go's
+// KindRemainingComplexity case: every sibling kind already held a native
+// executor there); with this executor, no bridge remains in this package.
 //
 // The Python job is the authority (src/dev_health_ops/metrics/
 // job_complexity_db.py: run_complexity_db_job). Its file-selection control
@@ -124,7 +124,7 @@ func NewComplexityExecutor(
 	}, nil
 }
 
-// ComputePartition satisfies CompatibilityExecutor: the seam the partition
+// ComputePartition satisfies PartitionExecutor: the seam the partition
 // handler drives.
 func (executor *ComplexityExecutor) ComputePartition(
 	ctx context.Context, run Run, partition Partition,

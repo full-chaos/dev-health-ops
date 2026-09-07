@@ -214,11 +214,43 @@ def test_pinned_kinds_match_the_checked_in_migration_state() -> None:
     assert retired_since_0066 <= pinned
     assert retired_since_0066.isdisjoint(by_kind)
 
+    # CHAOS-5320: the Celery dispatch plane is gone fleet-wide (prod Celery
+    # stopped 2026-08-19), so resolve_worker_job_route now rejects a
+    # celery-transport row outright and these 18 kinds -- all pinned by 0066
+    # at the time, still rollback_route:celery then -- moved to
+    # celery_removed/river/none. 0066's own historical pin is unchanged
+    # (it correctly recorded what THAT revision did); this test's checked-in
+    # comparison must recognize both shapes.
+    celery_removed_since_0066 = {
+        "investment.materialize",
+        "metrics.daily_dispatch",
+        "metrics.daily_finalize",
+        "metrics.daily_partition",
+        "metrics.remaining.capacity",
+        "metrics.remaining.complexity",
+        "metrics.remaining.dora",
+        "metrics.remaining.membership_backfill",
+        "metrics.remaining.recommendations",
+        "metrics.remaining.release_impact",
+        "operational.billing_notification",
+        "operational.webhook_delivery",
+        "report.execute_on_demand",
+        "report.execute_scheduled",
+        "sync.team_autoimport",
+        "system.heartbeat",
+        "system.retention_cleanup",
+        "workgraph.build",
+    }
+    assert celery_removed_since_0066 <= (pinned - retired_since_0066)
+
     # Each pinned kind must be routed to River by checked-in policy, otherwise
     # this migration would drive a row outside what the producer accepts.
     for kind in pinned - retired_since_0066:
         assert by_kind[kind]["route"] == "river", kind
-        assert by_kind[kind]["rollback_route"] == "celery", kind
+        if kind in celery_removed_since_0066:
+            assert by_kind[kind]["rollback_route"] == "none", kind
+        else:
+            assert by_kind[kind]["rollback_route"] == "celery", kind
 
     # The canary and the post-0066 Go-native-only kinds are deliberately
     # excluded. Asserting their identities stops a future kind from being

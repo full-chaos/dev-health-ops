@@ -1849,7 +1849,7 @@ flowchart TD
     end
     SYNC --> CT["work_item_dependencies (extkey/attachment edges)<br/>+ work_item_team_attributions (latest primary owner)<br/>+ work_item_cycle_times (activity bridge)"]
     CT --> WG["3. work-graph build"]
-    WG --> IM["4. investment materialize (--force)"]
+    WG --> IM["4. investment trigger"]
     IM --> Q["5. allocation coverage % + chord<br/>recover via query-time join to primary attribution"]
 ```
 
@@ -1874,10 +1874,10 @@ flowchart TD
    `work_item_team_attributions`. The org is derived from the sync config
    (#923), so `--org` is optional.
 3. **Work-graph build**, then
-4. **Investment materialize (`--force`)** — these rebuild `work_unit_investments`
-   + its `structural_evidence_json` `issues` **and** `prs` arrays (the coverage
-   join keys — see the CHAOS-2416 bullet in §0); the backfill does not trigger
-   them.
+4. **`dev-health-workerctl investment trigger`** — these rebuild
+   `work_unit_investments` + its `structural_evidence_json` `issues` **and**
+   `prs` arrays (the coverage join keys — see the CHAOS-2416 bullet in §0);
+   the backfill does not trigger them.
 5. **Verify & recover** — the coverage %, chord, team Cycle Time × Throughput
    quadrant, and work-unit investment evidence recover automatically via the
    query-time join to primary attribution. Confirm the links were captured:
@@ -1897,11 +1897,12 @@ flowchart TD
 
 > Exact CLI flags vary per command — confirm with `<cmd> --help`. The relevant
 > entry points: work-items ingestion is automatic (native Go provider-sync
-> route + webhooks, CHAOS-5351) — `sync work-items` is deleted, `backfill
+> route + webhooks, CHAOS-5351) -- `sync work-items` is deleted, `backfill
 > run` → `run_backfill_via_planner` (dispatches the same native route, does
 > not call Python compute); `work-graph build` → `run_work_graph_build`;
-> `investment materialize` → `run_investment_materialize`; `metrics daily` →
-> `run_daily_metrics`.
+> `investment trigger` → the native `investment.materialize` River kind
+> (`dev-hops investment materialize` was deleted, CHAOS-5173); `metrics
+> daily` → `run_daily_metrics`.
 
 ---
 

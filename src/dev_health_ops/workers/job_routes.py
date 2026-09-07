@@ -16,16 +16,16 @@ RIVER_ROUTE = "river"
 _ROUTES = frozenset({CELERY_ROUTE, SHADOW_ROUTE, RIVER_CANARY_ROUTE, RIVER_ROUTE})
 
 #: The durable ``sync.provider_unit`` routes under which River owns provider
-#: units. Any other legal value -- in practice ``celery``, the declared
-#: rollback route -- means River does NOT own them.
+#: units. Any other legal RESOLVED value means River does NOT own them.
 #:
-#: CHAOS-4054 step 4 deleted the Celery dispatch plane, so "River does not own
-#: them" no longer has a second runtime to mean. A producer that sees one of
-#: those routes must therefore fail closed rather than stage work: the Go
-#: outbox relay resolves this same row every step and RELEASES the claim for a
-#: Celery route (``internal/joboutbox/relay.go:253-263``), so staging anyway
-#: parks the unit in ``dispatching`` behind an outbox row nothing will ever
-#: deliver, holding a DispatchGuard slot with no lease to expire.
+#: CHAOS-5320: ``resolve_worker_job_route`` now rejects a ``celery``-transport
+#: row outright (drift, never resolved), so the only value this allowlist
+#: still needs to guard against in practice is ``shadow`` -- a producer that
+#: sees it must fail closed rather than stage work: the Go outbox relay
+#: resolves this same row every step and RELEASES the claim for any route
+#: outside this set (``internal/joboutbox/relay.go:253-263``), so staging
+#: anyway parks the unit in ``dispatching`` behind an outbox row nothing will
+#: ever deliver, holding a DispatchGuard slot with no lease to expire.
 PROVIDER_UNIT_OUTBOX_ROUTES = frozenset({RIVER_CANARY_ROUTE, RIVER_ROUTE})
 
 
@@ -45,7 +45,14 @@ def resolve_worker_job_route(session: Session, kind: str) -> str:
     """Resolve one row against checked-in migration policy.
 
     A missing, paused, duplicated, or drifted row never falls back to Celery:
-    that would allow concurrent execution owners during a control-plane fault.
+    that would allow concurrent execution owners during a control-plane
+    fault. CHAOS-5320: the Celery dispatch plane is gone fleet-wide (CHAOS-4054
+    step 4; prod Celery stopped 2026-08-19), so a row on the historical
+    rollback route (``celery``) is now DRIFT, not a legal alternate value --
+    it raises the same as a missing/paused/drifted row rather than resolving,
+    since nothing would ever process work staged behind it (see
+    ``0125_promote_worker_job_routes_off_celery_rollback``, which promotes
+    every checked-in kind's row off ``celery`` ahead of this change).
     """
 
     policies = tuple(job for job in load_migration_jobs() if job.kind == kind)
@@ -62,10 +69,7 @@ def resolve_worker_job_route(session: Session, kind: str) -> str:
     if route is None or route.job_kind != kind or route.transport not in _ROUTES:
         raise WorkerJobRouteError("worker job route is unavailable")
     policy = policies[0]
-    # MigrationJob intentionally exposes only the current route. During every
-    # coexistence state its rollback route is Celery; terminal Celery removal
-    # never reaches this producer module.
-    if route.transport not in {policy.route, CELERY_ROUTE}:
+    if route.transport != policy.route:
         raise WorkerJobRouteError("worker job route drifts from checked-in policy")
     if route.paused:
         raise WorkerJobRouteError("worker job route is paused")
@@ -76,9 +80,3 @@ def route_requires_outbox(route: str) -> bool:
     if route not in _ROUTES:
         raise ContractDecodeError("worker job route is unsupported")
     return route != CELERY_ROUTE
-
-
-def route_requires_celery(route: str) -> bool:
-    if route not in _ROUTES:
-        raise ContractDecodeError("worker job route is unsupported")
-    return route in {CELERY_ROUTE, SHADOW_ROUTE}

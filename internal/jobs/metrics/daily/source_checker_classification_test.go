@@ -18,7 +18,7 @@ func TestPartitionSourceCheckerFailureReleasesClaimAndRetries(t *testing.T) {
 		},
 		run: Run{ID: testRunID, OrganizationID: testOrgID, Status: "running"},
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestPartitionSourceCheckerInvalidStateReleasesClaimAndIsPermanent(t *testin
 		},
 		run: Run{ID: testRunID, OrganizationID: testOrgID, Status: "running"},
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}

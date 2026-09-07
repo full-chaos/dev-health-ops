@@ -1,16 +1,16 @@
 // Package daily owns the dormant, ID-only River boundary for daily metrics.
 //
-// The compatibility executor is deliberately narrow: it receives a durable
-// run/partition identity after this package has reloaded and fenced it from
-// PostgreSQL. It cannot receive a command, metric rows, SQL, credentials, or
-// caller-selected Python module.
+// CHAOS-3092 (PR-A): the Python compatibility bridge is GONE. Every
+// families.json family -- partition- and finalize-scope alike -- is computed
+// natively in Go by a registered executor. There is no HTTP seam left, no
+// skip-families negotiation, and nothing for a missing or failing family to
+// fall open to: a family with no registered executor, or one that fails at
+// runtime, is a loud failure rather than a silent hand-off to Python.
 //
 // All three kinds deliberately use the registered metrics queue. Celery's
 // current all-org fanout is lightweight and uses default, but this dispatcher
 // owns durable run/partition publication and must share the same bounded
-// ClickHouse-facing queue as its partitions and finalizer. The checked-in route
-// remains Celery until this topology and its compatibility executor are fully
-// audited.
+// ClickHouse-facing queue as its partitions and finalizer.
 package daily
 
 import (
@@ -35,18 +35,19 @@ var (
 	// for a partition's repos+day but its output table had zero rows for that
 	// scope (CHAOS-4263). Distinct from a genuinely empty day: the partition
 	// must not report success. This is classified Permanent, not Retryable
-	// (codex adversarial review, round 2): the compatibility bridge's
-	// execution ledger (worker_metrics.py:_reserve_execution) marks this
-	// exact (run, partition, family, generation, scope_digest) identity
-	// "succeeded" the moment ComputePartition returns -- any later attempt at
-	// the SAME identity is answered "skipped" without recomputing anything, so
-	// a bare retry can never resolve this on its own. Marking it Retryable
-	// would silently burn the job's attempt budget re-checking the same
-	// unchanged output before failing anyway, with no recomputation ever
-	// happening in between. Permanent fails loud and immediately instead,
-	// which is what the RCA actually requires; real recomputation needs a new
-	// execution identity (a ledger repair or a fresh run/partition), which is
-	// a separate, larger change than this ticket's scope.
+	// (codex adversarial review, round 2). The original rationale was the
+	// Python bridge's execution ledger, which marked the (run, partition,
+	// family, generation, scope_digest) identity "succeeded" the moment
+	// ComputePartition returned, so a bare retry was answered "skipped"
+	// without recomputing anything. CHAOS-3092 (PR-A) deleted that bridge
+	// and its ledger, but the classification is UNCHANGED and still correct
+	// for the native path: the native executors are deterministic over the
+	// same partition scope and day, so re-running the identical identity
+	// recomputes the identical zero-row output. Marking it Retryable would
+	// only burn the job's attempt budget re-checking unchanged output before
+	// failing anyway. Permanent fails loud and immediately instead; real
+	// recomputation needs a new run/partition identity, which is a separate,
+	// larger change than this ticket's scope.
 	ErrZeroRowsWithSourceData = errors.New("daily metrics family produced zero rows despite source data")
 	// ErrDayAlreadyCovered means a deferred-discovery `metrics daily-start`
 	// request (no --repo-id) found an ALREADY-succeeded run for the same
@@ -143,53 +144,6 @@ func retryClaim(err error) error {
 		return jobruntime.RetryableAfter(err, active.RetryAfter)
 	}
 	return jobruntime.Retryable(err)
-}
-
-// retryCompatibilityError marks err Retryable and, when it is one of the
-// compatibility bridge's classified sentinels (CHAOS-4264), attaches the
-// matching bounded Reason so the River attempt log explains a signaled or
-// resource-exhausted runner without anyone having to read Sentry/dmesg.
-// Anything else (including the pre-existing ErrUnavailable) is unaffected --
-// Retryable with no reason, exactly as before this ticket.
-//
-// ErrCompatibilityAmbiguousStuck (CHAOS-4319) is the one exception: the
-// Python ledger row it names can never move again without a human /repair
-// call, so marking it Retryable would only ever spend the job's whole
-// attempt budget reproducing the same 409 before River discards it with no
-// trace. It is marked Permanent instead -- PartitionHandler.Work has
-// already durably persisted the failure (failPartitionPermanently) by the
-// time this return value reaches River, so Permanent here means "stop
-// retrying a lost cause," never "the failure went unrecorded."
-func retryCompatibilityError(err error) error {
-	if errors.Is(err, ErrCompatibilityAmbiguousStuck) {
-		return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonAmbiguousRefused)
-	}
-	if errors.Is(err, ErrCompatibilityResourceExhaustedDeterministic) {
-		// CHAOS-4543: see ErrCompatibilityResourceExhaustedDeterministic's
-		// doc comment -- a KNOWN deterministic guard (not a real,
-		// attempt-to-attempt-variable memory kill), so retrying 5 times
-		// before River discards the job only reproduces the identical
-		// refusal. Permanent stops after this one attempt; the Reason
-		// stays ReasonResourceExhausted (same River-visible classification
-		// as the non-deterministic case) -- only the retry BUDGET changes,
-		// not what the failure is called.
-		return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonResourceExhausted)
-	}
-	marked := jobruntime.Retryable(err)
-	switch {
-	case errors.Is(err, ErrCompatibilityProcessSignaled):
-		return jobruntime.WithReason(marked, jobruntime.ReasonProcessSignaled)
-	case errors.Is(err, ErrCompatibilityResourceExhausted):
-		return jobruntime.WithReason(marked, jobruntime.ReasonResourceExhausted)
-	case errors.Is(err, ErrCompatibilityAmbiguousRefused):
-		return jobruntime.WithReason(marked, jobruntime.ReasonAmbiguousRefused)
-	case errors.Is(err, ErrCompatibilityProgressStalled):
-		return jobruntime.WithReason(marked, jobruntime.ReasonProgressStalled)
-	case errors.Is(err, ErrCompatibilityCapacityExhausted):
-		return jobruntime.WithReason(marked, jobruntime.ReasonCapacityExhausted)
-	default:
-		return marked
-	}
 }
 
 // RepositoryID is a ClickHouse repos.id -- the identity space
@@ -356,43 +310,21 @@ type RunPublisher interface {
 	PublishDispatchTx(context.Context, pgx.Tx, Run, string) error
 }
 
-// CompatibilityExecutor is the only temporary Python seam. Both identities
-// are loaded from Store before it is called, so it cannot expand the scope.
-//
-// ComputePartition's skipFamilies argument (CHAOS-4276) names families.json
-// families a NativeFamilyExecutor already computed and wrote for this
-// partition -- the compatibility bridge must not recompute or rewrite them.
-// An empty/nil skipFamilies is a no-op: every existing caller (and the
-// Python side, run_daily_metrics_job's skip_families parameter) behaves
-// exactly as before this field existed.
-// CHAOS-3092 (PR-A'): this interface used to also declare Finalize(ctx, run,
-// skipFamilies) for the same reason ComputePartition takes skipFamilies
-// (CHAOS-4290): a NativeFinalizeFamilyExecutor that already computed and
-// wrote a finalize-scope family had to stop the Python bridge recomputing
-// it, or the two writers would race on an append-only table deduped
-// `ORDER BY computed_at DESC LIMIT 1 BY ...`, where the LATER writer wins
-// silently. That bridge call is deleted now that every finalize-scope
-// family's Python compute is gone -- see FinalizeHandler.Work and
-// computeNativeFinalizeFamilies.
-type CompatibilityExecutor interface {
-	ComputePartition(ctx context.Context, run Run, partition Partition, skipFamilies []string) error
-}
-
 // NativeFamilyExecutor computes and writes ONE families.json family's rows
-// for a partition natively in Go, in place of the Python compatibility
-// bridge (CHAOS-4276, the daily bridge's per-family counterpart to the
-// remaining bridge's per-kind native executors). It returns how many rows it
-// wrote so PartitionHandler can report it through telemetry without a
-// separate readback.
+// for a partition natively in Go (CHAOS-4276, originally the per-family
+// counterpart to the remaining bridge's per-kind native executors). It
+// returns how many rows it wrote so PartitionHandler can report it through
+// telemetry without a separate readback.
 //
-// Unlike the remaining bridge (one River kind per family, a construction
-// refusal takes only that kind out of service), the daily bridge computes
-// every family inside ONE partition call. A NativeFamilyExecutor is
-// therefore consulted, and can fail, PER PARTITION rather than once at
-// worker startup -- PartitionHandler's fail-open policy (see Work) means a
-// single family's runtime failure degrades to "Python still computes it
-// this partition", not a failed partition and not a family taken out of
-// service fleet-wide.
+// Every family of one partition is computed inside ONE Work call, so a
+// NativeFamilyExecutor is consulted -- and can fail -- PER PARTITION rather
+// than once at worker startup. CHAOS-3092 (PR-A) deleted the Python
+// compatibility bridge that a runtime failure used to degrade to, and
+// CHAOS-5243 had already deleted the fail-open policy that pointed at it:
+// a family's runtime failure now holds the whole partition incomplete (see
+// computeNativeFamilies and ErrPreBridgeFamilyIncomplete). Construction-time
+// refusal is handled one layer up, in cmd/dev-health-worker, where it is a
+// startup error rather than a silently unregistered family.
 type NativeFamilyExecutor interface {
 	ComputeFamily(ctx context.Context, run Run, partition Partition) (rowsWritten int, err error)
 }
@@ -592,7 +524,6 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 type PartitionHandler struct {
 	store             Store
 	publisher         Publisher
-	compatibility     CompatibilityExecutor
 	sourceChecker     SourceDataChecker
 	zeroRowsObserver  jobruntime.DailyMetricsZeroRowsObserver
 	nativeFamilies    map[string]NativeFamilyExecutor
@@ -611,103 +542,26 @@ type PartitionHandler struct {
 	compatRetryObserver      jobruntime.DailyMetricsCompatRetryObserver
 
 	// postBridgeFamilies/postBridgeFamilyNames (CHAOS-4278) are native
-	// families that must run AFTER the compatibility bridge call for the
-	// SAME partition, not before -- see computePostBridgeNativeFamilies's
-	// doc comment for why families.json's "pre_bridge" (default) vs
-	// "post_bridge" phase exists at all.
+	// families that must run AFTER every pre_bridge family of the SAME
+	// partition, not before -- see computePostBridgeNativeFamilies's doc
+	// comment for why families.json's "pre_bridge" (default) vs
+	// "post_bridge" phase exists at all. The phase names are historical:
+	// CHAOS-3092 (PR-A) deleted the bridge call the boundary used to sit
+	// on, but the ORDERING the two phases encode (a family whose input
+	// another family writes in the same partition runs second) is exactly
+	// as load-bearing as it was, so the families.json contract keeps them.
 	postBridgeFamilies    map[string]NativeFamilyExecutor
 	postBridgeFamilyNames []string
-
-	// livenessCeilingBase/PerRepo (CHAOS-4316) bound the compatibility
-	// bridge call from the Go side, as a backstop behind the bridge's own
-	// progress-based watchdog (worker_metrics.py _watch_progress_stall).
-	// NewPartitionHandler seeds these with a nonzero, work-derived default
-	// (defaultLivenessCeilingBase/PerRepo below) -- team-lead ruling
-	// 2026-08-26: the fix must ship ON by default, because deployed
-	// compose/helm manifests do not set the new env vars that would
-	// otherwise be the only way to enable it. SetLivenessCeiling(0, 0) is
-	// the one explicit, deliberate way to opt out.
-	livenessCeilingBase    time.Duration
-	livenessCeilingPerRepo time.Duration
 }
 
-// defaultLivenessCeilingBase/PerRepo mirror config.Config's own defaults
-// (internal/platform/config/config.go, DEV_HEALTH_DAILY_PARTITION_LIVENESS_
-// CEILING_BASE/PER_REPO) so that ANY caller of NewPartitionHandler -- not
-// only cmd/dev-health-worker, which additionally wires the operator-tunable
-// config value via SetLivenessCeiling -- gets a safe, nonzero, work-derived
-// bound rather than silently unbounded behavior.
-//
-// Sized as queueDepthBudget(3) * the Python watchdog's own hard ceiling
-// (120s base + 90s/repo, x3 multiplier -- worker_metrics.py), NOT as an
-// independently-tuned Go-side number. A codex review on this ticket found
-// that the compatibility bridge's per-replica runner semaphore
-// (_RUNNER_CONCURRENCY_SEMAPHORE, default concurrency=1) means this
-// deadline -- which starts counting from HTTP-send time, before the
-// request even acquires that semaphore slot -- also has to absorb time
-// spent legitimately queued behind another partition's own full compute
-// window, not only this partition's own compute time. queueDepthBudget=3
-// says: tolerate up to two other partitions each legitimately consuming
-// their full Python hard ceiling ahead of this one on the same replica,
-// plus this partition's own hard ceiling, before concluding something is
-// actually wrong. At the default dailyRepositoryPartitionSize (3 repos),
-// that is base(18m) + perRepo(13m30s)*3 = 58m30s, vs. a 19m30s Python hard
-// ceiling -- a 3x multiple, not the earlier 25m/19.5m (~1.3x) margin that
-// left no room for even one legitimately queued neighbor. If either side's
-// per-repo constants are retuned, keep this ratio: the Go base/perRepo
-// pair must equal 3x the Python side's own base/perRepo*multiplier, so the
-// two formulas cannot silently drift apart the way an independent flat
-// number would.
-const (
-	defaultLivenessCeilingBase    = 18 * time.Minute
-	defaultLivenessCeilingPerRepo = 13*time.Minute + 30*time.Second
-)
-
-func NewPartitionHandler(store Store, publisher Publisher, compatibility CompatibilityExecutor) (*PartitionHandler, error) {
-	if store == nil || publisher == nil || compatibility == nil {
+func NewPartitionHandler(store Store, publisher Publisher) (*PartitionHandler, error) {
+	if store == nil || publisher == nil {
 		return nil, ErrUnavailable
 	}
 	return &PartitionHandler{
-		store: store, publisher: publisher, compatibility: compatibility,
-		nativeFamiliesNow:      func() time.Time { return time.Now().UTC() },
-		livenessCeilingBase:    defaultLivenessCeilingBase,
-		livenessCeilingPerRepo: defaultLivenessCeilingPerRepo,
+		store: store, publisher: publisher,
+		nativeFamiliesNow: func() time.Time { return time.Now().UTC() },
 	}, nil
-}
-
-// SetLivenessCeiling overrides the work-size-derived hard ceiling on the
-// compatibility bridge call (CHAOS-4316): base + perRepo*len(RepoIDs), never
-// a flat wall-clock number. This is a backstop, not the primary mechanism --
-// the bridge's own progress-based watchdog should always win the race under
-// normal conditions, since it can see per-repo progress the Go side cannot.
-// It exists for when that watchdog itself cannot run (e.g. the bridge's
-// event loop is wedged). The clock starts at HTTP-send time, before the
-// request acquires the bridge's per-replica runner semaphore slot, so base
-// and perRepo must stay sized to absorb legitimate queueing behind other
-// partitions' compute time, not only this partition's own -- see the
-// queueDepthBudget derivation on defaultLivenessCeilingBase/PerRepo above;
-// an override here should keep the same multiple over the Python side's
-// hard ceiling rather than picking an independent number.
-// NewPartitionHandler already seeds a safe nonzero
-// default (defaultLivenessCeilingBase/PerRepo) -- call this to tune it (a
-// larger/smaller bound) or to explicitly opt out by passing base <= 0,
-// which is the ONLY way to disable the ceiling; simply never calling this
-// method does NOT disable it.
-func (handler *PartitionHandler) SetLivenessCeiling(base, perRepo time.Duration) {
-	if handler == nil {
-		return
-	}
-	handler.livenessCeilingBase = base
-	handler.livenessCeilingPerRepo = perRepo
-}
-
-// livenessCeiling returns 0 (no ceiling) only when SetLivenessCeiling(0, _)
-// was called explicitly -- the constructor default is always nonzero.
-func (handler *PartitionHandler) livenessCeiling(repoCount int) time.Duration {
-	if handler == nil || handler.livenessCeilingBase <= 0 {
-		return 0
-	}
-	return handler.livenessCeilingBase + handler.livenessCeilingPerRepo*time.Duration(repoCount)
 }
 
 // SetSourceDataChecker wires the optional zero-rows-with-source-data check
@@ -730,15 +584,13 @@ func (handler *PartitionHandler) SetZeroRowsObserver(observer jobruntime.DailyMe
 	handler.zeroRowsObserver = observer
 }
 
-// SetNativeFamilies registers the families.json families this handler
-// computes natively in Go instead of the Python compatibility bridge
-// (CHAOS-4276). A nil/empty map (the default) is a no-op: every family stays
-// on the compatibility path exactly as before this capability existed. The
-// caller (cmd/dev-health-worker/daily.go) decides per family whether its
-// native executor could be built at all -- a family absent from this map
-// simply never leaves the compatibility path; see NativeFamilyExecutor's
-// doc comment for the runtime (per-partition) fail-open policy on top of
-// that construction-time decision.
+// SetNativeFamilies registers the families.json pre_bridge families this
+// handler computes natively in Go (CHAOS-4276). CHAOS-3092 (PR-A): there is
+// no compatibility path left for an unregistered family to stay on, so a
+// nil/empty map means this handler computes NOTHING for a partition. The
+// caller (cmd/dev-health-worker/daily.go) is what guarantees the map is
+// complete: a native executor that cannot be constructed is a startup
+// error there, not a silently absent map entry.
 func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFamilyExecutor) error {
 	if handler == nil {
 		return nil
@@ -836,12 +688,16 @@ func (handler *PartitionHandler) SetNativeFamilyObserver(observer jobruntime.Dai
 // MembershipLogger shape.
 type NativeFamilyRefusalLogger interface {
 	Error(msg string, args ...any)
+	// Info carries the per-partition "which families ran" summary
+	// (CHAOS-3092 PR-A observability gate). *slog.Logger satisfies both
+	// methods directly, so production wiring is unchanged.
+	Info(msg string, args ...any)
 }
 
 // SetNativeFamilyLogger wires optional logging for a native family's
 // per-partition refusal. Nil is tolerated everywhere it is read (same
 // discipline as SetNativeFamilyObserver) and never gates behavior on its
-// own -- fail-open stays fail-open, this only makes the reason visible.
+// own -- this only makes the reason visible.
 // Shared by both pre_bridge (computeNativeFamilies) and post_bridge
 // (computePostBridgeNativeFamilies) families, same as the observer above.
 func (handler *PartitionHandler) SetNativeFamilyLogger(logger NativeFamilyRefusalLogger) {
@@ -851,9 +707,13 @@ func (handler *PartitionHandler) SetNativeFamilyLogger(logger NativeFamilyRefusa
 	handler.nativeFamilyLogger = logger
 }
 
-// SetCompatRetryObserver wires the optional telemetry observer for a
-// partition durably persisted as failed_permanent after an unresolvable
-// ambiguous_refused response (CHAOS-4319). Never gates behavior on its own:
+// SetCompatRetryObserver wires the optional telemetry observer counting the
+// durable dispositions Work writes when a partition is released 'failed'
+// rather than completed (CHAOS-4319, CHAOS-5078, CHAOS-5190). CHAOS-3092
+// (PR-A) deleted the compat-bridge dispositions this counter was named
+// after -- what remains are the two native-family-incomplete decisions, on
+// the SAME counter deliberately, so an operator has one place to look for
+// "a partition did not complete and why". Never gates behavior on its own:
 // a nil observer (the default) still fails the partition and writes the
 // durable record, it just does not also increment the counter.
 func (handler *PartitionHandler) SetCompatRetryObserver(observer jobruntime.DailyMetricsCompatRetryObserver) {
@@ -876,69 +736,52 @@ func (handler *PartitionHandler) observeCompatRetry(decision jobruntime.DailyMet
 	}
 }
 
-// computeNativeFamilies runs every registered native family executor for one
-// partition and returns the names that succeeded, in the same sorted order
-// SetNativeFamilies stored -- deterministic so a failure in one family never
-// makes another family's inclusion depend on Go map iteration order.
+// computeNativeFamilies runs every registered pre_bridge native family
+// executor for one partition, in the same sorted order SetNativeFamilies
+// stored -- deterministic so a failure in one family never makes another
+// family's execution depend on Go map iteration order.
 //
 // FAIL LOUD BY DESIGN (CHAOS-5243, chris: "it should fail loudly so we find
-// it" -- supersedes the CHAOS-4276 fail-open ruling below for this,
-// pre_bridge, phase). A native family's runtime failure IS a partition
-// failure: the family is added to both `skipFamilies` and `incomplete`, the
-// partition is held out of CompletePartition, and the CHAOS-4276
-// fail-open-to-Python-bridge path is deleted outright for an ordinary
-// (non-partial) refusal -- not gated behind a marker, not conditional on
-// anything. The original CHAOS-4276 rationale (one family degrading to
-// Python must never take the other 22 down with it) traded correctness for
-// availability: a family failing silently, forever, with the partition
-// still completing 'succeeded' and only an anonymous counter incremented,
-// is exactly the failure mode this closes. Scope: pre_bridge only --
-// computePostBridgeNativeFamilies's post_bridge phase is unaffected here,
-// see CHAOS-5190/#2276 for its own (separate, more thorough) fix.
+// it" -- supersedes the CHAOS-4276 fail-open ruling for this, pre_bridge,
+// phase). A native family's runtime failure IS a partition failure: the
+// family is added to `incomplete`, and Work holds the partition out of
+// CompletePartition. The original CHAOS-4276 rationale (one family
+// degrading to Python must never take the other 22 down with it) traded
+// correctness for availability: a family failing silently, forever, with
+// the partition still completing 'succeeded' and only an anonymous counter
+// incremented, is exactly the failure mode this closes. CHAOS-3092 (PR-A)
+// then removed the option entirely -- there is no Python bridge left to
+// degrade to at all.
 //
 // THIS DOES NOT MEAN "RUN ANYWAY" FOR A FAMILY'S OWN DEPENDENTS
-// (CHAOS-5078 codex round 2 F3, on the PR that first put work_item_attribution
-// into this SAME loop ahead of its three readers): before this fix, a
-// dependency's runtime failure did not stop this loop from still calling
-// ComputeFamily on the families declaring `after` on it. A reader that then
-// succeeded (reading the PREVIOUS partition's attribution snapshot, since
-// today's write never landed) was added to skipFamilies -- excluding it from
-// the bridge's own recompute -- while its failed dependency was NOT added,
-// so the bridge WOULD recompute the dependency. The correction never reaches
-// the reader: the partition reports success with a stale or absent
-// team-derived output. Every family is still attempted exactly once and a
-// failure still degrades only that one family plus its transitive
-// dependents to the bridge -- see blockedNativeDependency.
+// (CHAOS-5078 codex round 2 F3, on the PR that first put
+// work_item_attribution into this SAME loop ahead of its three readers): a
+// dependency's runtime failure must stop this loop from still calling
+// ComputeFamily on the families declaring `after` on it. A reader that ran
+// anyway would read the PREVIOUS partition's snapshot (today's write never
+// landed) and report success over a stale or absent team-derived output.
+// Every family is still attempted exactly once, and a failure blocks only
+// that family plus its transitive dependents -- see blockedNativeDependency.
 //
-// A PARTIAL WRITE IS NOT FAIL-OPEN AT THE PARTITION LEVEL EITHER (CHAOS-5078
-// codex round 3, astra scale review F1's pre_bridge twin -- see
-// lane-ci-required-to-arc's CHAOS-5190/#2276 for the post_bridge sibling).
-// The returned error is non-nil exactly when at least one family failed
-// AFTER already writing rows (ErrPartialWrite): that family is excluded from
-// the bridge's own recompute (skipFamiliesForBridge's contract, unchanged --
-// re-running it would duplicate the rows already written to an append-only
-// table), so nothing completes its rows for this partition at all. The
-// comment this replaces claimed the partition was "re-driven" in that case;
-// nothing in redrive.go or postgres.go ever inspected PartialWrite, so that
-// was never true. Work now surfaces this error to hold the partition
-// 'failed' (re-dispatchable) instead of letting it complete over the gap.
-// An ORDINARY (non-partial) refusal is NO LONGER treated differently
-// (CHAOS-5243): it also holds the partition incomplete now, reported with
-// outcome Refused and rows=0 (genuinely nothing written) rather than
-// PartialWrite's true count -- the outcome/row-count distinction is
-// preserved, but neither case falls open to the bridge any more.
-func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run Run, partition Partition) ([]string, error) {
+// The returned error is non-nil exactly when at least one family did not
+// complete this partition -- an outright refusal, a block behind a failed
+// dependency's own failure, or a failure AFTER already writing rows
+// (ErrPartialWrite). The three are distinguished in the per-family
+// telemetry (outcome Refused vs PartialWrite, and the row count reported:
+// PartialWrite reports the executor's TRUE count, since zero would
+// understate what landed and mislead a re-drive decision), never in whether
+// the partition may complete. Work surfaces this error to hold the
+// partition 'failed' (re-dispatchable) instead of letting it complete over
+// the gap.
+func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run Run, partition Partition) error {
 	if handler == nil || len(handler.nativeFamilyNames) == 0 {
-		return nil, nil
+		return nil
 	}
-	skipFamilies := make([]string, 0, len(handler.nativeFamilyNames))
-	// incomplete (CHAOS-5078 codex r3) names every family that failed AFTER
-	// already writing rows this pass -- the partition-level signal Work uses
-	// to decide whether to hold the partition out of CompletePartition.
-	// Deliberately separate from `blocked`: blocked also includes ordinary
-	// (non-partial) refusals, which must NOT hold the partition (they stay
-	// fail-open to the bridge), so `blocked`'s membership is not the right
-	// set to report here.
+	// incomplete (CHAOS-5078 codex r3, widened by CHAOS-5243) names every
+	// family that did not complete this pass -- the partition-level signal
+	// Work uses to decide whether to hold the partition out of
+	// CompletePartition. Deliberately separate from `blocked`, which is the
+	// dependency-propagation set consulted BEFORE a family runs.
 	var incomplete []string
 	// blocked (CHAOS-5078 codex r2 F3) accumulates every family that did NOT
 	// successfully compute this pass -- both an outright ComputeFamily error
@@ -950,6 +793,7 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 	// work_item_state` would be blocked by IT, without needing to walk the
 	// dependency graph more than one edge at a time.
 	blocked := make(map[string]struct{}, len(handler.nativeFamilyNames))
+	computed := make([]string, 0, len(handler.nativeFamilyNames))
 	for _, name := range handler.nativeFamilyNames {
 		executor := handler.nativeFamilies[name]
 		if executor == nil {
@@ -959,18 +803,15 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			// The dependency failed or was itself blocked THIS pass -- the
 			// table this family reads may be stale (still holding an
 			// earlier partition's snapshot) or entirely unwritten today.
-			// Running anyway and then being added to skipFamilies (as
-			// "computed") would permanently exclude this family from the
-			// Python bridge's own recompute, so the correction the bridge
-			// makes to the dependency is never propagated to this reader.
-			// Not attempting it at all -- and leaving it OFF skipFamilies,
-			// exactly like a direct refusal -- keeps the bridge as the
-			// safety net for both the dependency AND this family together.
+			// Running anyway would report success over that stale or absent
+			// input. CHAOS-3092 (PR-A): there is no Python bridge left to
+			// recompute either family, so a block is reported exactly like
+			// a direct refusal -- it holds the partition incomplete.
 			if handler.nativeFamilyLogger != nil {
 				handler.nativeFamilyLogger.Error(
 					"native metrics.daily family blocked for this partition because its "+
-						"declared dependency failed or was blocked; falling back to the "+
-						"Python compatibility bridge for both (CHAOS-5078 codex r2 F3)",
+						"declared dependency failed or was blocked; the partition is held "+
+						"incomplete for both (CHAOS-5078 codex r2 F3, CHAOS-3092)",
 					"family", name,
 					"blocked_by", dependency,
 					"organization_id", run.OrganizationID,
@@ -1005,10 +846,7 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			// / codex r1 on #2235: the rows count reported is the executor's
 			// TRUE count, not zero, since zero would understate what landed and
 			// mislead the re-drive decision) -- an ordinary refusal reports 0,
-			// genuinely nothing written. Both are now `incomplete` and both
-			// join `skipFamilies` (a family excluded from native computation
-			// this pass must not ALSO be recomputed by a bridge call that no
-			// longer exists as a fallback for it).
+			// genuinely nothing written. Both are `incomplete`.
 			//
 			// Still added to `blocked` above (CHAOS-5078 codex r2 F3): an
 			// incomplete family is not a trustworthy result for this
@@ -1020,13 +858,13 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			} else {
 				rows = 0
 			}
-			skipFamilies = append(skipFamilies, name)
 			incomplete = append(incomplete, name)
 			if handler.nativeFamilyLogger != nil {
 				handler.nativeFamilyLogger.Error(
 					"native metrics.daily family failed for this partition; "+
-						"the partition is held incomplete rather than falling "+
-						"back to the Python compatibility bridge (CHAOS-5243)",
+						"the partition is held incomplete -- there is no Python "+
+						"compatibility bridge left to fall back to "+
+						"(CHAOS-5243, CHAOS-3092)",
 					"family", name,
 					"organization_id", run.OrganizationID,
 					"target_day", run.TargetDay,
@@ -1044,17 +882,33 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			}
 			continue
 		}
-		skipFamilies = append(skipFamilies, name)
+		computed = append(computed, name)
 		if handler.nativeObserver != nil {
 			_ = handler.nativeObserver.ObserveDailyMetricsNativeFamily(
 				name, jobruntime.DailyMetricsNativeFamilyOutcomeComputed, rows, duration,
 			)
 		}
 	}
-	if len(incomplete) > 0 {
-		return skipFamilies, fmt.Errorf("%w: %s", ErrPreBridgeFamilyIncomplete, strings.Join(incomplete, ","))
+	if handler.nativeFamilyLogger != nil {
+		// CHAOS-3092 (PR-A) observability gate: with the bridge gone, the
+		// per-partition question an operator asks is "which families
+		// actually ran here?" -- answered once per partition, at Info, so a
+		// silently shrinking family set is visible without correlating
+		// per-family counters.
+		handler.nativeFamilyLogger.Info(
+			"native metrics.daily pre_bridge families computed for this partition",
+			"organization_id", run.OrganizationID,
+			"target_day", run.TargetDay,
+			"partition_id", partition.ID,
+			"run_id", run.ID,
+			"computed", computed,
+			"incomplete", incomplete,
+		)
 	}
-	return skipFamilies, nil
+	if len(incomplete) > 0 {
+		return fmt.Errorf("%w: %s", ErrPreBridgeFamilyIncomplete, strings.Join(incomplete, ","))
+	}
+	return nil
 }
 
 // blockedNativeDependency reports whether `name` has a registered `after`
@@ -1072,38 +926,12 @@ func (handler *PartitionHandler) blockedNativeDependency(name string, blocked ma
 	return "", false
 }
 
-// skipFamiliesForBridge is what the compatibility bridge call is told NOT to
-// compute for this partition: every pre_bridge family that just succeeded
-// (computeNativeFamilies' own return value), PLUS every registered
-// post_bridge family NAME unconditionally (CHAOS-4278) -- a post_bridge
-// family has not run YET at this point (it runs after the bridge call
-// returns, see computePostBridgeNativeFamilies), so there is no success/
-// failure outcome to key the skip decision on. It must still be excluded
-// from the bridge's own compute: the bridge is Python's LAST family compute
-// this partition, if a post_bridge family were left unskipped Python would
-// ALSO write it, duplicating every row the post_bridge executor writes a
-// moment later. This is the one place a post_bridge family's inclusion is
-// NOT fail-open the way pre_bridge families are: if the post_bridge run
-// then fails, nothing computes that family for this partition (Python was
-// already told to skip it) -- see computePostBridgeNativeFamilies's doc
-// comment for why that tradeoff is inherent to the phase itself, not an
-// oversight.
-//
-// The returned error (CHAOS-5078 codex round 3) is computeNativeFamilies'
-// own ErrPreBridgeFamilyIncomplete, passed through unchanged -- the
-// post_bridge names appended below never produce an error here, since they
-// have not run yet at this point in the partition.
-func (handler *PartitionHandler) skipFamiliesForBridge(ctx context.Context, run Run, partition Partition) ([]string, error) {
-	skipFamilies, err := handler.computeNativeFamilies(ctx, run, partition)
-	if handler == nil || len(handler.postBridgeFamilyNames) == 0 {
-		return skipFamilies, err
-	}
-	return append(skipFamilies, handler.postBridgeFamilyNames...), err
-}
-
 // computePostBridgeNativeFamilies runs every registered POST_BRIDGE native
-// family executor for one partition, AFTER the compatibility bridge call has
-// already returned successfully for that same partition (see Work).
+// family executor for one partition, AFTER every pre_bridge family of that
+// same partition has run (see Work). CHAOS-3092 (PR-A): the boundary used
+// to be the compatibility bridge call that sat between the two phases; that
+// call is deleted, and the phase names are kept only because families.json
+// declares them and the ORDERING they encode is unchanged.
 //
 // # Why a post_bridge phase exists at all (CHAOS-4278)
 //
@@ -1271,7 +1099,7 @@ func (handler *PartitionHandler) computePostBridgeNativeFamilies(ctx context.Con
 }
 
 func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.DailyMetricsPartitionArgs]) error {
-	if handler == nil || handler.store == nil || handler.publisher == nil || handler.compatibility == nil || execution == nil {
+	if handler == nil || handler.store == nil || handler.publisher == nil || execution == nil {
 		return jobruntime.Permanent(ErrUnavailable)
 	}
 	partitionID := execution.Args.Payload.PartitionID
@@ -1304,45 +1132,29 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			return handler.store.RenewPartition(renewCtx, *claim)
 		},
 		func(workCtx context.Context) error {
-			skipFamilies, preBridgeErr := handler.skipFamiliesForBridge(workCtx, run, claim.Partition)
-			// CHAOS-4316: bound only the compatibility bridge call, not the
-			// native-family compute above (or the post_bridge native
-			// compute below, CHAOS-4278, for the SAME reason -- a separate,
-			// fast, ClickHouse-only path with none of the bridge's
-			// liveness gap) -- bridgeCtx is scoped to this one call only,
-			// workCtx stays unbounded for computePostBridgeNativeFamilies.
-			bridgeCtx := workCtx
-			if ceiling := handler.livenessCeiling(len(claim.Partition.RepoIDs)); ceiling > 0 {
-				var cancel context.CancelFunc
-				bridgeCtx, cancel = context.WithTimeout(bridgeCtx, ceiling)
-				defer cancel()
-			}
-			// preBridgeErr (CHAOS-5078 codex round 3) is deliberately NOT
-			// returned here: the bridge call must still run normally for
-			// every OTHER family regardless of one pre_bridge family's
-			// partial write, exactly as it already does for an ordinary
-			// pre_bridge refusal. It is returned at the end of this closure
-			// instead (below), once the bridge and post_bridge computes have
-			// both had their normal chance to run -- mirroring how a
-			// post_bridge failure is only ever discovered after its own
+			// CHAOS-5078 codex round 3: preBridgeErr is deliberately NOT
+			// returned here. A pre_bridge family's failure must not stop the
+			// post_bridge phase from having its own normal chance to run --
+			// the two phases are independent except for their ordering. It
+			// is returned at the end of this closure instead, mirroring how
+			// a post_bridge failure is only ever discovered after its own
 			// full loop completes.
-			if err := handler.compatibility.ComputePartition(bridgeCtx, run, claim.Partition, skipFamilies); err != nil {
-				return err
-			}
-			// CHAOS-4278: only after the bridge call has durably succeeded
-			// for this partition -- see computePostBridgeNativeFamilies's
-			// doc comment for why this ordering is the whole point of the
-			// phase. CHAOS-5190: its return value now DOES reach Work (it
-			// used to be discarded, fail-open at the partition level) --
-			// see the ErrPostBridgeFamilyIncomplete branch below. Checked
-			// BEFORE returning preBridgeErr (CHAOS-5078's pre_bridge
-			// sibling, merged in from #2246): if a partition somehow hits
-			// both a pre_bridge partial write AND a post_bridge one in the
-			// same run, the post_bridge failure wins arbitrarily -- either
-			// order is defensible (downstream only ever branches on ONE of
-			// the two mutually-exclusive errors.Is checks below), and there
-			// is no shared code path where both are expected to fire
-			// together in practice.
+			preBridgeErr := handler.computeNativeFamilies(workCtx, run, claim.Partition)
+			// CHAOS-4278: post_bridge families run only after every
+			// pre_bridge family of this partition -- see
+			// computePostBridgeNativeFamilies's doc comment for why that
+			// ordering is the whole point of the phase. CHAOS-5190: its
+			// return value DOES reach Work (it used to be discarded,
+			// fail-open at the partition level) -- see the
+			// ErrPostBridgeFamilyIncomplete branch below. Checked BEFORE
+			// returning preBridgeErr (CHAOS-5078's pre_bridge sibling,
+			// merged in from #2246): if a partition somehow hits both a
+			// pre_bridge failure AND a post_bridge one in the same run, the
+			// post_bridge failure wins arbitrarily -- either order is
+			// defensible (downstream only ever branches on ONE of the two
+			// mutually-exclusive errors.Is checks below), and there is no
+			// shared code path where both are expected to fire together in
+			// practice.
 			if err := handler.computePostBridgeNativeFamilies(workCtx, run, claim.Partition); err != nil {
 				// team-lead ruling (#2276 pre-pass items): the post_bridge
 				// error wins arbitrarily below, but a genuinely concurrent
@@ -1373,23 +1185,16 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 	); err != nil {
 		if errors.Is(err, ErrPostBridgeFamilyIncomplete) {
 			// CHAOS-5190 (astra scale review F1): a post_bridge family has
-			// no fallback writer for this partition (Python was already
-			// told to skip it before the bridge ran, see
-			// skipFamiliesForBridge's doc comment) -- so unlike a
-			// pre_bridge refusal, there is no "the bridge covers it"
-			// safety net here. Released 'failed' (re-dispatchable, same
-			// safe-replay shape as the compat-error branches below) rather
+			// no fallback writer for this partition -- CHAOS-3092 (PR-A)
+			// deleted the Python compatibility bridge, so neither phase has
+			// a safety net now. Released 'failed' (re-dispatchable, same
+			// safe-replay shape as every other released branch) rather
 			// than completed, so a retry can still fill the gap instead of
-			// a silently-incomplete partition reading as succeeded. NOT
-			// routed through retryCompatibilityError: this is not a
-			// compatibility bridge error (the bridge call already returned
-			// successfully), and reusing it would misclassify a post_bridge
-			// native failure as a compat-bridge one. It DOES share
-			// observeCompatRetry's counter (team-lead ruling on codex r2's
+			// a silently-incomplete partition reading as succeeded. It
+			// shares observeCompatRetry's counter (team-lead ruling on codex r2's
 			// F1) via its own DailyMetricsCompatRetryDecision value
 			// (ReleasedPostBridgeFamilyIncomplete) -- see that constant's
-			// doc comment for why this one decision on that counter isn't
-			// actually a compat-bridge disposition. The durable
+			// doc comment. The durable
 			// failure_reason column (written by releasePartitionWithReason
 			// below) is this branch's own record; per-family detail already
 			// landed via nativeObserver inside computePostBridgeNativeFamilies.
@@ -1401,14 +1206,11 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// left this partition stuck 'running' under its old lease,
 			// indistinguishable here from the release having actually
 			// landed, the exact CHAOS-4319 class of silent loss. The
-			// classification stays Retryable either way (this was never a
-			// candidate for Permanent, unlike the ambiguous_stuck/
-			// resource_exhausted_deterministic branches below) -- but a
+			// classification stays Retryable either way -- but a
 			// failed release is now named explicitly in the returned
 			// error's wrapped cause, since nothing else durable records it
 			// when the write itself is what failed. Sibling idiom: mirrors
-			// the progress_stalled/capacity_exhausted/resource_exhausted/
-			// process_signaled branches' `if releasePartitionWithReason(...)
+			// the pre_bridge branch's `if releasePartitionWithReason(...)
 			// { observeCompatRetry(...) }` shape exactly.
 			if releasePartitionWithReason(handler.store, ctx, *claim, jobruntime.ReasonPostBridgeFamilyIncomplete.String(), handler.nativeFamilyLogger, run) {
 				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedPostBridgeFamilyIncomplete)
@@ -1423,28 +1225,23 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 			// CHAOS-5078 codex round 3 (astra scale review F1's pre_bridge
 			// twin -- see lane-ci-required-to-arc's CHAOS-5190/#2276 for the
 			// post_bridge sibling, same shape, no code dependency): a
-			// pre_bridge family failed AFTER already writing rows, and that
-			// family was deliberately excluded from the bridge's own
-			// recompute (skipFamiliesForBridge's contract, unchanged) to
-			// avoid duplicating an append-only write. Nothing else produces
-			// this family's rows for this partition, so it is released
-			// 'failed' (re-dispatchable) instead of completed -- a retry can
-			// still fill the gap rather than a silently-incomplete partition
-			// reading as succeeded. Not wired through retryCompatibilityError:
-			// this is not a compatibility bridge error (the bridge call
-			// already returned successfully) -- reusing it would misclassify
-			// a pre_bridge native failure as a compat-bridge one. Per-family
-			// detail (which family, how many rows) already landed via
-			// nativeObserver inside computeNativeFamilies.
+			// pre_bridge family did not complete this partition. Nothing
+			// else produces that family's rows -- CHAOS-3092 (PR-A) deleted
+			// the Python compatibility bridge that was once the fallback --
+			// so the partition is released 'failed' (re-dispatchable)
+			// instead of completed: a retry can still fill the gap rather
+			// than a silently-incomplete partition reading as succeeded.
+			// Per-family detail (which family, how many rows) already
+			// landed via nativeObserver inside computeNativeFamilies.
 			//
 			// CHAOS-5078 codex confirmation pass (P2): the durable release
 			// itself can fail (a transient DB error, or the lease already
 			// expired by the time this 5s-detached call runs) -- discarding
 			// that outcome with `_ =` left no trace of whether the
 			// 'failed'/pre_bridge_family_incomplete row was ever actually
-			// persisted, same class of silent-loss gap CHAOS-4319/CHAOS-4543
-			// already closed for the compat-bridge branches below. Now gated
-			// exactly like those: observeCompatRetry fires ONLY when the
+			// persisted, the same class of silent-loss gap CHAOS-4319/
+			// CHAOS-4543 closed for the (now deleted) compat-bridge
+			// branches. observeCompatRetry fires ONLY when the
 			// write is confirmed to have landed, and a failed write wraps
 			// the returned error with an explicit note rather than looking
 			// identical to a successful release.
@@ -1457,117 +1254,8 @@ func (handler *PartitionHandler) Work(ctx context.Context, execution *jobruntime
 				jobruntime.ReasonPreBridgeFamilyIncomplete,
 			)
 		}
-		if errors.Is(err, ErrCompatibilityAmbiguousStuck) {
-			// CHAOS-4319: this ledger row will refuse every future attempt
-			// identically until a human /repair call moves it -- releasing
-			// back to 'failed' (silently re-dispatchable) would only queue
-			// up more guaranteed 409s. Persist the terminal outcome instead
-			// of letting River's eventual discard be the only trace.
-			//
-			// codex round 1 (P1): the durable write itself can fail (a
-			// transient DB error, or the lease already expired by the time
-			// this 5s-detached call runs). Permanent tells River to stop
-			// retrying -- that must never be returned unless the write is
-			// CONFIRMED to have landed, or the partition is lost with
-			// nothing durable to show for it, exactly the failure mode this
-			// ticket exists to close. A failed write falls back to ordinary
-			// Retryable instead: River keeps trying, and either a later
-			// attempt's write succeeds, or the existing discard-after-
-			// exhausted-attempts path is no worse than before this ticket.
-			if failPartitionPermanently(handler.store, ctx, *claim, jobruntime.ReasonAmbiguousRefused.String()) {
-				if handler.compatRetryObserver != nil {
-					_ = handler.compatRetryObserver.ObserveDailyMetricsCompatRetry(
-						jobruntime.DailyMetricsCompatRetryDecisionPersistedFailed,
-					)
-				}
-				return retryCompatibilityError(err)
-			}
-			releasePartition(handler.store, ctx, *claim)
-			return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonAmbiguousRefused)
-		}
-		if errors.Is(err, ErrCompatibilityProgressStalled) {
-			// CHAOS-4316: unlike the ambiguous_stuck case above, a liveness
-			// kill is NOT a claim this row can never satisfy -- a fresh
-			// attempt might simply not hang -- so this stays 'failed'
-			// (silently re-dispatchable), with a bounded failure_reason
-			// attached in the same atomic write so an operator reading the
-			// partition row can tell a liveness kill apart from any other
-			// 'failed' outcome without cross-referencing River's attempt
-			// log or Sentry.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "progress_stalled", handler.nativeFamilyLogger, run) {
-				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProgressStalled)
-			}
-			return retryCompatibilityError(err)
-		}
-		if errors.Is(err, ErrCompatibilityCapacityExhausted) {
-			// CHAOS-4317: same rationale as ErrCompatibilityProgressStalled
-			// above -- capacity pressure is transient container state, never
-			// a claim this row can't satisfy on a fresh attempt, so this
-			// stays 'failed' (silently re-dispatchable) with a bounded
-			// failure_reason attached so an operator reading the partition
-			// row can tell a pids-capacity refusal apart from any other
-			// 'failed' outcome without cross-referencing River's attempt log.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "capacity_exhausted", handler.nativeFamilyLogger, run) {
-				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedCapacityExhausted)
-			}
-			return retryCompatibilityError(err)
-		}
-		if errors.Is(err, ErrCompatibilityResourceExhaustedDeterministic) {
-			// CHAOS-4543: checked BEFORE the generic resource_exhausted
-			// branch below -- a KNOWN deterministic guard (see
-			// ErrCompatibilityResourceExhaustedDeterministic's doc comment).
-			// Still releases with the SAME "resource_exhausted"
-			// failure_reason (ordinarily re-dispatchable 'failed', never
-			// 'failed_permanent' -- daily-redrive or a future lower-volume
-			// day can still succeed), but retryCompatibilityError marks
-			// this Permanent so River does not burn its whole attempt
-			// budget reproducing an identical, deterministic refusal 5
-			// times every cycle.
-			//
-			// codex review (round 2): Permanent must never be returned
-			// unless the durable release is CONFIRMED to have landed --
-			// mirrors the ambiguous_stuck branch's own established rule
-			// above. A failed write (lease already expired, a transient DB
-			// error) here would otherwise tell River to stop retrying a job
-			// that recorded nothing durable at all: the exact silent-loss
-			// shape CHAOS-4319 exists to close, reintroduced for this new
-			// no-retry optimization if left unguarded.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted", handler.nativeFamilyLogger, run) {
-				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic)
-				return retryCompatibilityError(err)
-			}
-			return jobruntime.WithReason(jobruntime.Retryable(err), jobruntime.ReasonResourceExhausted)
-		}
-		if errors.Is(err, ErrCompatibilityResourceExhausted) {
-			// CHAOS-4543: same rationale as ErrCompatibilityProgressStalled
-			// above -- a resource_exhausted kill (the runner's RSS watchdog,
-			// its own RLIMIT_AS backstop, or a deliberate loader row-cap
-			// guard such as TestopsRowCapExceeded) is not a claim this row
-			// can never satisfy: a lower-volume day, a raised budget, or
-			// simply less concurrent load on a fresh attempt could all
-			// succeed later. Before this fix, this class fell through to the
-			// generic releasePartition path below with no failure_reason
-			// persisted -- a partition that strands this way (River
-			// eventually discards the job after its attempt budget) left an
-			// operator with a bare 'failed' row and no clue why, the exact
-			// CHAOS-4543 "raw text not captured" gap this ticket closes.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "resource_exhausted", handler.nativeFamilyLogger, run) {
-				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhausted)
-			}
-			return retryCompatibilityError(err)
-		}
-		if errors.Is(err, ErrCompatibilityProcessSignaled) {
-			// CHAOS-4543: sibling of the resource_exhausted branch above -- a
-			// runner subprocess killed by an external signal (kernel OOM,
-			// SIGTERM) is the same non-terminal, retryable shape and hit the
-			// identical missing-branch gap.
-			if releasePartitionWithReason(handler.store, ctx, *claim, "process_signaled", handler.nativeFamilyLogger, run) {
-				handler.observeCompatRetry(jobruntime.DailyMetricsCompatRetryDecisionReleasedProcessSignaled)
-			}
-			return retryCompatibilityError(err)
-		}
 		releasePartition(handler.store, ctx, *claim)
-		return retryCompatibilityError(err)
+		return jobruntime.Retryable(err)
 	}
 	if handler.sourceChecker != nil {
 		families, checkErr := handler.sourceChecker.ZeroRowFamiliesWithSourceData(ctx, partitionID)
@@ -1665,9 +1353,9 @@ var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoad
 var ErrUnknownFinalizeFamily = errors.New("daily: finalize family is not a recognised finalize-scope family")
 
 // ErrNativeFinalizeFamilyFailed wraps a native finalize-family executor that
-// ran and failed (or partially wrote before failing). retryCompatibilityError's
-// default arm makes it Retryable, which is the whole policy: the run is
-// redriven rather than completed.
+// ran and failed (or partially wrote before failing). FinalizeHandler.Work
+// returns it Retryable, which is the whole policy: the run is redriven
+// rather than completed.
 var ErrNativeFinalizeFamilyFailed = errors.New("daily: native finalize family failed")
 
 // ErrFinalizeFamilyIncomplete (CHAOS-3092 PR-A', ports ErrPostBridgeFamilyIncomplete's
@@ -2007,7 +1695,7 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 					"target_day", claim.Run.TargetDay.Format("2006-01-02"),
 				)
 			}
-			return retryCompatibilityError(err)
+			return jobruntime.Retryable(err)
 		}
 		// Class-sweep on r2 finding #1 (CHAOS-4290): logged, not discarded --
 		// same reasoning as the terminal write above, one severity notch down
@@ -2022,7 +1710,7 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 				"target_day", claim.Run.TargetDay.Format("2006-01-02"),
 			)
 		}
-		return retryCompatibilityError(err)
+		return jobruntime.Retryable(err)
 	}
 	if err := handler.store.CompleteFinalize(ctx, *claim); err != nil {
 		// Symmetric with the partition layer: this exit claimed and returned
@@ -2188,22 +1876,6 @@ func releasePartitionWithReason(
 		return false
 	}
 	return true
-}
-
-// failPartitionPermanently durably terminalizes a partition stuck ambiguous
-// (CHAOS-4319), mirroring releasePartition's own-context detachment so the
-// write still lands even when the caller's ctx is already done.
-// failPartitionPermanently durably terminalizes a partition stuck ambiguous
-// (CHAOS-4319), mirroring releasePartition's own-context detachment so the
-// write still lands even when the caller's ctx is already done. Returns
-// whether the write actually succeeded -- the caller must not classify the
-// job Permanent (stop retrying) unless this is true, or a failed durable
-// write would silently drop the partition exactly like the bug this ticket
-// fixes.
-func failPartitionPermanently(store Store, ctx context.Context, claim PartitionClaim, reason string) bool {
-	failCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	return store.FailPartitionPermanently(failCtx, claim, reason) == nil
 }
 
 // releaseFinalize returns the store's own error (r2 finding #1's class,

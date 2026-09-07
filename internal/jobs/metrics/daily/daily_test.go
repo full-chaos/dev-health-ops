@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -27,7 +28,7 @@ func TestPartitionLoadFailureReleasesClaimAndRetries(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003"},
 		loadErr:        ErrUnavailable,
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func TestPartitionScopeMismatchReleasesClaimAndIsPermanent(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003"},
 		run:            Run{ID: testRunID, OrganizationID: "00000000-0000-4000-8000-000000000008", Generation: "v1"},
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,12 @@ func TestPartitionScopeMismatchReleasesClaimAndIsPermanent(t *testing.T) {
 	}
 }
 
-func TestPartitionRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
+// CHAOS-3092 (PR-A): this test used to drive lease renewal by blocking the
+// compatibility bridge's ComputePartition call for a controlled duration
+// (blockingCompatibility{partitionDelay: ...}) -- there is no bridge call
+// left, so a native family plays that same blocking role now, exactly as
+// blockingFinalizeFamily already does on the finalize side.
+func TestPartitionRenewsLeaseUntilTheNativeFamiliesComplete(t *testing.T) {
 	store := &fakeStore{
 		partitionClaim: &PartitionClaim{
 			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
@@ -61,9 +67,13 @@ func TestPartitionRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
 		},
 		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	compatibility := &blockingCompatibility{partitionDelay: 80 * time.Millisecond}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{
+		"team_wellbeing": &blockingNativeFamily{delay: 80 * time.Millisecond},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
@@ -74,18 +84,27 @@ func TestPartitionRenewsLeaseUntilCompatibilityCompletes(t *testing.T) {
 	}
 }
 
-// TestPartitionNativeFamilySuccessSkipsCompatibility proves a native family
-// that computes successfully is excluded from the compatibility bridge's
-// work for this partition (CHAOS-4276): the compatibility call still
-// happens (every other family still needs it), but with the successful
-// family named in skipFamilies.
-func TestPartitionNativeFamilySuccessSkipsCompatibility(t *testing.T) {
+// TestPartitionNativeFamilySuccessCompletesWithNoBridgeCall is CHAOS-3092
+// (PR-A)'s close-condition proof for PartitionHandler.Work: a partition is
+// computed ENTIRELY by its registered native families and then completes,
+// with no Python compatibility bridge involved at any point.
+//
+// The strongest part of this proof is not an assertion in the body -- it is
+// that this file no longer contains a bridge test double AT ALL. The
+// package used to declare four (fakeCompatibility, failingCompatibility,
+// recordingCompatibility, blockingCompatibility), each implementing
+// CompatibilityExecutor, and NewPartitionHandler REQUIRED one as its third
+// argument (it returned ErrUnavailable for a nil executor). Both the
+// interface and the parameter are deleted, so a bridge call cannot be
+// reintroduced without changing this constructor's signature -- this file
+// would stop compiling, which is a stronger guarantee than any runtime
+// assertion that a mock was never called.
+func TestPartitionNativeFamilySuccessCompletesWithNoBridgeCall(t *testing.T) {
 	store := &fakeStore{
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +119,8 @@ func TestPartitionNativeFamilySuccessSkipsCompatibility(t *testing.T) {
 	if executor.calls != 1 {
 		t.Fatalf("native executor calls=%d, want 1", executor.calls)
 	}
-	if got := compatibility.lastSkipFamilies(); len(got) != 1 || got[0] != "team_wellbeing" {
-		t.Fatalf("skipFamilies=%v, want [team_wellbeing]", got)
+	if store.partitionCompletions != 1 {
+		t.Fatalf("completions=%d, want 1 -- the native families are the only writer now", store.partitionCompletions)
 	}
 	if len(observer.calls) != 1 || observer.calls[0].family != "team_wellbeing" ||
 		observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeComputed || observer.calls[0].rowsWritten != 7 {
@@ -119,6 +138,57 @@ func TestPartitionNativeFamilySuccessSkipsCompatibility(t *testing.T) {
 // TestPreBridgeNativeFamilyRefusalFailsThePartitionLoudly for the new
 // contract's own test, same fixture shape.
 
+// TestPartitionLogsWhichFamiliesRanPerPartition is CHAOS-3092 (PR-A)'s
+// observability gate for the partition path. With the Python bridge deleted,
+// the registered native families are the ONLY writers of a partition's rows,
+// so "which families ran here" is no longer inferable from anywhere else --
+// it must be said, once per partition, at Info.
+func TestPartitionLogsWhichFamiliesRanPerPartition(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := &recordingRefusalLogger{}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{
+		"team_wellbeing":   &fakeNativeFamilyExecutor{rowsWritten: 3},
+		"repo_user_commit": &fakeNativeFamilyExecutor{rowsWritten: 5},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetNativeFamilyLogger(logger)
+
+	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
+		t.Fatal(err)
+	}
+
+	logger.mu.Lock()
+	infoCalls := append([]recordingRefusalLogCall(nil), logger.infoCalls...)
+	errorCalls := len(logger.calls)
+	logger.mu.Unlock()
+
+	if errorCalls != 0 {
+		t.Fatalf("error log calls=%d, want 0 -- nothing failed this partition", errorCalls)
+	}
+	if len(infoCalls) != 1 {
+		t.Fatalf("info log calls=%d, want exactly 1 per partition", len(infoCalls))
+	}
+	if !infoCalls[0].hasArg("partition_id", testPartitionID) {
+		t.Errorf("summary log %#v does not name the partition", infoCalls[0])
+	}
+	if !infoCalls[0].hasStringSliceArg("computed", []string{"repo_user_commit", "team_wellbeing"}) {
+		t.Errorf(
+			"summary log %#v does not name the families that computed "+
+				"(want the sorted registered set) -- an operator cannot see a "+
+				"silently shrinking family set without it",
+			infoCalls[0],
+		)
+	}
+}
+
 // TestPreBridgePartialWriteHoldsPartitionIncomplete is CHAOS-5078 codex
 // round 3's RED-ON-BASELINE proof (astra scale review F1's pre_bridge twin,
 // mirroring lane-ci-required-to-arc's post_bridge
@@ -134,8 +204,7 @@ func TestPreBridgePartialWriteHoldsPartitionIncomplete(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,11 +224,6 @@ func TestPreBridgePartialWriteHoldsPartitionIncomplete(t *testing.T) {
 	}
 	if store.releasesWithReason != 1 || store.releaseReason != jobruntime.ReasonPreBridgeFamilyIncomplete.String() {
 		t.Fatalf("releasesWithReason=%d reason=%q, want 1/%q", store.releasesWithReason, store.releaseReason, jobruntime.ReasonPreBridgeFamilyIncomplete.String())
-	}
-	// The bridge is still told to skip the family (unchanged contract: a
-	// partial write must not be recomputed by the bridge, only held).
-	if got := compatibility.lastSkipFamilies(); len(got) != 1 || got[0] != "team_wellbeing" {
-		t.Fatalf("skipFamilies=%v, want [team_wellbeing]", got)
 	}
 	// Per-family telemetry (CHAOS-4288) is unchanged by this fix.
 	if len(observer.calls) != 1 || observer.calls[0].family != "team_wellbeing" ||
@@ -189,8 +253,7 @@ func TestPreBridgeFamilyIncompleteReleaseFailureIsLoggedAndNotFalselyObserved(t 
 		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 		releaseWithReasonErr: ErrLeaseLost,
 	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,8 +347,7 @@ func TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttributio
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,9 +367,10 @@ func TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttributio
 	// dependency" rather than a plain standalone refusal -- every pre_bridge
 	// refusal does this now). The BLOCKED READER's own handling
 	// (blockedNativeDependency, a separate code path this ticket does not
-	// touch) is UNCHANGED: work_item_state still never runs natively and
-	// still stays OFF skipFamilies (nothing was ever written for it, so the
-	// bridge remains a safe, correct fallback for THAT specific family).
+	// touch) is UNCHANGED: work_item_state still never runs natively. With
+	// the Python bridge deleted (CHAOS-3092 PR-A) nothing else writes it
+	// either, which is precisely why the failed dependency has to hold the
+	// whole partition.
 	workErr := handler.Work(context.Background(), partitionExecution())
 	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
 		t.Fatalf("Work error = %v, want it to wrap ErrPreBridgeFamilyIncomplete for the failed "+
@@ -324,12 +387,6 @@ func TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttributio
 		t.Fatalf("work_item_state executor calls=%d, want 0 -- it must never run natively when its "+
 			"work_item_attribution dependency failed this pass", reader.calls)
 	}
-	if got := compatibility.lastSkipFamilies(); len(got) != 1 || got[0] != "work_item_attribution" {
-		t.Fatalf("skipFamilies=%v, want [work_item_attribution] -- the failed family itself is now "+
-			"excluded from the bridge's recompute (CHAOS-5243, matches the partial-write "+
-			"contract), but its BLOCKED reader stays off skipFamilies since nothing was ever "+
-			"written for it and the bridge is still a safe fallback there", got)
-	}
 	sort.Slice(observer.calls, func(i, j int) bool { return observer.calls[i].family < observer.calls[j].family })
 	if len(observer.calls) != 2 ||
 		observer.calls[0].family != "work_item_attribution" || observer.calls[0].outcome != jobruntime.DailyMetricsNativeFamilyOutcomeRefused ||
@@ -339,34 +396,39 @@ func TestPreBridgeAttributionFailureDoesNotLetDependentReadersUseStaleAttributio
 }
 
 // sharedOrderingState lets a test observe whether a family's ComputeFamily
-// call sees data the compatibility bridge writes DURING the same partition
-// -- CHAOS-4278's whole reason for the post_bridge phase existing. Mirrors,
-// at test-double granularity, work_item_state reading work_item_team_
-// attributions after work_item_attribution (Python-bridged) writes it.
+// call sees data ANOTHER family writes DURING the same partition --
+// CHAOS-4278's whole reason for the post_bridge phase existing. Mirrors, at
+// test-double granularity, work_item_state reading work_item_team_
+// attributions after work_item_attribution writes it.
+//
+// CHAOS-3092 (PR-A): the writer used to be the Python compatibility bridge
+// (bridgeWritingCompatibility), which is deleted -- so the writer is now a
+// pre_bridge NATIVE family, which is exactly what production looks like
+// today: both phases are Go, and the phase boundary is the only thing
+// ordering them.
 type sharedOrderingState struct {
 	mu    sync.Mutex
 	value string
 }
 
-// bridgeWritingCompatibility is a CompatibilityExecutor stub that writes a
-// value to shared state on ComputePartition, simulating the bridge's
-// work_item_attribution family writing a fresh work_item_team_attributions
-// row for this partition.
-type bridgeWritingCompatibility struct {
+// stateWritingExecutor writes a value to shared state on ComputeFamily,
+// standing in for work_item_attribution's same-partition write.
+type stateWritingExecutor struct {
 	state *sharedOrderingState
+	calls int
 }
 
-func (compatibility *bridgeWritingCompatibility) ComputePartition(_ context.Context, _ Run, _ Partition, _ []string) error {
-	compatibility.state.mu.Lock()
-	compatibility.state.value = "written-by-bridge"
-	compatibility.state.mu.Unlock()
-	return nil
+func (executor *stateWritingExecutor) ComputeFamily(context.Context, Run, Partition) (int, error) {
+	executor.calls++
+	executor.state.mu.Lock()
+	executor.state.value = "written-by-pre-bridge"
+	executor.state.mu.Unlock()
+	return 1, nil
 }
-func (*bridgeWritingCompatibility) Finalize(context.Context, Run, []string) error { return nil }
 
 // stateReadingExecutor is a NativeFamilyExecutor stub that records whatever
 // sharedOrderingState held AT THE MOMENT ComputeFamily ran, so a test can
-// distinguish "ran before the bridge wrote" from "ran after."
+// distinguish "ran before the writer" from "ran after."
 type stateReadingExecutor struct {
 	state    *sharedOrderingState
 	observed string
@@ -381,102 +443,40 @@ func (executor *stateReadingExecutor) ComputeFamily(context.Context, Run, Partit
 	return 1, nil
 }
 
-// TestPreBridgeNativeFamilyReadsStaleDataBeforeCompatibilityWrites is
-// CHAOS-4278's RED-ON-BASELINE proof: a family registered pre_bridge (via
-// SetNativeFamilies, the mistake work_item_state originally shipped with,
-// caught by codex round 1 2026-09-01) runs its ComputeFamily call BEFORE the
-// compatibility bridge writes this partition's fresh data -- so it observes
-// the state BEFORE the bridge's write, not after. This is exactly codex's
-// P1: "Go reads attribution before Python writes this partition's snapshot."
-func TestPreBridgeNativeFamilyReadsStaleDataBeforeCompatibilityWrites(t *testing.T) {
+// TestPostBridgeNativeFamilyReadsDataWrittenByAPreBridgeFamily is the
+// CHAOS-4278 phase-ordering contract, restated for the post-bridge world
+// (CHAOS-3092 PR-A). It replaces the pair of tests that used the Python
+// bridge as the same-partition writer: computePostBridgeNativeFamilies must
+// run strictly AFTER every pre_bridge family of the same partition, so a
+// post_bridge reader observes the pre_bridge writer's value rather than the
+// previous partition's stale one.
+func TestPostBridgeNativeFamilyReadsDataWrittenByAPreBridgeFamily(t *testing.T) {
 	store := &fakeStore{
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
 	state := &sharedOrderingState{}
-	compatibility := &bridgeWritingCompatibility{state: state}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := &stateReadingExecutor{state: state}
-	handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": executor}) // WRONG phase -- demonstrates the bug
+	writer := &stateWritingExecutor{state: state}
+	reader := &stateReadingExecutor{state: state}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"work_item_attribution": writer}); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": reader}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
 		t.Fatal(err)
 	}
-	if executor.calls != 1 {
-		t.Fatalf("executor calls=%d, want 1", executor.calls)
+	if writer.calls != 1 || reader.calls != 1 {
+		t.Fatalf("writer calls=%d reader calls=%d, want 1/1", writer.calls, reader.calls)
 	}
-	if executor.observed != "" {
-		t.Fatalf("pre_bridge executor observed %q, want \"\" (empty/stale) -- it must have run BEFORE the bridge's write for this baseline to demonstrate the bug", executor.observed)
-	}
-}
-
-// TestPostBridgeNativeFamilyReadsDataWrittenByCompatibility is the GREEN
-// counterpart: the SAME family, registered post_bridge (SetPostBridge
-// NativeFamilies), observes the bridge's write -- proving
-// computePostBridgeNativeFamilies actually runs after
-// compatibility.ComputePartition returns, not before or concurrently.
-func TestPostBridgeNativeFamilyReadsDataWrittenByCompatibility(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
-		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	state := &sharedOrderingState{}
-	compatibility := &bridgeWritingCompatibility{state: state}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executor := &stateReadingExecutor{state: state}
-	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": executor})
-
-	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
-		t.Fatal(err)
-	}
-	if executor.calls != 1 {
-		t.Fatalf("executor calls=%d, want 1", executor.calls)
-	}
-	if executor.observed != "written-by-bridge" {
-		t.Fatalf("post_bridge executor observed %q, want %q", executor.observed, "written-by-bridge")
-	}
-}
-
-// TestSkipFamiliesForBridgeIncludesPostBridgeNamesUnconditionally proves
-// skipFamiliesForBridge tells the compatibility bridge to skip a
-// post_bridge family EVEN THOUGH it has not run yet (it cannot have -- it
-// runs after the bridge call this skip list is FOR), alongside a pre_bridge
-// family that skips only because it already succeeded.
-func TestSkipFamiliesForBridgeIncludesPostBridgeNamesUnconditionally(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
-		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
-	if err != nil {
-		t.Fatal(err)
-	}
-	preExecutor := &fakeNativeFamilyExecutor{rowsWritten: 3}
-	postExecutor := &fakeNativeFamilyExecutor{rowsWritten: 5}
-	handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": preExecutor})
-	handler.SetPostBridgeNativeFamilies(map[string]NativeFamilyExecutor{"work_item_state": postExecutor})
-
-	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
-		t.Fatal(err)
-	}
-	got := compatibility.lastSkipFamilies()
-	sort.Strings(got)
-	want := []string{"team_wellbeing", "work_item_state"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("skipFamilies=%v, want %v", got, want)
-	}
-	if preExecutor.calls != 1 {
-		t.Fatalf("pre_bridge executor calls=%d, want 1", preExecutor.calls)
-	}
-	if postExecutor.calls != 1 {
-		t.Fatalf("post_bridge executor calls=%d, want 1", postExecutor.calls)
+	if reader.observed != "written-by-pre-bridge" {
+		t.Fatalf("post_bridge executor observed %q, want %q -- the post_bridge phase ran before the pre_bridge write", reader.observed, "written-by-pre-bridge")
 	}
 }
 
@@ -497,8 +497,7 @@ func TestPostBridgeNativeFamilyFailureHoldsPartitionIncomplete(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,9 +512,6 @@ func TestPostBridgeNativeFamilyFailureHoldsPartitionIncomplete(t *testing.T) {
 	}
 	if !errors.Is(workErr, ErrPostBridgeFamilyIncomplete) {
 		t.Fatalf("Work error = %v, want it to wrap ErrPostBridgeFamilyIncomplete", workErr)
-	}
-	if got := compatibility.lastSkipFamilies(); len(got) != 1 || got[0] != "work_item_state" {
-		t.Fatalf("skipFamilies=%v, want [work_item_state] -- it must still be excluded from the bridge even though its post_bridge run later failed", got)
 	}
 	// The fix: no completion, a durable 'failed' release with this
 	// partition's own reason instead.
@@ -544,8 +540,7 @@ func TestPostBridgePartialWriteAlsoHoldsPartitionIncomplete(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,8 +591,7 @@ func TestBothPreAndPostBridgePartialWriteLogsBothErrors(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +640,7 @@ func TestPostBridgeNilExecutorDoesNotComplete(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +713,7 @@ func TestPostBridgeReleaseFailureIsNamedInTheReturnedError(t *testing.T) {
 		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 		releaseWithReasonErr: ErrLeaseLost,
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -765,7 +759,7 @@ func TestPostBridgeReleaseSuccessObservesCompatRetry(t *testing.T) {
 		},
 		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -808,7 +802,7 @@ func TestNativeFamilyRefusalIsLogged(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID, RepoIDs: repoIDs}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running", TargetDay: targetDay},
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, &recordingCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -861,8 +855,9 @@ func TestNativeFamilyRefusalIsLogged(t *testing.T) {
 // (non-partial) pre_bridge native family refusal used to log a counter
 // increment and let the partition complete 'succeeded' via the Python
 // compatibility bridge's fail-open fallback -- a native family could fail
-// silently, forever, and nobody would be paged. Mutant-proofed below by
-// reverting the fix (see its own comment).
+// silently, forever, and nobody would be paged. CHAOS-3092 (PR-A) has since
+// deleted that fallback outright, so this contract is now the only one
+// there is. Mutant-proofed below by reverting the fix (see its own comment).
 func TestPreBridgeNativeFamilyRefusalFailsThePartitionLoudly(t *testing.T) {
 	refusalErr := errors.New("transient clickhouse failure: cicd-5139")
 	targetDay := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
@@ -870,7 +865,7 @@ func TestPreBridgeNativeFamilyRefusalFailsThePartitionLoudly(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running", TargetDay: targetDay},
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, &recordingCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -913,7 +908,7 @@ func TestNativeFamilyLoggerIsOptional(t *testing.T) {
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, &recordingCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -931,28 +926,33 @@ func TestNativeFamilyLoggerIsOptional(t *testing.T) {
 	}
 }
 
-// TestPartitionWithNoNativeFamiliesIsANoop proves the default (no
-// SetNativeFamilies call) behaves exactly as before this capability existed:
-// compatibility receives a nil/empty skipFamilies.
+// TestPartitionWithNoNativeFamiliesIsANoop proves an unconfigured handler
+// (no SetNativeFamilies call) still claims, completes and releases cleanly
+// rather than erroring. CHAOS-3092 (PR-A): it computes NOTHING now -- there
+// is no bridge behind it -- which is why cmd/dev-health-worker makes an
+// unbuildable family a startup error instead of an empty map.
 func TestPartitionWithNoNativeFamiliesIsANoop(t *testing.T) {
 	store := &fakeStore{
 		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
 		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 	}
-	compatibility := &recordingCompatibility{}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := handler.Work(context.Background(), partitionExecution()); err != nil {
 		t.Fatal(err)
 	}
-	if got := compatibility.lastSkipFamilies(); len(got) != 0 {
-		t.Fatalf("skipFamilies=%v, want empty with no native families registered", got)
+	if store.partitionCompletions != 1 {
+		t.Fatalf("partition completions=%d, want 1", store.partitionCompletions)
 	}
 }
 
-func TestPartitionLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
+// CHAOS-3092 (PR-A): this test used to assert the compatibility bridge's
+// ComputePartition call was cancelled on lease loss -- there is no bridge
+// call left, so a native family that waits for ctx cancellation plays that
+// role now (the finalize side's own twin does exactly this).
+func TestPartitionLeaseLossCancelsTheNativeFamilyAndCannotComplete(t *testing.T) {
 	store := &fakeStore{
 		partitionClaim: &PartitionClaim{
 			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
@@ -962,18 +962,21 @@ func TestPartitionLeaseLossCancelsCompatibilityAndCannotComplete(t *testing.T) {
 		run:                       Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 		partitionRenewalFailureAt: 1,
 	}
-	compatibility := &blockingCompatibility{waitForCancellation: true}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
+		t.Fatal(err)
+	}
+	family := &blockingNativeFamily{waitForCancellation: true}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{"team_wellbeing": family}); err != nil {
 		t.Fatal(err)
 	}
 	err = handler.Work(context.Background(), partitionExecution())
 	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) ||
-		!compatibility.partitionCanceled || store.partitionCompletions != 0 {
+		!family.canceled() || store.partitionCompletions != 0 {
 		t.Fatalf(
 			"lease loss = %v canceled=%t completions=%d",
 			err,
-			compatibility.partitionCanceled,
+			family.canceled(),
 			store.partitionCompletions,
 		)
 	}
@@ -993,7 +996,7 @@ func TestPartitionCompletionFailureReleasesTheClaim(t *testing.T) {
 		run:           Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
 		completionErr: ErrUnavailable,
 	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, fakeCompatibility{})
+	handler, err := NewPartitionHandler(store, fakePublisher{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1003,580 +1006,6 @@ func TestPartitionCompletionFailureReleasesTheClaim(t *testing.T) {
 	}
 	if store.partitionCompletions != 1 || store.partitionReleases != 1 {
 		t.Fatalf("completions=%d releases=%d, want 1/1", store.partitionCompletions, store.partitionReleases)
-	}
-}
-
-// CHAOS-4316: without SetLivenessCeiling, runWithLeaseRenewal has no bound on
-// a compatibility call other than the lease renewal loop -- which keeps
-// succeeding forever as long as the store's RenewPartition call succeeds,
-// completely independent of whether the compatibility call is making any
-// progress. blockingCompatibility{waitForCancellation: true} models exactly
-// that: a hung bridge call that only ever returns when its ctx is canceled.
-// On origin/main (no SetLivenessCeiling call anywhere), nothing ever cancels
-// that ctx here -- fakeStore's RenewPartition always succeeds and the lease
-// is generous -- so Work would block for the full test timeout. This test
-// asserts the FIXED behavior (the ceiling fires and Work returns quickly);
-// verified manually before this commit that removing the SetLivenessCeiling
-// call below reproduces the hang (Work does not return within the 2s guard,
-// confirming the bug this ticket fixes).
-func TestPartitionLivenessCeilingReclaimsAHungCompatibilityCall(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID, RepoIDs: []RepositoryID{"repo-1", "repo-2"}},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: time.Hour, // generous: renewal must never be what unblocks this
-		},
-		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	compatibility := &blockingCompatibility{waitForCancellation: true}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, compatibility)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Tiny, work-size-derived ceiling: base 10ms + perRepo 5ms * 2 repos =
-	// 20ms -- proportional to len(RepoIDs), never a flat number, matching
-	// the production formula exactly (see SetLivenessCeiling's doc comment).
-	handler.SetLivenessCeiling(10*time.Millisecond, 5*time.Millisecond)
-
-	done := make(chan error, 1)
-	go func() { done <- handler.Work(context.Background(), partitionExecution()) }()
-
-	select {
-	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-			t.Fatalf("Work() = %v, want retryable", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Work did not return within the liveness ceiling -- CHAOS-4316 backstop regression")
-	}
-	compatibility.mu.Lock()
-	canceled := compatibility.partitionCanceled
-	compatibility.mu.Unlock()
-	if !canceled {
-		t.Fatal("compatibility call never observed ctx cancellation -- ceiling did not fire")
-	}
-	if store.partitionReleases != 1 {
-		t.Fatalf("partitionReleases=%d, want 1 (a ceiling-fired attempt must release its claim)", store.partitionReleases)
-	}
-}
-
-// SetLivenessCeiling with a zero/unset base must leave Work's ctx exactly as
-// unbounded as before this capability existed -- existing callers/tests that
-// never call it (every other test in this file) must see no behavior change.
-// TestLivenessCeilingEnabledByDefault proves the backstop ships ON by
-// default (team-lead ruling 2026-08-26): deployed compose/helm manifests do
-// not set the new env vars, so an opt-in design would never activate in
-// production. NewPartitionHandler alone (no SetLivenessCeiling call) must
-// already produce a nonzero, repo_count-derived bound.
-func TestLivenessCeilingEnabledByDefault(t *testing.T) {
-	handler, err := NewPartitionHandler(&fakeStore{}, fakePublisher{}, fakeCompatibility{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	zero := handler.livenessCeiling(0)
-	if zero != defaultLivenessCeilingBase {
-		t.Fatalf("livenessCeiling(0) = %v, want the default base %v", zero, defaultLivenessCeilingBase)
-	}
-	three := handler.livenessCeiling(3)
-	want := defaultLivenessCeilingBase + 3*defaultLivenessCeilingPerRepo
-	if three != want {
-		t.Fatalf("livenessCeiling(3) = %v, want %v (base + 3*perRepo)", three, want)
-	}
-	if three <= zero {
-		t.Fatalf("livenessCeiling(3) = %v must exceed livenessCeiling(0) = %v -- derived from repo_count, not flat", three, zero)
-	}
-}
-
-// TestLivenessCeilingToleratesOneQueuedNeighborAtHardCeiling is a red-first
-// regression for a codex review finding on this ticket: the Go ceiling's
-// clock starts at HTTP-send time, before the request acquires the
-// compatibility bridge's per-replica runner semaphore
-// (_RUNNER_CONCURRENCY_SEMAPHORE, default concurrency=1). An earlier
-// constant pairing (10m base + 5m/repo) gave only a ~1.3x margin over the
-// Python watchdog's own hard ceiling (120s base + 90s/repo, x3 multiplier)
-// at the default 3-repo partition size -- not enough to survive even one
-// legitimately queued neighbor that itself consumes its full Python hard
-// ceiling before yielding the semaphore slot, which would let the Go
-// backstop kill a healthy, merely-queued partition. This asserts the
-// documented queueDepthBudget(3) relationship holds: the Go ceiling at N
-// repos must be at least queueDepthBudget * the Python side's own hard
-// ceiling at N repos, so at least two full-length legitimate neighbors can
-// queue ahead of this partition before the backstop fires.
-func TestLivenessCeilingToleratesOneQueuedNeighborAtHardCeiling(t *testing.T) {
-	const (
-		pythonHardCeilingBasePerRepo = 3 // worker_metrics.py's hard-ceiling multiplier
-		pythonStallBaseSeconds       = 120 * time.Second
-		pythonStallPerRepoSeconds    = 90 * time.Second
-		queueDepthBudget             = 3
-	)
-	handler, err := NewPartitionHandler(&fakeStore{}, fakePublisher{}, fakeCompatibility{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, repoCount := range []int{1, 3, 10} {
-		pythonHardCeiling := pythonHardCeilingBasePerRepo * (pythonStallBaseSeconds + pythonStallPerRepoSeconds*time.Duration(repoCount))
-		goCeiling := handler.livenessCeiling(repoCount)
-		minimumTolerated := queueDepthBudget * pythonHardCeiling
-		if goCeiling < minimumTolerated {
-			t.Fatalf(
-				"repoCount=%d: livenessCeiling=%v, want >= %d x the Python hard ceiling (%v) = %v -- a legitimately queued neighbor could be killed as if hung",
-				repoCount, goCeiling, queueDepthBudget, pythonHardCeiling, minimumTolerated,
-			)
-		}
-	}
-}
-
-// TestLivenessCeilingExplicitZeroOptsOut proves the ONE sanctioned way to
-// disable the backstop: SetLivenessCeiling(0, _). Never calling
-// SetLivenessCeiling at all does NOT disable it (see the default-on test
-// above) -- only an explicit zero base does.
-func TestLivenessCeilingExplicitZeroOptsOut(t *testing.T) {
-	handler, err := NewPartitionHandler(&fakeStore{}, fakePublisher{}, fakeCompatibility{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handler.SetLivenessCeiling(0, 0)
-	if got := handler.livenessCeiling(5); got != 0 {
-		t.Fatalf("livenessCeiling() = %v, want 0 after an explicit SetLivenessCeiling(0, 0) opt-out", got)
-	}
-}
-
-// CHAOS-4264: a signaled/resource-exhausted/refused compatibility bridge
-// attempt must still be Retryable (no behavior change to River's retry
-// decision) but must carry the matching bounded jobruntime.Reason instead of
-// the pre-existing bare ErrUnavailable, so an attempt log line explains
-// itself without anyone reading Sentry or host dmesg.
-func TestRetryCompatibilityErrorAttachesBoundedReasonAndPreservesCause(t *testing.T) {
-	cases := []struct {
-		name  string
-		cause error
-	}{
-		{name: "signaled", cause: ErrCompatibilityProcessSignaled},
-		{name: "resource_exhausted", cause: ErrCompatibilityResourceExhausted},
-		{name: "ambiguous_refused", cause: ErrCompatibilityAmbiguousRefused},
-		{name: "progress_stalled", cause: ErrCompatibilityProgressStalled},
-		{name: "capacity_exhausted", cause: ErrCompatibilityCapacityExhausted},
-		{name: "unclassified", cause: ErrUnavailable},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			marked := retryCompatibilityError(testCase.cause)
-			if !strings.Contains(marked.Error(), string(jobruntime.CategoryRetryable)) {
-				t.Fatalf("Error() = %q, want the retryable category", marked.Error())
-			}
-			if !errors.Is(marked, testCase.cause) {
-				t.Fatalf("retryCompatibilityError(%v) lost its cause: %v", testCase.cause, marked)
-			}
-		})
-	}
-}
-
-// TestPartitionCompatibilityFailureIsRetryableWithReason drives the failure
-// through the real Handler.Work path (not just retryCompatibilityError in
-// isolation) so the wiring at the actual call site is what's under test, not
-// just the helper. Uses ErrUnavailable -- a genuinely unclassified failure
-// with no dedicated branch in Work's if/else chain -- as the example of the
-// generic fallback path. CHAOS-4543: this used to use
-// ErrCompatibilityProcessSignaled, but that error now has its own explicit
-// releasePartitionWithReason branch (see
-// TestPartitionProcessSignaledPersistsFailureReasonAndStaysRetryable), so it
-// is no longer a valid example of "falls through to the plain,
-// reason-less release" -- swapped to preserve this test's actual intent.
-func TestPartitionCompatibilityFailureIsRetryableWithReason(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: 30 * time.Millisecond,
-		},
-		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrUnavailable})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = handler.Work(context.Background(), partitionExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("compatibility failure = %v, want retryable", err)
-	}
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrUnavailable", err)
-	}
-	if store.partitionReleases != 1 {
-		t.Fatalf("partitionReleases = %d, want 1", store.partitionReleases)
-	}
-	if store.releasesWithReason != 0 {
-		t.Fatalf("releasesWithReason = %d, want 0 -- a genuinely unclassified failure must not fabricate a reason", store.releasesWithReason)
-	}
-}
-
-// TestPartitionProgressStalledPersistsFailureReasonAndStaysRetryable proves
-// CHAOS-4316's liveness-kill path writes the shared failure_reason column
-// (migration 0113, CHAOS-4319) through ReleasePartitionWithReason instead of
-// the plain ReleasePartition every other compatibility failure uses --
-// status stays 'failed' (silently re-dispatchable, unlike
-// ErrCompatibilityAmbiguousStuck's 'failed_permanent': a liveness kill is
-// not a claim this row can never satisfy).
-func TestPartitionProgressStalledPersistsFailureReasonAndStaysRetryable(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: 30 * time.Millisecond,
-		},
-		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityProgressStalled})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = handler.Work(context.Background(), partitionExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("compatibility failure = %v, want retryable", err)
-	}
-	if !errors.Is(err, ErrCompatibilityProgressStalled) {
-		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrCompatibilityProgressStalled", err)
-	}
-	if store.releasesWithReason != 1 || store.releaseReason != "progress_stalled" {
-		t.Fatalf("releasesWithReason=%d releaseReason=%q, want 1/progress_stalled", store.releasesWithReason, store.releaseReason)
-	}
-	if store.partitionReleases != 0 {
-		t.Fatalf("partitionReleases = %d, want 0 -- a liveness kill must release WITH a reason, not through the plain path", store.partitionReleases)
-	}
-}
-
-// TestPartitionResourceExhaustedPersistsFailureReasonAndStaysRetryable is the
-// CHAOS-4543 red-first proof. Before this fix, ErrCompatibilityResourceExhausted
-// (the runner's RSS watchdog kill or its own RLIMIT_AS/row-cap-guard
-// MemoryError, both classified resource_exhausted by classifyCompatibilityError)
-// had no explicit branch here and fell through to the generic
-// releasePartition/retryCompatibilityError path at the bottom of this
-// function -- releasing the partition back to 'failed' with failure_reason
-// left NULL. A daily-metrics run whose partition dies this way is retryable
-// in principle (a fresh attempt, a lower-volume day, or a raised budget could
-// all succeed later), but with the reason never persisted, an operator
-// reading daily_metrics_partitions after River exhausts its attempt budget
-// and discards the job sees only a bare 'failed' row with no clue why --
-// exactly the CHAOS-4543 "raw text not captured" gap. Mirrors
-// TestPartitionProgressStalledPersistsFailureReasonAndStaysRetryable's shape
-// (same non-terminal semantics: releasePartitionWithReason, not
-// FailPartitionPermanently -- a resource_exhausted partition is not a claim
-// this row can never satisfy).
-func TestPartitionResourceExhaustedPersistsFailureReasonAndStaysRetryable(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: 30 * time.Millisecond,
-		},
-		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhausted})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observer := &recordingCompatRetryObserver{}
-	handler.SetCompatRetryObserver(observer)
-	err = handler.Work(context.Background(), partitionExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("compatibility failure = %v, want retryable", err)
-	}
-	if !errors.Is(err, ErrCompatibilityResourceExhausted) {
-		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrCompatibilityResourceExhausted", err)
-	}
-	if store.releasesWithReason != 1 || store.releaseReason != "resource_exhausted" {
-		t.Fatalf("releasesWithReason=%d releaseReason=%q, want 1/resource_exhausted", store.releasesWithReason, store.releaseReason)
-	}
-	if store.partitionReleases != 0 {
-		t.Fatalf("partitionReleases = %d, want 0 -- a resource_exhausted kill must release WITH a reason, not through the plain path", store.partitionReleases)
-	}
-	if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhausted {
-		t.Fatalf("observer decisions = %v, want exactly [released_resource_exhausted]", observer.decisions)
-	}
-}
-
-// TestPartitionProcessSignaledPersistsFailureReasonAndStaysRetryable is the
-// CHAOS-4543 red-first proof for the sibling class: a runner subprocess
-// killed by an external signal (kernel OOM, SIGTERM) hit the exact same
-// missing-branch gap as ErrCompatibilityResourceExhausted above.
-func TestPartitionProcessSignaledPersistsFailureReasonAndStaysRetryable(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: 30 * time.Millisecond,
-		},
-		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityProcessSignaled})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observer := &recordingCompatRetryObserver{}
-	handler.SetCompatRetryObserver(observer)
-	err = handler.Work(context.Background(), partitionExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("compatibility failure = %v, want retryable", err)
-	}
-	if !errors.Is(err, ErrCompatibilityProcessSignaled) {
-		t.Fatalf("compatibility failure = %v, want it to unwrap to ErrCompatibilityProcessSignaled", err)
-	}
-	if store.releasesWithReason != 1 || store.releaseReason != "process_signaled" {
-		t.Fatalf("releasesWithReason=%d releaseReason=%q, want 1/process_signaled", store.releasesWithReason, store.releaseReason)
-	}
-	if store.partitionReleases != 0 {
-		t.Fatalf("partitionReleases = %d, want 0 -- a signaled kill must release WITH a reason, not through the plain path", store.partitionReleases)
-	}
-	if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionReleasedProcessSignaled {
-		t.Fatalf("observer decisions = %v, want exactly [released_process_signaled]", observer.decisions)
-	}
-}
-
-// TestPartitionResourceExhaustedDeterministicIsPermanentButSameFailureReason
-// is the CHAOS-4543 red-first proof for the deterministic-guard distinction
-// (codex review / team-lead direction): a resource_exhausted kill the Python
-// bridge itself classified as deterministic (a known guard like
-// TestopsRowCapExceeded, never the RSS watchdog) must stop River retrying
-// (Permanent, not Retryable) since 5 attempts only reproduce the identical
-// refusal -- but the DURABLE failure_reason on the partition row stays the
-// same "resource_exhausted" string as the non-deterministic case, and the
-// partition still releases to plain 'failed' (never 'failed_permanent'),
-// since a future lower-volume day or a raised operator cap could still
-// succeed.
-func TestPartitionResourceExhaustedDeterministicIsPermanentButSameFailureReason(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: 30 * time.Millisecond,
-		},
-		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhaustedDeterministic})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observer := &recordingCompatRetryObserver{}
-	handler.SetCompatRetryObserver(observer)
-	err = handler.Work(context.Background(), partitionExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
-		t.Fatalf("deterministic resource_exhausted failure = %v, want permanent", err)
-	}
-	if !errors.Is(err, ErrCompatibilityResourceExhaustedDeterministic) {
-		t.Fatalf("failure = %v, want it to unwrap to ErrCompatibilityResourceExhaustedDeterministic", err)
-	}
-	if store.releasesWithReason != 1 || store.releaseReason != "resource_exhausted" {
-		t.Fatalf("releasesWithReason=%d releaseReason=%q, want 1/resource_exhausted (SAME string as the non-deterministic case)", store.releasesWithReason, store.releaseReason)
-	}
-	if store.permanentFailures != 0 {
-		t.Fatalf("permanentFailures = %d, want 0 -- must release to plain 'failed' (releasePartitionWithReason), never 'failed_permanent'", store.permanentFailures)
-	}
-	if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionReleasedResourceExhaustedDeterministic {
-		t.Fatalf("observer decisions = %v, want exactly [released_resource_exhausted_deterministic]", observer.decisions)
-	}
-}
-
-// TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry is the codex-
-// review red-first proof (CHAOS-4543): releasePartitionWithReason's durable
-// write can itself fail (a transient DB error, or the lease already expired
-// out from under this attempt) -- releaseWithReasonErr injects exactly that.
-// Before this fix, the observeCompatRetry call was unconditional, so a
-// released_* telemetry decision fired even though the partition row was
-// never actually transitioned -- a telemetry/reality mismatch of the same
-// shape this ticket's own root-cause diagnosis had to work around
-// (failure_reason silently NULL despite a classified failure).
-func TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: 30 * time.Millisecond,
-		},
-		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-		releaseWithReasonErr: ErrLeaseLost,
-	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhausted})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observer := &recordingCompatRetryObserver{}
-	handler.SetCompatRetryObserver(observer)
-	err = handler.Work(context.Background(), partitionExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("compatibility failure = %v, want retryable", err)
-	}
-	if store.releasesWithReason != 1 {
-		t.Fatalf("releasesWithReason=%d, want 1 -- the write must still be ATTEMPTED", store.releasesWithReason)
-	}
-	if len(observer.decisions) != 0 {
-		t.Fatalf("observer decisions = %v, want none -- the durable write failed, so no released_* disposition may be reported", observer.decisions)
-	}
-}
-
-// TestPartitionResourceExhaustedDeterministicWriteFailureStaysRetryable is
-// the codex-review red-first proof (CHAOS-4543 round 2), the deterministic
-// sibling of TestPartitionReleaseWithReasonFailureDoesNotEmitTelemetry above:
-// the deterministic branch's Permanent classification must NEVER fire unless
-// the durable release write is CONFIRMED to have landed -- mirrors
-// TestPartitionAmbiguousStuckDurableWriteFailureStaysRetryable's existing
-// rule for the ambiguous_stuck branch. Before this fix, a failed write here
-// (lease already expired, a transient DB error) still returned Permanent,
-// telling River to stop retrying a job that recorded nothing durable at all
-// -- the exact silent-loss shape CHAOS-4319 exists to close, reintroduced by
-// this ticket's own no-retry optimization if left unguarded.
-func TestPartitionResourceExhaustedDeterministicWriteFailureStaysRetryable(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: 30 * time.Millisecond,
-		},
-		run:                  Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-		releaseWithReasonErr: ErrLeaseLost,
-	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityResourceExhaustedDeterministic})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observer := &recordingCompatRetryObserver{}
-	handler.SetCompatRetryObserver(observer)
-	err = handler.Work(context.Background(), partitionExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("deterministic resource_exhausted failure = %v, want retryable (write failed, must not go Permanent)", err)
-	}
-	if store.releasesWithReason != 1 {
-		t.Fatalf("releasesWithReason=%d, want 1 -- the write must still be ATTEMPTED", store.releasesWithReason)
-	}
-	if len(observer.decisions) != 0 {
-		t.Fatalf("observer decisions = %v, want none -- the durable write failed, so no released_* disposition may be reported", observer.decisions)
-	}
-}
-
-// TestPartitionAmbiguousStuckPersistsFailurePermanentlyInsteadOfDiscarding is
-// the CHAOS-4319 red-first proof. Before this ticket's fix, an
-// ambiguous_refused response whose ledger state is "ambiguous" was
-// classified identically to every other compatibility-bridge failure --
-// unconditionally Retryable, released back to 'failed' (silently
-// re-dispatchable), with no durable record of why. River would keep
-// re-claiming a partition that could only ever reproduce the same 409 until
-// its attempt budget ran out, then discard the job -- the partition simply
-// vanished, with nothing durable left behind explaining the loss. This test
-// drives Handler.Work with a fake bridge that always returns
-// ErrCompatibilityAmbiguousStuck (the state=="ambiguous" classification) and
-// asserts: (1) the error is Permanent, not Retryable -- River stops
-// retrying a lost cause instead of burning its whole attempt budget on
-// guaranteed 409s; (2) the partition is durably persisted via
-// FailPartitionPermanently (not the ordinary, re-dispatchable
-// ReleasePartition path); (3) the bounded telemetry decision fires. Calling
-// Work a second time proves the SAME durable outcome recurs deterministically
-// rather than eventually silently discarding -- there is no attempt count
-// after which the failure stops being recorded.
-func TestPartitionAmbiguousStuckPersistsFailurePermanentlyInsteadOfDiscarding(t *testing.T) {
-	newHandler := func() (*PartitionHandler, *fakeStore, *recordingCompatRetryObserver) {
-		store := &fakeStore{
-			partitionClaim: &PartitionClaim{
-				Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-				Token:         "00000000-0000-4000-8000-000000000003",
-				LeaseDuration: 30 * time.Millisecond,
-			},
-			run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-		}
-		handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityAmbiguousStuck})
-		if err != nil {
-			t.Fatal(err)
-		}
-		observer := &recordingCompatRetryObserver{}
-		handler.SetCompatRetryObserver(observer)
-		return handler, store, observer
-	}
-
-	for attempt := 1; attempt <= 2; attempt++ {
-		handler, store, observer := newHandler()
-		err := handler.Work(context.Background(), partitionExecution())
-		if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
-			t.Fatalf("attempt %d: ambiguous-stuck failure = %v, want permanent", attempt, err)
-		}
-		if !errors.Is(err, ErrCompatibilityAmbiguousStuck) {
-			t.Fatalf("attempt %d: err = %v, want it to unwrap to ErrCompatibilityAmbiguousStuck", attempt, err)
-		}
-		if store.permanentFailures != 1 {
-			t.Fatalf("attempt %d: permanentFailures = %d, want 1 (durable record must be written)", attempt, store.permanentFailures)
-		}
-		if store.permanentFailureReason != jobruntime.ReasonAmbiguousRefused.String() {
-			t.Fatalf("attempt %d: permanentFailureReason = %q, want %q", attempt, store.permanentFailureReason, jobruntime.ReasonAmbiguousRefused.String())
-		}
-		if store.partitionReleases != 0 {
-			t.Fatalf("attempt %d: partitionReleases = %d, want 0 -- a stuck-ambiguous partition must not go back to the silently re-dispatchable 'failed' status", attempt, store.partitionReleases)
-		}
-		if len(observer.decisions) != 1 || observer.decisions[0] != jobruntime.DailyMetricsCompatRetryDecisionPersistedFailed {
-			t.Fatalf("attempt %d: observer decisions = %v, want exactly [persisted_failed]", attempt, observer.decisions)
-		}
-	}
-}
-
-// TestPartitionAmbiguousStuckDurableWriteFailureStaysRetryable is the
-// codex-round-1 (P1) red-first proof: the detached, 5s-timeout-boxed
-// FailPartitionPermanently write can itself fail (a transient DB error, or
-// the lease already expired by the time it runs). Before this fix, Work
-// classified the job Permanent unconditionally whenever the bridge
-// response was ErrCompatibilityAmbiguousStuck, regardless of whether the
-// durable write actually landed -- so a failed write meant River stopped
-// retrying with NOTHING durable to show for it, the exact silent-loss shape
-// CHAOS-4319 exists to close. A failed write must fall back to ordinary
-// Retryable so River keeps trying instead of canceling on an unconfirmed
-// write.
-func TestPartitionAmbiguousStuckDurableWriteFailureStaysRetryable(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: 30 * time.Millisecond,
-		},
-		run:                 Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-		permanentFailureErr: ErrUnavailable,
-	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityAmbiguousStuck})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observer := &recordingCompatRetryObserver{}
-	handler.SetCompatRetryObserver(observer)
-
-	err = handler.Work(context.Background(), partitionExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("failed durable write = %v, want retryable (never Permanent on an unconfirmed write)", err)
-	}
-	if store.partitionReleases != 1 {
-		t.Fatalf("partitionReleases = %d, want 1 -- the fallback path must still release the claim", store.partitionReleases)
-	}
-	if len(observer.decisions) != 0 {
-		t.Fatalf("observer decisions = %v, want none -- a failed write is not a persisted_failed outcome", observer.decisions)
-	}
-}
-
-// TestPartitionAmbiguousRefusedTransientCollisionStaysRetryable is the
-// control case: a live concurrent claim (state=="executing") is a genuine,
-// self-resolving overlap, not a stuck ledger row, and must keep the
-// pre-CHAOS-4319 Retryable/ReleasePartition behavior exactly.
-func TestPartitionAmbiguousRefusedTransientCollisionStaysRetryable(t *testing.T) {
-	store := &fakeStore{
-		partitionClaim: &PartitionClaim{
-			Partition:     Partition{ID: testPartitionID, RunID: testRunID},
-			Token:         "00000000-0000-4000-8000-000000000003",
-			LeaseDuration: 30 * time.Millisecond,
-		},
-		run: Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
-	}
-	handler, err := NewPartitionHandler(store, fakePublisher{}, failingCompatibility{err: ErrCompatibilityAmbiguousRefused})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = handler.Work(context.Background(), partitionExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
-		t.Fatalf("transient ambiguous_refused = %v, want retryable", err)
-	}
-	if store.partitionReleases != 1 || store.permanentFailures != 0 {
-		t.Fatalf("partitionReleases=%d permanentFailures=%d, want 1/0", store.partitionReleases, store.permanentFailures)
 	}
 }
 
@@ -1995,45 +1424,6 @@ type fakePublisher struct{}
 func (fakePublisher) PublishPartition(context.Context, Run, Partition) error { return nil }
 func (fakePublisher) PublishFinalizeTx(context.Context, pgx.Tx, Run) error   { return nil }
 
-type fakeCompatibility struct{}
-
-func (fakeCompatibility) ComputePartition(context.Context, Run, Partition, []string) error {
-	return nil
-}
-
-// failingCompatibility always fails with a fixed, caller-chosen error --
-// used to prove the classified compatibility bridge sentinels (CHAOS-4264)
-// reach the caller unchanged through Handler.Work's retry wrapping.
-type failingCompatibility struct{ err error }
-
-func (compatibility failingCompatibility) ComputePartition(context.Context, Run, Partition, []string) error {
-	return compatibility.err
-}
-
-// recordingCompatibility records the skipFamilies each ComputePartition call
-// received, so a test can assert exactly which families a native executor's
-// outcome caused to be skipped.
-type recordingCompatibility struct {
-	mu           sync.Mutex
-	skipFamilies [][]string
-}
-
-func (compatibility *recordingCompatibility) ComputePartition(_ context.Context, _ Run, _ Partition, skipFamilies []string) error {
-	compatibility.mu.Lock()
-	defer compatibility.mu.Unlock()
-	compatibility.skipFamilies = append(compatibility.skipFamilies, skipFamilies)
-	return nil
-}
-
-func (compatibility *recordingCompatibility) lastSkipFamilies() []string {
-	compatibility.mu.Lock()
-	defer compatibility.mu.Unlock()
-	if len(compatibility.skipFamilies) == 0 {
-		return nil
-	}
-	return compatibility.skipFamilies[len(compatibility.skipFamilies)-1]
-}
-
 // fakeNativeFamilyExecutor is a NativeFamilyExecutor test double: either
 // returns a fixed row count, or a fixed error to exercise the fail-open path.
 type fakeNativeFamilyExecutor struct {
@@ -2074,8 +1464,9 @@ func (observer *recordingNativeFamilyObserver) ObserveDailyMetricsNativeFamily(
 // -- a counter increment alone was CHAOS-5138's whole root cause: it could
 // never say WHY a family was refused.
 type recordingRefusalLogger struct {
-	mu    sync.Mutex
-	calls []recordingRefusalLogCall
+	mu        sync.Mutex
+	calls     []recordingRefusalLogCall
+	infoCalls []recordingRefusalLogCall
 }
 
 type recordingRefusalLogCall struct {
@@ -2089,8 +1480,34 @@ func (logger *recordingRefusalLogger) Error(msg string, args ...any) {
 	logger.calls = append(logger.calls, recordingRefusalLogCall{msg: msg, args: append([]any(nil), args...)})
 }
 
+// Info satisfies NativeFamilyRefusalLogger's per-partition summary half
+// (CHAOS-3092 PR-A). Recorded on its OWN slice, deliberately: every existing
+// test in this file asserts on the exact length/content of `calls`, and the
+// summary line fires on every partition -- folding the two together would
+// silently rewrite those assertions' meaning.
+func (logger *recordingRefusalLogger) Info(msg string, args ...any) {
+	logger.mu.Lock()
+	defer logger.mu.Unlock()
+	logger.infoCalls = append(logger.infoCalls, recordingRefusalLogCall{msg: msg, args: append([]any(nil), args...)})
+}
+
 // hasArg reports whether the call's args contain the consecutive
 // key/value pair (slog-style key/value logging).
+// hasStringSliceArg is hasArg for a []string value: slices are not
+// comparable with ==, which would panic inside hasArg's interface compare.
+func (call recordingRefusalLogCall) hasStringSliceArg(key string, value []string) bool {
+	for i := 0; i+1 < len(call.args); i += 2 {
+		if call.args[i] != key {
+			continue
+		}
+		got, ok := call.args[i+1].([]string)
+		if ok && slices.Equal(got, value) {
+			return true
+		}
+	}
+	return false
+}
+
 func (call recordingRefusalLogCall) hasArg(key string, value any) bool {
 	for i := 0; i+1 < len(call.args); i += 2 {
 		if call.args[i] == key && call.args[i+1] == value {
@@ -2131,47 +1548,38 @@ func (discoverer *fakeRepositoryDiscoverer) RepositoryIDs(context.Context, strin
 	return discoverer.identifiers, discoverer.err
 }
 
-type blockingCompatibility struct {
+// blockingNativeFamily is a NativeFamilyExecutor that either delays a fixed
+// duration or waits for its ctx to be cancelled and records that it was --
+// never both. CHAOS-3092 (PR-A): it replaces blockingCompatibility, which
+// played this role while PartitionHandler still had a Python bridge call to
+// block. Mirrors blockingFinalizeFamily, one layer down.
+type blockingNativeFamily struct {
 	mu                  sync.Mutex
-	partitionDelay      time.Duration
-	finalizeDelay       time.Duration
+	delay               time.Duration
 	waitForCancellation bool
-	partitionCanceled   bool
-	finalizeCanceled    bool
+	wasCanceled         bool
 }
 
-func (compatibility *blockingCompatibility) ComputePartition(ctx context.Context, _ Run, _ Partition, _ []string) error {
-	if compatibility.waitForCancellation {
+func (family *blockingNativeFamily) ComputeFamily(ctx context.Context, _ Run, _ Partition) (int, error) {
+	if family.waitForCancellation {
 		<-ctx.Done()
-		compatibility.mu.Lock()
-		compatibility.partitionCanceled = true
-		compatibility.mu.Unlock()
-		return ctx.Err()
+		family.mu.Lock()
+		family.wasCanceled = true
+		family.mu.Unlock()
+		return 0, ctx.Err()
 	}
-	timer := time.NewTimer(compatibility.partitionDelay)
+	timer := time.NewTimer(family.delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return 0, ctx.Err()
 	case <-timer.C:
-		return nil
+		return 0, nil
 	}
 }
 
-func (compatibility *blockingCompatibility) Finalize(ctx context.Context, _ Run, _ []string) error {
-	if compatibility.waitForCancellation {
-		<-ctx.Done()
-		compatibility.mu.Lock()
-		compatibility.finalizeCanceled = true
-		compatibility.mu.Unlock()
-		return ctx.Err()
-	}
-	timer := time.NewTimer(compatibility.finalizeDelay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+func (family *blockingNativeFamily) canceled() bool {
+	family.mu.Lock()
+	defer family.mu.Unlock()
+	return family.wasCanceled
 }

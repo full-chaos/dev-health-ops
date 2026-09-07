@@ -170,10 +170,15 @@ cross-contract inconsistency between the repo's two provider-sync contract files
 
 ## METRICS
 
-`metrics.daily_partition` (native families run inside `dailyNativeFamilyRegistrations`,
-`cmd/dev-health-worker/daily.go` ~L680-820; everything else falls through to `HTTPCompatibilityExecutor` ->
-`POST /internal/worker/daily-metrics/v1/execute` -> `job_daily.py:1104 run_daily_metrics_job`) and 7
-independent `metrics.remaining.*` River kinds (`daily.go:566-646`) are the two WORKER-side families below.
+`metrics.daily_partition` (every family runs natively, constructed inside `dailyNativeFamilyRegistrations`,
+`cmd/dev-health-worker/daily.go`) and 7 independent `metrics.remaining.*` River kinds are the two
+WORKER-side families below. **CHAOS-3092 (PR-A) deleted the daily Python compatibility bridge outright**:
+`internal/jobs/metrics/daily/compatibility_http.go`, the `daily.CompatibilityExecutor` interface, the
+`ComputePartition` call in `PartitionHandler.Work`, the skip-families negotiation and the Python route
+`POST /internal/worker/daily-metrics/v1/execute` are all gone. There is nothing left for a family to fall
+through to: a native executor that cannot be CONSTRUCTED is a worker startup error naming the family and
+its cause, and one that fails at RUNTIME holds the partition `failed` (re-dispatchable) instead of letting
+it complete over the gap.
 The CLI verb layer used to bypass both -- several `dev-hops metrics` verbs called the Python compute
 function directly, even for families whose worker kind is now native. CHAOS-5055/#2232 repointed the
 LIVE `daily`/`rebuild`/`complexity`/`dora`/`capacity` verbs to dispatch through the Go worker instead

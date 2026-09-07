@@ -218,9 +218,6 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "DEV_HEALTH_METRICS_RUNNER_MAX_CONCURRENCY",
         "DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES",
         "DEV_HEALTH_METRICS_RUNNER_PIDS_PER_CHILD_SAFETY_MULTIPLIER",
-        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS",
-        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER",
-        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS",
         "DEV_HEALTH_SINK",
         "DEV_HEALTH_WORKERCTL_BIN",
         "EMAIL_API_KEY",
@@ -523,22 +520,17 @@ def discover_env_example_names(path: Path | None = None) -> set[str]:
 #: here). Kept as an empty set, not deleted outright, so the NEXT indirection
 #: blind spot has a documented place to land by hand.
 #:
-#: CHAOS-4316's liveness-stall watchdog is the next one: both
+#: CHAOS-4316's liveness-stall watchdog used to be the next one (both
 #: ``DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS`` and
-#: ``..._HARD_CEILING_MULTIPLIER`` are read only through the shared
+#: ``..._HARD_CEILING_MULTIPLIER`` were read only through the shared
 #: ``_configured_positive_float_env(key, default)`` helper in
-#: ``worker_metrics.py`` -- the module-level constant naming the env var is
-#: passed in as ``key``, one call away from the actual ``os.environ.get``,
-#: so the AST walker (which only follows a literal or module-level constant
-#: given DIRECTLY to ``os.environ.get``) cannot see it. The sibling constant
-#: ``DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_BASE_SECONDS`` does NOT need
-#: an entry here: ``_progress_stall_watchdog_enabled()`` reads it directly.
-_INDIRECT_ENV_READS: frozenset[str] = frozenset(
-    {
-        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_PER_REPO_SECONDS",
-        "DEV_HEALTH_METRICS_RUNNER_PROGRESS_STALL_HARD_CEILING_MULTIPLIER",
-    }
-)
+#: ``worker_metrics.py``, one call away from ``os.environ.get`` and
+#: invisible to the AST walker). CHAOS-3092 (2026-09-07) deleted that whole
+#: watchdog outright -- it existed only to bound a hung daily bridge
+#: subprocess, and that bridge has no callers left -- so both env vars, the
+#: helper, and this entry are gone with it. Back to an empty set, same as
+#: CHAOS-4054 left it.
+_INDIRECT_ENV_READS: frozenset[str] = frozenset()
 
 
 def derive_scrub_names() -> set[str]:

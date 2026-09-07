@@ -172,6 +172,32 @@ func ForecastCapacity(request ForecastRequest, today time.Time) (ForecastResult,
 	return result, nil
 }
 
+// simulationCount clamps a requested simulation count to a length Go can
+// actually allocate.
+//
+// CHAOS-5349 r1 P1: a negative count panics `make` ("makeslice: cap out of
+// range") on all four allocation sites below, and until query-api served
+// capacityForecast nothing could reach them with one -- the worker takes this
+// number from a partition scope written by its own scheduler, while the GraphQL
+// field takes it from the caller. A panic in a resolver is a 500 with no useful
+// body.
+//
+// Clamping to zero is Python's OWN semantics for every input including the
+// negative one: `range(-1)` is empty and `[0] * -1` is `[]`, so this is a no-op
+// for every value any existing fixture contains and cannot move a golden.
+//
+// It is NOT the whole fix. Python answering p50=p85=p95=0 for a nonsensical
+// request is a defect rather than a contract, so the RESOLVER rejects a
+// non-positive count outright before reaching this kernel -- see
+// capacityforecast.ResolveForecast. This clamp is the floor underneath that: no
+// input reaching this function, from any caller, can panic it.
+func simulationCount(simulations int) int {
+	if simulations < 0 {
+		return 0
+	}
+	return simulations
+}
+
 // MonteCarloForecastDays ports monte_carlo_forecast_days.
 func MonteCarloForecastDays(
 	throughputHistory []int, targetItems, simulations int, seed int64,
@@ -182,11 +208,11 @@ func MonteCarloForecastDays(
 	// Returns BEFORE seeding, exactly as Python does, so the generator is
 	// untouched on this path.
 	if targetItems <= 0 {
-		return make([]int, simulations), nil
+		return make([]int, simulationCount(simulations)), nil
 	}
 	const maxDays = 365
 	source := cpyrandom.New(seed)
-	completionDays := make([]int, 0, simulations)
+	completionDays := make([]int, 0, simulationCount(simulations))
 	for simulation := 0; simulation < simulations; simulation++ {
 		remaining := targetItems
 		days := 0
@@ -211,10 +237,10 @@ func MonteCarloForecastItems(
 		return nil, ErrEmptyHistory
 	}
 	if daysAvailable <= 0 {
-		return make([]int, simulations), nil
+		return make([]int, simulationCount(simulations)), nil
 	}
 	source := cpyrandom.New(seed)
-	itemsCompleted := make([]int, 0, simulations)
+	itemsCompleted := make([]int, 0, simulationCount(simulations))
 	for simulation := 0; simulation < simulations; simulation++ {
 		total := 0
 		for day := 0; day < daysAvailable; day++ {

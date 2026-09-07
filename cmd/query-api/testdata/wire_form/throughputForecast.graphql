@@ -1,0 +1,70 @@
+query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
+  throughputForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    historyWeeks
+    p50Weeks
+    p75Weeks
+    p90Weeks
+    insufficientHistory
+    rollingWindows {
+      windowWeeks
+      meanWeeklyThroughput
+      sampleCount
+      insufficientHistory
+      __typename
+    }
+    primaryRisk {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    wipCongestion {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    staleWip {
+      p50AgeHours
+      p90AgeHours
+      __typename
+    }
+    estimateCoverage {
+      ratio
+      estimatedCount
+      unestimatedCount
+      backlogSize
+      __typename
+    }
+    reviewBottleneck {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    incidentLoad {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    __typename
+  }
+}

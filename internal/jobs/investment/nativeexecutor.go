@@ -52,6 +52,12 @@ type NativeExecutor struct {
 	// model_ref must reach the PROVIDER, not merely the model-version string
 	// (codex r1 P1-b).
 	newProvider func(requested, model string) (categorize.Provider, categorize.ProviderKind, error)
+	// observer is the OPTIONAL repo-attribution metric sink (CHAOS-5459).
+	// Optional and not part of NewNativeExecutor's required-collaborator
+	// contract on purpose: a process that cannot supply a collector must still
+	// be able to materialize, and the run is observable via the log line
+	// regardless.
+	observer RepoAttributionObserver
 }
 
 // NewNativeExecutor builds the executor. Every collaborator is required.
@@ -64,6 +70,17 @@ func NewNativeExecutor(reader *chquery.Reader, writer *chwrite.Writer, logger *s
 		now:         func() time.Time { return time.Now().UTC() },
 		newProvider: resolveProviderFromEnv,
 	}, nil
+}
+
+// WithRepoAttributionObserver attaches the repo-attribution metric sink
+// (CHAOS-5459). A nil observer is a no-op, so a wiring site can pass the
+// result of a failed type assertion straight through.
+func (executor *NativeExecutor) WithRepoAttributionObserver(observer RepoAttributionObserver) *NativeExecutor {
+	if executor == nil || observer == nil {
+		return executor
+	}
+	executor.observer = observer
+	return executor
 }
 
 func resolveProviderFromEnv(requested, model string) (categorize.Provider, categorize.ProviderKind, error) {
@@ -226,6 +243,7 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if err != nil {
 		return nil, err
 	}
+	materializer = materializer.WithRepoAttributionObserver(executor.observer)
 
 	cfg := Config{
 		OrgID:   orgID,

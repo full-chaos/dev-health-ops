@@ -65,11 +65,25 @@ type MaterializeComponentInput struct {
 	// result always wins when both exist.
 	CascadeRepoID     *uuid.UUID
 	CascadeRepoSource string
-	PRChurn           map[string]float64
-	CommitChurn       map[string]float64
-	ActiveHours       map[string]float64
-	ParentTitles      map[string]string
-	EpicTitles        map[string]string
+	// CascadeAllocationSource (CHAOS-5459) is the
+	// work_unit_repo_effort.allocation_source the cascade's own tier writes --
+	// units.AllocationSourceHierarchyCascade for the ancestor/children tiers,
+	// units.AllocationSourceTeamOwnership for the team tier. Empty when
+	// CascadeRepoID is nil.
+	//
+	// An empty value alongside a NON-nil CascadeRepoID is treated as
+	// hierarchy_cascade, which is what every caller predating the team tier
+	// meant. That default is deliberately narrow: it cannot silently mislabel
+	// a team-tier row, because the team tier always sets this field, and it
+	// keeps a hand-built test input from writing an empty allocation_source
+	// (which would be neither a tier name nor "empty", and would partition
+	// coverage into a bucket no dashboard knows about).
+	CascadeAllocationSource string
+	PRChurn                 map[string]float64
+	CommitChurn             map[string]float64
+	ActiveHours             map[string]float64
+	ParentTitles            map[string]string
+	EpicTitles              map[string]string
 	// FromTS/ToTS is the run's window (config.from_ts/to_ts). A component
 	// whose computed time bounds fall entirely outside it is skipped, same
 	// as materialize.py:1335-1336.
@@ -253,7 +267,10 @@ func MaterializeComponent(input MaterializeComponentInput) (MaterializeComponent
 			record.RepoID = input.CascadeRepoID
 			record.RepoSource = &source
 			record.AllocationWeight = 1.0
-			record.AllocationSource = units.AllocationSourceHierarchyCascade
+			record.AllocationSource = input.CascadeAllocationSource
+			if record.AllocationSource == "" {
+				record.AllocationSource = units.AllocationSourceHierarchyCascade
+			}
 		}
 		repoEffortRecords[i] = record
 	}

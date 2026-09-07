@@ -801,6 +801,17 @@ var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_re
 // pass and only becomes eligible on a later one).
 var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
 
+// investmentRepoAttributionSources is the closed set of tiers
+// dev_health_investment_repo_attribution_total is partitioned by (CHAOS-5459).
+// It mirrors internal/jobs/investment's RepoAttributionSource* constants --
+// that package cannot import this one (the dependency runs the other way), so
+// the two lists are kept in step by
+// TestInvestmentRepoAttributionSourcesMatchTheInvestmentPackage rather than by
+// a shared symbol.
+var investmentRepoAttributionSources = []string{
+	"own_edges", "hierarchy_ancestor", "hierarchy_children", "team_ownership", "unassigned",
+}
+
 // dailyMetricsBlockedRunOutcomes is the closed set of bounded outcomes a
 // CHAOS-5040 blocked-run reconcile pass can report. "marked" and "cleared"
 // are TRANSITIONS, deliberately not a level: a pass is per-organization, so a
@@ -1286,6 +1297,13 @@ type MetricsCollector struct {
 	// for the same reason capacitySkippedScopes does: a run that projected
 	// nothing is otherwise indistinguishable from one that had nothing to
 	// project.
+	// investmentRepoAttribution (CHAOS-5458, folded into CHAOS-5459) counts
+	// components by how an
+	// investment.materialize run resolved their repository. Before it, the
+	// equivalent Stats fields were computed and thrown away every run, so the
+	// only way to answer "is repo attribution degrading" was an ad-hoc
+	// ClickHouse query. See investmentRepoAttributionSources for the labels.
+	investmentRepoAttribution     map[string]uint64
 	membershipRuns                uint64
 	membershipComponents          uint64
 	membershipMatched             uint64
@@ -1387,6 +1405,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		remainingManualBackfill:              make(map[remainingMetricsManualBackfillLabels]uint64, len(remainingMetricsManualBackfillFamilies)*len(remainingMetricsManualBackfillOutcomes())),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
+		investmentRepoAttribution:            make(map[string]uint64, len(investmentRepoAttributionSources)),
 		dailyMetricsBlockedRun:               make(map[string]uint64, len(dailyMetricsBlockedRunOutcomes)),
 		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
 		dailyMetricsFinalizeRedrive:          make(map[string]uint64, len(dailyMetricsFinalizeRedriveOutcomes)),
@@ -1487,6 +1506,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, outcome := range dailyMetricsFinalizeSweepOutcomes {
 		collector.dailyMetricsFinalizeSweep[outcome] = 0
+	}
+	for _, source := range investmentRepoAttributionSources {
+		collector.investmentRepoAttribution[source] = 0
 	}
 	for _, outcome := range dailyMetricsBlockedRunOutcomes {
 		collector.dailyMetricsBlockedRun[outcome] = 0
@@ -1854,6 +1876,26 @@ func (collector *MetricsCollector) ObserveDailyMetricsRedrive(reason string, cou
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsRedrive[reason] += uint64(count)
+	return nil
+}
+
+// ObserveInvestmentRepoAttribution records count components resolved by one
+// bounded repo-attribution tier during an investment.materialize run
+// (CHAOS-5459). count must be >= 0: a run that resolved nothing through a tier
+// still calls this with 0, so a tier's series stays PRESENT at zero rather
+// than disappearing -- "team_ownership stopped firing" and "team_ownership
+// fired zero times" are different facts and an absent series cannot tell them
+// apart.
+func (collector *MetricsCollector) ObserveInvestmentRepoAttribution(source string, count int) error {
+	if !slices.Contains(investmentRepoAttributionSources, source) {
+		return errors.New("investment repo attribution source is not registered")
+	}
+	if count < 0 {
+		return errors.New("investment repo attribution count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.investmentRepoAttribution[source] += uint64(count)
 	return nil
 }
 
@@ -3170,6 +3212,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
 	collector.writeDailyMetricsRedrive(&output)
 	collector.writeDailyMetricsFinalizeSweep(&output)
+	collector.writeInvestmentRepoAttribution(&output)
 	collector.writeDailyMetricsFinalizeLedgerRepair(&output)
 	collector.writeDailyMetricsFinalizeRedrive(&output)
 	collector.writeDailyMetricsPartitionRecompute(&output)
@@ -3528,6 +3571,20 @@ func (collector *MetricsCollector) writeDailyMetricsRedrive(output *strings.Buil
 // sweep counters as two distinct series (rather than one metric split by
 // label) so "how many runs are stuck" and "how many did we actually move"
 // each have their own unambiguous name for an alert to key off.
+// writeInvestmentRepoAttribution exposes the CHAOS-5459 repo-attribution
+// partition as one metric split by tier, rather than five separate names: the
+// useful query is a RATIO between tiers ("what share of components resolved
+// from their own code signal?"), which needs them in one family.
+func (collector *MetricsCollector) writeInvestmentRepoAttribution(output *strings.Builder) {
+	writeMetadata(output, "dev_health_investment_repo_attribution_total",
+		"Work-graph components an investment.materialize run attributed to a repository, by the tier that resolved it (own_edges, hierarchy_ancestor, hierarchy_children, team_ownership) or unassigned (CHAOS-5459).",
+		"counter")
+	for _, source := range investmentRepoAttributionSources {
+		writeUintSample(output, "dev_health_investment_repo_attribution_total",
+			[]metricLabel{{"source", source}}, collector.investmentRepoAttribution[source])
+	}
+}
+
 func (collector *MetricsCollector) writeDailyMetricsFinalizeSweep(output *strings.Builder) {
 	writeMetadata(output, "dev_health_daily_metrics_stranded_finalize_runs_detected_total", "Daily-metrics runs found status='running' with every partition succeeded but finalization never reaching a terminal state, detected by a CHAOS-4389 stranded-finalize sweep.", "counter")
 	writeUintSample(output, "dev_health_daily_metrics_stranded_finalize_runs_detected_total", nil, collector.dailyMetricsFinalizeSweep["detected"])

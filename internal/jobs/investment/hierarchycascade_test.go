@@ -47,7 +47,7 @@ func TestRepoHierarchyCascadeDepthOne(t *testing.T) {
 	}
 	issueComponent := buildIssueComponentIndex(components)
 
-	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent)
+	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent, nil)
 
 	cascade, ok := got[1]
 	if !ok {
@@ -88,7 +88,7 @@ func TestRepoHierarchyCascadeDepthTwo(t *testing.T) {
 	}
 	issueComponent := buildIssueComponentIndex(components)
 
-	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent)
+	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent, nil)
 
 	// MID's OWN component also cascades -- GP is MID's direct (depth-1)
 	// parent, so {MID, MIDb} independently inherits from GP too. That is
@@ -128,7 +128,7 @@ func TestRepoHierarchyCascadeCycleStaysUnassigned(t *testing.T) {
 
 	done := make(chan map[int]repoCascade, 1)
 	go func() {
-		done <- computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent)
+		done <- computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent, nil)
 	}()
 	var got map[int]repoCascade
 	select {
@@ -167,7 +167,7 @@ func TestRepoHierarchyCascadeAmbiguousAncestorStaysUnassigned(t *testing.T) {
 	}
 	issueComponent := buildIssueComponentIndex(components)
 
-	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent)
+	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent, nil)
 
 	if cascade, ok := got[2]; ok {
 		t.Errorf("ambiguous multi-repo ancestors (repoA via P, repoB via GP) produced a cascade result %+v; it must stay unassigned, not pick one", cascade)
@@ -197,7 +197,7 @@ func TestRepoHierarchyCascadeUnanimousChildren(t *testing.T) {
 	}
 	issueComponent := buildIssueComponentIndex(components)
 
-	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent)
+	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent, nil)
 
 	cascade, ok := got[0]
 	if !ok {
@@ -234,7 +234,7 @@ func TestRepoHierarchyCascadeDisagreeingChildrenStayUnassigned(t *testing.T) {
 	}
 	issueComponent := buildIssueComponentIndex(components)
 
-	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent)
+	got := computeRepoHierarchyCascade(components, ownRepoByComponent, workItems, issueComponent, nil)
 
 	if cascade, ok := got[0]; ok {
 		t.Errorf("KidA (repoA) and KidB (repoB) disagree; Parent3 must stay unassigned, got %+v", cascade)

@@ -70,7 +70,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	// cutover would appear complete while production kept running the old
 	// plane -- exactly the state this ticket exists to end, and one nothing
 	// downstream could detect. Same reasoning as workgraphBuildPreSteps'.
-	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, logger)
+	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, logger, observer)
 	if nativeErr != nil {
 		return workerFamily{}, nativeErr
 	}
@@ -400,7 +400,7 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 // not refuse a family that would not have touched it. addWorkgraphWorker turns
 // a nil into a refusal at the one place it matters -- the materialize case.
 func buildNativeInvestmentExecutor(
-	cfg config.Config, specs []jobruntime.HandlerSpec, logger *slog.Logger,
+	cfg config.Config, specs []jobruntime.HandlerSpec, logger *slog.Logger, observer jobruntime.Observer,
 ) (workgraph.NativeExecutor, error) {
 	materializeSelected := false
 	for _, spec := range specs {
@@ -430,6 +430,14 @@ func buildNativeInvestmentExecutor(
 	executor, executorErr := investment.NewNativeExecutor(reader, writer, logger)
 	if executorErr != nil {
 		return nil, errWorkerDependencyUnavailable
+	}
+	// CHAOS-5459. A narrow capability assertion, exactly like the
+	// WorkGraphLeaseObserver one above: the production observer IS the
+	// *jobruntime.MetricsCollector, so this succeeds in the deployed worker,
+	// and a test double that does not implement it simply gets no metric
+	// rather than a refusal.
+	if attributionObserver, ok := observer.(investment.RepoAttributionObserver); ok {
+		executor = executor.WithRepoAttributionObserver(attributionObserver)
 	}
 	return executor, nil
 }

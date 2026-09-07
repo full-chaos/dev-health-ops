@@ -114,24 +114,124 @@ type Stats struct {
 	DroppedEdges        int            `json:"dropped_edges"`
 	DroppedNodes        int            `json:"dropped_nodes"`
 	PartitionedHubs     int            `json:"partitioned_hubs"`
-	// RepoCascadeOwn/Ancestor/Children/Unassigned (CHAOS-5359) partition every
+	// RepoCascadeOwn/Ancestor/Children/TeamOwnership/Unassigned partition every
 	// component this run built by how (or whether) it resolved a repo --
 	// own-edges, inherited from an ancestor, inherited from unanimous
-	// children, or neither. They always sum to Components.
-	RepoCascadeOwn        int `json:"repo_cascade_own"`
-	RepoCascadeAncestor   int `json:"repo_cascade_ancestor"`
-	RepoCascadeChildren   int `json:"repo_cascade_children"`
-	RepoCascadeUnassigned int `json:"repo_cascade_unassigned"`
+	// children, inherited from the owning team (CHAOS-5459), or none of those.
+	// They always sum to Components.
+	RepoCascadeOwn      int `json:"repo_cascade_own"`
+	RepoCascadeAncestor int `json:"repo_cascade_ancestor"`
+	RepoCascadeChildren int `json:"repo_cascade_children"`
+	// RepoCascadeTeamOwnership (CHAOS-5459) counts components resolved by the
+	// LAST tier -- the owning team's repository -- after own-edges, ancestor
+	// and children all found nothing. It is deliberately its own counter and
+	// not folded into RepoCascadeChildren/Ancestor: a rising team-ownership
+	// share means churn-derived attribution is degrading upstream, which is a
+	// different alert from "the cascade is working".
+	RepoCascadeTeamOwnership int `json:"repo_cascade_team_ownership"`
+	RepoCascadeUnassigned    int `json:"repo_cascade_unassigned"`
 }
 
-// Materializer holds the collaborators one org-scoped run needs. All three are
-// required; a nil one is a wiring bug, not a degraded mode.
+// RepoAttributionObserver is the narrow capability the materializer needs to
+// export its repo-attribution partition as a metric (CHAOS-5459).
+//
+// It is a one-method interface satisfied by *jobruntime.MetricsCollector and
+// asserted for at the wiring site, rather than a jobruntime import here --
+// same pattern, and same reason, as jobruntime.HandlerInvocationObserver: it
+// costs nothing to any caller that does not have a collector, and it keeps
+// internal/jobs/investment free of a dependency on the runtime package.
+//
+// It is OPTIONAL. A materializer built without one still logs, so the run is
+// never unobservable; it just has no time series.
+type RepoAttributionObserver interface {
+	ObserveInvestmentRepoAttribution(source string, count int) error
+}
+
+// Materializer holds the collaborators one org-scoped run needs. The first
+// four are required; a nil one is a wiring bug, not a degraded mode. The
+// observer is optional.
 type Materializer struct {
 	reader   *chquery.Reader
 	writer   *chwrite.Writer
 	provider categorize.Provider
 	logger   *slog.Logger
+	observer RepoAttributionObserver
 }
+
+// WithRepoAttributionObserver returns the materializer with the observer
+// attached. A nil observer leaves it unattached rather than panicking later.
+func (m *Materializer) WithRepoAttributionObserver(observer RepoAttributionObserver) *Materializer {
+	if m == nil || observer == nil {
+		return m
+	}
+	m.observer = observer
+	return m
+}
+
+// observeRepoAttribution emits this run's repo-attribution partition as one
+// structured log line plus one counter increment per source.
+//
+// # A TELEMETRY FAULT NEVER FAILS A RUN
+//
+// The observer returns an error only for an unregistered source name, which
+// is a build-time bug in this file, not a runtime condition -- so it is logged
+// at Warn and the run continues. Returning it would let a metrics registry
+// mismatch fail a materialization that otherwise succeeded, which is strictly
+// worse than a missing series.
+func (m *Materializer) observeRepoAttribution(ctx context.Context, cfg Config, stats Stats) {
+	if m == nil || m.logger == nil {
+		return
+	}
+	m.logger.InfoContext(ctx, "investment repo attribution",
+		"org_id", cfg.OrgID,
+		"run_id", cfg.RunID,
+		"components", stats.Components,
+		"own_edges", stats.RepoCascadeOwn,
+		"hierarchy_ancestor", stats.RepoCascadeAncestor,
+		"hierarchy_children", stats.RepoCascadeChildren,
+		"team_ownership", stats.RepoCascadeTeamOwnership,
+		"unassigned", stats.RepoCascadeUnassigned,
+	)
+	if m.observer == nil {
+		return
+	}
+	// Every source is reported on EVERY run, including at zero: an absent
+	// series and a genuinely-zero one are indistinguishable to an alert, and
+	// "unassigned suddenly stopped being reported" must not read as
+	// "unassigned went to zero".
+	counts := []struct {
+		source string
+		count  int
+	}{
+		{RepoAttributionSourceOwnEdges, stats.RepoCascadeOwn},
+		{RepoAttributionSourceAncestor, stats.RepoCascadeAncestor},
+		{RepoAttributionSourceChildren, stats.RepoCascadeChildren},
+		{RepoAttributionSourceTeamOwnership, stats.RepoCascadeTeamOwnership},
+		{RepoAttributionSourceUnassigned, stats.RepoCascadeUnassigned},
+	}
+	for _, entry := range counts {
+		if err := m.observer.ObserveInvestmentRepoAttribution(entry.source, entry.count); err != nil {
+			m.logger.WarnContext(ctx, "investment repo attribution telemetry rejected",
+				"org_id", cfg.OrgID, "run_id", cfg.RunID,
+				"source", entry.source, "count", entry.count, "error", err)
+		}
+	}
+}
+
+// RepoAttributionSource* is the closed label set of
+// dev_health_investment_repo_attribution_total{source}. It deliberately mirrors
+// the ATTRIBUTION TIERS rather than the allocation_source column: `own_edges`
+// here covers both commit_churn and pr_churn, because the question this metric
+// answers is "did the unit resolve from its own code signal, an inherited one,
+// or not at all", and splitting own-edges by churn kind answers a different
+// one.
+const (
+	RepoAttributionSourceOwnEdges      = "own_edges"
+	RepoAttributionSourceAncestor      = "hierarchy_ancestor"
+	RepoAttributionSourceChildren      = "hierarchy_children"
+	RepoAttributionSourceTeamOwnership = "team_ownership"
+	RepoAttributionSourceUnassigned    = "unassigned"
+)
 
 // ErrUnavailable reports a Materializer built without a collaborator it needs.
 var ErrUnavailable = errors.New("investment: materializer dependency unavailable")
@@ -221,9 +321,13 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		ownRepoByComponent[index] = collectSingleRepoID(component.Edges, edgeRepoIDs)
 	}
 	issueComponent := buildIssueComponentIndex(components)
-	repoCascades := computeRepoHierarchyCascade(components, ownRepoByComponent, entities.WorkItems, issueComponent)
+	repoCascades := computeRepoHierarchyCascade(
+		components, ownRepoByComponent, entities.WorkItems, issueComponent, entities.TeamRepos,
+	)
 	for _, cascade := range repoCascades {
 		switch {
+		case cascade.AllocationSource == units.AllocationSourceTeamOwnership:
+			stats.RepoCascadeTeamOwnership++
 		case cascade.Source == RepoSourceChildren:
 			stats.RepoCascadeChildren++
 		case cascade.Source != "":
@@ -236,7 +340,21 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			stats.RepoCascadeOwn++
 		}
 	}
-	stats.RepoCascadeUnassigned = len(components) - stats.RepoCascadeOwn - stats.RepoCascadeAncestor - stats.RepoCascadeChildren
+	stats.RepoCascadeUnassigned = len(components) - stats.RepoCascadeOwn -
+		stats.RepoCascadeAncestor - stats.RepoCascadeChildren - stats.RepoCascadeTeamOwnership
+
+	// CHAOS-5458 (folded into CHAOS-5459): these counters were COMPUTED AND
+	// DISCARDED before this
+	// change -- nothing read Stats.RepoCascade*, so the only way to learn how
+	// a run attributed anything was an ad-hoc ClickHouse query against
+	// work_unit_repo_effort after the fact. That is exactly the shape chris's
+	// standing telemetry ruling forbids (2026-09-05 06:59 PDT, restated as a
+	// hard gate 2026-09-06 19:18Z: a behavior change ships its observable in
+	// the same PR). Both a log line at Info and a counter, because they answer
+	// different questions: the log says what THIS run did (readable in
+	// go-worker-heavy logs, org-scoped), the counter says what the fleet is
+	// doing over time (alertable on a rising unassigned share).
+	m.observeRepoAttribution(ctx, cfg, stats)
 
 	// PREPROCESS. Every component is assembled deterministically first, then
 	// split into "needs an LLM call" and "already has its answer". The split
@@ -254,6 +372,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			ActiveHours: entities.ActiveHours, ParentTitles: entities.ParentTitles, EpicTitles: entities.EpicTitles,
 			FromTS: cfg.FromTS, ToTS: cfg.ToTS,
 			CascadeRepoID: cascade.RepoID, CascadeRepoSource: cascade.Source,
+			CascadeAllocationSource: cascade.AllocationSource,
 		})
 		if err != nil {
 			return Stats{}, fmt.Errorf("assemble component %d: %w", index, err)
@@ -647,6 +766,10 @@ type entitySet struct {
 	ActiveHours  map[string]float64
 	ParentTitles map[string]string
 	EpicTitles   map[string]string
+	// TeamRepos (CHAOS-5459) maps issue node id -> the repository owned by
+	// that issue's native team, for the LAST attribution tier. It has no
+	// Python counterpart; see chquery.FetchTeamOwnedRepos.
+	TeamRepos map[string]chquery.TeamOwnedRepo
 }
 
 // fetchEntities ports materialize.py:1235-1287 -- collect every node id across
@@ -675,6 +798,15 @@ func (m *Materializer) fetchEntities(ctx context.Context, cfg Config, components
 	commitChurn, err := m.reader.FetchCommitChurn(ctx, repoCommits, cfg.OrgID)
 	if err != nil {
 		return entitySet{}, fmt.Errorf("fetch commit churn: %w", err)
+	}
+	// CHAOS-5459. Keyed on the SAME issue id list every other per-issue fetch
+	// above uses, so the team tier can never see an issue this run did not
+	// otherwise load. A failure here is returned, not swallowed: a silent
+	// empty map would look exactly like "no team owns any repo" and would
+	// re-open the coverage hole this tier exists to close, invisibly.
+	teamRepos, err := m.reader.FetchTeamOwnedRepos(ctx, issueIDs, cfg.OrgID)
+	if err != nil {
+		return entitySet{}, fmt.Errorf("fetch team-owned repos: %w", err)
 	}
 
 	workItemMap := make(map[string]chquery.WorkItem, len(workItems))
@@ -722,6 +854,7 @@ func (m *Materializer) fetchEntities(ctx context.Context, cfg Config, components
 		WorkItems: workItemMap, PRs: prMap, Commits: commitMap,
 		PRChurn: prChurn, CommitChurn: commitChurn, ActiveHours: activeHours,
 		ParentTitles: parentTitles, EpicTitles: epicTitles,
+		TeamRepos: teamRepos,
 	}, nil
 }
 

@@ -21,6 +21,20 @@ const (
 	// ever produces this value; AllocateRepoEffort itself never does, since it
 	// has no view of any component but its own.
 	AllocationSourceHierarchyCascade = "hierarchy_cascade"
+	// AllocationSourceTeamOwnership (CHAOS-5459) marks a repo-effort row
+	// resolved from the owning TEAM's repo ownership rather than from any
+	// per-unit code signal. It is the last tier, below own-edges and below
+	// both hierarchy-cascade tiers: it fires only for a component that has no
+	// commit/PR churn of its own AND no ancestor or child that resolved one.
+	//
+	// It exists because that residue is not a small tail. Measured on org
+	// 70d529e0 at run c8065d4a8c1648568d369519045747f2 (2026-09-07T12:01Z):
+	// 767 of 1365 units ended on the `empty` tier, and 767/767 of them are
+	// Linear issues on team CHAOS -- a team with six live team_repo_ownership
+	// rows. The link the product needs was in the data the whole time; no
+	// attribution tier, in Go OR in the Python it was ported from
+	// (materialize.py:1011-1069), ever read team_repo_ownership.
+	AllocationSourceTeamOwnership = "team_ownership"
 )
 
 // RepoAllocation is one row of _allocate_repo_effort's returned list --

@@ -101,8 +101,8 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	if len(components) != 0 {
 		t.Fatalf("components = %d, want no pool lifecycle without DSNs", len(components))
 	}
-	if registry.RequiredCount() != 11 {
-		t.Fatalf("required checks = %d, want 11", registry.RequiredCount())
+	if registry.RequiredCount() != 12 {
+		t.Fatalf("required checks = %d, want 12", registry.RequiredCount())
 	}
 	// Every accepted queue set now owns registered kinds, so queue telemetry is
 	// always required and a worker without a database cannot serve a complete
@@ -123,6 +123,7 @@ func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 		"domain_postgres",
 		"execution_liveness",
 		"idempotency_backend",
+		"posture_manifest_lockstep",
 		"queue_completeness",
 		"queue_postgres",
 		"queued_contract_versions",
@@ -435,6 +436,7 @@ func TestTransactionModeQueueControlHasActionableReadinessCategory(t *testing.T)
 		"domain_postgres",
 		"execution_liveness",
 		"idempotency_backend",
+		"posture_manifest_lockstep",
 		"queue_completeness",
 		"queue_control_config",
 		"queue_postgres",
@@ -1252,6 +1254,10 @@ type fakeWorkerDatabase struct {
 	// value at construction time.
 	txOpenerMu  sync.Mutex
 	txOpenerErr error
+	// postureLockstepResult/postureLockstepErr default to a healthy lockstep
+	// outcome, matching every other fake dependency in this file.
+	postureLockstepResult postgres.PostureManifestLockstepResult
+	postureLockstepErr    error
 }
 
 func (database *fakeWorkerDatabase) setTxOpenerErr(err error) {
@@ -1683,6 +1689,20 @@ func (database *fakeWorkerDatabase) AttachPoolAcquireObserver(observer postgres.
 
 func (database *fakeWorkerDatabase) DomainTxOpener() selfprobe.TxOpener {
 	return fakeTxOpener{database: database}
+}
+
+func (database *fakeWorkerDatabase) PostureManifestLockstep(
+	context.Context, string,
+) (postgres.PostureManifestLockstepResult, error) {
+	if database.postureLockstepErr != nil {
+		return postgres.PostureManifestLockstepResult{}, database.postureLockstepErr
+	}
+	if database.postureLockstepResult == (postgres.PostureManifestLockstepResult{}) {
+		// Never set by the test: default to a healthy lockstep outcome, like
+		// every other fake dependency in this file.
+		return postgres.PostureManifestLockstepResult{Lockstep: true}, nil
+	}
+	return database.postureLockstepResult, nil
 }
 
 func (database *fakeWorkerDatabase) Close() {

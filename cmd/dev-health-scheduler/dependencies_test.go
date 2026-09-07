@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -94,6 +95,7 @@ type fakeSchedulerDatabase struct {
 	queueCalls       atomic.Int64
 	coordinatorCalls atomic.Int64
 	schemaCalls      atomic.Int64
+	postureCalls     atomic.Int64
 	closed           atomic.Bool
 }
 
@@ -115,6 +117,13 @@ func (database *fakeSchedulerDatabase) CoordinatorReady(context.Context) error {
 func (database *fakeSchedulerDatabase) RiverSchemaReady(context.Context, string) error {
 	database.schemaCalls.Add(1)
 	return nil
+}
+
+func (database *fakeSchedulerDatabase) PostureManifestLockstep(
+	context.Context, string,
+) (postgres.PostureManifestLockstepResult, error) {
+	database.postureCalls.Add(1)
+	return postgres.PostureManifestLockstepResult{Lockstep: true}, nil
 }
 
 func (database *fakeSchedulerDatabase) DomainPool() *pgxpool.Pool { return database.pool }

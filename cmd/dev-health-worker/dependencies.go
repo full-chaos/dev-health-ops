@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -112,6 +113,12 @@ type workerDatabase interface {
 	// executionLivenessPool's doc comment for why this proves a materially
 	// different thing than domain_postgres's role-posture SELECT.
 	DomainTxOpener() selfprobe.TxOpener
+	// PostureManifestLockstep proves (CHAOS-5437) that binaryDigest -- this
+	// binary's own postgres.PostureManifestDigest() -- is no older than the
+	// posture manifest go-worker-migrate most recently applied. It runs on
+	// the domain pool: the manifest table is domain-role-readable only (see
+	// domainPosture's worker_posture_manifest_applied entry).
+	PostureManifestLockstep(ctx context.Context, binaryDigest string) (postgres.PostureManifestLockstepResult, error)
 	Close()
 }
 
@@ -209,6 +216,15 @@ func (database *postgresWorkerDatabase) RiverSchemaReady(ctx context.Context, sc
 	}
 	_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, schema, nil)
 	return err
+}
+
+func (database *postgresWorkerDatabase) PostureManifestLockstep(
+	ctx context.Context, binaryDigest string,
+) (postgres.PostureManifestLockstepResult, error) {
+	if database == nil || database.pools == nil || database.pools.Domain == nil {
+		return postgres.PostureManifestLockstepResult{}, errWorkerDependencyUnavailable
+	}
+	return postgres.CheckPostureManifestLockstep(ctx, database.pools.Domain, binaryDigest)
 }
 
 func (database *postgresWorkerDatabase) PoolSaturation() (float64, float64) {
@@ -395,6 +411,11 @@ type workerDependencies struct {
 	longestQueueTimeout   time.Duration
 	requiredShutdownGrace time.Duration
 	workerGroup           string
+	// postureGuard is CHAOS-5437's posture_manifest_lockstep check + gauge.
+	// nil only when dependencies.database itself is nil (no DSN configured);
+	// postureManifestLockstepReady reports unavailable in that case, exactly
+	// like every other database-backed check here.
+	postureGuard *postureguard.Guard
 }
 
 type preclaimReadinessComponent struct {
@@ -660,6 +681,17 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, err
 	}
+	// CHAOS-5437: nil only when no database DSN is configured (mirrors every
+	// other database-backed metrics source here); registering a nil *Guard
+	// as a health.MetricsSource would pass RegisterMetrics's own nil check
+	// (a nil pointer boxed in a non-nil interface) and then panic the first
+	// time it is scraped.
+	if dependencies.postureGuard != nil {
+		if err := registry.RegisterMetrics("posture_manifest_lockstep", dependencies.postureGuard); err != nil {
+			dependencies.close()
+			return nil, err
+		}
+	}
 	// worker_database_pool_acquire_seconds needs the collector, which is why
 	// this happens here rather than at pool construction: NewRuntimePools
 	// freezes its pgxpool tracer before dependencies.metrics exists.
@@ -704,6 +736,7 @@ func configureWorkerDependenciesWithSources(
 		{name: "queued_contract_versions", check: dependencies.queuedContractVersionsReady},
 		{name: "queue_control_config", check: dependencies.queueControlConfigReady},
 		{name: "queue_postgres", check: dependencies.queueReady},
+		{name: "posture_manifest_lockstep", check: dependencies.postureManifestLockstepReady},
 		{name: "river_schema", check: dependencies.riverSchemaReady(cfg.RiverDatabaseSchema)},
 		// idempotency_backend (CHAOS-4029): a synchronous, per-poll Begin+
 		// Rollback against the SAME pool internal/jobruntime.PostgresIdempotency
@@ -1370,6 +1403,15 @@ func buildWorkerDependencies(
 			dependencies.database = nil
 		}
 	}
+	if dependencies.database != nil {
+		// CHAOS-5437: bound now, while dependencies.database is confirmed
+		// non-nil -- taking a method value off a nil interface panics, so
+		// this cannot happen inside postureManifestLockstepReady itself,
+		// which runs on every readiness probe.
+		dependencies.postureGuard = postureguard.New(
+			"dev-health-worker", dependencies.database.PostureManifestLockstep, postgres.PostureManifestDigest(),
+		)
+	}
 
 	if sources.loadRuntimeRegistry == nil || sources.contractRoot == "" {
 		dependencies.registryErr = errWorkerDependencyUnavailable
@@ -1650,6 +1692,27 @@ func (dependencies *workerDependencies) queueReady(ctx context.Context) error {
 	}
 	if err := dependencies.database.QueueReady(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "queue_postgres", err)
+		return errWorkerDependencyUnavailable
+	}
+	return nil
+}
+
+// postureManifestLockstepReady is the posture_manifest_lockstep check
+// (CHAOS-5437): it refuses readiness the instant this binary's compiled-in
+// posture manifest is OLDER than the one go-worker-migrate most recently
+// applied, naming both digests via logDependencyCheckFailure -- the same
+// diagnosability CHAOS-5435 gave domain_postgres/queue_postgres/
+// river_schema/idempotency_backend, but proactive rather than reactive: this
+// is the check the 2026-09-07 incident had nothing to fail on, so
+// go-worker-heavy/-ops/go-scheduler/go-reconciler and three stream runners
+// sat not_ready for hours instead of naming the cause on their very first
+// readiness probe.
+func (dependencies *workerDependencies) postureManifestLockstepReady(ctx context.Context) error {
+	if dependencies == nil || dependencies.databaseErr != nil || dependencies.database == nil || dependencies.postureGuard == nil {
+		return errWorkerDependencyUnavailable
+	}
+	if err := dependencies.postureGuard.Ready(ctx); err != nil {
+		dependencies.logDependencyCheckFailure(ctx, "posture_manifest_lockstep", err)
 		return errWorkerDependencyUnavailable
 	}
 	return nil

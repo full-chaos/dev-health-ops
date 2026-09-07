@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -66,6 +67,10 @@ const (
 type streamStorage interface {
 	ClickHouseReady(context.Context) error
 	DomainPostgresReady(context.Context) error
+	// PostureManifestLockstep proves (CHAOS-5437) that binaryDigest -- this
+	// binary's own postgres.PostureManifestDigest() -- is no older than the
+	// posture manifest go-worker-migrate most recently applied.
+	PostureManifestLockstep(ctx context.Context, binaryDigest string) (postgres.PostureManifestLockstepResult, error)
 	ValkeyReady(context.Context) error
 	Handler(streamHandlerKind, streamhandlers.ExternalIngestObserver) (streamrunner.Handler, error)
 	NewTransport() (streamrunner.Transport, error)
@@ -179,6 +184,15 @@ func (storage *productionStreamStorage) DomainPostgresReady(ctx context.Context)
 		return errStreamDependencyUnavailable
 	}
 	return nil
+}
+
+func (storage *productionStreamStorage) PostureManifestLockstep(
+	ctx context.Context, binaryDigest string,
+) (postgres.PostureManifestLockstepResult, error) {
+	if storage == nil || storage.domainPool == nil {
+		return postgres.PostureManifestLockstepResult{}, errStreamDependencyUnavailable
+	}
+	return postgres.CheckPostureManifestLockstep(ctx, storage.domainPool, binaryDigest)
 }
 
 func (storage *productionStreamStorage) ValkeyReady(ctx context.Context) error {
@@ -325,6 +339,7 @@ func configureStreamRunnerDependenciesWithSources(
 			registry,
 			"clickhouse",
 			"domain_postgres",
+			"posture_manifest_lockstep",
 			"stream_consumer",
 			"valkey",
 		)
@@ -335,12 +350,24 @@ func configureStreamRunnerDependenciesWithSources(
 			storage.Close()
 		}
 	}()
+	// CHAOS-5437: posture_manifest_lockstep refuses readiness the instant
+	// this binary's compiled-in posture manifest is older than what
+	// go-worker-migrate has applied -- see cmd/dev-health-worker's identical
+	// check for the full incident this closes (three stream runners sat
+	// not_ready for 9h with no crash loop and no alert).
+	postureGuard := postureguard.New(
+		"dev-health-stream-runner", storage.PostureManifestLockstep, postgres.PostureManifestDigest(),
+	)
+	if err := registry.RegisterMetrics("posture_manifest_lockstep", postureGuard); err != nil {
+		return nil, err
+	}
 	storageChecks := []struct {
 		name  string
 		check health.CheckFunc
 	}{
 		{name: "clickhouse", check: storage.ClickHouseReady},
 		{name: "domain_postgres", check: storage.DomainPostgresReady},
+		{name: "posture_manifest_lockstep", check: postureGuard.Ready},
 		{name: "valkey", check: storage.ValkeyReady},
 	}
 	streamConsumerConfigured := false

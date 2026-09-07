@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/streamhandlers"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 )
@@ -130,6 +131,12 @@ type failingReadStorage struct {
 func (*failingReadStorage) ClickHouseReady(context.Context) error     { return nil }
 func (*failingReadStorage) DomainPostgresReady(context.Context) error { return nil }
 func (*failingReadStorage) ValkeyReady(context.Context) error         { return nil }
+
+func (*failingReadStorage) PostureManifestLockstep(
+	context.Context, string,
+) (postgres.PostureManifestLockstepResult, error) {
+	return postgres.PostureManifestLockstepResult{Lockstep: true}, nil
+}
 func (*failingReadStorage) Handler(streamHandlerKind, streamhandlers.ExternalIngestObserver) (streamrunner.Handler, error) {
 	return streamCommandHandler{}, nil
 }

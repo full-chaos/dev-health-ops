@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/syncroute"
@@ -115,7 +116,7 @@ func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *t
 		t.Fatalf("open readiness gate: %v", err)
 	}
 
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "job_registry", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "job_registry", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	status := registry.Readiness(context.Background())
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
@@ -609,7 +610,7 @@ func TestReconcilerConstructionFailureClosesDatabaseAndFailsReadiness(t *testing
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -640,7 +641,7 @@ func TestReconcilerSyncRegistryLoadFailureClosesDatabaseAndFailsReadiness(t *tes
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -674,7 +675,7 @@ func TestReconcilerSyncMutationBuildFailureClosesDatabaseAndFailsReadiness(t *te
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -867,7 +868,7 @@ func TestReconcilerRouteFenceConstructionFailureFailsClosed(t *testing.T) {
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_route_fence"}
+	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_route_fence"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -998,14 +999,24 @@ func (recorder *fakeReconcilerRecorder) Shutdown(context.Context) error {
 }
 
 type fakeReconcilerDatabase struct {
-	domainErr       error
-	queueErr        error
-	coordinatorErr  error
-	schemaErr       error
-	domainPool      *pgxpool.Pool
-	queuePool       *pgxpool.Pool
-	coordinatorPool *pgxpool.Pool
-	closed          atomic.Bool
+	domainErr          error
+	queueErr           error
+	coordinatorErr     error
+	schemaErr          error
+	postureLockstepErr error
+	domainPool         *pgxpool.Pool
+	queuePool          *pgxpool.Pool
+	coordinatorPool    *pgxpool.Pool
+	closed             atomic.Bool
+}
+
+func (database *fakeReconcilerDatabase) PostureManifestLockstep(
+	context.Context, string,
+) (postgres.PostureManifestLockstepResult, error) {
+	if database.postureLockstepErr != nil {
+		return postgres.PostureManifestLockstepResult{}, database.postureLockstepErr
+	}
+	return postgres.PostureManifestLockstepResult{Lockstep: true}, nil
 }
 
 func (database *fakeReconcilerDatabase) DomainPool() *pgxpool.Pool {

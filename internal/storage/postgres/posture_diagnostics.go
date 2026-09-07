@@ -35,7 +35,17 @@ func (gap PostureGap) String() string {
 		return fmt.Sprintf("%s: table does not exist", gap.TableName)
 	}
 	if len(gap.Excess) > 0 {
-		return fmt.Sprintf("%s: excess table-wide privileges %v (declared column-scoped only)", gap.TableName, gap.Excess)
+		// Deliberately shape-neutral: an Excess gap now comes from three
+		// distinct predicates (CHAOS-5436) -- a table-wide grant on a table
+		// this posture declares column-scoped only (CHAOS-4675), a privilege
+		// beyond what a table-wide RequiredTables entry's flags allow (e.g.
+		// UPDATE held where AllowUpdate=false), or any privilege on a
+		// relation the posture never declares at all -- and PostureGap
+		// carries no field saying which. Claiming "(declared column-scoped
+		// only)" unconditionally was true only for the first shape and would
+		// misdescribe the other two (codex r1 F-2): CHAOS-5296's own
+		// incident table was declared table-wide, not column-scoped.
+		return fmt.Sprintf("%s: excess privileges %v beyond the declared posture", gap.TableName, gap.Excess)
 	}
 	if gap.ColumnName != "" {
 		return fmt.Sprintf("%s.%s: missing %v", gap.TableName, gap.ColumnName, gap.Missing)

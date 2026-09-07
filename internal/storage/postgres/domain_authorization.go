@@ -1155,12 +1155,14 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 	switch {
 	case err != nil:
 		// The query never produced an answer at all: connection refused, auth
-		// failure, context deadline, a driver-level fault. %w on the driver
-		// error (never the DSN this pool was built from -- Config.URI is
-		// deliberately excluded from every error path in this package) keeps
-		// this branch distinguishable from ErrPostureRefused below while
-		// staying readiness-compatible via errors.Is(err, ErrUnavailable).
-		return fmt.Errorf("%w: querying role posture: %v", ErrUnavailable, err)
+		// failure, context deadline, a driver-level fault. Both ErrUnavailable
+		// and the driver error itself are %w-wrapped (Go's multi-%w support),
+		// so a caller can errors.Is/errors.As all the way to the concrete
+		// driver error -- never the DSN this pool was built from (Config.URI
+		// is deliberately excluded from every error path in this package) --
+		// while staying readiness-compatible via errors.Is(err, ErrUnavailable)
+		// and distinguishable from ErrPostureRefused below.
+		return fmt.Errorf("%w: querying role posture: %w", ErrUnavailable, err)
 	case !authorized:
 		// The query ran and answered "no": this role's own grants do not
 		// match its declared posture. A completely different incident from

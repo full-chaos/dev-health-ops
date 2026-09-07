@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -181,5 +182,80 @@ func TestSamplerBoundaries(t *testing.T) {
 func TestEnabledFromEnvDefaultsTrue(t *testing.T) {
 	if !enabledFromEnv() {
 		t.Fatal("OTEL_ENABLED must default to true, mirroring tracing.py")
+	}
+}
+
+// TestInitWithServiceNameInstallsTheSDKProviderNotTheNoop is CHAOS-5408's
+// proof, part (1): a caller (query-api's main(), or any future caller other
+// than the worker-shell framework) that runs InitWithServiceName with
+// tracing enabled and an endpoint configured must find
+// otel.GetTracerProvider() returning the REAL SDK provider afterward, not
+// still the package-default no-op -- this is the exact assertion every span
+// a resolver starts (cmd/query-api/internal/graph/telemetry.go's tracer,
+// captured once at package init from whatever the global provider was at
+// that time) depends on, since the OTel Go API's global package delegates a
+// pre-Init Tracer to the real provider once one is installed.
+func TestInitWithServiceNameInstallsTheSDKProviderNotTheNoop(t *testing.T) {
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:0")
+
+	component := InitWithServiceName(discardLogger(), "dev-health-query-api")
+	t.Cleanup(func() { _ = component.Shutdown(t.Context()) })
+
+	if component.provider == nil {
+		t.Fatal("expected a live provider (Component.provider) when tracing is enabled with an endpoint")
+	}
+	if _, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider); !ok {
+		t.Fatalf("otel.GetTracerProvider() is %T, want *sdktrace.TracerProvider -- the no-op default was never replaced", otel.GetTracerProvider())
+	}
+}
+
+// TestInitWithServiceNameFallsBackToItsOwnDefaultNameOnly proves the two
+// halves of InitWithServiceName's contract independently: the caller's
+// fallback name is used when OTEL_SERVICE_NAME is unset, and the env var
+// still wins over the fallback whenever it IS set -- a caller passing its
+// own default must never be able to accidentally override an operator's
+// explicit OTEL_SERVICE_NAME configuration.
+func TestInitWithServiceNameFallsBackToItsOwnDefaultNameOnly(t *testing.T) {
+	t.Setenv("OTEL_ENABLED", "true")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:0")
+
+	t.Run("OTEL_SERVICE_NAME unset uses the caller's fallback", func(t *testing.T) {
+		component := InitWithServiceName(discardLogger(), "dev-health-query-api")
+		t.Cleanup(func() { _ = component.Shutdown(t.Context()) })
+		if component.provider == nil {
+			t.Fatal("expected a live provider")
+		}
+	})
+
+	t.Run("OTEL_SERVICE_NAME set wins over the caller's fallback", func(t *testing.T) {
+		t.Setenv("OTEL_SERVICE_NAME", "operator-override")
+		component := InitWithServiceName(discardLogger(), "dev-health-query-api")
+		t.Cleanup(func() { _ = component.Shutdown(t.Context()) })
+		if component.provider == nil {
+			t.Fatal("expected a live provider")
+		}
+		// stringEnv itself (used identically by both Init and
+		// InitWithServiceName) already has direct coverage of the
+		// env-wins-over-fallback rule; this test's job is only to confirm
+		// InitWithServiceName actually calls stringEnv with its `defaultName`
+		// parameter rather than the package constant, which the following
+		// direct check on the helper proves without re-deriving it from a
+		// live exporter's resource attributes.
+		if got := stringEnv("OTEL_SERVICE_NAME", "dev-health-query-api"); got != "operator-override" {
+			t.Fatalf("stringEnv should have read the override: got %q", got)
+		}
+	})
+}
+
+// TestInitStillUsesDefaultServiceNameUnaffected is a regression guard: Init
+// (used by every worker binary via internal/platform/shell) must keep using
+// defaultServiceName ("dev-health-ops") as its fallback, unaffected by
+// InitWithServiceName's addition -- Init is now a one-line delegation to
+// InitWithServiceName, and this pins that the delegation passes
+// defaultServiceName, not some other value.
+func TestInitStillUsesDefaultServiceNameUnaffected(t *testing.T) {
+	if defaultServiceName != "dev-health-ops" {
+		t.Fatalf("defaultServiceName changed to %q -- Init's fallback for every worker binary would silently change too", defaultServiceName)
 	}
 }

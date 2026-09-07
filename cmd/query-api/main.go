@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -36,7 +37,22 @@ import (
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 )
+
+// otelServiceName is this binary's OTEL_SERVICE_NAME fallback (CHAOS-5408) --
+// tracing.InitWithServiceName's default when the env var is unset, so
+// query-api is distinguishable from the worker binaries (whose own default,
+// "dev-health-ops", tracing.Init keeps) in a trace backend without every
+// deployment needing to set OTEL_SERVICE_NAME by hand. The env var still
+// wins whenever it is set.
+const otelServiceName = "dev-health-query-api"
+
+// tracingShutdownTimeout bounds the final flush of any buffered spans on
+// process shutdown -- the same bound style readyzTimeout uses below, so a
+// wedged exporter cannot hang the shutdown sequence indefinitely.
+const tracingShutdownTimeout = 5 * time.Second
 
 const defaultAddr = ":8090"
 
@@ -175,6 +191,21 @@ func readyzDependencyClass(err error) string {
 }
 
 func main() {
+	// CHAOS-5408: installs the process-wide OTel TracerProvider so the spans
+	// the resolvers in internal/graph already start (org-scoping-rejection
+	// spans included) actually reach a collector instead of the global no-op
+	// provider every span in this binary silently fell into before this line
+	// existed -- confirmed absent by grep across this whole tree prior to
+	// this change. Fails soft on a bad/absent OTEL_* config (same contract
+	// tracing.Init's own doc comment describes): a broken collector or
+	// malformed env var never stops query-api from serving traffic, it just
+	// leaves tracing disabled. Started before anything else so no early
+	// resolver call can race an uninitialised global provider; shut down
+	// last, after the HTTP server has stopped accepting requests, so
+	// buffered spans from the final in-flight requests still flush.
+	logger := logging.NewJSON(os.Stdout, slog.LevelInfo)
+	tracingComponent := tracing.InitWithServiceName(logger, otelServiceName)
+
 	// Constructed to prove the schema/resolver pair builds and links
 	// correctly (see newExecutableSchemaHandler's doc comment); not
 	// mounted on any mux route in this Wave.
@@ -253,5 +284,15 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("query-api: graceful shutdown error: %v", err)
+	}
+
+	// Shut down tracing LAST, after the server has stopped accepting new
+	// requests -- flushes any spans still buffered from the final in-flight
+	// requests. A no-op on a disabled/never-installed component (see
+	// tracing.Component.Shutdown's own doc comment).
+	tracingShutdownCtx, tracingCancel := context.WithTimeout(context.Background(), tracingShutdownTimeout)
+	defer tracingCancel()
+	if err := tracingComponent.Shutdown(tracingShutdownCtx); err != nil {
+		log.Printf("query-api: tracing shutdown error: %v", err)
 	}
 }

@@ -69,6 +69,17 @@ def compute_schema_digest(sdl_path: Path) -> str:
     return "sha256:" + hashlib.sha256(sdl_path.read_bytes()).hexdigest()
 
 
+def _leading_fence_run(stripped_line: str) -> tuple[str | None, int]:
+    """``("`", 4)`` for a line opening/closing with ```` ```` ````, else
+    ``(None, 0)``. Recognises both ``` and ~~~ fences, and reports the run
+    LENGTH so nesting can be tracked."""
+    for char in ("`", "~"):
+        if stripped_line.startswith(char * 3):
+            run = len(stripped_line) - len(stripped_line.lstrip(char))
+            return char, run
+    return None, 0
+
+
 def _digest_appears_in_a_history_row(history_section: str, digest: str) -> bool:
     """True iff ``digest`` appears in a row of THE history table.
 
@@ -86,13 +97,26 @@ def _digest_appears_in_a_history_row(history_section: str, digest: str) -> bool:
       force from, moved by, notes), all non-empty -- a ``| digest | | | |``
       stub records nothing either.
     """
-    in_fence = False
+    # Fence tracking by CHARACTER AND LENGTH, not a boolean (codex r3, P1).
+    # A toggle cannot represent nesting: ```` opening, ``` opening, ```
+    # closing, ```` closing flipped the flag back to "outside" halfway
+    # through, so an example row inside the nested block satisfied the gate.
+    # CommonMark's rule is that a fence closes only on a run of the SAME
+    # character at least as long as the opener, which is exactly what is
+    # needed here.
+    fence_char: str | None = None
+    fence_len = 0
     for line in history_section.splitlines():
         stripped = line.strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
+        run_char, run_len = _leading_fence_run(stripped)
+        if run_char is not None:
+            if fence_char is None:
+                fence_char, fence_len = run_char, run_len
+                continue
+            if run_char == fence_char and run_len >= fence_len:
+                fence_char, fence_len = None, 0
             continue
-        if in_fence:
+        if fence_char is not None:
             continue
         # The section ends where the next heading begins; a table below an
         # unrelated later heading is not this table.

@@ -110,23 +110,46 @@ def _redact_url(url: str) -> str:
     )
 
 
-#: Matches ``//user:password@`` inside arbitrary text. Used on exception
-#: strings, which are not URLs and cannot be parsed as one, but which can
-#: still embed the URL that failed (urllib and the socket layer both do
-#: this for some error classes).
+#: Matches a URL authority's userinfo inside arbitrary text -- everything
+#: between ``//`` and the LAST ``@`` that still precedes the end of the
+#: authority (``/``, ``?``, ``#`` or whitespace).
 #:
-#: The password half deliberately allows ``/`` (codex r2, P2): an earlier
-#: version excluded it, so ``http://alice:pa/ss@host`` slipped through with
-#: the password intact. A password is percent-encoded by well-behaved
-#: callers but nothing guarantees it, and the cost of matching slightly too
-#: much here is a redacted string -- the cost of matching too little is a
-#: leaked credential. The user half still excludes ``/`` so the pattern
-#: cannot start matching at a path segment.
-_USERINFO_IN_TEXT = re.compile(r"//[^/\s:@]+:[^\s@]*@")
+#: Three earlier shapes of this pattern each leaked, and the lesson is the
+#: same every time: **do not try to describe what a credential looks like.**
+#:
+#: * v1 excluded ``/`` from the password, so ``alice:pa/ss@`` leaked (r2).
+#: * v2 stopped at the FIRST ``@``, so ``alice:s@cret@host`` leaked ``cret``
+#:   -- a raw ``@`` in a password is legal and nothing forces encoding (r3).
+#: * v2 also required a non-empty username, so ``:secret@host`` leaked the
+#:   password entirely (r3).
+#:
+#: This version describes the AUTHORITY instead, which has a definition:
+#: it ends at the first ``/``, ``?``, ``#`` or space, and any ``@`` inside
+#: it separates userinfo from host. Greedy matching therefore lands on the
+#: last such ``@``.
+#:
+#: The second alternative exists because the first one alone REGRESSED r2's
+#: vector: a ``/`` in a password is malformed per RFC 3986, so
+#: ``alice:pa/ss@host`` puts the ``@`` outside the authority and the strict
+#: branch never matches it. Malformed is exactly when a credential is most
+#: likely to be hand-typed, so the fallback scrubs to the last ``@`` before
+#: whitespace instead. Ordered so the strict branch wins where it applies,
+#: which keeps the host visible for diagnosis.
+#:
+#: Known and accepted over-redaction: a URL with no credentials but an
+#: ``@`` in its PATH (``http://host/pkg@v2``) has its host redacted too.
+#: Over-matching costs a redacted string; under-matching costs a
+#: credential, and that trade is not close.
+_USERINFO_IN_TEXT = re.compile(r"//(?:[^/?#\s]*@|[^\s]*@)")
 
 
 def _redact_text(text: str) -> str:
-    """Strip ``//user:password@`` from free text (an exception message)."""
+    """Strip a URL's userinfo from free text (an exception message).
+
+    Text, not a URL, so it cannot be parsed field-by-field the way
+    :func:`_redact_url` does -- but an exception string can still embed the
+    URL that failed, credentials included.
+    """
     return _USERINFO_IN_TEXT.sub("//<redacted>@", text)
 
 
@@ -466,8 +489,15 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
                     "python_plane_digest_error": digest_error,
                     "go_plane_schema_digest": go_digest,
                     "go_plane_error": go_error,
+                    # None means UNKNOWN, not "different" (codex r3, P1).
+                    # A comparison against a digest this process could not
+                    # compute has no truth value, and asserting one is the
+                    # exact failure mode this whole change exists to end:
+                    # stating a confident wrong answer instead of "unknown".
                     "planes_agree": (
-                        go_digest == local_digest if go_digest is not None else None
+                        None
+                        if (go_digest is None or local_digest is None)
+                        else go_digest == local_digest
                     ),
                     "registry_db_error": db_error,
                     "catalog_loaded": catalog_ok,
@@ -506,7 +536,18 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
         )
     else:
         print(f"python plane schema_digest : {local_digest}")
-    if go_digest is not None:
+    if go_digest is None:
+        print(f"go plane schema_digest     : UNREACHABLE ({go_error})")
+    elif local_digest is None:
+        # Both halves of the comparison are required for it to mean
+        # anything. Print the fact, withhold the verdict.
+        print(f"go plane schema_digest     : {go_digest}  [UNKNOWN]")
+        print(
+            "  The planes cannot be compared: this process could not compute "
+            "its own digest (above). This is NOT a mismatch -- it is an "
+            "unanswered question."
+        )
+    else:
         agree = "AGREE" if go_digest == local_digest else "MISMATCH"
         print(f"go plane schema_digest     : {go_digest}  [{agree}]")
         if go_digest != local_digest:
@@ -514,8 +555,6 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
                 "  !! Rows follow the deployed image. Every row written at "
                 f"{local_digest} is unreachable to this binary. See {_RUNBOOK}"
             )
-    else:
-        print(f"go plane schema_digest     : UNREACHABLE ({go_error})")
     if not catalog_ok:
         print(
             "!! CATALOG UNAVAILABLE: api/graphql/go_api_operations.json failed "
@@ -533,7 +572,12 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
     print("rows by schema_digest:")
     if digest_counts:
         for digest, count in sorted(digest_counts.items()):
-            marker = "  <- live" if digest == local_digest else "  <- STALE"
+            if local_digest is None:
+                # Cannot say which of these is live without the live digest;
+                # calling them all STALE would be a fabricated verdict.
+                marker = "  <- live/stale UNKNOWN"
+            else:
+                marker = "  <- live" if digest == local_digest else "  <- STALE"
             print(f"  {digest}  {count}{marker}")
     else:
         print("  (table is empty -- nothing is enabled for Go)")

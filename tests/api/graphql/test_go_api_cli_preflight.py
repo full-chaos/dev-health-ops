@@ -483,27 +483,169 @@ def test_a_malformed_port_does_not_crash_redaction() -> None:
     assert "secret" not in out
 
 
+# Every vector below was MEASURED leaking at some point in this PR's review
+# history. Each is asserted with a direct `not in`, and there is deliberately
+# no `or` anywhere: the previous version of this test read
+#     assert "s@cret" not in redacted or "<redacted>" in redacted
+# and the `or` made it vacuous, since "<redacted>" is always present. It
+# passed while the credential leaked (trap #43's class, in my own hand).
+_REDACTION_VECTORS = [
+    # (url, the substring that must never survive)
+    ("http://alice:super-secret@host/registry", "super-secret"),  # r1
+    ("http://alice:pa/ss@host/registry", "pa/ss"),  # r2: '/' in password
+    ("http://alice:s@cret@host/registry", "cret"),  # r3: raw '@' in password
+    ("http://:secret@host/registry", "secret"),  # r3: empty username
+    ("http://alice@host/registry", "alice"),  # r3: username only
+    ("http://alice:secret@example.com:bad/registry", "secret"),  # malformed port
+    ("http://alice:secret@[::1]:8080/registry", "secret"),  # IPv6 host
+    ("http://user:p%40ss@host/registry", "p%40ss"),  # percent-encoded
+]
+
+
+@pytest.mark.parametrize(("url", "secret"), _REDACTION_VECTORS)
+def test_redact_text_never_leaves_the_secret(url: str, secret: str) -> None:
+    redacted = go_api_cli._redact_text(url)
+    assert secret not in redacted
+    assert "<redacted>" in redacted
+
+
+@pytest.mark.parametrize(("url", "secret"), _REDACTION_VECTORS)
+def test_redact_url_never_leaves_the_secret(url: str, secret: str) -> None:
+    redacted = go_api_cli._redact_url(url)
+    assert secret not in redacted
+    assert "<redacted>" in redacted
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://alice:super-secret@host/registry", "http://<redacted>@host/registry"),
+        ("http://alice:pa/ss@host/registry", "http://<redacted>@host/registry"),
+        ("http://alice:s@cret@host/registry", "http://<redacted>@host/registry"),
+        ("http://:secret@host/registry", "http://<redacted>@host/registry"),
+        ("http://alice@host/registry", "http://<redacted>@host/registry"),
+        (
+            "http://alice:secret@example.com:bad/registry",
+            "http://<redacted>@example.com:bad/registry",
+        ),
+        (
+            "http://alice:secret@[::1]:8080/registry",
+            "http://<redacted>@[::1]:8080/registry",
+        ),
+    ],
+)
+def test_redaction_keeps_the_host_exactly(url: str, expected: str) -> None:
+    """Pinned output, not a disjunction.
+
+    Over-redaction has a real cost: the host is the diagnostic, and an
+    operator who cannot see which endpoint failed is barely better off than
+    one who saw a password. Asserting the exact string keeps both halves
+    honest and leaves no `or` for a future edit to hide behind.
+    """
+    assert go_api_cli._redact_text(url) == expected
+
+
 @pytest.mark.parametrize(
     "url",
     [
-        "http://alice:super-secret@host/registry",
-        "http://alice:pa/ss@host/registry",
-        "http://alice:s@cret@host/registry",
-        "http://user:p%40ss@host/registry",
-        "http://alice:secret@[::1]:8080/registry",
-        "http://alice:secret@example.com:bad/registry",
+        "http://127.0.0.1:1/registry",
+        "http://host/registry?q=1",
+        "https://query-api.internal:8080/registry",
     ],
 )
-def test_no_password_survives_either_redactor(url: str) -> None:
-    """Both helpers, over the shapes a real URL can take.
+def test_a_url_without_credentials_is_left_intact(url: str) -> None:
+    assert go_api_cli._redact_text(url) == url
+    assert go_api_cli._redact_url(url) == url
 
-    The cost of over-matching here is a redacted string; the cost of
-    under-matching is a leaked credential, so these assert absence rather
-    than an exact rendering.
+
+@pytest.mark.asyncio
+async def test_status_never_states_a_verdict_it_cannot_support(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r3 P1: with no local digest, `status` claimed MISMATCH.
+
+    `None` means UNKNOWN, not "different". r2's fix stopped the crash and
+    left every downstream comparison treating None as a value, so the tool
+    reported a confident MISMATCH, `planes_agree: false`, and the literal
+    string "written at None" -- sending an operator to rebuild an image
+    over a missing file. Stating a confident wrong answer instead of
+    "unknown" is the precise failure this whole change exists to end.
     """
-    for redacted in (go_api_cli._redact_url(url), go_api_cli._redact_text(url)):
-        assert "super-secret" not in redacted
-        assert "pa/ss" not in redacted
-        assert "s@cret" not in redacted or "<redacted>" in redacted
-        assert "p%40ss" not in redacted
-        assert "secret" not in redacted or "<redacted>" in redacted
+    import contextlib
+
+    import dev_health_ops.db as db_module
+
+    @contextlib.asynccontextmanager
+    async def dead_session():
+        raise RuntimeError("db down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db_module, "get_postgres_session", dead_session)
+    monkeypatch.setattr(
+        go_api_cli,
+        "current_schema_digest",
+        lambda: (_ for _ in ()).throw(RuntimeError("missing SDL")),
+    )
+    monkeypatch.setattr(
+        go_api_cli,
+        "_fetch_go_plane_registry",
+        lambda _url: go_api_cli.GoPlaneRegistry(
+            schema_digest="sha256:29d509cd", operations={}
+        ),
+    )
+
+    assert (
+        await go_api_cli._cmd_routing_status(
+            argparse.Namespace(query_api_url="http://query-api", json=False)
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "MISMATCH" not in out
+    assert "None" not in out
+    assert "[UNKNOWN]" in out
+    assert "NOT a mismatch" in out
+    assert "<- STALE" not in out
+
+
+@pytest.mark.asyncio
+async def test_status_json_reports_planes_agree_as_null_when_unknown(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import contextlib
+    import json as json_module
+
+    import dev_health_ops.db as db_module
+
+    @contextlib.asynccontextmanager
+    async def dead_session():
+        raise RuntimeError("db down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db_module, "get_postgres_session", dead_session)
+    monkeypatch.setattr(
+        go_api_cli,
+        "current_schema_digest",
+        lambda: (_ for _ in ()).throw(RuntimeError("missing SDL")),
+    )
+    monkeypatch.setattr(
+        go_api_cli,
+        "_fetch_go_plane_registry",
+        lambda _url: go_api_cli.GoPlaneRegistry(
+            schema_digest="sha256:29d509cd", operations={}
+        ),
+    )
+
+    assert (
+        await go_api_cli._cmd_routing_status(
+            argparse.Namespace(query_api_url="http://query-api", json=True)
+        )
+        == 0
+    )
+    payload = json_module.loads(capsys.readouterr().out)
+    assert payload["python_plane_schema_digest"] is None
+    assert payload["planes_agree"] is None, (
+        "planes_agree must be null when a plane's digest is unknown -- false "
+        "asserts a mismatch that was never measured"
+    )
+    assert payload["go_plane_schema_digest"] == "sha256:29d509cd"

@@ -56,6 +56,22 @@ def tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _insert_into_history_section(doc_path: Path, block: str) -> None:
+    """Insert `block` inside the history section, after its last table row.
+
+    Anything appended to end-of-file lands after a later heading, which the
+    section bound rejects on its own -- so a test that appends is not
+    testing what it thinks it is.
+    """
+    text = doc_path.read_text()
+    heading_at = text.index(checker.HISTORY_HEADING)
+    head, tail = text[:heading_at], text[heading_at:]
+    lines = tail.splitlines(keepends=True)
+    last_row = max(i for i, line in enumerate(lines) if line.strip().startswith("|"))
+    lines.insert(last_row + 1, block)
+    doc_path.write_text(head + "".join(lines))
+
+
 def _append_history_row(doc_path: Path, digest: str) -> None:
     """Insert a row into the history TABLE, as an operator would.
 
@@ -290,3 +306,81 @@ def test_a_row_in_a_later_unrelated_table_does_not_count(
 
     assert checker.main(["--root", str(tree)]) == 1
     assert "is NOT recorded" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("name", "fence_open", "fence_inner"),
+    [
+        ("nested backtick", "````", "```"),
+        ("nested tilde", "~~~~", "~~~"),
+        ("mixed backtick then tilde", "```", "~~~"),
+    ],
+)
+def test_nested_fences_cannot_smuggle_an_example_row(
+    tree: Path,
+    capsys: pytest.CaptureFixture[str],
+    name: str,
+    fence_open: str,
+    fence_inner: str,
+) -> None:
+    """codex r3 (P1): a boolean toggle cannot represent nesting.
+
+    ```` opening, ``` opening, ``` closing, ```` closing flipped the flag
+    back to "outside" halfway through, so an illustrative row inside the
+    nested block satisfied the gate -- the exact evasion the fence skip
+    exists to prevent.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    # INSIDE the history section, not appended at end-of-file. Appending
+    # lands after the next heading, where the section bound rejects it
+    # before the fence logic is ever consulted -- the first version of this
+    # test passed for that reason and proved nothing about fences.
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    _insert_into_history_section(
+        doc_path,
+        f"{fence_open}\n{fence_inner}\n"
+        f"| `{moved}` | 2026-09-07 | example | not a real row |\n"
+        f"{fence_inner}\n{fence_open}\n",
+    )
+
+    assert checker.main(["--root", str(tree)]) == 1, name
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+def test_a_longer_closing_fence_still_closes_the_block(tree: Path) -> None:
+    """The converse: a real row after a properly closed block still counts.
+
+    A fence rule that never closes would make the gate unsatisfiable, which
+    is its own failure -- people route around a gate they cannot pass.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    text = doc_path.read_text()
+    heading_at = text.index(checker.HISTORY_HEADING)
+    head, tail = text[:heading_at], text[heading_at:]
+    lines = tail.splitlines(keepends=True)
+    last_row = max(i for i, line in enumerate(lines) if line.strip().startswith("|"))
+    lines.insert(last_row + 1, "```\nan example block\n```\n")
+    lines.insert(
+        last_row + 2,
+        f"| `{moved}` | 2026-09-07 | a test commit | after a closed fence |\n",
+    )
+    doc_path.write_text(head + "".join(lines))
+
+    assert checker.main(["--root", str(tree)]) == 0

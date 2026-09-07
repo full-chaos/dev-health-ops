@@ -13,41 +13,26 @@ everywhere, on every PR.
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-
-from dev_health_ops.models.go_api_registry import ProofRun
 
 
 def _compiled_proof_query(operations: dict[str, str]) -> str:
-    """Rebuild `operations_with_enablement_proof`'s SELECT and compile it.
+    """Compile THE PRODUCTION statement.
 
-    Imported from the module under test rather than retyped, so the two
-    cannot drift: the function is exercised for its WHERE clause, which is
-    the thing the fix changed.
+    codex r3 (P3): this used to rebuild the same clauses by hand and compile
+    the copy, which proves only that the test agrees with itself -- a
+    regression in the real function would not have failed it. It now imports
+    `build_enablement_proof_select`, the seam the async function actually
+    executes, so the SQL under assertion is the SQL that runs.
     """
-    from dev_health_ops.api.graphql import go_api_routing_admin as admin
+    from dev_health_ops.api.graphql.go_api_routing_admin import (
+        build_enablement_proof_select,
+    )
 
-    # Re-derive the same predicate the function builds, via the module's own
-    # constants, and compile with literals bound so the text is inspectable.
-    stmt = (
-        sa.select(ProofRun.selected_operation)
-        .where(
-            ProofRun.schema_digest == "sha256:live",
-            ProofRun.candidate_build == "build-1",
-            ProofRun.stage == admin.ENABLEMENT_PROOF_STAGE,
-            ProofRun.terminal_state == admin.ENABLEMENT_PROOF_TERMINAL_STATE,
-            sa.or_(
-                *(
-                    sa.and_(
-                        ProofRun.selected_operation == operation,
-                        ProofRun.document_digest == document_digest,
-                    )
-                    for operation, document_digest in operations.items()
-                )
-            ),
-        )
-        .distinct()
+    stmt = build_enablement_proof_select(
+        schema_digest="sha256:live",
+        candidate_build="build-1",
+        operations=operations,
     )
     return str(
         stmt.compile(
@@ -58,24 +43,21 @@ def _compiled_proof_query(operations: dict[str, str]) -> str:
 
 
 def test_the_production_query_constrains_document_digest() -> None:
-    """The fourth column must appear in the real function's WHERE clause.
+    """The fourth key column must be in the SQL that actually runs.
 
-    Read off the function itself, not a copy: a regression that drops
-    `document_digest` again must fail here even though this test has no
-    database.
+    Asserted against the COMPILED production statement, not against the
+    source text and not against a rebuilt copy: if a regression drops
+    `document_digest` from the predicate, the emitted SQL loses it and this
+    fails, with no database required.
     """
-    import inspect
-
-    from dev_health_ops.api.graphql import go_api_routing_admin as admin
-
-    source = inspect.getsource(admin.operations_with_enablement_proof)
-    assert "ProofRun.document_digest == document_digest" in source, (
+    sql = " ".join(_compiled_proof_query({"featureFlags": "doc-ff"}).split())
+    assert "document_digest = 'doc-ff'" in sql, (
         "the proof lookup no longer constrains document_digest -- a proof "
         "recorded against a DIFFERENT registered document would authorize "
         "an enablement (plan section 8.3: a proof is evidence for exactly "
         "one 4-column tuple)"
     )
-    assert "ProofRun.selected_operation == operation" in source
+    assert "selected_operation = 'featureFlags'" in sql
 
 
 def test_the_predicate_pairs_operation_with_its_own_document() -> None:
@@ -107,3 +89,43 @@ def test_the_predicate_carries_all_four_key_columns() -> None:
         assert column in sql, f"{column} missing from the proof predicate"
     assert "deployed_executed" in sql
     assert "'match'" in sql
+
+
+def test_zero_operations_never_reaches_the_database() -> None:
+    """An empty mapping short-circuits before any query is built."""
+    import asyncio
+
+    from dev_health_ops.api.graphql.go_api_routing_admin import (
+        operations_with_enablement_proof,
+    )
+
+    class _ExplodingSession:
+        async def execute(self, *_a, **_k):  # pragma: no cover - must not run
+            raise AssertionError("queried the database for an empty mapping")
+
+    assert (
+        asyncio.run(
+            operations_with_enablement_proof(
+                _ExplodingSession(),  # type: ignore[arg-type]
+                schema_digest="sha256:live",
+                candidate_build="b",
+                operations={},
+            )
+        )
+        == frozenset()
+    )
+
+
+def test_one_operation_still_pairs_both_columns() -> None:
+    sql = " ".join(_compiled_proof_query({"featureFlags": "doc-ff"}).split())
+    assert "selected_operation = 'featureFlags'" in sql
+    assert "document_digest = 'doc-ff'" in sql
+
+
+def test_sql_metacharacters_in_an_operation_name_stay_data() -> None:
+    """A quote in an operation name must not change the parse."""
+    hostile = "feature'; DROP TABLE go_api_proof_run; --"
+    sql = " ".join(_compiled_proof_query({hostile: "doc"}).split())
+    assert "DROP TABLE go_api_proof_run" not in sql.replace("''", "'").split("WHERE")[0]
+    # The quote is escaped by doubling, i.e. it is a literal, not syntax.
+    assert "feature''; DROP TABLE" in sql

@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
 
 from dev_health_ops.models.go_api_registry import ProofRun, RoutingState
 
@@ -45,6 +46,7 @@ from .go_api_registry import register_candidate_build
 
 __all__ = [
     "ENABLEMENT_PROOF_STAGE",
+    "build_enablement_proof_select",
     "ENABLEMENT_PROOF_TERMINAL_STATE",
     "OperationStatus",
     "count_rows_by_schema_digest",
@@ -233,13 +235,38 @@ async def operations_with_enablement_proof(
     """
     if not operations:
         return frozenset()
+    result = await session.execute(
+        build_enablement_proof_select(
+            schema_digest=schema_digest,
+            candidate_build=candidate_build,
+            operations=operations,
+        )
+    )
+    return frozenset(result.scalars().all())
+
+
+def build_enablement_proof_select(
+    *,
+    schema_digest: str,
+    candidate_build: str,
+    operations: Mapping[str, str],
+) -> Select[tuple[str]]:
+    """The SELECT :func:`operations_with_enablement_proof` executes.
+
+    Extracted so a test can COMPILE THE PRODUCTION PREDICATE rather than a
+    hand-rebuilt copy of it (codex r3, P3). The previous test reconstructed
+    the same clauses and compiled those, which proves only that the test
+    agrees with itself -- a regression in the real function would not have
+    failed it. The behaviour needs no database to verify, so the seam is
+    worth having.
+    """
     # The key is FOUR columns, and `document_digest` is not optional
     # (codex r1, P2 -- it was missing, so a proof recorded against a
     # DIFFERENT registered document could authorize an enablement).
     # Matched as an explicit tuple-OR rather than two independent `IN`
     # lists: `selected_operation IN (...) AND document_digest IN (...)`
     # is a cross product and would accept exactly the mismatch under test.
-    result = await session.execute(
+    return (
         select(ProofRun.selected_operation)
         .where(
             ProofRun.schema_digest == schema_digest,
@@ -258,7 +285,6 @@ async def operations_with_enablement_proof(
         )
         .distinct()
     )
-    return frozenset(result.scalars().all())
 
 
 async def count_rows_by_schema_digest(session: AsyncSession) -> dict[str, int]:

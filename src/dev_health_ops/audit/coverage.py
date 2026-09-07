@@ -178,6 +178,17 @@ def _sink_check(repo_root: Path) -> dict[str, dict[str, Any]]:
     return results
 
 
+# CHAOS-5351 (codex review, r1 P2): providers that have NO native
+# provider-sync route at all -- "synthetic" generates fixture/demo data via
+# a completely different mechanism (fixtures generate), never real
+# provider-sync ingestion -- must not report "ok" on this dimension just
+# because every REAL ingestion provider now does unconditionally. Checked
+# directly against internal/providersync/execution_registry.go: zero
+# `"synthetic"` case entries exist there, confirming this isn't a gap this
+# ticket introduced, it's a provider this dimension never applied to.
+_NO_NATIVE_PROVIDER_SYNC_ROUTE = frozenset({"synthetic"})
+
+
 def _commands_check(repo_root: Path) -> dict[str, dict[str, Any]]:
     # CHAOS-5351: this used to check for a Python sync command entrypoint
     # (`dev-hops sync work-items` -- job_work_items.py's run_work_items_sync_job
@@ -188,11 +199,22 @@ def _commands_check(repo_root: Path) -> dict[str, dict[str, Any]]:
     # work-items dataset case, one per provider) is now the only production
     # ingest path, wired unconditionally at worker startup rather than gated
     # behind a CLI command a provider could be missing from. There is nothing
-    # left for this dimension to discriminate between providers on, so every
-    # AUDIT_PROVIDERS entry reports "ok" -- this stays a distinct report
-    # dimension (not deleted outright) so `compile_coverage_report`'s
+    # left for this dimension to discriminate between REAL ingestion
+    # providers on, so every AUDIT_PROVIDERS entry EXCEPT
+    # _NO_NATIVE_PROVIDER_SYNC_ROUTE reports "ok" -- this stays a distinct
+    # report dimension (not deleted outright) so `compile_coverage_report`'s
     # `commands=` contract and its existing tests need no shape change.
-    return {provider: {"status": "ok", "missing": []} for provider in AUDIT_PROVIDERS}
+    return {
+        provider: (
+            {
+                "status": "not_applicable",
+                "missing": ["no_native_provider_sync_route"],
+            }
+            if provider in _NO_NATIVE_PROVIDER_SYNC_ROUTE
+            else {"status": "ok", "missing": []}
+        )
+        for provider in AUDIT_PROVIDERS
+    }
 
 
 def _migration_tables(repo_root: Path, tables: Sequence[str]) -> list[str]:

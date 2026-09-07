@@ -8,7 +8,7 @@ Complete reference for the dev-health-ops command-line interface.
 
 The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
 
-- `sync` : ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests, teams, work-items)
+- `sync` : ingest provider data (git, prs, blame, cicd, deployments, incidents, security, tests, teams) -- `work-items` is native-only now (see `sync work-items` below)
 - `teams` : team catalog operations (ClickHouse-backed sync)
 - `metrics` — compute analytics (daily, rebuild, dora, complexity, capacity, release-impact, validate-flags, compounding-risk)
 - `audit` — diagnostics (completeness, schema, perf, coverage)

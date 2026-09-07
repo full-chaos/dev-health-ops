@@ -112,6 +112,55 @@ def _cmd_backfill_run(ns: argparse.Namespace) -> int:
 
             provider = str(config.provider or "").strip().lower()
             sync_targets = tuple(str(t) for t in (config.sync_targets or []))
+            # CHAOS-5351 (codex review, r1 P1): sync_targets is the LEGACY
+            # target vocabulary a SyncConfiguration actually persists
+            # (`git`/`prs`/`work-items`/`operational`/...), not the
+            # canonical IntegrationDataset.dataset_key vocabulary
+            # plan_sync_run's explicit dataset_keys filter expects
+            # (`sync/planner.py:933-947` matches dataset_keys against exact
+            # dataset_key rows). Passing sync_targets straight through
+            # planned zero units for e.g. provider=github,
+            # sync_targets=["git"] -- "git" is not a dataset_key, the
+            # canonical keys it expands to are
+            # repo-metadata/commits/commit-stats/files/blame.
+            # planner_dataset_keys is the SAME single mapping used at
+            # integration-create time, sync_targets-reconciliation-on-edit,
+            # and the CHAOS-4106 data repair (sync/datasets.py's own
+            # docstring) -- reuse it here rather than re-deriving the
+            # translation a fourth time.
+            from dev_health_ops.sync.datasets import (
+                planner_dataset_keys,
+                supported_legacy_targets,
+            )
+
+            if sync_targets:
+                # team-lead ruling (r1 fix): refuse loudly on an unresolved
+                # target instead of silently planning a narrower (possibly
+                # empty) dataset_keys set. supported_legacy_targets(provider)
+                # is the union of every dataset's legacy_targets for this
+                # provider -- planner_dataset_keys can only ever produce a
+                # dataset_key from a target inside that union (each spec's
+                # dataset_key is only included when
+                # `targets.intersection(spec.legacy_targets)` is non-empty),
+                # so a target outside it can NEVER contribute a canonical
+                # key, and this check is checked BEFORE calling
+                # planner_dataset_keys, not after inspecting an empty result.
+                known_targets = set(supported_legacy_targets(provider))
+                unresolved = sorted({t for t in sync_targets if t not in known_targets})
+                if unresolved:
+                    raise ValueError(
+                        f"backfill run: sync configuration {ns.config_id} "
+                        f"({config.name!r}) has sync_targets {unresolved} "
+                        f"that provider {provider!r} does not recognize as "
+                        "a legacy target (checked against "
+                        "sync.datasets.supported_legacy_targets) -- "
+                        "refusing rather than silently planning a "
+                        "narrower or empty dataset_keys set. Full "
+                        f"sync_targets on this config: {sorted(sync_targets)}."
+                    )
+                dataset_keys = tuple(planner_dataset_keys(provider, list(sync_targets)))
+            else:
+                dataset_keys = None
             integration_id = (
                 str(config.integration_id)
                 if config.integration_id is not None
@@ -122,6 +171,23 @@ def _cmd_backfill_run(ns: argparse.Namespace) -> int:
                     f"Sync configuration {ns.config_id} has no integration_id; "
                     "cannot plan a backfill"
                 )
+
+            # CHAOS-5351 (codex review, r1 P2): source_ids=None below means
+            # "every enabled source for this integration" (sync/planner.py's
+            # _load_enabled_sources, same filter reproduced read-only here)
+            # -- count them now so the Info log states the actual scope
+            # instead of the opaque literal "all_enabled".
+            from dev_health_ops.models import IntegrationSource
+
+            enabled_source_count = (
+                session.query(IntegrationSource)
+                .filter(
+                    IntegrationSource.org_id == org_id,
+                    IntegrationSource.integration_id == uuid.UUID(integration_id),
+                    IntegrationSource.is_enabled.is_(True),
+                )
+                .count()
+            )
 
             # CHAOS-4498 (codex review, P2 / CHAOS-4500), carried over
             # unchanged from run_backfill_for_config: the shared discovery
@@ -158,24 +224,57 @@ def _cmd_backfill_run(ns: argparse.Namespace) -> int:
             since,
             before,
             org_id=org_id,
-            dataset_keys=sync_targets or None,
+            dataset_keys=dataset_keys,
             triggered_by="operator_backfill",
         )
         dispatch = result.get("dispatch") or {}
+        # CHAOS-5351 (codex review, r1 P2): dispatch_status can be
+        # "blocked_on_reference_discovery" (or any other non-"dispatched"
+        # dispatch_sync_run outcome) even though run_backfill_via_planner's
+        # own top-level result["status"] is unconditionally "success" once
+        # dispatch_required is True -- that field means "we called dispatch
+        # without raising," not "units are actually queued." Read dispatch's
+        # own status for the log/print below instead of trusting the
+        # top-level field.
+        dispatch_status = dispatch.get("status") if dispatch else result.get("status")
         logger.info(
             "Backfill dispatched: since=%s before=%s provider=%s "
-            "dataset_keys=%s unit_count=%s sync_run_id=%s dispatch_status=%s",
+            "sync_targets=%s dataset_keys=%s source_ids=all_enabled(%s) "
+            "unit_count=%s sync_run_id=%s dispatch_status=%s",
             since.isoformat(),
             before.isoformat(),
             provider,
-            sorted(sync_targets) or "all",
+            sorted(sync_targets) or "none",
+            sorted(dataset_keys) if dataset_keys else "all_enabled",
+            # CHAOS-5351 (codex review, r1 P2): source_ids=None is the
+            # intentional "every enabled source for these dataset_keys"
+            # broadening (see the comment above) -- log the ACTUAL enabled
+            # source count (queried above, same filter
+            # sync.planner._load_enabled_sources uses) rather than the
+            # opaque literal "all_enabled", so an operator can read the
+            # effective scope straight from this one log line instead of
+            # inferring it from unit_count (which also varies with the
+            # window/dataset_key count, so it cannot by itself answer "how
+            # many sources did this touch").
+            enabled_source_count,
             result.get("unit_count"),
             result.get("sync_run_id"),
-            dispatch.get("status") if dispatch else result.get("status"),
+            dispatch_status,
         )
+        # CHAOS-5351 (codex review, r1 P2): print the REAL dispatch outcome
+        # rather than a blanket "success" -- "success" previously printed
+        # even when dispatch_status was "blocked_on_reference_discovery"
+        # (or any other non-"dispatched" dispatch_sync_run outcome), which
+        # reads as terminal/done to an operator when the run may still be
+        # pending (CHAOS-4498 discovery, rate limiting, etc). This is a
+        # status report, not a new pass/fail contract -- the CLI still
+        # returns 0 for every outcome plan_sync_run/dispatch_sync_run
+        # themselves treat as non-exceptional (a raised exception is the
+        # only path to a nonzero return, unchanged from before).
+        outcome = dispatch_status if dispatch_status else "success"
         print(
-            f"Backfill {result['status']}: {result.get('unit_count', 0)} unit(s) "
-            f"for sync_run_id={result.get('sync_run_id')}"
+            f"Backfill {outcome}: {result.get('unit_count', 0)} unit(s) "
+            f"planned for sync_run_id={result.get('sync_run_id')}"
         )
         return 0
     except Exception as exc:

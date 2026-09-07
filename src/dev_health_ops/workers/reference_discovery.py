@@ -341,9 +341,10 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
         # (legacy/in-flight) runs fall back to integration.credential_id.
         #
         # CHAOS-4498 (codex review round 1, P1): this used to be gated
-        # purely on `if units:` -- wrong for seed_reference_discovery_run's
-        # zero-unit backfill anchor, which DOES need real credentials for
-        # its populate() call. Resolving unconditionally on every run broke
+        # purely on `if units:` -- wrong for the (CHAOS-5351-deleted)
+        # seed_reference_discovery_run's zero-unit backfill anchor, which
+        # DID need real credentials for its populate() call. Resolving
+        # unconditionally on every run broke
         # a DIFFERENT existing zero-unit case (codex round 2, P1): a
         # planner-originated zero-unit run (all sources/datasets disabled)
         # deliberately leaves `run.auth_source` NULL -- plan_sync_run only
@@ -354,16 +355,23 @@ def _load_discovery_context(run_uuid: uuid.UUID) -> dict[str, Any]:
         # _provider_capability check never got a chance to run).
         #
         # The correct signal is `run.auth_source is not None`, not `units`:
-        # seed_reference_discovery_run ALWAYS stamps a non-None auth_source
-        # (AUTH_SOURCE_ENVIRONMENT or AUTH_SOURCE_INTEGRATION_CREDENTIAL,
-        # via _resolve_credential_stamp, called unconditionally regardless
-        # of unit count -- and _resolve_credential_stamp itself already
-        # raises for a credential-less PagerDuty backfill target, matching
-        # this codebase's existing global invariant, which is correct), so
+        # the deleted (CHAOS-5351) seed_reference_discovery_run ALWAYS
+        # stamped a non-None auth_source (AUTH_SOURCE_ENVIRONMENT or
+        # AUTH_SOURCE_INTEGRATION_CREDENTIAL, via _resolve_credential_stamp,
+        # called unconditionally regardless of unit count -- and
+        # _resolve_credential_stamp itself already raises for a
+        # credential-less PagerDuty backfill target, matching this
+        # codebase's existing global invariant, which is correct), so
         # `units or run.auth_source is not None` resolves credentials for
-        # every unit-planned run (unchanged) AND for a backfill anchor
-        # (fixed), while a genuine zero-unit, never-stamped planner run
-        # keeps its untouched no-op path (fixed back).
+        # every unit-planned run (unchanged) AND for that (now historical)
+        # backfill-anchor shape, while a genuine zero-unit, never-stamped
+        # planner run keeps its untouched no-op path. CHAOS-5351 note: no
+        # current production code stamps a zero-unit run's auth_source any
+        # more (the backfill tool dispatches through plan_sync_run's
+        # unit-planned path now), so the `run.auth_source is not None` half
+        # of this check may itself be unreachable today -- kept rather than
+        # removed since it is a defensive discriminator, not a hot path,
+        # and no ticket has ruled on deleting it yet.
         credentials: dict[str, Any] = {}
         if units or run.auth_source is not None:
             _stamped_credential_id, resolved_credentials = resolve_run_auth(

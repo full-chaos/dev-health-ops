@@ -127,10 +127,19 @@ def _patch_cmd_backfill_run_session(
     config: object,
     *,
     canonical_config: object | None = "__unset__",
+    enabled_source_count: int = 2,
 ) -> None:
     """Patch _cmd_backfill_run's config lookup + the CHAOS-4500 canonical-
     config resolver. Defaults canonical_config to `config` itself (the happy
-    path: the shared resolver picks the operator's own config)."""
+    path: the shared resolver picks the operator's own config).
+
+    `enabled_source_count` backs the CHAOS-5351 (codex review, r1 P2)
+    IntegrationSource.count() query the Info log's source_ids=all_enabled(N)
+    field reads -- the query model class isn't checked, so ANY `.query(...)`
+    call in _cmd_backfill_run (the SyncConfiguration lookup OR the source
+    count) reaches this same `_Query`, one_or_none() returning the config
+    and count() returning this fixed value regardless of which table was
+    actually queried."""
 
     class _Query:
         def filter(self, *args, **kwargs):
@@ -138,6 +147,9 @@ def _patch_cmd_backfill_run_session(
 
         def one_or_none(self):
             return config
+
+        def count(self):
+            return enabled_source_count
 
     class _Session:
         def query(self, *args, **kwargs):
@@ -153,9 +165,7 @@ def _patch_cmd_backfill_run_session(
     monkeypatch.setattr(
         "dev_health_ops.backfill.cli.get_postgres_session_sync", lambda: _Ctx()
     )
-    resolved_canonical = (
-        config if canonical_config == "__unset__" else canonical_config
-    )
+    resolved_canonical = config if canonical_config == "__unset__" else canonical_config
     monkeypatch.setattr(
         "dev_health_ops.sync.trigger_routing.canonical_sync_config_for_sync_run",
         lambda session, sync_run: resolved_canonical,
@@ -204,8 +214,158 @@ def test_cmd_backfill_run_calls_planner_with_resolved_window_and_config(
     assert captured["org_id"] == config_org
     dataset_keys = captured["dataset_keys"]
     assert isinstance(dataset_keys, tuple)
-    assert set(dataset_keys) == {"work-items", "prs"}
+    # CHAOS-5351 (codex review, r1 P1): dataset_keys is the CANONICAL
+    # dataset_key expansion of the legacy sync_targets
+    # (sync/datasets.planner_dataset_keys), not sync_targets verbatim --
+    # "work-items" and "prs" both fan out to every dataset_key whose
+    # legacy_targets includes them (the same mapping used at
+    # integration-create/edit time), so this is deliberately wider than the
+    # 2-element raw target set.
+    assert set(dataset_keys) == {
+        "work-items",
+        "work-item-labels",
+        "work-item-projects",
+        "work-item-history",
+        "work-item-comments",
+        "prs",
+        "pr-reviews",
+        "pr-comments",
+    }
     assert captured["triggered_by"] == "operator_backfill"
+
+
+def test_cmd_backfill_run_translates_legacy_git_target_to_canonical_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CHAOS-5351 codex review r1 P1: a SyncConfiguration persists LEGACY
+    sync_targets ("git", not a real dataset_key) -- passing that straight
+    through to run_backfill_via_planner's dataset_keys filter planned ZERO
+    units, since plan_sync_run matches dataset_keys against exact
+    IntegrationDataset.dataset_key rows and "git" is not one. Reviewer's
+    executed repro: provider=github, sync_targets=["git"] ->
+    dataset_keys=('git',) -> unit_count=0."""
+    from dev_health_ops.backfill import cli as backfill_cli
+
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_cmd_backfill_run_session(
+        monkeypatch,
+        _FakeConfig(config_org, provider="github", sync_targets=["git"]),
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_planner(*args, **kwargs):
+        captured.update(kwargs)
+        return {"status": "success", "unit_count": 4, "sync_run_id": "run-2"}
+
+    monkeypatch.setattr(backfill_cli, "run_backfill_via_planner", _fake_planner)
+
+    assert backfill_cli._cmd_backfill_run(_run_ns()) == 0
+
+    dataset_keys = captured["dataset_keys"]
+    assert isinstance(dataset_keys, tuple)
+    assert "git" not in dataset_keys
+    assert set(dataset_keys) == {
+        "repo-metadata",
+        "commits",
+        "commit-stats",
+        "files",
+        "blame",
+    }
+
+
+def test_cmd_backfill_run_translates_pagerduty_operational_target_to_canonical_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Class case for the P1 fix (team-lead ruling): pagerduty's single
+    legacy target "operational" fans out to all 11 of its canonical
+    dataset_keys -- a second provider/shape proving the translation isn't
+    github-specific."""
+    from dev_health_ops.backfill import cli as backfill_cli
+
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_cmd_backfill_run_session(
+        monkeypatch,
+        _FakeConfig(config_org, provider="pagerduty", sync_targets=["operational"]),
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_planner(*args, **kwargs):
+        captured.update(kwargs)
+        return {"status": "success", "unit_count": 11, "sync_run_id": "run-3"}
+
+    monkeypatch.setattr(backfill_cli, "run_backfill_via_planner", _fake_planner)
+
+    assert backfill_cli._cmd_backfill_run(_run_ns()) == 0
+
+    dataset_keys = captured["dataset_keys"]
+    assert isinstance(dataset_keys, tuple)
+    assert "operational" not in dataset_keys
+    assert set(dataset_keys) == {
+        "services",
+        "business-services",
+        "escalation-policies",
+        "schedules",
+        "on-calls",
+        "users",
+        "teams",
+        "incidents",
+        "incident-alerts",
+        "incident-log-entries",
+        "incident-notes",
+    }
+
+
+def test_cmd_backfill_run_refuses_on_unresolvable_sync_target(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Team-lead ruling (r1 fix): a sync_targets entry the provider does not
+    recognize at all (never a valid legacy target for ANY of its datasets)
+    must REFUSE loudly, naming the unresolved target -- never silently plan
+    a narrower or empty dataset_keys set and dispatch 0 units."""
+    from dev_health_ops.backfill import cli as backfill_cli
+
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_cmd_backfill_run_session(
+        monkeypatch,
+        _FakeConfig(
+            config_org, provider="github", sync_targets=["git", "not-a-real-target"]
+        ),
+    )
+    monkeypatch.setattr(
+        backfill_cli,
+        "run_backfill_via_planner",
+        lambda *a, **k: pytest.fail("must not dispatch on an unresolved target"),
+    )
+
+    with caplog.at_level("ERROR"):
+        result = backfill_cli._cmd_backfill_run(_run_ns())
+
+    assert result == 1
+    assert "not-a-real-target" in caplog.text
+    assert "github" in caplog.text
+
+
+def test_cmd_backfill_run_passes_dataset_keys_none_when_config_has_no_sync_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty/unset sync_targets means "no explicit narrowing" -- must stay
+    None (the planner's own all-enabled-datasets contract), not an empty
+    tuple (which would filter down to nothing)."""
+    from dev_health_ops.backfill import cli as backfill_cli
+
+    config_org = "55555555-5555-5555-5555-555555555555"
+    _patch_cmd_backfill_run_session(
+        monkeypatch, _FakeConfig(config_org, sync_targets=[])
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        backfill_cli,
+        "run_backfill_via_planner",
+        lambda *a, **k: (captured.update(k), {"status": "success"})[1],
+    )
+
+    assert backfill_cli._cmd_backfill_run(_run_ns()) == 0
+    assert captured["dataset_keys"] is None
 
 
 def test_cmd_backfill_run_derives_org_from_config_when_org_omitted(
@@ -234,9 +394,9 @@ def test_cmd_backfill_run_raises_on_org_mismatch(
     config_org = "77777777-7777-7777-7777-777777777777"
     _patch_cmd_backfill_run_session(monkeypatch, _FakeConfig(config_org))
     monkeypatch.setattr(
-        backfill_cli, "run_backfill_via_planner", lambda *a, **k: pytest.fail(
-            "must not dispatch on an org mismatch"
-        )
+        backfill_cli,
+        "run_backfill_via_planner",
+        lambda *a, **k: pytest.fail("must not dispatch on an org mismatch"),
     )
 
     with caplog.at_level("ERROR"):
@@ -270,9 +430,11 @@ def test_cmd_backfill_run_rejects_child_config_id(
         monkeypatch, child_config, canonical_config=parent_config
     )
     monkeypatch.setattr(
-        backfill_cli, "run_backfill_via_planner", lambda *a, **k: pytest.fail(
+        backfill_cli,
+        "run_backfill_via_planner",
+        lambda *a, **k: pytest.fail(
             "must not dispatch when the canonical-config guard fires"
-        )
+        ),
     )
 
     with caplog.at_level("ERROR"):

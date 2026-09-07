@@ -484,4 +484,3 @@ def _merge_github_project_v2_rows(
         *repository_transitions,
         *(project_transitions or []),
     ]
-

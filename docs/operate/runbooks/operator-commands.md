@@ -130,9 +130,11 @@ See §(c) above for the full ordered recovery sequence these two commands partic
 Provider sync raw ingestion is essentially 100% NATIVE for every provider/dataset pair (github, gitlab,
 jira, linear, launchdarkly, pagerduty -- see `docs/go-migration-matrix.md` SYNC's generated table; the one
 exception is jira team-membership auto-import, still Python, CHAOS-4198). `dev-hops sync <git|prs|blame|
-cicd|deployments|incidents|teams|work-items>` is an operator-trigger shell over the same native Go
-sync-dispatch path (`sync_processor.register_commands`) -- the CLI verb dispatches through the native path,
-it is not itself a Python compute engine, unlike the metrics CLI verbs in §(a).
+cicd|deployments|incidents|teams>` is an operator-trigger shell over the same native Go sync-dispatch path
+(`sync_processor.register_commands`) -- the CLI verb dispatches through the native path, it is not itself
+a Python compute engine, unlike the metrics CLI verbs in §(a). `work-items` has NO CLI verb at all
+(CHAOS-5351 deleted `sync work-items`) -- it is synced automatically by the native provider-sync route and
+by webhooks; use `dev-hops backfill run --config-id <uuid>` to force a window.
 
 Run `dev-hops sync --help` for the exact current flag syntax before using it in prod.
 

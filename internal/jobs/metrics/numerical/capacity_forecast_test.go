@@ -338,3 +338,78 @@ func describeInt(value *int) string {
 	}
 	return strconv.Itoa(*value)
 }
+
+// TestMonteCarloSurvivesANegativeSimulationCount is CHAOS-5349 r1 P1's kernel
+// half.
+//
+// Until query-api served capacityForecast, nothing could reach these functions
+// with a negative count: the worker takes the number from a partition scope its
+// own scheduler wrote. The GraphQL field takes it from the caller, and
+// `simulations` is `Int! = 10000` in the SDL -- non-null, but unconstrained
+// below. A negative value panicked `make` ("makeslice: cap out of range"), which
+// in a resolver is a 500 with no useful body.
+//
+// All FOUR allocation sites are exercised, because two of them sit on early
+// returns that a test hitting only the main loop would miss entirely.
+//
+// The expected answer is Python's: `range(-1)` is empty and `[0] * -1` is `[]`,
+// so a negative count yields no simulations. The RESOLVER rejects such a request
+// outright rather than answering from it -- see capacityforecast.ResolveForecast
+// -- but the kernel must not be the thing that decides that, and must never be
+// the thing that panics.
+func TestMonteCarloSurvivesANegativeSimulationCount(t *testing.T) {
+	history := []int{3, 4, 5}
+
+	for _, simulations := range []int{-1, -10000} {
+		// Main loop, days mode.
+		days, err := MonteCarloForecastDays(history, 10, simulations, 42)
+		if err != nil {
+			t.Fatalf("MonteCarloForecastDays(simulations=%d): %v", simulations, err)
+		}
+		if len(days) != 0 {
+			t.Errorf("MonteCarloForecastDays(simulations=%d): got %d draws, want 0 (Python's range(%d) is empty)",
+				simulations, len(days), simulations)
+		}
+
+		// Early return, days mode: target_items <= 0 returns before seeding.
+		earlyDays, err := MonteCarloForecastDays(history, 0, simulations, 42)
+		if err != nil {
+			t.Fatalf("MonteCarloForecastDays(targetItems=0, simulations=%d): %v", simulations, err)
+		}
+		if len(earlyDays) != 0 {
+			t.Errorf("early-return days: got %d, want 0", len(earlyDays))
+		}
+
+		// Main loop, items mode.
+		items, err := MonteCarloForecastItems(history, 7, simulations, 42)
+		if err != nil {
+			t.Fatalf("MonteCarloForecastItems(simulations=%d): %v", simulations, err)
+		}
+		if len(items) != 0 {
+			t.Errorf("MonteCarloForecastItems(simulations=%d): got %d draws, want 0", simulations, len(items))
+		}
+
+		// Early return, items mode: days_available <= 0.
+		earlyItems, err := MonteCarloForecastItems(history, 0, simulations, 42)
+		if err != nil {
+			t.Fatalf("MonteCarloForecastItems(daysAvailable=0, simulations=%d): %v", simulations, err)
+		}
+		if len(earlyItems) != 0 {
+			t.Errorf("early-return items: got %d, want 0", len(earlyItems))
+		}
+	}
+}
+
+// TestSimulationCountIsANoOpForEveryRealisticInput proves the clamp cannot have
+// moved a fixture: it changes nothing for any non-negative value, which is every
+// value any existing golden contains.
+func TestSimulationCountIsANoOpForEveryRealisticInput(t *testing.T) {
+	for _, simulations := range []int{0, 1, 2, 500, 10000, 1 << 20} {
+		if got := simulationCount(simulations); got != simulations {
+			t.Errorf("simulationCount(%d) = %d, want it unchanged", simulations, got)
+		}
+	}
+	if got := simulationCount(-1); got != 0 {
+		t.Errorf("simulationCount(-1) = %d, want 0", got)
+	}
+}

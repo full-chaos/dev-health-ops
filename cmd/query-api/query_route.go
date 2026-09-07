@@ -529,6 +529,175 @@ const registeredInvestmentFullDocument = `query InvestmentFull($orgId: String!, 
   }
 }`
 
+// registeredCapacityForecastDocument is CHAOS-5349's registered document
+// for the capacityForecast operation -- the on-demand Monte Carlo, one of
+// the three capacity/forecast operations this ticket moves off Python.
+//
+// Same "registered documents only" contract as every const above: this is
+// the urql WIRE FORM, not the source text in
+// web/src/lib/graphql/queries.ts. urql's cacheExchange runs formatDocument
+// (injecting the __typename selections visible below) and fetchExchange
+// runs stringifyDocument before the bytes leave the browser, so a const
+// copied from the source file digests to a value no real client ever
+// sends -- which is exactly the defect CHAOS-4696 found sitting live on
+// featureFlags. Produced by the web repo's OWN wire-parity tooling
+// (web/scripts/graphql-wire-parity.ts's wireForm), which is the same
+// function its CI check compares this registry against; the featureFlags
+// fixture under testdata/wire_capture remains the independent, real-HTTP
+// proof that wireForm's output IS what a real fetch() puts on the wire.
+// Source const: CAPACITY_FORECAST_QUERY, queries.ts:236.
+const registeredCapacityForecastDocument = `query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {
+  capacityForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    targetItems
+    targetDate
+    p50Date
+    p85Date
+    p95Date
+    p50Days
+    p85Days
+    p95Days
+    p50Items
+    p85Items
+    p95Items
+    throughputMean
+    throughputStddev
+    historyDays
+    insufficientHistory
+    highVariance
+    __typename
+  }
+}`
+
+// registeredCapacityForecastsDocument is CHAOS-5349's registered document
+// for the capacityForecasts operation -- the persisted-row connection,
+// which reads what the native worker executor already writes.
+//
+// Same wire-form provenance as registeredCapacityForecastDocument above.
+// Source const: CAPACITY_FORECASTS_QUERY, queries.ts:330.
+const registeredCapacityForecastsDocument = `query CapacityForecasts($orgId: String!, $filters: CapacityForecastFilterInput) {
+  capacityForecasts(orgId: $orgId, filters: $filters) {
+    edges {
+      node {
+        forecastId
+        computedAt
+        teamId
+        workScopeId
+        backlogSize
+        targetItems
+        targetDate
+        p50Date
+        p85Date
+        p95Date
+        p50Days
+        p85Days
+        p95Days
+        p50Items
+        p85Items
+        p95Items
+        throughputMean
+        throughputStddev
+        historyDays
+        insufficientHistory
+        highVariance
+        __typename
+      }
+      cursor
+      __typename
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+      __typename
+    }
+    totalCount
+    __typename
+  }
+}`
+
+// registeredThroughputForecastDocument is CHAOS-5349's registered document
+// for the throughputForecast operation -- the rolling-window model, the
+// largest of the three and the only one with no pre-existing Go kernel.
+//
+// Same wire-form provenance as registeredCapacityForecastDocument above.
+// Source const: THROUGHPUT_FORECAST_QUERY, queries.ts:264.
+const registeredThroughputForecastDocument = `query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {
+  throughputForecast(orgId: $orgId, input: $input) {
+    forecastId
+    computedAt
+    teamId
+    workScopeId
+    backlogSize
+    historyWeeks
+    p50Weeks
+    p75Weeks
+    p90Weeks
+    insufficientHistory
+    rollingWindows {
+      windowWeeks
+      meanWeeklyThroughput
+      sampleCount
+      insufficientHistory
+      __typename
+    }
+    primaryRisk {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    wipCongestion {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    staleWip {
+      p50AgeHours
+      p90AgeHours
+      __typename
+    }
+    estimateCoverage {
+      ratio
+      estimatedCount
+      unestimatedCount
+      backlogSize
+      __typename
+    }
+    reviewBottleneck {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    incidentLoad {
+      kind
+      score
+      label
+      value
+      threshold
+      active
+      __typename
+    }
+    __typename
+  }
+}`
+
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
 // now shared code in cmd/query-api/internal/digest so
@@ -1004,6 +1173,9 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"flowMatrix":           digestHex(registeredFlowMatrixDocument),
 		"investmentBreakdown":  digestHex(registeredInvestmentBreakdownDocument),
 		"investmentFull":       digestHex(registeredInvestmentFullDocument),
+		"capacityForecast":     digestHex(registeredCapacityForecastDocument),
+		"capacityForecasts":    digestHex(registeredCapacityForecastsDocument),
+		"throughputForecast":   digestHex(registeredThroughputForecastDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

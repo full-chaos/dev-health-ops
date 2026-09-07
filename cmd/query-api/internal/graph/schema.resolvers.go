@@ -7,10 +7,12 @@ package graph
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/capacityforecast"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/cognitiveload"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/complexitytimeseries"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
@@ -18,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/operatingreview"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/throughputforecast"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -431,19 +434,167 @@ func (r *queryResolver) ReportRuns(ctx context.Context, orgID string, reportID s
 	panic(fmt.Errorf("not implemented: ReportRuns - reportRuns"))
 }
 
-// CapacityForecast is the resolver for the capacityForecast field.
+// CapacityForecast is the resolver for the capacityForecast field
+// (CHAOS-5349). Ports
+// dev_health_ops.api.graphql.resolvers.capacity.resolve_capacity_forecast
+// via capacityforecast.ResolveForecast -- see that package's doc comment
+// for the full parity contract (the falsy target-items fallback, the two
+// tolerated null answers, and the DECLARED seed divergence: Python runs
+// this Monte Carlo unseeded, so this port draws a fresh crypto/rand seed
+// per request rather than inventing a fixed one).
+//
+// The orgID parameter is deliberately UNUSED for scoping, matching
+// Python's ACTUAL behavior exactly: resolve_capacity_forecast accepts an
+// org_id argument, never reads it, and authorizes via
+// require_org_id(context) alone -- the same "authorized org always wins,
+// a client-supplied orgId is parsed but never trusted" behavior
+// operatingReview/cognitiveLoad/reviewEdges/hotspots already document.
+// This resolver reproduces that by construction: it passes claims.OrgID,
+// never orgID.
+//
+// time.Now() is passed in rather than read inside the package because the
+// read windows are wall-clock derived (utc_today() minus historyDays) and
+// therefore move at UTC midnight -- injecting it is what lets a test pin
+// the window without the production path pinning one Python never pins.
 func (r *queryResolver) CapacityForecast(ctx context.Context, orgID string, input *model.CapacityForecastInput) (*model.CapacityForecast, error) {
-	panic(fmt.Errorf("not implemented: CapacityForecast - capacityForecast"))
+	// CHAOS-5349 r1 P2: the span starts BEFORE the authorization guard, so an
+	// org-scoping rejection is counted rather than silent. Guarding first --
+	// which is what every earlier delegated resolver in this file does -- means
+	// a caller whose envelope carries no org produces no span and no counter at
+	// all, so "this operation is being called and rejected" and "this operation
+	// is receiving no traffic" look identical in the metrics. That is the one
+	// question an operator asks first. (The older operations share the defect;
+	// widening this PR to them was declined deliberately -- it is filed as its
+	// own sweep.)
+	spanCtx, finish := startCapacityForecastSpan(ctx)
+
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		finish("denied")
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	result, err := capacityforecast.ResolveForecast(spanCtx, r.ClickHouse, claims.OrgID, input, time.Now())
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("capacityForecast: %w", err)
+	}
+	// A null result is a TOLERATED empty (no history, or no positive item
+	// target), not a failure -- counted as its own outcome so an org whose
+	// every request answers null is visible in the metrics.
+	if result == nil {
+		finish("empty")
+		return nil, nil
+	}
+	finish("ok")
+	return result, nil
 }
 
-// CapacityForecasts is the resolver for the capacityForecasts field.
+// CapacityForecasts is the resolver for the capacityForecasts field
+// (CHAOS-5349). Ports
+// dev_health_ops.api.graphql.resolvers.capacity.resolve_capacity_forecasts
+// via capacityforecast.ResolveForecasts -- see that package's doc comment
+// for the connection contract this reproduces rather than fixes (the
+// cursor is the forecastId verbatim, totalCount is the PAGE length, and
+// hasPreviousPage is hardcoded false because nothing pages backwards).
+//
+// Same orgID-is-parsed-but-never-trusted rule as CapacityForecast above.
 func (r *queryResolver) CapacityForecasts(ctx context.Context, orgID string, filters *model.CapacityForecastFilterInput) (*model.CapacityForecastConnection, error) {
-	panic(fmt.Errorf("not implemented: CapacityForecasts - capacityForecasts"))
+	// CHAOS-5349 r1 P2: the span starts BEFORE the authorization guard, so an
+	// org-scoping rejection is counted rather than silent. Guarding first --
+	// which is what every earlier delegated resolver in this file does -- means
+	// a caller whose envelope carries no org produces no span and no counter at
+	// all, so "this operation is being called and rejected" and "this operation
+	// is receiving no traffic" look identical in the metrics. That is the one
+	// question an operator asks first. (The older operations share the defect;
+	// widening this PR to them was declined deliberately -- it is filed as its
+	// own sweep.)
+	spanCtx, finish := startCapacityForecastsSpan(ctx)
+
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		finish("denied")
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	result, err := capacityforecast.ResolveForecasts(spanCtx, r.ClickHouse, claims.OrgID, filters)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("capacityForecasts: %w", err)
+	}
+	if len(result.Edges) == 0 {
+		finish("empty")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
-// ThroughputForecast is the resolver for the throughputForecast field.
+// ThroughputForecast is the resolver for the throughputForecast field
+// (CHAOS-5349). Ports
+// dev_health_ops.api.graphql.resolvers.forecast.resolve_throughput_forecast
+// via throughputforecast.Resolve -- see that package's doc comment for the
+// full parity contract (the no-estimate contract for a partial rolling
+// window, the inverted percentile bands, and insufficientHistory as
+// provenance rather than data volume).
+//
+// This is the only one of the three CHAOS-5349 operations with no
+// pre-existing Go kernel: unlike capacityForecast, which reuses the
+// worker's numerical.ForecastCapacity, the whole rolling-window model was
+// ported for this resolver and is pinned against live Python by
+// tests/fixtures/throughput_forecast_golden.json.
+//
+// Same orgID-is-parsed-but-never-trusted rule as CapacityForecast above.
 func (r *queryResolver) ThroughputForecast(ctx context.Context, orgID string, input model.ThroughputForecastInput) (*model.ThroughputForecast, error) {
-	panic(fmt.Errorf("not implemented: ThroughputForecast - throughputForecast"))
+	// CHAOS-5349 r1 P2: the span starts BEFORE the authorization guard, so an
+	// org-scoping rejection is counted rather than silent. Guarding first --
+	// which is what every earlier delegated resolver in this file does -- means
+	// a caller whose envelope carries no org produces no span and no counter at
+	// all, so "this operation is being called and rejected" and "this operation
+	// is receiving no traffic" look identical in the metrics. That is the one
+	// question an operator asks first. (The older operations share the defect;
+	// widening this PR to them was declined deliberately -- it is filed as its
+	// own sweep.)
+	spanCtx, finish := startThroughputForecastSpan(ctx)
+
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		finish("denied")
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	result, err := throughputforecast.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input, time.Now())
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("throughputForecast: %w", err)
+	}
+	// This resolver never answers null -- an empty scope gets the structured
+	// no-history payload instead -- so "empty" is detected from the sentinel
+	// forecast id rather than from a nil result.
+	if result != nil && result.ForecastID == "no-history" {
+		finish("empty")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
 // OperatingReview is the resolver for the operatingReview field (CHAOS-4352

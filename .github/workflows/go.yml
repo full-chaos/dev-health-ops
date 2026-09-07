@@ -368,7 +368,12 @@ jobs:
           # measurement is n=1, which is exactly why the inner bound
           # matters: it fails loud on its own terms rather than depending
           # on that single data point staying representative.
-          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... \
+          # CHAOS-5349 added ./cmd/query-api/...: the throughput-forecast kernel
+          # is FMA-class float code with a bit-exact live-Python golden, and it
+          # lives under cmd/, not internal/jobs/. Before this, the job's package
+          # glob silently excluded it -- the test existed, passed on amd64, and
+          # was never once run on the architecture it was written for.
+          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... ./cmd/query-api/... \
             -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
             | tee go-test-output.json
           ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)

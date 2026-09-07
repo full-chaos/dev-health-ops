@@ -41,7 +41,7 @@ Until these gaps are fixed, we recommend triggering the equivalent Celery jobs i
 
 Subcommands like `metrics daily` also accept `--sink` to select the output backend. Legacy values (`mongo`, `sqlite`, `postgres`, `both`) are rejected immediately with a migration message. ClickHouse is the only supported analytics backend.
 
-> **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`, `investment materialize`, `work-graph build`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
+> **Caveat:** Some subcommands (e.g., `audit completeness`, `audit coverage`, `work-graph build`) define their own `--db` flag that accepts an **analytics** (ClickHouse) connection string, overriding the global `--db` meaning for that subcommand. Check individual subcommand docs below for the expected connection type.
 
 ### Dual-Database Architecture
 
@@ -91,7 +91,6 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 |-------------|----------|
 | ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
 | `dev-health-workerctl` binary on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN`), Postgres coordinator (+org) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055: dispatch to the Go worker, no direct ClickHouse connection of their own) |
-| ClickHouse via `--db` (`CLICKHOUSE_URI`) | `investment materialize` |
 | PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); `migrate configs-to-integrations` (one-time child-config -> integration data migration; `--dry-run` to preview); legacy `migrate upgrade`/`downgrade`/`current` |
 | Organization (`--org` / `ORG_ID`) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055), `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
 
@@ -1912,32 +1911,7 @@ dev-hops work-graph build --db "$CLICKHOUSE_URI" \
 
 ## Investment
 
-### `investment materialize`
-
-Materialize WorkUnit investment categorization (theme/subcategory distributions and edges) into ClickHouse sinks. Takes its ClickHouse DSN via its own `--db` flag (default: `CLICKHOUSE_URI`).
-
-```bash
-# Full org materialization (publishes coverage marker)
-dev-hops investment materialize --db "$CLICKHOUSE_URI" --org "$ORG_ID"
-
-# Date-windowed refresh (unscoped → still publishes the org-wide coverage
-# marker via the full-coverage membership projection; CHAOS-2776)
-dev-hops investment materialize --window-days 30 --llm-provider none
-```
-
-**Options:**
-| Option | Description |
-|--------|-------------|
-| `--db` | ClickHouse connection string (default: `CLICKHOUSE_URI`) |
-| `--from` / `--to` | Date range (`--from` defaults to `--window-days` before `--to`; `--to` defaults to now) |
-| `--window-days` | Window size when `--from` is not set (default: 30). Windowing does NOT suppress the org-wide membership marker — the post-run projection is full-coverage by construction (CHAOS-2776) |
-| `--repo-id` / `--team-id` | Filter to specific repos/teams. Scoped runs skip the membership projection and publish no org-wide marker |
-| `-l, --llm-provider` | LLM provider (`auto`, `openai`, `anthropic`, `local`, `mock`, `none`). Use `none` for distributions without explanations |
-| `-m, --model` | LLM model name (overrides provider default) |
-| `--persist-evidence-snippets` / `--no-persist-evidence-snippets` | Persist or skip extractive evidence quotes |
-| `--force` | Force re-materialization |
-
-> Investment categorization runs at **compute time** and persists distributions through sinks only.
+> **CHAOS-5173:** the `dev-hops investment materialize` verb was deleted — it was a separate, direct-Python-compute entry point from the `investment.materialize` River kind, which is NATIVE and runs through the same worker dispatch/idempotency every other kind does. Use `dev-health-workerctl investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` to enqueue a fresh run through the native executor instead. It drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) — only an org id and an optional `--from`/`--to` window exist on the request.
 
 ---
 

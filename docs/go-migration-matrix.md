@@ -278,9 +278,9 @@ deleted, the frozen file and this one test survive.
 CHAOS-4924 -- `WorkGraphBuilder.build()` had shrunk to a 0-stats no-op by then; use
 `dev-health-workerctl workgraph trigger` instead (table below).
 
-| CLI verb | Executor | Writer call site | Ticket |
-|---|---|---|---|
-| `dev-hops investment materialize` | COMPAT-Python | `work_graph/runner.py run_investment_materialization`. NOTE: the CLI verb is a SEPARATE entry point from the `investment.materialize` River kind, which is NATIVE (table below) -- the CLI still runs the Python implementation directly, and re-pointing it is CHAOS-4767's follow-up. | CHAOS-4767 |
+`dev-hops investment materialize` was deleted entirely (CHAOS-5173) -- it was a separate, direct-Python-compute entry point from the `investment.materialize` River kind (NATIVE, table below); `dev-health-workerctl investment trigger` (see §(c)/(d) in `docs/operate/runbooks/operator-commands.md`) is the only CLI path now, and it goes through the native executor like the automatic producers do.
+
+No COMPAT-Python CLI verbs remain in this section (CHAOS-3092 close condition).
 
 No `families.json` equivalent exists for these 5 River kinds (`internal/jobs/families.json` does not exist)
 -- the table below is entirely hand-tracked in `WORKGRAPH_INVESTMENT_LEDGER` in

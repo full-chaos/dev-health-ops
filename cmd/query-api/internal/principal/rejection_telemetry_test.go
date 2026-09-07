@@ -65,12 +65,16 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 		name       string
 		wantReason string
 		wantKID    string
+		wantIss    string
+		wantAud    string
 		token      func() string
 	}{
 		{
 			name:       "unknown_kid",
 			wantReason: "unknown_kid",
 			wantKID:    "edge-minted-kid-not-in-jwks",
+			wantIss:    testIssuer,
+			wantAud:    testAudience,
 			token: func() string {
 				return signEnvelope(t, priv, "edge-minted-kid-not-in-jwks", baseClaims())
 			},
@@ -79,6 +83,8 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			name:       "bad_signature",
 			wantReason: "bad_signature",
 			wantKID:    testKID,
+			wantIss:    testIssuer,
+			wantAud:    testAudience,
 			token: func() string {
 				// Right kid, WRONG key -- proves signature verification,
 				// not just kid lookup, drives this classification.
@@ -89,6 +95,8 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			name:       "audience",
 			wantReason: "audience",
 			wantKID:    testKID,
+			wantIss:    testIssuer,
+			wantAud:    "some-other-service",
 			token: func() string {
 				claims := baseClaims()
 				claims.Audience = jwt.ClaimStrings{"some-other-service"}
@@ -99,6 +107,8 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			name:       "issuer",
 			wantReason: "issuer",
 			wantKID:    testKID,
+			wantIss:    "not-the-real-edge",
+			wantAud:    testAudience,
 			token: func() string {
 				claims := baseClaims()
 				claims.Issuer = "not-the-real-edge"
@@ -109,6 +119,8 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			name:       "expired",
 			wantReason: "expired",
 			wantKID:    testKID,
+			wantIss:    testIssuer,
+			wantAud:    testAudience,
 			token: func() string {
 				claims := baseClaims()
 				past := time.Now().Add(-2 * time.Minute)
@@ -121,6 +133,8 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			name:       "not_yet_valid",
 			wantReason: "not_yet_valid",
 			wantKID:    testKID,
+			wantIss:    testIssuer,
+			wantAud:    testAudience,
 			token: func() string {
 				claims := baseClaims()
 				claims.NotBefore = jwt.NewNumericDate(time.Now().Add(2 * time.Minute))
@@ -131,6 +145,8 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			name:       "malformed",
 			wantReason: "malformed",
 			wantKID:    "",
+			wantIss:    "",
+			wantAud:    "",
 			token: func() string {
 				return "not-a-jwt-at-all"
 			},
@@ -165,6 +181,12 @@ func TestVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			}
 			if got, _ := rec["kid"].(string); got != tc.wantKID {
 				t.Errorf("log kid = %q, want %q", got, tc.wantKID)
+			}
+			if got, _ := rec["iss"].(string); got != tc.wantIss {
+				t.Errorf("log iss = %q, want %q", got, tc.wantIss)
+			}
+			if got, _ := rec["aud"].(string); got != tc.wantAud {
+				t.Errorf("log aud = %q, want %q", got, tc.wantAud)
 			}
 			if got, _ := rec["remote_addr"].(string); got != remoteAddr {
 				t.Errorf("log remote_addr = %q, want %q (the caller-supplied value)", got, remoteAddr)

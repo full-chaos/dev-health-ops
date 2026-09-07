@@ -37,9 +37,12 @@ var (
 // Verify emits on rejection (CHAOS-5443) -- remote address and a
 // correlation id, never anything from the token or the key material.
 // Carried via context (same pattern as authctx.WithClaims/FromContext,
-// one layer up the request path) rather than widening Verify's own
-// signature, so every existing caller -- including every test in this
-// package -- that has no such metadata to give keeps working unchanged.
+// one layer up the request path) rather than as two more string
+// parameters on Verify: Verify's signature does still widen once, to take
+// a context.Context (required for slog.WarnContext regardless of this
+// metadata), but every caller that has no remote-addr/request-id to give
+// -- including every pre-existing test in this package -- keeps working
+// by passing a bare context.Background(), with no metadata attached.
 type requestMeta struct {
 	remoteAddr string
 	requestID  string

@@ -17,7 +17,6 @@ const maxResponseBytes = 4 * 1024
 
 type HTTPDispatcherConfig struct {
 	WebhookEndpoint       string
-	BillingEndpoint       string
 	HeartbeatEndpoint     string
 	BearerToken           string
 	AllowInsecureInternal bool
@@ -33,7 +32,6 @@ type bridgeResponse struct {
 type HTTPDispatcher struct {
 	client            *http.Client
 	webhookEndpoint   string
-	billingEndpoint   string
 	heartbeatEndpoint string
 	token             string
 }
@@ -42,14 +40,13 @@ func NewHTTPDispatcher(client *http.Client, config HTTPDispatcherConfig) (*HTTPD
 	if client == nil || client.Timeout < 100*time.Millisecond || client.Timeout > 30*time.Second ||
 		strings.TrimSpace(config.BearerToken) == "" ||
 		!validInternalEndpoint(config.WebhookEndpoint, config.AllowInsecureInternal) ||
-		!validInternalEndpoint(config.BillingEndpoint, config.AllowInsecureInternal) ||
 		!validInternalEndpoint(config.HeartbeatEndpoint, config.AllowInsecureInternal) {
 		return nil, errors.New("operational HTTP dispatcher configuration is invalid")
 	}
 	return &HTTPDispatcher{
 		client: client, webhookEndpoint: config.WebhookEndpoint,
-		billingEndpoint: config.BillingEndpoint, heartbeatEndpoint: config.HeartbeatEndpoint,
-		token: config.BearerToken,
+		heartbeatEndpoint: config.HeartbeatEndpoint,
+		token:             config.BearerToken,
 	}, nil
 }
 
@@ -65,18 +62,6 @@ func (dispatcher *HTTPDispatcher) DispatchWebhook(ctx context.Context, delivery 
 		"provider":    delivery.Provider,
 		"event_type":  delivery.EventType,
 	}, "success", "skipped")
-}
-
-func (dispatcher *HTTPDispatcher) DispatchBilling(ctx context.Context, notification BillingNotification) error {
-	return dispatcher.post(ctx, dispatcher.billingEndpoint, map[string]string{
-		"notification_id":   notification.ID,
-		"organization_id":   notification.OrganizationID,
-		"notification_type": notification.NotificationType,
-		// CHAOS-3952: crossed so the bridge receiver can verify its own read
-		// of the durable row against Go's, and so the row's own completion
-		// fence is keyed on the same value both sides agree identifies it.
-		"idempotency_key": notification.IdempotencyKey,
-	}, "sent")
 }
 
 func (dispatcher *HTTPDispatcher) post(

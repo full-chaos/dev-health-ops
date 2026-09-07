@@ -1,0 +1,18 @@
+{
+  "app_base_url": "https://app.example.test/",
+  "attributes": {
+    "days_remaining": 3,
+    "tier": "Team",
+    "trial_end_date": "2026-10-01"
+  },
+  "case": "ascii",
+  "email_type": "trial_expiring",
+  "expected_html": "<!doctype html>\n<html lang=\"en\">\n  <body>\n    <h1>Your Team trial ends in 3 days</h1>\n    <p>Hi Dana Reed,</p>\n    <p>Your Team trial for Northwind Analytics ends on 2026-10-01.</p>\n    <p>When your trial ends, you will lose access to advanced analytics dashboards, organization-wide collaboration insights, and priority support features.</p>\n    <p><a href=\"https://app.example.test/billing\">Add a payment method</a> to keep your Team access.</p>\n  </body>\n</html>\n",
+  "expected_subject": "Your Team trial ends in 3 days",
+  "expected_to_address": "owner@example.test",
+  "owner": {
+    "email": "owner@example.test",
+    "full_name": "Dana Reed",
+    "org_name": "Northwind Analytics"
+  }
+}

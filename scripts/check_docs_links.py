@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -18,12 +19,34 @@ FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 
 def slugify(heading: str) -> str:
+    """Mirror mkdocs' real anchor algorithm (python-markdown's `toc`
+    extension, `markdown.extensions.toc.slugify`, `unicode=False` -- this
+    repo's mkdocs.yml does not opt into unicode slugs), so an anchor that
+    passes this checker matches what `mkdocs build` actually renders and
+    what `tests/docs/test_built_site_links.py` checks against real built
+    HTML (CHAOS-5417/CHAOS-5439: the old regex here additionally folded
+    `_` into `-`, which markdown's own slugify never does -- an anchor
+    that satisfied only THIS checker then 404'd on the real built site).
+
+    HTML-tag and backtick stripping happens here because this function
+    works from the raw markdown heading text, not the HTML this extension
+    receives internally after markdown has already rendered inline code
+    spans -- that pre-step has no equivalent in the upstream function to
+    mirror.
+    """
     heading = re.sub(r"<[^>]+>", "", heading)
     heading = re.sub(r"`([^`]*)`", r"\1", heading)
-    heading = heading.strip().lower()
-    heading = re.sub(r"[^\w\s-]", "", heading)
-    heading = re.sub(r"[\s_-]+", "-", heading).strip("-")
-    return heading
+    # unicode=False path: fold to the closest ASCII form first (accents
+    # stripped, e.g. "café" -> "cafe"), exactly as upstream does before
+    # its own punctuation strip.
+    heading = unicodedata.normalize("NFKD", heading)
+    heading = heading.encode("ascii", "ignore").decode("ascii")
+    heading = re.sub(r"[^\w\s-]", "", heading).strip().lower()
+    # Only whitespace/hyphen RUNS collapse to a single hyphen -- `_` is
+    # `\w` and passes through untouched, matching upstream exactly
+    # (upstream does not strip a leading/trailing hyphen either; neither
+    # does this).
+    return re.sub(r"[-\s]+", "-", heading)
 
 
 def anchors_for(path: Path) -> set[str]:

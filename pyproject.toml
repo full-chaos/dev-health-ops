@@ -308,6 +308,8 @@ module = [
   "riverqueue.*",
   "motor",
   "motor.*",
+  "markdown",
+  "markdown.*",
 ]
 ignore_missing_imports = true
 

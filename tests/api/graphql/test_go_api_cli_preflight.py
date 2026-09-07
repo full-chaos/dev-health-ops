@@ -181,3 +181,18 @@ def test_operations_are_resolved_from_the_catalog_not_a_hand_list() -> None:
     assert error is None
     assert resolved == sorted(catalog)
     assert len(resolved) == len(catalog) > 0
+
+
+def test_a_non_http_query_api_url_is_refused_before_opening_anything(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """urllib opens file:// too.
+
+    Without a scheme guard, a malformed ``GO_API_QUERY_API_URL`` would
+    make the "ask the running binary" step read a local file and then
+    refuse with a JSON parse error -- pointing an operator at the wrong
+    problem entirely.
+    """
+    assert _enable(query_api_url="file:///etc/hostname") == 2
+    err = capsys.readouterr().err
+    assert "must be http:// or https://" in err

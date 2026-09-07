@@ -102,6 +102,15 @@ def _fetch_go_plane_registry(base_url: str) -> GoPlaneRegistry:
     accepting a body missing ``schema_digest`` would defeat preflight 2
     exactly when it matters.
     """
+    # Reject anything but http(s) BEFORE urlopen: urllib happily opens
+    # file:// (and ftp://), so a malformed GO_API_QUERY_API_URL could have
+    # this "read the running binary's registry" step read a local file
+    # instead and report a confusing parse error rather than the real
+    # problem. An operator-supplied URL is exactly where that typo lives.
+    if not base_url.lower().startswith(("http://", "https://")):
+        raise GoPlaneUnavailable(
+            f"query-api URL must be http:// or https://, got {base_url!r}"
+        )
     url = base_url.rstrip("/") + "/registry"
     try:
         with urllib.request.urlopen(url, timeout=_REGISTRY_TIMEOUT_SECONDS) as resp:

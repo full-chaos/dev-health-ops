@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -27,9 +28,10 @@ import (
 //
 // # Fidelity, and where it is NOT obvious
 //
-// The Python job is the authority (src/dev_health_ops/metrics/job_dora.py:
-// run_dora_metrics_job). Two of its behaviours are easy to "improve" into a
-// divergence, so they are reproduced deliberately:
+// The deleted Python job (src/dev_health_ops/metrics/job_dora.py:
+// run_dora_metrics_job, removed once this native port landed -- CHAOS-5336)
+// was the authority this port was built against. Two of its behaviours were
+// easy to "improve" into a divergence, so they are reproduced deliberately:
 //
 //  1. THE LOADING WINDOW AND THE COUNTING WINDOW ARE DIFFERENT, ON PURPOSE.
 //     _load_deployments selects rows whose
@@ -64,6 +66,12 @@ type DORAExecutor struct {
 	contract  OperationalOrderingContract
 	nowUTC    func() time.Time
 	batchSize int
+	// logger restores the per-(org,day) observability the deleted Python job
+	// (job_dora.py) had and the native executor's aggregate-only counters
+	// (DORAObserver) do not carry (CHAOS-5382). Defaults to slog.Default() at
+	// construction, following ReleaseImpactExecutor's convention, so every
+	// call site here can log unconditionally.
+	logger *slog.Logger
 }
 
 // DORAObserver reports what the native executor actually did.
@@ -98,7 +106,7 @@ var defaultDORAMetrics = []string{
 // silently fall back to the bridge -- the two-plane rule is that the native
 // implementation REPLACES the executor for a kind wholesale.
 func NewDORAExecutor(
-	ctx context.Context, conn driver.Conn, observer DORAObserver,
+	ctx context.Context, conn driver.Conn, observer DORAObserver, logger *slog.Logger,
 ) (*DORAExecutor, error) {
 	if conn == nil {
 		return nil, errDORAUnavailable
@@ -134,13 +142,36 @@ func NewDORAExecutor(
 	if err := verifyOrderingContract(ctx, conn, contract); err != nil {
 		return nil, err
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &DORAExecutor{
 		conn:      conn,
 		observer:  observer,
 		contract:  contract,
 		nowUTC:    func() time.Time { return time.Now().UTC() },
 		batchSize: doraDefaultBatchSize,
+		logger:    logger,
 	}, nil
+}
+
+// logPartitionDay restores the per-(org,day) Info line job_dora.py logged
+// (job_dora.py:247-251): "DORA: wrote %d metric rows for org_id=%s day=%s".
+// The native executor's per-kind counter (DORAObserver) reports how many rows
+// a whole PARTITION wrote; it cannot say which day moved, or that a given
+// org/day pair wrote anything at all -- exactly what the deleted Python job's
+// per-day line gave an operator reading logs (CHAOS-5382).
+func (executor *DORAExecutor) logPartitionDay(orgID string, day time.Time, written int) {
+	if written == 0 {
+		// Python's own line was gated on `if rows:` -- a day producing zero
+		// rows logged nothing there either. Restoring the same gate keeps a
+		// quiet day quiet, matching the deleted job rather than adding a new
+		// zero-row line it never had.
+		return
+	}
+	executor.logger.Info("dora: wrote metric rows",
+		"org_id", orgID, "day", day.Format("2006-01-02"),
+		"table", "dora_metrics_daily", "rows_written", written)
 }
 
 // ComputePartition runs the dora computation for one partition.
@@ -214,6 +245,7 @@ func (executor *DORAExecutor) ComputePartition(
 		if err != nil {
 			return CompatibilityOutcome{}, err
 		}
+		executor.logPartitionDay(run.OrganizationID, current, written)
 		rowsWritten += written
 	}
 

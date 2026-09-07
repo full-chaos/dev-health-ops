@@ -276,7 +276,7 @@ func TestDORAExecutorComputesThroughTheRealClaimPath(t *testing.T) {
 	}
 	partitionID := deterministicPartitionID(run.ID, 1)
 
-	executor, err := NewDORAExecutor(ctx, conn, nil)
+	executor, err := NewDORAExecutor(ctx, conn, nil, nil)
 	if err != nil {
 		t.Fatalf("NewDORAExecutor: %v", err)
 	}
@@ -423,7 +423,7 @@ computed_at, org_id)`)
 	}
 	partitionID := deterministicPartitionID(run.ID, 1)
 
-	executor, err := NewCapacityExecutor(ctx, conn, nil)
+	executor, err := NewCapacityExecutor(ctx, conn, nil, nil)
 	if err != nil {
 		t.Fatalf("NewCapacityExecutor: %v", err)
 	}

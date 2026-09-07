@@ -12,6 +12,7 @@ entirely about the deleted /execute machinery -- is gone.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Generator
 from typing import Any, cast
@@ -143,7 +144,25 @@ def test_workgraph_repair_responds_and_commits_when_authorized(
     assert response.status_code == 200, response.text
     assert response.json() == {"status": "repaired", "request_id": str(REQUEST_ID)}
     assert session.committed
+    # Codex r1 (P2): asserting only the COUNT let a typo'd table/column name
+    # in any of the 4 statements pass silently -- a naive substring check is
+    # ALSO not enough, since "work_graph_execution_repairs_typo" still
+    # contains "work_graph_execution_repairs" (verified: mutating the real
+    # INSERT's table name to that typo kept a substring-only assertion
+    # green). \b anchors the table name on a word boundary so a suffixed
+    # typo fails here, not only against real Postgres.
     assert len(session.executed) == 4
+    select_sql, insert_sql, request_update_sql, ledger_update_sql = session.executed
+    assert "FOR UPDATE" in select_sql
+    assert re.search(r"\bwork_graph_execution_requests\b", select_sql)
+    assert re.search(r"\bwork_graph_execution_ledger\b", select_sql)
+    assert re.search(r"INSERT INTO\s+work_graph_execution_repairs\b", insert_sql)
+    assert "SET state" in request_update_sql and re.search(
+        r"UPDATE\s+work_graph_execution_requests\b", request_update_sql
+    )
+    assert "SET state" in ledger_update_sql and re.search(
+        r"UPDATE\s+work_graph_execution_ledger\b", ledger_update_sql
+    )
 
 
 def test_workgraph_repair_refuses_a_row_that_is_not_unleased_ambiguous(

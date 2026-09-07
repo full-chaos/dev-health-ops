@@ -58,18 +58,9 @@ func buildOperationalWorker(
 	if !ok || postgresDatabase.pools == nil || observer == nil || logger == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	baseURL := strings.TrimRight(cfg.OperationalBridgeURL, "/")
-	dispatcher, err := operational.NewHTTPDispatcher(
-		&http.Client{Timeout: cfg.OperationalBridgeTimeout},
-		operational.HTTPDispatcherConfig{
-			BillingEndpoint:       baseURL + "/api/internal/worker-operational/billing",
-			HeartbeatEndpoint:     baseURL + "/api/internal/worker-operational/heartbeat",
-			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
-			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
-		},
-	)
+	dispatcher, err := buildOperationalHTTPDispatcher(cfg, specs, logger)
 	if err != nil {
-		return workerFamily{}, errWorkerDependencyUnavailable
+		return workerFamily{}, err
 	}
 	// Retention deletes relay-owned outbox rows and completion fences. Use the
 	// queue-control role, whose intentionally narrow grants own that cleanup;
@@ -187,6 +178,55 @@ func buildOperationalWorker(
 		handlers: registered,
 		queues:   budgets,
 	}, nil
+}
+
+// operationalHTTPDispatchedKinds names exactly the enabled-kind checks whose
+// handlers still route through the Python-compatibility HTTP bridge. CHAOS-
+// 5320 (#2346) deleted the bridge's webhook leg entirely -- webhook delivery
+// needs no dispatcher at all now -- but billing notification and the
+// heartbeat phone-home effect are each still HTTP-backed compatibility
+// shims (see NewHeartbeatHandler's doc comment), not just billing alone.
+// CHAOS-5353 removes billing_notification from this set when it lands its
+// native port; once heartbeat follows, this whole construction collapses.
+var operationalHTTPDispatchedKinds = map[string]bool{
+	jobcontract.KindBillingNotification: true,
+	jobcontract.KindHeartbeat:           true,
+}
+
+// buildOperationalHTTPDispatcher constructs the operational HTTP bridge
+// dispatcher only when an enabled, executable kind in specs still needs it
+// (CHAOS-5384). A webhook-only worker builds no HTTP dispatcher at all and
+// so cannot fail on an unset/misconfigured bridge URL it never uses. When a
+// kind that DOES need it is enabled, an invalid bridge URL fails fast here
+// with a bounded reason instead of silently falling through.
+func buildOperationalHTTPDispatcher(
+	cfg config.Config, specs []jobruntime.HandlerSpec, logger *slog.Logger,
+) (*operational.HTTPDispatcher, error) {
+	var kinds []string
+	for _, spec := range specs {
+		if operationalHTTPDispatchedKinds[spec.Kind] {
+			kinds = append(kinds, spec.Kind)
+		}
+	}
+	if len(kinds) == 0 {
+		logger.Info("operational http dispatcher not constructed", "reason", "no enabled kind requires it")
+		return nil, nil
+	}
+	baseURL := strings.TrimRight(cfg.OperationalBridgeURL, "/")
+	dispatcher, err := operational.NewHTTPDispatcher(
+		&http.Client{Timeout: cfg.OperationalBridgeTimeout},
+		operational.HTTPDispatcherConfig{
+			BillingEndpoint:       baseURL + "/api/internal/worker-operational/billing",
+			HeartbeatEndpoint:     baseURL + "/api/internal/worker-operational/heartbeat",
+			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
+			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
+		},
+	)
+	if err != nil {
+		return nil, dependencyUnavailable("operational_http_dispatcher_misconfigured")
+	}
+	logger.Info("operational http dispatcher constructed", "kinds", strings.Join(kinds, ","))
+	return dispatcher, nil
 }
 
 type operationalTenantScope struct{}

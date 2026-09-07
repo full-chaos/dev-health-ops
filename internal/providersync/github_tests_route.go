@@ -51,8 +51,9 @@ var ErrGitHubTestsIncomplete = errors.New("github tests inventory incomplete")
 var ErrGitHubTestsArtifactUnavailable = fmt.Errorf("%w: artifact unavailable", ErrGitHubTestsIncomplete)
 
 // ErrGitHubTestsArtifactOversized narrows ErrGitHubTestsIncomplete to the
-// download-time bound violation: the artifact body exceeded
-// githubTestsMaxDownloadSize.
+// download-time bound violation: the artifact body exceeded the configured
+// per-artifact cap (githubTestsMaxDownloadSize by default, overridable via
+// GitHubTestsRouteHandler.MaxArtifactBytes / WORKER_GITHUB_TESTS_MAX_ARTIFACT_BYTES).
 //
 // CHAOS-4315 (reversing this sentinel's original disposition): in the
 // CHUNKED route -- the one production dispatch always executes for cicd/tests

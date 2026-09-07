@@ -682,6 +682,48 @@ func TestGitHubTestsRoutineNotFoundArtifactsDoNotFireTotality(t *testing.T) {
 	}
 }
 
+// TestGitHubTestsNotFoundOnlyUnitStillLogsTheSkipSummary pins the CHAOS-5427
+// follow-up N-1 fix: RED on the pre-fix code, where a unit whose ONLY skip
+// this attempt was routine not-found (no oversized/unavailable/
+// unreadable_archive) emitted NO summary log line at all -- notFoundExcluded
+// fed neither `incomplete` (by design, matching the routine-404/410
+// disposition) nor excludedSuffix/excludedPrefix, so
+// githubTestsLogArtifactSkipSummary's hasArtifactDisposition gate never saw
+// evidence a real skip happened this attempt, even though
+// totality_excluded_not_found was genuinely nonzero. GREEN after: the gate
+// also checks notFoundExcluded directly.
+func TestGitHubTestsNotFoundOnlyUnitStillLogsTheSkipSummary(t *testing.T) {
+	records := captureMembershipLogs(t)
+	doer := &githubTestsNotFoundArtifactDoer{t: t, runs: 2, status: http.StatusNotFound}
+	client := githubTestsClient(t, doer)
+
+	walk, err := walkGitHubTestsChunksResult(t, client, 8)
+	if err != nil {
+		t.Fatalf("two routine not-found artifacts sank the unit: err=%v", err)
+	}
+	if walk.cursor.Phase != "done" {
+		t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
+	}
+
+	var found *slog.Record
+	for index := range *records {
+		if (*records)[index].Level == slog.LevelWarn &&
+			(*records)[index].Message == "provider artifacts skipped this unit; inventory continued" {
+			found = &(*records)[index]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no skip-summary WARN record for a not-found-only unit; got %d records", len(*records))
+	}
+	attrs := membershipLogAttrs(*found)
+	if got := attrs["totality_excluded_not_found"]; got != int64(2) {
+		t.Fatalf("totality_excluded_not_found=%v (%T), want 2", got, got)
+	}
+	if got := attrs["artifact_skip_total"]; got != int64(0) {
+		t.Fatalf("artifact_skip_total=%v, want 0 -- a not-found skip is not a whole-artifact skip in that vocabulary", got)
+	}
+}
+
 // githubTestsMixedNotFoundDoer serves three runs: one whose artifact 404s
 // (routine, excluded from totality accounting) and two whose artifacts are
 // genuinely unreadable (a 2xx non-zip body). Mixes the two dispositions the

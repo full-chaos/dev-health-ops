@@ -561,7 +561,14 @@ func githubTestsLogArtifactSkipSummary(
 	// Firing THIS "provider artifacts skipped this unit" line for a unit whose
 	// only incompleteness was run-level claimed a skip that never happened,
 	// with a misleading artifact_skip_total=0 right next to the message.
-	hasArtifactDisposition := excludedSuffix > 0 || excludedPrefix > 0
+	// notFoundExcluded is included here (codex review r1, CHAOS-5427 follow-up
+	// N-1): a unit whose ONLY skip this attempt is routine not-found never
+	// appends anything to `incomplete` (by design -- see the notFound branch's
+	// own doc comment in CollectChunks) and never touches excludedSuffix/
+	// excludedPrefix either, so without this it silently logged nothing even
+	// though a real skip -- and its totality_excluded_not_found count -- did
+	// happen this attempt.
+	hasArtifactDisposition := excludedSuffix > 0 || excludedPrefix > 0 || notFoundExcluded > 0
 	for _, observation := range incomplete {
 		if observation.Component == githubTestsReportMemberComponent && observation.Count > 0 {
 			hasArtifactDisposition = true
@@ -1517,8 +1524,9 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.ArchivesUnreadable = bumpGitHubTestsArchiveCounter(cursor.ArchivesUnreadable)
 								continue
 							}
-							// An artifact whose body exceeded
-							// githubTestsMaxDownloadSize is provider data
+							// An artifact whose body exceeded the configured
+							// per-artifact cap (githubTestsMaxDownloadSize by
+							// default) is provider data
 							// too: the same repository produces the same
 							// oversized bytes on every future attempt, so
 							// failing the whole unit here pinned

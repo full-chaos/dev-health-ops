@@ -219,6 +219,7 @@ func frozenOracleDivergences(
 	goOnlyFields map[string]string,
 ) []string {
 	t.Helper()
+	assertOracleSourcesUnchangedSinceBuild(t)
 	validateOracleCasesAndFields(t, "frozenOracleDivergences", cases, goOnlyFields)
 	_, currentFile, _, _ := runtime.Caller(0)
 	packageDir := filepath.Dir(currentFile)
@@ -388,7 +389,17 @@ func recordGenericOracleProof(t *testing.T, packageDir, pairID string) {
 // directive's file list drifted out of sync with what oracleDivergences
 // actually executes.
 //
-//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/oracle_pairs/*.py
+// testdata/oracle_frozen/*.json carries the SAME stale-cache risk
+// (CHAOS_hygiene_0907 (cc)): frozenOracleDivergences reads those snapshots
+// from disk at run time exactly like oracleDivergences shells out to the
+// Python files above, but the directive used to list only the live-oracle
+// sources -- a byte-level edit to a frozen snapshot changed nothing this
+// binary embeds, so `go test`'s cache could serve a stale PASS after a
+// frozen golden changed. Embedding the frozen snapshots too closes that gap
+// the same way, and frozenOracleDivergences now calls
+// assertOracleSourcesUnchangedSinceBuild just like oracleDivergences does.
+//
+//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/oracle_pairs/*.py testdata/oracle_frozen/*.json
 var embeddedOracleSources embed.FS
 
 // The comparison vocabulary below moved to internal/testsupport/oraclecompare

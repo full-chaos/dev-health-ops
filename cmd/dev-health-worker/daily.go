@@ -1468,11 +1468,11 @@ func addRemainingWorker[T jobruntime.ContractArgs](
 	registry *jobruntime.Registry,
 	spec jobruntime.HandlerSpec,
 	store remaining.Store,
-	compatibility remaining.CompatibilityExecutor,
+	executor remaining.PartitionExecutor,
 	dependencies jobruntime.Dependencies,
 	family string,
 ) (jobruntime.HandlerSpec, error) {
-	handler, err := remaining.NewPartitionHandler[T](store, compatibility, family)
+	handler, err := remaining.NewPartitionHandler[T](store, executor, family)
 	if err != nil {
 		return jobruntime.HandlerSpec{}, err
 	}

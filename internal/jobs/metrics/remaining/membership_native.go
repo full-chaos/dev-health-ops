@@ -173,7 +173,7 @@ func verifyMembershipSchema(ctx context.Context, conn driver.Conn) error {
 	return nil
 }
 
-// ComputePartition satisfies CompatibilityExecutor: the seam the partition
+// ComputePartition satisfies PartitionExecutor: the seam the partition
 // handler drives.
 //
 // Unlike recommendations, this kind needs no readiness gate of its own here:
@@ -221,7 +221,7 @@ func (executor *MembershipExecutor) ComputePartition(
 }
 
 // A compile-time pin that this executor IS the seam the handler drives.
-var _ CompatibilityExecutor = (*MembershipExecutor)(nil)
+var _ PartitionExecutor = (*MembershipExecutor)(nil)
 
 // unitNodesFor converts one units.Component into the deduplicated node list
 // its work_unit_id hashes over. units.BuildComponents already dedupes

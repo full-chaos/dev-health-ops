@@ -183,7 +183,13 @@ func requireSameWindows(t *testing.T, got []rollingWindow, want []goldenRollingW
 	}
 }
 
-func TestForecastThroughputCapacityMatchesLivePython(t *testing.T) {
+// The `MatchesLivePythonBitExact` SUFFIX IS LOAD-BEARING, not a style choice:
+// .github/workflows/go.yml's go-arm64-numeric-parity job selects its tests with
+// `-run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$'`.
+// Rename this test without that suffix and it silently stops running on arm64
+// -- which is the only architecture where the FMA fusion this fixture exists to
+// catch actually happens.
+func TestForecastThroughputCapacityMatchesLivePythonBitExact(t *testing.T) {
 	fixture := loadGolden(t)
 	for _, testCase := range fixture.Cases {
 		t.Run(testCase.Name, func(t *testing.T) {
@@ -231,7 +237,7 @@ func TestForecastThroughputCapacityMatchesLivePython(t *testing.T) {
 // cannot reach: resolve_throughput_forecast hand-builds its empty payload from
 // compute_rolling_windows and compute_risk_overlays without ever calling
 // forecast_throughput_capacity, so no kernel vector exercises it.
-func TestNoHistoryPayloadMatchesLivePython(t *testing.T) {
+func TestNoHistoryPayloadMatchesLivePythonBitExact(t *testing.T) {
 	fixture := loadGolden(t)
 	if len(fixture.ResolverPaths) != 1 {
 		t.Fatalf("expected exactly one resolver-path vector, got %d", len(fixture.ResolverPaths))

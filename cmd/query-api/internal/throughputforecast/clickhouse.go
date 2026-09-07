@@ -281,6 +281,20 @@ type estimateCoverage struct {
 }
 
 // loadEstimateCoverage ports _load_estimate_coverage.
+//
+// INHERITED QUIRK, reproduced rather than fixed: the inner dedup groups by raw
+// team_id, while estimate_coverage_metrics_daily's own sorting key is
+// `(org_id, day, provider, work_scope_id, ifNull(team_id, ”))` (migration
+// 063). team_id is Nullable(String) there, so the ReplacingMergeTree collapses
+// a NULL row and an empty-string row into ONE key while this GROUP BY treats
+// them as two groups -- a scope that has both would be counted twice here and
+// once by the engine.
+//
+// Python's query has exactly this shape (resolvers/forecast.py:284, byte
+// identical), so matching it is the parity contract and diverging would be the
+// defect. Recorded here rather than silently carried: if the quirk is ever
+// worth fixing it must be fixed on BOTH sides, in its own change, with the
+// row-count difference measured first.
 func loadEstimateCoverage(
 	ctx context.Context, client QueryClient, orgID string,
 	teamIDs []string, workScopeID *string,

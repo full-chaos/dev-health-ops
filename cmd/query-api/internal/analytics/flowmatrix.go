@@ -170,16 +170,19 @@ type compiledQuery struct {
 // note): TEAM and REPO now resolve UseInvestment exactly like AUTHOR/
 // THEME/SUBCATEGORY -- resolveUseInvestment(their own one-element
 // dimension list, req.UseInvestment) -- and route through
-// compileFlowMatrixInvestmentDimension whenever it resolves true,
-// reading LatestWorkUnitInvestmentsSource()/repoAllocationInvestmentSource()
-// (via investmentContextFor) instead of the raw work_item_cycle_times/
-// work_item_team_attributions tables the fixed templates below read.
-// Neither TEAM nor REPO is in resolveUseInvestment's auto-route set
-// ({THEME, SUBCATEGORY, WORK_TYPE}), so this only fires when the caller
-// sends an explicit useInvestment=true (web's useChordFlow.ts always
-// does) -- an unset/false UseInvestment for TEAM/REPO reaches the fixed-
-// template branch below UNCHANGED, byte-identical to before this port.
-// Python's compile_flow_matrix does NOT get this fix (chris's standing
+// compileFlowMatrixInvestmentTeamRepoDimension (NOT
+// compileFlowMatrixInvestmentDimension -- see that function's doc
+// comment for why they need a different edges shape) whenever it
+// resolves true, reading LatestWorkUnitInvestmentsSource()/
+// repoAllocationInvestmentSource() (via investmentContextFor) instead of
+// the raw work_item_cycle_times/work_item_team_attributions tables the
+// fixed templates below read. Neither TEAM nor REPO is in
+// resolveUseInvestment's auto-route set ({THEME, SUBCATEGORY,
+// WORK_TYPE}), so this only fires when the caller sends an explicit
+// useInvestment=true (web's useChordFlow.ts always does) -- an
+// unset/false UseInvestment for TEAM/REPO reaches the fixed-template
+// branch below UNCHANGED, byte-identical to before this port. Python's
+// compile_flow_matrix does NOT get this fix (chris's standing
 // no-further-Python-GraphQL-work rule) -- Python's chord for TEAM/REPO
 // keeps reading work_item_cycle_times regardless of use_investment; this
 // is a deliberate, ticketed Go/Python divergence, not a parity bug.
@@ -195,7 +198,15 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 	switch req.Dimension {
 	case DimensionTeam, DimensionRepo:
 		if resolveUseInvestment([]Dimension{req.Dimension}, req.UseInvestment) {
-			return compileFlowMatrixInvestmentDimension(req, orgID, timeoutSeconds, filters)
+			// NOT compileFlowMatrixInvestmentDimension -- that function's
+			// shared edges shape is source==target (self-pairs only), which
+			// team-lead's codex-round-1 read (2026-09-07 09:50Z) correctly
+			// rejected for TEAM/REPO: the web chord UI has self-links off
+			// by default and no field to turn them on, so a self-pairs-only
+			// result renders as "No flows match", the exact bug this ticket
+			// exists to fix. See compileFlowMatrixInvestmentTeamRepoDimension's
+			// doc comment for the bridged-self-join replacement.
+			return compileFlowMatrixInvestmentTeamRepoDimension(req, orgID, timeoutSeconds, filters)
 		}
 	case DimensionWorkType:
 		// WORK_TYPE never reads the investment source, regardless of
@@ -211,9 +222,10 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 		// rather than silently return org-wide/unfiltered data for a
 		// same-dimension flow matrix. Only reached for the fixed-template
 		// path now (TEAM/REPO with useInvestment=true already returned
-		// above, through compileFlowMatrixInvestmentDimension, which
-		// supports filters via translateFilters exactly like AUTHOR/
-		// THEME/SUBCATEGORY).
+		// above, through compileFlowMatrixInvestmentTeamRepoDimension,
+		// which supports filters via translateFilters exactly like
+		// AUTHOR/THEME/SUBCATEGORY's compileFlowMatrixInvestmentDimension
+		// does).
 		return compiledQuery{}, compiledQuery{}, newValidationError(
 			"filters", string(req.Dimension),
 			"flowMatrix filters are not supported for same-dimension %s queries yet (CHAOS-2487); "+
@@ -259,22 +271,23 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 }
 
 // flowMatrixUsesInvestmentSource reports whether CompileFlowMatrix would
-// route req through compileFlowMatrixInvestmentDimension (and therefore
-// through LatestWorkUnitInvestmentsSource) -- CHAOS-4759 codex round-2 P1
-// fix: resolveFlowMatrix (resolve.go) never sees the useInvestment value
-// compileFlowMatrixInvestmentDimension resolves internally, so a caller
-// that needs to know whether THIS request will touch the investment
-// source (to gate RecordArgMaxNullTransitionGuard) has to make the same
-// decision CompileFlowMatrix's own switch below makes. Kept here,
-// deliberately duplicating the switch's case list rather than changing
-// CompileFlowMatrix's signature to return the decision, so the two stay
-// visually adjacent and a future dimension added to one switch is easy to
-// spot missing from the other. CHAOS-5426: only WORK_TYPE now NEVER reads
-// the investment source regardless of UseInvestment (CompileFlowMatrix's
-// `case DimensionWorkType` branch skips the resolveUseInvestment check
-// entirely); TEAM, REPO, and every other dimension resolve via
-// resolveUseInvestment exactly as compileFlowMatrixInvestmentDimension
-// does below.
+// route req through the investment source (LatestWorkUnitInvestmentsSource /
+// repoAllocationInvestmentSource, via either compileFlowMatrixInvestmentDimension
+// for AUTHOR/THEME/SUBCATEGORY or compileFlowMatrixInvestmentTeamRepoDimension
+// for TEAM/REPO) -- CHAOS-4759 codex round-2 P1 fix: resolveFlowMatrix
+// (resolve.go) never sees the useInvestment value those functions resolve
+// internally, so a caller that needs to know whether THIS request will
+// touch the investment source (to gate RecordArgMaxNullTransitionGuard)
+// has to make the same decision CompileFlowMatrix's own switch below
+// makes. Kept here, deliberately duplicating the switch's case list
+// rather than changing CompileFlowMatrix's signature to return the
+// decision, so the two stay visually adjacent and a future dimension
+// added to one switch is easy to spot missing from the other. CHAOS-5426:
+// only WORK_TYPE now NEVER reads the investment source regardless of
+// UseInvestment (CompileFlowMatrix's `case DimensionWorkType` branch
+// skips the resolveUseInvestment check entirely); TEAM, REPO, and every
+// other dimension resolve via resolveUseInvestment exactly as both
+// investment-path functions below do.
 func flowMatrixUsesInvestmentSource(req FlowMatrixRequest) bool {
 	if req.Dimension == DimensionWorkType {
 		return false
@@ -288,13 +301,20 @@ func flowMatrixUsesInvestmentSource(req FlowMatrixRequest) bool {
 // sankey_nodes_template([dimension], ...) and
 // sankey_edges_template(dimension, dimension, ...) (source==target: a
 // same-dimension self-join, the flow-matrix "chord" shape) over
-// _get_context_params's investment machinery. CHAOS-5426: TEAM and REPO
-// route here too now, whenever CompileFlowMatrix's own
-// resolveUseInvestment check resolves true for them; only WORK_TYPE
-// stays permanently on the fixed hand-written templates that never read
-// use_investment at all -- the split this whole package's doc comments
-// used to call "by DIMENSION, not by the flag" (CHAOS-4538 brief §2) is
-// now "by DIMENSION, except WORK_TYPE, filtered by the flag".
+// _get_context_params's investment machinery.
+//
+// CHAOS-5426: TEAM and REPO do NOT route through this function, despite
+// also being investment dimensions now -- this function's edges shape
+// (source==target per row) produces ONLY self-pairs, which team-lead's
+// codex-round-1 read (2026-09-07 09:50Z) correctly rejected for the chord
+// UI (self-links off by default, no field to enable them). TEAM/REPO
+// route through compileFlowMatrixInvestmentTeamRepoDimension below
+// instead, which builds a genuine bridged self-join for cross-entity
+// pairs. This function is therefore UNCHANGED by CHAOS-5426 -- still
+// exactly AUTHOR/THEME/SUBCATEGORY, still exactly the same SQL text it
+// produced before this ticket, on purpose (their same-row semantics may
+// be intentional and are out of this ticket's scope, per team-lead's
+// ruling).
 //
 // useInvestment here is resolveUseInvestment's per-request resolution
 // (req.UseInvestment, i.e. FlowMatrixRequestInput's OWN useInvestment
@@ -383,6 +403,160 @@ ORDER BY value DESC, source ASC, target ASC
 LIMIT {max_edges:UInt32}
 %s
 `, dimUpper, dimUpper, dimCol, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, dimCol, dimCol, settingsMaxExecutionTime(timeoutSeconds))
+	edgesBindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
+		{Name: "max_edges", Value: req.MaxEdges},
+	}
+	edgesBindings = append(edgesBindings, fc.bindings...)
+
+	return compiledQuery{sql: nodesSQL, bindings: nodesBindings}, compiledQuery{sql: edgesSQL, bindings: edgesBindings}, nil
+}
+
+// compileFlowMatrixInvestmentTeamRepoDimension builds TEAM and REPO's
+// investment-mode flowMatrix query pair. CHAOS-5426, team-lead's codex-
+// round-1 NOT GO (2026-09-07 09:50Z, verbatim reasoning): "the chord is
+// 'Team exchange: pairs that frequently touch the same work'; the UI's
+// 'Include self-links' is OFF by default, so a result of only self-pairs
+// renders exactly what chris sees today: No flows match." Confirmed by
+// reading model.FlowMatrixRequestInput (models_gen.go): there is no
+// includeSelfLinks-shaped field anywhere on it, so this function
+// unconditionally excludes self-pairs -- there is no flag to make them
+// optional, matching the OLD fixed hand-written TEAM/REPO templates'
+// own unconditional `a.team_id != b.team_id` / `a.repo_id != b.repo_id`
+// exclusion (flowMatrixTeamEdgesTemplate / flowMatrixRepoEdgesTemplate
+// below).
+//
+// Nodes are the same shape compileFlowMatrixInvestmentDimension builds
+// for its own dimensions (one row per dimension value, GROUP BY
+// node_id) -- duplicated here rather than shared, so an edit to either
+// function's SQL text cannot silently perturb the other's.
+//
+// Edges are a genuine BRIDGED SELF-JOIN -- two aggregation passes, same
+// shape as the old fixed templates' activity-select-then-self-join
+// pattern, but reading the investment source instead of
+// work_item_cycle_times:
+//   - TEAM pairs: two DISTINCT teams (ut.team_label) with effort on the
+//     SAME repo_id. repo_id is a native column on every investment row
+//     regardless of dimension (LatestWorkUnitInvestmentsSource always
+//     projects it) -- no extra join needed to bridge on it.
+//   - REPO pairs: two DISTINCT repos (dbColumn's r.repo) touched by the
+//     SAME team. investmentContextFor only adds the `ut` team join
+//     automatically when TEAM is in the dimensions list or a filter
+//     needs it -- neither is true for a bare REPO-dimension request, so
+//     this function forces that join on for the edges half specifically.
+//
+// Both bridge columns exclude the empty/unassigned case (repo_id IS NOT
+// NULL; ut.team_id != ”) -- matching the old templates' own
+// `t.team_id IS NOT NULL AND t.team_id != ”` / not-null repo guards. An
+// unassigned bridge would otherwise fan every work unit with no
+// repo/team attribution out against every other one, which is an
+// artefact of missing data, not a real shared-repo/shared-team
+// relationship.
+//
+// measureExpr is computed once, from a nodes-only investmentContext
+// (nodeCtx below) -- safe to reuse for the edges activity-select too,
+// because UseRepoAllocation depends only on the ONE-element dimensions
+// list ([]Dimension{req.Dimension}), which is identical between nodeCtx
+// and the edges-only edgeCtx (edgeCtx only differs in whether the `ut`
+// join is FORCED on, which does not change UseRepoAllocation).
+func compileFlowMatrixInvestmentTeamRepoDimension(req FlowMatrixRequest, orgID string, timeoutSeconds int, filters *model.FilterInput) (nodes, edges compiledQuery, err error) {
+	dimCol, err := dbColumn(req.Dimension, true)
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
+
+	fc, err := translateFilters(filters, true, defaultFilterColumns())
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
+
+	nodeCtx := investmentContextFor([]Dimension{req.Dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+	measureExpr, err := dbExpression(req.Measure, true, nodeCtx.UseRepoAllocation)
+	if err != nil {
+		return compiledQuery{}, compiledQuery{}, err
+	}
+	// Force a uniform Float64 result type -- see CompileTimeseries's doc
+	// comment for the full reasoning; identical here.
+	measureExpr = "toFloat64(" + measureExpr + ")"
+
+	dimUpper := strings.ToUpper(string(req.Dimension))
+
+	nodesSQL := fmt.Sprintf(`
+SELECT
+    '%s' AS dimension,
+    toString(%s) AS node_id,
+    %s AS value
+FROM %s
+%s
+WHERE %s
+  AND %s.org_id = {org_id:String}
+%s
+GROUP BY node_id
+ORDER BY value DESC, node_id ASC
+LIMIT {limit_per_dim:UInt32}
+%s
+`, dimUpper, dimCol, measureExpr, nodeCtx.Source, nodeCtx.ExtraClauses, nodeCtx.DateFilter, nodeCtx.Alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
+	nodesBindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
+		{Name: "limit_per_dim", Value: req.MaxNodes},
+	}
+	nodesBindings = append(nodesBindings, fc.bindings...)
+
+	edgeForceTeamJoin := req.Dimension == DimensionRepo || needsTeamJoin(filters)
+	edgeCtx := investmentContextFor([]Dimension{req.Dimension}, edgeForceTeamJoin, needsAuthorJoin(filters))
+
+	var bridgeCol, bridgeNotEmpty string
+	switch req.Dimension {
+	case DimensionTeam:
+		bridgeCol = "repo_id"
+		bridgeNotEmpty = "repo_id IS NOT NULL"
+	case DimensionRepo:
+		bridgeCol = "ut.team_id"
+		bridgeNotEmpty = "ut.team_id != ''"
+	default:
+		return compiledQuery{}, compiledQuery{}, fmt.Errorf(
+			"analytics: compileFlowMatrixInvestmentTeamRepoDimension: unsupported dimension %q", req.Dimension)
+	}
+
+	// activitySelect is embedded TWICE below (AS a, AS b) -- the named
+	// ClickHouse params it references ({org_id:String} etc.) are matched
+	// by name, not position, so edgesBindings below still only needs ONE
+	// copy of each binding despite the text appearing twice. Same pattern
+	// flowMatrixTeamActivitySelect/flowMatrixRepoEnrichedSelect already
+	// use further down this file.
+	activitySelect := fmt.Sprintf(`
+    SELECT
+        %s AS entity,
+        %s AS bridge,
+        %s AS value
+    FROM %s
+    %s
+    WHERE %s
+      AND %s.org_id = {org_id:String}
+    %s
+      AND %s
+    GROUP BY entity, bridge
+`, dimCol, bridgeCol, measureExpr, edgeCtx.Source, edgeCtx.ExtraClauses, edgeCtx.DateFilter, edgeCtx.Alias, fc.sql, bridgeNotEmpty)
+
+	edgesSQL := fmt.Sprintf(`
+SELECT
+    '%s' AS source_dimension,
+    '%s' AS target_dimension,
+    toString(a.entity) AS source,
+    toString(b.entity) AS target,
+    toFloat64(SUM(a.value)) AS value
+FROM (%s) AS a
+INNER JOIN (%s) AS b ON a.bridge = b.bridge
+WHERE a.entity != b.entity
+GROUP BY source, target
+ORDER BY value DESC, source ASC, target ASC
+LIMIT {max_edges:UInt32}
+%s
+`, dimUpper, dimUpper, activitySelect, activitySelect, settingsMaxExecutionTime(timeoutSeconds))
 	edgesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},

@@ -505,15 +505,18 @@ func TestCompileFlowMatrix_ThemeSubcategory_CompilesInlinedSource(t *testing.T) 
 
 // TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_RoutesToInvestmentSource
 // is CHAOS-5426's golden-shape lock: TEAM and REPO, with an explicit
-// useInvestment=true, must compile through compileFlowMatrixInvestmentDimension
-// (investmentContextFor's bridge) -- reading work_unit_investments (TEAM) /
-// the repo-allocation source (REPO) via dbColumn's investment mapping
-// (ut.team_label / r.repo, validate.go:176-183) -- NOT the fixed
+// useInvestment=true, must compile through
+// compileFlowMatrixInvestmentTeamRepoDimension (investmentContextFor's
+// bridge) -- reading work_unit_investments (TEAM) / the repo-allocation
+// source (REPO) via dbColumn's investment mapping (ut.team_label /
+// r.repo, validate.go:176-183) -- NOT the fixed
 // work_item_cycle_times/work_item_team_attributions templates the same
 // dimensions compile to when useInvestment is false. Mirrors
 // TestCompileFlowMatrix_ThemeSubcategory_CompilesInlinedSource's shape
 // assertions (no leading WITH, real SELECT) plus the source-table swap
-// this ticket's whole point is.
+// this ticket's whole point is. The CROSS-entity edges shape (team-lead's
+// codex-round-1 NOT GO) is pinned separately, below, by
+// TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_EdgesBridgeCrossEntity.
 func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_RoutesToInvestmentSource(t *testing.T) {
 	useInvestment := true
 	cases := []struct {
@@ -551,7 +554,7 @@ func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_RoutesToInvestmentSource(t
 					t.Errorf("dimension %v %s SQL must never contain a top-level WITH clause, got: %s", tc.dim, q.name, q.sql)
 				}
 				if !strings.Contains(q.sql, tc.wantDimCol) {
-					t.Errorf("dimension %v %s SQL missing investment dimension column %q -- did not route through compileFlowMatrixInvestmentDimension", tc.dim, q.name, tc.wantDimCol)
+					t.Errorf("dimension %v %s SQL missing investment dimension column %q -- did not route through compileFlowMatrixInvestmentTeamRepoDimension", tc.dim, q.name, tc.wantDimCol)
 				}
 				if !strings.Contains(q.sql, tc.wantSource) {
 					t.Errorf("dimension %v %s SQL missing investment source table %q", tc.dim, q.name, tc.wantSource)
@@ -559,6 +562,121 @@ func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_RoutesToInvestmentSource(t
 				if strings.Contains(q.sql, "work_item_cycle_times") {
 					t.Errorf("dimension %v %s SQL still reads work_item_cycle_times -- CHAOS-5426 regression, useInvestment=true must not fall back to the fixed template", tc.dim, q.name)
 				}
+			}
+		})
+	}
+}
+
+// TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_EdgesBridgeCrossEntity
+// is the direct regression lock for team-lead's codex-round-1 NOT GO
+// (2026-09-07 09:50Z): the FIRST version of this port's investment-mode
+// TEAM/REPO edges reused compileFlowMatrixInvestmentDimension's same-row
+// shape (source==target every row -- see that function's doc comment),
+// which the web chord UI renders as "No flows match" (self-links off by
+// default, no field to enable them). This pins the REPLACEMENT bridged
+// self-join shape structurally: a genuine `a`/`b` self-join over an
+// aggregated activity subquery, joined on the OTHER dimension (repo_id
+// for TEAM, ut.team_id for REPO) and excluding same-entity pairs --
+// mirroring the OLD fixed hand-written templates' own
+// `a.team_id != b.team_id` / `a.repo_id != b.repo_id` shape, just over
+// the investment source instead of work_item_cycle_times.
+func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_EdgesBridgeCrossEntity(t *testing.T) {
+	useInvestment := true
+	cases := []struct {
+		dim           Dimension
+		wantBridgeCol string
+		// wantForcedJoin is present ONLY for REPO: investmentContextFor
+		// does not add the `ut` team join automatically for a bare
+		// REPO-dimension request (dimensionListHas only checks for TEAM in
+		// the list, and no filter here needs a team join either) -- this
+		// function must force it on for the edges half specifically, or
+		// the bridge column itself would not resolve.
+		wantForcedJoin string
+	}{
+		{DimensionTeam, "repo_id", ""},
+		{DimensionRepo, "ut.team_id", "LEFT JOIN"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.dim), func(t *testing.T) {
+			req := FlowMatrixRequest{
+				Dimension:     tc.dim,
+				Measure:       MeasureCount,
+				StartDate:     mustDate(t, "2026-01-01"),
+				EndDate:       mustDate(t, "2026-01-31"),
+				MaxNodes:      50,
+				MaxEdges:      200,
+				UseInvestment: &useInvestment,
+			}
+			_, edges, err := CompileFlowMatrix(req, "org-1", 30, nil)
+			if err != nil {
+				t.Fatalf("dimension %v: CompileFlowMatrix error = %v", tc.dim, err)
+			}
+			sql := edges.sql
+
+			// The self-join itself: two aliased subqueries, bridged on the
+			// OTHER dimension, filtered to exclude same-entity pairs.
+			if !strings.Contains(sql, "AS a\nINNER JOIN") {
+				t.Errorf("dimension %v edges SQL missing the a/b self-join shape, got: %s", tc.dim, sql)
+			}
+			wantJoinCond := "ON a.bridge = b.bridge"
+			if !strings.Contains(sql, wantJoinCond) {
+				t.Errorf("dimension %v edges SQL missing bridge join condition %q, got: %s", tc.dim, wantJoinCond, sql)
+			}
+			if !strings.Contains(sql, tc.wantBridgeCol) {
+				t.Errorf("dimension %v edges SQL missing bridge column %q, got: %s", tc.dim, tc.wantBridgeCol, sql)
+			}
+			if !strings.Contains(sql, "WHERE a.entity != b.entity") {
+				t.Errorf("dimension %v edges SQL missing the cross-entity exclusion -- self-pairs must never appear", tc.dim)
+			}
+			if strings.Contains(sql, "toString(a.entity) AS source") == false || strings.Contains(sql, "toString(b.entity) AS target") == false {
+				t.Errorf("dimension %v edges SQL missing source/target aliasing from the a/b subqueries, got: %s", tc.dim, sql)
+			}
+			if tc.wantForcedJoin != "" && !strings.Contains(sql, tc.wantForcedJoin) {
+				t.Errorf("dimension %v edges SQL missing forced team join %q needed to resolve the bridge column, got: %s", tc.dim, tc.wantForcedJoin, sql)
+			}
+			// Old same-row shape must be GONE: the outer SELECT must no
+			// longer alias the SAME dimCol expression as both source and
+			// target from a single FROM with no self-join -- it now reads
+			// from two aliased activity subqueries instead.
+			if !strings.Contains(sql, "FROM (") || !strings.Contains(sql, ") AS a\nINNER JOIN (") {
+				t.Errorf("dimension %v edges SQL missing the FROM (activitySelect) AS a / INNER JOIN (activitySelect) AS b shape, got: %s", tc.dim, sql)
+			}
+		})
+	}
+}
+
+// TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_EdgesExcludeEmptyBridge
+// pins the not-null/not-empty bridge guard: an unassigned bridge (no
+// repo_id for TEAM, no team for REPO) must never fan out against every
+// other unassigned row -- that would be an artefact of missing data, not
+// a real shared-repo/shared-team relationship (see this function's
+// production doc comment).
+func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_EdgesExcludeEmptyBridge(t *testing.T) {
+	useInvestment := true
+	cases := []struct {
+		dim            Dimension
+		wantEmptyGuard string
+	}{
+		{DimensionTeam, "repo_id IS NOT NULL"},
+		{DimensionRepo, "ut.team_id != ''"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.dim), func(t *testing.T) {
+			req := FlowMatrixRequest{
+				Dimension:     tc.dim,
+				Measure:       MeasureCount,
+				StartDate:     mustDate(t, "2026-01-01"),
+				EndDate:       mustDate(t, "2026-01-31"),
+				MaxNodes:      50,
+				MaxEdges:      200,
+				UseInvestment: &useInvestment,
+			}
+			_, edges, err := CompileFlowMatrix(req, "org-1", 30, nil)
+			if err != nil {
+				t.Fatalf("dimension %v: CompileFlowMatrix error = %v", tc.dim, err)
+			}
+			if !strings.Contains(edges.sql, tc.wantEmptyGuard) {
+				t.Errorf("dimension %v edges SQL missing empty-bridge guard %q, got: %s", tc.dim, tc.wantEmptyGuard, edges.sql)
 			}
 		})
 	}

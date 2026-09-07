@@ -130,6 +130,18 @@ class RoutingState(Base):
     #: only matters once mode is shadow/canary/primary.
     eligible_orgs: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     rollout_percentage: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: WHO ran the command that wrote this row (the CLI's resolved operator
+    #: identity, else the host user) and WHY, in their own words. Nullable
+    #: because every row written before alembic 0127 has neither.
+    #:
+    #: These exist because a routing row is a decision, and a decision with
+    #: no durable "who/why" is unreadable six weeks later -- the same
+    #: complaint that produced the UNPROVEN marker in `status`. On
+    #: 2026-09-07 an operator enabled 15 operations with
+    #: `--acknowledge-unproven` on an explicit ruling, and the ruling had
+    #: nowhere to live but a chat message.
+    review_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -207,6 +219,18 @@ class ProofRun(Base):
     #: never 'mismatch'.
     data_watermark: Mapped[str | None] = mapped_column(Text, nullable=True)
     org_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: WHO ran the command that wrote this row (the CLI's resolved operator
+    #: identity, else the host user) and WHY, in their own words. Nullable
+    #: because every row written before alembic 0127 has neither.
+    #:
+    #: These exist because a routing row is a decision, and a decision with
+    #: no durable "who/why" is unreadable six weeks later -- the same
+    #: complaint that produced the UNPROVEN marker in `status`. On
+    #: 2026-09-07 an operator enabled 15 operations with
+    #: `--acknowledge-unproven` on an explicit ruling, and the ruling had
+    #: nowhere to live but a chat message.
+    review_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

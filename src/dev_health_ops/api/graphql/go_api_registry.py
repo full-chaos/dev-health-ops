@@ -169,6 +169,8 @@ async def record_proof_run(
     data_watermark: str | None = None,
     org_id: str | None = None,
     proof_run_id: UUID | None = None,
+    review_evidence: str | None = None,
+    recorded_by: str | None = None,
 ) -> ProofRun:
     """Record one proof-gate outcome. Raises ``ValueError`` before touching
     the database on an out-of-vocabulary ``stage``/``terminal_state`` --
@@ -204,6 +206,8 @@ async def record_proof_run(
         side_effect_digest=side_effect_digest,
         data_watermark=data_watermark,
         org_id=org_id,
+        review_evidence=review_evidence,
+        recorded_by=recorded_by,
         observed_at=datetime.now(timezone.utc),
     )
     session.add(proof_run)

@@ -295,6 +295,25 @@ def _is_workers_inspect_json_invocation(argv: list[str] | None) -> bool:
     )
 
 
+def _is_go_api_routing_json_invocation(argv: list[str] | None) -> bool:
+    """`dev-hops go-api routing status --json` must emit ONLY JSON.
+
+    Found by running the command for real against the compose stack: the
+    JSON was correct but stdout carried the process's startup logging ahead
+    of it ("Sentry initialised", "OpenTelemetry tracing disabled", …), so
+    `json.load()` failed and a caller had to slice from the first `{`.
+    `--json` exists to be machine-read; noise on stdout defeats its only
+    purpose.
+
+    Every test for that command captured stdout INSIDE the process with
+    capsys, where the startup banner does not appear -- so none of them
+    could have caught it. `tests/api/graphql/test_go_api_cli_json_stdout.py`
+    drives the real entrypoint through a subprocess for exactly that reason.
+    """
+    args = sys.argv[1:] if argv is None else argv
+    return "go-api" in args and "routing" in args and "--json" in args
+
+
 def _is_push_invocation(argv: list[str] | None) -> bool:
     """`push` subcommands print their primary result to stdout (sample's raw
     envelope JSON, `--json` mode's single JSON object) and are frequently
@@ -469,6 +488,7 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     # for the failure mode when it is omitted).
     ("go-api", "routing", "enable"): frozenset({_REQ_POSTGRES}),
     ("go-api", "routing", "status"): frozenset({_REQ_POSTGRES}),
+    ("go-api", "routing", "disable"): frozenset({_REQ_POSTGRES}),
     ("service-credentials", "create"): frozenset({_REQ_POSTGRES}),
     ("service-credentials", "list"): frozenset({_REQ_POSTGRES}),
     ("service-credentials", "rotate"): frozenset({_REQ_POSTGRES}),
@@ -882,9 +902,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"dotenv error: {exc}", file=sys.stderr)
             return 2
 
-    quiet_json_inspect = _is_workers_inspect_json_invocation(
-        argv
-    ) or _is_push_invocation(argv)
+    quiet_json_inspect = (
+        _is_workers_inspect_json_invocation(argv)
+        or _is_push_invocation(argv)
+        or _is_go_api_routing_json_invocation(argv)
+    )
     service_credentials_output = _is_service_credential_invocation(argv)
     previous_otel_enabled = os.environ.get("OTEL_ENABLED")
     if quiet_json_inspect:
@@ -910,7 +932,12 @@ def main(argv: list[str] | None = None) -> int:
         if _REQ_POSTGRES in (getattr(ns, "_requires", None) or frozenset()) and ns.db:
             os.environ["POSTGRES_URI"] = ns.db
 
-        if service_credentials_output:
+        if service_credentials_output or _is_go_api_routing_json_invocation(argv):
+            # `--json` output must be parseable by `json.load` with no
+            # slicing. Suppressing parser noise is not enough on its own:
+            # the startup banner is emitted by logging handlers that default
+            # to stdout, which is what put "Sentry initialised" ahead of the
+            # JSON on the real stack.
             _route_logs_to_stderr()
 
         level_name = str(getattr(ns, "log_level", "") or "INFO").upper()

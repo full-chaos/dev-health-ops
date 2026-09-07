@@ -220,6 +220,10 @@
               "minimum": 1,
               "type": "integer"
             },
+            "qualname": {
+              "description": "GraphQL resolver rows only: '<module>.<qualname>' of the resolver's underlying callable (e.g. 'dev_health_ops.api.graphql.models.data_health.DataHealth.metric_lineage'), from discover_ops_routes.py's introspection of the served schema. This, not file:line, is what ci/check_endpoint_profiles.py drift-checks a GraphQL row's anchor against -- it is stable across line churn elsewhere in the file, unlike line, which moves whenever unrelated code shifts above the resolver and is kept here only as a human navigation hint. Required (checker-enforced, not schema-enforced -- see MISSING QUALNAME ANCHOR) for surface_kind graphql_field/graphql_mutation/graphql_subscription rows; not applicable to rest rows.",
+              "type": "string"
+            },
             "router_local_path": {
               "type": "string"
             }

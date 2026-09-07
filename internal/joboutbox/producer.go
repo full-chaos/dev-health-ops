@@ -156,21 +156,29 @@ ON CONFLICT (dedupe_key) DO NOTHING`,
 	}
 	var existingKind, existingHash, existingPrerequisite, existingStatus string
 	var existingVersion int
-	var existingRiverJobID *int64
-	// status and river_job_id are read alongside the agreement fields, in the
-	// same round trip. Before this, the conflict branch compared kind,
-	// contract_version, payload_hash and prerequisite_completion_key, found
-	// them identical, and returned nil -- WITHOUT ever looking at status. A
-	// 'delivered' row is terminal for the relay (repository.go's claim SQL
-	// takes only 'pending' and expired 'claimed'), so every such publish was a
-	// no-op reported as a success. See ErrDeliveryAlreadyTerminal.
+	// `status` is read alongside the agreement fields, in the same round trip.
+	// Before this, the conflict branch compared kind, contract_version,
+	// payload_hash and prerequisite_completion_key, found them identical, and
+	// returned nil -- WITHOUT ever looking at status. A 'delivered' row is
+	// terminal for the relay (repository.go's claim SQL takes only 'pending'
+	// and expired 'claimed'), so every such publish was a no-op reported as a
+	// success. See ErrDeliveryAlreadyTerminal.
+	//
+	// `river_job_id` is deliberately NOT read here, though it would make the
+	// error more useful. This SELECT is on the hot publish path of EVERY job
+	// kind, so every column it names becomes a column every fixture and every
+	// deployment must already have -- and twenty in-tree integration fixtures
+	// build worker_job_outbox without it, which turned an idempotent
+	// republish into a 42501/42703 for unrelated packages. The status alone
+	// answers the question this error exists to ask, and the dead job is one
+	// query away from the dedupe key the caller already holds.
 	err = tx.QueryRow(ctx, `
 SELECT job_kind, contract_version, payload_hash,
-       COALESCE(prerequisite_completion_key, ''), status, river_job_id
+       COALESCE(prerequisite_completion_key, ''), status
 FROM public.worker_job_outbox
 WHERE dedupe_key = $1`, envelope.IdempotencyKey).
 		Scan(&existingKind, &existingVersion, &existingHash, &existingPrerequisite,
-			&existingStatus, &existingRiverJobID)
+			&existingStatus)
 	if errors.Is(err, pgx.ErrNoRows) || err != nil {
 		return ErrUnavailable
 	}
@@ -182,18 +190,11 @@ WHERE dedupe_key = $1`, envelope.IdempotencyKey).
 	// DISAGREES is a contract fault and must keep reporting itself as one,
 	// whatever its status happens to be.
 	if terminalOutboxStatus(existingStatus) {
-		// The status and the River job id are the two facts a caller needs to
-		// decide what to do, and neither is tenant data or credential
-		// material: the status is one of four fixed literals and the job id is
-		// a bigint from River's own sequence. The dedupe key is deliberately
-		// NOT included -- it embeds the domain id, and this error text reaches
-		// operator-facing logs.
-		if existingRiverJobID != nil {
-			return fmt.Errorf("%w: status=%s river_job_id=%d",
-				ErrDeliveryAlreadyTerminal, existingStatus, *existingRiverJobID)
-		}
-		return fmt.Errorf("%w: status=%s river_job_id=none",
-			ErrDeliveryAlreadyTerminal, existingStatus)
+		// The status is the fact a caller needs, and it is one of four fixed
+		// literals -- no tenant data, no credential material. The dedupe key is
+		// deliberately NOT included: it embeds the domain id, and this error
+		// text reaches operator-facing logs.
+		return fmt.Errorf("%w: status=%s", ErrDeliveryAlreadyTerminal, existingStatus)
 	}
 	return nil
 }

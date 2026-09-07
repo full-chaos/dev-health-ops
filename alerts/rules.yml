@@ -266,12 +266,44 @@ groups:
       # sync_dispatch_unreclaimable_sweep_failures_total's, and it has its own
       # alert below rather than being folded in here, because the two need
       # different operator actions (a grant or a route fence, versus a strand).
+      #
+      # THE EXPRESSION, and why it is not the obvious one (codex r1, P2).
+      #
+      # The first cut was `max(gauge) > 0 and sum(increase(counter[15m])) == 0`
+      # -- both sides aggregated fleet-wide. Label matching was valid, but the
+      # counter side is a GLOBAL zero test: two units stuck on one reconciler
+      # while a third, unrelated unit terminalizes anywhere in the fleet makes
+      # `sum(increase(...)) = 1`, the `and` drops, and the two stuck units page
+      # nobody. An alert that a healthy neighbour can silence is worse than no
+      # alert.
+      #
+      # `min_over_time(gauge[15m]) > 0` is the honest primary signal and needs
+      # no counter at all: it says the sweep saw at least one candidate at
+      # EVERY scrape for fifteen minutes. A working active sweep terminalizes
+      # what it selects in the same pass, so its gauge returns to zero between
+      # strands and the minimum is 0. A shadow deployment, a refused write, or
+      # a genuinely unresolvable strand never lets it reach zero.
+      #
+      # The counter half is kept only as a corroborator and is scoped `by
+      # (instance)`, so it can no longer be satisfied by a different
+      # reconciler's work. Instance is Prometheus's own target label, not an
+      # organization identifier, so this adds no cardinality the PRD forbids --
+      # the same constraint that stops SyncDispatchExhaustedDeliveryRecoveryLoop
+      # below from grouping by run.
+      #
+      # RESIDUAL, stated rather than papered over: within ONE instance, a
+      # backlog that is draining steadily while one unit stays stuck still
+      # shows movement on the counter and will not fire. Separating those needs
+      # a per-candidate identity on the metric, which is an org identifier, and
+      # is exactly the trade-off already documented on the exhausted-delivery
+      # rule. `min_over_time` is what makes the common case -- nothing is being
+      # terminalized at all -- reliable.
       - alert: SyncDispatchUnreclaimableCandidatesNotTerminalizing
         expr: |
           (
-            max(sync_dispatch_unreclaimable_candidates) > 0
+            min_over_time(sync_dispatch_unreclaimable_candidates[15m]) > 0
             and
-            sum(increase(sync_dispatch_unreclaimable_terminalized_total[15m])) == 0
+            sum by (instance) (increase(sync_dispatch_unreclaimable_terminalized_total[15m])) == 0
           )
         for: 15m
         labels:

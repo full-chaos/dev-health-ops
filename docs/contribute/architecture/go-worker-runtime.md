@@ -674,10 +674,15 @@ because `active` is an assertion about the deployment and a typo must not
 quietly become one.
 
 **`active` is the shipped value, and `shadow` is only the compiled fallback.**
-Every deploy shape in this repo — the go-workers compose overlay, the
-docker-compose and swarm stacks, the Helm values, the Kubernetes ConfigMap, both
-`.env.example` files — sets `SYNC_UNRECLAIMABLE_SWEEP=active` for
-`dev-health-reconciler`. `ParseSweepMode("")` still answers `shadow` so a binary
+Every deploy shape in this repo sets it for `dev-health-reconciler`: the
+go-workers compose overlay, the Helm values, the Kubernetes ConfigMap and both
+`.env.example` files carry `SYNC_UNRECLAIMABLE_SWEEP=active`, while the
+docker-compose and swarm stacks carry
+`--unreclaimable-sweep=${SYNC_UNRECLAIMABLE_SWEEP:-active}` in `command:` —
+CHAOS-4020's contract for those two surfaces is that only credentials render
+through `environment:`, so the flag is where a reader (and `docker compose
+config`) can see it. The interpolated default keeps the operator override
+either form would give. `ParseSweepMode("")` still answers `shadow` so a binary
 run with no configuration at all cannot destroy work, but nothing ships in that
 state any more.
 

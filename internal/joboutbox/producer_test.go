@@ -84,7 +84,7 @@ func TestIsPublishedTreatsOnlyTheTerminalDeliverySentinelAsSuccess(t *testing.T)
 		{name: "terminal delivery", err: ErrDeliveryAlreadyTerminal, want: true},
 		{
 			name: "terminal delivery, wrapped with its evidence",
-			err:  fmt.Errorf("%w: status=delivered river_job_id=127714", ErrDeliveryAlreadyTerminal),
+			err:  fmt.Errorf("%w: status=delivered", ErrDeliveryAlreadyTerminal),
 			want: true,
 		},
 		{name: "contract rejected", err: ErrContractRejected},

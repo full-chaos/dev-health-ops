@@ -72,15 +72,19 @@ def _write_prometheus_body(path: Path) -> str:
     return text[start.start() : end]
 
 
-def _metric_names(expr: str) -> set[str]:
-    """Every bare metric identifier in a PromQL expression.
+# PromQL duration literals (``[15m]``, ``[1h]``) are stripped before
+# tokenizing. Without this, ``m`` and ``h`` are extracted as "metric names" and
+# then trivially "found" in any Go source, because every ordinary word contains
+# those letters -- the check passes whether or not the real metric exists.
+# Found by codex r1 (P3) against the first version of this file.
+_DURATION = re.compile(r"\[\s*\d+[smhdwy]\s*\]")
 
-    PromQL function names look identical to metric names to a regex, so the
-    known functions are subtracted rather than the metric names being listed --
-    listing them would make this helper agree with whatever the test expected
-    instead of reporting what the rule actually reads.
-    """
-    functions = {
+# A PromQL function or keyword looks exactly like a metric name to a regex, so
+# the known ones are SUBTRACTED rather than the metric names being listed --
+# listing them would make this helper agree with whatever the test expected
+# instead of reporting what the rule actually reads.
+_PROMQL_WORDS = frozenset(
+    {
         "sum",
         "max",
         "min",
@@ -88,28 +92,81 @@ def _metric_names(expr: str) -> set[str]:
         "count",
         "increase",
         "rate",
+        "min_over_time",
+        "max_over_time",
+        "avg_over_time",
         "and",
         "or",
         "unless",
+        "by",
+        "without",
+        "on",
+        "ignoring",
+        "group_left",
+        "group_right",
+        "instance",
+        "job",
     }
+)
+
+
+def _metric_names(expr: str) -> set[str]:
+    """Every bare metric identifier in a PromQL expression.
+
+    A metric name in this codebase always contains an underscore (the
+    Prometheus naming convention every rule here follows), which is what
+    finally rules out single letters, label names and bare keywords -- a
+    length threshold alone would still admit ``instance``.
+    """
+    without_durations = _DURATION.sub(" ", expr)
     return {
         token
-        for token in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expr)
-        if token not in functions
+        for token in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", without_durations)
+        if token not in _PROMQL_WORDS and "_" in token
     }
+
+
+def test_the_metric_name_parser_is_not_vacuous() -> None:
+    """The parser itself, pinned -- it is the thing every check below trusts.
+
+    Both directions matter. Extracting a duration unit as a metric name makes
+    the emission check below pass on any input (codex r1, P3: ``m`` and ``h``
+    appear in every Go file). Extracting too little makes it pass by finding
+    nothing to check at all.
+    """
+    extracted = _metric_names(
+        "min_over_time(some_metric_total[15m]) > 0 and "
+        "sum by (instance) (increase(other_metric_total[1h])) == 0"
+    )
+    assert extracted == {"some_metric_total", "other_metric_total"}, extracted
+    # The specific failure codex found, asserted directly as a negative rather
+    # than as part of an equality that could drift.
+    assert "m" not in extracted
+    assert "h" not in extracted
+    # A rule that reads no metric at all must be visible as an empty set, not
+    # silently satisfied.
+    assert _metric_names("up == 0") == set()
 
 
 def test_every_sweep_alert_metric_is_actually_emitted() -> None:
     emitted = _write_prometheus_body(SYNCRECONCILER_LOOP) + _write_prometheus_body(
         JOBOUTBOX_LOOP
     )
+    checked = 0
     for name in (STRAND_ALERT, SWEEP_FAILING_ALERT, REARM_ALERT):
         for metric in _metric_names(str(_alert(name)["expr"])):
-            assert metric in emitted, (
+            checked += 1
+            # Token-safe, not a substring: a metric name that is a PREFIX of a
+            # real one would otherwise pass on the longer name's strength.
+            assert re.search(rf"\b{re.escape(metric)}\b", emitted), (
                 f"{name} reads {metric!r}, which no WritePrometheus emits -- "
                 "an alert on a metric nobody publishes never fires, which is the "
                 "exact shape of the shadow-mode observability this rule replaces"
             )
+    # Four distinct metric reads across the three rules. Without this the whole
+    # test passes when the parser returns nothing -- the vacuous-guard class
+    # this file was already caught by once.
+    assert checked == 4, checked
 
 
 def test_strand_alert_reads_the_pair_not_either_half() -> None:

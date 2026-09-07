@@ -1,0 +1,17 @@
+{
+  "app_base_url": "https://app.example.test/",
+  "attributes": {
+    "new_tier": "Entreprise ★",
+    "old_tier": "Équipe"
+  },
+  "case": "unicode",
+  "email_type": "subscription_changed",
+  "expected_html": "<!doctype html>\n<html lang=\"en\">\n  <body>\n    <h1>Subscription Updated</h1>\n    <p>Hi Björn Åberg-O'Neill,</p>\n    <p>Élan Systèmes — München 日本支店 subscription changed from Équipe to Entreprise ★.</p>\n  </body>\n</html>\n",
+  "expected_subject": "Subscription changed",
+  "expected_to_address": "bjorn@example.test",
+  "owner": {
+    "email": "bjorn@example.test",
+    "full_name": "Björn Åberg-O'Neill",
+    "org_name": "Élan Systèmes — München 日本支店"
+  }
+}

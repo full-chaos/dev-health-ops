@@ -62,7 +62,6 @@ func buildOperationalWorker(
 	dispatcher, err := operational.NewHTTPDispatcher(
 		&http.Client{Timeout: cfg.OperationalBridgeTimeout},
 		operational.HTTPDispatcherConfig{
-			BillingEndpoint:       baseURL + "/api/internal/worker-operational/billing",
 			HeartbeatEndpoint:     baseURL + "/api/internal/worker-operational/heartbeat",
 			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
 			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,
@@ -117,7 +116,22 @@ func buildOperationalWorker(
 	for _, spec := range specs {
 		switch spec.Kind {
 		case jobcontract.KindBillingNotification:
-			handler, handlerErr := operational.NewBillingHandler(store, dispatcher)
+			// CHAOS-5353: rendered and sent natively. The email provider is
+			// resolved ONCE here, at startup, from the same EMAIL_PROVIDER /
+			// EMAIL_FROM_ADDRESS / EMAIL_API_KEY / SMTP_* variables the
+			// Python sender used, so a misconfiguration refuses worker
+			// startup instead of failing every notification at send time.
+			sender, senderErr := operational.NewEmailSenderFromEnv(
+				&http.Client{Timeout: cfg.OperationalBridgeTimeout},
+			)
+			if senderErr != nil {
+				logger.Error("billing notification email provider is unusable",
+					"error", senderErr)
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			handler, handlerErr := operational.NewBillingHandler(
+				store, store, store, sender, operational.AppBaseURLFromEnv(),
+			)
 			if handlerErr != nil {
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}

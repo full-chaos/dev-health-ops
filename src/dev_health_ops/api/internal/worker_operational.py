@@ -1,17 +1,20 @@
 """Authenticated internal bridge invoked by LIVE Go operational handlers.
 
 CHAOS-4440: this module's own docstring previously said "dormant" — backwards.
-`operational.billing_notification` and `system.heartbeat` are registered and
-running in production today (`cmd/dev-health-worker/operational.go`); each
-route below is called from the Go handler that owns the durable row, the
-River attempt, and retry classification, while this bridge performs the
-compatibility side effect (email dispatch, telemetry POST) during
-coexistence. CHAOS-5320 deleted the `/webhook` route this module used to
-carry (`operational.webhook_delivery`'s Python fallback) -- native Go
-handling (CHAOS-5318/5319/5320) plus its own explicit-ignore path fully
-replaced it, so no webhook delivery ever reaches this bridge anymore. The
-`/pagerduty` route is a different shape: it reconciles one Go-owned Valkey
-stream delivery per call rather than a durable Postgres row — see
+`system.heartbeat` is registered and running in production today
+(`cmd/dev-health-worker/operational.go`); the `/heartbeat` route below is
+called from the Go handler that owns the River attempt and retry
+classification, while this bridge performs the telemetry POST.
+
+Both other compatibility routes are gone. CHAOS-5320 deleted `/webhook`
+(`operational.webhook_delivery`'s Python fallback), replaced by native Go
+handling (CHAOS-5318/5319/5320) plus an explicit-ignore path. CHAOS-5353
+deleted `/billing`: the Go handler now owns the completion fence, the
+owner-email lookup, all seven email renderings, and the provider send, so
+no billing notification reaches this bridge anymore.
+
+The `/pagerduty` route is a different shape: it reconciles one Go-owned
+Valkey stream delivery per call rather than a durable Postgres row — see
 `PagerDutyDelivery` below.
 """
 
@@ -27,10 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from dev_health_ops.api.internal.worker_auth import authorize_worker_bridge
-from dev_health_ops.workers.system_ops import (
-    phone_home_heartbeat,
-    send_billing_notification,
-)
+from dev_health_ops.workers.system_ops import phone_home_heartbeat
 
 router = APIRouter(prefix="/api/internal/worker-operational", include_in_schema=False)
 
@@ -52,27 +52,6 @@ PAGERDUTY_BRIDGE_STATUSES = frozenset(
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class BillingReference(_StrictModel):
-    notification_id: uuid.UUID
-    organization_id: uuid.UUID
-    notification_type: str
-    # CHAOS-3952: Go's own copy of the durable row's idempotency key. Cross-
-    # checked against the row itself so the two sides' identity can never
-    # silently drift; the actual duplicate-send guard is the row's own
-    # completion fence (system_ops._claim_billing_notification_completion).
-    # Optional, not required: a REQUIRED field on a strict (extra="forbid")
-    # bridge model is a rolling-deploy hazard — an old Go binary that omits
-    # it hits a 422 that http.go classifies as permanent (codex round 2,
-    # P1, EXECUTED), terminalizing the River job with no email ever sent.
-    # `send_billing_notification` itself already treats a missing key as
-    # "skip the cross-check" (see system_ops.py), so the wire contract
-    # matches. This does not cover new-Go-against-old-Python during a
-    # rollout (an old strict model rejects the unknown field outright) —
-    # that direction needs deploy ORDER (bridge before worker), not a code
-    # change here; see the PR's RISK-NOTES.
-    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class HeartbeatReference(_StrictModel):
@@ -109,20 +88,6 @@ def _bridge_result(result: object, *, success: frozenset[str]) -> dict[str, str]
 
 def _authorize(authorization: Annotated[str | None, Header()] = None) -> None:
     authorize_worker_bridge(authorization)
-
-
-@router.post("/billing", dependencies=[])
-async def process_billing_reference(
-    reference: BillingReference,
-    authorization: Annotated[str | None, Header()] = None,
-) -> dict:
-    _authorize(authorization)
-    result = await run_in_threadpool(
-        send_billing_notification.run,
-        durable_notification_id=str(reference.notification_id),
-        idempotency_key=reference.idempotency_key,
-    )
-    return _bridge_result(result, success=frozenset({"sent"}))
 
 
 @router.post("/heartbeat", dependencies=[])

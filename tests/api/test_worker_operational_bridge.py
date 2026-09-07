@@ -8,117 +8,56 @@ from dev_health_ops.api.main import app
 
 
 def test_internal_bridge_requires_token(monkeypatch) -> None:
-    # CHAOS-5320 deleted the /webhook route this test used to exercise --
-    # retargeted to /billing, the surviving route with the same auth
-    # requirement (authorize_worker_bridge gates every route on this router
-    # identically, independent of which one carries the check).
+    # This test has now outlived two routes: CHAOS-5320 deleted /webhook and
+    # CHAOS-5353 deleted /billing. Retargeted to /heartbeat, the surviving
+    # durable-row route with the same auth requirement --
+    # authorize_worker_bridge gates every route on this router identically,
+    # independent of which one carries the check.
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    response = TestClient(app).post(
+        "/api/internal/worker-operational/heartbeat",
+        json={"scheduled_for": "2026-07-21T12:00:00Z"},
+    )
+    assert response.status_code == 401
+
+
+def test_internal_bridge_classifies_unknown_result_shape_as_retryable(
+    monkeypatch,
+) -> None:
+    # Retargeted twice now (CHAOS-5320 deleted /webhook, CHAOS-5353 deleted
+    # /billing): _bridge_result's "non-dict result -> 502" path is generic
+    # across every route on this router, never specific to one of them.
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
+    with patch(
+        "dev_health_ops.api.internal.worker_operational.phone_home_heartbeat.run",
+        return_value=None,
+    ):
+        response = TestClient(app).post(
+            "/api/internal/worker-operational/heartbeat",
+            headers={"Authorization": "Bearer test-token"},
+            json={"scheduled_for": "2026-07-21T12:00:00Z"},
+        )
+    assert response.status_code == 502
+
+
+def test_internal_bridge_no_longer_exposes_a_billing_route(monkeypatch) -> None:
+    """CHAOS-5353: the billing bridge is gone, not merely unused.
+
+    A route left mounted would still accept and act on a POST from an old Go
+    binary, sending an email the native handler has already sent -- so the
+    deletion, not just the disuse, is the property worth pinning.
+    """
     monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
     response = TestClient(app).post(
         "/api/internal/worker-operational/billing",
+        headers={"Authorization": "Bearer test-token"},
         json={
             "notification_id": "00000000-0000-4000-8000-000000000011",
             "organization_id": "00000000-0000-4000-8000-000000000010",
             "notification_type": "invoice_receipt",
         },
     )
-    assert response.status_code == 401
-
-
-def test_internal_bridge_passes_only_durable_billing_reference(monkeypatch) -> None:
-    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
-    with patch(
-        "dev_health_ops.api.internal.worker_operational.send_billing_notification.run",
-        return_value={"status": "sent"},
-    ) as run:
-        response = TestClient(app).post(
-            "/api/internal/worker-operational/billing",
-            headers={"Authorization": "Bearer test-token"},
-            json={
-                "notification_id": "00000000-0000-4000-8000-000000000011",
-                "organization_id": "00000000-0000-4000-8000-000000000010",
-                "notification_type": "invoice_receipt",
-                "idempotency_key": "billing:key",
-            },
-        )
-    assert response.status_code == 200
-    run.assert_called_once_with(
-        durable_notification_id="00000000-0000-4000-8000-000000000011",
-        idempotency_key="billing:key",
-    )
-
-
-def test_internal_bridge_classifies_dropped_billing_as_permanent(monkeypatch) -> None:
-    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
-    with patch(
-        "dev_health_ops.api.internal.worker_operational.send_billing_notification.run",
-        return_value={"status": "dropped", "reason": "missing_durable_notification"},
-    ):
-        response = TestClient(app).post(
-            "/api/internal/worker-operational/billing",
-            headers={"Authorization": "Bearer test-token"},
-            json={
-                "notification_id": "00000000-0000-4000-8000-000000000011",
-                "organization_id": "00000000-0000-4000-8000-000000000010",
-                "notification_type": "invoice_receipt",
-                "idempotency_key": "billing:key",
-            },
-        )
-    assert response.status_code == 422
-    assert response.json() == {"detail": "Operational delivery rejected"}
-
-
-def test_internal_bridge_accepts_billing_reference_missing_idempotency_key(
-    monkeypatch,
-) -> None:
-    """codex round 2, P1 (executed): a REQUIRED idempotency_key on this
-    strict bridge model is a rolling-deploy hazard — an old Go binary that
-    predates CHAOS-3952 omits the field, hits a 422, and http.go
-    permanently terminalizes the River job with no email ever sent. The
-    field must stay optional (send_billing_notification's own parameter
-    already is) so an old-Go/new-Python deploy window degrades to "no
-    cross-check", not "billing email delivery stops"."""
-    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
-    with patch(
-        "dev_health_ops.api.internal.worker_operational.send_billing_notification.run",
-        return_value={"status": "sent"},
-    ) as run:
-        response = TestClient(app).post(
-            "/api/internal/worker-operational/billing",
-            headers={"Authorization": "Bearer test-token"},
-            json={
-                "notification_id": "00000000-0000-4000-8000-000000000011",
-                "organization_id": "00000000-0000-4000-8000-000000000010",
-                "notification_type": "invoice_receipt",
-            },
-        )
-    assert response.status_code == 200
-    run.assert_called_once_with(
-        durable_notification_id="00000000-0000-4000-8000-000000000011",
-        idempotency_key=None,
-    )
-
-
-def test_internal_bridge_classifies_unknown_result_shape_as_retryable(
-    monkeypatch,
-) -> None:
-    # CHAOS-5320 deleted the /webhook route this test used to exercise --
-    # retargeted to /billing: _bridge_result's "non-dict result -> 502" path
-    # is generic across every route on this router, not webhook-specific.
-    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "test-token")
-    with patch(
-        "dev_health_ops.api.internal.worker_operational.send_billing_notification.run",
-        return_value=None,
-    ):
-        response = TestClient(app).post(
-            "/api/internal/worker-operational/billing",
-            headers={"Authorization": "Bearer test-token"},
-            json={
-                "notification_id": "00000000-0000-4000-8000-000000000011",
-                "organization_id": "00000000-0000-4000-8000-000000000010",
-                "notification_type": "invoice_receipt",
-            },
-        )
-    assert response.status_code == 502
+    assert response.status_code == 404
 
 
 def test_internal_bridge_dispatches_heartbeat_occurrence(monkeypatch) -> None:

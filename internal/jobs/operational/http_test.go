@@ -2,7 +2,6 @@ package operational
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -46,7 +45,6 @@ func TestHTTPDispatcherClassifiesBridgeResultContract(t *testing.T) {
 				}),
 			}
 			dispatcher, err := NewHTTPDispatcher(client, HTTPDispatcherConfig{
-				BillingEndpoint:   "https://api.internal.example/billing",
 				HeartbeatEndpoint: "https://api.internal.example/heartbeat",
 				BearerToken:       "test-token",
 			})
@@ -63,51 +61,6 @@ func TestHTTPDispatcherClassifiesBridgeResultContract(t *testing.T) {
 	}
 }
 
-// CHAOS-3952: the whole fix is worthless if the key never leaves the
-// process — assert the wire body Go actually sends, not just that
-// DispatchBilling returns nil.
-func TestDispatchBillingSendsIdempotencyKeyAcrossTheBridge(t *testing.T) {
-	var captured map[string]string
-	client := &http.Client{
-		Timeout: time.Second,
-		Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			body, err := io.ReadAll(request.Body)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal(body, &captured); err != nil {
-				t.Fatal(err)
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"status":"sent"}`)),
-				Header:     make(http.Header),
-			}, nil
-		}),
-	}
-	dispatcher, err := NewHTTPDispatcher(client, HTTPDispatcherConfig{
-		BillingEndpoint:   "https://api.internal.example/billing",
-		HeartbeatEndpoint: "https://api.internal.example/heartbeat",
-		BearerToken:       "test-token",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	notification := BillingNotification{
-		ID: billingID, OrganizationID: "00000000-0000-4000-8000-000000000010",
-		NotificationType: "invoice_receipt", IdempotencyKey: "billing:wire-key",
-	}
-	if err := dispatcher.DispatchBilling(context.Background(), notification); err != nil {
-		t.Fatal(err)
-	}
-	if captured["idempotency_key"] != "billing:wire-key" {
-		t.Fatalf("idempotency_key did not cross the bridge: body=%#v", captured)
-	}
-	if captured["notification_id"] != billingID {
-		t.Fatalf("notification_id missing from wire body: %#v", captured)
-	}
-}
-
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -116,7 +69,6 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 
 func TestHTTPDispatcherRequiresBoundedTimeoutAndDeployableEndpoint(t *testing.T) {
 	config := HTTPDispatcherConfig{
-		BillingEndpoint:   "https://api.internal.example/worker/billing",
 		HeartbeatEndpoint: "https://api.internal.example/worker/heartbeat",
 		BearerToken:       "test-token",
 	}
@@ -126,7 +78,12 @@ func TestHTTPDispatcherRequiresBoundedTimeoutAndDeployableEndpoint(t *testing.T)
 	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err != nil {
 		t.Fatalf("internal TLS endpoint rejected: %v", err)
 	}
-	config.BillingEndpoint = "http://api:8080/worker/billing"
+	// CHAOS-5320/CHAOS-5353 left the heartbeat as the only endpoint on this
+	// dispatcher, so the endpoint-validation ladder below now exercises it
+	// rather than the deleted billing one. The property under test is
+	// unchanged: validInternalEndpoint's scheme/host rules, including that
+	// the insecure opt-in widens service-DNS names but never public ones.
+	config.HeartbeatEndpoint = "http://api:8080/worker/heartbeat"
 	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err == nil {
 		t.Fatal("unencrypted service-DNS endpoint accepted")
 	}
@@ -134,7 +91,7 @@ func TestHTTPDispatcherRequiresBoundedTimeoutAndDeployableEndpoint(t *testing.T)
 	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err != nil {
 		t.Fatalf("explicit internal service-DNS endpoint rejected: %v", err)
 	}
-	config.BillingEndpoint = "http://api.example.com/worker/billing"
+	config.HeartbeatEndpoint = "http://api.example.com/worker/heartbeat"
 	if _, err := NewHTTPDispatcher(&http.Client{Timeout: time.Second}, config); err == nil {
 		t.Fatal("public unencrypted endpoint accepted with internal opt-in")
 	}

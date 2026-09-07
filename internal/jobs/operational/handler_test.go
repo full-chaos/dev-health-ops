@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -89,39 +88,6 @@ func spyRecordIgnoredWebhookEvent() (recorded *bool, restore func()) {
 	return recorded, restore
 }
 
-func TestBillingHandlerEnforcesAuthoritativeTenant(t *testing.T) {
-	org := "00000000-0000-4000-8000-000000000010"
-	store := &fakeStore{billing: BillingNotification{
-		ID: billingID, OrganizationID: org, NotificationType: "invoice_receipt", IdempotencyKey: "billing:key",
-	}}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewBillingHandler(store, dispatcher)
-	execution := &jobruntime.Execution[jobruntime.BillingNotificationArgs]{
-		Args: jobruntime.BillingNotificationArgs{EnvelopeArgs: jobruntime.EnvelopeArgs[jobcontract.BillingNotificationPayload]{
-			Payload: jobcontract.BillingNotificationPayload{NotificationID: billingID},
-		}},
-		OrganizationID: &org,
-		Envelope:       jobcontract.Envelope{Domain: jobcontract.DomainLink{Type: "billing_notification", ID: billingID}},
-	}
-	if err := handler.Work(context.Background(), execution); err != nil {
-		t.Fatal(err)
-	}
-	if dispatcher.billing.ID != billingID {
-		t.Fatalf("dispatched %#v", dispatcher.billing)
-	}
-}
-
-func TestDurableDuplicateIsSuppressedByRuntimeBeforeHandler(t *testing.T) {
-	// The handler has no local duplicate cache: jobruntime's durable
-	// billing_notification/webhook_delivery claim is the single source.
-	store := &fakeStore{err: errors.New("must not load duplicate")}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewBillingHandler(store, dispatcher)
-	if handler == nil || store.calls != 0 || dispatcher.calls != 0 {
-		t.Fatal("construction performed a delivery effect")
-	}
-}
-
 const (
 	webhookID = "00000000-0000-4000-8000-000000000012"
 	billingID = "00000000-0000-4000-8000-000000000011"
@@ -141,16 +107,4 @@ func (store *fakeStore) LoadWebhook(context.Context, string) (WebhookDelivery, e
 func (store *fakeStore) LoadBilling(context.Context, string) (BillingNotification, error) {
 	store.calls++
 	return store.billing, store.err
-}
-
-type fakeDispatcher struct {
-	billing BillingNotification
-	err     error
-	calls   int
-}
-
-func (dispatcher *fakeDispatcher) DispatchBilling(_ context.Context, notification BillingNotification) error {
-	dispatcher.calls++
-	dispatcher.billing = notification
-	return dispatcher.err
 }

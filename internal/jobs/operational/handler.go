@@ -45,18 +45,15 @@ type BillingNotification struct {
 	OrganizationID   string
 	NotificationType string
 	IdempotencyKey   string
+	// Attributes is the raw `billing_notifications.attributes` JSONB. Go
+	// renders the email from it directly since CHAOS-5353; before that it was
+	// read only by the Python bridge receiver.
+	Attributes []byte
 }
 
 type DeliveryStore interface {
 	LoadWebhook(context.Context, string) (WebhookDelivery, error)
 	LoadBilling(context.Context, string) (BillingNotification, error)
-}
-
-// Dispatcher is a concrete effect boundary. The production HTTP adapter sends
-// durable references to the existing internal operational services; it never
-// sends provider bodies, billing attributes, or recipient addresses.
-type Dispatcher interface {
-	DispatchBilling(context.Context, BillingNotification) error
 }
 
 type WebhookHandler struct {
@@ -125,44 +122,6 @@ func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.E
 	// other recognised-but-not-yet-native event type, plus anything a future
 	// provider integration adds before its own native route lands.
 	recordIgnoredWebhookEvent(ctx, delivery.Provider, delivery.EventType, delivery.ID)
-	return nil
-}
-
-type BillingHandler struct {
-	store      DeliveryStore
-	dispatcher Dispatcher
-}
-
-func NewBillingHandler(store DeliveryStore, dispatcher Dispatcher) (*BillingHandler, error) {
-	if store == nil || dispatcher == nil {
-		return nil, errors.New("complete billing dependencies are required")
-	}
-	return &BillingHandler{store: store, dispatcher: dispatcher}, nil
-}
-
-func (handler *BillingHandler) Work(ctx context.Context, execution *jobruntime.Execution[jobruntime.BillingNotificationArgs]) error {
-	if handler == nil || handler.store == nil || handler.dispatcher == nil || execution == nil {
-		return jobruntime.Permanent(errors.New("billing handler is not configured"))
-	}
-	id := execution.Args.Payload.NotificationID
-	if execution.Envelope.Domain.ID != "" && execution.Envelope.Domain.ID != id {
-		return jobruntime.Permanent(ErrDeliveryInvalid)
-	}
-	notification, err := handler.store.LoadBilling(ctx, id)
-	if err != nil {
-		return classifyStoreError(err)
-	}
-	if notification.ID != id || execution.OrganizationID == nil ||
-		notification.OrganizationID != *execution.OrganizationID ||
-		notification.NotificationType == "" || notification.IdempotencyKey == "" {
-		return jobruntime.Permanent(ErrDeliveryInvalid)
-	}
-	if err := handler.dispatcher.DispatchBilling(ctx, notification); err != nil {
-		if errors.Is(err, ErrDispatchPermanent) {
-			return jobruntime.Permanent(err)
-		}
-		return jobruntime.Retryable(err)
-	}
 	return nil
 }
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import date, datetime, time, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from dev_health_ops.credentials.resolver import (
@@ -12,9 +12,6 @@ from dev_health_ops.credentials.resolver import (
     resolve_gitlab_url,
 )
 from dev_health_ops.metrics.sinks.ingestion import IngestionSink
-from dev_health_ops.providers.github.work_item_options import (
-    canonical_github_work_item_runtime_options,
-)
 from dev_health_ops.providers.usage import (
     PROVIDER_USAGE_OBSERVATION_KEY,
     attach_partial_observations,
@@ -54,16 +51,6 @@ _CODE_DATASETS = frozenset(
         DatasetKey.DEPLOYMENTS.value,
         DatasetKey.INCIDENTS.value,
         DatasetKey.SECURITY.value,
-    }
-)
-
-_WORK_ITEM_DATASETS = frozenset(
-    {
-        DatasetKey.WORK_ITEMS.value,
-        DatasetKey.WORK_ITEM_LABELS.value,
-        DatasetKey.WORK_ITEM_PROJECTS.value,
-        DatasetKey.WORK_ITEM_HISTORY.value,
-        DatasetKey.WORK_ITEM_COMMENTS.value,
     }
 )
 
@@ -244,91 +231,6 @@ def _require_jira_incident_entitlement(context: SyncTaskContext) -> None:
 
     with get_postgres_session_sync() as session:
         require_canonical_incident_feature_for_update_sync(session, context.org_id)
-
-
-def _window_backfill_days(context: SyncTaskContext) -> int:
-    if context.window_start is None or context.window_end is None:
-        return 1
-    start_day = context.window_start.date()
-    end_day = context.window_end.date()
-    return max(1, (end_day - start_day).days + 1)
-
-
-def _window_day(context: SyncTaskContext) -> date:
-    window_end = context.window_end
-    if window_end is not None:
-        return window_end.date()
-    window_start = context.window_start
-    if window_start is not None:
-        return window_start.date()
-    return datetime.now(timezone.utc).date()
-
-
-def _window_start_from_work_item_args(context: SyncTaskContext) -> datetime | None:
-    if context.window_start is not None:
-        return context.window_start
-    day = _window_day(context)
-    return datetime.combine(day, time.min, tzinfo=timezone.utc)
-
-
-def _work_item_kwargs(context: SyncTaskContext) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {
-        "db_url": context.db_url,
-        "day": _window_day(context),
-        "backfill_days": _window_backfill_days(context),
-        "provider": context.provider,
-        "org_id": context.org_id,
-        "credentials": _credentials_mapping(context) or None,
-        "require_source": True,
-    }
-    if context.provider in {"github", "gitlab", "linear"}:
-        repo_name: str | None = context.source_external_id
-        if context.provider == "linear" and context.source_is_org_wide_placeholder:
-            repo_name = None
-            kwargs["require_source"] = False
-        kwargs["repo_name"] = repo_name
-    if context.provider == "gitlab" and kwargs["credentials"]:
-        token, gitlab_url = _gitlab_credentials(context)
-        kwargs["credentials"] = {
-            **kwargs["credentials"],
-            "token": token,
-            "gitlab_url": gitlab_url,
-        }
-    if context.provider == "github":
-        kwargs.update(
-            {
-                name: value
-                for name, value in _github_work_item_options(context).items()
-                if value is not None
-            }
-        )
-    return kwargs
-
-
-def _github_work_item_options(context: SyncTaskContext) -> dict[str, Any]:
-    """Return the runtime controls frozen onto a GitHub work-items claim."""
-    flags = _explicit_flags(context)
-    raw_dataset_options = getattr(context, "dataset_options", None)
-    if raw_dataset_options is None:
-        dataset_options: dict[str, Any] = {}
-    elif isinstance(raw_dataset_options, dict):
-        dataset_options = raw_dataset_options
-    else:
-        raise ValueError("GitHub work-items dataset_options must be a mapping")
-
-    runtime_options = canonical_github_work_item_runtime_options(dataset_options)
-
-    # Keep this literal exhaustive: the live Python-Go oracle reflects these
-    # keys from production rather than maintaining a hand-selected field list.
-    return {
-        "include_issues": context.dataset_key in _WORK_ITEM_DATASETS,
-        # CHAOS-646: only ingest PRs as work items when the PRS dataset is also
-        # enabled for this config. None would re-enable the environment default.
-        "include_pull_requests": flags["sync_prs"],
-        "fetch_comments": runtime_options["fetch_comments"],
-        "fetch_milestones": runtime_options["fetch_milestones"],
-        "comments_limit": runtime_options["comments_limit"],
-    }
 
 
 def _run_github_dataset(
@@ -653,31 +555,6 @@ def _attach_usage_sink_to_exception(
         )
 
 
-def _run_work_item_dataset(context: SyncTaskContext) -> dict[str, Any]:
-    from dev_health_ops.metrics.job_work_items import run_work_items_sync_job
-
-    kwargs = _work_item_kwargs(context)
-    sync_result = run_work_items_sync_job(**kwargs)
-    window_start = _window_start_from_work_item_args(context)
-    result: dict[str, Any] = {
-        "provider": context.provider,
-        "dataset": context.dataset_key,
-        "source": context.source_external_id,
-        "work_items_synced": True,
-        "day": kwargs["day"].isoformat(),
-        "backfill_days": kwargs["backfill_days"],
-        "window_start": window_start.isoformat() if window_start is not None else None,
-        "window_end": context.window_end.isoformat()
-        if context.window_end is not None
-        else None,
-    }
-    if isinstance(sync_result, dict) and isinstance(
-        sync_result.get("observations"), dict
-    ):
-        result["observations"] = sync_result["observations"]
-    return result
-
-
 def _run_feature_flags_dataset(context: SyncTaskContext) -> dict[str, Any]:
     from dev_health_ops.workers.feature_flag_sync import (
         _sync_gitlab_feature_flags,
@@ -744,13 +621,15 @@ def run_dataset_unit(
         if provider == "gitlab":
             return _run_gitlab_dataset(context, runtime)
 
-    if dataset_key in _WORK_ITEM_DATASETS and provider in {
-        "github",
-        "gitlab",
-        "jira",
-        "linear",
-    }:
-        return _run_work_item_dataset(context)
+    # CHAOS-5351: the work-item-dataset branch that dispatched to
+    # _run_work_item_dataset (run_work_items_sync_job, Python compute) is
+    # deleted -- the native provider-sync route
+    # (cmd/dev-health-worker/provider_sync.go's work-items dataset case, one
+    # per provider) is the only production ingest path now, and this Celery
+    # dataset-unit dispatch (run_sync_unit -> run_dataset_unit) was itself
+    # unreachable in production (prod Celery stopped 2026-08-19). A
+    # work-items dataset_key now falls through to the "Unsupported" raise
+    # below, same as any other dataset this Celery path never handled.
 
     if dataset_key == DatasetKey.FEATURE_FLAGS.value:
         return _run_feature_flags_dataset(context)

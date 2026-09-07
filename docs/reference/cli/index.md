@@ -89,7 +89,7 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 
 | Requirement | Commands |
 |-------------|----------|
-| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync work-items`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
+| ClickHouse (`--analytics-db` / `CLICKHOUSE_URI`) | `sync git`, `sync prs`, `sync blame`, `sync cicd`, `sync deployments`, `sync incidents`, `sync security`, `sync tests`, `sync teams`; `metrics validate-flags`, `metrics compounding-risk` (+org); `audit perf`, `audit schema`; `ai allowlist list/set` (+org); `migrate clickhouse` (bare + `upgrade`/`status`/`repair`) |
 | `dev-health-workerctl` binary on `PATH` (or `DEV_HEALTH_WORKERCTL_BIN`), Postgres coordinator (+org) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055: dispatch to the Go worker, no direct ClickHouse connection of their own) |
 | PostgreSQL (`--db` / `POSTGRES_URI`) | `billing reconcile`; `migrate postgres` (bare + `upgrade`/`downgrade`/`current`); `migrate configs-to-integrations` (one-time child-config -> integration data migration; `--dry-run` to preview); legacy `migrate upgrade`/`downgrade`/`current` |
 | Organization (`--org` / `ORG_ID`) | `metrics daily`, `metrics rebuild`, `metrics dora`, `metrics complexity`, `metrics capacity`, `metrics release-impact` (CHAOS-5055), `metrics compounding-risk`, `backfill run`, `ai allowlist list/set` |
@@ -164,32 +164,17 @@ dev-hops sync prs --provider github \
   --repo repo
 ```
 
-### `sync work-items`
+### `sync work-items` (deleted, CHAOS-5351)
 
-Sync work items from issue trackers. Uses `CLICKHOUSE_URI`.
-
-```bash
-# All providers
-dev-hops sync work-items --provider all \
-  --before 2025-02-02 \
-  --backfill 30
-
-# Jira only
-dev-hops sync work-items --provider jira
-
-# GitHub with pattern
-dev-hops sync work-items --provider github \
-  -s "org/*"
-
-# Linear (all teams)
-dev-hops sync work-items --provider linear
-
-# Linear (specific team by key)
-dev-hops sync work-items --provider linear \
-  --repo ENG
-```
-
-**Providers:** `jira`, `github`, `gitlab`, `linear`, `synthetic`, `all`
+This command no longer exists. Work items are synced automatically by the
+native Go provider-sync route (`cmd/dev-health-worker/provider_sync.go`'s
+work-items dataset case, one per provider, dispatched via the river
+`sync_provider` queue) and by webhooks — there is no manual per-provider sync
+trigger. To force a backfill for a specific sync configuration and window,
+use `dev-hops backfill run --config-id <uuid> [--since ...] [--before ...]`,
+which dispatches through the same native route. To inspect what the queue is
+doing, use `dev-health-workerctl jobs list --queue sync_provider --kind
+<kind>` / `jobs inspect <id>`.
 
 ### `sync cicd`
 
@@ -2123,10 +2108,10 @@ dev-hops sync git --provider github \
   --owner myorg \
   --repo myrepo
 
-# 3. Sync work items
-dev-hops sync work-items --provider jira \
-  --before 2025-02-02 \
-  --backfill 30
+# 3. Work items sync automatically via the native Go provider-sync route +
+#    webhooks (CHAOS-5351) -- no manual command. To force a backfill window
+#    for a specific sync config: dev-hops backfill run --config-id <uuid>
+#    [--since ...] [--before ...]
 
 # 4. Compute metrics (CHAOS-5055: dispatches to dev-health-workerctl; needs
 #    it on PATH plus a running worker/Postgres coordinator)

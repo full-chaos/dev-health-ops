@@ -388,7 +388,7 @@ func recordGenericOracleProof(t *testing.T, packageDir, pairID string) {
 // directive's file list drifted out of sync with what oracleDivergences
 // actually executes.
 //
-//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/python_investment_call_site.py testdata/oracle_pairs/*.py
+//go:embed testdata/python_generic_row_oracle.py testdata/oracle_registry.py testdata/python_oracle_loader.py testdata/field_reflection.py testdata/oracle_pairs/*.py
 var embeddedOracleSources embed.FS
 
 // The comparison vocabulary below moved to internal/testsupport/oraclecompare

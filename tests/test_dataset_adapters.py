@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -231,152 +230,20 @@ def test_gitlab_code_datasets_call_project_processor_with_explicit_flags(
     assert result["source"] == "123"
 
 
-@pytest.mark.parametrize(
-    "provider, source_external_id, expected_extra",
-    [
-        ("github", "full-chaos/dev-health", {"repo_name": "full-chaos/dev-health"}),
-        ("gitlab", "123", {"repo_name": "123"}),
-        ("linear", "TEAM", {"repo_name": "TEAM"}),
-    ],
-)
-def test_work_item_datasets_route_to_work_item_sync_scoped_to_source(
-    provider: str, source_external_id: str, expected_extra: dict[str, object]
-) -> None:
-    credentials: dict[str, object] = {
-        "token": "token",
-        "gitlab_url": "https://gitlab.example",
-    }
-    ctx = _context(
-        provider=provider,
-        dataset_key="work-items",
-        source_external_id=source_external_id,
-        credentials=credentials,
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        result = run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    kwargs = work_items.call_args.kwargs
-    assert kwargs["db_url"] == "clickhouse://localhost/default"
-    assert kwargs["provider"] == provider
-    assert kwargs["org_id"] == "org-1"
-    assert kwargs["day"] == WINDOW_END.date()
-    assert kwargs["backfill_days"] == 3
-    for key, value in expected_extra.items():
-        assert kwargs[key] == value
-    if provider == "github":
-        assert kwargs["include_issues"] is True
-    else:
-        assert "include_issues" not in kwargs
-    assert result["work_items_synced"] is True
-    assert result["source"] == source_external_id
-
-
-def test_github_work_item_unit_threads_source_scope_contract() -> None:
-    """CHAOS-2720: the adapter must hand ``run_work_items_sync_job`` the source
-    identity that lets it scope a GitHub unit to its own repo — ``repo_name`` set
-    to the ``owner/repo`` slug AND ``require_source=True`` (fail closed if the
-    source repo is not discovered). ``run_work_items_sync_job`` then drops
-    off-source GitHub repos before ingest, so one unit no longer fans out across
-    every org repo (call-count proof in tests/test_work_item_source_scope.py).
-    """
-    ctx = _context(
-        provider="github",
-        dataset_key="work-items",
-        source_external_id="full-chaos/dev-health",
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    kwargs = work_items.call_args.kwargs
-    assert kwargs["repo_name"] == "full-chaos/dev-health"
-    assert kwargs["require_source"] is True
-
-
-def test_gitlab_work_item_unit_threads_source_scope_contract() -> None:
-    """CHAOS-2763: gitlab twin of the GitHub contract above. The adapter must
-    hand ``run_work_items_sync_job`` the unit's numeric GitLab project id (the
-    dataset-adapter layer already threads ``context.source_external_id``
-    through for provider in {github, gitlab, linear} — this pins that gitlab
-    is not silently excluded) AND ``require_source=True``, so
-    ``run_work_items_sync_job`` can scope the unit to its own project (call-
-    count proof in tests/test_work_item_source_scope.py).
-    """
-    ctx = _context(
-        provider="gitlab",
-        dataset_key="work-items",
-        source_external_id="123",
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    kwargs = work_items.call_args.kwargs
-    assert kwargs["repo_name"] == "123"
-    assert kwargs["require_source"] is True
-
-
-def test_linear_org_wide_provider_name_placeholder_routes_to_no_source() -> None:
-    ctx = _context(
-        provider="linear",
-        dataset_key="work-items",
-        source_external_id="linear",
-        source_is_org_wide_placeholder=True,
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        result = run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    kwargs = work_items.call_args.kwargs
-    assert kwargs["provider"] == "linear"
-    assert kwargs["repo_name"] is None
-    assert kwargs["require_source"] is False
-    assert result["source"] == "linear"
-
-
-def test_linear_provider_name_scoped_source_stays_visible_to_provider() -> None:
-    ctx = _context(
-        provider="linear",
-        dataset_key="work-items",
-        source_external_id="linear",
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    kwargs = work_items.call_args.kwargs
-    assert kwargs["repo_name"] == "linear"
-    assert kwargs["require_source"] is True
-
-
-def test_work_item_derivative_dataset_uses_same_work_item_path() -> None:
-    ctx = _context(
-        provider="linear", dataset_key="work-item-comments", source_external_id="ENG"
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    assert work_items.call_args.kwargs["repo_name"] == "ENG"
+# CHAOS-5351: the work-item-dataset routing tests that used to live here
+# (test_work_item_datasets_route_to_work_item_sync_scoped_to_source,
+# test_github/gitlab_work_item_unit_threads_source_scope_contract,
+# test_linear_org_wide_provider_name_placeholder_routes_to_no_source,
+# test_linear_provider_name_scoped_source_stays_visible_to_provider,
+# test_work_item_derivative_dataset_uses_same_work_item_path) all patched
+# dev_health_ops.metrics.job_work_items.run_work_items_sync_job and asserted
+# on _run_work_item_dataset/_work_item_kwargs's repo-scoping kwargs. Both are
+# deleted -- run_dataset_unit's work-items branch now falls through to the
+# "Unsupported provider dataset unit" raise, same as any other dataset this
+# Celery path never handled -- so there is nothing left to route or scope
+# here. The native provider-sync route
+# (cmd/dev-health-worker/provider_sync.go's work-items dataset case) owns
+# the same repo-scoping contract now.
 
 
 def test_gitlab_feature_flags_route_to_existing_feature_flag_sync() -> None:
@@ -1169,178 +1036,13 @@ def test_github_dataset_through_runtime_cache_enters_store_before_insert(
     assert result["dataset"] == "repo-metadata"
 
 
-def test_github_work_items_include_prs_when_prs_dataset_enabled() -> None:
-    """CHAOS-646: github work-items ingest PRs as work items when PRS is enabled.
-
-    The planner stamps ``sync_prs=True`` on the work-items unit when a PRS-family
-    dataset is enabled for the config; the adapter must thread that into
-    ``run_work_items_sync_job(include_pull_requests=True)``.
-    """
-    ctx = _context(
-        provider="github",
-        dataset_key="work-items",
-        processor_flags=_flags(sync_prs=True),
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    assert work_items.call_args.kwargs["include_issues"] is True
-    assert work_items.call_args.kwargs["include_pull_requests"] is True
-
-
-def test_github_work_items_threads_frozen_runtime_controls() -> None:
-    ctx = _context(
-        provider="github",
-        dataset_key="work-items",
-        processor_flags=_flags(sync_prs=True),
-        dataset_options={
-            "fetch_comments": False,
-            "fetch_milestones": True,
-            "comments_limit": 37,
-        },
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        run_dataset_unit(ctx, _runtime())
-
-    kwargs = work_items.call_args.kwargs
-    assert kwargs["fetch_comments"] is False
-    assert kwargs["fetch_milestones"] is True
-    assert kwargs["comments_limit"] == 37
-
-
-@patch.dict(
-    os.environ,
-    {
-        "GITHUB_FETCH_COMMENTS": "false",
-        "GITHUB_FETCH_MILESTONES": "false",
-        "GITHUB_COMMENTS_LIMIT": "7",
-    },
-)
-def test_github_work_items_unrepaired_options_use_safe_defaults_not_live_env() -> None:
-    ctx = _context(
-        provider="github",
-        dataset_key="work-items",
-        processor_flags=_flags(sync_prs=False),
-        dataset_options={},
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        run_dataset_unit(ctx, _runtime())
-
-    kwargs = work_items.call_args.kwargs
-    assert kwargs["fetch_comments"] is True
-    assert kwargs["fetch_milestones"] is True
-    assert kwargs["comments_limit"] == 500
-
-
-def test_github_work_items_threads_usage_observations_to_result() -> None:
-    ctx = _context(
-        provider="github",
-        dataset_key="work-items",
-        processor_flags=_flags(sync_prs=True),
-    )
-    observations = {
-        "github_usage": [
-            {
-                "transport": "rest",
-                "operation": "GET /repos/full-chaos/dev-health/issues",
-                "request_count": 1,
-                "rate_limit": {"remaining": "4999", "reset": "1234567890"},
-            }
-        ]
-    }
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job",
-        return_value={"observations": observations},
-    ):
-        result = run_dataset_unit(ctx, _runtime())
-
-    assert result["observations"] == observations
-
-
-def test_github_work_items_exclude_prs_when_prs_dataset_disabled() -> None:
-    """CHAOS-646 regression: PRs must NOT be ingested as work items when the PRS
-    dataset is off. A missing/None value would let the github provider fall back
-    to the GITHUB_INCLUDE_PRS env default (PRs ON), re-introducing the bug."""
-    ctx = _context(
-        provider="github",
-        dataset_key="work-items",
-        processor_flags=_flags(sync_prs=False),
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    assert work_items.call_args.kwargs["include_issues"] is True
-    assert work_items.call_args.kwargs["include_pull_requests"] is False
-
-
-def test_non_github_work_items_leave_include_pull_requests_unset() -> None:
-    """Only github threads include_pull_requests (matching the legacy worker);
-    other providers leave it unset so the provider default applies."""
-    ctx = _context(
-        provider="jira",
-        dataset_key="work-items",
-        source_external_id="ENG",
-        processor_flags=_flags(),
-    )
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    assert "include_issues" not in work_items.call_args.kwargs
-    assert "include_pull_requests" not in work_items.call_args.kwargs
-
-
-@pytest.mark.parametrize(
-    "dataset_key",
-    ["work-item-labels", "work-item-projects"],
-)
-def test_work_item_derivative_preserves_non_null_window_start_not_midnight(
-    dataset_key: str,
-) -> None:
-    """CHAOS-2707: work-item-labels and work-item-projects must echo the
-    context's window_start in result["window_start"] verbatim, not fall back
-    to midnight of the window day.
-    """
-    ctx = _context(
-        provider="jira",
-        dataset_key=dataset_key,
-        source_external_id="ENG",
-    )
-    # WINDOW_START is 2026-01-10T00:00:00+00:00 — but the key invariant is
-    # that a non-midnight context.window_start (e.g. mid-day) is preserved.
-    mid_day_start = WINDOW_START.replace(hour=14, minute=30, second=0)
-    ctx = replace(ctx, window_start=mid_day_start)
-
-    with patch(
-        "dev_health_ops.metrics.job_work_items.run_work_items_sync_job"
-    ) as work_items:
-        result = run_dataset_unit(ctx, _runtime())
-
-    work_items.assert_called_once()
-    # The adapter must NOT fall back to midnight; it must preserve the exact
-    # window_start from context.
-    assert result["window_start"] == mid_day_start.isoformat(), (
-        f"Expected window_start={mid_day_start.isoformat()!r} but got {result['window_start']!r}; "
-        "adapter fell back to midnight instead of preserving context.window_start"
-    )
+# CHAOS-5351: the github/non-github work-items PRS-threading, frozen-runtime-
+# controls, usage-observations, and work-item-derivative-window-start tests
+# that used to live here all patched
+# dev_health_ops.metrics.job_work_items.run_work_items_sync_job and asserted
+# on _work_item_kwargs/_github_work_item_options's kwargs-building. Both are
+# deleted along with run_work_items_sync_job -- see the equivalent deletion
+# note above test_gitlab_feature_flags_route_to_existing_feature_flag_sync.
 
 
 # ---------------------------------------------------------------------------

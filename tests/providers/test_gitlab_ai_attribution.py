@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-import dataclasses
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
-
-import pytest
 
 # Import connectors FIRST to break the providers._base <-> connectors circular
 # import that otherwise ERRORs at collection in isolated runs (see CHAOS-2370).
 import dev_health_ops.connectors  # noqa: F401
-import dev_health_ops.metrics.job_work_items as job
-import dev_health_ops.metrics.work_items as work_items_module
-from dev_health_ops.metrics.work_items import DiscoveredRepo
-from dev_health_ops.models.ai_attribution import AIAttributionRecord
 from dev_health_ops.providers.gitlab.normalize import (
     detect_mr_attributions,
     gitlab_mr_ai_attributions,
@@ -200,221 +193,16 @@ def test_gitlab_attribution_subject_id_joins_git_pull_requests_number() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Live-path integration test
-#
-# Drives the ACTUAL scheduled work-items sync entrypoint
-# (run_work_items_sync_job -> fetch_gitlab_work_items) with a fake GitLab
-# client and asserts MR-derived AI attribution records reach
-# write_ai_attribution() with the real org_id. This is the seam the prior
-# attempt left broken (records were only emitted from the orphaned
-# GitLabProvider.iter_ingest path, never the legacy GitLab branch).
+# CHAOS-5351: the live-path integration tests that used to live here
+# (test_gitlab_work_items_sync_writes_ai_attribution_with_org_id,
+# test_gitlab_work_items_sync_skips_attribution_when_org_blank) drove
+# run_work_items_sync_job -> fetch_gitlab_work_items end to end with a fake
+# GitLab client, asserting MR-derived AI attribution records reached
+# write_ai_attribution() with the real org_id. Deleted along with
+# run_work_items_sync_job -- the native provider-sync route
+# (internal/providersync/gitlab_work_item_derived.go) is the production
+# writer of ai_attribution now; the pure-function contract this file's other
+# tests pin (detect_mr_attributions_*, gitlab_mr_ai_attributions_*,
+# gitlab_attribution_subject_id_joins_git_pull_requests_number above) is
+# unaffected and stays covered.
 # ---------------------------------------------------------------------------
-
-
-class _FakeGitLabClient:
-    """Minimal stand-in for GitLabWorkClient covering the live fetch path."""
-
-    def __init__(self, *, issues: list[Any], mrs: list[Any]) -> None:
-        self._issues = issues
-        self._mrs = mrs
-
-    def iter_project_issues(
-        self, *, project_id_or_path: str, state: str = "all", **_kwargs: Any
-    ) -> list[Any]:
-        return self._issues
-
-    def iter_project_merge_requests(
-        self, *, project_id_or_path: str, state: str = "all", **_kwargs: Any
-    ) -> list[Any]:
-        return self._mrs
-
-
-def _gitlab_issue(iid: int) -> SimpleNamespace:
-    created = datetime(2026, 5, 1, 12, tzinfo=timezone.utc)
-    return SimpleNamespace(
-        iid=iid,
-        title=f"Issue {iid}",
-        description="normal non-AI work",
-        state="opened",
-        created_at=created,
-        updated_at=created,
-        closed_at=None,
-        labels=[],
-        assignees=[],
-        author=SimpleNamespace(username="human", name="human", email=None),
-        web_url=f"https://gitlab.com/group/widget/-/issues/{iid}",
-    )
-
-
-@dataclasses.dataclass(frozen=True)
-class _Classification:
-    investment_area: str = "Maintenance / Tech Debt"
-    project_stream: str = ""
-    confidence: float = 1.0
-    rule_id: str = "test"
-
-
-class _Classifier:
-    def __init__(self, *_args: object, **_kwargs: object) -> None:
-        pass
-
-    def classify(self, _payload: object) -> _Classification:
-        return _Classification()
-
-
-class _FakeClickHouseSink:
-    def __init__(self, _dsn: str) -> None:
-        self.org_id = ""
-        self.work_items: list[object] = []
-        self.transitions: list[object] = []
-        self.ai_attributions: list[AIAttributionRecord] = []
-        self.metric_rows: list[object] = []
-
-    def ensure_tables(self) -> None:
-        return None
-
-    def query_dicts(
-        self, _query: str, _params: dict[str, object]
-    ) -> list[dict[str, object]]:
-        return []
-
-    def write_work_items(self, rows: list[object]) -> None:
-        self.work_items.extend(rows)
-
-    def write_work_item_transitions(self, rows: list[object]) -> None:
-        self.transitions.extend(rows)
-
-    def write_ai_attribution(self, rows: list[AIAttributionRecord]) -> None:
-        self.ai_attributions.extend(rows)
-
-    def write_work_item_metrics(self, rows: list[object]) -> None:
-        self.metric_rows.extend(rows)
-
-    def write_work_item_user_metrics(self, rows: list[object]) -> None:
-        self.metric_rows.extend(rows)
-
-    def write_work_item_cycle_times(self, rows: list[object]) -> None:
-        self.metric_rows.extend(rows)
-
-    def write_work_item_state_durations(self, rows: list[object]) -> None:
-        self.metric_rows.extend(rows)
-
-    def write_issue_type_metrics(self, rows: list[object]) -> None:
-        self.metric_rows.extend(rows)
-
-    def write_investment_classifications(self, rows: list[object]) -> None:
-        self.metric_rows.extend(rows)
-
-    def write_investment_metrics(self, rows: list[object]) -> None:
-        self.metric_rows.extend(rows)
-
-    def close(self) -> None:
-        return None
-
-
-def _patch_common(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    sink: _FakeClickHouseSink,
-    repo_id: uuid.UUID,
-    fake_client: _FakeGitLabClient,
-) -> None:
-    monkeypatch.setattr(job, "ClickHouseMetricsSink", lambda _dsn: sink)
-    monkeypatch.setattr(job, "InvestmentClassifier", _Classifier)
-    # CHAOS-5310/CHAOS-5321/CHAOS-3092 (R6): no compute_work_item_metrics_daily
-    # / compute_work_item_state_durations_daily to patch here anymore --
-    # job_work_items.py no longer calls either (native Go executors +
-    # providersync ingest derivation own these tables now).
-    monkeypatch.setattr(
-        job,
-        "_discover_repos",
-        lambda **_kwargs: [
-            DiscoveredRepo(
-                repo_id=repo_id,
-                full_name="group/widget",
-                source="gitlab",
-                settings={},
-            )
-        ],
-    )
-
-    # Inject the fake GitLab client at the metrics-dependency seam that
-    # fetch_gitlab_work_items resolves via get_metrics_dependencies().
-    base = work_items_module.get_metrics_dependencies()
-    overridden = dataclasses.replace(
-        base, gitlab_client_factory=lambda *, token, gitlab_url=None: fake_client
-    )
-    monkeypatch.setattr(
-        work_items_module,
-        "get_metrics_dependencies",
-        lambda: overridden,
-    )
-
-
-def test_gitlab_work_items_sync_writes_ai_attribution_with_org_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    org_id = uuid.uuid4()
-    repo_id = uuid.uuid4()
-    sink = _FakeClickHouseSink("clickhouse://test")
-    fake_client = _FakeGitLabClient(
-        issues=[_gitlab_issue(10)],
-        mrs=[
-            _mr(iid=11, labels=["ai-assisted"]),
-            _mr(iid=12, author_username="claude-code[bot]", author_bot=True),
-            _mr(
-                iid=13,
-                description="Implementation details\n\nAI-Assisted-By: Claude Code",
-            ),
-            _mr(iid=14, description="Reviewed and implemented by a human."),
-        ],
-    )
-    _patch_common(monkeypatch, sink=sink, repo_id=repo_id, fake_client=fake_client)
-
-    run_job: Any = job.run_work_items_sync_job
-    run_job(
-        db_url="clickhouse://test",
-        day=date(2026, 5, 2),
-        backfill_days=1,
-        provider="gitlab",
-        org_id=str(org_id),
-        credentials={"token": "test-gitlab-token"},
-    )
-
-    # MR-derived attribution records reached the sink, org-scoped to the real org.
-    assert sink.ai_attributions
-    assert {row.org_id for row in sink.ai_attributions} == {org_id}
-    assert {row.repo_id for row in sink.ai_attributions} == {repo_id}
-    assert {str(row.source) for row in sink.ai_attributions} >= {
-        "pr_label",
-        "bot_author",
-        "commit_trailer",
-    }
-    # Subject ids are the bare MR iid string (joins git_pull_requests.number).
-    assert any(row.subject_id == "11" for row in sink.ai_attributions)
-    # The non-AI MR (#14) produced no attribution row.
-    assert not any(row.subject_id == "14" for row in sink.ai_attributions)
-
-
-def test_gitlab_work_items_sync_skips_attribution_when_org_blank(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Without a tenant scope, attribution must NOT be written with a blank org.
-    repo_id = uuid.uuid4()
-    sink = _FakeClickHouseSink("clickhouse://test")
-    fake_client = _FakeGitLabClient(
-        issues=[_gitlab_issue(10)],
-        mrs=[_mr(iid=11, labels=["ai-assisted"])],
-    )
-    _patch_common(monkeypatch, sink=sink, repo_id=repo_id, fake_client=fake_client)
-
-    run_job: Any = job.run_work_items_sync_job
-    run_job(
-        db_url="clickhouse://test",
-        day=date(2026, 5, 2),
-        backfill_days=1,
-        provider="gitlab",
-        org_id="",
-    )
-
-    assert sink.ai_attributions == []

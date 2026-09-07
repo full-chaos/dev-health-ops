@@ -98,7 +98,7 @@ Diff it against the same query after step 5. This is a prerequisite, not an opti
 
 | Command | Source | When to use |
 |---|---|---|
-| `dev-hops sync work-items` / `dev-hops backfill run` | `docs/contribute/architecture/team-attribution.md` §5 -- Python CLI trigger shell over the native Go sync-dispatch path | Recompute `work_item_team_attributions` for an org; **must run for ALL providers** (Linear AND GitHub/GitLab) -- Linear-only recomputes nothing, since PR/MR rows and their edges come from the git providers. `--org` is optional (derived from the sync config). |
+| No manual trigger | `cmd/dev-health-worker/provider_sync.go`'s work-items dataset case (CHAOS-5351) | `work_item_team_attributions` is recomputed automatically: the native Go provider-sync route (river `sync_provider` queue, one work-items case per provider) and webhooks keep it current for every provider, with no operator action needed. `dev-hops sync work-items` is deleted (CHAOS-5351) -- it called the now-deleted `run_work_items_sync_job` directly. `dev-hops backfill run` still exists but now dispatches a provider backfill through the SAME native route (`run_backfill_via_planner`) rather than recomputing attributions on its own; use `dev-health-workerctl jobs list --queue sync_provider --kind <kind>` / `jobs inspect <id>` to inspect what the river queue is doing for a given org's units. |
 | `dev-health-workerctl workgraph trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` | `trigger_workgraph.go:98-283` (CHAOS-5172) | Step 3: enqueue a fresh `workgraph.build` request through the same `workgraph.RequestWriter.WriteTx` path the automatic post-sync/scheduled producers use. |
 | `dev-health-workerctl investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` | `trigger_investment.go:73-222` (CHAOS-5173) | Step 4, native path: enqueue a fresh `investment.materialize` request through the native executor. Drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) -- only an org id and an optional `--from`/`--to` window exist on the request. |
 | `dev-health-workerctl providersync retire-linear-pseudo-projects [--org <uuid>] [--dry-run]` | `main.go:1408-1466` (CHAOS-4530 follow-up) | One-time cleanup of `{org_id}:linear:{team_key}` pseudo-project rows in `projects`. Destructive (physical delete), authorized before any ClickHouse call is attempted. |
@@ -106,10 +106,10 @@ Diff it against the same query after step 5. This is a prerequisite, not an opti
 | Team membership resolution (admin override layer) | `docs/contribute/architecture/team-attribution.md` §CHAOS-4321 | Not a CLI command. Admin panel `/org/admin/identities` writes `identities.team_ids`; `teams.manual_members` is the admin-exclusive override roster. No CLI mutation path exists. |
 
 **Team-attribution recovery order** (`docs/contribute/architecture/team-attribution.md` §5): (1) merge +
-deploy the mechanism, (2) backfill ALL providers via sync/backfill, (3) `workgraph trigger`, (4) `investment
-trigger`, (5) verify via the query-time join (coverage %, chord). The
-backfill runner only re-runs the sync job -- it does **not** fan out to work-graph or investment
-automatically; both must be triggered explicitly.
+deploy the mechanism, (2) confirm ALL providers' work-items ingestion is current (automatic via native
+provider sync -- `dev-hops backfill run` if a specific window needs forcing), (3) `workgraph trigger`, (4)
+`investment trigger`, (5) verify via the query-time join (coverage %, chord). Ingestion does **not** fan out
+to work-graph or investment automatically; both must be triggered explicitly.
 
 Attribution precedence (for diagnosing a "wrong team" symptom): repo/project ownership → 2-layer membership
 resolution (admin override in `identities`/`teams.manual_members`, else provider-imported

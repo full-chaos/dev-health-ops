@@ -1798,9 +1798,12 @@ The investment **allocation** views derive team at *query time*: the coverage %,
 team-exchange chord, team Cycle Time × Throughput quadrant, and work-unit
 investment evidence read `work_unit_investments` / cycle-time activity and join
 latest primary `work_item_team_attributions` rows for team identity. So three
-things must be true, and the backfill **runner only re-runs
-`run_work_items_sync_job` — it does NOT fan out** to the work-graph or investment
-jobs (only the live sync path chains those). They must be triggered explicitly.
+things must be true, and the backfill **runner (CHAOS-5351: `run_backfill_via_planner`,
+the native provider-sync dispatch path -- `run_work_items_sync_job` and the
+Python `run_backfill_for_config` that called it are deleted) only dispatches
+a provider work-items backfill — it does NOT fan out** to the work-graph or
+investment jobs (only the live sync path chains those). They must be
+triggered explicitly.
 
 > **Restoration check (2026-08-19):** confirmed still true, with named citation and documented
 > exceptions. The reader contract has a name: `PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE`, defined
@@ -1893,10 +1896,13 @@ flowchart TD
    from, and an empty chord is **correct** (data-driven), not a bug.
 
 > Exact CLI flags vary per command — confirm with `<cmd> --help`. The relevant
-> entry points: `sync work-items` / `backfill run` → `run_work_items_sync_job`;
-> `work-graph build` → `run_work_graph_build`; `investment trigger` → the
-> native `investment.materialize` River kind (`dev-hops investment
-> materialize` was deleted, CHAOS-5173); `metrics daily` → `run_daily_metrics`.
+> entry points: work-items ingestion is automatic (native Go provider-sync
+> route + webhooks, CHAOS-5351) -- `sync work-items` is deleted, `backfill
+> run` → `run_backfill_via_planner` (dispatches the same native route, does
+> not call Python compute); `work-graph build` → `run_work_graph_build`;
+> `investment trigger` → the native `investment.materialize` River kind
+> (`dev-hops investment materialize` was deleted, CHAOS-5173); `metrics
+> daily` → `run_daily_metrics`.
 
 ---
 

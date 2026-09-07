@@ -80,7 +80,10 @@ _MISSING_CASES = [
     ),
     (("metrics", "validate-flags"), ("ClickHouse",)),
     (("metrics", "rebuild"), ("organization",)),
-    (("sync", "work-items"), ("ClickHouse",)),
+    # CHAOS-5351: `sync work-items` is deleted along with
+    # run_work_items_sync_job -- the native provider-sync route is the only
+    # production ingest path now, and this Celery-era CLI verb no longer
+    # exists to preflight-check.
     (
         ("audit", "completeness", "--db", "clickhouse://localhost"),
         ("organization",),

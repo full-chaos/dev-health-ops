@@ -15,10 +15,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 )
 
-// The three sentinels below classify a CompatibilityExecutor.Execute failure
+// The three sentinels below classify a NativeExecutor.Execute failure
 // for runClaimedWork's retry/ambiguous split. They were coined alongside the
 // (now-deleted, CHAOS-3092) HTTP bridge executor but are executor-agnostic:
-// materializeHandler.work classifies ANY CompatibilityExecutor's error
+// materializeHandler.work classifies ANY NativeExecutor's error
 // against them, including the native investment executor's, so they live
 // here rather than with a specific implementation.
 var (
@@ -231,7 +231,7 @@ func isTransientStepError(err error) bool {
 	return errors.As(err, &netErr)
 }
 
-// buildHandler runs workgraph.build entirely natively: no CompatibilityExecutor
+// buildHandler runs workgraph.build entirely natively: no NativeExecutor
 // field exists on this type at all (CHAOS-4924 cutover) -- Python's remaining
 // build() compute was already a 0-stats no-op (every stage ported to a native
 // pre-step), so there is nothing left to bridge to, and the absence is
@@ -322,33 +322,33 @@ func (h *buildHandler) work(ctx context.Context, requestID string, organizationI
 	)
 }
 
-// materializeHandler runs investment.materialize through the Python bridge,
-// unchanged by the CHAOS-4924 Build cutover -- investment.materialize is its
-// own track (CHAOS-4441 landed its own native path separately; this type
-// exists for whichever configuration still routes through the bridge).
+// materializeHandler runs investment.materialize through its NativeExecutor.
+// CHAOS-3092 deleted the HTTP bridge this type used to call; investment.materialize
+// is its own track from workgraph.build's CHAOS-4924 cutover (CHAOS-4441 landed
+// its native path separately), wired independently in addWorkgraphWorker.
 type materializeHandler struct {
-	store         Store
-	compatibility CompatibilityExecutor
-	logger        *slog.Logger
+	store    Store
+	executor NativeExecutor
+	logger   *slog.Logger
 }
 
-func newMaterializeHandler(store Store, compatibility CompatibilityExecutor, logger *slog.Logger) (*materializeHandler, error) {
-	if store == nil || compatibility == nil {
+func newMaterializeHandler(store Store, executor NativeExecutor, logger *slog.Logger) (*materializeHandler, error) {
+	if store == nil || executor == nil {
 		return nil, ErrUnavailable
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &materializeHandler{store: store, compatibility: compatibility, logger: logger}, nil
+	return &materializeHandler{store: store, executor: executor, logger: logger}, nil
 }
 
 func (h *materializeHandler) work(ctx context.Context, requestID string, organizationID *string, domain jobcontract.DomainLink) error {
-	if h == nil || h.compatibility == nil {
+	if h == nil || h.executor == nil {
 		return jobruntime.Permanent(ErrInvalidState)
 	}
 	return runClaimedWork(ctx, h.store, h.logger, requestID, KindMaterialize, organizationID, domain,
 		func(workCtx context.Context, claim Claim) ([]byte, error) {
-			return h.compatibility.Execute(workCtx, claim)
+			return h.executor.Execute(workCtx, claim)
 		},
 		func(ctx context.Context, claim Claim, err error) error {
 			// A failure the executor could positively place as "never sent" or
@@ -386,7 +386,7 @@ type MaterializeHandler struct{ *materializeHandler }
 // NewBuildHandler builds the workgraph.build handler. preSteps are native Go
 // producers that run before postSteps, in the order given; see NativePreStep
 // for why they live inside this execution rather than beside it. There is no
-// CompatibilityExecutor here at all -- see buildHandler's own doc comment.
+// NativeExecutor here at all -- see buildHandler's own doc comment.
 func NewBuildHandler(
 	store Store,
 	preSteps []NativePreStep, postSteps []NativePostStep,
@@ -395,7 +395,7 @@ func NewBuildHandler(
 	h, err := newBuildHandler(store, preSteps, postSteps, logger)
 	return &BuildHandler{h}, err
 }
-func NewMaterializeHandler(store Store, executor CompatibilityExecutor, logger *slog.Logger) (*MaterializeHandler, error) {
+func NewMaterializeHandler(store Store, executor NativeExecutor, logger *slog.Logger) (*MaterializeHandler, error) {
 	h, err := newMaterializeHandler(store, executor, logger)
 	return &MaterializeHandler{h}, err
 }

@@ -82,9 +82,9 @@ type Store interface {
 	Ambiguous(context.Context, Claim, string) error
 }
 
-// CompatibilityExecutor is intentionally narrow. It receives the loaded
+// NativeExecutor is intentionally narrow. It receives the loaded
 // authoritative request and fenced claim; it cannot choose a Python callable,
 // change LLM controls, or supply source evidence.
-type CompatibilityExecutor interface {
+type NativeExecutor interface {
 	Execute(context.Context, Claim) ([]byte, error)
 }

@@ -360,7 +360,7 @@ func buildPreStepOrder() []string {
 // producers ever created a request row for them (RequestWriter.WriteTx's
 // sole call site only ever writes workgraph.build), confirmed exhaustively
 // after #2227 landed investment.materialize's native cutover.
-func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, nativeInvestment workgraph.CompatibilityExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep, buildPostSteps []workgraph.NativePostStep) error {
+func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, spec jobruntime.HandlerSpec, store workgraph.Store, nativeInvestment workgraph.NativeExecutor, dependencies jobruntime.Dependencies, buildPreSteps []workgraph.NativePreStep, buildPostSteps []workgraph.NativePostStep) error {
 	switch spec.Kind {
 	case jobcontract.KindWorkGraphBuild:
 		h, err := workgraph.NewBuildHandler(store, buildPreSteps, buildPostSteps, dependencies.Logger)
@@ -401,7 +401,7 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 // a nil into a refusal at the one place it matters -- the materialize case.
 func buildNativeInvestmentExecutor(
 	cfg config.Config, specs []jobruntime.HandlerSpec, logger *slog.Logger,
-) (workgraph.CompatibilityExecutor, error) {
+) (workgraph.NativeExecutor, error) {
 	materializeSelected := false
 	for _, spec := range specs {
 		if spec.Kind == jobcontract.KindInvestmentMaterialize {

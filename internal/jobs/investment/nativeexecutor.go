@@ -3,8 +3,8 @@ package investment
 // nativeexecutor.go is the seam that replaces the Python bridge for
 // investment.materialize.
 //
-// It satisfies workgraph.CompatibilityExecutor -- the SAME interface the HTTP
-// bridge satisfies -- so nothing else in the execution path changes: the
+// It satisfies workgraph.NativeExecutor -- the SAME interface the HTTP
+// bridge used to satisfy (CHAOS-3092 deleted it) -- so nothing else in the execution path changes: the
 // handler still claims the request, renews its lease, calls Execute exactly
 // once, and completes the request, which writes the
 // `work_graph_execution_request:<id>` fence that the outbox's
@@ -389,4 +389,4 @@ func materializeWindow(scope materializeScope, now time.Time) (time.Time, time.T
 
 // compile-time proof the executor is substitutable for the HTTP bridge. If this
 // stops compiling, the seam has changed and the cutover needs re-reading.
-var _ workgraph.CompatibilityExecutor = (*NativeExecutor)(nil)
+var _ workgraph.NativeExecutor = (*NativeExecutor)(nil)

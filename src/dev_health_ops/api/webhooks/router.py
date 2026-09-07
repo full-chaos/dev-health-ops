@@ -24,14 +24,16 @@ from sqlalchemy.exc import IntegrityError
 
 from dev_health_ops.db import get_postgres_session
 from dev_health_ops.models.operational_deliveries import WebhookDelivery
-from dev_health_ops.workers.job_contracts import WebhookDeliveryPayload
-from dev_health_ops.workers.job_outbox import enqueue_worker_job
+from dev_health_ops.workers.job_contracts import (
+    ContractDecodeError,
+    WebhookDeliveryPayload,
+)
+from dev_health_ops.workers.job_outbox import OutboxEnqueueError, enqueue_worker_job
 from dev_health_ops.workers.job_routes import (
+    WorkerJobRouteError,
     resolve_worker_job_route,
-    route_requires_celery,
     route_requires_outbox,
 )
-from dev_health_ops.workers.system_tasks import process_webhook_event
 
 from .auth import GitHubWebhookBody, GitLabWebhookBody, JiraWebhookBody
 from .models import (
@@ -93,28 +95,53 @@ async def _persist_webhook_delivery(event: WebhookEvent) -> uuid.UUID:
 
 
 async def _dispatch_webhook_task(event: WebhookEvent) -> uuid.UUID:
-    """Persist first, then send Celery only the durable delivery reference."""
+    """Persist first, then route the durable delivery reference to the
+    worker.
+
+    CHAOS-5320: the Celery dispatch this function used to fall back to
+    (``process_webhook_event.delay(...)``) is deleted along with the task
+    itself -- native Go handling (CHAOS-5318/5319/5320) plus its own
+    explicit-ignore path (WebhookHandler.Work) fully replaced it, so every
+    delivery now goes through _route_webhook_delivery's outbox enqueue only.
+
+    CHAOS-5320 confirmation-round F1 fix: a routing/enqueue failure is no
+    longer swallowed into a false "accepted" response -- WorkerJobRouteError/
+    ContractDecodeError/OutboxEnqueueError are logged with full routing
+    context and re-raised as a 503, so the caller sees a real failure
+    instead of a silently dropped delivery. 503, not 500: the durable
+    WebhookDelivery row this function already persisted is uniquely keyed
+    on (provider, delivery_key) with an IntegrityError-based idempotent
+    lookup (_persist_webhook_delivery's own conflict fallback), so a
+    provider retry safely re-resolves to the SAME row and re-attempts the
+    SAME idempotent enqueue (job_outbox's dedupe_key ON CONFLICT DO
+    NOTHING) -- the failure is safe to retry, not a reason to also mark the
+    row failed or delete it.
+    """
     delivery_id = await _persist_webhook_delivery(event)
-    route = await _route_webhook_delivery(event, delivery_id)
     try:
-        if route_requires_celery(route):
-            getattr(process_webhook_event, "delay")(
-                durable_delivery_id=str(delivery_id),
-            )
-        logger.info(
-            "Dispatched webhook event: provider=%s type=%s delivery=%s",
+        await _route_webhook_delivery(event, delivery_id)
+    except (WorkerJobRouteError, ContractDecodeError, OutboxEnqueueError) as error:
+        logger.error(
+            "Webhook route/enqueue failed: provider=%s event_type=%s "
+            "org_id=%s kind=%s webhook_event_id=%s delivery_id=%s error=%s",
             event.provider,
             event.event_type,
+            event.org_id,
+            WebhookDeliveryPayload.KIND,
+            event.id,
             delivery_id,
+            error,
         )
-    except Exception as e:
-        # Log but don't fail - webhook should still return 200
-        # to prevent provider retries flooding the system
-        logger.error(
-            "Failed to dispatch webhook to Celery: %s (event_id=%s)",
-            e,
-            delivery_id,
-        )
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook delivery could not be routed; retry",
+        ) from error
+    logger.info(
+        "Dispatched webhook event: provider=%s type=%s delivery=%s",
+        event.provider,
+        event.event_type,
+        delivery_id,
+    )
     return delivery_id
 
 

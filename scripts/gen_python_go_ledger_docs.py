@@ -246,11 +246,11 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "producer": "`cmd/dev-health-worker/operational.go:132-143`",
         "trigger": "manual (webhook receipt enqueues)",
         "gate": "`descriptor.Executable()` (route=river)",
-        "writer": "Python `system_webhooks.py:63 process_webhook_event`",
-        "tables": "Python-owned (github/gitlab/jira event tables)",
+        "writer": "Go `internal/jobs/operational/handler.go` (`WebhookHandler.Work`) -- routes natively to `SyncDispatchWriter.TriggerScopedSync` or an explicit counted ignore (`recordIgnoredWebhookEvent`); no Python callback",
+        "tables": "`public.scheduled_sync_occurrences`/`public.sync_manual_triggers` (Go) via the native sync-dispatch path; `github_app_installations`/`github_app_events` (Go) for the two native GitHub App event types",
         "evidence": "argued — code read",
-        "state": "bridge",
-        "ticket": "CHAOS-4440 (stale docstring)",
+        "state": "native",
+        "ticket": "CHAOS-5320 (this PR) — `system_webhooks.py:63 process_webhook_event` and the HTTP bridge it dispatched to are deleted entirely",
     },
     "report.execute_on_demand": {
         "producer": "`cmd/dev-health-worker/reports.go:36-96` (`buildReportWorker`)",
@@ -528,12 +528,12 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "system_tasks.py": {
         "category": "c",
-        "evidence": "corrected 2026-08-28 per codex review: NOT a dead shim — `api/webhooks/router.py:34` and `api/billing/router.py:45` import `process_webhook_event`/`send_billing_notification` from this module and call `.delay(...)`/`.apply_async(...)` on them, gated behind `if route_requires_celery(route):`. Since `operational.webhook_delivery`/`billing_notification` are `route=river` in migration-state.json, that gate evaluates false in production today, so the call is live-but-inert (same 'live call site, dead effect' shape as report_task.py above) — the module itself cannot be deleted without removing these two router imports first",
-        "ticket": "CHAOS-4439 (coordinate with api/webhooks/router.py + api/billing/router.py, not a pure file deletion)",
+        "evidence": "corrected 2026-09-06 (CHAOS-5320): NOT a dead shim, but for a different reason than before — `api/webhooks/router.py`'s `process_webhook_event` import and `api/billing/router.py`'s `send_billing_notification`/`.delay(...)` call site (both gated behind `route_requires_celery`) are DELETED; `route_requires_celery` itself is deleted (job_routes.py). `system_tasks.py`'s only remaining live importer is `workers/tasks.py`'s barrel re-export, which registers its `@celery_app.task`-decorated functions with the Celery app at import time for the worker process — unrelated to whether any router still dispatches to them.",
+        "ticket": "CHAOS-4439 (dead worker modules) -- the router-coordination caveat from the prior entry no longer applies",
     },
     "system_webhooks.py": {
         "category": "a",
-        "evidence": "imported worker_operational.py:19,166 (process_webhook_event)",
+        "evidence": "corrected 2026-09-06 (CHAOS-5320 confirmation-round F6): process_webhook_event (the prior citation's import) is deleted along with the webhook HTTP bridge -- worker_operational.py:177 now imports CanonicalIncidentIngestionDisabledError/_canonical_incident_ingestion_allowed instead (unrelated to webhook dispatch), and pagerduty.py:40 imports process_pagerduty_webhook_event (the still-live, deliberately-unaffected pagerduty stream) -- both live imports, still category a.",
         "ticket": "n/a",
     },
     "task_utils.py": {

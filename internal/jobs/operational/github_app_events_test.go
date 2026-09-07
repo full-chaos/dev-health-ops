@@ -52,19 +52,20 @@ func TestWebhookHandlerRoutesInstallationEventsNativelyWithoutHTTPDispatch(t *te
 		}},
 		result: GithubAppEventResult{Processed: true, InstallationID: 123, Action: "created"},
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, err := NewWebhookHandler(installStore, dispatcher)
+	handler, err := NewWebhookHandler(installStore)
 	if err != nil {
 		t.Fatal(err)
 	}
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
 		t.Fatal(err)
 	}
 	if installStore.calls != 1 || installStore.eventType != "installation" {
 		t.Fatalf("native writer calls=%d eventType=%q", installStore.calls, installStore.eventType)
 	}
-	if dispatcher.calls != 0 {
-		t.Fatalf("HTTP dispatcher was called %d times; installation events must never reach it", dispatcher.calls)
+	if *recorded {
+		t.Fatal("installation events must never be recorded as ignored")
 	}
 }
 
@@ -78,13 +79,14 @@ func TestWebhookHandlerRoutesMarketplacePurchaseNativelyWithoutHTTPDispatch(t *t
 		}},
 		result: GithubAppEventResult{Processed: true, Action: "marketplace_purchase"},
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(installStore, dispatcher)
+	handler, _ := NewWebhookHandler(installStore)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
 		t.Fatal(err)
 	}
-	if installStore.calls != 1 || dispatcher.calls != 0 {
-		t.Fatalf("native calls=%d dispatcher calls=%d", installStore.calls, dispatcher.calls)
+	if installStore.calls != 1 || *recorded {
+		t.Fatalf("native calls=%d recorded=%v", installStore.calls, *recorded)
 	}
 }
 
@@ -98,8 +100,9 @@ func TestWebhookHandlerNativeInstallationFailureIsRetryable(t *testing.T) {
 		}},
 		err: errUnavailableForTest,
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(installStore, dispatcher)
+	handler, _ := NewWebhookHandler(installStore)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	err := handler.Work(context.Background(), webhookExecution(webhookID))
 	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
 		t.Fatalf("Work = %v, want category %s", err, jobruntime.CategoryRetryable)
@@ -107,35 +110,40 @@ func TestWebhookHandlerNativeInstallationFailureIsRetryable(t *testing.T) {
 	if strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
 		t.Fatalf("a store failure must be retryable, not permanent: %v", err)
 	}
-	if dispatcher.calls != 0 {
-		t.Fatalf("dispatcher must not be called on a native-path failure, got %d calls", dispatcher.calls)
+	if *recorded {
+		t.Fatal("a retryable native-path failure must not also be recorded as ignored")
 	}
 }
 
-// TestWebhookHandlerFallsBackToHTTPDispatchWithoutInstallationWriter pins the
-// optional-capability contract: a store that does NOT implement
+// TestWebhookHandlerIgnoresInstallationEventWithoutInstallationWriter pins
+// the optional-capability contract: a store that does NOT implement
 // InstallationWriter (fakeStore, used by every other test in this package)
-// must still dispatch installation/marketplace_purchase events over HTTP
-// exactly as before -- this is the backward-compatible fallback the type
-// assertion in Work exists to provide.
-func TestWebhookHandlerFallsBackToHTTPDispatchWithoutInstallationWriter(t *testing.T) {
+// falls through installation/marketplace_purchase's native branch, and --
+// since CHAOS-5320 removed the HTTP fallback -- lands on the explicit-ignore
+// path instead, same as any other event type with no matching writer.
+func TestWebhookHandlerIgnoresInstallationEventWithoutInstallationWriter(t *testing.T) {
 	payload := []byte(`{"action":"created","installation":{"id":123}}`)
 	sum := sha256.Sum256(payload)
 	store := &fakeStore{webhook: WebhookDelivery{
 		ID: webhookID, Provider: "github", DeliveryKey: "delivery-1", EventType: "installation",
 		Payload: payload, PayloadSHA256: hex.EncodeToString(sum[:]),
 	}}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(store, dispatcher)
+	handler, _ := NewWebhookHandler(store)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
 		t.Fatal(err)
 	}
-	if dispatcher.webhook.ID != webhookID {
-		t.Fatalf("expected the fallback HTTP dispatch, got %#v", dispatcher.webhook)
+	if !*recorded {
+		t.Fatal("expected the ignore path since fakeStore implements neither InstallationWriter nor SyncDispatchWriter")
 	}
 }
 
-func TestWebhookHandlerNonGithubAppEventsStillDispatchOverHTTP(t *testing.T) {
+// TestWebhookHandlerIgnoresPushEventWithoutSyncDispatchWriter is
+// fakeInstallationStore's twin of the test above: it implements
+// InstallationWriter but not SyncDispatchWriter, so a "push" event (native
+// per isNativeSyncDispatchEvent) still falls through to the ignore path.
+func TestWebhookHandlerIgnoresPushEventWithoutSyncDispatchWriter(t *testing.T) {
 	payload := []byte(`{"repository":{"full_name":"full-chaos/dev-health"}}`)
 	sum := sha256.Sum256(payload)
 	installStore := &fakeInstallationStore{
@@ -144,16 +152,17 @@ func TestWebhookHandlerNonGithubAppEventsStillDispatchOverHTTP(t *testing.T) {
 			Payload: payload, PayloadSHA256: hex.EncodeToString(sum[:]),
 		}},
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(installStore, dispatcher)
+	handler, _ := NewWebhookHandler(installStore)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
 		t.Fatal(err)
 	}
 	if installStore.calls != 0 {
 		t.Fatalf("a push event must never reach the installation writer, got %d calls", installStore.calls)
 	}
-	if dispatcher.webhook.ID != webhookID {
-		t.Fatalf("expected push to dispatch over HTTP, got %#v", dispatcher.webhook)
+	if !*recorded {
+		t.Fatal("expected the ignore path since fakeInstallationStore does not implement SyncDispatchWriter")
 	}
 }
 

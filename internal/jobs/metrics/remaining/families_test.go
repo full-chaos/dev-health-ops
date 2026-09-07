@@ -31,10 +31,12 @@ func TestInventoryIsExactBoundedAndSourceBacked(t *testing.T) {
 // TestEveryFamilyHasIndependentRollbackAndReviewedReplay guards that every
 // family in the reviewed inventory keeps its own, non-shared route key so an
 // operator can roll one family back to Celery without touching its siblings.
-// Every family is now checked in at go_default/river (route: "river",
-// rollback_route: "celery"), so the independent-rollback path is live rather
-// than dormant; the per-family rollback route must still be independently
-// reachable for each family.
+// Every family is checked in at river (route: "river"); rollback_route was
+// "celery" for 6 of these 7 families until CHAOS-5320 -- the Celery dispatch
+// plane is gone fleet-wide (prod Celery stopped 2026-08-19), so "celery" is
+// no longer a resolvable rollback ANYWHERE, and every family now carries
+// rollback_route: "none", the same shape work_item_attribution (born native,
+// CHAOS-3092 PR-B) already used before the rest of the fleet caught up.
 func TestEveryFamilyHasIndependentRollbackAndReviewedReplay(t *testing.T) {
 	inventory, err := Load()
 	if err != nil {
@@ -46,18 +48,8 @@ func TestEveryFamilyHasIndependentRollbackAndReviewedReplay(t *testing.T) {
 			t.Fatalf("%s shares rollback key with %s", family.Name, previous)
 		}
 		routeKeys[family.RouteKey] = family.Name
-		// "none" is a legitimate rollback route ONLY for a family with no
-		// Celery predecessor to fall back to -- work_item_attribution is the
-		// first "remaining" family born native (CHAOS-3092 PR-B), matching
-		// the same "none" shape sync.team_repo_ownership_derivation already
-		// uses for the identical reason. Every other family keeps "celery",
-		// unchanged.
-		if family.Route != "river" || !family.Executable() ||
-			(family.RollbackRoute != "celery" && family.RollbackRoute != "none") {
+		if family.Route != "river" || !family.Executable() || family.RollbackRoute != "none" {
 			t.Fatalf("%s is not independently executable: route=%s rollback=%s", family.Name, family.Route, family.RollbackRoute)
-		}
-		if family.RollbackRoute == "none" && family.Name != "work_item_attribution" {
-			t.Fatalf("%s: \"none\" rollback is reserved for families with no Celery predecessor", family.Name)
 		}
 	}
 }

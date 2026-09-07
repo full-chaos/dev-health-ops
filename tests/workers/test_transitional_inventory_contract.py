@@ -160,8 +160,25 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # daily-fallback and investment dispatches) and the
     # flush_external_ingest_recompute.apply_async row were re-anchored to
     # their new lines, no surface change.
-    # = 90.
-    assert inventory["row_count"] == 90
+    # = 90, - 6 removed under CHAOS-5320: resolve_worker_job_route now rejects
+    # the celery rollback route outright (job_routes.py), so every remaining
+    # celery-dispatch surface feeding operational.webhook_delivery and
+    # operational.billing_notification is provably dead --
+    # celery_task:system_webhooks.py's process_webhook_event row (the
+    # function itself was already deleted), call_site_literal:billing/
+    # router.py's send_billing_notification.delay row, call_site_
+    # getattr_indirection:webhooks/router.py's getattr(process_webhook_event,
+    # 'delay') row, and the three api_trigger_endpoint rows this inventory
+    # only tracked BECAUSE they forwarded to one of those celery dispatch
+    # sites (webhooks/router.py's POST /webhooks/github, billing/router.py's
+    # POST /webhooks/stripe, and billing_edge.py's cross-file-forwarding
+    # POST /api/v1/billing/webhooks/stripe) -- none of the three routes to
+    # any celery-relevant surface anymore, so none remain inventory-worthy.
+    # The still-live pagerduty celery_task (process_pagerduty_webhook_event,
+    # a wholly separate stream, unaffected by this change) is re-anchored
+    # in place (line 254 -> 53) after the file shrank, not removed.
+    # = 84.
+    assert inventory["row_count"] == 84
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():
@@ -290,12 +307,22 @@ def test_billing_rows_point_at_the_billing_bridge_test():
     """Regression guard for a Codex MED-3 finding: the billing dispatch rows
     previously pointed at unrelated tests (e.g. tests/test_sync_units.py for
     the API call site row). The billing-related rows whose surface text
-    names "billing" (the Celery task, its API call site, its registry kind,
-    and the round-4 billing_edge.py cross-file forwarding row) must all
-    point at the real operational-bridge billing test."""
+    names "billing" must all point at the real operational-bridge billing
+    test.
+
+    CHAOS-5320: the round-3/round-4 API call site and cross-file forwarding
+    rows (billing/router.py's POST /webhooks/stripe, billing_edge.py's
+    forwarding POST /api/v1/billing/webhooks/stripe) are REMOVED, not
+    reduced to 2 by accident -- send_billing_notification.delay (the celery
+    dispatch site that made those two endpoints celery-relevant) is deleted,
+    so neither endpoint routes to any celery surface anymore. The 2 that
+    remain -- the celery_task itself (system_ops.py's send_billing_notification,
+    still live via worker_operational.py's internal-bridge .run() call, per
+    team-lead's ruling) and the registry_kind row -- both still need this
+    same acceptance test."""
     inventory = checker.load_inventory(_INVENTORY_PATH)
     billing_rows = [r for r in inventory["rows"] if "billing" in r["surface"].lower()]
-    assert len(billing_rows) == 4, billing_rows
+    assert len(billing_rows) == 2, billing_rows
     for row in billing_rows:
         assert row["acceptance_test_id"] == (
             "tests/api/test_worker_operational_bridge.py"

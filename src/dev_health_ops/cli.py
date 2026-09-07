@@ -437,7 +437,6 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("audit", "schema"): frozenset({_REQ_CLICKHOUSE}),
     ("audit", "planner-configs"): frozenset({_REQ_POSTGRES}),
     # --- other ClickHouse-backed commands ---
-    ("investment", "materialize"): frozenset({_REQ_CLICKHOUSE}),
     ("ai", "allowlist", "list"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
     ("ai", "allowlist", "set"): frozenset({_REQ_CLICKHOUSE, _REQ_ORG}),
     # --- PostgreSQL semantic store ---

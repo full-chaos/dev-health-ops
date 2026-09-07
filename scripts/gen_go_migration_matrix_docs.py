@@ -468,7 +468,7 @@ WORKGRAPH_INVESTMENT_LEDGER: dict[str, dict[str, str]] = {
         "executor": "NATIVE",
         "citation": (
             "Go: `internal/jobs/investment/nativeexecutor.go` (implements the same "
-            "`workgraph.CompatibilityExecutor` seam the bridge did) -> `materialize.go` "
+            "`workgraph.NativeExecutor` seam the bridge did) -> `materialize.go` "
             "orchestrator -> `chquery` fetch + `materializecomponent.go` assembly + "
             "`categorize` LLM plane + `chwrite` write. Python "
             "`materialize.py:1169-1854 materialize_investments()` is retained but no longer "

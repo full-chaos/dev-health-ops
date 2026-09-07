@@ -120,13 +120,16 @@ ambiguous). Orchestrator resolutions, baked into the contract:
    write-then-`.delay` from the webhook handler, and the Go package
    (`internal/jobs/pagerduty`) exists but is unreachable from any `cmd/`
    binary (`dormant_go`).
-6. **`investment.*` kinds** -- real current executor is the work-graph
-   compatibility bridge `cmd/dev-health-worker/workgraph.go` (confirmed: it
-   constructs `workgraph.NewHTTPCompatibilityExecutor` against
-   `/internal/worker/workgraph/v1/execute`), **not** `internal/jobs/investment`
-   as `registry.json`'s `handler_owner` metadata claims. That metadata drift is
-   a known gap (4.7) whose fix belongs to CUT-13 -- this inventory records the
-   real owner without editing `registry.json`.
+6. **`investment.*` kinds** -- real current executor is the native
+   `internal/jobs/investment.NewNativeExecutor` (CHAOS-3092 deleted the HTTP
+   compatibility bridge this paragraph originally described,
+   `workgraph.NewHTTPCompatibilityExecutor` against
+   `/internal/worker/workgraph/v1/execute`), wired by
+   `cmd/dev-health-worker/workgraph.go` and satisfying the
+   `workgraph.NativeExecutor` interface -- this now matches
+   `internal/jobs/investment` as `registry.json`'s `handler_owner` metadata
+   claims; the metadata-drift gap (4.7) this paragraph recorded no longer
+   applies to this kind.
 
 ## The CI gate
 

@@ -157,10 +157,6 @@ task_queues: dict[str, dict[str, Any]] = {
 #     these two used to reach -- provider_unit_transport.py is gone -- so
 #     that particular reason for keeping them no longer applies; the test
 #     surface one still does.)
-#   * dispatch-go-external-ingest-recompute-bridge -- CHAOS-4057: the Go
-#     inventory's "OwnerRemoved" claim for this entry is false (no Go
-#     consumer of bridge_pending rows exists); retire only when CHAOS-4057
-#     resolves port-vs-retire.
 #   * monitor-queue-depths, prune-rate-limit-observations, prune-external-
 #     ingest-batches -- still exercised by a REAL Celery worker+beat fleet in
 #     tests/acceptance/compose.ask-dev.yml's release-blocking gate (see the
@@ -175,15 +171,6 @@ beat_schedule = {
         "task": "dev_health_ops.workers.tasks.reconcile_sync_dispatch",
         "schedule": 60.0,
         "options": {"queue": "sync"},
-    },
-    # Dormant unless the disabled Go external-stream profile writes a typed
-    # compatibility bridge row. Downstream metric execution remains on the
-    # current Python planner/Celery routes through the coexistence window.
-    "dispatch-go-external-ingest-recompute-bridge": {
-        "task": "dev_health_ops.workers.tasks.dispatch_external_ingest_recompute_bridge",
-        "schedule": 10.0,
-        "kwargs": {"limit": 50},
-        "options": {"queue": "default", "expires": 30},
     },
     "monitor-queue-depths": {
         "task": "dev_health_ops.workers.tasks.monitor_queue_depths",

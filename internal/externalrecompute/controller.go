@@ -31,6 +31,11 @@ type Store interface {
 	Complete(context.Context, Claim) error
 }
 
+// CompatibilityDispatcher is the controller's write seam. The name is
+// historical: since CHAOS-5296 its production implementation
+// (PostgresNativeDispatcher) addresses the row to the native drain consumer,
+// not to a Python compatibility task. Kept as-is here so this change stays a
+// behaviour change rather than a rename sweep across the controller's tests.
 type CompatibilityDispatcher interface {
 	Dispatch(context.Context, Claim) error
 	PendingScopes(context.Context, int) ([]streamhandlers.ExternalRecomputeScope, error)

@@ -12,21 +12,33 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const (
-	CompatibilityBridgeKind = "external_ingest.recompute.compat.v1"
-	CompatibilityTaskName   = "dev_health_ops.workers.tasks.dispatch_external_ingest_recompute_bridge"
-)
+// CompatibilityBridgeKind is the recompute_scope blob's bridgeKind value. It
+// keeps its historical spelling deliberately: the blob is a WIRE format written
+// by one process and read by another, and rows written before this change are
+// still in flight, so renaming the value would strand them. What changed is who
+// reads them -- see PostgresNativeDispatcher.
+const CompatibilityBridgeKind = "external_ingest.recompute.compat.v1"
 
-type PostgresCompatibilityDispatcher struct {
+// PostgresNativeDispatcher writes the durable recompute row the native drain
+// consumer claims (internal/externalrecompute/drain.go).
+//
+// It was PostgresCompatibilityDispatcher, and it wrote rows addressed to the
+// Celery task dispatch_external_ingest_recompute_bridge. Celery stopped in
+// production on 2026-08-19; the rows kept being written and nothing read them
+// for ~2.5 weeks. The only change here is the dispatch TARGET recorded on the
+// row -- NativeDrainTaskName instead of the Celery task name -- which is what
+// makes the accumulated legacy rows unreachable from the new consumer and
+// reachable only from the one-shot replay command (CHAOS-5296).
+type PostgresNativeDispatcher struct {
 	pool *pgxpool.Pool
 	now  func() time.Time
 }
 
-func NewPostgresCompatibilityDispatcher(pool *pgxpool.Pool) (*PostgresCompatibilityDispatcher, error) {
+func NewPostgresNativeDispatcher(pool *pgxpool.Pool) (*PostgresNativeDispatcher, error) {
 	if pool == nil {
 		return nil, ErrInvalidConfig
 	}
-	return &PostgresCompatibilityDispatcher{pool: pool, now: time.Now}, nil
+	return &PostgresNativeDispatcher{pool: pool, now: time.Now}, nil
 }
 
 type bridgeScope struct {
@@ -40,7 +52,7 @@ type bridgeScope struct {
 	WindowEndedAt   *string  `json:"windowEndedAt"`
 }
 
-func (dispatcher *PostgresCompatibilityDispatcher) Dispatch(ctx context.Context, claim Claim) error {
+func (dispatcher *PostgresNativeDispatcher) Dispatch(ctx context.Context, claim Claim) error {
 	if dispatcher == nil || dispatcher.pool == nil || claim.ID == "" || validateScope(claim.Scope) != nil {
 		return ErrInvalidConfig
 	}
@@ -79,7 +91,7 @@ func (dispatcher *PostgresCompatibilityDispatcher) Dispatch(ctx context.Context,
 		) VALUES ($1,$2,$3,$4,$5,$6,'default',NULL,'bridge_pending',$7)
 		ON CONFLICT (id) DO NOTHING
 	`, bridgeID, claim.Scope.OrgID, claim.Scope.SourceSystem,
-		claim.Scope.SourceInstance, CompatibilityTaskName, bridgeID.String(), now); err != nil {
+		claim.Scope.SourceInstance, NativeDrainTaskName, bridgeID.String(), now); err != nil {
 		return fmt.Errorf("persist external recompute bridge identity: %w", err)
 	}
 	for _, ingestionID := range ingestionIDs {
@@ -98,7 +110,7 @@ func (dispatcher *PostgresCompatibilityDispatcher) Dispatch(ctx context.Context,
 	return nil
 }
 
-func (dispatcher *PostgresCompatibilityDispatcher) PendingScopes(
+func (dispatcher *PostgresNativeDispatcher) PendingScopes(
 	ctx context.Context,
 	limit int,
 ) ([]streamhandlers.ExternalRecomputeScope, error) {

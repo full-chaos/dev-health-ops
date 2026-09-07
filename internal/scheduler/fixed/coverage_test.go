@@ -216,10 +216,18 @@ func TestBeatScheduleParserFindsTheCheckedInventory(t *testing.T) {
 	// in RetiredBeatInventory rather than silently dropped.
 	// prune_ask_dev_conversations went back to Native in the same change
 	// (CHAOS-3481 made Go the genuine sole purger first, so its Python
-	// predecessor is gone again). The live table now has six unconditional
-	// rows and zero optional rows.
-	if unconditional != 6 {
-		t.Fatalf("parsed %d unconditional beat entries, want 6", unconditional)
+	// predecessor is gone again).
+	//
+	// 6 -> 5 under CHAOS-5296 (2026-09-07): CHAOS-4026 kept
+	// dispatch-go-external-ingest-recompute-bridge only because it was the
+	// SOLE reader of the rows the Go stream runner writes, and deleting it
+	// then would have silently dropped every external-ingest-triggered
+	// recompute. That condition is now gone -- internal/externalrecompute/
+	// drain.go reads those rows natively -- so the entry and its Celery task
+	// are deleted and recorded in RetiredBeatInventory. The live table now
+	// has five unconditional rows and zero optional rows.
+	if unconditional != 5 {
+		t.Fatalf("parsed %d unconditional beat entries, want 5", unconditional)
 	}
 	if optional != 0 {
 		t.Fatalf("parsed %d optional beat entries, want 0", optional)

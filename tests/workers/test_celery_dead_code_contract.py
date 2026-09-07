@@ -101,7 +101,11 @@ _DELETED_MODULES = (
 _FLAGGED_SURVIVING_BEAT_ENTRIES = (
     "dispatch-scheduled-syncs",
     "reconcile-sync-dispatch",
-    "dispatch-go-external-ingest-recompute-bridge",
+    # dispatch-go-external-ingest-recompute-bridge was here until CHAOS-5296.
+    # It is now RETIRED, not kept: its whole purpose was draining Go-authored
+    # rows into the Python planner, and that reader is native Go now, so the
+    # entry has no task to call. test_recompute_bridge_task_is_deleted below
+    # is what guards it staying gone.
     "monitor-queue-depths",
     "prune-rate-limit-observations",
     "prune-external-ingest-batches",
@@ -109,7 +113,6 @@ _FLAGGED_SURVIVING_BEAT_ENTRIES = (
 _FLAGGED_SURVIVING_TASK_NAMES = (
     "dispatch_scheduled_syncs",
     "reconcile_sync_dispatch",
-    "dispatch_external_ingest_recompute_bridge",
     "monitor_queue_depths",
     "prune_rate_limit_observations",
     "prune_external_ingest_batches",
@@ -239,27 +242,27 @@ def test_flagged_entries_were_not_silently_dropped() -> None:
             f"{qualified!r} is not registered on the celery app -- this PR "
             "(CHAOS-4026) deliberately kept it."
         )
-    # dispatch_external_ingest_recompute_bridge is registered via a whole-module
-    # import (`import ...external_ingest_recompute` with a lint waiver in tasks.py),
-    # not an individual export -- it was never in tasks.__all__, before or
-    # after this PR. The rest are.
-    for name in set(_FLAGGED_SURVIVING_TASK_NAMES) - {
-        "dispatch_external_ingest_recompute_bridge"
-    }:
+    for name in _FLAGGED_SURVIVING_TASK_NAMES:
         assert name in tasks.__all__
 
 
-def test_orphaned_recompute_bridge_task_is_untouched() -> None:
-    """CHAOS-4057: the orphaned bridge stays until port-vs-retire is decided.
+def test_recompute_bridge_task_is_deleted() -> None:
+    """CHAOS-5296: the Celery bridge is gone, replaced by a native consumer.
 
-    Explicit scope boundary from CHAOS-4026: this task's Celery machinery is
-    NOT dead -- it is the only reader of the Go stream-external process's
-    bridge_pending compatibility rows. Deleting it would be a second,
-    silent data-loss incident on top of the one CHAOS-4057 already found.
+    This assertion is the inverse of the one it replaces. CHAOS-4026 kept the
+    task because it was the ONLY reader of the Go runner's bridge rows, and
+    deleting it then would have been a second silent data-loss incident on top
+    of the one CHAOS-4057 found. CHAOS-5296 removed that condition by shipping
+    the reader in Go (internal/externalrecompute/drain.go) and repointing the
+    writer at it in the same change, so no legacy enqueue can happen at all.
+
+    Asserting its ABSENCE rather than just deleting the old test is deliberate:
+    a task re-added here would have no consumer and would silently reintroduce
+    the split-brain this ticket closed.
     """
     from dev_health_ops.workers import external_ingest_recompute
 
-    assert hasattr(
+    assert not hasattr(
         external_ingest_recompute, "dispatch_external_ingest_recompute_bridge"
     )
 

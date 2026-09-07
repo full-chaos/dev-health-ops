@@ -53,7 +53,7 @@ func TestPostgresCompatibilityBridgeIsDeterministicAndDoesNotDuplicateBatchStatu
 			t.Fatal(err)
 		}
 	}
-	dispatcher, err := NewPostgresCompatibilityDispatcher(pool)
+	dispatcher, err := NewPostgresNativeDispatcher(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +144,9 @@ func createCompatibilityTables(t *testing.T, ctx context.Context, pool *pgxpool.
 			source_instance text NOT NULL,
 			recompute_status text NOT NULL,
 			recompute_scope jsonb NULL,
+			recompute_dispatched_at timestamptz NULL,
+			recompute_completed_at timestamptz NULL,
+			recompute_error text NULL,
 			updated_at timestamptz NOT NULL
 		);
 		CREATE TABLE external_ingest_recompute_jobs (

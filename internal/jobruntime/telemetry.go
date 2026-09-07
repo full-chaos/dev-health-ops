@@ -104,10 +104,11 @@ type dailyMetricsLeaseLabels struct {
 
 // DailyMetricsRunTrigger identifies which entry point created a
 // daily-metrics run: the nightly all-org fixed schedule, a post-sync
-// re-drive for one completed sync (CHAOS-4263), or an operator-triggered
+// re-drive for one completed sync (CHAOS-4263), an operator-triggered
 // `metrics daily-start` dispatch with deferred repository discovery
-// (CHAOS-5055). The set is closed to these three -- the only callers that
-// ever leave RepositoryDiscoveryRequired true for daily.PostgresStore's
+// (CHAOS-5055), or the native external-ingest recompute drain (CHAOS-5296).
+// The set is closed to these four -- the only callers that ever leave
+// RepositoryDiscoveryRequired true for daily.PostgresStore's
 // Start*RunTx/StartManualDailyRun methods.
 type DailyMetricsRunTrigger string
 
@@ -115,6 +116,15 @@ const (
 	DailyMetricsRunTriggerScheduledFanout DailyMetricsRunTrigger = "scheduled_fanout"
 	DailyMetricsRunTriggerPostSync        DailyMetricsRunTrigger = "post_sync"
 	DailyMetricsRunTriggerManual          DailyMetricsRunTrigger = "manual"
+	// DailyMetricsRunTriggerExternalRecompute is the D8 org-wide fallback:
+	// a customer-push batch whose work items carry no repository linkage
+	// recomputes the whole org for the day, so its run necessarily defers
+	// repository discovery. It needs its own label rather than borrowing
+	// post_sync's, because "the customer pushed work items with no repos"
+	// and "a provider sync finished" are different operational events and a
+	// dashboard that cannot tell them apart cannot attribute a discovery
+	// spike to either.
+	DailyMetricsRunTriggerExternalRecompute DailyMetricsRunTrigger = "external_recompute"
 )
 
 // DailyMetricsDiscoveryOutcome is the bounded result of resolving live
@@ -4128,9 +4138,10 @@ func dailyMetricsLeaseSeries() []dailyMetricsLeaseLabels {
 // outcomes. Every series is pre-seeded so a scrape distinguishes "materialized
 // non-empty every time" from "discovery never runs for this trigger".
 func dailyMetricsDiscoverySeries() []dailyMetricsDiscoveryLabels {
-	series := make([]dailyMetricsDiscoveryLabels, 0, 9)
+	series := make([]dailyMetricsDiscoveryLabels, 0, 12)
 	for _, trigger := range []DailyMetricsRunTrigger{
-		DailyMetricsRunTriggerScheduledFanout, DailyMetricsRunTriggerPostSync, DailyMetricsRunTriggerManual,
+		DailyMetricsRunTriggerScheduledFanout, DailyMetricsRunTriggerPostSync,
+		DailyMetricsRunTriggerManual, DailyMetricsRunTriggerExternalRecompute,
 	} {
 		for _, outcome := range []DailyMetricsDiscoveryOutcome{
 			DailyMetricsDiscoveryOutcomeMaterialized, DailyMetricsDiscoveryOutcomeNoRepositories,

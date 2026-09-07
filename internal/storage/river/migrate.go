@@ -477,7 +477,14 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.dev_conversation_tombstones') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.dev_conversation_tombstones TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.external_ingest_batch_payloads') IS NOT NULL THEN GRANT SELECT, DELETE ON TABLE public.external_ingest_batch_payloads TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.external_ingest_batches') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.external_ingest_batches TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.external_ingest_recompute_jobs') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.external_ingest_recompute_jobs TO " + domainRole + "; END IF; END $$",
+		// UPDATE was added by CHAOS-5296: the native external-recompute drain
+		// claims a row (bridge_pending -> bridge_claimed) and marks it terminal
+		// (-> bridge_dispatched/bridge_failed) from this role. Before the port
+		// the only reader was Celery, running as a different role entirely,
+		// which is why SELECT+INSERT sufficed. No DELETE: nothing in the drain
+		// or the replay command removes a row -- the ledger is the evidence
+		// that a recompute was dispatched, and retention owns its lifetime.
+		"DO $$ BEGIN IF to_regclass('public.external_ingest_recompute_jobs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.external_ingest_recompute_jobs TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.external_ingest_rejections') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.external_ingest_rejections TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.external_ingest_sources') IS NOT NULL THEN GRANT SELECT ON TABLE public.external_ingest_sources TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.feature_flags') IS NOT NULL THEN GRANT SELECT ON TABLE public.feature_flags TO " + domainRole + "; END IF; END $$",

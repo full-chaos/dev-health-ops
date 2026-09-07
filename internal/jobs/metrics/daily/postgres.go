@@ -92,6 +92,16 @@ const postSyncGenerationPrefix = "post-sync:"
 // contract above warns about.
 const ManualDailyGenerationPrefix = "manual-daily:"
 
+// ExternalRecomputeGenerationPrefix identifies a daily-metrics run created by
+// the native external-ingest recompute drain (CHAOS-5296). It is a FOURTH
+// recognised prefix rather than a reuse of postSyncGenerationPrefix because
+// MaterializeScheduledFanout refuses any generation it does not recognise: a
+// run written under an unlisted prefix would be accepted by StartRunTx, then
+// rejected at discovery time and left in 'running' forever with no partitions
+// and no completion fence. That is precisely the D8 org-wide fallback path
+// (work items with no repository linkage), so it is not a rare corner.
+const ExternalRecomputeGenerationPrefix = "ext-recompute:"
+
 // PostgresStore is the durable fence around the temporary compatibility
 // compute adapter. Queue retries may repeat a request, but only a claimant
 // with the current persisted token can make a partition/finalizer successful.
@@ -522,6 +532,10 @@ func isManualDailyGeneration(generation string) bool {
 	return strings.HasPrefix(generation, ManualDailyGenerationPrefix) && len(generation) <= 64
 }
 
+func isExternalRecomputeGeneration(generation string) bool {
+	return strings.HasPrefix(generation, ExternalRecomputeGenerationPrefix) && len(generation) <= 64
+}
+
 func normalizeRepositoryPartitions(repositoryIDs []RepositoryID) ([][]RepositoryID, error) {
 	seen := make(map[RepositoryID]struct{}, len(repositoryIDs))
 	repositories := make([]RepositoryID, 0, len(repositoryIDs))
@@ -752,7 +766,7 @@ func (store *PostgresStore) MaterializeScheduledFanout(
 ) (bool, error) {
 	if !store.valid() || !validUUID(run.ID) || !validUUID(run.OrganizationID) ||
 		(!isScheduledFanoutGeneration(run.Generation) && !isPostSyncGeneration(run.Generation) &&
-			!isManualDailyGeneration(run.Generation)) {
+			!isManualDailyGeneration(run.Generation) && !isExternalRecomputeGeneration(run.Generation)) {
 		return false, ErrInvalidState
 	}
 	trigger := jobruntime.DailyMetricsRunTriggerScheduledFanout
@@ -761,6 +775,8 @@ func (store *PostgresStore) MaterializeScheduledFanout(
 		trigger = jobruntime.DailyMetricsRunTriggerPostSync
 	case isManualDailyGeneration(run.Generation):
 		trigger = jobruntime.DailyMetricsRunTriggerManual
+	case isExternalRecomputeGeneration(run.Generation):
+		trigger = jobruntime.DailyMetricsRunTriggerExternalRecompute
 	}
 	// Live ClickHouse discovery has no natural upper bound the way an
 	// explicit StartRunRequest does -- fail loud rather than silently

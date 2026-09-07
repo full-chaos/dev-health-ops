@@ -881,15 +881,21 @@ func TestProductionOperationalBuilderConstructsNativeSyncCoverageRefresh(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 5 || components[0].Name() != "postgres-runtime-pools" ||
-		components[2].Name() != "self-probe-worker_execution_liveness" ||
-		components[3].Name() != "preclaim-readiness" ||
-		components[4].Name() != "river-workers" {
+	// 5 -> 6 under CHAOS-5296: the external-recompute drain is a lifecycle
+	// component of this process now. Naming each position rather than only
+	// counting is what makes an accidental reordering (which changes shutdown
+	// order) fail here instead of in production.
+	if len(components) != 6 || components[0].Name() != "postgres-runtime-pools" ||
+		components[1].Name() != "queue-health-monitor" ||
+		components[2].Name() != "external-recompute-drain" ||
+		components[3].Name() != "self-probe-worker_execution_liveness" ||
+		components[4].Name() != "preclaim-readiness" ||
+		components[5].Name() != "river-workers" {
 		t.Fatalf("production components = %#v", components)
 	}
-	queueWorkers, ok := components[4].(workerProcessComponent)
+	queueWorkers, ok := components[5].(workerProcessComponent)
 	if !ok || queueWorkers.presence == nil {
-		t.Fatalf("production queue lifecycle = %#v", components[4])
+		t.Fatalf("production queue lifecycle = %#v", components[5])
 	}
 	presence, ok := queueWorkers.presence.(*jobruntime.WorkerPresence)
 	if !ok || presence == nil {

@@ -93,18 +93,37 @@ def test_inventory_row_count_matches_the_baseline():
     pagerduty` is deleted with the route itself, the same way. The Go stream
     consumer reconciles PagerDuty webhooks natively, so nothing calls the
     bridge route and it no longer exists to profile.
-    = 367. Both decrements are real and INDEPENDENT: PR-A and this PR each
-    removed a different worker-bridge route, and the two landed as one merge.
-    Neither side's -1 subsumes the other -- a merge that kept only one number
-    would silently re-admit a deleted route to the baseline.
+    = 367, -1 REST under CHAOS-5353: `POST /api/internal/worker-operational/
+    billing`, deleted the same way again. The Go BillingHandler owns the
+    completion fence, the owner lookup, the seven renderings and the provider
+    send, so nothing posts to that bridge any more.
+    = 366. All three decrements are real and INDEPENDENT: three different
+    worker-bridge routes, removed by three different changes that landed as
+    two merges. No one -1 subsumes another, and a merge keeping only one or
+    two of them silently re-admits a deleted route to the baseline.
+
+    MERGE HAZARD, recorded because it has now nearly landed silently TWICE.
+    Each of the three changes edited these same asserts, and each was correct
+    in isolation. Twice the resulting numeric lines were textually IDENTICAL
+    on both sides of a merge -- once because two branches subtracted 1 from
+    the same starting value, and once because two branches reached the same
+    figure from different starting values by coincidence. Identical lines do
+    not conflict, so git merged them silently and produced a count that was
+    right for neither branch and one route too high. Both times only the
+    surrounding PROSE conflicted, which is the sole reason it was noticed;
+    had the wording happened to match, a wrong baseline would have shipped
+    green. **When two branches each touch a counted baseline, RECOUNT from
+    contracts/auth/v1/endpoint-profiles.ops.json. Never subtract from either
+    side's number, and never trust a clean merge here -- the absence of a
+    conflict marker on these lines is not evidence that they are right.**
     """
     inventory = checker.load_json(_INVENTORY_PATH)
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 308, len(rest)
+    assert len(rest) == 307, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 367, len(rows)
+    assert len(rows) == 366, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -130,10 +149,13 @@ def test_classification_summary_matches_the_baseline():
     # itself classified protected. - 1 under CHAOS-3092 (PR-A): the deleted
     # daily-metrics bridge route was protected too (worker bridge bearer).
     # - 1 under CHAOS-4105: so was the deleted worker-operational/pagerduty
-    # row, for the same reason. Both decrements apply; see
-    # test_inventory_row_count_matches_the_baseline on why neither subsumes
-    # the other.
-    assert len(protected) == 340, len(protected)
+    # row, and - 1 under CHAOS-5353 for the deleted worker-operational/billing
+    # row. Every worker-bridge route is classified protected, so each such
+    # deletion lands here too. All three decrements apply; see the merge
+    # hazard note in test_inventory_row_count_matches_the_baseline for why
+    # none of them subsumes another, and why this number is recounted rather
+    # than derived.
+    assert len(protected) == 339, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

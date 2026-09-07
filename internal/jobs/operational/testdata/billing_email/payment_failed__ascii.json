@@ -1,0 +1,18 @@
+{
+  "app_base_url": "https://app.example.test/",
+  "attributes": {
+    "amount_cents": 1900,
+    "attempt_count": 1,
+    "currency": "usd"
+  },
+  "case": "ascii",
+  "email_type": "payment_failed",
+  "expected_html": "<!doctype html>\n<html lang=\"en\">\n  <body>\n    <h1>Payment Issue</h1>\n    <p>Hi Dana Reed,</p>\n    <p>Payment of 19.00 USD failed for Northwind Analytics. This is attempt 1. Please update your payment method.</p>\n  </body>\n</html>\n",
+  "expected_subject": "Invoice payment failed",
+  "expected_to_address": "owner@example.test",
+  "owner": {
+    "email": "owner@example.test",
+    "full_name": "Dana Reed",
+    "org_name": "Northwind Analytics"
+  }
+}

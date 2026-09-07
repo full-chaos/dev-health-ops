@@ -16,7 +16,6 @@ import (
 const maxResponseBytes = 4 * 1024
 
 type HTTPDispatcherConfig struct {
-	BillingEndpoint       string
 	HeartbeatEndpoint     string
 	BearerToken           string
 	AllowInsecureInternal bool
@@ -26,12 +25,14 @@ type bridgeResponse struct {
 	Status string `json:"status"`
 }
 
-// HTTPDispatcher is the production bridge to the internal provider and email
-// services during coexistence. Only durable identities and bounded routing
-// metadata cross the boundary; the services reload authoritative rows.
+// HTTPDispatcher is the production bridge to the internal operational
+// services. Only bounded, non-identifying metadata crosses the boundary.
+//
+// It is heartbeat-only now: CHAOS-5320 deleted the webhook bridge and
+// CHAOS-5353 the billing one, so `system.heartbeat`'s telemetry POST is the
+// last call that still leaves this process for the Python API.
 type HTTPDispatcher struct {
 	client            *http.Client
-	billingEndpoint   string
 	heartbeatEndpoint string
 	token             string
 }
@@ -39,14 +40,13 @@ type HTTPDispatcher struct {
 func NewHTTPDispatcher(client *http.Client, config HTTPDispatcherConfig) (*HTTPDispatcher, error) {
 	if client == nil || client.Timeout < 100*time.Millisecond || client.Timeout > 30*time.Second ||
 		strings.TrimSpace(config.BearerToken) == "" ||
-		!validInternalEndpoint(config.BillingEndpoint, config.AllowInsecureInternal) ||
 		!validInternalEndpoint(config.HeartbeatEndpoint, config.AllowInsecureInternal) {
 		return nil, errors.New("operational HTTP dispatcher configuration is invalid")
 	}
 	return &HTTPDispatcher{
-		client:          client,
-		billingEndpoint: config.BillingEndpoint, heartbeatEndpoint: config.HeartbeatEndpoint,
-		token: config.BearerToken,
+		client:            client,
+		heartbeatEndpoint: config.HeartbeatEndpoint,
+		token:             config.BearerToken,
 	}, nil
 }
 
@@ -54,18 +54,6 @@ func (dispatcher *HTTPDispatcher) DispatchHeartbeat(ctx context.Context, schedul
 	return dispatcher.post(ctx, dispatcher.heartbeatEndpoint, map[string]string{
 		"scheduled_for": scheduledFor.UTC().Format(time.RFC3339),
 	}, "ok")
-}
-
-func (dispatcher *HTTPDispatcher) DispatchBilling(ctx context.Context, notification BillingNotification) error {
-	return dispatcher.post(ctx, dispatcher.billingEndpoint, map[string]string{
-		"notification_id":   notification.ID,
-		"organization_id":   notification.OrganizationID,
-		"notification_type": notification.NotificationType,
-		// CHAOS-3952: crossed so the bridge receiver can verify its own read
-		// of the durable row against Go's, and so the row's own completion
-		// fence is keyed on the same value both sides agree identifies it.
-		"idempotency_key": notification.IdempotencyKey,
-	}, "sent")
 }
 
 func (dispatcher *HTTPDispatcher) post(

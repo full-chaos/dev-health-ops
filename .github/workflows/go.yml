@@ -34,6 +34,13 @@ on:
       # compiled binary and is covered by that package's tests -- but it is
       # a .sql file, which no other pattern here matches (CHAOS-4882).
       - 'internal/storage/postgres/authschema/migrations/**'
+      # Same shape (CHAOS-5353): the seven billing email bodies are
+      # //go:embed-ed into internal/jobs/operational, so editing one changes
+      # what the worker actually sends, and the golden fixtures in that
+      # package's tests are what catch a drift. They are .html files, which no
+      # other pattern here matches -- without this, a PR touching only a
+      # template is classified non-Go and go-quality passes vacuously.
+      - 'internal/jobs/operational/templates/**'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'
@@ -123,6 +130,13 @@ on:
       # compiled binary and is covered by that package's tests -- but it is
       # a .sql file, which no other pattern here matches (CHAOS-4882).
       - 'internal/storage/postgres/authschema/migrations/**'
+      # Same shape (CHAOS-5353): the seven billing email bodies are
+      # //go:embed-ed into internal/jobs/operational, so editing one changes
+      # what the worker actually sends, and the golden fixtures in that
+      # package's tests are what catch a drift. They are .html files, which no
+      # other pattern here matches -- without this, a PR touching only a
+      # template is classified non-Go and go-quality passes vacuously.
+      - 'internal/jobs/operational/templates/**'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'

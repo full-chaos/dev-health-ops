@@ -1,0 +1,17 @@
+{
+  "app_base_url": "https://app.example.test/",
+  "attributes": {
+    "new_tier": "Team",
+    "old_tier": "Community"
+  },
+  "case": "ascii",
+  "email_type": "subscription_changed",
+  "expected_html": "<!doctype html>\n<html lang=\"en\">\n  <body>\n    <h1>Subscription Updated</h1>\n    <p>Hi Dana Reed,</p>\n    <p>Northwind Analytics subscription changed from Community to Team.</p>\n  </body>\n</html>\n",
+  "expected_subject": "Subscription changed",
+  "expected_to_address": "owner@example.test",
+  "owner": {
+    "email": "owner@example.test",
+    "full_name": "Dana Reed",
+    "org_name": "Northwind Analytics"
+  }
+}

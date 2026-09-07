@@ -108,7 +108,28 @@ func buildOperationalWorker(
 	for _, spec := range specs {
 		switch spec.Kind {
 		case jobcontract.KindBillingNotification:
-			handler, handlerErr := operational.NewBillingHandler(store, dispatcher)
+			// CHAOS-5353: rendered and sent natively. The email provider is
+			// resolved ONCE here, at startup, from the same EMAIL_PROVIDER /
+			// EMAIL_FROM_ADDRESS / EMAIL_API_KEY / SMTP_* variables the
+			// Python sender used, so a misconfiguration refuses worker
+			// startup instead of failing every notification at send time.
+			sender, senderErr := operational.NewEmailSenderFromEnv(
+				&http.Client{Timeout: cfg.OperationalBridgeTimeout},
+			)
+			if senderErr != nil {
+				logger.Error("billing notification email provider is unusable",
+					"error", senderErr)
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			appBaseURL, baseURLErr := operational.AppBaseURLFromEnv()
+			if baseURLErr != nil {
+				logger.Error("billing notification base URL is unusable",
+					"variable", "APP_BASE_URL", "error", baseURLErr)
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
+			handler, handlerErr := operational.NewBillingHandler(
+				store, store, store, sender, appBaseURL,
+			)
 			if handlerErr != nil {
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}
@@ -186,11 +207,12 @@ func buildOperationalWorker(
 // needs no dispatcher at all now -- but billing notification and the
 // heartbeat phone-home effect are each still HTTP-backed compatibility
 // shims (see NewHeartbeatHandler's doc comment), not just billing alone.
-// CHAOS-5353 removes billing_notification from this set when it lands its
-// native port; once heartbeat follows, this whole construction collapses.
+// CHAOS-5353 has now done exactly that for billing_notification: it renders
+// and sends natively, so the heartbeat phone-home effect is the ONLY remaining
+// HTTP-backed compatibility shim. Once heartbeat follows, this whole
+// construction collapses and the dispatcher can go with it.
 var operationalHTTPDispatchedKinds = map[string]bool{
-	jobcontract.KindBillingNotification: true,
-	jobcontract.KindHeartbeat:           true,
+	jobcontract.KindHeartbeat: true,
 }
 
 // buildOperationalHTTPDispatcher constructs the operational HTTP bridge
@@ -216,7 +238,6 @@ func buildOperationalHTTPDispatcher(
 	dispatcher, err := operational.NewHTTPDispatcher(
 		&http.Client{Timeout: cfg.OperationalBridgeTimeout},
 		operational.HTTPDispatcherConfig{
-			BillingEndpoint:       baseURL + "/api/internal/worker-operational/billing",
 			HeartbeatEndpoint:     baseURL + "/api/internal/worker-operational/heartbeat",
 			BearerToken:           cfg.OperationalBridgeToken.Reveal(),
 			AllowInsecureInternal: cfg.OperationalBridgeAllowInsecure,

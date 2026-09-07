@@ -203,6 +203,72 @@ func TestPreBridgeNilExecutorHoldsThePartitionIncomplete(t *testing.T) {
 	}
 }
 
+// TestPreBridgeNilExecutorBlocksItsDependents pins the one property of the
+// nil-executor fix that #2357 shipped WITHOUT a permanent assertion.
+//
+// #2357's r2 confirmation round verified this behaviour with a throwaway
+// probe (a family declaring `after` on a nil-executor family was never
+// called, calls=0) and then deleted the probe, so the code was correct but
+// nothing in the suite would catch a regression. `blocked` is private, and
+// TestPreBridgeNilExecutorHoldsThePartitionIncomplete only observes the
+// PARTITION-level outcome -- which stays identical whether or not the
+// dependent is blocked, because the nil family alone already holds the
+// partition incomplete. That is exactly what makes the gap invisible: the
+// existing test passes either way.
+//
+// The property matters on its own terms. A family with no executor writes
+// nothing, so a reader declaring `after` on it would run against the
+// PREVIOUS partition's snapshot and report success over stale data -- the
+// same failure blockedNativeDependency exists to prevent for an ordinary
+// refusal (CHAOS-5078 codex r2 F3). Nil-executor must not be the one
+// refusal shape that skips dependency propagation.
+func TestPreBridgeNilExecutorBlocksItsDependents(t *testing.T) {
+	store := &fakeStore{
+		partitionClaim: &PartitionClaim{Partition: Partition{ID: testPartitionID, RunID: testRunID}, Token: "00000000-0000-4000-8000-000000000003", LeaseDuration: 30 * time.Millisecond},
+		run:            Run{ID: testRunID, OrganizationID: testOrgID, Generation: "daily-v1", Status: "running"},
+	}
+	handler, err := NewPartitionHandler(store, fakePublisher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// work_item_state declares `after: work_item_attribution` in
+	// families.json, so registering the dependency with a nil executor must
+	// block the reader from running natively at all.
+	dependent := &fakeNativeFamilyExecutor{rowsWritten: 11}
+	if err := handler.SetNativeFamilies(map[string]NativeFamilyExecutor{
+		"work_item_attribution": nil,
+		"work_item_state":       dependent,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingNativeFamilyObserver{}
+	handler.SetNativeFamilyObserver(observer)
+
+	workErr := handler.Work(context.Background(), partitionExecution())
+	if !errors.Is(workErr, ErrPreBridgeFamilyIncomplete) {
+		t.Fatalf("Work error = %v, want it to wrap ErrPreBridgeFamilyIncomplete", workErr)
+	}
+	if dependent.calls != 0 {
+		t.Fatalf("work_item_state executor calls=%d, want 0 -- a family whose declared "+
+			"dependency has NO executor must not run natively against the previous "+
+			"partition's snapshot", dependent.calls)
+	}
+	if store.partitionCompletions != 0 {
+		t.Fatalf("partition completions=%d, want 0", store.partitionCompletions)
+	}
+	outcomes := make(map[string]jobruntime.DailyMetricsNativeFamilyOutcome, len(observer.calls))
+	for _, call := range observer.calls {
+		outcomes[call.family] = call.outcome
+	}
+	for _, family := range []string{"work_item_attribution", "work_item_state"} {
+		if outcomes[family] != jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
+			t.Errorf("family %q outcome = %q, want %q -- both the executor-less family and the "+
+				"dependent it blocked must be visible as refused, not silently absent",
+				family, outcomes[family], jobruntime.DailyMetricsNativeFamilyOutcomeRefused)
+		}
+	}
+}
+
 // TestPartitionLogsWhichFamiliesRanPerPartition is CHAOS-3092 (PR-A)'s
 // observability gate for the partition path. With the Python bridge deleted,
 // the registered native families are the ONLY writers of a partition's rows,

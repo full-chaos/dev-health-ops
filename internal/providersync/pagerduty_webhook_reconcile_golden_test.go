@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 )
@@ -219,7 +220,7 @@ func TestPagerDutyWebhookReconcileMatchesFrozenPythonGoldens(t *testing.T) {
 				pagerDutyWebhookTestClaim(golden.OrgID),
 				golden.ProviderInstanceID,
 				pagerDutyGoldenEvent(t, golden),
-				PagerDutyWebhookSinks{IncidentFamily: sink, Services: sink, Users: sink},
+				PagerDutyWebhookSinks{IncidentFamily: sink, Services: sink, Users: sink, Responders: sink},
 				hydrator,
 			)
 			if err != nil {
@@ -288,7 +289,7 @@ func TestPagerDutyWebhookReconcileUsesDatasetsTheSinksAccept(t *testing.T) {
 		if _, err := ReconcilePagerDutyWebhook(
 			context.Background(), pagerDutyWebhookTestClaim(golden.OrgID),
 			golden.ProviderInstanceID, pagerDutyGoldenEvent(t, golden),
-			PagerDutyWebhookSinks{IncidentFamily: sink, Services: sink, Users: sink},
+			PagerDutyWebhookSinks{IncidentFamily: sink, Services: sink, Users: sink, Responders: sink},
 			&stubIncidentHydrator{body: json.RawMessage(`{"id":"PINC9","title":"t","status":"triggered","created_at":"2026-07-17T11:59:00Z"}`)},
 		); err != nil {
 			t.Fatalf("%s: %v", golden.Case, err)
@@ -313,6 +314,7 @@ func TestPagerDutyWebhookReconcileRejectsUnsupportedAndMalformedEvents(t *testin
 		IncidentFamily: recordingWebhookSink{written: &written},
 		Services:       recordingWebhookSink{written: &written},
 		Users:          recordingWebhookSink{written: &written},
+		Responders:     recordingWebhookSink{written: &written},
 	}
 	base := PagerDutyWebhookEvent{
 		EventID:    "evt-1",
@@ -370,7 +372,7 @@ func TestPagerDutyWebhookReconcileKeepsHydrationFailureRetryable(t *testing.T) {
 			ReceivedAt: time.Date(2026, 7, 17, 12, 0, 5, 0, time.UTC),
 			Data:       json.RawMessage(`{"id":"PINC9"}`),
 		},
-		PagerDutyWebhookSinks{IncidentFamily: sink, Services: sink, Users: sink},
+		PagerDutyWebhookSinks{IncidentFamily: sink, Services: sink, Users: sink, Responders: sink},
 		&stubIncidentHydrator{err: rateLimited},
 	)
 	if !errors.Is(err, rateLimited) {
@@ -394,6 +396,7 @@ func TestPagerDutyWebhookReconcileStopsAfterAFailedDependencyWrite(t *testing.T)
 	sinks := PagerDutyWebhookSinks{
 		IncidentFamily: recordingWebhookSink{written: &written},
 		Services:       recordingWebhookSink{written: &written},
+		Responders:     recordingWebhookSink{written: &written},
 		Users: recordingWebhookSink{
 			written: &written, failOn: "operational_users", err: userFailure,
 		},
@@ -435,7 +438,7 @@ func TestPagerDutyResponderRowIsKeyedOnTheWebhookEventID(t *testing.T) {
 			Data: json.RawMessage(`{"id":"PRESP7","name":"Grace","role":"observer",
 				"incident":{"id":"PINC1","title":"t","status":"triggered","created_at":"2026-07-17T11:58:00Z"}}`),
 		},
-		PagerDutyWebhookSinks{IncidentFamily: sink, Services: sink, Users: sink}, nil,
+		PagerDutyWebhookSinks{IncidentFamily: sink, Services: sink, Users: sink, Responders: sink}, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -523,3 +526,84 @@ func TestPagerDutyResponderColumnsOmitTheV2OrderingColumns(t *testing.T) {
 }
 
 var _ = uuid.Nil
+
+// The regression codex r1 found with a live probe. The first draft of this
+// change widened PagerDutyIncidentFamilyClickHouseEffects to accept
+// operational_incident_responders under the "incidents" dataset, which meant
+// an ORDINARY PULL claim could write responder rows through the sink the pull
+// route already holds. Nothing exploited it -- the pull route emits no
+// responder effect -- but the sink's one-dataset-one-table invariant had been
+// traded away for a webhook-only need.
+//
+// Responders now have their own sink type, so this test pins BOTH halves:
+// the family sink refuses the destination outright, and the responder sink
+// refuses everything else.
+func TestPagerDutyIncidentFamilySinkStillRefusesResponderEffects(t *testing.T) {
+	claim, err := pagerDutyWebhookClaim(pagerDutyWebhookTestClaim("org-4105"), "incidents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	occurredAt := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	row := pagerDutyResponderRow{
+		OrgID: "org-4105", Provider: "pagerduty", ProviderInstanceID: "acme",
+		SourceEntityType: "responder", ExternalID: "evt-1", SourceVersionAt: occurredAt,
+		ObservedAt: occurredAt, LastSynced: occurredAt, IncidentID: "incident-id",
+	}
+	if err := fillPagerDutyResponderOrdering(&row); err != nil {
+		t.Fatal(err)
+	}
+	effect, err := effectBatchFromValues(
+		"operational_incident_responders", EffectReadbackRequired, []pagerDutyResponderRow{row},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	family := PagerDutyIncidentFamilyClickHouseEffects{
+		Conn: refusingClickHouseConn{t: t}, ProviderInstanceID: "acme",
+		Entitlement: allowIncidentEntitlement,
+		Lease:       providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	if err := family.WriteEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("family sink accepted a responder effect: %v", err)
+	}
+	if _, err := family.InspectEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("family sink inspected a responder effect: %v", err)
+	}
+
+	// And the responder sink is not a general-purpose one: it takes its own
+	// destination and nothing else.
+	responders := PagerDutyWebhookRespondersClickHouseEffects{
+		Conn: refusingClickHouseConn{t: t}, ProviderInstanceID: "acme",
+		Entitlement: allowIncidentEntitlement,
+		Lease:       providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	incidentEffect, err := effectBatchFromValues(
+		"operational_incidents", EffectReadbackRequired, []pagerDutyIncidentRow{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := responders.WriteEffect(context.Background(), claim, incidentEffect); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("responder sink accepted an incident effect: %v", err)
+	}
+	wrongDataset := claim
+	wrongDataset.Dataset = "incident-notes"
+	if err := responders.WriteEffect(context.Background(), wrongDataset, effect); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("responder sink accepted the wrong dataset: %v", err)
+	}
+}
+
+// refusingClickHouseConn fails the test if the sink ever reaches ClickHouse.
+// A validation test that silently depended on a nil connection would pass for
+// the wrong reason, so the rejection must happen before any statement.
+type refusingClickHouseConn struct {
+	driver.Conn
+	t *testing.T
+}
+
+func (conn refusingClickHouseConn) PrepareBatch(
+	context.Context, string, ...driver.PrepareBatchOption,
+) (driver.Batch, error) {
+	conn.t.Fatal("sink reached ClickHouse for an effect it should have refused")
+	return nil, nil
+}

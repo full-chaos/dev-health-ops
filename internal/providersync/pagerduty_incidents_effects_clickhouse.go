@@ -77,15 +77,6 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) WriteEffect(
 			return err
 		}
 		return sink.writeNoteRows(ctx, rows)
-	case "operational_incident_responders":
-		rows, err := decodeEffectRows[pagerDutyResponderRow](effect)
-		if err != nil {
-			return err
-		}
-		if err := validatePagerDutyResponderRows(claim, sink.ProviderInstanceID, rows); err != nil {
-			return err
-		}
-		return sink.writeResponderRows(ctx, rows)
 	default:
 		return ErrInvalidConfiguration
 	}
@@ -134,15 +125,6 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) InspectEffect(
 			return EffectConflict, err
 		}
 		return sink.inspectNoteRows(ctx, claim, rows)
-	case "operational_incident_responders":
-		rows, err := decodeEffectRows[pagerDutyResponderRow](effect)
-		if err != nil {
-			return EffectConflict, err
-		}
-		if err := validatePagerDutyResponderRows(claim, sink.ProviderInstanceID, rows); err != nil {
-			return EffectConflict, err
-		}
-		return sink.inspectResponderRows(ctx, claim, rows)
 	default:
 		return EffectConflict, ErrInvalidConfiguration
 	}
@@ -155,12 +137,7 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) validateRequest(
 		claim.Provider != "pagerduty" || strings.TrimSpace(sink.ProviderInstanceID) == "" {
 		return ErrInvalidConfiguration
 	}
-	// operational_incident_responders rides the parent "incidents" dataset:
-	// it has no pull-sync producer of its own (see
-	// pagerduty_incident_responders.go), and a responder row is only ever
-	// written in the same reconciliation as the incident it points at.
 	validDataset := (claim.Dataset == "incidents" && effect.Destination == "operational_incidents") ||
-		(claim.Dataset == "incidents" && effect.Destination == "operational_incident_responders") ||
 		(claim.Dataset == "incident-alerts" && effect.Destination == "operational_alerts") ||
 		(claim.Dataset == "incident-log-entries" && effect.Destination == "operational_incident_timeline_events") ||
 		(claim.Dataset == "incident-notes" && effect.Destination == "operational_incident_notes")

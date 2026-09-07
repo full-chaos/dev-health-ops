@@ -66,6 +66,10 @@ func TestPagerDutyWebhookGoldensCommitToMigratedClickHouse(t *testing.T) {
 		Conn: conn, Lease: lease, ProviderInstanceID: "acme",
 		Entitlement: allowIncidentEntitlement,
 	}
+	responders := PagerDutyWebhookRespondersClickHouseEffects{
+		Conn: conn, Lease: lease, ProviderInstanceID: "acme",
+		Entitlement: allowIncidentEntitlement,
+	}
 
 	goldens := loadPagerDutyGoldens(t)
 	if len(goldens) != 18 {
@@ -97,6 +101,7 @@ func TestPagerDutyWebhookGoldensCommitToMigratedClickHouse(t *testing.T) {
 				IncidentFamily: &inspectingWebhookSink{sink: incidentFamily, committed: &committed},
 				Services:       &inspectingWebhookSink{sink: services, committed: &committed},
 				Users:          &inspectingWebhookSink{sink: users, committed: &committed},
+				Responders:     &inspectingWebhookSink{sink: responders, committed: &committed},
 			}
 			outcome, err := ReconcilePagerDutyWebhook(
 				ctx, pagerDutyWebhookTestClaim(golden.OrgID), golden.ProviderInstanceID,

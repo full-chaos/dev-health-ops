@@ -5,6 +5,8 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 	"time"
@@ -17,13 +19,23 @@ import (
 // reconciler was its sole writer (webhooks.py built the IncidentResponder
 // inline, without a normalizer), and CHAOS-4105 moves that writer here.
 //
-// It is registered under the "incidents" dataset rather than a twelfth
-// PagerDuty dataset on purpose. A dataset is a pull-sync capability -- it
-// appears in the provider matrix, the sync planner and the migration docs --
-// and inventing one for a table nothing pulls would claim a route that does
-// not exist. Responders are only ever written alongside the incident they
-// belong to, in the same reconciliation, so the incident's dataset is the
-// truthful scope.
+// It is NOT a twelfth PagerDuty dataset. A dataset is a pull-sync capability
+// -- it appears in the provider matrix, the sync planner and the migration
+// docs -- and inventing one for a table nothing pulls would claim a route
+// that does not exist. Responders are only ever written alongside the
+// incident they belong to, in the same reconciliation, so they carry the
+// incident's dataset.
+//
+// They get their OWN sink type rather than a fifth destination on
+// PagerDutyIncidentFamilyClickHouseEffects. The first draft widened that
+// sink to accept operational_incident_responders under the "incidents"
+// dataset, and codex r1 showed with a live probe that this admitted a
+// responder effect from an ORDINARY PULL claim -- the pull route emits no
+// such effect today, so nothing was corrupted, but the sink's
+// one-dataset-one-table invariant had been traded away for a webhook-only
+// need. A separate type restores it: only the webhook path constructs this
+// sink, so "only the webhook writes responders" is a fact about the type
+// graph rather than a rule a future caller has to remember.
 
 const pagerDutyResponderColumns = "org_id,provider,provider_instance_id,source_entity_type,external_id,source_version_at,id,source_id,source_url,source_event_at,source_event_id,observed_at,last_synced,raw_status,raw_severity,raw_priority,normalized_status,normalized_severity,normalized_priority,relationship_provenance,relationship_confidence,incident_id,user_id,responder_name,role,responder_assignment_id,requested_at,assigned_at,acknowledged_at,completed_at"
 
@@ -143,7 +155,70 @@ func pagerDutyResponderScanValues(row *pagerDutyResponderRow) []any {
 	return []any{&row.OrgID, &row.Provider, &row.ProviderInstanceID, &row.SourceEntityType, &row.ExternalID, &row.SourceVersionAt, &row.ID, &row.SourceID, &row.SourceURL, &row.SourceEventAt, &row.SourceEventID, &row.ObservedAt, &row.LastSynced, &row.RawStatus, &row.RawSeverity, &row.RawPriority, &row.NormalizedStatus, &row.NormalizedSeverity, &row.NormalizedPriority, &row.RelationshipProvenance, &row.RelationshipConfidence, &row.IncidentID, &row.UserID, &row.ResponderName, &row.Role, &row.ResponderAssignmentID, &row.RequestedAt, &row.AssignedAt, &row.AcknowledgedAt, &row.CompletedAt}
 }
 
-func (sink PagerDutyIncidentFamilyClickHouseEffects) writeResponderRows(
+// PagerDutyWebhookRespondersClickHouseEffects is the responder sink. It
+// mirrors the incident family's shape -- same tenant scope, same lease fence,
+// same incident entitlement, same readback inspection -- and differs only in
+// being reachable from one call site.
+type PagerDutyWebhookRespondersClickHouseEffects struct {
+	Conn               driver.Conn
+	Lease              providerfoundation.LeaseGuard
+	ProviderInstanceID string
+	Entitlement        IncidentEntitlement
+	Metrics            *providerfoundation.Metrics
+}
+
+func (sink PagerDutyWebhookRespondersClickHouseEffects) validateRequest(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) error {
+	if ctx == nil || sink.Conn == nil || sink.Lease == nil || sink.Entitlement == nil ||
+		claim.Validate() != nil || claim.Provider != "pagerduty" ||
+		strings.TrimSpace(sink.ProviderInstanceID) == "" {
+		return ErrInvalidConfiguration
+	}
+	if claim.Dataset != "incidents" || effect.Destination != "operational_incident_responders" {
+		return ErrInvalidConfiguration
+	}
+	return sink.Lease.Assert(ctx)
+}
+
+func (sink PagerDutyWebhookRespondersClickHouseEffects) WriteEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) error {
+	if err := sink.validateRequest(ctx, claim, effect); err != nil {
+		return err
+	}
+	if err := requireIncidentEntitlement(
+		ctx, sink.Entitlement, sink.Metrics, claim, IncidentEntitlementSeamWrite,
+	); err != nil {
+		return err
+	}
+	rows, err := decodeEffectRows[pagerDutyResponderRow](effect)
+	if err != nil {
+		return err
+	}
+	if err := validatePagerDutyResponderRows(claim, sink.ProviderInstanceID, rows); err != nil {
+		return err
+	}
+	return sink.writeResponderRows(ctx, rows)
+}
+
+func (sink PagerDutyWebhookRespondersClickHouseEffects) InspectEffect(
+	ctx context.Context, claim Claim, effect EffectBatch,
+) (EffectInspection, error) {
+	if err := sink.validateRequest(ctx, claim, effect); err != nil {
+		return EffectConflict, err
+	}
+	rows, err := decodeEffectRows[pagerDutyResponderRow](effect)
+	if err != nil {
+		return EffectConflict, err
+	}
+	if err := validatePagerDutyResponderRows(claim, sink.ProviderInstanceID, rows); err != nil {
+		return EffectConflict, err
+	}
+	return sink.inspectResponderRows(ctx, claim, rows)
+}
+
+func (sink PagerDutyWebhookRespondersClickHouseEffects) writeResponderRows(
 	ctx context.Context, rows []pagerDutyResponderRow,
 ) error {
 	if len(rows) == 0 {
@@ -165,7 +240,7 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) writeResponderRows(
 	return batch.Send()
 }
 
-func (sink PagerDutyIncidentFamilyClickHouseEffects) inspectResponderRows(
+func (sink PagerDutyWebhookRespondersClickHouseEffects) inspectResponderRows(
 	ctx context.Context, claim Claim, rows []pagerDutyResponderRow,
 ) (EffectInspection, error) {
 	return inspectPagerDutyRows(rows, func(row pagerDutyResponderRow) string { return row.ID }, func(row pagerDutyResponderRow) *big.Int { return row.SourceRevision }, func(id string) (pagerDutyResponderRow, bool, error) {
@@ -173,7 +248,7 @@ func (sink PagerDutyIncidentFamilyClickHouseEffects) inspectResponderRows(
 	})
 }
 
-func (sink PagerDutyIncidentFamilyClickHouseEffects) loadResponderRow(
+func (sink PagerDutyWebhookRespondersClickHouseEffects) loadResponderRow(
 	ctx context.Context, claim Claim, id string,
 ) (pagerDutyResponderRow, bool, error) {
 	rows, err := sink.Conn.Query(ctx, "SELECT "+pagerDutyResponderColumns+" FROM operational_incident_responders FINAL WHERE org_id = ? AND provider = ? AND provider_instance_id = ? AND source_entity_type = ? AND id = ? LIMIT 1", claim.OrgID, claim.Provider, strings.ToLower(strings.TrimSpace(sink.ProviderInstanceID)), "responder", id)

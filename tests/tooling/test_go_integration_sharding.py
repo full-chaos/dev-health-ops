@@ -1807,9 +1807,32 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # is deleted, and its sibling top-level oracle tests already convert to
     # the frozen comparator IN PLACE (same test names, no count change from
     # that half of the diff).
-    assert len(expected_provider_tests) == 1324
+    # CHAOS-4105 (PagerDuty webhook reconciliation ported to Go, Python
+    # bridge deleted, 2026-09-07): +9 top-level (1324 -> 1333),
+    # integration-tagged +1 (152 -> 153).
+    # Eight are ordinary in-memory tests in
+    # pagerduty_webhook_reconcile_golden_test.go: the frozen-golden replay
+    # (one subtest per captured Python case), the dataset/destination pairing
+    # the effect sinks accept, the terminal-vs-retryable classification of
+    # unsupported/malformed events, the hydration-failure-stays-retryable
+    # rule, the stop-before-the-dependent-write rule, and three pinning the
+    # new operational_incident_responders row: its webhook-event-id key, its
+    # tenant/ordering validation, and its column list omitting the four v2
+    # ordering columns the deployed schema does not have.
+    # The ninth, TestPagerDutyWebhookGoldensCommitToMigratedClickHouse, is
+    # integration-tagged: it replays the same goldens against the production
+    # migration chain in a real ClickHouse, which is the only way the
+    # responders destination -- the one table with no pull-sync producer --
+    # meets its real schema.
+    # CHAOS-4105 codex r1 fix (same PR): +1 ordinary top-level (1333 -> 1334),
+    # integration-tagged UNCHANGED at 153.
+    # TestPagerDutyIncidentFamilySinkStillRefusesResponderEffects pins the
+    # sink invariant the first draft traded away -- responders moved to their
+    # own sink type, so the incident-family sink must refuse that destination
+    # outright and the responder sink must refuse every other one.
+    assert len(expected_provider_tests) == 1334
 
-    assert len(expected_integration_tests) == 152
+    assert len(expected_integration_tests) == 153
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1825,7 +1848,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1324
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1334
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1927,7 +1950,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1324
+    assert len(selected_tests) == len(set(selected_tests)) == 1334
     assert set(selected_tests) == expected_tests
 
 

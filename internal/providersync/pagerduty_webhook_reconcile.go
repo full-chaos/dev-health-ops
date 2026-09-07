@@ -67,6 +67,11 @@ type PagerDutyWebhookSinks struct {
 	IncidentFamily PagerDutyWebhookSink
 	Services       PagerDutyWebhookSink
 	Users          PagerDutyWebhookSink
+	// Responders is deliberately its own sink rather than a fifth
+	// destination on IncidentFamily -- see
+	// pagerduty_incident_responders.go for why widening the family sink
+	// was the wrong shape.
+	Responders PagerDutyWebhookSink
 }
 
 // PagerDutyWebhookWrite reports one committed destination write so the caller
@@ -478,7 +483,7 @@ func pagerDutyWebhookWriteResponder(
 		return nil, fmt.Errorf("%w: %v", ErrPagerDutyWebhookMalformed, err)
 	}
 	if err := pagerDutyWebhookWrite(
-		ctx, sinks.IncidentFamily, responderClaim, "operational_incident_responders",
+		ctx, sinks.Responders, responderClaim, "operational_incident_responders",
 		[]pagerDutyResponderRow{row},
 	); err != nil {
 		return nil, err

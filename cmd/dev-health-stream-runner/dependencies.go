@@ -246,6 +246,7 @@ func (storage *productionStreamStorage) Handler(kind streamHandlerKind, observer
 			Receipts:    receipts,
 			Sinks:       storage.pagerDutyWebhookSinks,
 			Hydrator:    storage.pagerDutyIncidentHydrator,
+			Metrics:     storage.pagerduty.metrics,
 		})
 		if err != nil {
 			return nil, err
@@ -611,6 +612,10 @@ func (storage *productionStreamStorage) pagerDutyWebhookSinks(
 			Entitlement: entitlement, Metrics: storage.pagerduty.metrics,
 		},
 		Users: providersync.PagerDutyUsersClickHouseEffects{
+			Conn: storage.clickHouse, Lease: lease, ProviderInstanceID: providerInstanceID,
+			Entitlement: entitlement, Metrics: storage.pagerduty.metrics,
+		},
+		Responders: providersync.PagerDutyWebhookRespondersClickHouseEffects{
 			Conn: storage.clickHouse, Lease: lease, ProviderInstanceID: providerInstanceID,
 			Entitlement: entitlement, Metrics: storage.pagerduty.metrics,
 		},

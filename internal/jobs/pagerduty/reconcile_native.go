@@ -36,8 +36,16 @@ type NativeReconciler struct {
 	sinks       func(providerInstanceID string, lease providerfoundation.LeaseGuard) providersync.PagerDutyWebhookSinks
 	hydrator    func(graph LockedGraph, lease providerfoundation.LeaseGuard) providersync.PagerDutyIncidentHydrator
 	receipts    ReceiptFence
+	metrics     *providerfoundation.Metrics
 	now         func() time.Time
 }
+
+// pagerDutyWebhookEntitlementDataset labels the refusal counter. The webhook
+// is not a dataset sync, but the counter's dataset label is a bounded
+// vocabulary shared with the pull route, and "incidents" is the dataset whose
+// entitlement this actually is -- inventing a "webhook" label would mint a
+// second series for the same policy decision (CHAOS-4219's one-series rule).
+const pagerDutyWebhookEntitlementDataset = "incidents"
 
 // ReceiptFence proves this process still owns the receipt. The effect sinks
 // take a LeaseGuard and call it before every ClickHouse send; backing that
@@ -61,16 +69,22 @@ type NativeReconcilerConfig struct {
 	// Hydrator builds the REST client used only when a webhook payload is too
 	// sparse to normalize, fenced by the same lease.
 	Hydrator func(graph LockedGraph, lease providerfoundation.LeaseGuard) providersync.PagerDutyIncidentHydrator
+	// Metrics carries the shared provider-foundation fragment the entitlement
+	// refusal counter lands on. A nil pointer is safe (the counter is
+	// nil-receiver guarded) but means the refusal is invisible to a scrape,
+	// so it is required like every other dependency here.
+	Metrics *providerfoundation.Metrics
 }
 
 func NewNativeReconciler(config NativeReconcilerConfig) (*NativeReconciler, error) {
 	if config.Pool == nil || config.Entitlement == nil || config.Receipts == nil ||
-		config.Sinks == nil || config.Hydrator == nil {
+		config.Sinks == nil || config.Hydrator == nil || config.Metrics == nil {
 		return nil, errUnavailable
 	}
 	return &NativeReconciler{
 		pool: config.Pool, entitlement: config.Entitlement, receipts: config.Receipts,
-		sinks: config.Sinks, hydrator: config.Hydrator, now: time.Now,
+		sinks: config.Sinks, hydrator: config.Hydrator, metrics: config.Metrics,
+		now: time.Now,
 	}, nil
 }
 
@@ -201,7 +215,16 @@ func (reconciler *NativeReconciler) Reconcile(
 	if reconciler == nil || reconciler.pool == nil {
 		return errUnavailable
 	}
+	// These two returns quarantine a delivery permanently, and both ran
+	// silently until codex r1 caught it: a dead-letter row appeared with no
+	// line in the log explaining it, which is the one thing the reason codes
+	// exist to make explainable. They fire BEFORE the graph lock, so there is
+	// no org or provider instance to name yet -- the binding and receipt are
+	// what an operator has to work with, and they are enough to find the
+	// delivery.
 	if event.BindingID == "" || len(event.Payload) == 0 {
+		reconciler.logMalformed(ctx, event, "",
+			errors.New("stream entry has no binding id or no payload"))
 		return &streamrunner.PermanentError{Reason: reasonSchemaInvalid}
 	}
 	var envelope webhookEnvelope
@@ -209,6 +232,8 @@ func (reconciler *NativeReconciler) Reconcile(
 		strings.TrimSpace(envelope.Event.ID) == "" ||
 		strings.TrimSpace(envelope.Event.EventType) == "" ||
 		envelope.Event.OccurredAt.IsZero() || len(envelope.Event.Data) == 0 {
+		reconciler.logMalformed(ctx, event, envelope.Event.EventType,
+			errors.New("webhook envelope is missing id, event_type, occurred_at, or data"))
 		return &streamrunner.PermanentError{Reason: reasonSchemaInvalid}
 	}
 	started := reconciler.now()
@@ -235,6 +260,16 @@ func (reconciler *NativeReconciler) Reconcile(
 	// DLQ reason is what tells an operator to re-enable rather than debug.
 	if err := reconciler.entitlement.Require(ctx, graph.OrgID); err != nil {
 		if errors.Is(err, providersync.ErrIncidentEntitlementDisabled) {
+			// Count as well as log. providersync's own requireIncidentEntitlement
+			// owns this counter for the sink seam, but this pre-sink check calls
+			// Require directly and therefore bypasses it -- so without this line
+			// dev_health_provider_incident_entitlement_refused_total reads zero
+			// for every webhook a disabled org refuses, which is the most
+			// trustworthy-looking way for a metric to be wrong (codex r1).
+			reconciler.metrics.RecordIncidentEntitlementRefused(
+				"pagerduty", pagerDutyWebhookEntitlementDataset,
+				providersync.IncidentEntitlementSeamCollect,
+			)
 			reconciler.logRefusal(ctx, event, envelope, graph.OrgID, reasonFeatureDisabled, err)
 			return &streamrunner.PermanentError{Reason: reasonFeatureDisabled}
 		}
@@ -323,6 +358,7 @@ func (reconciler *NativeReconciler) claimFor(
 }
 
 const (
+	webhookMalformedEvent  = "pagerduty webhook rejected before the binding lock"
 	webhookReconciledEvent = "pagerduty webhook reconciled"
 	webhookRefusedEvent    = "pagerduty webhook refused"
 	webhookFailedEvent     = "pagerduty webhook failed"
@@ -352,6 +388,23 @@ func (reconciler *NativeReconciler) logSuccess(
 		attributes = append(attributes, slog.Int("rows_"+write.Destination, write.Rows))
 	}
 	slog.InfoContext(ctx, webhookReconciledEvent, attributes...)
+}
+
+// logMalformed explains a delivery quarantined before the graph lock, where
+// no org or provider instance is known yet. It is a WARN for the same reason
+// logRefusal is: a producer sending malformed entries is an expected,
+// operator-visible state, not an infrastructure fault.
+func (reconciler *NativeReconciler) logMalformed(
+	ctx context.Context, event Event, eventType string, cause error,
+) {
+	slog.WarnContext(ctx, webhookMalformedEvent,
+		slog.String("provider", "pagerduty"),
+		slog.String("binding_id", event.BindingID),
+		slog.String("event_type", eventType),
+		slog.String("receipt_id", event.ReceiptID),
+		slog.String("reason", reasonSchemaInvalid),
+		slog.String("error", cause.Error()),
+	)
 }
 
 // A terminal refusal is a WARN: it is an expected operator- or

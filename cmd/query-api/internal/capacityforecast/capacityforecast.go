@@ -103,6 +103,32 @@ const (
 	defaultSimulations = 10000
 )
 
+// maxSimulations bounds the Monte Carlo draw count a caller may request.
+//
+// CHAOS-5349 r2 P1, measured rather than argued. `simulations` is `Int! = 10000`
+// in the SDL, so a POSITIVE value passes the `< 1` guard added in r1 and reaches
+// numerical.MonteCarloForecastDays's `make([]int, 0, simulations)`. At
+// math.MaxInt32 that asks for 8 bytes x (2^31-1) = ~17.2 GB:
+//
+//	runtime: out of memory: cannot allocate 17179869184-byte block
+//	fatal error: out of memory
+//
+// That is categorically worse than the panic r1 found. A Go panic unwinds ONE
+// request; `fatal error: out of memory` is not recoverable and takes the whole
+// PROCESS down -- so a single GraphQL variable is a service-wide outage for
+// every org on the instance, not a 500 for the caller who sent it.
+//
+// 1,000,000 is 100x the default and allocates 8 MB, which is bounded and
+// unremarkable, while being far beyond any forecast anyone has a use for. The
+// number is deliberately generous: the point is to make the input BOUNDED, not
+// to second-guess how many draws a user wants.
+//
+// The kernel is NOT capped -- it clamps negatives only (simulationCount), and
+// deliberately does not silently truncate a large count. A clamp there would
+// answer a different question than the one asked, with nothing telling the
+// caller; the rejection belongs at the edge where the value arrives.
+const maxSimulations = 1_000_000
+
 // randomSeed draws the per-request Monte Carlo seed. See the package doc for
 // why this is a fresh draw rather than a fixed value.
 //
@@ -156,24 +182,42 @@ func ResolveForecast(
 	// request. DECLARED DIVERGENCE -- see the PR body.
 	//
 	// Rejected BEFORE any query, so a nonsensical request costs the org nothing,
-	// and the field and the offending value are both named so the caller can
-	// see what to change. There is deliberately no UPPER bound: neither Python
-	// nor the worker path enforces one, and inventing a ceiling here would
-	// silently truncate a request that works today.
-	if simulations < 1 {
+	// and the field, the offending value and the cap are all named so the caller
+	// can see what to change.
+	//
+	// The UPPER bound (maxSimulations) was added by r2 after an executed OOM --
+	// see that constant. The earlier version of this comment argued against a
+	// ceiling on parity grounds, because neither Python nor the worker path has
+	// one. That argument was wrong for a reason parity cannot see: Python has
+	// the same defect wearing different clothes (range(2^31-1) does not
+	// allocate, it loops two billion times and hangs the worker), so "Python
+	// has no cap" was evidence that Python is also exposed, not that a cap is
+	// unnecessary.
+	if simulations < 1 || simulations > maxSimulations {
+		reason := "simulations must be at least 1; a zero-simulation Monte Carlo has no output to take percentiles of"
+		if simulations > maxSimulations {
+			// The DoS half. Logged distinctly from the too-small case because
+			// they mean opposite things operationally: one is a malformed
+			// client, the other is a request that would have taken the process
+			// down with it.
+			reason = "simulations exceeds the cap; the draw slice is allocated up front, so an unbounded count is an out-of-memory abort of the whole process"
+		}
 		slog.WarnContext(ctx, "query_api.capacity_forecast.invalid_input",
 			"org_id", orgID,
 			"field", "simulations",
 			"value", simulations,
-			"reason", "simulations must be at least 1; a zero-simulation Monte Carlo has no output to take percentiles of",
+			"cap", maxSimulations,
+			"reason", reason,
 			"duration_ms", time.Since(started).Milliseconds(),
 		)
 		return nil, &gqlerror.Error{
 			Message: fmt.Sprintf(
-				"capacityForecast: simulations must be at least 1, got %d", simulations),
+				"capacityForecast: simulations must be between 1 and %d, got %d",
+				maxSimulations, simulations),
 			Extensions: map[string]any{
 				"code":  "BAD_USER_INPUT",
 				"field": "simulations",
+				"cap":   maxSimulations,
 			},
 		}
 	}

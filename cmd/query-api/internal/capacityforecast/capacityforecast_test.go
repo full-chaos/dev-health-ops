@@ -3,6 +3,7 @@ package capacityforecast
 import (
 	"context"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -458,6 +459,80 @@ func TestResolveForecastRejectsANonPositiveSimulationCount(t *testing.T) {
 
 // TestResolveForecastAcceptsTheSmallestValidSimulationCount pins the boundary
 // from the other side, so the guard cannot quietly become `< 2` or `<= 1`.
+// TestResolveForecastRejectsAnOversizedSimulationCount is CHAOS-5349 r2 P1.
+//
+// A POSITIVE simulations value passed r1's `< 1` guard and reached
+// make([]int, 0, n). At math.MaxInt32 that is ~17.2 GB, and the failure is
+// `fatal error: out of memory` -- NOT a panic. The distinction is the whole
+// severity: a panic unwinds one request, a fatal OOM takes the process down, so
+// one GraphQL variable was a service-wide outage for every org on the instance.
+//
+// The nil QueryClient is the load-bearing part again: the rejection must happen
+// before any read, so if the guard ever stops short-circuiting this test panics
+// rather than passing quietly.
+func TestResolveForecastRejectsAnOversizedSimulationCount(t *testing.T) {
+	for _, simulations := range []int{maxSimulations + 1, 10_000_000, math.MaxInt32} {
+		input := &model.CapacityForecastInput{HistoryDays: 90, Simulations: simulations}
+
+		result, err := ResolveForecast(
+			context.Background(), nil, "org-1", input, day(t, "2026-09-01"))
+
+		if result != nil {
+			t.Errorf("simulations=%d: got a forecast, want a rejection", simulations)
+		}
+		if err == nil {
+			t.Fatalf("simulations=%d: got nil error -- this value allocates %d bytes and "+
+				"aborts the process", simulations, simulations*8)
+		}
+		gqlErr, ok := err.(*gqlerror.Error)
+		if !ok {
+			t.Fatalf("simulations=%d: error is %T, want *gqlerror.Error", simulations, err)
+		}
+		if code, _ := gqlErr.Extensions["code"].(string); code != "BAD_USER_INPUT" {
+			t.Errorf("simulations=%d: extensions.code = %v, want BAD_USER_INPUT",
+				simulations, gqlErr.Extensions["code"])
+		}
+		// The CAP is reported, not just the rejection: a caller told only "too
+		// big" has to bisect to find the boundary.
+		if cap, _ := gqlErr.Extensions["cap"].(int); cap != maxSimulations {
+			t.Errorf("simulations=%d: extensions.cap = %v, want %d",
+				simulations, gqlErr.Extensions["cap"], maxSimulations)
+		}
+		if !strings.Contains(gqlErr.Message, strconv.Itoa(maxSimulations)) {
+			t.Errorf("simulations=%d: message %q does not name the cap",
+				simulations, gqlErr.Message)
+		}
+	}
+}
+
+// TestResolveForecastAcceptsExactlyTheCap pins the boundary from the allowed
+// side, so the guard cannot quietly become `>= maxSimulations`.
+//
+// Deliberately NOT run through the Monte Carlo: a million draws over this
+// history is real work and this test is about the BOUNDARY, not the maths. The
+// backlog is zero, so resolveTargetItems yields zero items and the resolver
+// returns its tolerated nil before any simulation runs -- reaching that return
+// at all proves the value was accepted.
+func TestResolveForecastAcceptsExactlyTheCap(t *testing.T) {
+	client := &fakeClient{responses: []*fakeRowScanner{
+		throughputRows(t, 2, 4, 6),
+		{rows: [][]any{{uint64(0)}}},
+	}}
+	input := &model.CapacityForecastInput{HistoryDays: 90, Simulations: maxSimulations}
+
+	got, err := ResolveForecast(context.Background(), client, "org-1", input, day(t, "2026-09-01"))
+	if err != nil {
+		t.Fatalf("simulations=%d (exactly the cap) was rejected: %v", maxSimulations, err)
+	}
+	if got != nil {
+		t.Fatalf("expected the empty-backlog nil, got %+v", got)
+	}
+	if client.calls != 2 {
+		t.Errorf("issued %d queries, want 2 -- the request was accepted and read normally",
+			client.calls)
+	}
+}
+
 func TestResolveForecastAcceptsTheSmallestValidSimulationCount(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{
 		throughputRows(t, 2, 4, 6),

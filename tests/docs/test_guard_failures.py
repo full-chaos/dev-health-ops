@@ -3,11 +3,13 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
+from markdown.extensions.toc import slugify as mkdocs_slugify
 
 from scripts.check_built_site_links import check_built_site
 from scripts.check_code_prerequisites import pages_missing_prerequisite_link
-from scripts.check_docs_links import check_docs
+from scripts.check_docs_links import check_docs, slugify
 from scripts.check_external_links import FetchResult, check_external_links
 from scripts.check_freshness_inventory import check_freshness_inventory, load_inventory
 
@@ -28,6 +30,54 @@ def test_broken_source_link_fails() -> None:
     assert len(errors) == 1
     assert "does-not-exist.md" in errors[0]
     assert "missing file" in errors[0]
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "Plain Heading",
+        "What a surface ISSUES: the `issued_credential` field",
+        "snake_case_identifier stays snake_case",
+        "Trailing punctuation!?",
+        "Multiple   spaces  collapse",
+        "Mixed_Underscore-and-Hyphen Runs",
+        "Café Résumé — unicode gets folded to ASCII",
+        "  leading and trailing whitespace  ",
+    ],
+)
+def test_slugify_matches_the_real_mkdocs_toc_anchor(heading: str) -> None:
+    """CHAOS-5417/CHAOS-5439: check_docs_links.slugify must match what
+    `mkdocs build` actually renders (python-markdown's own `toc` extension,
+    `unicode=False` -- this repo's mkdocs.yml does not opt into unicode
+    slugs), not an approximation that happens to look plausible. A mismatch
+    here is exactly the class of bug that let a link pass this checker
+    while 404ing on the real built site (tests/docs/test_built_site_links.py
+    is the ground-truth check against real rendered HTML; this test is the
+    cheap, fast one that keeps this checker's approximation honest without
+    a full mkdocs build).
+
+    Compares directly against `markdown.extensions.toc.slugify`, the exact
+    function mkdocs' `toc` extension calls with `permalink: true`, rather
+    than hand-asserting expected strings -- a hand-written expectation could
+    drift from upstream the same way the old buggy regex did.
+    """
+    assert slugify(heading) == mkdocs_slugify(heading, "-")
+
+
+def test_slugify_html_and_backtick_stripping_matches_the_rendered_text() -> None:
+    """`markdown.extensions.toc.slugify` never sees a raw `<tag>` or a raw
+    backtick -- by the time the `toc` extension calls it, markdown has
+    already rendered inline code spans and stripped/escaped HTML upstream,
+    so it only ever receives plain inner text. This checker instead works
+    from the RAW heading source line, so it strips HTML tags and unwraps
+    backticks itself first (see `slugify`'s docstring) -- there is no
+    single upstream call that takes the raw markdown and is directly
+    comparable. This test proves that pre-step is equivalent to feeding
+    mkdocs' slugify the already-rendered inner text by hand.
+    """
+    raw = "<code>HTML</code> tags and `backticks` are stripped"
+    rendered_inner_text = "HTML tags and backticks are stripped"
+    assert slugify(raw) == mkdocs_slugify(rendered_inner_text, "-")
 
 
 def test_broken_built_asset_fails(tmp_path: Path) -> None:

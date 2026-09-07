@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -75,6 +76,10 @@ type reconcilerDatabase interface {
 	QueueReady(context.Context) error
 	CoordinatorReady(context.Context) error
 	RiverSchemaReady(context.Context, string) error
+	// PostureManifestLockstep proves (CHAOS-5437) that binaryDigest -- this
+	// binary's own postgres.PostureManifestDigest() -- is no older than the
+	// posture manifest go-worker-migrate most recently applied.
+	PostureManifestLockstep(ctx context.Context, binaryDigest string) (postgres.PostureManifestLockstepResult, error)
 	DomainPool() *pgxpool.Pool
 	QueuePool() *pgxpool.Pool
 	CoordinatorPool() *pgxpool.Pool
@@ -139,6 +144,15 @@ func (database *postgresReconcilerDatabase) RiverSchemaReady(ctx context.Context
 	}
 	_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, schema, nil)
 	return err
+}
+
+func (database *postgresReconcilerDatabase) PostureManifestLockstep(
+	ctx context.Context, binaryDigest string,
+) (postgres.PostureManifestLockstepResult, error) {
+	if database == nil || database.pools == nil || database.pools.Domain == nil {
+		return postgres.PostureManifestLockstepResult{}, errReconcilerDependencyUnavailable
+	}
+	return postgres.CheckPostureManifestLockstep(ctx, database.pools.Domain, binaryDigest)
 }
 
 func (database *postgresReconcilerDatabase) QueuePool() *pgxpool.Pool {
@@ -488,6 +502,10 @@ type reconcilerDependencies struct {
 	syncRecorderErr      error
 	syncLoop             *syncreconciler.Loop
 	syncLoopErr          error
+
+	// postureGuard is CHAOS-5437's posture_manifest_lockstep check + gauge.
+	// nil only when dependencies.database itself is nil.
+	postureGuard *postureguard.Guard
 }
 
 func configureReconcilerDependenciesWithSourcesAndLogger(
@@ -539,6 +557,7 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		// problem is attributable in readiness output rather than surfacing as a
 		// generic domain failure.
 		{name: "coordinator_postgres", check: dependencies.coordinatorReady},
+		{name: "posture_manifest_lockstep", check: dependencies.postureManifestLockstepReady},
 		{name: "river_schema", check: dependencies.riverSchemaReady(cfg.RiverDatabaseSchema)},
 		{name: "sync_dispatch_registry", check: dependencies.syncRegistryReady},
 		{name: "execution_liveness", check: func(ctx context.Context) error {
@@ -559,6 +578,14 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	}
 	for _, check := range checks {
 		if err := registry.RegisterRequired(check.name, check.check); err != nil {
+			dependencies.close()
+			return nil, err
+		}
+	}
+	// CHAOS-5437: nil only when dependencies.database is nil (mirrors every
+	// other database-backed metrics source here).
+	if dependencies.postureGuard != nil {
+		if err := registry.RegisterMetrics("posture_manifest_lockstep", dependencies.postureGuard); err != nil {
 			dependencies.close()
 			return nil, err
 		}
@@ -621,6 +648,13 @@ func buildReconcilerDependencies(
 			dependencies.databaseErr = dependencyUnavailable("reconciler_database_open_failed")
 			dependencies.disableDatabase()
 		}
+	}
+	if dependencies.database != nil {
+		// CHAOS-5437: bound now, while dependencies.database is confirmed
+		// non-nil -- taking a method value off a nil interface panics.
+		dependencies.postureGuard = postureguard.New(
+			"dev-health-reconciler", dependencies.database.PostureManifestLockstep, postgres.PostureManifestDigest(),
+		)
 	}
 	if sources.loadRuntimeRegistry == nil || sources.contractRoot == "" {
 		dependencies.registryErr = dependencyUnavailable("reconciler_job_registry_source_missing")
@@ -807,6 +841,20 @@ func (dependencies *reconcilerDependencies) coordinatorReady(ctx context.Context
 	if err := dependencies.database.CoordinatorReady(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "coordinator_postgres", err)
 		dependencies.logCoordinatorPostureGaps(ctx)
+		return errReconcilerDependencyUnavailable
+	}
+	return nil
+}
+
+// postureManifestLockstepReady is CHAOS-5437's posture_manifest_lockstep
+// check -- see cmd/dev-health-worker's identical check for the full
+// incident this closes.
+func (dependencies *reconcilerDependencies) postureManifestLockstepReady(ctx context.Context) error {
+	if dependencies == nil || dependencies.databaseErr != nil || dependencies.database == nil || dependencies.postureGuard == nil {
+		return errReconcilerDependencyUnavailable
+	}
+	if err := dependencies.postureGuard.Ready(ctx); err != nil {
+		dependencies.logDependencyCheckFailure(ctx, "posture_manifest_lockstep", err)
 		return errReconcilerDependencyUnavailable
 	}
 	return nil

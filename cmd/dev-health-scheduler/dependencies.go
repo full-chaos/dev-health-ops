@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -26,6 +27,10 @@ type schedulerDatabase interface {
 	QueueReady(context.Context) error
 	CoordinatorReady(context.Context) error
 	RiverSchemaReady(context.Context, string) error
+	// PostureManifestLockstep proves (CHAOS-5437) that binaryDigest -- this
+	// binary's own postgres.PostureManifestDigest() -- is no older than the
+	// posture manifest go-worker-migrate most recently applied.
+	PostureManifestLockstep(ctx context.Context, binaryDigest string) (postgres.PostureManifestLockstepResult, error)
 	DomainPool() *pgxpool.Pool
 	CoordinatorPool() (*pgxpool.Pool, error)
 	Close()
@@ -149,6 +154,15 @@ func (database *postgresSchedulerDatabase) RiverSchemaReady(
 // Policy locks and coordinator ledgers stay on CoordinatorPool; sync_runs,
 // sync_run_units, and FK-dependent provider inventory repair commit together
 // on the domain transaction.
+func (database *postgresSchedulerDatabase) PostureManifestLockstep(
+	ctx context.Context, binaryDigest string,
+) (postgres.PostureManifestLockstepResult, error) {
+	if database == nil || database.pools == nil || database.pools.Domain == nil {
+		return postgres.PostureManifestLockstepResult{}, errSchedulerActivationUnavailable
+	}
+	return postgres.CheckPostureManifestLockstep(ctx, database.pools.Domain, binaryDigest)
+}
+
 func (database *postgresSchedulerDatabase) DomainPool() *pgxpool.Pool {
 	if database == nil || database.pools == nil {
 		return nil
@@ -532,6 +546,7 @@ func buildSchedulerLoopWithSources(
 			"queue_postgres",
 			"coordinator_postgres",
 			"river_schema",
+			"posture_manifest_lockstep",
 			"scheduler_loop",
 			"execution_liveness",
 		); registerErr != nil {
@@ -575,6 +590,22 @@ func buildSchedulerLoopWithSources(
 			return database.RiverSchemaReady(ctx, cfg.RiverDatabaseSchema)
 		}),
 	); err != nil {
+		return nil, err
+	}
+	// CHAOS-5437: posture_manifest_lockstep refuses readiness the instant
+	// this binary's compiled-in posture manifest is older than what
+	// go-worker-migrate has applied -- see cmd/dev-health-worker's identical
+	// check for the full incident this closes.
+	postureGuard := postureguard.New(
+		"dev-health-scheduler", database.PostureManifestLockstep, postgres.PostureManifestDigest(),
+	)
+	if err := registry.RegisterRequired(
+		"posture_manifest_lockstep",
+		wrapSchedulerReadinessCheckWithLogging(logger, "posture_manifest_lockstep", postureGuard.Ready),
+	); err != nil {
+		return nil, err
+	}
+	if err := registry.RegisterMetrics("posture_manifest_lockstep", postureGuard); err != nil {
 		return nil, err
 	}
 	// CHAOS-3114: the sync handoff repository and occurrence reconciler run

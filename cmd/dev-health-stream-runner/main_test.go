@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/streamhandlers"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 )
@@ -60,6 +61,12 @@ type streamCommandStorage struct {
 
 func (*streamCommandStorage) ClickHouseReady(context.Context) error     { return nil }
 func (*streamCommandStorage) DomainPostgresReady(context.Context) error { return nil }
+
+func (*streamCommandStorage) PostureManifestLockstep(
+	context.Context, string,
+) (postgres.PostureManifestLockstepResult, error) {
+	return postgres.PostureManifestLockstepResult{Lockstep: true}, nil
+}
 func (storage *streamCommandStorage) ValkeyReady(context.Context) error { return storage.valkeyErr }
 func (storage *streamCommandStorage) Handler(kind streamHandlerKind, _ streamhandlers.ExternalIngestObserver) (streamrunner.Handler, error) {
 	if storage.handlerErr != nil {
@@ -99,7 +106,7 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		want := []string{"clickhouse", "domain_postgres", "stream_consumer", "valkey"}
+		want := []string{"clickhouse", "domain_postgres", "posture_manifest_lockstep", "stream_consumer", "valkey"}
 		if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 			t.Fatalf("readiness = %#v, want failed %v", status, want)
 		}

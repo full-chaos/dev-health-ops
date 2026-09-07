@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -54,6 +55,30 @@ func (failure dependencyFailure) DependencyReason() string { return failure.reas
 
 func dependencyUnavailable(reason string) error { return dependencyFailure{reason: reason} }
 
+// wrapStreamRunnerReadinessCheckWithLogging logs a failing check's own
+// bounded error text before returning it unchanged. health.Registry never
+// surfaces a CheckFunc's returned error anywhere (its own doc comment:
+// "Error text is deliberately never returned by the HTTP surface"), so a
+// check whose error carries real diagnostic detail -- like
+// postureguard.Guard.Ready's, which names both posture-manifest digests --
+// needs this to make that detail reach an operator at all. Mirrors
+// cmd/dev-health-scheduler's wrapSchedulerReadinessCheckWithLogging exactly;
+// not shared between the two binaries because neither imports the other's
+// package for a two-line helper.
+func wrapStreamRunnerReadinessCheckWithLogging(logger *slog.Logger, check string, ready health.CheckFunc) health.CheckFunc {
+	return func(ctx context.Context) error {
+		err := ready(ctx)
+		if err != nil && logger != nil {
+			logger.ErrorContext(ctx, "stream-runner readiness dependency check failed",
+				"error_category", "dependency_unavailable",
+				"check", check,
+				"error", err.Error(),
+			)
+		}
+		return err
+	}
+}
+
 type streamHandlerKind string
 
 const (
@@ -66,6 +91,10 @@ const (
 type streamStorage interface {
 	ClickHouseReady(context.Context) error
 	DomainPostgresReady(context.Context) error
+	// PostureManifestLockstep proves (CHAOS-5437) that binaryDigest -- this
+	// binary's own postgres.PostureManifestDigest() -- is no older than the
+	// posture manifest go-worker-migrate most recently applied.
+	PostureManifestLockstep(ctx context.Context, binaryDigest string) (postgres.PostureManifestLockstepResult, error)
 	ValkeyReady(context.Context) error
 	Handler(streamHandlerKind, streamhandlers.ExternalIngestObserver) (streamrunner.Handler, error)
 	NewTransport() (streamrunner.Transport, error)
@@ -179,6 +208,15 @@ func (storage *productionStreamStorage) DomainPostgresReady(ctx context.Context)
 		return errStreamDependencyUnavailable
 	}
 	return nil
+}
+
+func (storage *productionStreamStorage) PostureManifestLockstep(
+	ctx context.Context, binaryDigest string,
+) (postgres.PostureManifestLockstepResult, error) {
+	if storage == nil || storage.domainPool == nil {
+		return postgres.PostureManifestLockstepResult{}, errStreamDependencyUnavailable
+	}
+	return postgres.CheckPostureManifestLockstep(ctx, storage.domainPool, binaryDigest)
 }
 
 func (storage *productionStreamStorage) ValkeyReady(ctx context.Context) error {
@@ -325,6 +363,7 @@ func configureStreamRunnerDependenciesWithSources(
 			registry,
 			"clickhouse",
 			"domain_postgres",
+			"posture_manifest_lockstep",
 			"stream_consumer",
 			"valkey",
 		)
@@ -335,12 +374,32 @@ func configureStreamRunnerDependenciesWithSources(
 			storage.Close()
 		}
 	}()
+	// CHAOS-5437: posture_manifest_lockstep refuses readiness the instant
+	// this binary's compiled-in posture manifest is older than what
+	// go-worker-migrate has applied -- see cmd/dev-health-worker's identical
+	// check for the full incident this closes (three stream runners sat
+	// not_ready for 9h with no crash loop and no alert).
+	postureGuard := postureguard.New(
+		"dev-health-stream-runner", storage.PostureManifestLockstep, postgres.PostureManifestDigest(),
+	)
+	if err := registry.RegisterMetrics("posture_manifest_lockstep", postureGuard); err != nil {
+		return nil, err
+	}
 	storageChecks := []struct {
 		name  string
 		check health.CheckFunc
 	}{
 		{name: "clickhouse", check: storage.ClickHouseReady},
 		{name: "domain_postgres", check: storage.DomainPostgresReady},
+		// wrapStreamRunnerReadinessCheckWithLogging (codex review finding,
+		// CHAOS-5437 round 1): registering postureGuard.Ready directly left
+		// its formatted refusal -- naming both digests, "rebuild/redeploy
+		// this image" -- unreachable, since health.Registry never surfaces a
+		// CheckFunc's returned error anywhere (see cmd/dev-health-worker's
+		// identical logDependencyCheckFailure doc comment). Every OTHER
+		// binary's posture_manifest_lockstep check already logs; this one
+		// silently did not.
+		{name: "posture_manifest_lockstep", check: wrapStreamRunnerReadinessCheckWithLogging(logger, "posture_manifest_lockstep", postureGuard.Ready)},
 		{name: "valkey", check: storage.ValkeyReady},
 	}
 	streamConsumerConfigured := false

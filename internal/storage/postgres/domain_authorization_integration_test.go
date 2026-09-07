@@ -136,6 +136,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_instances (instance_id uuid PRIMARY KEY)",
+		"CREATE TABLE public.worker_posture_manifest_applied (manifest_digest text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now(), migrate_build text NOT NULL)",
 		"CREATE TABLE public.unrelated_semantic_table (id bigint PRIMARY KEY, state text)",
 		"CREATE TABLE public.alembic_version (version_num varchar(32) PRIMARY KEY)",
 		"CREATE SEQUENCE public.unrelated_sequence",
@@ -156,6 +157,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, INSERT ON TABLE public.daily_metrics_partition_recompute_events TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_instances TO " + authorizedDomainRole,
+		"GRANT SELECT ON TABLE public.worker_posture_manifest_applied TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_outbox, public.external_ingest_rejections TO " + authorizedDomainRole,
 		// CHAOS-5296: the native external-recompute drain claims and terminalizes
 		// these rows from the domain role, so UPDATE is now part of the posture.

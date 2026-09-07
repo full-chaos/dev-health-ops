@@ -572,6 +572,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		"CREATE TABLE public.worker_job_runs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_concurrency_leases (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.worker_instances (instance_id uuid PRIMARY KEY)",
+		"CREATE TABLE public.worker_posture_manifest_applied (manifest_digest text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now(), migrate_build text NOT NULL)",
 		`CREATE TABLE public.job_runs (
 			id uuid PRIMARY KEY, job_id uuid NOT NULL, status integer NOT NULL,
 			result json, triggered_by text NOT NULL, completed_at timestamptz,error text,

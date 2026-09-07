@@ -7,6 +7,12 @@ EXIT_FAILURE=10
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}" || exit "${EXIT_FAILURE}"
 
+# CHAOS-5362: the bare-binary River/worker/reconciler mechanism (build,
+# provisioning, daemon start + /readyz, sync seed/finalize, native-family
+# telemetry wait, teardown) is shared with ci/run_metrics_executed_proof.sh.
+# shellcheck source=ci/lib/go_worker_fixture.sh
+source "${ROOT_DIR}/ci/lib/go_worker_fixture.sh"
+
 PYTHONPATH="${ROOT_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONPATH
 
@@ -272,31 +278,89 @@ E2E_ORG_ID="11111111-2222-4333-8444-555555555555"
 READINESS_ATTEMPTS="${LIVE_E2E_READINESS_ATTEMPTS:-90}"
 READINESS_SLEEP_SECS="${LIVE_E2E_READINESS_SLEEP_SECS:-2}"
 
+# CHAOS-5362: bare-binary Go worker/reconciler config (ci/lib/go_worker_
+# fixture.sh). Same defaults as ci/run_metrics_executed_proof.sh's own
+# Postgres/River settings -- both jobs' service containers use the same
+# postgres/postgres/test_db credentials (see .github/workflows/live-e2e.yml).
+POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+POSTGRES_SUPERUSER="${POSTGRES_SUPERUSER:-postgres}"
+POSTGRES_SUPERUSER_PASSWORD="${POSTGRES_SUPERUSER_PASSWORD:-postgres}"
+POSTGRES_DB="${POSTGRES_DB:-test_db}"
+POSTGRES_SUPERUSER_URI="${POSTGRES_URI}"
+
+CLICKHOUSE_URI_HTTP="${CLICKHOUSE_URI}"
+CLICKHOUSE_NATIVE_PORT="${CLICKHOUSE_NATIVE_PORT:-9000}"
+# Go's clickhouse-go speaks the native wire protocol, not Python's
+# clickhouse-connect HTTP port -- see start_worker_stack's own comment.
+CLICKHOUSE_URI_NATIVE="clickhouse://ch:ch@127.0.0.1:${CLICKHOUSE_NATIVE_PORT}/default"
+
+VALKEY_HOST="${LIVE_E2E_VALKEY_HOST:-127.0.0.1}"
+VALKEY_PORT="${LIVE_E2E_VALKEY_PORT:-6379}"
+
+RIVER_DOMAIN_ROLE="devhealth_domain"
+RIVER_QUEUE_ROLE="devhealth_queue"
+RIVER_COORDINATOR_ROLE="devhealth_coordinator"
+RIVER_DOMAIN_PASSWORD="devhealth_domain"
+RIVER_QUEUE_PASSWORD="devhealth_queue"
+RIVER_COORDINATOR_PASSWORD="devhealth_coordinator"
+
+WORKER_OPERATIONAL_BRIDGE_TOKEN="${WORKER_OPERATIONAL_BRIDGE_TOKEN:-ci-live-e2e-bridge-token}"
+# CHAOS-5362: previously only ever read inline as
+# "${SETTINGS_ENCRYPTION_KEY:-dev-key-not-for-prod}" (never actually
+# assigned as a shell variable) -- start_worker_stack's plain `export
+# SETTINGS_ENCRYPTION_KEY` needs it to actually be set under `set -u`.
+SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY:-dev-key-not-for-prod}"
+WORKER_HTTP_PORT="${LIVE_E2E_WORKER_PORT:-18085}"
+RECONCILER_HTTP_PORT="${LIVE_E2E_RECONCILER_PORT:-18086}"
+
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/live-backend-e2e.XXXXXX")"
+# CHAOS-5362: BIN_DIR for the Go binaries build_go_binaries builds.
+BIN_DIR="${TMP_DIR}/bin"
+mkdir -p "${BIN_DIR}"
 API_LOG_FILE="${LIVE_E2E_API_LOG_FILE:-${TMP_DIR}/api.log}"
 API_PID=""
+WORKER_PID=""
+RECONCILER_PID=""
 
+# CHAOS-5025 (shared teardown bound): see validate_teardown_wait_secs /
+# stop_worker_stack in ci/lib/go_worker_fixture.sh.
+TEARDOWN_WAIT_SECS="${LIVE_E2E_TEARDOWN_WAIT_SECS:-60}"
+validate_teardown_wait_secs
+
+# CHAOS-5362: this cleanup() now tears down 3 background daemons (api,
+# worker, reconciler) via stop_worker_stack + a direct stop_service for the
+# api, not just the original single API_PID -- so it adopts the same
+# re-entrancy-safe trap discipline ci/run_metrics_executed_proof.sh already
+# needed for the identical shape (codex r2/r3 findings there): a second
+# signal arriving mid-teardown can re-enter cleanup() on bash's
+# function-return path (`pop_var_context: head of shell_variables not a
+# function context`), and a trapped INT/TERM RESUMES the script rather than
+# exiting it, so a cancelled run would otherwise tear down services, delete
+# TMP_DIR, and then keep executing the harness against nothing.
+CLEANUP_DONE=""
 cleanup() {
   local rc=$?
-  if [ -n "${API_PID}" ] && kill -0 "${API_PID}" >/dev/null 2>&1; then
-    kill "${API_PID}" >/dev/null 2>&1 || true
-    wait "${API_PID}" >/dev/null 2>&1 || true
+  if [ -n "${CLEANUP_DONE}" ]; then
+    return "${rc}"
   fi
+  CLEANUP_DONE=1
+  trap '' INT TERM
+  # Kill ORDER is load-bearing (CHAOS-5025): dev-health-worker is the API's
+  # only client (--operational-bridge-url), so the API must be signalled
+  # LAST -- stop_worker_stack drains worker then reconciler; the api stops
+  # here, directly, afterward.
+  stop_worker_stack
+  stop_service "dev-hops api" "${API_PID}"
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
   return "${rc}"
 }
-
-# CHAOS-5320 confirmation-round F5: a signal trap only fires once bash
-# resumes the interpreter loop -- it does NOT terminate the script on its
-# own. A single `trap cleanup EXIT INT TERM` cleaned up correctly on INT/TERM
-# but then let execution CONTINUE against the just-deleted TMP_DIR instead of
-# exiting. Route INT/TERM through their own handler that disarms every trap,
-# cleans up once, then re-raises the signal against itself so bash's default
-# disposition actually terminates the process (exit code 128+signum).
 on_signal() {
-  trap - EXIT INT TERM
+  local sig="$1"
   cleanup
-  kill -s "$1" "$$"
+  trap - EXIT
+  trap - "${sig}"
+  kill -"${sig}" "$$"
 }
 trap cleanup EXIT
 trap 'on_signal INT' INT
@@ -426,17 +490,25 @@ wait_for_ready() {
 echo "==> waiting for Valkey readiness"
 wait_for_redis
 
-# FIXTURE-BACKED, NOT PIPELINE PROOF (CHAOS-4266): --with-metrics writes
+# CHAOS-5362 (team-lead ruling): Python `--with-metrics`/`--with-work-graph`
+# compute seeding is REMOVED from this gate entirely. It used to write
 # derived metric rows (repo_metrics_daily, team_metrics_daily, ...) directly
-# into ClickHouse via the fixture sink, bypassing sync -> metrics.daily_dispatch
-# -> the Go/Python bridge -> job_daily.py entirely. The assertions below (health/
-# meta/home) only prove the API can read those pre-seeded rows back -- they do
-# NOT exercise the metrics compute pipeline, and this job's own trigger/dispatch
-# path can be completely dead while these checks stay green (CHAOS-4263 and
-# CHAOS-4264 both did exactly that for a week, undetected). For real
-# executed-proof of the metrics pipeline, see the `metrics-executed-proof` job
-# in .github/workflows/live-e2e.yml and ci/assert_metrics_executed_proof.py.
-echo "==> generating deterministic ClickHouse fixtures (metrics + work graph) â€” FIXTURE-BACKED, not pipeline proof"
+# into ClickHouse via the fixture sink, bypassing sync ->
+# metrics.daily_dispatch -> the Go/Python bridge -> job_daily.py entirely --
+# fixture-backed readback, never pipeline proof, and increasingly a SILENT
+# NO-OP as families' Python compute is deleted one by one (CHAOS-4263/4264
+# ran undetected on this exact gap for a week: every existing check asserted
+# a job RAN rather than that it produced real rows via the real path;
+# #2335's repos_covered_pct=0.0 failure is the same class of bug surfacing
+# again). Kept below: the base `fixtures generate` call, for its raw
+# git_commits/PR/team data only -- team_wellbeing/cicd/deploy/incident and
+# every other native-only family now get their rows from the real Go worker
+# pipeline further down (seed_and_finalize_sync_targets /
+# wait_for_native_family_telemetry, ci/lib/go_worker_fixture.sh), not from
+# Python compute of any kind. For real executed-proof of the metrics
+# pipeline generally, see the `metrics-executed-proof` job in
+# .github/workflows/live-e2e.yml and ci/assert_metrics_executed_proof.py.
+echo "==> generating deterministic ClickHouse fixtures (raw git/PR/team data only)"
 (
   export ORG_ID="${E2E_ORG_ID}"
   unset POSTGRES_URI
@@ -450,9 +522,7 @@ echo "==> generating deterministic ClickHouse fixtures (metrics + work graph) â€
     --days "${FIXTURE_DAYS}" \
     --commits-per-day "${FIXTURE_COMMITS_PER_DAY}" \
     --pr-count "${FIXTURE_PR_COUNT}" \
-    --seed "${FIXTURE_SEED}" \
-    --with-metrics \
-    --with-work-graph
+    --seed "${FIXTURE_SEED}"
 )
 
 echo "==> migrating PostgreSQL for internal credential lifecycle coverage"
@@ -479,6 +549,12 @@ echo "==> starting API at ${BASE_URL}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI}"
   export POSTGRES_URI="${POSTGRES_URI}"
   export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
+  # CHAOS-5362: the Go worker started below authenticates its operational-
+  # bridge calls back into this API with this shared token (--operational-
+  # bridge-allow-insecure=true, start_worker_stack) -- the API must know the
+  # same value to accept them, same as ci/run_metrics_executed_proof.sh's
+  # own API-start block.
+  export WORKER_OPERATIONAL_BRIDGE_TOKEN="${WORKER_OPERATIONAL_BRIDGE_TOKEN}"
   exec_dev_hops \
     --db "${POSTGRES_URI}" \
     --analytics-db "${CLICKHOUSE_URI}" \
@@ -488,6 +564,57 @@ API_PID="$!"
 
 echo "==> waiting for readiness"
 wait_for_ready
+
+# CHAOS-5362: drive the real Go dispatch/compute pipeline for every family
+# whose Python compute is deleted, now that the --with-metrics/
+# --with-work-graph fixture-direct write is removed entirely (see the
+# comment above the fixtures-generate call).
+#
+# Reuses ci/run_metrics_executed_proof.sh's own mechanism (ci/lib/go_worker_
+# fixture.sh): build the Go binaries, provision River against this job's
+# throwaway Postgres, start dev-health-worker + dev-health-reconciler
+# pointed at the API already running above (its --operational-bridge-url),
+# seed real source rows through the real sync path for cicd/deployments/
+# incidents/tests, finalize those sync_runs (triggering the real post-sync
+# fanout -> metrics.daily_dispatch/daily_partition River jobs), and confirm
+# via the worker's own /metrics endpoint that the rows came from the native
+# executor, not a fail-open fallback (there is none left for these families).
+#
+# RISK-NOTE (CHAOS-5362): WORKER_REMAINING_COMPLEXITY_CONFIG_PATH does not
+# exist on main today -- it is introduced by unmerged PR #2334
+# (chaos-4291-complexity-native-rebuilt). This gate does not select the
+# "remaining metrics" queue family that flag gates, so its absence here does
+# not affect this job. Whichever of #2334 or this PR lands second must add
+# the line exporting WORKER_REMAINING_COMPLEXITY_CONFIG_PATH (pointed at
+# src/dev_health_ops/config/complexity.yaml) to start_worker_stack's exported
+# env in ci/lib/go_worker_fixture.sh, once both are on main and this job
+# picks up a queue that needs it.
+echo "==> [CHAOS-5362] building the Go worker/reconciler binaries and provisioning River"
+build_go_binaries
+migrate_and_assert_river
+provision_river
+
+WORKER_LOG_FILE="${LIVE_E2E_WORKER_LOG_FILE:-${TMP_DIR}/worker.log}"
+RECONCILER_LOG_FILE="${LIVE_E2E_RECONCILER_LOG_FILE:-${TMP_DIR}/reconciler.log}"
+start_worker_stack "${WORKER_LOG_FILE}" "${RECONCILER_LOG_FILE}"
+
+RUN_START="$(run_python -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
+echo "==> [CHAOS-5362] seeding real source rows through the real sync path, run_start=${RUN_START}"
+ORG_ID="${E2E_ORG_ID}" REPO_NAME="${FIXTURE_REPO_NAME}" BACKFILL_DAYS="${FIXTURE_DAYS}" \
+  seed_and_finalize_sync_targets cicd deployments incidents tests
+
+echo "==> [CHAOS-5362] confirming the native Go executors (not a Python fail-open) computed these rows"
+# Reachable subset only (same causal-satisfaction rule as
+# ci/run_metrics_executed_proof.sh's own NATIVE_TELEMETRY_FAMILIES): the four
+# sync targets seeded above causally satisfy cicd/deploy/incident.
+# team_wellbeing/repo_user_commit are causally satisfied by the git_commits
+# the base fixtures-generate call above already wrote (that call does not
+# pass --team-count, so commits may resolve to the "unassigned" bucket
+# rather than a named team -- fine for this check, which only proves the
+# native executor ran, not which team it attributed to). benchmarking is NOT
+# included -- it needs a complexity-scan seed step this job does not
+# perform, same exclusion reason as executed-proof's team_complexity.
+wait_for_native_family_telemetry team_wellbeing repo_user_commit cicd deploy incident
 
 echo "==> generating auth token for authenticated endpoints"
 AUTH_TOKEN="$(generate_auth_token)"
@@ -502,11 +629,16 @@ META_FILE="${TMP_DIR}/meta.json"
 fetch_json "/api/v1/meta" "${META_FILE}" "200"
 run_python "${PY_PROGRAM_DIR}/assert_meta.py" "${META_FILE}"
 
-# FIXTURE-BACKED, NOT PIPELINE PROOF (CHAOS-4266): asserts the API can read
-# back the rows --with-metrics wrote directly above. Does not exercise sync,
-# dispatch, or the job_daily.py/bridge compute path -- see the comment on the
-# fixture-generation step above.
-echo "==> validating /api/v1/home (fixture-backed readback, not metrics-pipeline proof)"
+# CHAOS-5362: repos_covered_pct (backed by repo_metrics_daily, written by
+# the native repo_user_commit executor) is now REAL pipeline proof, not
+# fixture-backed -- it reads back rows the seed_and_finalize_sync_targets /
+# start_worker_stack pipeline above actually produced via the real Go
+# worker. prs_linked_to_issues_pct/issues_with_cycle_states_pct (backed by
+# work_item_cycle_times) are NOT covered by that pipeline and previously
+# came from the now-removed --with-metrics call's Python compute; their
+# current provenance after that removal was not re-verified here (RISK:
+# assert_home.py may need updating if those two fields regress in CI).
+echo "==> validating /api/v1/home"
 HOME_FILE="${TMP_DIR}/home.json"
 fetch_json "/api/v1/home" "${HOME_FILE}" "200"
 run_python "${PY_PROGRAM_DIR}/assert_home.py" "${HOME_FILE}"

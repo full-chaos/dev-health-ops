@@ -2,7 +2,6 @@
   "source": "dev_health_ops.metrics.forecast.forecast_throughput_capacity",
   "generator": "tests/fixtures/generate_throughput_forecast_golden.py",
   "ticket": "CHAOS-5349",
-  "python": "3.14.7",
   "note": "forecast_id and computed_at are excluded from every case: both are volatile per call (uuid4 / wall clock) on both sides and belong to the resolver rather than the kernel.",
   "cases": [
     {

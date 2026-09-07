@@ -41,8 +41,21 @@ The cases exist to pin behaviours a tidier port would "fix":
   normalisation. Case 8 has two active overlays whose raw values order the
   opposite way from their scores.
 
-Run: python3 tests/fixtures/generate_throughput_forecast_golden.py > \
-    tests/fixtures/throughput_forecast_golden.json
+Run:
+    uv run python tests/fixtures/generate_throughput_forecast_golden.py [--stdout]
+
+--stdout and the OUTPUT_PATH declaration below are what make this generator
+DISCOVERABLE by internal/jobs/workgraph/units's
+TestEveryDiscoverableCorpusStillMatchesLivePython, which re-runs every generator
+under tests/fixtures/ against the deployed interpreter and byte-compares the
+result with the committed corpus. Without both, this corpus would land on that
+guard's undiscoverable list and count against its ratchet -- a rot surface the
+ratchet exists to shrink, not to grow.
+
+Nothing interpreter-specific is emitted for the same reason: the guard's
+comparison is byte-for-byte, so a version string or a path in the payload would
+make the corpus fail the moment CI's Python differs from the machine that
+generated it.
 """
 
 from __future__ import annotations
@@ -50,6 +63,7 @@ from __future__ import annotations
 import json
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 from dev_health_ops.metrics.compute_capacity import ThroughputHistory, ThroughputSample
@@ -58,6 +72,8 @@ from dev_health_ops.metrics.forecast import (
     compute_rolling_windows,
     forecast_throughput_capacity,
 )
+
+OUTPUT_PATH = Path(__file__).parent / "throughput_forecast_golden.json"
 
 # Anchor day. Nothing in this kernel reads the clock -- forecast_id and
 # computed_at are the only wall-clock outputs and both are excluded below -- so
@@ -466,25 +482,32 @@ def main() -> None:
         },
     }
 
-    json.dump(
-        {
-            "source": "dev_health_ops.metrics.forecast.forecast_throughput_capacity",
-            "generator": "tests/fixtures/generate_throughput_forecast_golden.py",
-            "ticket": "CHAOS-5349",
-            "python": sys.version.split()[0],
-            "note": (
-                "forecast_id and computed_at are excluded from every case: both "
-                "are volatile per call (uuid4 / wall clock) on both sides and "
-                "belong to the resolver rather than the kernel."
-            ),
-            "cases": cases,
-            "resolver_paths": [no_history],
-        },
-        sys.stdout,
-        indent=2,
-        sort_keys=False,
-    )
-    sys.stdout.write("\n")
+    payload = {
+        "source": "dev_health_ops.metrics.forecast.forecast_throughput_capacity",
+        "generator": "tests/fixtures/generate_throughput_forecast_golden.py",
+        "ticket": "CHAOS-5349",
+        "note": (
+            "forecast_id and computed_at are excluded from every case: both "
+            "are volatile per call (uuid4 / wall clock) on both sides and "
+            "belong to the resolver rather than the kernel."
+        ),
+        "cases": cases,
+        "resolver_paths": [no_history],
+    }
+
+    # allow_nan=False is a guard, not a formality: a division that produced inf
+    # or nan would otherwise be serialised as a bare `Infinity` token, which is
+    # not valid JSON and which Go's decoder rejects -- so the corpus would look
+    # fine here and fail only in the port's test.
+    rendered = json.dumps(payload, indent=2, sort_keys=False, allow_nan=False) + "\n"
+    if "--stdout" in sys.argv[1:]:
+        sys.stdout.write(rendered)
+        return
+
+    OUTPUT_PATH.write_text(rendered)
+    print(f"wrote {OUTPUT_PATH}")
+    print(f"  kernel cases:   {len(cases)}")
+    print("  resolver paths: 1 (no-history payload)")
 
 
 if __name__ == "__main__":

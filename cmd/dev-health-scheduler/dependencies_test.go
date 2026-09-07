@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +16,60 @@ import (
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// TestWrapSchedulerReadinessCheckWithLoggingLogsCheckAndError is the
+// scheduler's CHAOS-5435 regression test: health.Registry never surfaces a
+// CheckFunc's returned error anywhere, so before this wrapper existed a
+// scheduler readiness refusal reached an operator as a bare check name with
+// no reason logged. The wrapper must log the check name and the underlying
+// error's text, and still pass the original error through unchanged.
+func TestWrapSchedulerReadinessCheckWithLoggingLogsCheckAndError(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	wantErr := errors.New("role posture refused for devhealth_domain")
+	check := wrapSchedulerReadinessCheckWithLogging(logger, "domain_postgres", func(context.Context) error {
+		return wantErr
+	})
+	if err := check(context.Background()); !errors.Is(err, wantErr) {
+		t.Fatalf("check() error = %v, want %v", err, wantErr)
+	}
+	line := logs.String()
+	if !strings.Contains(line, "check=domain_postgres") {
+		t.Errorf("log line missing check=domain_postgres: %s", line)
+	}
+	if !strings.Contains(line, wantErr.Error()) {
+		t.Errorf("log line missing underlying error %q: %s", wantErr.Error(), line)
+	}
+}
+
+// TestWrapSchedulerReadinessCheckWithLoggingSkipsLoggingOnSuccess proves a
+// passing check stays silent -- readiness is re-evaluated on every scrape,
+// so logging every success would turn one healthy replica into ERROR-rate
+// noise.
+func TestWrapSchedulerReadinessCheckWithLoggingSkipsLoggingOnSuccess(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	check := wrapSchedulerReadinessCheckWithLogging(logger, "domain_postgres", func(context.Context) error { return nil })
+	if err := check(context.Background()); err != nil {
+		t.Fatalf("check() error = %v", err)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("unexpected log line on a passing check: %s", logs.String())
+	}
+}
+
+// TestWrapSchedulerReadinessCheckWithLoggingNilLoggerNeverPanics proves the
+// wrapper degrades to a plain pass-through, not a nil-pointer panic, when no
+// logger was ever configured.
+func TestWrapSchedulerReadinessCheckWithLoggingNilLoggerNeverPanics(t *testing.T) {
+	wantErr := errors.New("boom")
+	check := wrapSchedulerReadinessCheckWithLogging(nil, "domain_postgres", func(context.Context) error {
+		return wantErr
+	})
+	if err := check(context.Background()); !errors.Is(err, wantErr) {
+		t.Fatalf("check() error = %v, want %v", err, wantErr)
+	}
+}
 
 type schedulerHandoffStepperFunc func(
 	context.Context,

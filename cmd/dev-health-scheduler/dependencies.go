@@ -69,6 +69,31 @@ func openSchedulerDatabase(ctx context.Context, cfg config.Config) (schedulerDat
 	}, nil
 }
 
+// wrapSchedulerReadinessCheckWithLogging is domain_postgres/queue_postgres/
+// coordinator_postgres/river_schema's single reporting path (CHAOS-5435),
+// the scheduler's counterpart of the same-named helper in
+// cmd/dev-health-worker and cmd/dev-health-reconciler's dependencies.go.
+// health.Registry never surfaces a CheckFunc's returned error anywhere
+// (registry.go: "Error text is deliberately never returned by the HTTP
+// surface"), so a scheduler readiness refusal used to reach an operator as
+// a bare check name with no reason logged anywhere in the process. The
+// wrapped Ready methods already document that they never expose catalog or
+// driver connection material, so logging the returned error's text here is
+// safe.
+func wrapSchedulerReadinessCheckWithLogging(logger *slog.Logger, check string, ready health.CheckFunc) health.CheckFunc {
+	return func(ctx context.Context) error {
+		err := ready(ctx)
+		if err != nil && logger != nil {
+			logger.ErrorContext(ctx, "scheduler readiness dependency check failed",
+				"error_category", "dependency_unavailable",
+				"check", check,
+				"error", err.Error(),
+			)
+		}
+		return err
+	}
+}
+
 func (database *postgresSchedulerDatabase) DomainReady(ctx context.Context) error {
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return errSchedulerActivationUnavailable
@@ -526,20 +551,29 @@ func buildSchedulerLoopWithSources(
 			database.Close()
 		}
 	}()
-	if err := registry.RegisterRequired("domain_postgres", database.DomainReady); err != nil {
+	if err := registry.RegisterRequired(
+		"domain_postgres",
+		wrapSchedulerReadinessCheckWithLogging(logger, "domain_postgres", database.DomainReady),
+	); err != nil {
 		return nil, err
 	}
-	if err := registry.RegisterRequired("queue_postgres", database.QueueReady); err != nil {
+	if err := registry.RegisterRequired(
+		"queue_postgres",
+		wrapSchedulerReadinessCheckWithLogging(logger, "queue_postgres", database.QueueReady),
+	); err != nil {
 		return nil, err
 	}
-	if err := registry.RegisterRequired("coordinator_postgres", database.CoordinatorReady); err != nil {
+	if err := registry.RegisterRequired(
+		"coordinator_postgres",
+		wrapSchedulerReadinessCheckWithLogging(logger, "coordinator_postgres", database.CoordinatorReady),
+	); err != nil {
 		return nil, err
 	}
 	if err := registry.RegisterRequired(
 		"river_schema",
-		func(ctx context.Context) error {
+		wrapSchedulerReadinessCheckWithLogging(logger, "river_schema", func(ctx context.Context) error {
 			return database.RiverSchemaReady(ctx, cfg.RiverDatabaseSchema)
-		},
+		}),
 	); err != nil {
 		return nil, err
 	}

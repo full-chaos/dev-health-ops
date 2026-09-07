@@ -1638,6 +1638,7 @@ func (dependencies *workerDependencies) domainReady(ctx context.Context) error {
 		return errWorkerDependencyUnavailable
 	}
 	if err := dependencies.database.DomainReady(ctx); err != nil {
+		dependencies.logDependencyCheckFailure(ctx, "domain_postgres", err)
 		return errWorkerDependencyUnavailable
 	}
 	return nil
@@ -1648,9 +1649,35 @@ func (dependencies *workerDependencies) queueReady(ctx context.Context) error {
 		return errWorkerDependencyUnavailable
 	}
 	if err := dependencies.database.QueueReady(ctx); err != nil {
+		dependencies.logDependencyCheckFailure(ctx, "queue_postgres", err)
 		return errWorkerDependencyUnavailable
 	}
 	return nil
+}
+
+// logDependencyCheckFailure is domainReady/queueReady/riverSchemaReady/
+// idempotencyBackendReady's single reporting path (CHAOS-5435). health.Registry
+// never surfaces a CheckFunc's returned error anywhere (registry.go:
+// "Error text is deliberately never returned by the HTTP surface") -- before
+// this existed, all four checks collapsed into the same opaque
+// errWorkerDependencyUnavailable, so an operator saw only
+// failed_checks=domain_postgres with nothing anywhere saying why. That cost
+// a real incident a 60+ minute crash loop diagnosed by check NAME alone: the
+// underlying cause (a stale binary's posture manifest disagreeing with a
+// freshly migrated grant) was invisible until someone diffed binaries by
+// hand. err is always this package's own postgres.Check*Authorization /
+// postgres.*Ready / selfprobe result, each of which already documents that
+// it never exposes catalog or driver connection material, so its text is
+// safe to log directly here.
+func (dependencies *workerDependencies) logDependencyCheckFailure(ctx context.Context, check string, err error) {
+	if dependencies == nil || dependencies.logger == nil || err == nil {
+		return
+	}
+	dependencies.logger.ErrorContext(ctx, "worker readiness dependency check failed",
+		"error_category", "dependency_unavailable",
+		"check", check,
+		"error", err.Error(),
+	)
 }
 
 // idempotencyBackendReady is the idempotency_backend check's CheckFunc (see
@@ -1663,6 +1690,7 @@ func (dependencies *workerDependencies) idempotencyBackendReady(ctx context.Cont
 		return errWorkerDependencyUnavailable
 	}
 	if err := selfprobe.Once(ctx, dependencies.database.DomainTxOpener()); err != nil {
+		dependencies.logDependencyCheckFailure(ctx, "idempotency_backend", err)
 		return errWorkerDependencyUnavailable
 	}
 	return nil
@@ -1698,6 +1726,7 @@ func (dependencies *workerDependencies) riverSchemaReady(schema string) health.C
 			return errWorkerDependencyUnavailable
 		}
 		if err := dependencies.database.RiverSchemaReady(ctx, schema); err != nil {
+			dependencies.logDependencyCheckFailure(ctx, "river_schema", err)
 			return errWorkerDependencyUnavailable
 		}
 		return nil

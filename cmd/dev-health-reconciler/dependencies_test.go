@@ -733,6 +733,50 @@ func TestReconcilerPoolReadinessErrorsAreCollapsed(t *testing.T) {
 	}
 }
 
+// TestReconcilerReadinessCheckFailuresLogTheCheckNameAndUnderlyingError is
+// the reconciler counterpart of the worker's CHAOS-5435 regression test:
+// domainReady/queueReady/coordinatorReady/riverSchemaReady all used to
+// discard the real error and return the same opaque
+// errReconcilerDependencyUnavailable, so a readiness refusal reached an
+// operator as a bare check name with nothing anywhere saying why.
+func TestReconcilerReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
+	database := &fakeReconcilerDatabase{
+		domainErr:      errors.New("role posture refused for devhealth_domain"),
+		queueErr:       errors.New("role posture refused for devhealth_queue"),
+		coordinatorErr: errors.New("role posture refused for devhealth_coordinator"),
+		schemaErr:      errors.New("river schema not migrated"),
+	}
+	var logs bytes.Buffer
+	dependencies := &reconcilerDependencies{
+		database: database,
+		logger:   slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+
+	cases := []struct {
+		name string
+		run  func() error
+		want error
+	}{
+		{"domain_postgres", func() error { return dependencies.domainReady(context.Background()) }, database.domainErr},
+		{"queue_postgres", func() error { return dependencies.queueReady(context.Background()) }, database.queueErr},
+		{"coordinator_postgres", func() error { return dependencies.coordinatorReady(context.Background()) }, database.coordinatorErr},
+		{"river_schema", func() error { return dependencies.riverSchemaReady("river")(context.Background()) }, database.schemaErr},
+	}
+	for _, testCase := range cases {
+		logs.Reset()
+		if err := testCase.run(); !errors.Is(err, errReconcilerDependencyUnavailable) {
+			t.Fatalf("%s: error = %v, want errReconcilerDependencyUnavailable", testCase.name, err)
+		}
+		line := logs.String()
+		if !strings.Contains(line, "check="+testCase.name) {
+			t.Errorf("%s: log line missing check=%s: %s", testCase.name, testCase.name, line)
+		}
+		if !strings.Contains(line, testCase.want.Error()) {
+			t.Errorf("%s: log line missing underlying error %q: %s", testCase.name, testCase.want.Error(), line)
+		}
+	}
+}
+
 func TestReconcilerRouteFenceDriftClosesOnlyRouteFenceReadiness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	// See TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder's identical

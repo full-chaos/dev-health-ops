@@ -1166,6 +1166,67 @@ func TestPoolReadinessErrorsAreCollapsedToStableFailure(t *testing.T) {
 	}
 }
 
+// TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError is the
+// regression test for CHAOS-5435: before this fix, domainReady/queueReady/
+// riverSchemaReady/idempotencyBackendReady all discarded the real error and
+// returned the same opaque errWorkerDependencyUnavailable, so an operator
+// saw only failed_checks=domain_postgres with no reason logged anywhere --
+// exactly what turned a stale-binary posture mismatch into a 60+ minute
+// crash loop. Each check must now log its own check name plus the
+// underlying error's text before returning the sentinel.
+func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
+	database := &fakeWorkerDatabase{
+		domainErr: errors.New("role posture refused for devhealth_domain"),
+		queueErr:  errors.New("role posture refused for devhealth_queue"),
+		schemaErr: errors.New("river schema not migrated"),
+	}
+	database.setTxOpenerErr(errors.New("begin failed: connection reset"))
+
+	var logs bytes.Buffer
+	dependencies := &workerDependencies{
+		database: database,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+
+	cases := []struct {
+		name    string
+		run     func() error
+		wantErr string
+	}{
+		{"domain_postgres", func() error { return dependencies.domainReady(context.Background()) }, database.domainErr.Error()},
+		{"queue_postgres", func() error { return dependencies.queueReady(context.Background()) }, database.queueErr.Error()},
+		{"river_schema", func() error { return dependencies.riverSchemaReady("river")(context.Background()) }, database.schemaErr.Error()},
+		{"idempotency_backend", func() error { return dependencies.idempotencyBackendReady(context.Background()) }, "begin probe transaction: unavailable"},
+	}
+	for _, testCase := range cases {
+		logs.Reset()
+		if err := testCase.run(); !errors.Is(err, errWorkerDependencyUnavailable) {
+			t.Fatalf("%s: error = %v, want errWorkerDependencyUnavailable", testCase.name, err)
+		}
+		var record map[string]any
+		if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
+			t.Fatalf("%s: log line is not JSON (%v): %s", testCase.name, err, logs.String())
+		}
+		if record["check"] != testCase.name {
+			t.Errorf("%s: log check = %v, want %q", testCase.name, record["check"], testCase.name)
+		}
+		if record["error"] != testCase.wantErr {
+			t.Errorf("%s: log error = %v, want %q", testCase.name, record["error"], testCase.wantErr)
+		}
+	}
+}
+
+// TestReadinessCheckWithNoLoggerNeverPanics proves logDependencyCheckFailure
+// is a no-op, not a nil-pointer panic, when no logger was ever configured --
+// the same shape TestPoolReadinessErrorsAreCollapsedToStableFailure already
+// exercises for a *workerDependencies built with zero logger.
+func TestReadinessCheckWithNoLoggerNeverPanics(t *testing.T) {
+	dependencies := &workerDependencies{database: &fakeWorkerDatabase{domainErr: errors.New("boom")}}
+	if err := dependencies.domainReady(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("domainReady() error = %v", err)
+	}
+}
+
 type fakeWorkerDatabase struct {
 	domainErr            error
 	queueErr             error

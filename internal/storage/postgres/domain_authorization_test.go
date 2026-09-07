@@ -52,6 +52,13 @@ func TestDomainAuthorizationRejectsMissingOrUnavailablePool(t *testing.T) {
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("CheckDomainAuthorization() error = %v", err)
 	}
+	// CHAOS-5435: a query that never ran at all (this is one -- the dial
+	// itself times out) is a driver/connectivity incident, never a posture
+	// refusal. ErrPostureRefused must stay reserved for a query that
+	// actually completed and answered "no."
+	if errors.Is(err, ErrPostureRefused) {
+		t.Fatalf("CheckDomainAuthorization() incorrectly classified a connection failure as ErrPostureRefused: %v", err)
+	}
 	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), config.URI) {
 		t.Fatalf("authorization readiness exposed connection material: %v", err)
 	}

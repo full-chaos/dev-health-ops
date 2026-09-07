@@ -73,6 +73,7 @@ from dev_health_ops.sync.budget_types import (
 )
 from dev_health_ops.sync.dispatch_outbox import OUTBOX_KIND_DISPATCH
 from tests._helpers import (
+    freeze_dispatch_clock,
     pin_provider_unit_routability,
     seed_sync_dispatch_transport_routes,
 )
@@ -221,6 +222,10 @@ def test_sibling_units_deferred_during_active_cooldown(db_session, monkeypatch):
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+    # CHAOS budget_guard_cooldown wall-clock flake: pin dispatch's own
+    # internal `now` to this test's `now` so the 0.5s tolerance below checks
+    # the cooldown math, not how much real time the dispatch call took.
+    freeze_dispatch_clock(monkeypatch, now)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -393,6 +398,9 @@ def test_ambiguous_attribution_falls_back_to_dimension_gating(db_session, monkey
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+    # CHAOS budget_guard_cooldown wall-clock flake: see the sibling-deferral
+    # test above -- pin dispatch's internal `now` to this test's `now`.
+    freeze_dispatch_clock(monkeypatch, now)
 
     sync_units.dispatch_sync_run(str(run.id))
 
@@ -722,6 +730,9 @@ def test_next_deferred_at_rearms_redispatch(db_session, monkeypatch):
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+    # CHAOS budget_guard_cooldown wall-clock flake: see
+    # test_sibling_units_deferred_during_active_cooldown above.
+    freeze_dispatch_clock(monkeypatch, now)
 
     sync_units.dispatch_sync_run(str(run.id))
 
@@ -774,7 +785,8 @@ def test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibli
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
 
-    reset_at = datetime.now(timezone.utc) + timedelta(seconds=180)
+    now = datetime.now(timezone.utc)
+    reset_at = now + timedelta(seconds=180)
     real_reconfirm = BudgetGuard.reconfirm_cooldowns
 
     def _reconfirm_after_concurrent_commit(*args, **kwargs):
@@ -798,6 +810,11 @@ def test_concurrent_observation_between_enforce_run_and_claim_still_defers_sibli
         "reconfirm_cooldowns",
         staticmethod(_reconfirm_after_concurrent_commit),
     )
+    # CHAOS budget_guard_cooldown wall-clock flake: pin dispatch's internal
+    # `now` to the same instant `reset_at` was derived from, so the
+    # available_at tolerance below checks the clamp math, not real elapsed
+    # time through the dispatch call.
+    freeze_dispatch_clock(monkeypatch, now)
 
     result = sync_units.dispatch_sync_run(str(run.id))
 
@@ -1029,7 +1046,8 @@ def test_late_reconfirm_match_short_reset_window_defers_with_full_bookkeeping(
     db_session.add(second)
     db_session.flush()
 
-    reset_at = datetime.now(timezone.utc) + timedelta(seconds=90)
+    now = datetime.now(timezone.utc)
+    reset_at = now + timedelta(seconds=90)
     real_reconfirm = BudgetGuard.reconfirm_cooldowns
 
     def _reconfirm_after_concurrent_commit(*args, **kwargs):
@@ -1054,6 +1072,9 @@ def test_late_reconfirm_match_short_reset_window_defers_with_full_bookkeeping(
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+    # CHAOS budget_guard_cooldown wall-clock flake: pin dispatch's internal
+    # `now` to the instant `reset_at` was derived from.
+    freeze_dispatch_clock(monkeypatch, now)
 
     sync_units.dispatch_sync_run(str(run.id))
 
@@ -1126,6 +1147,9 @@ def test_late_reconfirm_match_long_reset_window_clamps_to_wall_clock_deadline(
     _patch_db_session(monkeypatch, db_session)
     _patch_worker_enqueues(monkeypatch)
     monkeypatch.setenv("SYNC_BUDGET_DEFERRAL_JITTER_SECONDS", "0")
+    # CHAOS budget_guard_cooldown wall-clock flake: pin dispatch's internal
+    # `now` to the instant `reset_at`/`deadline` were derived from.
+    freeze_dispatch_clock(monkeypatch, now)
 
     sync_units.dispatch_sync_run(str(run.id))
 

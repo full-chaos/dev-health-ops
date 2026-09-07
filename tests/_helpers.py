@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import Table
@@ -202,3 +203,49 @@ def provider_unit_outbox_keys(session: Session) -> set[str]:
         for row in session.query(WorkerJobOutbox).all()
         if row.job_kind == "sync.provider_unit"
     }
+
+
+def freeze_dispatch_clock(monkeypatch: Any, now: datetime) -> None:
+    """Pin every ``datetime.now(timezone.utc)`` the dispatch/cooldown path
+    reads to exactly ``now`` (CHAOS budget_guard_cooldown wall-clock flake).
+
+    A cooldown test builds ``now = datetime.now(timezone.utc)``, derives a
+    fixture ``reset_at`` from it, then calls ``dispatch_sync_run`` -- which
+    computes its OWN, separate ``datetime.now(timezone.utc)`` internally
+    (``BudgetGuard.enforce_run``'s ``now`` parameter defaults to ``None`` and
+    the caller never passes one). The two calls are normally milliseconds
+    apart, but under host load (DB round-trips, GC pauses, scheduler
+    contention) the gap can exceed a tight tolerance, so an assertion like
+    ``abs((available_at - reset_at).total_seconds()) < 0.5`` fails on real
+    elapsed wall-clock time rather than on a defect.
+
+    This freezes ``datetime.now`` in every module on the dispatch path to
+    return the SAME instant the test itself used, so the assertion no longer
+    depends on how much real time passed between the two calls.
+    """
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> _FrozenDateTime:
+            # Declared to return `_FrozenDateTime` (not a bare `datetime`)
+            # only to satisfy the Liskov-substitutable `Self` return type
+            # `datetime.now` declares upstream -- mypy flags a plain
+            # `datetime` return here as an incompatible override. The VALUE
+            # returned must stay a genuine, plain `datetime.datetime`
+            # though: SQLAlchemy's sqlite3 dialect binds it straight into a
+            # DBAPI parameter, and sqlite3's datetime adapter only
+            # recognizes the exact `datetime` type, not a subclass --
+            # `cls(...)`-constructing a real `_FrozenDateTime` instance here
+            # raised "type '_FrozenDateTime' is not supported" from every
+            # write these tests make. `cast` satisfies the type checker
+            # without changing the runtime object.
+            value = now if tz is not None else now.replace(tzinfo=None)
+            return cast(_FrozenDateTime, value)
+
+    for module_path in (
+        "dev_health_ops.sync.budget_guard",
+        "dev_health_ops.workers.sync_units",
+        "dev_health_ops.workers.rate_limit_defer",
+    ):
+        module = __import__(module_path, fromlist=["datetime"])
+        monkeypatch.setattr(module, "datetime", _FrozenDateTime)

@@ -312,10 +312,21 @@ groups:
       # Both sides are now aggregated `by (instance)` so their label sets are
       # identical, AND the matcher names `on (instance)` explicitly so a future
       # edit to either side cannot quietly reintroduce the mismatch.
+      #
+      # TWO REDUCERS, and they are not the same one (codex r3, P2). Over TIME
+      # the reducer is `min_over_time`: the finding is that the gauge NEVER
+      # reached zero across the window, because a working sweep drains to zero
+      # between strands. Over SERIES the reducer is `max`: the finding is that
+      # ANY series on this instance stayed non-zero. The first draft used `min`
+      # for both, which suppresses a real backlog the moment an instance
+      # exposes a second series that happens to read zero -- the metric is
+      # unlabelled today (loop.go writes one bare sample), so `min` and `max`
+      # agree on current data and the defect would have been invisible until
+      # the day a label was added.
       - alert: SyncDispatchUnreclaimableCandidatesNotTerminalizing
         expr: |
           (
-            min by (instance) (min_over_time(sync_dispatch_unreclaimable_candidates[15m])) > 0
+            max by (instance) (min_over_time(sync_dispatch_unreclaimable_candidates[15m])) > 0
             and on (instance)
             sum by (instance) (increase(sync_dispatch_unreclaimable_terminalized_total[15m])) == 0
           )

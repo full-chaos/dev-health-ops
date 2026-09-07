@@ -19,6 +19,14 @@ var failureReturn = regexp.MustCompile(`return jobruntime\.(Retryable|Permanent)
 
 var safeCauseWrapper = regexp.MustCompile(`jobruntime\.WithSafeCause(Text)?\(`)
 
+// goLineComment is stripped from the window before the wrapper is looked for
+// (codex r3, P3). This file is heavily commented and several of those comments
+// name WithSafeCause/WithSafeCauseText in prose, so an unwrapped return sitting
+// beside such a comment would satisfy the guard on the comment's strength --
+// the same "measuring what the source SAYS, not what it DOES" defect this
+// guard's sibling in tests/workers had.
+var goLineComment = regexp.MustCompile(`//[^\n]*`)
+
 // TestEveryProviderUnitFailureReturnCarriesASafeCause is the class-level
 // guard, added after codex round 2 found four failure returns the original
 // change missed.
@@ -61,7 +69,7 @@ func TestEveryProviderUnitFailureReturnCarriesASafeCause(t *testing.T) {
 				break
 			}
 		}
-		if !safeCauseWrapper.MatchString(window) {
+		if !safeCauseWrapper.MatchString(goLineComment.ReplaceAllString(window, " ")) {
 			t.Errorf(
 				"%s:%d returns a FAILED attempt with no jobruntime.WithSafeCause/WithSafeCauseText.\n"+
 					"River's durable error row is the fixed string \"dev-health job failed [<category>]\" "+

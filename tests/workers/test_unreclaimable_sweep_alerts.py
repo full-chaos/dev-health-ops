@@ -64,6 +64,27 @@ def _alert(name: str) -> dict[str, Any]:
 # discussed in prose right beside the line that writes it.
 _GO_LINE_COMMENT = re.compile(r"//[^\n]*")
 
+# ``# HELP <name>`` and ``# TYPE <name>`` are METADATA, not a sample. Every
+# metric name in this exposition appears three times -- once in each of those
+# and once on the sample line -- so a pin that accepts any mention still passes
+# after the sample itself is deleted (codex r3, P3). Both metadata forms are
+# removed so only a real sample line can satisfy the check.
+#
+# What this still does NOT do, said plainly rather than implied: it reads
+# source, not a scrape. It cannot prove the function is reachable or that the
+# value is correct. It proves the name is written somewhere other than its own
+# HELP/TYPE text, which is what catches the failure this file exists for -- a
+# rule referencing a metric nobody emits at all.
+_HELP_OR_TYPE = re.compile(r"#\s*(HELP|TYPE)\s+[a-zA-Z_][a-zA-Z0-9_]*")
+
+# The exposition lines are built as ONE Go string literal, so the newlines
+# between HELP, TYPE and the sample are the two characters ``\`` and ``n`` in
+# the source -- which glues the sample's metric name to a preceding ``n`` and
+# destroys the word boundary the search below relies on. Turning the escape
+# into real whitespace is what makes "is this name written as a SAMPLE"
+# answerable at all once the HELP/TYPE mentions are removed.
+_ESCAPED_NEWLINE = re.compile(r"\\n")
+
 
 def _write_prometheus_body(path: Path) -> str:
     """The body of this file's own ``WritePrometheus``, comments removed.
@@ -78,7 +99,9 @@ def _write_prometheus_body(path: Path) -> str:
     assert start, f"no WritePrometheus function in {path}"
     following = re.search(r"^func ", text[start.end() :], re.MULTILINE)
     end = start.end() + (following.start() if following else len(text) - start.end())
-    return _GO_LINE_COMMENT.sub(" ", text[start.start() : end])
+    body = _GO_LINE_COMMENT.sub(" ", text[start.start() : end])
+    body = _ESCAPED_NEWLINE.sub(" ", body)
+    return _HELP_OR_TYPE.sub(" ", body)
 
 
 def test_the_write_prometheus_reader_ignores_comments() -> None:
@@ -91,6 +114,9 @@ def test_the_write_prometheus_reader_ignores_comments() -> None:
     emitted = _write_prometheus_body(SYNCRECONCILER_LOOP)
     assert "sync_dispatch_unreclaimable_candidates" in emitted
     assert "//" not in emitted, "comments survived the strip"
+    # And the metadata forms are gone, so what remains is a sample mention.
+    assert "# HELP sync_dispatch_unreclaimable_candidates" not in emitted
+    assert "# TYPE sync_dispatch_unreclaimable_candidates" not in emitted
 
 
 # PromQL duration literals (``[15m]``, ``[1h]``) are stripped before

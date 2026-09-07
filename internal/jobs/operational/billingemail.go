@@ -177,10 +177,31 @@ func normalizeAppBaseURL(raw string) string {
 	return strings.TrimRight(raw, "/")
 }
 
-// AppBaseURLFromEnv reads the same APP_BASE_URL variable Python read. Kept
-// separate from normalizeAppBaseURL so rendering itself stays pure.
-func AppBaseURLFromEnv() string {
-	return normalizeAppBaseURL(os.Getenv("APP_BASE_URL"))
+// ErrAppBaseURLEmpty reports an APP_BASE_URL that is set to nothing.
+var ErrAppBaseURLEmpty = errors.New("APP_BASE_URL is set but empty")
+
+// AppBaseURLFromEnv reads the same APP_BASE_URL variable Python read, under
+// the same absent-versus-empty rule the email provider variables now use
+// (CHAOS-5353 r2, P2): an ABSENT variable takes the default, a variable set to
+// the empty string is a misconfiguration and is refused.
+//
+// Python collapsed the two -- os.getenv("APP_BASE_URL", default) returns ""
+// for an explicitly empty value, and every link in a trial email then rendered
+// as a bare path like "/billing". Refusing is deliberately stricter, for the
+// same reason as EMAIL_FROM_ADDRESS and SMTP_HOST: a blank expansion in a Helm
+// or compose file is never what an operator meant, and a relative URL in an
+// email that arrives in someone's inbox is not a link at all.
+//
+// Kept separate from normalizeAppBaseURL so rendering itself stays pure.
+func AppBaseURLFromEnv() (string, error) {
+	raw, present := os.LookupEnv("APP_BASE_URL")
+	if !present {
+		return normalizeAppBaseURL(""), nil
+	}
+	if strings.TrimSpace(raw) == "" {
+		return "", ErrAppBaseURLEmpty
+	}
+	return normalizeAppBaseURL(raw), nil
 }
 
 // formatAmountCents ports `f"{Decimal(amount_cents) / 100:.2f}"`.

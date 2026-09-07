@@ -129,8 +129,14 @@ func buildOperationalWorker(
 					"error", senderErr)
 				return workerFamily{}, errWorkerDependencyUnavailable
 			}
+			appBaseURL, baseURLErr := operational.AppBaseURLFromEnv()
+			if baseURLErr != nil {
+				logger.Error("billing notification base URL is unusable",
+					"variable", "APP_BASE_URL", "error", baseURLErr)
+				return workerFamily{}, errWorkerDependencyUnavailable
+			}
 			handler, handlerErr := operational.NewBillingHandler(
-				store, store, store, sender, operational.AppBaseURLFromEnv(),
+				store, store, store, sender, appBaseURL,
 			)
 			if handlerErr != nil {
 				return workerFamily{}, errWorkerDependencyUnavailable

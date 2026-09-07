@@ -84,14 +84,20 @@ def test_inventory_row_count_matches_the_baseline():
     was a phantom row for a route CHAOS-5320's own earlier deletion had
     already removed from the served application -- the inventory row was
     never cleaned up until now.
+    = 369, -1 REST under CHAOS-5353: `POST /api/internal/worker-operational/billing`.
+    Unlike the webhook row above this one was NOT a phantom -- the route was
+    live and served right up to this change. It is removed because the route
+    itself is deleted: the Go BillingHandler now owns the completion fence,
+    the owner lookup, the seven renderings and the provider send, so nothing
+    posts to that bridge any more.
     """
     inventory = checker.load_json(_INVENTORY_PATH)
     rows = inventory["rows"]
     rest = [r for r in rows if r["surface_kind"] == "rest"]
     graphql = [r for r in rows if r["surface_kind"] in _GRAPHQL_KINDS]
-    assert len(rest) == 310, len(rest)
+    assert len(rest) == 309, len(rest)
     assert len(graphql) == 59, len(graphql)
-    assert len(rows) == 369, len(rows)
+    assert len(rows) == 368, len(rows)
 
 
 def test_the_three_subscriptions_are_profiled():
@@ -115,7 +121,10 @@ def test_classification_summary_matches_the_baseline():
     # = 343, - 1 under CHAOS-5320: the deleted worker-operational/webhook
     # phantom row (see test_inventory_row_count_matches_the_baseline) was
     # itself classified protected.
-    assert len(protected) == 342, len(protected)
+    # = 342, - 1 under CHAOS-5353: the deleted worker-operational/billing row,
+    # also protected (bridge-token gated). Both deletions land here because
+    # every worker-operational bridge route is classified protected.
+    assert len(protected) == 341, len(protected)
     # 22 + the four fastapi doc routes + /metrics.
     assert len(public) == 27, len(public)
     assert len(protected) + len(public) == len(rows)

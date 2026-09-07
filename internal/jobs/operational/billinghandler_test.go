@@ -786,9 +786,15 @@ func TestEmptyEnvironmentValuesAreRefusedNotDefaulted(t *testing.T) {
 // TestAbsentEnvironmentValuesStillTakeTheirDefaults is the counterpart: the
 // fix must reject EMPTY without breaking ABSENT, which is the ordinary case.
 func TestAbsentEnvironmentValuesStillTakeTheirDefaults(t *testing.T) {
+	// t.Setenv FIRST so the framework registers a cleanup that restores the
+	// caller's original value, THEN Unsetenv to reach the genuinely-absent
+	// state. Unsetenv alone would leak: it discards whatever the caller had
+	// and never puts it back, so a later test in the same binary would see an
+	// environment this one silently emptied.
 	for _, name := range []string{
 		"EMAIL_PROVIDER", "EMAIL_FROM_ADDRESS", "SMTP_HOST", "SMTP_PORT",
 	} {
+		t.Setenv(name, "")
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatal(err)
 		}
@@ -800,4 +806,112 @@ func TestAbsentEnvironmentValuesStillTakeTheirDefaults(t *testing.T) {
 	if sender.Name() != "console" {
 		t.Fatalf("provider = %q, want console", sender.Name())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// CHAOS-5353 r2 regression pins. Each FAILS at this commit's parent.
+// ---------------------------------------------------------------------------
+
+// TestNoOwnerWithAFailedCompletionWriteIsNotReportedAsSuccess is the r2 P1
+// pin, and the sibling of the r1 one.
+//
+// At the fix parent, the completion-write failure branch returned nil
+// unconditionally. That is right when an email IS out -- releasing or
+// retrying would duplicate it -- but wrong when nothing was sent, which is
+// the no-owner case: there was nothing to duplicate, so returning nil merely
+// stranded the row behind an uncompleted claim while River recorded success.
+func TestNoOwnerWithAFailedCompletionWriteIsNotReportedAsSuccess(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{
+		claim:       ClaimResult{Claimed: true},
+		completeErr: errors.New("completion write is unavailable"),
+	}
+	owners := &fakeOwners{err: ErrOrgOwnerNotFound}
+	sender := &fakeSender{}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	err := handler.Work(context.Background(), billingExecution())
+	if err == nil {
+		t.Fatal("nothing was sent and the completion write failed, yet Work " +
+			"reported success; the row is stranded behind its own claim")
+	}
+	if !hasCategory(err, jobruntime.CategoryRetryable) {
+		t.Fatalf("classified as %v, want retryable", err)
+	}
+	if fence.releases == 0 || !fence.released {
+		t.Fatalf("the claim was not released (releases=%d released=%v), so the "+
+			"retry cannot resolve this notification", fence.releases, fence.released)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatal("an email was sent for an organization with no owner")
+	}
+}
+
+// TestASentEmailWithAFailedCompletionWriteStillNeverRetries guards the fix
+// above from over-reaching. This is the opposite case and the reason the
+// branch has to exist at all: the email IS out, so releasing or retrying
+// would deliver it twice.
+func TestASentEmailWithAFailedCompletionWriteStillNeverRetries(t *testing.T) {
+	store := &fakeStore{billing: billingRow(`{}`)}
+	fence := &fakeFence{
+		claim:       ClaimResult{Claimed: true},
+		completeErr: errors.New("completion write is unavailable"),
+	}
+	owners := &fakeOwners{owner: OwnerContact{
+		Email: "o@example.test", FullName: "D", OrgName: "N"}}
+	sender := &fakeSender{}
+	handler := newTestBillingHandler(t, store, fence, owners, sender)
+
+	if err := handler.Work(context.Background(), billingExecution()); err != nil {
+		t.Fatalf("a delivered email must not retry on a bookkeeping failure, got %v", err)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(sender.sent))
+	}
+	if fence.releases != 0 {
+		t.Fatal("the claim was released after the email had gone out; " +
+			"a retry would duplicate it")
+	}
+}
+
+// TestAppBaseURLDistinguishesAbsentFromEmpty is the r2 P2 pin. At the fix
+// parent an explicitly empty APP_BASE_URL silently became the default, so
+// every link in a trial email pointed at example.com.
+func TestAppBaseURLDistinguishesAbsentFromEmpty(t *testing.T) {
+	t.Run("absent takes the default", func(t *testing.T) {
+		t.Setenv("APP_BASE_URL", "")
+		if err := os.Unsetenv("APP_BASE_URL"); err != nil {
+			t.Fatal(err)
+		}
+		base, err := AppBaseURLFromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if base != "https://example.com" {
+			t.Fatalf("base = %q, want the default", base)
+		}
+	})
+	t.Run("empty is refused", func(t *testing.T) {
+		t.Setenv("APP_BASE_URL", "")
+		if _, err := AppBaseURLFromEnv(); !errors.Is(err, ErrAppBaseURLEmpty) {
+			t.Fatalf("an explicitly empty APP_BASE_URL returned %v; it must be "+
+				"refused, not silently defaulted", err)
+		}
+	})
+	t.Run("whitespace only is refused", func(t *testing.T) {
+		t.Setenv("APP_BASE_URL", "   ")
+		if _, err := AppBaseURLFromEnv(); !errors.Is(err, ErrAppBaseURLEmpty) {
+			t.Fatalf("a whitespace-only APP_BASE_URL returned %v", err)
+		}
+	})
+	t.Run("a real value keeps its trailing-slash trim", func(t *testing.T) {
+		t.Setenv("APP_BASE_URL", "https://app.example.test//")
+		base, err := AppBaseURLFromEnv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if base != "https://app.example.test" {
+			t.Fatalf("base = %q", base)
+		}
+	})
 }

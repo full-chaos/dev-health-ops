@@ -141,19 +141,37 @@ func (handler *BillingHandler) Work(
 		return jobruntime.Retryable(deliverErr)
 	}
 
-	// The send succeeded (or there was no owner to send to). Recording
-	// completion is bookkeeping ON TOP of that fact, never a gate on it: a
-	// failed completion write must NOT release the claim and must NOT retry,
-	// because either would duplicate a delivered email. The claim stays held
-	// with completed_at unset -- exactly the stale-claim state a later
-	// contending attempt classifies and surfaces.
+	// The send succeeded, or there was no owner to send to. Recording
+	// completion is bookkeeping ON TOP of that fact, never a gate on it --
+	// but what a FAILED completion write means depends entirely on whether
+	// an email actually went out, and the two cases are opposites.
 	if err := handler.fence.MarkCompleted(ctx, notification.ID, handler.now()); err != nil {
+		if sent {
+			// An email IS out. Releasing or retrying would duplicate it, so
+			// we do neither. The claim stays held with completed_at unset --
+			// exactly the stale-claim state a later contending attempt
+			// classifies and surfaces. Bookkeeping is stuck; delivery is not.
+			logger.ErrorContext(ctx,
+				"billing notification: the email was sent but its completion write "+
+					"failed; the claim stays held and will surface as a stale claim",
+				"error", err, "sent", true,
+				"claim_outcome", string(FenceOutcomeSentFenceWriteFailed))
+			return nil
+		}
+		// Nothing was sent (the organization has no owner), so there is
+		// nothing to duplicate and the duplicate-avoidance argument above
+		// does not apply. CHAOS-5353 r2 (P1): returning nil here anyway was
+		// the sibling of the r1 defect -- it stranded the row behind an
+		// uncompleted claim while River recorded success, so no retry could
+		// ever finish the bookkeeping. Release and retry instead: the next
+		// attempt re-checks the owner (one may exist by then) and completes.
 		logger.ErrorContext(ctx,
-			"billing notification: the email was sent but its completion write failed; "+
-				"the claim stays held and will surface as a stale claim",
-			"error", err, "sent", sent,
-			"claim_outcome", string(FenceOutcomeSentFenceWriteFailed))
-		return nil
+			"billing notification: nothing was sent and the completion write failed; "+
+				"releasing the claim so a retry can resolve it",
+			"error", err, "sent", false,
+			"claim_outcome", string(FenceOutcomeReleasedForRetry))
+		handler.releaseClaim(ctx, logger, notification.ID, FenceOutcomeReleasedForRetry)
+		return jobruntime.Retryable(err)
 	}
 	logger.InfoContext(ctx, "billing notification: delivered",
 		"sent", sent, "claim_outcome", string(outcome))

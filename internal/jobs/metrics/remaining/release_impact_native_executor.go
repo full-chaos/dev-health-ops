@@ -187,7 +187,7 @@ func (e *ReleaseImpactExecutor) nowOrRefuse() (time.Time, error) {
 }
 
 // ComputePartition runs release_impact for one partition, satisfying the same
-// one-method CompatibilityExecutor contract DORAExecutor/CapacityExecutor do.
+// one-method PartitionExecutor contract DORAExecutor/CapacityExecutor do.
 func (e *ReleaseImpactExecutor) ComputePartition(
 	ctx context.Context, run Run, partition Partition,
 ) (CompatibilityOutcome, error) {

@@ -1162,7 +1162,7 @@ func (executor *WorkItemAttributionExecutor) publishRunMarkers(
 	return executor.writer.WriteScopedAttributionRuns(ctx, records)
 }
 
-// ComputePartition satisfies CompatibilityExecutor: the seam the partition
+// ComputePartition satisfies PartitionExecutor: the seam the partition
 // handler drives.
 //
 // Unlike membership_backfill's ComputePartition, the decoded scope is NOT
@@ -1201,4 +1201,4 @@ func (executor *WorkItemAttributionExecutor) ComputePartition(
 }
 
 // A compile-time pin that this executor IS the seam the handler drives.
-var _ CompatibilityExecutor = (*WorkItemAttributionExecutor)(nil)
+var _ PartitionExecutor = (*WorkItemAttributionExecutor)(nil)

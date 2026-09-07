@@ -16,14 +16,14 @@ import (
 
 // DORAExecutor is the NATIVE implementation of the dora remaining-metric kind
 // (CHAOS-3092 R1) -- the first compute family to leave the HTTP compatibility
-// bridge.
+// bridge. Every other remaining-metric kind has since followed (CUT-20); no
+// bridge remains in this package.
 //
-// It satisfies the same one-method CompatibilityExecutor contract
-// HTTPCompatibilityExecutor does, so the swap happens where the handler is
+// It satisfies the same one-method PartitionExecutor contract the deleted
+// HTTP bridge executor did, so the swap happened where the handler is
 // constructed, per kind, with no environment switch and no fallback: a worker
 // either builds the native executor for this kind or refuses to start the
-// family (see cmd/dev-health-worker/daily.go). The other seven kinds keep the
-// bridge until each has its own parity proof.
+// family (see cmd/dev-health-worker/daily.go).
 //
 // # Fidelity, and where it is NOT obvious
 //

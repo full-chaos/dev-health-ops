@@ -18,7 +18,7 @@ type Store interface {
 	ReleasePartition(context.Context, Claim) error
 }
 
-type CompatibilityExecutor interface {
+type PartitionExecutor interface {
 	ComputePartition(context.Context, Run, Partition) (CompatibilityOutcome, error)
 }
 
@@ -37,22 +37,22 @@ type CompatibilityOutcome struct {
 
 type PartitionHandler[T jobruntime.ContractArgs] struct {
 	store          Store
-	compatibility  CompatibilityExecutor
+	executor       PartitionExecutor
 	expectedFamily string
 }
 
 func NewPartitionHandler[T jobruntime.ContractArgs](
 	store Store,
-	compatibility CompatibilityExecutor,
+	executor PartitionExecutor,
 	expectedFamily string,
 ) (*PartitionHandler[T], error) {
 	var args T
 	kind, ok := JobKindForFamily(expectedFamily)
-	if store == nil || compatibility == nil || !ok || args.Kind() != kind {
+	if store == nil || executor == nil || !ok || args.Kind() != kind {
 		return nil, ErrUnavailable
 	}
 	return &PartitionHandler[T]{
-		store: store, compatibility: compatibility, expectedFamily: expectedFamily,
+		store: store, executor: executor, expectedFamily: expectedFamily,
 	}, nil
 }
 
@@ -60,7 +60,7 @@ func (handler *PartitionHandler[T]) Work(
 	ctx context.Context,
 	execution *jobruntime.Execution[T],
 ) error {
-	if handler == nil || handler.store == nil || handler.compatibility == nil || execution == nil {
+	if handler == nil || handler.store == nil || handler.executor == nil || execution == nil {
 		return jobruntime.Permanent(ErrUnavailable)
 	}
 	payload, ok := execution.Args.ContractEnvelope().Payload.(jobcontract.RemainingMetricsPartitionPayload)
@@ -107,7 +107,7 @@ func (handler *PartitionHandler[T]) Work(
 		},
 		func(workCtx context.Context) error {
 			var workErr error
-			outcome, workErr = handler.compatibility.ComputePartition(workCtx, run, claim.Partition)
+			outcome, workErr = handler.executor.ComputePartition(workCtx, run, claim.Partition)
 			return workErr
 		},
 	); err != nil {
@@ -120,9 +120,8 @@ func (handler *PartitionHandler[T]) Work(
 		// job's whole attempt budget on three identical failures before
 		// discarding -- work that accomplishes nothing, on the fast path
 		// that is the actual native-executor precondition bug this ticket
-		// is about. Anything else here (a ClickHouse/Postgres query error,
-		// a compatibility-bridge HTTP failure) is genuinely transient and
-		// stays Retryable.
+		// is about. Anything else here (a ClickHouse/Postgres query error)
+		// is genuinely transient and stays Retryable.
 		if errors.Is(err, ErrInvalidState) {
 			return jobruntime.WithReason(jobruntime.Permanent(err), jobruntime.ReasonInvalidState)
 		}

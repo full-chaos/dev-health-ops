@@ -350,7 +350,7 @@ func newClickHouseOnlyExecutor(
 	}, nil
 }
 
-// ComputePartition satisfies CompatibilityExecutor: the seam the partition
+// ComputePartition satisfies PartitionExecutor: the seam the partition
 // handler drives, and the ONLY place the readiness gate is consulted.
 //
 // # THE GATE LIVES HERE, NOT IN THE CALLER
@@ -463,4 +463,4 @@ func (executor *RecommendationsExecutor) ComputePartition(
 // A compile-time pin that this executor IS the seam the handler drives. Without
 // it, a signature drift would surface only where daily.go registers the kind --
 // far from the code that changed.
-var _ CompatibilityExecutor = (*RecommendationsExecutor)(nil)
+var _ PartitionExecutor = (*RecommendationsExecutor)(nil)

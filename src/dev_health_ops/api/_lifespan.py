@@ -34,7 +34,13 @@ async def lifespan(app: FastAPI):
          feature keys when a Postgres URL is configured. Re-raise integrity
          errors so the process refuses to start with a corrupt registry; tolerate
          other failures (e.g. DB not yet ready in tests / containers).
-      3. Verify PostgreSQL satisfies the required application schema revision
+      3. Report whether any ``go_api_routing_state`` row is reachable at
+         this process's schema digest (best-effort, never fatal). Rows
+         keyed to a superseded schema digest are unreachable, and both
+         planes fail closed to Python without saying so -- that state went
+         undetected for six days in September 2026. See
+         ``api/graphql/go_api_routing_drift.py``.
+      4. Verify PostgreSQL satisfies the required application schema revision
          (CHAOS-3299). Re-raise when the database is reachable but missing the
          revision, so the process refuses to start against an unmigrated
          schema (converting the failure mode from a runtime
@@ -83,6 +89,26 @@ async def lifespan(app: FastAPI):
             logger.warning(
                 "FeatureBundle key validation skipped (DB not ready): %s", _exc
             )
+
+        # Go-API routing drift (best-effort, never fatal): the API serves
+        # every request from Python without this table, so an unreadable
+        # registry must not stop startup -- but a table full of rows that
+        # are ALL keyed to a superseded schema digest is invisible without
+        # this line, which is exactly how the 2026-09-01 enablement stayed
+        # dead for six days.
+        try:
+            from dev_health_ops.api.graphql.go_api_routing_drift import (
+                check_routing_digest_drift,
+            )
+            from dev_health_ops.db import get_postgres_session
+
+            async with get_postgres_session() as _routing_session:
+                await check_routing_digest_drift(_routing_session)
+        except Exception as _exc:  # pragma: no cover - defence in depth
+            # check_routing_digest_drift already swallows and logs its own
+            # failures (including the DB read); reaching here means the
+            # session/import itself failed. Same posture, one level out.
+            logger.warning("Go-API routing drift check skipped: %s", _exc)
 
         from dev_health_ops.migrate import (
             application_schema_status,

@@ -1,0 +1,386 @@
+"""``ci/check_go_api_routing_digest.py`` -- red/green against real trees.
+
+Follows the precedent of ``tests/test_endpoint_profiles_contract.py``: the
+checker is a CI gate, and loading + running it from pytest is what puts it
+under a REQUIRED context rather than an optional workflow step someone can
+skip.
+
+The gate has two halves, and both are proven to actually fail here. A gate
+that cannot be shown to fail is not a gate:
+
+* Move the SDL without updating the pin -> fail.
+* Update the pin without recording the digest in the history table -> also
+  fail. This second half is the one that matters. Without it, the obvious
+  way to make a red build green is to bump the pin -- which silences the
+  alarm and leaves every routing row dead, which is exactly the outcome
+  the check exists to prevent.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import shutil
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CHECKER_PATH = REPO_ROOT / "ci" / "check_go_api_routing_digest.py"
+
+
+def _load_checker():
+    spec = importlib.util.spec_from_file_location(
+        "_check_go_api_routing_digest_under_test", CHECKER_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+checker = _load_checker()
+
+
+@pytest.fixture
+def tree(tmp_path: Path) -> Path:
+    """A minimal repo-shaped tree carrying real copies of the three files."""
+    (tmp_path / "contracts" / "graphql" / "v1").mkdir(parents=True)
+    (tmp_path / "docs" / "contribute" / "architecture").mkdir(parents=True)
+    for relative in (
+        checker.SDL_RELATIVE,
+        checker.PIN_RELATIVE,
+        checker.HISTORY_DOC_RELATIVE,
+    ):
+        shutil.copy(REPO_ROOT / relative, tmp_path / relative)
+    return tmp_path
+
+
+def _insert_into_history_section(doc_path: Path, block: str) -> None:
+    """Insert `block` inside the history section, after its last table row.
+
+    Anything appended to end-of-file lands after a later heading, which the
+    section bound rejects on its own -- so a test that appends is not
+    testing what it thinks it is.
+    """
+    text = doc_path.read_text()
+    heading_at = text.index(checker.HISTORY_HEADING)
+    head, tail = text[:heading_at], text[heading_at:]
+    lines = tail.splitlines(keepends=True)
+    last_row = max(i for i, line in enumerate(lines) if line.strip().startswith("|"))
+    lines.insert(last_row + 1, block)
+    doc_path.write_text(head + "".join(lines))
+
+
+def _append_history_row(doc_path: Path, digest: str) -> None:
+    """Insert a row into the history TABLE, as an operator would.
+
+    Appending to end-of-file lands after the next heading, which the
+    checker correctly refuses -- that is the point of the section bound.
+    A realistic green path has to edit the table itself.
+    """
+    text = doc_path.read_text()
+    heading_at = text.index(checker.HISTORY_HEADING)
+    head, tail = text[:heading_at], text[heading_at:]
+    lines = tail.splitlines(keepends=True)
+    last_row = max(i for i, line in enumerate(lines) if line.strip().startswith("|"))
+    row = f"| `{digest}` | 2026-09-07 | a test commit | Added by the operator |\n"
+    lines.insert(last_row + 1, row)
+    doc_path.write_text(head + "".join(lines))
+
+
+def test_real_tree_passes_the_gate(capsys: pytest.CaptureFixture[str]) -> None:
+    """The checked-in tree is consistent right now."""
+    assert checker.main(["--root", str(REPO_ROOT)]) == 0
+    assert "OK: Go-API schema digest" in capsys.readouterr().out
+
+
+def test_moving_the_sdl_without_updating_the_pin_fails(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One byte of SDL change is enough to kill every routing row."""
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+
+    assert checker.main(["--root", str(tree)]) == 1
+    err = capsys.readouterr().err
+    assert "schema digest MOVED" in err
+    # The message must say what it BREAKS and what to do, not just that two
+    # strings differ -- the 2026-09-01 failure was a person not knowing this
+    # table existed.
+    assert "DEAD" in err
+    assert "dev-hops go-api routing enable" in err
+
+
+def test_bumping_the_pin_without_documenting_it_still_fails(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The half that stops the alarm being silenced.
+
+    Simulates the tempting fix for the previous test: recompute the digest,
+    paste it into the pin, move on. The routing rows are still dead and
+    nobody has been told, so the gate must stay red.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    assert checker.main(["--root", str(tree)]) == 1
+    err = capsys.readouterr().err
+    assert "is NOT recorded" in err
+    assert moved in err
+    assert "Schema-digest history" in err
+
+
+def test_documenting_the_moved_digest_makes_it_pass(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The full, correct operator flow goes green -- so the gate is passable.
+
+    A gate with no demonstrated green path is one people learn to bypass.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    _append_history_row(tree / checker.HISTORY_DOC_RELATIVE, moved)
+
+    assert checker.main(["--root", str(tree)]) == 0
+    assert "OK: Go-API schema digest" in capsys.readouterr().out
+
+
+def test_a_digest_recorded_only_outside_the_history_section_does_not_count(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The digest must appear in the HISTORY TABLE, not merely somewhere.
+
+    Guards against the check degrading into a substring search over the
+    whole document -- the recovery procedure above the table quotes digests
+    as examples, and a passing grade earned by one of those would be
+    meaningless.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    # Mentioned BEFORE the history heading only.
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    text = doc_path.read_text()
+    heading_at = text.index(checker.HISTORY_HEADING)
+    doc_path.write_text(
+        text[:heading_at] + f"\nAn aside mentioning {moved}.\n" + text[heading_at:]
+    )
+
+    assert checker.main(["--root", str(tree)]) == 1
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+def test_missing_files_fail_rather_than_pass_vacuously(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A tree with nothing to check fails; it never reports OK.
+
+    "A measurement that did not happen must FAIL, loudly" (root
+    ``AGENTS.md``) -- a checker that quietly succeeds when its inputs are
+    absent is worse than no checker, because CI then shows green.
+    """
+    assert checker.main(["--root", str(tmp_path)]) == 1
+    assert "not found" in capsys.readouterr().err
+
+
+def test_a_prose_mention_inside_the_history_section_does_not_count(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The digest must be in a table ROW, not merely somewhere below the heading.
+
+    codex r1 (P2): a substring search over the section passed when the
+    digest appeared in a sentence after the heading. That records nothing
+    an operator can read as history -- and "get the checker green" is
+    exactly the pressure this gate exists to resist.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    doc_path.write_text(
+        doc_path.read_text()
+        + f"\nWe moved the digest to {moved} in a hurry and will tidy later.\n"
+    )
+
+    assert checker.main(["--root", str(tree)]) == 1
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+def test_a_stub_row_with_empty_cells_does_not_count(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A row is only a record if it actually says when and what moved it."""
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    doc_path.write_text(doc_path.read_text() + f"\n| `{moved}` |  |  |  |\n")
+
+    assert checker.main(["--root", str(tree)]) == 1
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+def test_a_fenced_code_block_row_does_not_count(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r2 (P2): a pipe-prefixed line inside ``` fences satisfied the check.
+
+    An example of a history row is not a history row. The recovery
+    procedure above the table is full of illustrative snippets, so this is
+    a live way to tick the gate while recording nothing.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    doc_path.write_text(
+        doc_path.read_text()
+        + f"\n```\n| `{moved}` | 2026-09-07 | example | not a real row |\n```\n"
+    )
+
+    assert checker.main(["--root", str(tree)]) == 1
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+def test_a_row_in_a_later_unrelated_table_does_not_count(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r2 (P2): the search ran to end-of-file, so any later table counted.
+
+    The section ends at the next heading; a table under a different one is
+    a different table.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    doc_path.write_text(
+        doc_path.read_text()
+        + "\n## Some later section\n\n| Thing | When | Who | Note |\n|---|---|---|---|\n"
+        + f"| `{moved}` | 2026-09-07 | someone | unrelated table |\n"
+    )
+
+    assert checker.main(["--root", str(tree)]) == 1
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("name", "fence_open", "fence_inner"),
+    [
+        ("nested backtick", "````", "```"),
+        ("nested tilde", "~~~~", "~~~"),
+        ("mixed backtick then tilde", "```", "~~~"),
+    ],
+)
+def test_nested_fences_cannot_smuggle_an_example_row(
+    tree: Path,
+    capsys: pytest.CaptureFixture[str],
+    name: str,
+    fence_open: str,
+    fence_inner: str,
+) -> None:
+    """codex r3 (P1): a boolean toggle cannot represent nesting.
+
+    ```` opening, ``` opening, ``` closing, ```` closing flipped the flag
+    back to "outside" halfway through, so an illustrative row inside the
+    nested block satisfied the gate -- the exact evasion the fence skip
+    exists to prevent.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    # INSIDE the history section, not appended at end-of-file. Appending
+    # lands after the next heading, where the section bound rejects it
+    # before the fence logic is ever consulted -- the first version of this
+    # test passed for that reason and proved nothing about fences.
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    _insert_into_history_section(
+        doc_path,
+        f"{fence_open}\n{fence_inner}\n"
+        f"| `{moved}` | 2026-09-07 | example | not a real row |\n"
+        f"{fence_inner}\n{fence_open}\n",
+    )
+
+    assert checker.main(["--root", str(tree)]) == 1, name
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+def test_a_longer_closing_fence_still_closes_the_block(tree: Path) -> None:
+    """The converse: a real row after a properly closed block still counts.
+
+    A fence rule that never closes would make the gate unsatisfiable, which
+    is its own failure -- people route around a gate they cannot pass.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    text = doc_path.read_text()
+    heading_at = text.index(checker.HISTORY_HEADING)
+    head, tail = text[:heading_at], text[heading_at:]
+    lines = tail.splitlines(keepends=True)
+    last_row = max(i for i, line in enumerate(lines) if line.strip().startswith("|"))
+    lines.insert(last_row + 1, "```\nan example block\n```\n")
+    lines.insert(
+        last_row + 2,
+        f"| `{moved}` | 2026-09-07 | a test commit | after a closed fence |\n",
+    )
+    doc_path.write_text(head + "".join(lines))
+
+    assert checker.main(["--root", str(tree)]) == 0

@@ -163,7 +163,7 @@ func TestNewQueryHandler_LoggedOperationSetMatchesCheckedInCatalog(t *testing.T)
 		log.SetFlags(prevFlags)
 	}()
 
-	_ = newQueryHandler(nopQueryClient{}, pgPool, verifier, "sha256:test-schema-digest")
+	_, _ = newQueryHandler(nopQueryClient{}, pgPool, verifier, "sha256:test-schema-digest")
 
 	logged := logBuf.String()
 	const marker = "query-api: /query route mounted ("

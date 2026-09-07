@@ -58,7 +58,7 @@ func TestReadyz_PostgresUnreachableSinceStartup_Returns503(t *testing.T) {
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, ready, cleanup, buildErr := buildQueryRoute(cfg)
+	_, _, ready, cleanup, buildErr := buildQueryRoute(cfg)
 	if buildErr != nil {
 		t.Fatalf("buildQueryRoute unexpectedly failed against an unreachable-but-lazily-dialed Postgres pool (this is the defect this test exists to prove buildQueryRoute does NOT fail on): %v", buildErr)
 	}
@@ -130,7 +130,7 @@ func TestReadyz_BothDependenciesReachable_ThenClickHouseDiesAfterStartup(t *test
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, ready, cleanup, buildErr := buildQueryRoute(cfg)
+	_, _, ready, cleanup, buildErr := buildQueryRoute(cfg)
 	if buildErr != nil {
 		t.Fatalf("buildQueryRoute: %v", buildErr)
 	}

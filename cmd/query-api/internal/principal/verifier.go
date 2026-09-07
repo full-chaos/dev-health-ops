@@ -2,6 +2,7 @@ package principal
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -19,6 +20,46 @@ import (
 // validly-signed envelope carries a `v` this verifier was not written to
 // handle. See SupportedSchemaVersion's doc comment.
 var ErrUnsupportedSchemaVersion = errors.New("principal: unsupported envelope schema version")
+
+// errNoKidHeader and errUnknownKid are sentinels wrapped into keyFunc's
+// returned error (CHAOS-5443) so Verify can classify a rejection AFTER
+// jwt.ParseWithClaims re-wraps it as ErrTokenUnverifiable -- confirmed
+// against the installed golang-jwt/jwt/v5 v5.3.1 source
+// (parser.go: `newError("error while executing keyfunc",
+// ErrTokenUnverifiable, err)` uses fmt.Errorf with two %w verbs, so
+// errors.Is still finds either sentinel through that wrapping).
+var (
+	errNoKidHeader = errors.New("principal: token has no kid header")
+	errUnknownKid  = errors.New("principal: no jwks key for kid")
+)
+
+// requestMeta is caller-supplied, request-scoped context for the WARN log
+// Verify emits on rejection (CHAOS-5443) -- remote address and a
+// correlation id, never anything from the token or the key material.
+// Carried via context (same pattern as authctx.WithClaims/FromContext,
+// one layer up the request path) rather than widening Verify's own
+// signature, so every existing caller -- including every test in this
+// package -- that has no such metadata to give keeps working unchanged.
+type requestMeta struct {
+	remoteAddr string
+	requestID  string
+}
+
+type requestMetaKey struct{}
+
+// WithRequestMeta attaches the calling request's remote address and
+// correlation id to ctx, for Verify's rejection WARN log. A caller with
+// no such metadata (a test, an internal recheck) may simply omit this and
+// pass a bare context -- Verify logs empty strings for both fields, never
+// a "missing metadata" error.
+func WithRequestMeta(ctx context.Context, remoteAddr, requestID string) context.Context {
+	return context.WithValue(ctx, requestMetaKey{}, requestMeta{remoteAddr: remoteAddr, requestID: requestID})
+}
+
+func requestMetaFrom(ctx context.Context) requestMeta {
+	meta, _ := ctx.Value(requestMetaKey{}).(requestMeta)
+	return meta
+}
 
 // readJWKSFileForCheck is CheckJWKS's ONLY read of the live jwksPath --
 // a seam so a test can prove that invariant deterministically (codex
@@ -222,21 +263,49 @@ func validJWKSKeyID(value string) bool {
 // also enforces the claim-schema-version contract: an envelope whose `v`
 // this verifier was not written to handle is rejected even though its
 // signature is valid -- see SupportedSchemaVersion's doc comment.
-func (v *Verifier) Verify(tokenString string) (*Claims, error) {
+//
+// CHAOS-5443: every rejection this method returns (schema-version
+// mismatches excepted -- see below) is also logged at WARN, with a
+// classified reason plus the presented kid and the envelope's claimed
+// iss/aud (never the token or key material), and counted on
+// dev_health_query_api_envelope_rejected_total{reason}. Before this, a
+// live kid mismatch (edge minted with one kid, JWKS rotated to another,
+// same underlying key) took 40 minutes to diagnose because the caller
+// only ever saw a bare "unauthorized" 401 -- unknown_kid, bad_signature,
+// audience, issuer, expired, not_yet_valid, and malformed are now
+// distinguishable from the log alone, without ever printing the token.
+// A schema-version rejection is NOT one of those seven reasons (it means
+// the signature and every JWT-level claim already validated; only the
+// envelope's own claim shape is unsupported) and keeps its pre-existing,
+// narrower "unsupported_schema_version" outcome on the older
+// devhealth_query_api_envelope_verify_total counter, unchanged by this
+// ticket.
+func (v *Verifier) Verify(ctx context.Context, tokenString string) (*Claims, error) {
 	claims := &Claims{}
+	meta := requestMetaFrom(ctx)
 
+	// kid is captured here, outside keyFunc's own scope, because it must
+	// still be available for the rejection log even when keyFunc itself
+	// never got a valid one to work with (empty header) or the token
+	// fails validation for a completely different reason after keyFunc
+	// already succeeded (e.g. audience/issuer/expiry) -- ParseUnverified
+	// (called first, inside ParseWithClaims) has already decoded the
+	// header by the time keyFunc runs, so this is always the token's
+	// PRESENTED kid, whether or not it turned out to be usable.
+	var kid string
 	keyFunc := func(token *jwt.Token) (interface{}, error) {
-		kid, _ := token.Header["kid"].(string)
-		if kid == "" {
-			return nil, errors.New("principal: token has no kid header")
+		var ok bool
+		kid, ok = token.Header["kid"].(string)
+		if !ok || kid == "" {
+			return nil, errNoKidHeader
 		}
 		keys, err := v.jwks.Keys()
 		if err != nil {
 			return nil, fmt.Errorf("principal: loading jwks: %w", err)
 		}
-		key, ok := keys[kid]
-		if !ok {
-			return nil, fmt.Errorf("principal: no jwks key for kid %q", kid)
+		key, found := keys[kid]
+		if !found {
+			return nil, fmt.Errorf("%w %q", errUnknownKid, kid)
 		}
 		return key, nil
 	}
@@ -251,10 +320,15 @@ func (v *Verifier) Verify(tokenString string) (*Claims, error) {
 		jwt.WithExpirationRequired(),
 	)
 	if err != nil {
+		reason := classifyRejectionReason(err)
+		logEnvelopeRejection(ctx, reason, kid, claims, meta)
+		recordEnvelopeRejected(reason)
 		recordVerifyOutcome("rejected")
 		return nil, fmt.Errorf("principal: verify: %w", err)
 	}
 	if !token.Valid {
+		logEnvelopeRejection(ctx, "malformed", kid, claims, meta)
+		recordEnvelopeRejected("malformed")
 		recordVerifyOutcome("rejected")
 		return nil, errors.New("principal: token invalid")
 	}
@@ -269,4 +343,42 @@ func (v *Verifier) Verify(tokenString string) (*Claims, error) {
 
 	recordVerifyOutcome("verified")
 	return claims, nil
+}
+
+// classifyRejectionReason maps a jwt.ParseWithClaims error to one of
+// CHAOS-5443's seven caller-observable rejection reasons. errors.Is walks
+// the FULL error chain golang-jwt/jwt/v5 builds (its newError/joinErrors
+// helpers use fmt.Errorf with multiple %w verbs -- confirmed against the
+// installed v5.3.1 source), so this works regardless of how many layers
+// of "token is unverifiable"/"token has invalid claims" wrapping sit
+// between the returned error and the specific sentinel underneath.
+//
+// Every case this switch does NOT name -- errNoKidHeader,
+// jwt.ErrTokenMalformed (bad base64/segment count/header or claims JSON),
+// jwt.ErrTokenUnverifiable (unsupported/missing alg, or v.jwks.Keys()
+// itself failing to load -- an operational fault, not a per-token
+// decision, but still "this envelope could not be processed"),
+// jwt.ErrTokenRequiredClaimMissing (jwt.WithExpirationRequired rejecting
+// a token with no exp at all), and anything else this verifier does not
+// have a narrower bucket for -- collapses to "malformed": the
+// caller-observable fact is identical in every one of those cases, the
+// presented envelope could not be processed as a valid token at all, as
+// opposed to being processed and found to disagree on one specific claim.
+func classifyRejectionReason(err error) string {
+	switch {
+	case errors.Is(err, errUnknownKid):
+		return "unknown_kid"
+	case errors.Is(err, jwt.ErrTokenSignatureInvalid):
+		return "bad_signature"
+	case errors.Is(err, jwt.ErrTokenInvalidAudience):
+		return "audience"
+	case errors.Is(err, jwt.ErrTokenInvalidIssuer):
+		return "issuer"
+	case errors.Is(err, jwt.ErrTokenExpired):
+		return "expired"
+	case errors.Is(err, jwt.ErrTokenNotValidYet):
+		return "not_yet_valid"
+	default:
+		return "malformed"
+	}
 }

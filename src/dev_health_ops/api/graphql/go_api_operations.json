@@ -1,5 +1,13 @@
 [
   {
+    "operation": "capacityForecast",
+    "digest": "b4fb8f075aba9954714f10f7f4451242d969548d6392d778dae1177759f80780"
+  },
+  {
+    "operation": "capacityForecasts",
+    "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20"
+  },
+  {
     "operation": "cognitiveLoad",
     "digest": "dcdfb2692addf52ed6117162963c698b628af37d01d08e4a8724f90388d8427d"
   },
@@ -34,6 +42,10 @@
   {
     "operation": "reviewEdges",
     "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123"
+  },
+  {
+    "operation": "throughputForecast",
+    "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9"
   },
   {
     "operation": "workGraphArtifacts",

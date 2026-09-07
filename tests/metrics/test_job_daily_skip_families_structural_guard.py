@@ -142,16 +142,6 @@ DELETED_NATIVE_FAMILY_COMPUTE_FUNCTIONS = {
     # outright along with compute_dora.py, not left behind as a dead
     # single-constant file.
     "deploy": "compute_deploy_metrics_daily",
-    # CHAOS-5323: work_item_estimate's daily compute deleted from
-    # job_daily.py -- the native Go executor (WorkItemEstimateExecutor,
-    # CHAOS-4283) is the only writer of estimate_coverage_metrics_daily for a
-    # daily partition now. Unlike work_item_attribution above,
-    # compute_estimate_coverage_metrics_daily itself is ALSO deleted from the
-    # codebase (compute_work_items.py): job_work_items.py's
-    # run_work_items_sync_job call site is deleted too -- team-lead's
-    # ruling found that job, unlike the one work_item_attribution shares
-    # with it, is itself a legacy Python path with no live Go dispatcher.
-    "work_item_estimate": "compute_estimate_coverage_metrics_daily",
     # CHAOS-5234: work_graph_edges's daily compute deleted from job_daily.py
     # -- the native Go executor (WorkGraphEdgesExecutor, CHAOS-4286) is the
     # only writer of work_graph_pr_review_outcome_edges/work_graph_pr_

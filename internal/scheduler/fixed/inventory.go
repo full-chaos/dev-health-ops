@@ -537,9 +537,10 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 			Reason: "Go's capacity_forecast_weekly_fanout fixed schedule owns this cadence; the " +
 				"Python dispatch_capacity_forecast and run_capacity_forecast_job Celery tasks (and " +
 				"the product_tasks.py module that held them) were only ever reachable via this " +
-				"Beat entry (job_capacity.py's compute function is not dead -- it stays live via " +
-				"the CLI and worker_metrics.py's bridge).",
-			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).",
+				"Beat entry, and job_capacity.py itself (compute function, CLI verb, and " +
+				"worker_metrics.py's bridge it fed) is now fully DELETED (CHAOS-5336 native Go " +
+				"executor + cleanup) -- there is no remaining live path for it at all.",
+			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED); CHAOS-5336 (deletion).",
 		},
 		{
 			Name:    "process-ingest-streams",

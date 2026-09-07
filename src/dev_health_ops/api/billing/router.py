@@ -9,7 +9,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Any, Protocol, cast
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -39,10 +39,8 @@ from dev_health_ops.workers.job_contracts import BillingNotificationPayload
 from dev_health_ops.workers.job_outbox import enqueue_worker_job
 from dev_health_ops.workers.job_routes import (
     resolve_worker_job_route,
-    route_requires_celery,
     route_requires_outbox,
 )
-from dev_health_ops.workers.system_tasks import send_billing_notification
 
 from ._helpers import assign_attr, require_str, require_uuid
 from .invoice_routes import router as invoice_router
@@ -69,10 +67,6 @@ except ModuleNotFoundError:
 
 class SignatureVerificationError(Exception):
     """Fallback export when Stripe SDK is unavailable."""
-
-
-class _BillingNotificationTask(Protocol):
-    def delay(self, *, durable_notification_id: str) -> object: ...
 
 
 async def _enqueue_billing_notification(
@@ -124,15 +118,17 @@ async def _enqueue_billing_notification(
             if existing_notification_id is None:
                 raise
             notification_id = existing_notification_id
+    # CHAOS-5320: the Celery dispatch plane is gone fleet-wide, so a route
+    # that formerly meant "also fire the Celery task" (celery, and shadow's
+    # dual-dispatch half) no longer has a live consumer -- resolve_worker_job_route
+    # itself now rejects a celery-transport row outright, and every route this
+    # can still resolve to (river, river_canary, shadow) is already staged via
+    # _route_billing_notification's own route_requires_outbox gate above.
     route = await _route_billing_notification(
         notification_id=notification_id,
         org_id=org_uuid,
         idempotency_key=idempotency_key,
     )
-    if route_requires_celery(route):
-        return cast(_BillingNotificationTask, send_billing_notification).delay(
-            durable_notification_id=str(notification_id)
-        )
     return {"status": "routed", "transport": route}
 
 

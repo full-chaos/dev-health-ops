@@ -42,7 +42,7 @@ func webhookDeliveryFor(provider, eventType string, payload []byte) WebhookDeliv
 	}
 }
 
-func TestIsRepoScopedSyncEvent(t *testing.T) {
+func TestIsNativeSyncDispatchEvent(t *testing.T) {
 	cases := []struct {
 		provider, eventType string
 		want                bool
@@ -63,12 +63,21 @@ func TestIsRepoScopedSyncEvent(t *testing.T) {
 		{"gitlab", "issue_created", true},
 		{"gitlab", "pipeline", true},
 		{"gitlab", "tag_push", false},
-		{"jira", "issue_updated", false},
+		// CHAOS-5320: jira is no longer excluded -- issue_created/updated/
+		// deleted are the exact set _process_jira_event handles today
+		// (JIRA_EVENT_MAP's three canonical values). The raw provider
+		// webhookEvent string ("jira:issue_created") is never what reaches
+		// this function -- delivery.EventType is the already-canonicalised
+		// value (map_jira_event's output), same as github/gitlab.
+		{"jira", "issue_created", true},
+		{"jira", "issue_updated", true},
+		{"jira", "issue_deleted", true},
 		{"jira", "jira:issue_created", false},
+		{"jira", "unknown", false},
 	}
 	for _, testCase := range cases {
-		if got := isRepoScopedSyncEvent(testCase.provider, testCase.eventType); got != testCase.want {
-			t.Errorf("isRepoScopedSyncEvent(%q, %q) = %v, want %v", testCase.provider, testCase.eventType, got, testCase.want)
+		if got := isNativeSyncDispatchEvent(testCase.provider, testCase.eventType); got != testCase.want {
+			t.Errorf("isNativeSyncDispatchEvent(%q, %q) = %v, want %v", testCase.provider, testCase.eventType, got, testCase.want)
 		}
 	}
 }
@@ -79,19 +88,20 @@ func TestWebhookHandlerRoutesRecognisedGithubEventsNativelyWithoutHTTPDispatch(t
 		fakeStore: fakeStore{webhook: webhookDeliveryFor("github", "push", payload)},
 		result:    SyncDispatchResult{Processed: true, OccurrenceID: "sha256:abc"},
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, err := NewWebhookHandler(store, dispatcher)
+	handler, err := NewWebhookHandler(store)
 	if err != nil {
 		t.Fatal(err)
 	}
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
 		t.Fatal(err)
 	}
 	if store.calls != 1 || store.provider != "github" || store.eventType != "push" {
 		t.Fatalf("dispatch calls=%d provider=%q eventType=%q", store.calls, store.provider, store.eventType)
 	}
-	if dispatcher.calls != 0 {
-		t.Fatalf("HTTP dispatcher was called %d times; a recognised sync event must never reach it", dispatcher.calls)
+	if *recorded {
+		t.Fatal("a recognised sync event must never be recorded as ignored")
 	}
 }
 
@@ -101,13 +111,14 @@ func TestWebhookHandlerRoutesRecognisedGitlabEventsNativelyWithoutHTTPDispatch(t
 		fakeStore: fakeStore{webhook: webhookDeliveryFor("gitlab", "merge_request", payload)},
 		result:    SyncDispatchResult{Processed: true, OccurrenceID: "sha256:def"},
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(store, dispatcher)
+	handler, _ := NewWebhookHandler(store)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
 		t.Fatal(err)
 	}
-	if store.calls != 1 || dispatcher.calls != 0 {
-		t.Fatalf("dispatch calls=%d dispatcher calls=%d", store.calls, dispatcher.calls)
+	if store.calls != 1 || *recorded {
+		t.Fatalf("dispatch calls=%d recorded=%v", store.calls, *recorded)
 	}
 }
 
@@ -117,8 +128,9 @@ func TestWebhookHandlerUnroutableSyncIsPermanentNotRetried(t *testing.T) {
 		fakeStore: fakeStore{webhook: webhookDeliveryFor("github", "push", payload)},
 		result:    SyncDispatchResult{Processed: false, Reason: "webhook_sync_unroutable:no_sync_configuration"},
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(store, dispatcher)
+	handler, _ := NewWebhookHandler(store)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	err := handler.Work(context.Background(), webhookExecution(webhookID))
 	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) {
 		t.Fatalf("Work = %v, want category %s", err, jobruntime.CategoryPermanent)
@@ -130,8 +142,8 @@ func TestWebhookHandlerUnroutableSyncIsPermanentNotRetried(t *testing.T) {
 	if cause == nil || !strings.Contains(cause.Error(), "no_sync_configuration") {
 		t.Fatalf("Work error's unwrapped cause must name the unroutable reason: %v", cause)
 	}
-	if dispatcher.calls != 0 {
-		t.Fatalf("an unroutable sync must never fall back to HTTP dispatch (global-token path), got %d calls", dispatcher.calls)
+	if *recorded {
+		t.Fatal("an unroutable sync is a permanent error, never also recorded as an ignore (no fallback exists)")
 	}
 }
 
@@ -141,63 +153,84 @@ func TestWebhookHandlerSyncDispatchFailureIsRetryable(t *testing.T) {
 		fakeStore: fakeStore{webhook: webhookDeliveryFor("github", "push", payload)},
 		err:       errUnavailableForTest,
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(store, dispatcher)
+	handler, _ := NewWebhookHandler(store)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	err := handler.Work(context.Background(), webhookExecution(webhookID))
 	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
 		t.Fatalf("Work = %v, want category %s", err, jobruntime.CategoryRetryable)
 	}
-	if dispatcher.calls != 0 {
-		t.Fatalf("dispatcher must not be called on a native-path failure, got %d calls", dispatcher.calls)
+	if *recorded {
+		t.Fatal("a retryable native-path failure must not also be recorded as ignored")
 	}
 }
 
-func TestWebhookHandlerFallsBackToHTTPDispatchWithoutSyncDispatchWriter(t *testing.T) {
-	payload := []byte(`{"repository":{"id":1,"full_name":"full-chaos/dev-health"}}`)
-	store := &fakeStore{webhook: webhookDeliveryFor("github", "push", payload)}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(store, dispatcher)
-	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
-		t.Fatal(err)
-	}
-	if dispatcher.webhook.ID != webhookID {
-		t.Fatalf("expected the fallback HTTP dispatch, got %#v", dispatcher.webhook)
-	}
-}
-
-func TestWebhookHandlerJiraEventsStillDispatchOverHTTP(t *testing.T) {
+// TestWebhookHandlerIgnoresUnrecognisedJiraEvent covers a jira
+// delivery.EventType that isn't one of jiraSyncEventTypes' three canonical
+// values -- the raw, un-canonicalised webhookEvent string
+// ("jira:issue_updated") never actually reaches this function in production
+// (delivery.EventType is already map_jira_event's OUTPUT by the time a
+// webhook_deliveries row exists, same as github/gitlab), but the ignore path
+// this exercises (an unmatched jira event type is recorded, never silently
+// dropped) is real regardless of how it's reached. See
+// TestWebhookHandlerRoutesRecognisedJiraEventsNativelyWithoutHTTPDispatch
+// for the CHAOS-5320 native path this PR adds.
+func TestWebhookHandlerIgnoresUnrecognisedJiraEvent(t *testing.T) {
 	payload := []byte(`{"issue":{"key":"CHAOS-1"}}`)
 	store := &fakeSyncDispatchStore{
 		fakeStore: fakeStore{webhook: webhookDeliveryFor("jira", "jira:issue_updated", payload)},
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(store, dispatcher)
+	handler, _ := NewWebhookHandler(store)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
 		t.Fatal(err)
 	}
 	if store.calls != 0 {
-		t.Fatalf("jira must never reach SyncDispatchWriter (no native work-items manual-trigger path), got %d calls", store.calls)
+		t.Fatalf("an unrecognised jira event type must never reach SyncDispatchWriter, got %d calls", store.calls)
 	}
-	if dispatcher.webhook.ID != webhookID {
-		t.Fatalf("expected jira to dispatch over HTTP, got %#v", dispatcher.webhook)
+	if !*recorded {
+		t.Fatal("expected the ignore path for an unrecognised jira event type")
 	}
 }
 
-func TestWebhookHandlerUnrecognisedGithubEventStillDispatchesOverHTTP(t *testing.T) {
+// TestWebhookHandlerRoutesRecognisedJiraEventsNativelyWithoutHTTPDispatch is
+// jira's twin of the existing github/gitlab "routes natively" tests
+// (CHAOS-5320): a recognised, already-canonicalised jira event type is
+// routed to SyncDispatchWriter, never recorded as an ignore.
+func TestWebhookHandlerRoutesRecognisedJiraEventsNativelyWithoutHTTPDispatch(t *testing.T) {
+	payload := []byte(`{"issue":{"key":"CHAOS-1","fields":{"project":{"key":"CHAOS","name":"Full Chaos"}}}}`)
+	store := &fakeSyncDispatchStore{
+		fakeStore: fakeStore{webhook: webhookDeliveryFor("jira", "issue_updated", payload)},
+		result:    SyncDispatchResult{Processed: true, OccurrenceID: "sha256:jira1"},
+	}
+	handler, _ := NewWebhookHandler(store)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
+	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
+		t.Fatal(err)
+	}
+	if store.calls != 1 || *recorded {
+		t.Fatalf("dispatch calls=%d recorded=%v", store.calls, *recorded)
+	}
+}
+
+func TestWebhookHandlerIgnoresUnrecognisedGithubEvent(t *testing.T) {
 	payload := []byte(`{"action":"created"}`)
 	store := &fakeSyncDispatchStore{
 		fakeStore: fakeStore{webhook: webhookDeliveryFor("github", "issue_comment", payload)},
 	}
-	dispatcher := &fakeDispatcher{}
-	handler, _ := NewWebhookHandler(store, dispatcher)
+	handler, _ := NewWebhookHandler(store)
+	recorded, restore := spyRecordIgnoredWebhookEvent()
+	defer restore()
 	if err := handler.Work(context.Background(), webhookExecution(webhookID)); err != nil {
 		t.Fatal(err)
 	}
 	if store.calls != 0 {
 		t.Fatalf("an unrecognised event type must never reach SyncDispatchWriter, got %d calls", store.calls)
 	}
-	if dispatcher.webhook.ID != webhookID {
-		t.Fatalf("expected issue_comment to dispatch over HTTP, got %#v", dispatcher.webhook)
+	if !*recorded {
+		t.Fatal("expected the ignore path for an unrecognised github event type")
 	}
 }
 

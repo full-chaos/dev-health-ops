@@ -225,7 +225,7 @@ which had been unreachable dead code (never wired into `cli.py`'s argparse tree)
 | work_graph_edges | NATIVE | Go: `internal/jobs/metrics/daily/work_graph_edges_native_executor.go` (`WorkGraphEdgesExecutor`) | CHAOS-4286 (Done) |
 | work_item | NATIVE | Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- pre_bridge, ordered after `work_item_attribution` by families.json's `after` edge; reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ported `compute_work_item_metrics_daily` (compute_work_items.py), deleted entirely by CHAOS-5310/CHAOS-3092 (fully native, no remaining Python caller) | CHAOS-4283 |
 | work_item_attribution | NATIVE | Go: `internal/jobs/metrics/daily/work_item_attribution_native_executor.go` -- pre_bridge; ported `compute_work_item_team_attributions` (compute_work_items.py), the FULL daily compute (distinct from §3's native staleness-only backstop of the same table), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller). Runs before its three readers via families.json's `after` edges | CHAOS-4283 |
-| work_item_estimate | NATIVE | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ported `compute_estimate_coverage_metrics_daily` (compute_work_items.py), deleted entirely by CHAOS-5323/CHAOS-3092 (fully native, no remaining Python caller) | CHAOS-4283 |
+| work_item_estimate | NATIVE | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ports `compute_work_items.py:1425 compute_estimate_coverage_metrics_daily` | CHAOS-4283 |
 | work_item_state | NATIVE | Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads; ported `compute_work_item_state_durations_daily` (compute_work_item_state_durations.py), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller) | CHAOS-4278 (Done) |
 <!-- END GENERATED DAILY METRICS MATRIX -->
 
@@ -320,7 +320,7 @@ it.
 
 | Area | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `operational.webhook_delivery` | COMPAT-Python (Go job shell only) | Go: `internal/jobs/operational/http.go:19,35,44,50,63` (`webhookEndpoint`) <- `cmd/dev-health-worker/operational.go:65` (`POST /api/internal/worker-operational/webhook`); Python: `worker_operational.py:119 process_webhook_reference` -> `system_webhooks.py:63 process_webhook_event`. 100% of webhook receipt/parse/reconciliation is Python -- no native pre-step exists (unlike `workgraph.build`'s prestep). | CHAOS-4440 (stale docstring only) |
+| `operational.webhook_delivery` | NATIVE | Go: `internal/jobs/operational/handler.go` (`WebhookHandler.Work`) -- routes every recognised event natively via `SyncDispatchWriter.TriggerScopedSync` (github/gitlab/jira) or the two native GitHub App event types (`InstallationWriter`), with an explicit counted ignore (`recordIgnoredWebhookEvent`) for anything else. CHAOS-5320 deletes the HTTP compatibility bridge (`internal/jobs/operational/http.go`'s `webhookEndpoint`, `POST /api/internal/worker-operational/webhook`, `worker_operational.py:119 process_webhook_reference`, `system_webhooks.py:63 process_webhook_event`) entirely -- no Python callback of any kind remains. | CHAOS-5320 (this PR) |
 
 ## STREAMS
 

@@ -40,9 +40,7 @@ var pythonIntDifferentialCases = []string{
 }
 
 func TestPythonIntMatchesRealCPython(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 not available")
-	}
+	requireCPython(t)
 	// The value crosses the process boundary base64-encoded so no shell,
 	// argv, or source-encoding layer can alter the exotic bytes under test --
 	// which would silently turn this differential into a comparison of two
@@ -87,6 +85,45 @@ except Exception:
 			t.Fatalf("pythonInt(%q) = (%d, %v); CPython int() = (%d, %v)",
 				raw, goValue, goOK, pythonValue, pythonOK)
 		}
+	}
+}
+
+// requireCPython skips unless the interpreter on PATH is the one this parity
+// seam is actually specified against.
+//
+// The Python side of this contract is CPython's int(): the whitespace set is
+// Py_UNICODE_ISSPACE, and the underscore grammar is CPython's numeric-literal
+// rule. A different implementation (PyPy, MicroPython) or an older release can
+// legitimately differ, and this test would then go red for a reason that has
+// nothing to do with the Go code under test -- which is worse than not running,
+// because a red test nobody trusts is a red test everybody ignores. The
+// repository targets 3.12+ (see pyproject.toml's requires-python), so anything
+// older is out of contract rather than a finding.
+func requireCPython(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+	out, err := exec.Command("python3", "-c",
+		"import platform,sys;print(platform.python_implementation(),sys.version_info[0],sys.version_info[1])").
+		Output()
+	if err != nil {
+		t.Skipf("python3 did not report its implementation: %v", err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 3 {
+		t.Skipf("unexpected interpreter banner %q", strings.TrimSpace(string(out)))
+	}
+	if fields[0] != "CPython" {
+		t.Skipf("interpreter is %s, not CPython: int() grammar is only specified here for CPython", fields[0])
+	}
+	major, majorErr := strconv.Atoi(fields[1])
+	minor, minorErr := strconv.Atoi(fields[2])
+	if majorErr != nil || minorErr != nil {
+		t.Skipf("unexpected interpreter version %q", strings.TrimSpace(string(out)))
+	}
+	if major < 3 || (major == 3 && minor < 12) {
+		t.Skipf("CPython %d.%d predates this repository's 3.12+ contract", major, minor)
 	}
 }
 

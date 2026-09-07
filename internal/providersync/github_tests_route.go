@@ -23,8 +23,15 @@ const (
 	// configured 2.5-month backfill window can exceed two pages, so the route
 	// permits the package-wide nativeMaxPages ceiling (10,000 runs) while still
 	// failing closed when GitHub advertises a page beyond that bound.
-	githubTestsMaxRuns         = nativeMaxPages * nativePerPage
-	githubTestsMaxArtifacts    = 25
+	githubTestsMaxRuns      = nativeMaxPages * nativePerPage
+	githubTestsMaxArtifacts = 25
+	// githubTestsMaxDownloadSize is the DEFAULT per-artifact download cap,
+	// used whenever GitHubTestsRouteHandler.MaxArtifactBytes is unset
+	// (WORKER_GITHUB_TESTS_MAX_ARTIFACT_BYTES, config.Config
+	// WorkerGithubTestsMaxArtifactBytes) -- see downloadGitHubTestsArtifact's
+	// maxBytes parameter. A legitimate repo shape (e.g. a large nightly test
+	// bundle) can exceed 100 MiB without the read itself being broken; before
+	// this became configurable the only remedy was a rebuild.
 	githubTestsMaxDownloadSize = 100 << 20
 	githubTestsRuleVersion     = "ci-acceptance.v1"
 )
@@ -44,8 +51,9 @@ var ErrGitHubTestsIncomplete = errors.New("github tests inventory incomplete")
 var ErrGitHubTestsArtifactUnavailable = fmt.Errorf("%w: artifact unavailable", ErrGitHubTestsIncomplete)
 
 // ErrGitHubTestsArtifactOversized narrows ErrGitHubTestsIncomplete to the
-// download-time bound violation: the artifact body exceeded
-// githubTestsMaxDownloadSize.
+// download-time bound violation: the artifact body exceeded the configured
+// per-artifact cap (githubTestsMaxDownloadSize by default, overridable via
+// GitHubTestsRouteHandler.MaxArtifactBytes / WORKER_GITHUB_TESTS_MAX_ARTIFACT_BYTES).
 //
 // CHAOS-4315 (reversing this sentinel's original disposition): in the
 // CHUNKED route -- the one production dispatch always executes for cicd/tests
@@ -286,6 +294,11 @@ type GitHubTestsRouteHandler struct {
 	MaxRuns            int
 	MaxArtifactsPerRun int
 	MaxJobPages        int
+	// MaxArtifactBytes overrides githubTestsMaxDownloadSize when positive
+	// (WORKER_GITHUB_TESTS_MAX_ARTIFACT_BYTES, config.Config). Zero/negative
+	// keeps the package default -- see the zero-means-default pattern the
+	// three fields above already use.
+	MaxArtifactBytes int64
 }
 
 func (handler GitHubTestsRouteHandler) Collect(
@@ -321,6 +334,10 @@ func (handler GitHubTestsRouteHandler) Collect(
 	jobPages := handler.MaxJobPages
 	if jobPages == 0 {
 		jobPages = nativeMaxPages
+	}
+	maxArtifactBytes := handler.MaxArtifactBytes
+	if maxArtifactBytes <= 0 {
+		maxArtifactBytes = githubTestsMaxDownloadSize
 	}
 	if maxRuns < 1 || maxRuns > githubTestsMaxRuns || maxArtifacts < 1 || maxArtifacts > githubTestsMaxArtifacts || jobPages < 1 || jobPages > nativeMaxPages {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
@@ -491,7 +508,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			// treats a routine 404/410 and a genuinely empty 2xx body
 			// identically (CHAOS-4185 codex round 3 only changed the
 			// CHUNKED route's accounting, not this oracle's disposition).
-			archive, used, _, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID))
+			archive, used, _, downloadErr := downloadGitHubTestsArtifact(ctx, client, root, string(artifact.ID), maxArtifactBytes)
 			requests += used
 			if downloadErr != nil {
 				// Same disposition as an unreadable container below: an
@@ -576,7 +593,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 	// counters -- it has no persisted, resumable cursor to hang them off
 	// (same divergence as skippedArtifacts above; see the oversized-artifact
 	// doc comment).
-	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, nil, nil, 0, 0, nil)
+	githubTestsLogArtifactSkipSummary(claim, repo.FullName, incomplete, nil, nil, 0, 0, nil, 0)
 	return CompleteRouteBatch{Effects: effects, Watermark: watermark, Result: map[string]any{
 		"pipeline_runs_synced": len(pipelines), "job_runs_synced": len(jobs), "acceptance_checks_synced": len(acceptance),
 		"test_suites_synced": len(suites), "test_cases_synced": len(cases), "coverage_snapshots_synced": len(coverage), "repo": repo.FullName,
@@ -830,6 +847,7 @@ func gitHubTestsCheckKey(provider, name string) string {
 // otherwise satisfy the totality floor and terminalize a healthy unit.
 func downloadGitHubTestsArtifact(
 	ctx context.Context, client *providerfoundation.HTTPClient, root, artifactID string,
+	maxBytes int64,
 ) (archive []byte, used int, notFound bool, err error) {
 	response, err := client.Do(ctx, http.MethodGet, root+"/actions/artifacts/"+url.PathEscape(artifactID)+"/zip", nil)
 	if err != nil {
@@ -862,23 +880,23 @@ func downloadGitHubTestsArtifact(
 	if response.StatusCode >= 400 {
 		return nil, requests, false, &providerfoundation.ProviderError{Class: providerfoundation.ErrorPermanent, StatusCode: response.StatusCode}
 	}
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, githubTestsMaxDownloadSize+1))
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBytes+1))
 	if readErr != nil {
 		return nil, requests, false, fmt.Errorf(
 			"%w: artifact download read failed: %v", ErrGitHubTestsIncomplete, readErr,
 		)
 	}
-	if len(body) > githubTestsMaxDownloadSize {
-		// len(body) is capped at githubTestsMaxDownloadSize+1 by the
-		// LimitReader above, so it is always exactly that value here -- the
-		// true artifact size beyond the cap is never read. That capped
-		// length is still the useful "observed size" for the skip marker: it
-		// is the boundary the download actually crossed. Carried on the typed
-		// error (not just the message) so the chunked route's durable marker
+	if int64(len(body)) > maxBytes {
+		// len(body) is capped at maxBytes+1 by the LimitReader above, so it
+		// is always exactly that value here -- the true artifact size beyond
+		// the cap is never read. That capped length is still the useful
+		// "observed size" for the skip marker: it is the boundary the
+		// download actually crossed. Carried on the typed error (not just
+		// the message) so the chunked route's durable marker
 		// (GitHubTestsSkippedArtifact, CHAOS-4315) gets real ints, not a
 		// re-parse of formatted text.
 		return nil, requests, false, &githubTestsArtifactOversizedError{
-			SizeBytes: int64(len(body)), CapBytes: int64(githubTestsMaxDownloadSize),
+			SizeBytes: int64(len(body)), CapBytes: maxBytes,
 		}
 	}
 	return body, requests, false, nil

@@ -162,7 +162,7 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
 	}
 	handler, providerMetrics := buildProviderSyncHandlerWithRuntimeDependencies(
 		repository, cipher, nil, clickhouseConn, valkeyClient, pool,
-		nil, nil, slog.Default(), workItemsRuntimeConfig{},
+		nil, nil, slog.Default(), workItemsRuntimeConfig{}, 0,
 	)
 
 	server := httptest.NewServer(githubAllArtifactsUnreadableFixtureDoer(t, 2))

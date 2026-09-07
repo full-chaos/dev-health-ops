@@ -682,6 +682,48 @@ func TestGitHubTestsRoutineNotFoundArtifactsDoNotFireTotality(t *testing.T) {
 	}
 }
 
+// TestGitHubTestsNotFoundOnlyUnitStillLogsTheSkipSummary pins the CHAOS-5427
+// follow-up N-1 fix: RED on the pre-fix code, where a unit whose ONLY skip
+// this attempt was routine not-found (no oversized/unavailable/
+// unreadable_archive) emitted NO summary log line at all -- notFoundExcluded
+// fed neither `incomplete` (by design, matching the routine-404/410
+// disposition) nor excludedSuffix/excludedPrefix, so
+// githubTestsLogArtifactSkipSummary's hasArtifactDisposition gate never saw
+// evidence a real skip happened this attempt, even though
+// totality_excluded_not_found was genuinely nonzero. GREEN after: the gate
+// also checks notFoundExcluded directly.
+func TestGitHubTestsNotFoundOnlyUnitStillLogsTheSkipSummary(t *testing.T) {
+	records := captureMembershipLogs(t)
+	doer := &githubTestsNotFoundArtifactDoer{t: t, runs: 2, status: http.StatusNotFound}
+	client := githubTestsClient(t, doer)
+
+	walk, err := walkGitHubTestsChunksResult(t, client, 8)
+	if err != nil {
+		t.Fatalf("two routine not-found artifacts sank the unit: err=%v", err)
+	}
+	if walk.cursor.Phase != "done" {
+		t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
+	}
+
+	var found *slog.Record
+	for index := range *records {
+		if (*records)[index].Level == slog.LevelWarn &&
+			(*records)[index].Message == "provider artifacts skipped this unit; inventory continued" {
+			found = &(*records)[index]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no skip-summary WARN record for a not-found-only unit; got %d records", len(*records))
+	}
+	attrs := membershipLogAttrs(*found)
+	if got := attrs["totality_excluded_not_found"]; got != int64(2) {
+		t.Fatalf("totality_excluded_not_found=%v (%T), want 2", got, got)
+	}
+	if got := attrs["artifact_skip_total"]; got != int64(0) {
+		t.Fatalf("artifact_skip_total=%v, want 0 -- a not-found skip is not a whole-artifact skip in that vocabulary", got)
+	}
+}
+
 // githubTestsMixedNotFoundDoer serves three runs: one whose artifact 404s
 // (routine, excluded from totality accounting) and two whose artifacts are
 // genuinely unreadable (a 2xx non-zip body). Mixes the two dispositions the
@@ -743,5 +785,73 @@ func TestGitHubTestsMixedNotFoundAndUnreadableCountsOnlyTheObserved(t *testing.T
 	}
 	if walk.final.Result != nil {
 		t.Fatalf("final batch=%#v, want no final emission on a totality failure", walk.final)
+	}
+}
+
+// TestGitHubTestsAllOversizedArtifactsDoNotFireTotality pins the
+// CHAOS-4315/CHAOS-4185 interaction fix (github_tests_chunked_route.go, the
+// oversized branch): RED on the pre-fix baseline, where this same shape --
+// five oversized artifacts and nothing else -- bumped BOTH ArchivesSeen and
+// ArchivesUnreadable, satisfied seen==unreadable(5)>=githubTestsAllArtifactsUnreadableFloor,
+// and terminalized the unit with ErrGitHubTestsAllArtifactsUnreadable,
+// discarding every already-committed row (this is the live prod incident:
+// full-chaos/script-manifest's cicd sync failed hourly since 2026-09-02 on
+// exactly this shape -- 5 nightly-bundle artifacts each ~350KB over the
+// 100MiB cap). An oversized artifact downloaded fine (every byte up to the
+// cap was read); it is not evidence the channel is broken, so it must be
+// excluded from the totality gate's counters entirely, matching the routine
+// 404/410 branch. GREEN after the fix: the gate never fires (ArchivesSeen
+// stays 0), the unit finalizes `done`, and the watermark still advances
+// (oversized is a CHAOS-4394 watermark-advancing cause, unchanged by this
+// fix).
+func TestGitHubTestsAllOversizedArtifactsDoNotFireTotality(t *testing.T) {
+	oversized := map[int]bool{1: true, 2: true, 3: true, 4: true, 5: true}
+	doer := &githubTestsDownloadFailureDoer{t: t, artifacts: 5, oversized: oversized}
+
+	walk, err := walkGitHubTestsChunksResult(t, githubTestsClient(t, doer), 8)
+	if err != nil {
+		t.Fatalf(
+			"5 oversized artifacts and 0 readable sank the unit: err=%v; want it skipped "+
+				"and the unit finalized -- an oversized artifact is not evidence the read "+
+				"channel is broken (CHAOS-4315/CHAOS-4185 interaction)", err,
+		)
+	}
+	if doer.archiveRequests != 5 {
+		t.Fatalf("downloaded %d archive redirects, want 5 (every oversized artifact observed)", doer.archiveRequests)
+	}
+	if walk.cursor.Phase != "done" {
+		t.Fatalf("terminal phase=%q, want done", walk.cursor.Phase)
+	}
+	if walk.cursor.ArchivesSeen == nil || *walk.cursor.ArchivesSeen != 0 {
+		t.Fatalf(
+			"ArchivesSeen=%v, want known 0: every artifact was oversized, and an oversized "+
+				"skip must never feed the totality gate's denominator",
+			intPtrString(walk.cursor.ArchivesSeen),
+		)
+	}
+	if walk.cursor.ArchivesUnreadable == nil || *walk.cursor.ArchivesUnreadable != 0 {
+		t.Fatalf(
+			"ArchivesUnreadable=%v, want known 0: an oversized skip must never feed the "+
+				"totality gate's numerator either",
+			intPtrString(walk.cursor.ArchivesUnreadable),
+		)
+	}
+	observation := githubTestsSkipObservation(t, walk.cursor.Incomplete, githubTestsReportMemberComponent)
+	if observation.Cause != githubTestsArtifactOversizedCause || observation.Count != 5 {
+		t.Fatalf(
+			"durable observation=%+v, want cause=%s count=5 -- every skip is still durably recorded, only the gate's counters are unaffected",
+			observation, githubTestsArtifactOversizedCause,
+		)
+	}
+	skippedArtifacts, ok := walk.final.Result["skipped_artifacts"].([]GitHubTestsSkippedArtifact)
+	if !ok || len(skippedArtifacts) != 5 {
+		t.Fatalf("skipped_artifacts=%#v, want exactly 5 durable marker records", walk.final.Result["skipped_artifacts"])
+	}
+	want := nativeTestClaim("github", "cicd").BeforeAt
+	if walk.final.Watermark == nil || !walk.final.Watermark.Equal(*want) {
+		t.Fatalf(
+			"watermark=%v, want %v -- oversized stays a watermark-advancing cause (CHAOS-4394), unchanged by this fix",
+			walk.final.Watermark, want,
+		)
 	}
 }

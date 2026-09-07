@@ -98,7 +98,7 @@ VALUES ($1, 'canonical_incident_ingestion', 'community', true)`, featureID); err
 	handler, providerMetrics := buildProviderSyncHandlerWithRuntimeDependencies(
 		repository, cipher, nil, nil, nil, pool,
 		providersync.PostgresIncidentEntitlement{Pool: pool},
-		nil, slog.Default(), workItemsRuntimeConfig{},
+		nil, slog.Default(), workItemsRuntimeConfig{}, 0,
 	)
 
 	for _, test := range []struct {

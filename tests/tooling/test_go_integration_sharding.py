@@ -1830,7 +1830,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # sink invariant the first draft traded away -- responders moved to their
     # own sink type, so the incident-family sink must refuse that destination
     # outright and the responder sink must refuse every other one.
-    assert len(expected_provider_tests) == 1334
+    # CHAOS-5427 (oversized github cicd/tests artifact skips excluded from
+    # the CHAOS-4185 totality gate): +2 ordinary top-level (1334 -> 1336),
+    # integration-tagged UNCHANGED at 153.
+    # TestGitHubTestsAllOversizedArtifactsDoNotFireTotality (5 oversized
+    # artifacts, 0 readable, must not trip the totality gate) and
+    # TestGitHubTestsNotFoundOnlyUnitStillLogsTheSkipSummary (a not-found-
+    # only unit must still emit the skip-summary log line) are both
+    # in-memory, non-integration tests.
+    assert len(expected_provider_tests) == 1336
 
     assert len(expected_integration_tests) == 153
     assert expected_integration_tests < expected_provider_tests
@@ -1848,7 +1856,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1334
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1336
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1950,7 +1958,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1334
+    assert len(selected_tests) == len(set(selected_tests)) == 1336
     assert set(selected_tests) == expected_tests
 
 

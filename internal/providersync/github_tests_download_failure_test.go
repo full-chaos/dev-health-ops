@@ -411,17 +411,20 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 				observation, githubTestsArtifactOversizedCause,
 			)
 		}
-		// The oversized branch must bump BOTH totality counters exactly like
-		// the adjacent ErrGitHubTestsArtifactUnavailable branch does: SEEN
-		// because a real download attempt was made, UNREADABLE because its
-		// contents were never obtained. Asserting only the observation/cause
-		// above would pass even if one of these two bumps were dropped,
-		// silently miscounting the CHAOS-4185 total-unreadability floor.
-		if walk.cursor.ArchivesSeen == nil || *walk.cursor.ArchivesSeen != 2 {
-			t.Fatalf("ArchivesSeen=%v, want known 2 (1 oversized + 1 healthy)", intPtrString(walk.cursor.ArchivesSeen))
+		// The oversized branch must NOT bump either totality counter
+		// (CHAOS-4315/CHAOS-4185 interaction fix): a deliberate policy skip
+		// on bytes that downloaded fine is not evidence our read channel is
+		// broken, matching the routine-404/410 branch's own exclusion. Before
+		// this fix both counters were bumped here, which fed the CHAOS-4315
+		// skip into the CHAOS-4185 totality gate's own denominator and
+		// numerator and could terminalize a unit CHAOS-4315 says must not
+		// fail (see TestGitHubTestsAllOversizedArtifactsDoNotFireTotality for
+		// the reachable case: >=2 oversized artifacts and nothing else).
+		if walk.cursor.ArchivesSeen == nil || *walk.cursor.ArchivesSeen != 1 {
+			t.Fatalf("ArchivesSeen=%v, want known 1 (the healthy artifact only; the oversized one is excluded)", intPtrString(walk.cursor.ArchivesSeen))
 		}
-		if walk.cursor.ArchivesUnreadable == nil || *walk.cursor.ArchivesUnreadable != 1 {
-			t.Fatalf("ArchivesUnreadable=%v, want known 1 (the oversized artifact only)", intPtrString(walk.cursor.ArchivesUnreadable))
+		if walk.cursor.ArchivesUnreadable == nil || *walk.cursor.ArchivesUnreadable != 0 {
+			t.Fatalf("ArchivesUnreadable=%v, want known 0 (the oversized artifact is excluded, not counted unreadable)", intPtrString(walk.cursor.ArchivesUnreadable))
 		}
 		// CHAOS-4315 finding 1 (independent review, BLOCK): report_member was
 		// entirely absent from githubTestsWatermarkAdvancingPairs, so ANY
@@ -465,8 +468,10 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 	})
 
 	// A run whose bad artifacts are a MIX of causes (oversized + unavailable)
-	// alongside one healthy artifact must classify totality the same way a
-	// single-cause mix would: ArchivesSeen counts every attempt, both bad
+	// alongside one healthy artifact must classify totality correctly: the
+	// oversized artifact is excluded from ArchivesSeen/ArchivesUnreadable
+	// entirely (CHAOS-4315/CHAOS-4185 interaction fix), the unavailable
+	// artifact still counts as both seen and unreadable (unchanged), both
 	// causes land in Incomplete distinctly, and -- because one artifact WAS
 	// readable -- githubTestsCheckAllArtifactsUnreadable's seen==unreadable
 	// floor (CHAOS-4185) must NOT fire. This guards against the oversized
@@ -489,11 +494,11 @@ func TestGitHubTestsChunkedArtifactDownloadOversizedCarriesCause(t *testing.T) {
 		if walk.cursor.Suites != 1 {
 			t.Fatalf("committed %d suites, want 1 from the healthy artifact", walk.cursor.Suites)
 		}
-		if walk.cursor.ArchivesSeen == nil || *walk.cursor.ArchivesSeen != 3 {
-			t.Fatalf("ArchivesSeen=%v, want known 3", intPtrString(walk.cursor.ArchivesSeen))
+		if walk.cursor.ArchivesSeen == nil || *walk.cursor.ArchivesSeen != 2 {
+			t.Fatalf("ArchivesSeen=%v, want known 2 (unavailable + healthy; the oversized artifact is excluded)", intPtrString(walk.cursor.ArchivesSeen))
 		}
-		if walk.cursor.ArchivesUnreadable == nil || *walk.cursor.ArchivesUnreadable != 2 {
-			t.Fatalf("ArchivesUnreadable=%v, want known 2 (not 3 -- the healthy artifact must not count)", intPtrString(walk.cursor.ArchivesUnreadable))
+		if walk.cursor.ArchivesUnreadable == nil || *walk.cursor.ArchivesUnreadable != 1 {
+			t.Fatalf("ArchivesUnreadable=%v, want known 1 (the unavailable artifact only; oversized excluded, healthy not unreadable)", intPtrString(walk.cursor.ArchivesUnreadable))
 		}
 		var oversizedCount, unavailableCount int
 		for _, observation := range walk.cursor.Incomplete {

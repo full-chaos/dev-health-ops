@@ -40,20 +40,20 @@ NOT cover them. What it covers is Python that is genuinely dead.
 
 # What this ledger currently holds
 
-Only ``discover_team_scopes``. CHAOS-5336 deleted the capacity-forecast
+The EXECUTION path -- ``resolvers/capacity.py``, ``resolvers/forecast.py`` and
+``metrics/capacity_queries.py`` -- plus ``discover_team_scopes``. CHAOS-5336 deleted the capacity-forecast
 scheduler; this function was its last survivor and had no caller in ``src/`` at
 all. An unbounded sweep of the whole tree found exactly three references: its
 own definition, its own test, and a doc comment in
 ``internal/jobs/metrics/remaining/capacity_native_clickhouse.go`` naming it as
 the source of a query the Go worker already ports.
 
-The larger deletion CHAOS-5349 was scoped for -- ``resolvers/capacity.py``,
-``resolvers/forecast.py``, ``metrics/forecast.py``, ``metrics/compute_capacity.py``
-and the rest of ``metrics/capacity_queries.py`` -- is NOT here, and must not be
-added until the fallback question above is ruled on: with the routing rows
-enabled those modules are only reached on the fallback paths, so deleting them
-means those three operations lose their fallback entirely. That is a live
-behaviour change and a separate decision from "enable the routing rows".
+What is NOT here, deliberately: ``metrics/compute_capacity.py`` and
+``metrics/forecast.py``. They are the Go kernels' parity ORACLES, kept on the
+``metrics/compounding_risk.py`` precedent, and the third test below asserts they
+survive AND that nothing under ``src/`` imports them -- an oracle that acquires
+a production importer has quietly become a live path again, which is the one way
+this arrangement could rot back into the dual implementation it replaced.
 
 Widen this ledger as each subsequent deletion lands. Do not remove entries.
 """
@@ -81,13 +81,57 @@ DELETED_GO_SERVED_RESOLVER_SYMBOLS: dict[Path, frozenset[str]] = {
     CAPACITY_QUERIES_SOURCE: frozenset({"discover_team_scopes"}),
 }
 
-# module path -> a module that must not exist on disk AT ALL.
+# label -> a module that must not exist on disk AT ALL.
 #
-# Deliberately EMPTY today. See this module's docstring: the resolver and
-# compute modules CHAOS-5349 was scoped to delete are blocked on a ruling about
-# the fail-closed fallback, and an entry added here before that ruling would
-# assert a deletion that has not been agreed.
-DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {}
+# The EXECUTION path for the three query-api-served capacity/forecast
+# operations. chris ruled 2026-09-07 02:51Z that these three lose their Python
+# fallback ("raise is fine"); the Strawberry field bodies now raise, and the
+# code they used to call is gone.
+DELETED_GO_SERVED_RESOLVER_MODULES: dict[str, Path] = {
+    # capacityForecast + capacityForecasts. Its query layer went with it.
+    "capacity resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "capacity.py",
+    # throughputForecast, including the seven ClickHouse reads that lived here
+    # rather than in the kernel -- which is why metrics/forecast.py had no
+    # resolver-only function left to delete.
+    "forecast resolver": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "api"
+    / "graphql"
+    / "resolvers"
+    / "forecast.py",
+    # The capacity resolver's only query layer; no other importer.
+    "capacity query layer": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "metrics"
+    / "capacity_queries.py",
+}
+
+# The kernels RETAINED as Go-parity oracles, on the metrics/compounding_risk.py
+# precedent: the daily-family deletion train kept that pure kernel on main as
+# the oracle for its golden generator while deleting the family's execution
+# path.
+#
+# Deleting these instead would leave the Go ports' fixtures unfalsifiable --
+# a golden captured from a producer that no longer exists cannot disagree with
+# anything, and the corpus guard that re-runs the generators against live
+# Python would fail outright (measured: all three importing generators die with
+# ModuleNotFoundError).
+RETAINED_ORACLE_MODULES: dict[str, Path] = {
+    "capacity kernel": ROOT
+    / "src"
+    / "dev_health_ops"
+    / "metrics"
+    / "compute_capacity.py",
+    "throughput kernel": ROOT / "src" / "dev_health_ops" / "metrics" / "forecast.py",
+}
 
 # The Strawberry declarations that MUST survive every deletion in this family,
 # because they are what produces the SDL that both planes digest for routing.
@@ -152,14 +196,27 @@ def _defined_names(source: Path) -> set[str]:
 
 
 def test_deleted_symbols_are_not_redefined() -> None:
-    """A deleted symbol must stay deleted, in the module it was deleted from."""
+    """A deleted symbol must stay deleted, in the module it was deleted from.
+
+    A symbol entry whose whole module has SINCE been deleted is satisfied by
+    that module's entry in DELETED_GO_SERVED_RESOLVER_MODULES -- the symbol
+    cannot come back while the file it lived in does not exist. That is the
+    "move it, do not drop it" path, and it is checked rather than assumed: a
+    vanished module with no modules-ledger entry is a silently dropped
+    assertion, which is exactly what a never-shrink ledger exists to prevent.
+    """
+    ledgered_modules = set(DELETED_GO_SERVED_RESOLVER_MODULES.values())
     for source, deleted in DELETED_GO_SERVED_RESOLVER_SYMBOLS.items():
-        assert source.exists(), (
-            f"{source} no longer exists. If it was deleted deliberately, move its "
-            "entry from DELETED_GO_SERVED_RESOLVER_SYMBOLS to "
-            "DELETED_GO_SERVED_RESOLVER_MODULES rather than dropping it -- this "
-            "ledger never shrinks."
-        )
+        if not source.exists():
+            assert source in ledgered_modules, (
+                f"{source} no longer exists and is not in "
+                "DELETED_GO_SERVED_RESOLVER_MODULES either, so nothing now "
+                "asserts that "
+                f"{', '.join(sorted(deleted))} stays deleted. Add the module to "
+                "the modules ledger rather than dropping the symbol entry -- "
+                "this ledger never shrinks."
+            )
+            continue
         defined = _defined_names(source)
         restored = sorted(deleted & defined)
         assert not restored, (
@@ -211,4 +268,55 @@ def test_sdl_load_bearing_declarations_still_exist() -> None:
             "5e2150ef.... If the schema genuinely must change, that is a "
             "schema-change PR with a regenerated pin and a routing-row "
             "migration, not a Python cleanup."
+        )
+
+
+def test_retained_oracles_exist_and_have_no_production_importer() -> None:
+    """The kept kernels must survive, and must stay out of the production graph.
+
+    Two assertions, and the second is the one that stops this arrangement from
+    rotting. A module retained "as an oracle" that something under ``src/``
+    starts importing is no longer an oracle -- it is a live path with a
+    misleading docstring, and the Go port it was supposed to be measured
+    against now has a Python twin executing beside it. That is precisely the
+    dual implementation CHAOS-5349 deleted.
+
+    ``tests/`` is excluded from the sweep on purpose: the generators and unit
+    tests SHOULD import these, and that is the whole point of keeping them.
+    """
+    source_root = ROOT / "src"
+    for label, module in RETAINED_ORACLE_MODULES.items():
+        assert module.exists(), (
+            f"{label}: {module} has been deleted. It is the parity oracle for a "
+            "Go kernel -- see its own module docstring. Deleting it does not "
+            "remove a Python code path (there is none left); it removes the "
+            "ability to prove the Go port still agrees with anything, and it "
+            "breaks TestEveryDiscoverableCorpusStillMatchesLivePython, which "
+            "re-runs the golden generators against live Python."
+        )
+
+        dotted = "dev_health_ops.metrics." + module.stem
+        importers: list[str] = []
+        for candidate in source_root.rglob("*.py"):
+            # An oracle importing another oracle is not a production path:
+            # metrics/forecast.py takes ThroughputHistory from
+            # metrics/compute_capacity.py, and both are kept for the same
+            # reason. Excluding the retained set keeps this assertion about
+            # what it is actually for -- something OUTSIDE the oracle island
+            # reaching into it.
+            if candidate == module or candidate in RETAINED_ORACLE_MODULES.values():
+                continue
+            text = candidate.read_text(encoding="utf-8")
+            if dotted in text or f"from .{module.stem} import" in text:
+                importers.append(str(candidate.relative_to(ROOT)))
+
+        assert not importers, (
+            f"{label}: {dotted} is imported from production code by "
+            f"{', '.join(sorted(importers))}. It is retained ONLY as the parity "
+            "oracle for its Go port and its docstring says so. A production "
+            "importer means the Python is executing again beside the Go that "
+            "replaced it -- the dual implementation CHAOS-5349 removed. Either "
+            "the new caller belongs in Go, or this module is being promoted "
+            "back to a live path, which is a decision to make explicitly rather "
+            "than by adding an import."
         )

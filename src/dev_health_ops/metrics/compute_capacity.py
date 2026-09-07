@@ -1,5 +1,29 @@
 """Capacity planning via Monte Carlo simulation.
 
+ORACLE for the Go capacity kernel (``internal/jobs/metrics/numerical``'s
+``ForecastCapacity``/``MonteCarloForecast*``/``IntegerPercentiles``) via
+``tests/fixtures/generate_capacity_forecast_golden.py``,
+``generate_remaining_metrics_python_golden.py`` and ``generate_fma_golden.py``,
+re-executed against live Python by the corpus guard
+``TestEveryDiscoverableCorpusStillMatchesLivePython``; not a production path;
+production importers: none.
+
+CHAOS-5349 deleted this module's EXECUTION path -- the GraphQL capacity
+resolvers and their query layer -- and query-api serves those operations
+natively. What survives is the kernel, retained deliberately as the parity
+oracle, on the same precedent as ``metrics/compounding_risk.py``: a Go port
+whose Python original has been deleted can no longer be proved to agree with
+anything, and its goldens become frozen blobs that only restate whatever the Go
+code already does.
+
+``get_backlog_size_clickhouse`` is the one non-kernel survivor:
+``tests/test_linear_backfill_clickhouse_idempotency_live.py`` uses it as an
+independent backlog reader against a live ClickHouse. The other three loaders
+(``load_throughput_history_clickhouse``/``_sqlalchemy``,
+``get_backlog_size_sqlalchemy``) were deleted with the execution path -- an
+unbounded sweep found ZERO references to any of them anywhere in the tree,
+including their own tests.
+
 Forecasts work completion using historical throughput data.
 """
 
@@ -16,7 +40,6 @@ from typing import TYPE_CHECKING
 from dev_health_ops.metrics.sinks.clickhouse.idempotency import WORK_ITEMS_DEDUPED
 
 if TYPE_CHECKING:
-    import sqlalchemy.ext.asyncio
     from clickhouse_connect.driver import Client as ClickHouseClient
 
 
@@ -372,123 +395,6 @@ def forecast_capacity(
     )
 
 
-async def load_throughput_history_clickhouse(
-    client: ClickHouseClient,
-    team_id: str | None = None,
-    work_scope_id: str | None = None,
-    history_days: int = 90,
-    org_id: str = "",
-) -> ThroughputHistory:
-    """Load throughput history from ClickHouse.
-
-    Args:
-        client: ClickHouse client connection.
-        team_id: Filter by team (optional).
-        work_scope_id: Filter by work scope (optional).
-        history_days: Number of days of history to load.
-
-    Returns:
-        ThroughputHistory with loaded samples.
-    """
-    conditions = [f"day >= today() - {history_days}"]
-    params = {}
-
-    if org_id:
-        conditions.append("org_id = {org_id:String}")
-        params["org_id"] = org_id
-    if team_id:
-        conditions.append("team_id = {team_id:String}")
-        params["team_id"] = team_id
-    if work_scope_id:
-        conditions.append("work_scope_id = {work_scope_id:String}")
-        params["work_scope_id"] = work_scope_id
-
-    where_clause = " AND ".join(conditions)
-
-    query = f"""
-        SELECT
-            day,
-            sum(items_completed) as items_completed
-        FROM work_item_metrics_daily FINAL
-        WHERE {where_clause}
-        GROUP BY day
-        ORDER BY day
-    """
-
-    result = client.query(query, parameters=params)
-
-    samples = [
-        ThroughputSample(
-            day=row[0],
-            items_completed=int(row[1]),
-            team_id=team_id,
-            work_scope_id=work_scope_id,
-        )
-        for row in result.result_rows
-    ]
-
-    return ThroughputHistory(samples)
-
-
-async def load_throughput_history_sqlalchemy(
-    session: sqlalchemy.ext.asyncio.AsyncSession,
-    team_id: str | None = None,
-    work_scope_id: str | None = None,
-    history_days: int = 90,
-) -> ThroughputHistory:
-    """Load throughput history from SQLAlchemy backend (Postgres/SQLite).
-
-    Args:
-        session: Async SQLAlchemy session.
-        team_id: Filter by team (optional).
-        work_scope_id: Filter by work scope (optional).
-        history_days: Number of days of history to load.
-
-    Returns:
-        ThroughputHistory with loaded samples.
-    """
-    from datetime import date as date_type
-    from datetime import timedelta
-
-    from sqlalchemy import text
-
-    start_date = date_type.today() - timedelta(days=history_days)
-    conditions = ["day >= :start_date"]
-    params: dict[str, object] = {"start_date": start_date}
-
-    if team_id:
-        conditions.append("team_id = :team_id")
-        params["team_id"] = team_id
-    if work_scope_id:
-        conditions.append("work_scope_id = :work_scope_id")
-        params["work_scope_id"] = work_scope_id
-
-    where_clause = " AND ".join(conditions)
-    query = text(
-        f"""
-        SELECT day, SUM(items_completed) as items_completed
-        FROM work_item_metrics_daily FINAL
-        WHERE {where_clause}
-        GROUP BY day
-        ORDER BY day
-    """
-    )
-    result = await session.execute(query, params)
-    rows = result.all()
-
-    samples = [
-        ThroughputSample(
-            day=row[0],
-            items_completed=int(row[1]),
-            team_id=team_id,
-            work_scope_id=work_scope_id,
-        )
-        for row in rows
-    ]
-
-    return ThroughputHistory(samples)
-
-
 async def get_backlog_size_clickhouse(
     client: ClickHouseClient,
     team_id: str | None = None,
@@ -532,42 +438,3 @@ async def get_backlog_size_clickhouse(
     if result.result_rows:
         return int(result.result_rows[0][0])
     return 0
-
-
-async def get_backlog_size_sqlalchemy(
-    session: sqlalchemy.ext.asyncio.AsyncSession,
-    team_id: str | None = None,
-    work_scope_id: str | None = None,
-) -> int:
-    """Query current backlog size from SQLAlchemy backend.
-
-    Args:
-        session: Async SQLAlchemy session.
-        team_id: Filter by team (optional).
-        work_scope_id: Filter by work scope (optional).
-
-    Returns:
-        Number of open items.
-    """
-    from sqlalchemy import text
-
-    conditions = ["status NOT IN ('done', 'closed', 'cancelled', 'resolved')"]
-    params: dict[str, object] = {}
-
-    if team_id:
-        conditions.append("team_id = :team_id")
-        params["team_id"] = team_id
-    if work_scope_id:
-        conditions.append("work_scope_id = :work_scope_id")
-        params["work_scope_id"] = work_scope_id
-
-    where_clause = " AND ".join(conditions)
-    query = text(
-        f"""
-        SELECT COUNT(*) FROM work_items
-        WHERE {where_clause}
-    """
-    )
-    result = await session.execute(query, params)
-    count = result.scalar()
-    return count or 0

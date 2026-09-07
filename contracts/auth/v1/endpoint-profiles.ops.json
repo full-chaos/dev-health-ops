@@ -15246,7 +15246,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/internal/worker_operational.py",
-        "line": 61,
+        "line": 60,
         "router_local_path": "/heartbeat"
       },
       "gaps": [],
@@ -15259,7 +15259,7 @@
         "description": "Local _authorize() checks Authorization: Bearer against WORKER_OPERATIONAL_BRIDGE_TOKEN env var with hmac.compare_digest; fails closed (401) if the env var is unset. Duplicated per-file rather than using the shared api/internal/worker_auth.py helper used by worker_metrics.py/worker_workgraph.py.",
         "anchor": {
           "path": "src/dev_health_ops/api/internal/worker_operational.py",
-          "line": 57
+          "line": 56
         }
       },
       "token_shape": {

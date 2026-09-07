@@ -23,9 +23,19 @@ import (
 
 // CHAOS-5353: the email transport `dev_health_ops.api.services.email` provided
 // to the Python billing path, ported to Go under the SAME environment variable
-// names. This is deliberate parity, not a new abstraction: an operator's
-// existing EMAIL_PROVIDER/EMAIL_FROM_ADDRESS/EMAIL_API_KEY/SMTP_* settings keep
-// working unchanged after the cutover. The Python service itself SURVIVES --
+// names -- EMAIL_PROVIDER, EMAIL_FROM_ADDRESS, EMAIL_API_KEY/RESEND_API_KEY,
+// SMTP_HOST/PORT/USERNAME/PASSWORD/USE_TLS. This is deliberate parity, not a
+// new abstraction.
+//
+// Parity of NAMES, not of every accepted VALUE. Two deliberate tightenings,
+// both fail-closed, both called out in the PR body rather than left implied:
+// a variable that is SET BUT EMPTY is refused instead of silently taking its
+// default (see configuredValue), and SMTP_PORT outside 1-65535 is refused at
+// startup where Python's int() accepted 0, -1 and 65536 and stored them
+// unvalidated. Any configuration that was VALID under Python keeps working
+// unchanged; configurations that were silently broken now fail loudly.
+//
+// The Python service itself SURVIVES --
 // verification, invite, welcome and password-reset mail still go through it --
 // so this file is an additional consumer of the same configuration, not a
 // replacement for it.

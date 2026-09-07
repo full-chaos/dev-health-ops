@@ -195,12 +195,20 @@ func main() {
 	// configured, nothing to check" contract for that state.
 	var ready func(context.Context) error
 	if routeCfg, ok := loadQueryRouteConfig(); ok {
-		queryHandler, readyFn, cleanup, buildErr := buildQueryRoute(routeCfg)
+		queryHandler, registryHandler, readyFn, cleanup, buildErr := buildQueryRoute(routeCfg)
 		if buildErr != nil {
 			log.Fatalf("query-api: build /query route: %v", buildErr)
 		}
 		defer cleanup()
 		mux.HandleFunc("/query", queryHandler)
+		// GET /registry: what THIS process registers, and the schema digest
+		// it computed. Mounted with /query, not beside /healthz, on purpose
+		// -- it describes /query's registration set, so an unconfigured
+		// environment where /query never mounted must 404 here too rather
+		// than answer for a route that does not exist. `dev-hops go-api
+		// routing enable` treats that 404 as a refusal, which is correct:
+		// there is nothing to enable into. See registry_route.go.
+		mux.HandleFunc("/registry", registryHandler)
 		ready = readyFn
 		// CHAOS-4710 deliverable 3: the mount-confirmation log line used to
 		// live here as a hand-typed, six-of-twelve literal (stale since

@@ -35,7 +35,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["operation_for_digest", "known_operations"]
+__all__ = ["operation_for_digest", "known_operations", "catalog_entries"]
 
 _CATALOG_PATH = Path(__file__).parent / "go_api_operations.json"
 
@@ -92,3 +92,27 @@ def known_operations() -> frozenset[str]:
     tests and diagnostics; never by per-request dispatch logic."""
     _load()
     return frozenset(_digest_to_operation.values())
+
+
+def catalog_entries() -> tuple[tuple[str, str], ...]:
+    """Every ``(operation, document_digest)`` pair in the catalog, sorted
+    by operation name.
+
+    The ``dev-hops go-api routing`` commands drive both their enablement
+    writes and their status report from this, so the operation list is
+    derived from query-api's own ``registrydump``-generated inventory
+    rather than hand-maintained in a second place -- the CHAOS-4466 /
+    CHAOS-4495 drift class this module's docstring already names. Sorted
+    so command output and any diff of it are stable between runs.
+
+    Returns an empty tuple if the catalog failed to load, exactly as
+    :func:`operation_for_digest` returns ``None`` -- the callers treat
+    that as "nothing is Go-eligible" and refuse to enable anything, which
+    is the same fail-closed default a per-request dispatch already takes.
+    """
+    _load()
+    return tuple(
+        sorted(
+            (operation, digest) for digest, operation in _digest_to_operation.items()
+        )
+    )

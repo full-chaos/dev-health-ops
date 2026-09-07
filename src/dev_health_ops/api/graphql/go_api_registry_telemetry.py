@@ -23,9 +23,11 @@ __all__ = [
     "GO_API_REGISTRY_LOOKUP_TOTAL",
     "GO_API_CANDIDATE_BUILD_REGISTERED_TOTAL",
     "GO_API_PROOF_RUN_RECORDED_TOTAL",
+    "GO_API_ROUTING_DIGEST_DRIFT_TOTAL",
     "build_go_api_registry_lookup_counter",
     "build_go_api_candidate_build_registered_counter",
     "build_go_api_proof_run_recorded_counter",
+    "build_go_api_routing_digest_drift_counter",
 ]
 
 _prometheus: Any = load_prometheus()
@@ -88,8 +90,47 @@ def build_go_api_proof_run_recorded_counter(
     )
 
 
+def build_go_api_routing_digest_drift_counter(
+    *,
+    meter: Any = _meter,
+    prometheus: Any = _prometheus,
+) -> Any:
+    """Counter of routing-table schema-digest drift checks, by result.
+
+    Emitted ONCE per process start (api/_lifespan.py), not per request --
+    the condition it reports is a property of the table versus the
+    deployed SDL, which cannot change while a process runs.
+
+    ``result`` is one of:
+
+    * ``live``   -- at least one routing row exists at the digest this
+      process computes. Dispatch can work.
+    * ``stale``  -- rows exist, but NONE at the live digest. Every one of
+      them is unreachable and every request silently falls back to
+      Python. This is the 2026-09-01 outage's signal, and the reason this
+      counter exists: for six days that state produced no metric, no log
+      line, and no alert.
+    * ``empty``  -- the table has no rows at all. Nothing was ever
+      enabled, which is the legitimate default posture, NOT an incident.
+      Distinguished from ``stale`` on purpose: the two look identical
+      from the outside (no traffic reaches Go) and mean opposite things.
+    * ``error``  -- the check itself could not run. Never conflated with
+      ``empty``; an unreachable registry must not read as "nothing
+      enabled" (the same distinction the lookup counter's ``error`` label
+      draws).
+    """
+    return build_counter(
+        "devhealth_go_api_routing_digest_drift_total",
+        "Go API routing-state schema-digest drift checks at startup, by result",
+        ["result"],
+        meter=meter,
+        prometheus=prometheus,
+    )
+
+
 GO_API_REGISTRY_LOOKUP_TOTAL = build_go_api_registry_lookup_counter()
 GO_API_CANDIDATE_BUILD_REGISTERED_TOTAL = (
     build_go_api_candidate_build_registered_counter()
 )
 GO_API_PROOF_RUN_RECORDED_TOTAL = build_go_api_proof_run_recorded_counter()
+GO_API_ROUTING_DIGEST_DRIFT_TOTAL = build_go_api_routing_digest_drift_counter()

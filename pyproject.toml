@@ -197,9 +197,13 @@ include-package-data = true
   "contracts/sync-dispatch/v1/*.md",
 ]
 # CHAOS-5013: same reason and same trap as the three trees above --
-# go_api_dispatcher._current_schema_digest() reads schema.graphql at RUNTIME
+# go_api_schema_digest.current_schema_digest() reads schema.graphql at RUNTIME
 # via contract_artifacts.contract_directory(), on every Go-dispatch attempt,
-# not only in a checkout. Caught by codex round 1 on #2204 before it shipped
+# not only in a checkout. (It lived in go_api_dispatcher as
+# _current_schema_digest until the routing-enablement change moved it to its
+# own stdlib-only module so the CLI and CI checker can import it; same file,
+# same read, same packaging requirement -- and now ALSO read by
+# `dev-hops go-api routing` and ci/check_go_api_routing_digest.py.) Caught by codex round 1 on #2204 before it shipped
 # (tests/tooling/test_contract_artifact_packaging.py's RUNTIME_CONTRACT_TREES
 # now covers this tree too).
 "contracts/graphql/v1" = ["contracts/graphql/v1/*.graphql"]
@@ -323,6 +327,7 @@ module = [
   "_tie_boundary_seeding",
   "_go_schema_digest",
   "_go_registered_documents",
+  "_go_api_fake_query_api",
 ]
 ignore_missing_imports = true
 

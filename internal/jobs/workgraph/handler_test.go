@@ -303,7 +303,7 @@ func (s failingPreStep) Run(context.Context, Claim) (map[string]any, error) {
 
 // classifyingExecutor returns a fixed pre-classified error, so the handler's
 // own retry/ambiguous branch is exercised without a network or a concrete
-// CompatibilityExecutor implementation at all. Moved here from the deleted
+// NativeExecutor implementation at all. Moved here from the deleted
 // compatibility_classification_test.go (CHAOS-3092: the HTTP bridge executor
 // these tests were written alongside is gone, but the classification
 // contract they cover -- ErrCompatibilityNotSent/Refused/Unknown, defined in

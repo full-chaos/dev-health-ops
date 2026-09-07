@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
-
-os.environ.setdefault("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-analytics-auth")
-os.environ.setdefault("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
-
 from fastapi.testclient import TestClient
 
 from dev_health_ops.api.main import app
 
 client = TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture(autouse=True)
+def _live_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide backend secrets for this module's requests only.
+
+    Values are set per-test via monkeypatch (auto-reverted at teardown), never
+    at import time -- an import-time os.environ.setdefault here would leak
+    CLICKHOUSE_URI process-globally and activate every CLICKHOUSE_URI-gated
+    ``tests/**/*_live.py`` suite during collection (CHAOS-5350/ticket (z)).
+    """
+    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-for-analytics-auth")
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
 
 
 @pytest.mark.parametrize(

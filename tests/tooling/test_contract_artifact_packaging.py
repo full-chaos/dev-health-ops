@@ -45,8 +45,12 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_CONTRACT_TREES = {
     ("provider-matrix", "v1"): "matrix.json",
     ("sync-dispatch", "v1"): "transport-routes.json",
-    # CHAOS-5013: go_api_dispatcher._current_schema_digest() reads this file
-    # via contract_artifacts.contract_directory() on every dispatch attempt
+    # CHAOS-5013: go_api_schema_digest.current_schema_digest() reads this
+    # file via contract_artifacts.contract_directory() on every dispatch
+    # attempt (it was go_api_dispatcher._current_schema_digest when this
+    # entry was written; the routing-enablement change moved the producer to
+    # its own stdlib-only module, unchanged, and added two more readers --
+    # the `dev-hops go-api routing` CLI and ci/check_go_api_routing_digest.py)
     # -- the exact same CHAOS-3933 packaging trap this file exists to catch,
     # caught here BEFORE it shipped (codex round 1, #2204): the installed
     # `api` image runs `pip install --prefix=/install .`

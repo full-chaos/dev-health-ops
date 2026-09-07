@@ -884,7 +884,7 @@ func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
 // the ClickHouse Ping's fail-fast-at-boot discipline -- see that check's
 // own comment for why it does not substitute for the live one in
 // readinessCheck.
-func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Context) error, func(), error) {
+func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, http.HandlerFunc, func(context.Context) error, func(), error) {
 	// CHAOS-5013: the schema digest routeswitch.PostgresSwitch needs for
 	// its own routing-state lookups is computed directly from the
 	// embedded SDL, not read from an operator-supplied env var and
@@ -898,7 +898,7 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Conte
 
 	chClient, err := newQueryRouteClickHouseClient(cfg.ClickHouseURI)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	// Eager readiness check, matching cmd/dev-health-worker's own
 	// documented contract for this exact env var (deploy/go-workers/
@@ -917,18 +917,18 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Conte
 	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := chClient.Ping(pingCtx); err != nil {
-		return nil, nil, nil, fmt.Errorf("query-api: ClickHouse readiness check failed (CLICKHOUSE_URI must be the NATIVE protocol port, not the HTTP port -- see deploy/go-workers/README.md): %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("query-api: ClickHouse readiness check failed (CLICKHOUSE_URI must be the NATIVE protocol port, not the HTTP port -- see deploy/go-workers/README.md): %w", err)
 	}
 
 	pgPool, err := pgxpool.New(context.Background(), cfg.RegistryPostgresURI)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	verifier, err := principal.NewVerifier(cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience)
 	if err != nil {
 		pgPool.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	// CHAOS-4708: eager readiness check, matching the ClickHouse Ping
 	// above's "measurement that did not happen must FAIL, loudly"
@@ -943,13 +943,13 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, func(context.Conte
 	// readiness check below does not substitute for THIS eager Ping.
 	if err := verifier.CheckJWKS(); err != nil {
 		pgPool.Close()
-		return nil, nil, nil, fmt.Errorf("query-api: JWKS readiness check failed (GO_API_ENVELOPE_JWKS_PATH must point to a readable, non-empty, valid Ed25519 JWKS document): %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("query-api: JWKS readiness check failed (GO_API_ENVELOPE_JWKS_PATH must point to a readable, non-empty, valid Ed25519 JWKS document): %w", err)
 	}
 
-	handler := newQueryHandler(chClient, pgPool, verifier, schemaDigest)
+	handler, registryHandler := newQueryHandler(chClient, pgPool, verifier, schemaDigest)
 	cleanup := func() { pgPool.Close() }
 	ready := readinessCheck(chClient, pgPool, verifier)
-	return handler, ready, cleanup, nil
+	return handler, registryHandler, ready, cleanup, nil
 }
 
 // readinessCheck returns a func that checks ALL THREE of /query's live
@@ -1137,7 +1137,7 @@ func mountedRouteLogMessage(digestByOperation map[string]string) string {
 	)
 }
 
-func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) http.HandlerFunc {
+func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) (http.HandlerFunc, http.HandlerFunc) {
 	// digestByOperation is this route's registered-document inventory:
 	// operation name -> the sha256 digest of that operation's registered
 	// document text. CHAOS-4369 Wave 3 generalizes what Wave 1/2 hardcoded
@@ -1183,6 +1183,14 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// mountedRouteLogMessage's doc comment for why this is not a
 	// package-level function main.go can call directly.
 	log.Print(mountedRouteLogMessage(digestByOperation))
+	// Both are built from THIS map and THIS schemaDigest -- the same two
+	// values PostgresSwitch is about to be constructed with -- so neither
+	// can describe a registration set this route does not actually have.
+	// That is the same by-construction discipline mountedRouteLogMessage
+	// above exists to enforce, applied to the two surfaces an operator
+	// uses to answer "is anything actually enabled?".
+	logRoutingStateDrift(pgPool, schemaDigest)
+	registryHandler := newRegistryHandler(schemaDigest, digestByOperation)
 	sw := routeswitch.NewPostgresSwitch(pgPool, schemaDigest, digestByOperation)
 	routeMux := routeswitch.NewMux(sw)
 
@@ -1300,7 +1308,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 		routeMux.Dispatch(operation, w, r)
-	}
+	}, registryHandler
 }
 
 // operationForDocument resolves a request's raw query text to a

@@ -35,11 +35,22 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["operation_for_digest", "known_operations"]
+__all__ = [
+    "operation_for_digest",
+    "known_operations",
+    "catalog_entries",
+    "catalog_loaded_successfully",
+]
 
 _CATALOG_PATH = Path(__file__).parent / "go_api_operations.json"
 
 _catalog_loaded = False
+#: Whether the ONE load attempt actually succeeded. Without this, a catalog
+#: that failed to parse and a catalog that is legitimately empty are the same
+#: observable state -- and `status` would print an empty table with exit 0 for
+#: both, which is the exact 'two states that look identical' failure this
+#: whole change exists to stop (codex r1, P2).
+_catalog_load_ok = False
 _digest_to_operation: dict[str, str] = {}
 
 
@@ -64,6 +75,8 @@ def _load() -> None:
                 )
             mapping[digest] = operation
         _digest_to_operation.update(mapping)
+        global _catalog_load_ok
+        _catalog_load_ok = True
         logger.info(
             "go_api_operation_catalog.loaded",
             extra={"operation_count": len(mapping)},
@@ -92,3 +105,41 @@ def known_operations() -> frozenset[str]:
     tests and diagnostics; never by per-request dispatch logic."""
     _load()
     return frozenset(_digest_to_operation.values())
+
+
+def catalog_entries() -> tuple[tuple[str, str], ...]:
+    """Every ``(operation, document_digest)`` pair in the catalog, sorted
+    by operation name.
+
+    The ``dev-hops go-api routing`` commands drive both their enablement
+    writes and their status report from this, so the operation list is
+    derived from query-api's own ``registrydump``-generated inventory
+    rather than hand-maintained in a second place -- the CHAOS-4466 /
+    CHAOS-4495 drift class this module's docstring already names. Sorted
+    so command output and any diff of it are stable between runs.
+
+    Returns an empty tuple if the catalog failed to load, exactly as
+    :func:`operation_for_digest` returns ``None`` -- the callers treat
+    that as "nothing is Go-eligible" and refuse to enable anything, which
+    is the same fail-closed default a per-request dispatch already takes.
+    """
+    _load()
+    return tuple(
+        sorted(
+            (operation, digest) for digest, operation in _digest_to_operation.items()
+        )
+    )
+
+
+def catalog_loaded_successfully() -> bool:
+    """Whether the catalog file was read and parsed without error.
+
+    ``catalog_entries()`` returning empty is ambiguous on its own: it means
+    EITHER the file failed to load (fail-closed, an incident) OR the file is
+    genuinely empty. Per-request dispatch does not care -- both mean "nothing
+    is Go-eligible", the safe default. An operator staring at
+    ``dev-hops go-api routing status`` cares enormously, so the diagnostic
+    surfaces the difference instead of printing an empty table either way.
+    """
+    _load()
+    return _catalog_load_ok

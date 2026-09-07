@@ -6,7 +6,7 @@ investment.materialize's compute in-process. That caller no longer exists --
 cmd/dev-health-worker/workgraph.go wires investment.materialize entirely
 natively (buildNativeInvestmentExecutor -> investment.NewNativeExecutor,
 internal/jobs/investment/nativeexecutor.go), calling
-workgraph.CompatibilityExecutor.Execute directly with no HTTP round trip --
+workgraph.NativeExecutor.Execute directly with no HTTP round trip --
 so /execute, its request/scope model, and every helper that only existed to
 run a compatibility subprocess for it were deleted along with the Celery task
 they invoked (work_graph_tasks.py's run_investment_materialize).

@@ -22,37 +22,32 @@ with real ``User``/``Organization``/``Membership`` rows, through the actual
 
 from __future__ import annotations
 
-import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-telemetry-auth")
-os.environ.setdefault("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy import select  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 
-from dev_health_ops.api.auth.router import get_current_user  # noqa: E402
-from dev_health_ops.api.main import app  # noqa: E402
-from dev_health_ops.api.services.auth import (  # noqa: E402
+from dev_health_ops.api.auth.router import get_current_user
+from dev_health_ops.api.main import app
+from dev_health_ops.api.services.auth import (
     AuthenticatedUser,
     set_impersonation_context,
 )
-from dev_health_ops.models.audit import AuditLog  # noqa: E402
-from dev_health_ops.models.git import Base  # noqa: E402
-from dev_health_ops.models.settings import Setting  # noqa: E402
-from dev_health_ops.models.users import Membership, Organization, User  # noqa: E402
-from tests._helpers import tables_of  # noqa: E402
+from dev_health_ops.models.audit import AuditLog
+from dev_health_ops.models.git import Base
+from dev_health_ops.models.settings import Setting
+from dev_health_ops.models.users import Membership, Organization, User
+from tests._helpers import tables_of
 
 STATUS = "/api/v1/telemetry/status"
 OPT_IN = "/api/v1/telemetry/opt-in"
@@ -62,6 +57,20 @@ REPORT = "/api/v1/telemetry/report"
 ARBITRARY_ORG = "00000000-0000-0000-0000-000000000000"
 
 _TABLES = tables_of(User, Organization, Membership, Setting, AuditLog)
+
+
+@pytest.fixture(autouse=True)
+def _live_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide backend secrets for this module's requests only.
+
+    Values are set per-test via monkeypatch (auto-reverted at teardown), never
+    at import time -- an import-time os.environ.setdefault here would leak
+    CLICKHOUSE_URI process-globally and activate every CLICKHOUSE_URI-gated
+    ``tests/**/*_live.py`` suite during collection (CHAOS-5350/ticket (z)).
+    """
+    monkeypatch.setenv("CLICKHOUSE_URI", "clickhouse://localhost:8123/default")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-key-for-telemetry-auth")
+    monkeypatch.setenv("SETTINGS_ENCRYPTION_KEY", "test-encryption-key")
 
 
 # ---------------------------------------------------------------------------

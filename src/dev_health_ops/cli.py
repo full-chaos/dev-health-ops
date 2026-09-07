@@ -463,6 +463,12 @@ _COMMAND_REQUIREMENTS: dict[tuple[str, ...], frozenset[str]] = {
     ("admin", "bundles", "assign-plan"): frozenset({_REQ_POSTGRES}),
     ("admin", "bundles", "assign-org"): frozenset({_REQ_POSTGRES}),
     ("billing", "reconcile"): frozenset({_REQ_POSTGRES}),
+    # go-api routing reads/writes go_api_routing_state + go_api_proof_run in
+    # the semantic store. Declared here so --db actually reaches POSTGRES_URI
+    # before the session opens (see the finalize-synthetic-sync comment above
+    # for the failure mode when it is omitted).
+    ("go-api", "routing", "enable"): frozenset({_REQ_POSTGRES}),
+    ("go-api", "routing", "status"): frozenset({_REQ_POSTGRES}),
     ("service-credentials", "create"): frozenset({_REQ_POSTGRES}),
     ("service-credentials", "list"): frozenset({_REQ_POSTGRES}),
     ("service-credentials", "rotate"): frozenset({_REQ_POSTGRES}),
@@ -619,6 +625,7 @@ def build_parser() -> argparse.ArgumentParser:
     from dev_health_ops import service_credentials
     from dev_health_ops.api import runner as api_runner
     from dev_health_ops.api.admin import cli as admin_cli
+    from dev_health_ops.api.graphql import go_api_cli
     from dev_health_ops.audit import (
         completeness,
         coverage,
@@ -720,6 +727,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- ai governance administration ----
     ai_governance_cli.register_commands(sub)
+
+    # ---- go-api routing (query-api operation rollout) ----
+    # The committed writer for go_api_routing_state. Before this existed the
+    # only thing that could write that table was a pytest helper, so every
+    # real enablement was hand-written SQL with a hand-typed schema_digest --
+    # which is how twelve rows were seeded on 2026-09-01 at a digest an SDL
+    # change obsoleted the same day, silently, for six days.
+    go_api_cli.register_commands(sub)
 
     # ---- work-graph & investment ----
     work_graph_runner.register_commands(sub)

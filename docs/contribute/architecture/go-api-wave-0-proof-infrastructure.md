@@ -208,6 +208,100 @@ codegen and `query-api`'s gqlgen consume it, and the drift gate
 (`tests/api/graphql/test_schema_sdl_pinned.py`) that fails on any
 divergence.
 
+## When the schema digest moves
+
+Every `go_api_routing_state` row is keyed by `schema_digest`. Change
+`contracts/graphql/v1/schema.graphql` by one byte and the digest changes,
+which means **every existing routing row instantly stops matching** — the
+Python dispatcher's `lookup_routing_state` misses, `PostgresSwitch.Enabled`
+returns false, and every request is served by Python.
+
+That behaviour is correct: a missing row is the documented safe default.
+The danger is that it is also **silent**, and indistinguishable from "no
+operation has been enabled yet".
+
+### What this cost, once
+
+On 2026-09-01, twelve routing rows were seeded by hand between 12:26Z and
+14:39Z — all `mode=canary`, `rollout_percentage=100`, `owner=go`, pointing
+at candidate build `78fc68815` — at digest
+`sha256:67b87d38…`. At 13:39Z that same day, PR #2065 (`33b3f3f21d`,
+"Widen TimeseriesBucket.value SDL nullability to match Go's `*float64`")
+changed the SDL, moving the digest to `sha256:29d509cd…`.
+
+All twelve rows died at that moment. Zero operations were served by Go.
+Nothing logged it, nothing counted it, no test covered it, and the rows
+still looked perfectly healthy in `psql`. It was found six days later, by
+hand.
+
+### The rule
+
+**Routing rows follow the deployed image, not your checkout.** `query-api`
+embeds its own copy of the SDL (`go:embed`) and computes
+`digest.Schema(schemav1.SDL)` from it; the Python edge reads
+`contracts/graphql/v1/schema.graphql` from disk. They agree only while the
+running image and the checkout carry the same SDL. Writing rows from a
+checkout that has moved ahead of the deployed image produces rows the
+running binary can never read — exactly the failure above.
+
+So: **rebuild and deploy `query-api` first, re-enable second.** Never the
+other way round.
+
+### Recovery procedure
+
+```bash
+# 1. What does each plane think the digest is, and which rows are alive?
+dev-hops go-api routing status --query-api-url http://query-api:8080
+
+# 2. If the planes disagree, STOP: rebuild/redeploy the query-api image
+#    from this SDL. `enable` will refuse until they agree, by design.
+
+# 3. Re-enable against the deployed build. --candidate-build is the ops
+#    commit sha the running image was built from.
+dev-hops go-api routing enable \
+  --operations all-registered \
+  --candidate-build <ops-sha-the-image-was-built-from> \
+  --mode canary
+
+# 4. Confirm every operation reads MATCH, and none reads UNPROVEN
+#    unless you deliberately acknowledged that.
+dev-hops go-api routing status
+```
+
+`enable` refuses (exit 2, writing nothing) when query-api is unreachable,
+when the two planes' digests disagree, when the running binary does not
+register an operation or registers it under a different document digest,
+or when no `deployed_executed`/`match` proof run exists for the candidate
+build. The last of these is waivable with `--acknowledge-unproven`, which
+logs one warning per row and makes `status` report those rows as
+`UNPROVEN` for as long as they are in force.
+
+### How this is now detected
+
+| Signal | Where | Fires when |
+|---|---|---|
+| `go_api_routing.rows_stale` (ERROR log) | Python edge startup (`api/_lifespan.py`) | Rows exist, none at the live digest |
+| `devhealth_go_api_routing_digest_drift_total{result="stale"}` | Python edge startup | Same condition, as a scrapeable counter |
+| `query-api: ROUTING ROWS STALE` (log) | `query-api` route construction | Same condition, on the Go plane |
+| `devhealth_go_api_dispatch_fallback_total{reason="no_routing_row"}` | Python edge, per request | A dispatch-eligible request found no row |
+| `ci/check_go_api_routing_digest.py` | CI | The SDL moved without updating the pin and this table |
+
+`empty` (nothing enabled) is deliberately reported as a *different* result
+from `stale` (everything enabled is dead). The two look identical from
+outside — no traffic reaches Go either way — and mean opposite things.
+
+### Schema-digest history
+
+Update this table in the SAME change that moves the SDL.
+`ci/check_go_api_routing_digest.py` fails if
+`contracts/graphql/v1/schema-digest.json` names a digest that does not
+appear here.
+
+| Digest | In force from | Moved by | Notes |
+|---|---|---|---|
+| `sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706` | before 2026-09-01 | superseded by `33b3f3f21d` | The twelve 2026-09-01 rows were seeded here and died the same day |
+| `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88` | 2026-09-01 | `33b3f3f21d` (#2065, widen `TimeseriesBucket.value` nullability) | Current |
+
 ## Status
 
 As of 2026-08-27, every Wave 0 deliverable exists and is tested: the

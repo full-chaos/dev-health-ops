@@ -72,7 +72,22 @@ func (component Component) Shutdown(ctx context.Context) error {
 // process. Register the returned Component first in the lifecycle component
 // list so it starts first and shuts down last, after every other component
 // has stopped producing spans.
+//
+// Init's default service name is "dev-health-ops" (defaultServiceName,
+// matching tracing.py's own default) -- a caller that wants a different
+// per-binary default when OTEL_SERVICE_NAME is unset uses
+// InitWithServiceName instead.
 func Init(logger *slog.Logger) Component {
+	return InitWithServiceName(logger, defaultServiceName)
+}
+
+// InitWithServiceName is Init with an explicit fallback service name.
+// OTEL_SERVICE_NAME still wins whenever it is set -- this only changes what
+// serviceName falls back to when the env var is absent, so a binary other
+// than the worker-shell framework's callers (query-api, CHAOS-5408) is
+// distinguishable in a trace backend by default, without requiring every
+// deployment to remember to set OTEL_SERVICE_NAME for it by hand.
+func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -81,7 +96,7 @@ func Init(logger *slog.Logger) Component {
 		return Component{}
 	}
 
-	serviceName := stringEnv("OTEL_SERVICE_NAME", defaultServiceName)
+	serviceName := stringEnv("OTEL_SERVICE_NAME", defaultName)
 	environment := stringEnv("OTEL_ENVIRONMENT", defaultEnvironment)
 	endpoint := stringEnv("OTEL_EXPORTER_OTLP_ENDPOINT", defaultEndpoint)
 	sampleRate, err := sampleRateFromEnv()

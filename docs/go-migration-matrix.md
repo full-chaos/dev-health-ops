@@ -297,15 +297,15 @@ Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather th
 | --- | --- | --- | --- | --- |
 | DORA | NATIVE | see §3 | river, native | CHAOS-3092 R1 (Done) |
 | cognitive load (team_cognitive_load) | NATIVE | see §2 | river, native -- finalize scope, co-registered with ic_finalize | CHAOS-5141 |
-| investment.materialize | NATIVE | Go: `internal/jobs/investment/nativeexecutor.go` (implements the same `workgraph.CompatibilityExecutor` seam the bridge did) -> `materialize.go` orchestrator -> `chquery` fetch + `materializecomponent.go` assembly + `categorize` LLM plane + `chwrite` write. Python `materialize.py:1169-1854 materialize_investments()` is retained but no longer reached from the worker path (removal is CHAOS-4767) | river, native -- `addWorkgraphWorker`'s `KindInvestmentMaterialize` case takes `nativeInvestment` | CHAOS-4441 (cutover landed) |
+| investment.materialize | NATIVE | Go: `internal/jobs/investment/nativeexecutor.go` (implements the same `workgraph.NativeExecutor` seam the bridge did) -> `materialize.go` orchestrator -> `chquery` fetch + `materializecomponent.go` assembly + `categorize` LLM plane + `chwrite` write. Python `materialize.py:1169-1854 materialize_investments()` is retained but no longer reached from the worker path (removal is CHAOS-4767) | river, native -- `addWorkgraphWorker`'s `KindInvestmentMaterialize` case takes `nativeInvestment` | CHAOS-4441 (cutover landed) |
 | recommendations | NATIVE | see §3 | river, native | CHAOS-4281/CHAOS-3092 (Done) |
 | workgraph.build | NATIVE | Go: `internal/jobs/workgraph/handler.go`'s `buildHandler` runs the full `buildPreStepOrder()` sequence (issue<->PR/issue<->commit/PR<->commit edges, flag-guards, operational-incident, issue<->issue edges) natively, no bridge call at all. Python's `WorkGraphBuilder.build()` (`src/dev_health_ops/work_graph/builder.py`) is DELETED -- every stage it used to run was already a 0-stats no-op by the time of this cutover | river, native -- `addWorkgraphWorker`'s `KindWorkGraphBuild` case takes no executor at all | CHAOS-4924 (cutover landed) |
 <!-- END GENERATED WORKGRAPH INVESTMENT MATRIX -->
 
 ~~**Built but unwired:** `internal/jobs/investment/materializecomponent.go` ... has **zero non-test
 callers** anywhere in the tree.~~ **RESOLVED (CHAOS-4441 cutover):** the executor wiring landed.
-`internal/jobs/investment/nativeexecutor.go` implements the same `workgraph.CompatibilityExecutor` seam
-the HTTP bridge implements, `materialize.go` orchestrates fetch -> assembly -> categorize -> write, and
+`internal/jobs/investment/nativeexecutor.go` implements the same `workgraph.NativeExecutor` seam
+the HTTP bridge used to implement, `materialize.go` orchestrates fetch -> assembly -> categorize -> write, and
 `addWorkgraphWorker` hands the `investment.materialize` case that executor instead of the bridge.
 Scheduler, reconciler, outbox and the `work_graph_execution_request:<id>` completion fence are unchanged
 by construction -- the seam is the same interface.

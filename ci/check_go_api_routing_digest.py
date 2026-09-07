@@ -70,15 +70,34 @@ def compute_schema_digest(sdl_path: Path) -> str:
 
 
 def _digest_appears_in_a_history_row(history_section: str, digest: str) -> bool:
-    """True iff ``digest`` appears inside a markdown table row.
+    """True iff ``digest`` appears in a row of THE history table.
 
-    A history row is a line that starts with ``|``, carries the digest, and
-    has at least the four cells the table declares (digest, in force from,
-    moved by, notes) -- so a bare ``| sha256:... |`` stub does not count as
-    having written anything down either.
+    "A line starting with ``|``" is not enough (codex r2, P2): a fenced
+    code block containing a pipe-prefixed line satisfied that, and so did a
+    row of an unrelated table added further down the page. Both would let
+    someone tick the gate without recording anything an operator can read
+    as history, which is the one thing this check exists to force.
+
+    So the search is bounded three ways:
+
+    * it stops at the next markdown heading, so only THIS section counts;
+    * fenced code blocks are skipped, so an example is not a record;
+    * the row needs at least the four cells the table declares (digest, in
+      force from, moved by, notes), all non-empty -- a ``| digest | | | |``
+      stub records nothing either.
     """
+    in_fence = False
     for line in history_section.splitlines():
         stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        # The section ends where the next heading begins; a table below an
+        # unrelated later heading is not this table.
+        if stripped.startswith("#"):
+            return False
         if not stripped.startswith("|") or digest not in stripped:
             continue
         cells = [cell.strip() for cell in stripped.strip("|").split("|")]

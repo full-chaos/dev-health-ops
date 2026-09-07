@@ -56,6 +56,23 @@ def tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _append_history_row(doc_path: Path, digest: str) -> None:
+    """Insert a row into the history TABLE, as an operator would.
+
+    Appending to end-of-file lands after the next heading, which the
+    checker correctly refuses -- that is the point of the section bound.
+    A realistic green path has to edit the table itself.
+    """
+    text = doc_path.read_text()
+    heading_at = text.index(checker.HISTORY_HEADING)
+    head, tail = text[:heading_at], text[heading_at:]
+    lines = tail.splitlines(keepends=True)
+    last_row = max(i for i, line in enumerate(lines) if line.strip().startswith("|"))
+    row = f"| `{digest}` | 2026-09-07 | a test commit | Added by the operator |\n"
+    lines.insert(last_row + 1, row)
+    doc_path.write_text(head + "".join(lines))
+
+
 def test_real_tree_passes_the_gate(capsys: pytest.CaptureFixture[str]) -> None:
     """The checked-in tree is consistent right now."""
     assert checker.main(["--root", str(REPO_ROOT)]) == 0
@@ -120,11 +137,7 @@ def test_documenting_the_moved_digest_makes_it_pass(
     pin["schema_digest"] = moved
     pin_path.write_text(json.dumps(pin, indent=2))
 
-    doc_path = tree / checker.HISTORY_DOC_RELATIVE
-    doc_path.write_text(
-        doc_path.read_text()
-        + f"\n| `{moved}` | 2026-09-07 | a test commit | Added by the operator |\n"
-    )
+    _append_history_row(tree / checker.HISTORY_DOC_RELATIVE, moved)
 
     assert checker.main(["--root", str(tree)]) == 0
     assert "OK: Go-API schema digest" in capsys.readouterr().out
@@ -218,6 +231,62 @@ def test_a_stub_row_with_empty_cells_does_not_count(
 
     doc_path = tree / checker.HISTORY_DOC_RELATIVE
     doc_path.write_text(doc_path.read_text() + f"\n| `{moved}` |  |  |  |\n")
+
+    assert checker.main(["--root", str(tree)]) == 1
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+def test_a_fenced_code_block_row_does_not_count(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r2 (P2): a pipe-prefixed line inside ``` fences satisfied the check.
+
+    An example of a history row is not a history row. The recovery
+    procedure above the table is full of illustrative snippets, so this is
+    a live way to tick the gate while recording nothing.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    doc_path.write_text(
+        doc_path.read_text()
+        + f"\n```\n| `{moved}` | 2026-09-07 | example | not a real row |\n```\n"
+    )
+
+    assert checker.main(["--root", str(tree)]) == 1
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+def test_a_row_in_a_later_unrelated_table_does_not_count(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r2 (P2): the search ran to end-of-file, so any later table counted.
+
+    The section ends at the next heading; a table under a different one is
+    a different table.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    doc_path.write_text(
+        doc_path.read_text()
+        + "\n## Some later section\n\n| Thing | When | Who | Note |\n|---|---|---|---|\n"
+        + f"| `{moved}` | 2026-09-07 | someone | unrelated table |\n"
+    )
 
     assert checker.main(["--root", str(tree)]) == 1
     assert "is NOT recorded" in capsys.readouterr().err

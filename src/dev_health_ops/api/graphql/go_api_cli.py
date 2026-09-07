@@ -91,13 +91,20 @@ def _redact_url(url: str) -> str:
     """
     try:
         parts = urllib.parse.urlsplit(url)
+        # .port PARSES, and raises ValueError on a malformed one (":bad").
+        # Reading it inside the guard keeps a bad port from turning a
+        # redaction call into a crash (codex r2, P2).
+        port = parts.port
     except ValueError:
-        return "<unparseable url>"
+        # Unparseable, so it cannot be redacted field-by-field. Fall back to
+        # the text scrubber rather than returning the raw string: failing to
+        # parse must never mean failing to redact.
+        return _redact_text(url)
     if not parts.username and not parts.password:
         return url
     host = parts.hostname or ""
-    if parts.port:
-        host = f"{host}:{parts.port}"
+    if port:
+        host = f"{host}:{port}"
     return urllib.parse.urlunsplit(
         (parts.scheme, f"<redacted>@{host}", parts.path, parts.query, parts.fragment)
     )
@@ -107,7 +114,15 @@ def _redact_url(url: str) -> str:
 #: strings, which are not URLs and cannot be parsed as one, but which can
 #: still embed the URL that failed (urllib and the socket layer both do
 #: this for some error classes).
-_USERINFO_IN_TEXT = re.compile(r"//[^/\s:@]+:[^/\s@]*@")
+#:
+#: The password half deliberately allows ``/`` (codex r2, P2): an earlier
+#: version excluded it, so ``http://alice:pa/ss@host`` slipped through with
+#: the password intact. A password is percent-encoded by well-behaved
+#: callers but nothing guarantees it, and the cost of matching slightly too
+#: much here is a redacted string -- the cost of matching too little is a
+#: leaked credential. The user half still excludes ``/`` so the pattern
+#: cannot start matching at a path segment.
+_USERINFO_IN_TEXT = re.compile(r"//[^/\s:@]+:[^\s@]*@")
 
 
 def _redact_text(text: str) -> str:
@@ -396,7 +411,16 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
 
     catalog = catalog_entries()
     catalog_ok = catalog_loaded_successfully()
-    local_digest = current_schema_digest()
+    # codex r2 (P1): this was unguarded, so an unreadable SDL raised out of
+    # `status` and emitted NOTHING -- not even invalid JSON. Same contract
+    # breach as the unguarded database read r1 found, one line higher up:
+    # this command reports what it can and never dies on what it cannot.
+    local_digest: str | None = None
+    digest_error: str | None = None
+    try:
+        local_digest = current_schema_digest()
+    except Exception as exc:
+        digest_error = f"{type(exc).__name__}: {exc}"
 
     base_url = _query_api_url(ns)
     go_digest: str | None = None
@@ -423,9 +447,13 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
     db_error: str | None = None
     try:
         async with get_postgres_session() as session:
-            statuses = await routing_status_rows(
-                session, live_schema_digest=local_digest, catalog=catalog
-            )
+            # Without a live digest there is no key to classify rows
+            # AGAINST, so MATCH/STALE/MISSING would be meaningless. The
+            # per-digest census still is meaningful, so it is still read.
+            if local_digest is not None:
+                statuses = await routing_status_rows(
+                    session, live_schema_digest=local_digest, catalog=catalog
+                )
             digest_counts = await count_rows_by_schema_digest(session)
     except Exception as exc:
         db_error = f"{type(exc).__name__}: {exc}"
@@ -435,6 +463,7 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
             json.dumps(
                 {
                     "python_plane_schema_digest": local_digest,
+                    "python_plane_digest_error": digest_error,
                     "go_plane_schema_digest": go_digest,
                     "go_plane_error": go_error,
                     "planes_agree": (
@@ -467,7 +496,16 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
         )
         return 0
 
-    print(f"python plane schema_digest : {local_digest}")
+    if local_digest is None:
+        print(f"python plane schema_digest : UNAVAILABLE ({digest_error})")
+        print(
+            "  The canonical SDL could not be read, so this process cannot "
+            "compute the routing key at all -- every dispatch will fall back "
+            "to Python. Rows cannot be classified against a digest that does "
+            "not exist."
+        )
+    else:
+        print(f"python plane schema_digest : {local_digest}")
     if go_digest is not None:
         agree = "AGREE" if go_digest == local_digest else "MISMATCH"
         print(f"go plane schema_digest     : {go_digest}  [{agree}]")

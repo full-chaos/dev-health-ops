@@ -390,3 +390,120 @@ async def test_status_does_not_cry_wolf_when_the_catalog_is_merely_empty(
         == 0
     )
     assert "CATALOG UNAVAILABLE" not in capsys.readouterr().out
+
+
+# --- codex r2 fixes -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_survives_an_unreadable_sdl_and_still_emits_valid_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r2 P1: an unreadable SDL killed `status` with NO output at all.
+
+    Same contract breach r1 found in the database read, one line higher up.
+    `--json` emitting nothing is worse than emitting an error field: a
+    caller parsing it gets a crash instead of a diagnosis.
+    """
+    import contextlib
+    import json as json_module
+
+    import dev_health_ops.db as db_module
+
+    @contextlib.asynccontextmanager
+    async def dead_session():
+        raise RuntimeError("db down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db_module, "get_postgres_session", dead_session)
+    monkeypatch.setattr(
+        go_api_cli,
+        "current_schema_digest",
+        lambda: (_ for _ in ()).throw(RuntimeError("missing SDL")),
+    )
+
+    assert (
+        await go_api_cli._cmd_routing_status(
+            argparse.Namespace(query_api_url=None, json=True)
+        )
+        == 0
+    )
+    payload = json_module.loads(capsys.readouterr().out)
+    assert payload["python_plane_schema_digest"] is None
+    assert "missing SDL" in payload["python_plane_digest_error"]
+
+
+@pytest.mark.asyncio
+async def test_status_text_mode_names_an_unreadable_sdl(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import contextlib
+
+    import dev_health_ops.db as db_module
+
+    @contextlib.asynccontextmanager
+    async def dead_session():
+        raise RuntimeError("db down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db_module, "get_postgres_session", dead_session)
+    monkeypatch.setattr(
+        go_api_cli,
+        "current_schema_digest",
+        lambda: (_ for _ in ()).throw(RuntimeError("missing SDL")),
+    )
+
+    assert (
+        await go_api_cli._cmd_routing_status(
+            argparse.Namespace(query_api_url=None, json=False)
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "UNAVAILABLE" in out
+    assert "missing SDL" in out
+    assert "cannot compute the routing key" in out
+
+
+def test_a_password_containing_a_slash_is_still_redacted() -> None:
+    """codex r2 P2: the userinfo pattern excluded `/`, so `pa/ss` survived."""
+    leaked = "http://alice:pa/ss@127.0.0.1:1/registry is unreachable"
+    redacted = go_api_cli._redact_text(leaked)
+    assert "pa/ss" not in redacted
+    assert "<redacted>" in redacted
+
+
+def test_a_malformed_port_does_not_crash_redaction() -> None:
+    """codex r2 P2: `.port` raises ValueError on `:bad`.
+
+    A redaction helper that raises turns a credential-bearing string into
+    an unhandled traceback -- which prints it anyway, via the exception.
+    """
+    out = go_api_cli._redact_url("http://alice:secret@example.com:bad/registry")
+    assert "secret" not in out
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://alice:super-secret@host/registry",
+        "http://alice:pa/ss@host/registry",
+        "http://alice:s@cret@host/registry",
+        "http://user:p%40ss@host/registry",
+        "http://alice:secret@[::1]:8080/registry",
+        "http://alice:secret@example.com:bad/registry",
+    ],
+)
+def test_no_password_survives_either_redactor(url: str) -> None:
+    """Both helpers, over the shapes a real URL can take.
+
+    The cost of over-matching here is a redacted string; the cost of
+    under-matching is a leaked credential, so these assert absence rather
+    than an exact rendering.
+    """
+    for redacted in (go_api_cli._redact_url(url), go_api_cli._redact_text(url)):
+        assert "super-secret" not in redacted
+        assert "pa/ss" not in redacted
+        assert "s@cret" not in redacted or "<redacted>" in redacted
+        assert "p%40ss" not in redacted
+        assert "secret" not in redacted or "<redacted>" in redacted

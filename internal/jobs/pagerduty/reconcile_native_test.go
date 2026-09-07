@@ -209,3 +209,92 @@ func TestNewNativeReconcilerRequiresItsMetricsFragment(t *testing.T) {
 type nilFence struct{}
 
 func (nilFence) Assert(context.Context, ReceiptClaim) error { return nil }
+
+// codex r2's last open finding. Both of these paths return a TRANSIENT error,
+// so streamrunner logs the wrapped text on its own -- the failure was never
+// invisible. What was missing is the delivery identity, without which an
+// operator reading "begin pagerduty webhook transaction: ..." cannot tell
+// which binding or receipt produced it.
+func TestTransientPreLockFailuresCarryTheDeliveryIdentity(t *testing.T) {
+	event := Event{
+		BindingID: "binding-9",
+		EventID:   "evt-9",
+		ReceiptID: "pagerduty:binding-9:evt-9",
+		Payload: json.RawMessage(
+			`{"event":{"id":"evt-9","event_type":"incident.triggered",` +
+				`"occurred_at":"2026-07-17T12:00:00Z","data":{"id":"PINC1"}}}`),
+		Received: time.Date(2026, 7, 17, 12, 0, 5, 0, time.UTC),
+	}
+
+	t.Run("no pool", func(t *testing.T) {
+		logs := captureLogs(t)
+		// A nil RECEIVER, not merely a nil pool: the guard covers both, and
+		// the log helper has to survive the harder one.
+		var reconciler *NativeReconciler
+		if err := reconciler.Reconcile(context.Background(), event, ReceiptClaim{}); !errors.Is(err, errUnavailable) {
+			t.Fatalf("error = %v, want errUnavailable", err)
+		}
+		assertCarriesIdentity(t, logs.String(), "")
+	})
+
+	t.Run("transaction cannot begin", func(t *testing.T) {
+		logs := captureLogs(t)
+		reconciler := &NativeReconciler{pool: unreachablePool(t), now: time.Now}
+		err := reconciler.Reconcile(context.Background(), event, ReceiptClaim{})
+		if err == nil {
+			t.Fatal("an unreachable database was treated as success")
+		}
+		// Transient, never terminal: a database that is down says nothing
+		// about whether the event is processable, and quarantining it here
+		// would dead-letter a delivery a later retry would have handled.
+		var permanent *streamrunner.PermanentError
+		if errors.As(err, &permanent) {
+			t.Fatalf("a database failure was classified permanent: %v", err)
+		}
+		if !strings.Contains(err.Error(), "begin pagerduty webhook transaction") {
+			t.Fatalf("error lost its context: %v", err)
+		}
+		assertCarriesIdentity(t, logs.String(), "incident.triggered")
+	})
+}
+
+// assertCarriesIdentity pins what makes the line actionable, and that the
+// payload still never reaches a log.
+func assertCarriesIdentity(t *testing.T, output, eventType string) {
+	t.Helper()
+	if !strings.Contains(output, webhookTransientEvent) {
+		t.Fatalf("transient failure emitted no line: %q", output)
+	}
+	for _, want := range []string{
+		"binding_id=binding-9",
+		"receipt_id=pagerduty:binding-9:evt-9",
+		"event_id=evt-9",
+		"provider=pagerduty",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("line is missing %s: %q", want, output)
+		}
+	}
+	if eventType != "" && !strings.Contains(output, "event_type="+eventType) {
+		t.Fatalf("line is missing event_type=%s: %q", eventType, output)
+	}
+	if strings.Contains(output, `"data"`) || strings.Contains(output, "PINC1") {
+		t.Fatalf("line leaked the payload: %q", output)
+	}
+}
+
+// unreachablePool is a real *pgxpool.Pool that can never connect: pgxpool
+// dials lazily, so construction succeeds and the failure lands exactly where
+// this test needs it -- inside Begin -- with no server and no container.
+func unreachablePool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool, err := pgxpool.New(
+		context.Background(),
+		"postgres://unused:unused@127.0.0.1:1/unused?connect_timeout=1&sslmode=disable",
+	)
+	if err != nil {
+		t.Fatalf("construct unreachable pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}

@@ -213,6 +213,9 @@ func (reconciler *NativeReconciler) Reconcile(
 	ctx context.Context, event Event, receipt ReceiptClaim,
 ) error {
 	if reconciler == nil || reconciler.pool == nil {
+		// Safe on a nil receiver: this is a package function, not a method,
+		// precisely because the receiver is what may be missing here.
+		logTransient(ctx, event, "", errUnavailable)
 		return errUnavailable
 	}
 	// These two returns quarantine a delivery permanently, and both ran
@@ -240,6 +243,7 @@ func (reconciler *NativeReconciler) Reconcile(
 
 	tx, err := reconciler.pool.Begin(ctx)
 	if err != nil {
+		logTransient(ctx, event, envelope.Event.EventType, err)
 		return fmt.Errorf("begin pagerduty webhook transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
@@ -359,6 +363,7 @@ func (reconciler *NativeReconciler) claimFor(
 
 const (
 	webhookMalformedEvent  = "pagerduty webhook rejected before the binding lock"
+	webhookTransientEvent  = "pagerduty webhook failed before the binding lock"
 	webhookReconciledEvent = "pagerduty webhook reconciled"
 	webhookRefusedEvent    = "pagerduty webhook refused"
 	webhookFailedEvent     = "pagerduty webhook failed"
@@ -388,6 +393,30 @@ func (reconciler *NativeReconciler) logSuccess(
 		attributes = append(attributes, slog.Int("rows_"+write.Destination, write.Rows))
 	}
 	slog.InfoContext(ctx, webhookReconciledEvent, attributes...)
+}
+
+// logTransient explains a delivery that failed before the binding graph was
+// locked and will be retried.
+//
+// streamrunner already surfaces the returned error (runner.go's process ->
+// "stream runner cycle failed"), so the failure itself was never invisible.
+// What was missing is the DELIVERY IDENTITY: an operator reading
+// "begin pagerduty webhook transaction: ..." could not tell which binding or
+// receipt it belonged to, which is the difference between a line you can act
+// on and one you can only count. Reported by codex r2 as the last open
+// finding on CHAOS-4105.
+//
+// It is a package function rather than a method because one of its two call
+// sites is the nil-receiver guard itself.
+func logTransient(ctx context.Context, event Event, eventType string, cause error) {
+	slog.ErrorContext(ctx, webhookTransientEvent,
+		slog.String("provider", "pagerduty"),
+		slog.String("binding_id", event.BindingID),
+		slog.String("event_type", eventType),
+		slog.String("event_id", event.EventID),
+		slog.String("receipt_id", event.ReceiptID),
+		slog.String("error", cause.Error()),
+	)
 }
 
 // logMalformed explains a delivery quarantined before the graph lock, where

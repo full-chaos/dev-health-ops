@@ -119,10 +119,24 @@ independent sets of pairs converted here:
   `engine_destinations_all_days`/`_assert_engine_helper_called_inside_job_loop`)
   statically asserted the comparison ran inside `job_work_items.py`'s
   `for d in days:` loop, so once that loop's enclosing function is deleted the
-  live comparison is unrepresentable, not merely unavailable --
-  `compute_work_item_engine_destinations_daily` itself is NOT deleted in this
-  PR (it has no other Python caller either, but retiring it is a separate,
-  larger follow-up: see CHAOS-5351's handoff notes).
+  live comparison is unrepresentable, not merely unavailable.
+  `compute_work_item_engine_destinations_daily` (and
+  `work_item_engine_destinations.py`, its dedicated test file, the now-fully-
+  unused `_github_work_item_derived_helpers.py`, and
+  `testdata/python_investment_call_site.py`) ARE deleted in this PR --
+  chris's rule: zero production callers, delete now. The one other consumer
+  of `python_investment_call_site.py`'s reflection,
+  `investment_classifier_reachability_test.go`'s
+  `TestInvestmentCallSiteArtifactPremiseHolds`/
+  `TestInvestmentClassifierUnreachableRulesStayUnreachable`, is repointed at
+  a new Go-source reflector (`investmentParseGoCallSitePremise`, same file)
+  that parses `github_work_item_engine_destinations.go`'s own
+  `InvestmentArtifact{...}` composite literal via `go/ast` -- Go is
+  production now, so the premise derives from Go source, not Python's dead
+  mirror of it. A new tripwire
+  (`TestInvestmentGoCallSiteReflectorFailsWhenLiteralMissing`) proves the
+  reflector errors loudly (never silently passes) if the literal moves,
+  duplicates, or turns positional.
 
 Captured 2026-09-07 on bigboy, from the still-live `job_work_items.py` /
 `dataset_adapters.py` at `chaos-5351-delete-work-items-sync-job-v2`'s merge

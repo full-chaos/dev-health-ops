@@ -457,8 +457,20 @@ func (r *queryResolver) ReportRuns(ctx context.Context, orgID string, reportID s
 // therefore move at UTC midnight -- injecting it is what lets a test pin
 // the window without the production path pinning one Python never pins.
 func (r *queryResolver) CapacityForecast(ctx context.Context, orgID string, input *model.CapacityForecastInput) (*model.CapacityForecast, error) {
+	// CHAOS-5349 r1 P2: the span starts BEFORE the authorization guard, so an
+	// org-scoping rejection is counted rather than silent. Guarding first --
+	// which is what every earlier delegated resolver in this file does -- means
+	// a caller whose envelope carries no org produces no span and no counter at
+	// all, so "this operation is being called and rejected" and "this operation
+	// is receiving no traffic" look identical in the metrics. That is the one
+	// question an operator asks first. (The older operations share the defect;
+	// widening this PR to them was declined deliberately -- it is filed as its
+	// own sweep.)
+	spanCtx, finish := startCapacityForecastSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied")
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -468,7 +480,6 @@ func (r *queryResolver) CapacityForecast(ctx context.Context, orgID string, inpu
 		}
 	}
 
-	spanCtx, finish := startCapacityForecastSpan(ctx)
 	result, err := capacityforecast.ResolveForecast(spanCtx, r.ClickHouse, claims.OrgID, input, time.Now())
 	if err != nil {
 		finish("error")
@@ -495,8 +506,20 @@ func (r *queryResolver) CapacityForecast(ctx context.Context, orgID string, inpu
 //
 // Same orgID-is-parsed-but-never-trusted rule as CapacityForecast above.
 func (r *queryResolver) CapacityForecasts(ctx context.Context, orgID string, filters *model.CapacityForecastFilterInput) (*model.CapacityForecastConnection, error) {
+	// CHAOS-5349 r1 P2: the span starts BEFORE the authorization guard, so an
+	// org-scoping rejection is counted rather than silent. Guarding first --
+	// which is what every earlier delegated resolver in this file does -- means
+	// a caller whose envelope carries no org produces no span and no counter at
+	// all, so "this operation is being called and rejected" and "this operation
+	// is receiving no traffic" look identical in the metrics. That is the one
+	// question an operator asks first. (The older operations share the defect;
+	// widening this PR to them was declined deliberately -- it is filed as its
+	// own sweep.)
+	spanCtx, finish := startCapacityForecastsSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied")
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -506,7 +529,6 @@ func (r *queryResolver) CapacityForecasts(ctx context.Context, orgID string, fil
 		}
 	}
 
-	spanCtx, finish := startCapacityForecastsSpan(ctx)
 	result, err := capacityforecast.ResolveForecasts(spanCtx, r.ClickHouse, claims.OrgID, filters)
 	if err != nil {
 		finish("error")
@@ -536,8 +558,20 @@ func (r *queryResolver) CapacityForecasts(ctx context.Context, orgID string, fil
 //
 // Same orgID-is-parsed-but-never-trusted rule as CapacityForecast above.
 func (r *queryResolver) ThroughputForecast(ctx context.Context, orgID string, input model.ThroughputForecastInput) (*model.ThroughputForecast, error) {
+	// CHAOS-5349 r1 P2: the span starts BEFORE the authorization guard, so an
+	// org-scoping rejection is counted rather than silent. Guarding first --
+	// which is what every earlier delegated resolver in this file does -- means
+	// a caller whose envelope carries no org produces no span and no counter at
+	// all, so "this operation is being called and rejected" and "this operation
+	// is receiving no traffic" look identical in the metrics. That is the one
+	// question an operator asks first. (The older operations share the defect;
+	// widening this PR to them was declined deliberately -- it is filed as its
+	// own sweep.)
+	spanCtx, finish := startThroughputForecastSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied")
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -547,7 +581,6 @@ func (r *queryResolver) ThroughputForecast(ctx context.Context, orgID string, in
 		}
 	}
 
-	spanCtx, finish := startThroughputForecastSpan(ctx)
 	result, err := throughputforecast.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input, time.Now())
 	if err != nil {
 		finish("error")

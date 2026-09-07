@@ -354,8 +354,13 @@ func startCapacityForecastSpan(ctx context.Context) (context.Context, func(outco
 }
 
 // recordCapacityForecastOutcome increments the outcome counter. outcome is
-// one of "ok", "empty" or "error" -- see startCapacityForecastSpan for why
-// "empty" is its own value here and not a flavour of "ok".
+// one of "ok", "empty", "denied" or "error".
+//
+// "denied" is an authorization rejection, and it is counted because the span now
+// starts BEFORE the auth guard (CHAOS-5349 r1 P2). Without it a caller whose
+// envelope carries no org produced no span and no counter, making "called and
+// rejected" indistinguishable from "never called". "empty" is its own value for
+// the same reason -- see startCapacityForecastSpan.
 func recordCapacityForecastOutcome(outcome string) {
 	capacityForecastOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -376,10 +381,11 @@ func startCapacityForecastsSpan(ctx context.Context) (context.Context, func(outc
 }
 
 // recordCapacityForecastsOutcome increments the outcome counter. outcome is
-// one of "ok", "empty" or "error": an empty CONNECTION is a successful query
-// that matched no rows, which four independent filters can each cause, and
-// separating it from "ok" is what makes "the filters are wrong" visible
-// without a log dive.
+// one of "ok", "empty", "denied" or "error". An empty CONNECTION is a
+// successful query that matched no rows, which four independent filters can
+// each cause, and separating it from "ok" is what makes "the filters are wrong"
+// visible without a log dive; "denied" is an authorization rejection, counted
+// because the span starts before the auth guard (CHAOS-5349 r1 P2).
 func recordCapacityForecastsOutcome(outcome string) {
 	capacityForecastsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
@@ -400,7 +406,9 @@ func startThroughputForecastSpan(ctx context.Context) (context.Context, func(out
 }
 
 // recordThroughputForecastOutcome increments the outcome counter. outcome is
-// one of "ok", "empty" or "error".
+// one of "ok", "empty", "denied" or "error". "denied" is an authorization
+// rejection, counted because the span starts before the auth guard
+// (CHAOS-5349 r1 P2).
 //
 // "empty" here does NOT mean a null response -- this resolver never returns
 // null for an empty scope, it returns a structured no-estimate payload

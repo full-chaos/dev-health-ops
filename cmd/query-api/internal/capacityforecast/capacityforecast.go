@@ -78,6 +78,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
@@ -141,6 +142,40 @@ func ResolveForecast(
 		teamID, workScopeID = input.TeamID, input.WorkScopeID
 		targetItems, targetDate = input.TargetItems, input.TargetDate
 		historyDays, simulations = input.HistoryDays, input.Simulations
+	}
+
+	// CHAOS-5349 r1 P1. `simulations` is `Int! = 10000` in the SDL: non-null,
+	// but nothing in GraphQL constrains it below, so a caller can send -1. That
+	// used to reach the Monte Carlo kernel's make() and panic the resolver
+	// ("makeslice: cap out of range") -- a 500 with no useful body.
+	//
+	// Python does not panic; it answers p50=p85=p95=0, because `range(-1)` is
+	// empty. That is NOT a contract worth preserving. A forecast built from
+	// zero simulations is not a conservative estimate, it is a fabricated one,
+	// and returning it as though it were an answer is worse than refusing the
+	// request. DECLARED DIVERGENCE -- see the PR body.
+	//
+	// Rejected BEFORE any query, so a nonsensical request costs the org nothing,
+	// and the field and the offending value are both named so the caller can
+	// see what to change. There is deliberately no UPPER bound: neither Python
+	// nor the worker path enforces one, and inventing a ceiling here would
+	// silently truncate a request that works today.
+	if simulations < 1 {
+		slog.WarnContext(ctx, "query_api.capacity_forecast.invalid_input",
+			"org_id", orgID,
+			"field", "simulations",
+			"value", simulations,
+			"reason", "simulations must be at least 1; a zero-simulation Monte Carlo has no output to take percentiles of",
+			"duration_ms", time.Since(started).Milliseconds(),
+		)
+		return nil, &gqlerror.Error{
+			Message: fmt.Sprintf(
+				"capacityForecast: simulations must be at least 1, got %d", simulations),
+			Extensions: map[string]any{
+				"code":  "BAD_USER_INPUT",
+				"field": "simulations",
+			},
+		}
 	}
 
 	history, err := loadThroughput(ctx, client, orgID, teamID, workScopeID, historyDays, now)

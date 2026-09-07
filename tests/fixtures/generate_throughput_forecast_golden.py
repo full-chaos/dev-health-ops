@@ -61,6 +61,8 @@ generated it.
 from __future__ import annotations
 
 import json
+import math
+import struct
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -68,6 +70,8 @@ from typing import Any
 
 from dev_health_ops.metrics.compute_capacity import ThroughputHistory, ThroughputSample
 from dev_health_ops.metrics.forecast import (
+    _percentile,
+    _weeks_to_complete,
     compute_risk_overlays,
     compute_rolling_windows,
     forecast_throughput_capacity,
@@ -409,6 +413,116 @@ CASES: list[dict[str, Any]] = [
 ]
 
 
+def bits_hex(value: float) -> str:
+    """The IEEE-754 bit pattern of ``value``, as ``math.Float64bits`` prints it."""
+    return "0x" + format(struct.unpack(">Q", struct.pack(">d", value))[0], "016x")
+
+
+# Direct vectors for _percentile itself (CHAOS-5349 r1 P3).
+#
+# The forecast cases above CANNOT cover this function. Their only observable
+# percentile outputs are p50/p75/p90_weeks, which are integers produced by
+# math.ceil -- so any change to the interpolation that does not happen to cross a
+# ceil boundary is invisible to every one of them. Measured on the Go side:
+# mutating `remainder` to `remainder + 1.0` left the entire package GREEN.
+#
+# These vectors close that hole by asserting the function's own float output, by
+# bit pattern. Every case has a rank that lands BETWEEN two samples, because a
+# rank that lands exactly on one returns early and never reaches the
+# interpolation at all -- a table of those would look thorough and test nothing.
+PERCENTILE_CASES: list[dict[str, Any]] = [
+    {
+        "name": "interpolates_between_two_samples",
+        "why": "rank 0.5 in a 2-element list: the simplest case that interpolates at all.",
+        "values": [1.0, 2.0],
+        "fraction": 0.5,
+    },
+    {
+        "name": "p10_of_eleven_lands_on_a_sample",
+        "why": (
+            "rank (11-1)*0.10 = 1.0 exactly, so lower == upper and the function "
+            "returns ordered[1] WITHOUT interpolating. Pins the early return."
+        ),
+        "values": [float(v) for v in range(11)],
+        "fraction": 0.10,
+    },
+    {
+        "name": "p10_of_ten_interpolates",
+        "why": "rank (10-1)*0.10 = 0.9, a fraction of 0.9 between two adjacent samples.",
+        "values": [float(v) for v in range(10)],
+        "fraction": 0.10,
+    },
+    {
+        "name": "thirds_are_not_representable",
+        "why": (
+            "rank (4-1)*(1/3) is not exactly 1.0 in binary, so the interpolation "
+            "runs on a fraction with no exact float representation -- the shape "
+            "most likely to differ between a fused and an unfused multiply-add."
+        ),
+        "values": [0.0, 3.0, 6.0, 9.0],
+        "fraction": 1.0 / 3.0,
+    },
+    {
+        "name": "unsorted_input_is_sorted_first",
+        "why": "the function sorts a COPY; a port that percentiles in input order disagrees here.",
+        "values": [9.0, 1.0, 7.0, 3.0, 5.0],
+        "fraction": 0.25,
+    },
+    {
+        "name": "wide_magnitudes_interpolate",
+        "why": (
+            "adjacent samples differing by ~1e8: `lo + (hi - lo) * f` and "
+            "`lo*(1-f) + hi*f` disagree here in the last ulp, and this module's "
+            "form is the FIRST one. compute_capacity's percentile is the second."
+        ),
+        "values": [1.0, 100000000.5, 200000000.25],
+        "fraction": 0.3,
+    },
+    {
+        "name": "single_sample_returns_itself",
+        "why": "len == 1 returns ordered[0] before any rank arithmetic.",
+        "values": [42.5],
+        "fraction": 0.9,
+    },
+    {
+        "name": "empty_is_zero",
+        "why": "an empty distribution is 0.0, which is what makes weeks None downstream.",
+        "values": [],
+        "fraction": 0.5,
+    },
+]
+
+
+def _percentile_vectors() -> list[dict[str, Any]]:
+    """Capture _percentile's exact output, plus the weeks value it feeds."""
+    rows: list[dict[str, Any]] = []
+    for case in PERCENTILE_CASES:
+        value = _percentile(list(case["values"]), case["fraction"])
+        # A backlog sized so ceil() sits JUST above an integer boundary for this
+        # percentile: weeks = ceil(backlog / value). Picking the backlog from the
+        # value itself means the boundary case exists for every vector rather
+        # than only where a hand-chosen number happened to land, which is the
+        # "at least one vector crossing a Ceil boundary" requirement generalised.
+        boundary_backlog = None
+        weeks_at_boundary = None
+        if value > 0:
+            boundary_backlog = int(math.floor(value * 3)) + 1
+            weeks_at_boundary = _weeks_to_complete(boundary_backlog, value)
+        rows.append(
+            {
+                "name": case["name"],
+                "why": case["why"],
+                "values": case["values"],
+                "fraction": case["fraction"],
+                "expected": value,
+                "expected_bits": bits_hex(value),
+                "boundary_backlog": boundary_backlog,
+                "weeks_at_boundary": weeks_at_boundary,
+            }
+        )
+    return rows
+
+
 def main() -> None:
     cases: list[dict[str, Any]] = []
     for case in CASES:
@@ -492,6 +606,7 @@ def main() -> None:
             "belong to the resolver rather than the kernel."
         ),
         "cases": cases,
+        "percentiles": _percentile_vectors(),
         "resolver_paths": [no_history],
     }
 
@@ -507,6 +622,7 @@ def main() -> None:
     OUTPUT_PATH.write_text(rendered)
     print(f"wrote {OUTPUT_PATH}")
     print(f"  kernel cases:   {len(cases)}")
+    print(f"  percentile vectors: {len(PERCENTILE_CASES)}")
     print("  resolver paths: 1 (no-history payload)")
 
 

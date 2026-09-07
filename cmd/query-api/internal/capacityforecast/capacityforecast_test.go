@@ -3,11 +3,13 @@ package capacityforecast
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
@@ -401,5 +403,76 @@ func TestStrDatetimeUTCMatchesPythonStr(t *testing.T) {
 				t.Errorf("got %q, want %q", got, testCase.want)
 			}
 		})
+	}
+}
+
+// TestResolveForecastRejectsANonPositiveSimulationCount is CHAOS-5349 r1 P1's
+// resolver half, and a DECLARED DIVERGENCE from Python.
+//
+// Python answers p50=p85=p95=0 for `simulations: -1`, because `range(-1)` is
+// empty. Executed against the live module during the review:
+// `PY_NEGATIVE_SIMULATIONS_OK p50=0 p85=0 p95=0`. That is a defect, not a
+// contract: a forecast built from zero simulations is not a conservative
+// estimate, it is a fabricated one, and handing it back as an answer is worse
+// than refusing the request.
+//
+// So this port refuses, BEFORE issuing any query -- a nonsensical request must
+// not cost the org a ClickHouse read. The nil client below is the proof: if the
+// guard ever stopped short-circuiting, this test would panic rather than pass.
+func TestResolveForecastRejectsANonPositiveSimulationCount(t *testing.T) {
+	for _, simulations := range []int{0, -1, -10000} {
+		input := &model.CapacityForecastInput{HistoryDays: 90, Simulations: simulations}
+
+		// A nil QueryClient: reaching any read at all is a nil-pointer panic.
+		result, err := ResolveForecast(
+			context.Background(), nil, "org-1", input, day(t, "2026-09-01"))
+
+		if result != nil {
+			t.Errorf("simulations=%d: got a forecast, want a rejection", simulations)
+		}
+		if err == nil {
+			t.Fatalf("simulations=%d: got nil error, want a validation error", simulations)
+		}
+		gqlErr, ok := err.(*gqlerror.Error)
+		if !ok {
+			t.Fatalf("simulations=%d: error is %T, want *gqlerror.Error so the client sees a coded rejection",
+				simulations, err)
+		}
+		if code, _ := gqlErr.Extensions["code"].(string); code != "BAD_USER_INPUT" {
+			t.Errorf("simulations=%d: extensions.code = %v, want BAD_USER_INPUT",
+				simulations, gqlErr.Extensions["code"])
+		}
+		// The offending FIELD and its VALUE are both named: a rejection that
+		// does not say which input was wrong makes the caller guess.
+		if field, _ := gqlErr.Extensions["field"].(string); field != "simulations" {
+			t.Errorf("simulations=%d: extensions.field = %v, want \"simulations\"",
+				simulations, gqlErr.Extensions["field"])
+		}
+		if !strings.Contains(gqlErr.Message, "simulations") ||
+			!strings.Contains(gqlErr.Message, strconv.Itoa(simulations)) {
+			t.Errorf("simulations=%d: message %q names neither the field nor the value",
+				simulations, gqlErr.Message)
+		}
+	}
+}
+
+// TestResolveForecastAcceptsTheSmallestValidSimulationCount pins the boundary
+// from the other side, so the guard cannot quietly become `< 2` or `<= 1`.
+func TestResolveForecastAcceptsTheSmallestValidSimulationCount(t *testing.T) {
+	client := &fakeClient{responses: []*fakeRowScanner{
+		throughputRows(t, 2, 4, 6),
+		{rows: [][]any{{uint64(12)}}},
+	}}
+	input := &model.CapacityForecastInput{HistoryDays: 90, Simulations: 1}
+
+	got, err := ResolveForecast(context.Background(), client, "org-1", input, day(t, "2026-09-01"))
+	if err != nil {
+		t.Fatalf("simulations=1 was rejected: %v", err)
+	}
+	if got == nil {
+		t.Fatal("simulations=1 produced no forecast")
+	}
+	if got.P50Days == nil {
+		t.Error("simulations=1: the fixed-scope branch did not run")
 	}
 }

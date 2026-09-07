@@ -76,10 +76,22 @@ type goldenCase struct {
 	Expected goldenExpected `json:"expected"`
 }
 
+type goldenPercentile struct {
+	Name            string    `json:"name"`
+	Why             string    `json:"why"`
+	Values          []float64 `json:"values"`
+	Fraction        float64   `json:"fraction"`
+	Expected        float64   `json:"expected"`
+	ExpectedBits    string    `json:"expected_bits"`
+	BoundaryBacklog *int      `json:"boundary_backlog"`
+	WeeksAtBoundary *int      `json:"weeks_at_boundary"`
+}
+
 type goldenFixture struct {
-	Source        string       `json:"source"`
-	Cases         []goldenCase `json:"cases"`
-	ResolverPaths []goldenCase `json:"resolver_paths"`
+	Source        string             `json:"source"`
+	Cases         []goldenCase       `json:"cases"`
+	Percentiles   []goldenPercentile `json:"percentiles"`
+	ResolverPaths []goldenCase       `json:"resolver_paths"`
 }
 
 func loadGolden(t *testing.T) goldenFixture {
@@ -315,5 +327,76 @@ func TestPrimaryRiskKeepsTheFirstMaximumOnATie(t *testing.T) {
 	if primary.kind != riskKindWIP {
 		t.Fatalf("primary risk on a score tie: got %q, want %q (the first maximum)",
 			primary.kind, riskKindWIP)
+	}
+}
+
+// TestPercentileMatchesLivePythonBitExact closes the hole CHAOS-5349 r1 P3 found.
+//
+// The forecast cases above CANNOT cover percentile's interpolation. Their only
+// observable percentile outputs are p50/p75/p90Weeks, which are integers
+// produced by math.Ceil, so any change to the interpolation that does not happen
+// to cross a ceil boundary is invisible to every one of them. Measured by the
+// review: mutating `remainder` to `remainder + 1.0` left this entire package
+// GREEN, while the fixture's own doc comment claimed the interpolation was
+// pinned bit-for-bit. It was not.
+//
+// These vectors assert the function's own float output by BIT PATTERN, and each
+// one also carries a backlog sized so weeksToComplete sits just above an integer
+// boundary -- so a shift too small to show up in the float comparison would
+// still move the week count. Both halves are checked.
+//
+// The name carries the ...MatchesLivePythonBitExact suffix deliberately: it is
+// what go.yml's go-arm64-numeric-parity job selects on, and this is the most
+// FMA-exposed assertion in the package.
+func TestPercentileMatchesLivePythonBitExact(t *testing.T) {
+	fixture := loadGolden(t)
+	if len(fixture.Percentiles) == 0 {
+		t.Fatal("the golden carries no percentile vectors -- the interpolation is unguarded again")
+	}
+
+	interpolating := 0
+	for _, testCase := range fixture.Percentiles {
+		t.Run(testCase.Name, func(t *testing.T) {
+			t.Logf("pins: %s", testCase.Why)
+
+			got := percentile(testCase.Values, testCase.Fraction)
+			if math.Float64bits(got) != math.Float64bits(testCase.Expected) {
+				t.Errorf("percentile(%v, %v): got %s, live Python produced %s",
+					testCase.Values, testCase.Fraction, bits(got), bits(testCase.Expected))
+			}
+
+			// The fixture also records CPython's own rendering of the bit
+			// pattern. Comparing against it catches a corpus that was
+			// regenerated on one side only -- the float and its bits would then
+			// disagree with each other, which no single-value assertion sees.
+			if want := fmt.Sprintf("0x%016x", math.Float64bits(testCase.Expected)); want != testCase.ExpectedBits {
+				t.Errorf("fixture is internally inconsistent: expected=%v renders as %s, but expected_bits says %s",
+					testCase.Expected, want, testCase.ExpectedBits)
+			}
+
+			// The Ceil-boundary half. The backlog was chosen from the percentile
+			// itself so the week count sits one unit above the exact quotient;
+			// a percentile that drifts upward drops it by a whole week.
+			if testCase.BoundaryBacklog != nil {
+				gotWeeks := weeksToComplete(*testCase.BoundaryBacklog, got)
+				requireSameIntPointer(t,
+					fmt.Sprintf("weeksToComplete(%d, percentile)", *testCase.BoundaryBacklog),
+					gotWeeks, testCase.WeeksAtBoundary)
+			}
+		})
+
+		// A rank landing exactly on a sample returns early and never
+		// interpolates. A table made only of those would look thorough and
+		// exercise nothing, so the count is asserted below.
+		rank := float64(len(testCase.Values)-1) * testCase.Fraction
+		if len(testCase.Values) > 1 && rank != math.Floor(rank) {
+			interpolating++
+		}
+	}
+
+	if interpolating < 3 {
+		t.Fatalf("only %d vector(s) actually reach the interpolation branch; the rest return "+
+			"early on an exact rank or a short slice. This table would pass against a broken "+
+			"interpolation", interpolating)
 	}
 }

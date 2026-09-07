@@ -34,9 +34,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any, cast
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
@@ -328,24 +330,58 @@ async def apply_disable(
     changes: Sequence[ModeChange],
     review_evidence: str | None = None,
     recorded_by: str | None = None,
+    expected_candidate_build: str | None = None,
 ) -> list[ModeChange]:
     """Write the mode changes `plan_disable` produced.
 
     Only rows that actually exist are touched: a `ModeChange` with
     ``current_mode is None`` is skipped, never inserted. Turning something
-    off must not be able to turn something on.
+    off must not be able to turn something on -- enforced twice, by the
+    mode check below and by using UPDATE rather than an upsert.
+
+    ``expected_candidate_build`` becomes part of the WHERE, so the
+    candidate-build guard is atomic with the write instead of a
+    time-of-check/time-of-use read in `plan_disable`. A row repointed in
+    between simply does not match, and is reported by its absence from the
+    returned list.
     """
     applied: list[ModeChange] = []
     for change in changes:
         if change.current_mode is None:
             continue
-        await session.execute(
-            update(RoutingState)
-            .where(
-                RoutingState.schema_digest == schema_digest,
-                RoutingState.document_digest == change.document_digest,
-                RoutingState.selected_operation == change.operation,
+        # Enforced HERE, at the write, not only in plan_disable (codex r1,
+        # P1): a hand-built ModeChange(new_mode="primary") reached this
+        # function and turned routing ON -- the one thing an off-ramp must
+        # never be able to do. An invariant checked only by the caller is
+        # an invariant the next caller breaks.
+        if change.new_mode not in DISABLE_MODES:
+            raise ValueError(
+                f"apply_disable refuses mode {change.new_mode!r}: this verb "
+                f"may only set {DISABLE_MODES}. Turning an operation ON is "
+                "`enable`'s job, and it has preflights this path does not."
             )
+        conditions = [
+            RoutingState.schema_digest == schema_digest,
+            RoutingState.document_digest == change.document_digest,
+            RoutingState.selected_operation == change.operation,
+        ]
+        if expected_candidate_build is not None:
+            # The guard has to be part of the WRITE, not a separate earlier
+            # read (codex r1, P1): plan_disable checks it, then anyone can
+            # repoint the row before apply_disable fires. Putting it in the
+            # WHERE makes the check and the write one atomic statement, so
+            # a repointed row is simply not matched.
+            conditions.append(
+                RoutingState.current_candidate_build == expected_candidate_build
+            )
+        # `AsyncSession.execute` is annotated `Result[Any]`, which has no
+        # `rowcount`; an UPDATE returns a `CursorResult` at runtime, which
+        # does. Cast rather than `# type: ignore`, so the reason stays
+        # legible and swapping this for a non-DML statement fails review
+        # instead of being quietly covered.
+        statement = (
+            update(RoutingState)
+            .where(*conditions)
             .values(
                 mode=change.new_mode,
                 review_evidence=review_evidence,
@@ -353,6 +389,12 @@ async def apply_disable(
                 updated_at=datetime.now(timezone.utc),
             )
         )
+        result = cast("CursorResult[Any]", await session.execute(statement))
+        if result.rowcount == 0:
+            # Only reachable with the guard on: the row moved between plan
+            # and apply. Reported by omission from `applied`, never as a
+            # silent success.
+            continue
         applied.append(
             ModeChange(
                 operation=change.operation,

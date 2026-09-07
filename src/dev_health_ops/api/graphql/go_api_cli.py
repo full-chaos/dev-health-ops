@@ -521,6 +521,7 @@ async def _cmd_routing_disable(ns: argparse.Namespace) -> int:
             changes=changes,
             review_evidence=ns.review_evidence.strip(),
             recorded_by=_recorded_by(),
+            expected_candidate_build=getattr(ns, "candidate_build", None),
         )
         await session.commit()
 
@@ -534,6 +535,18 @@ async def _cmd_routing_disable(ns: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     print(f"\napplied: {len(applied)} row(s) now mode={ns.mode}")
+    expected_rows = len([c for c in changes if c.current_mode is not None])
+    if len(applied) != expected_rows:
+        # Only possible with --candidate-build: a row was repointed between
+        # the plan and the write, so the guarded UPDATE did not match it.
+        # Silence here would read as success.
+        print(
+            f"WARNING: {expected_rows - len(applied)} row(s) did NOT change -- "
+            "their candidate build moved between the plan and the write. "
+            "Re-run `status` and decide again.",
+            file=sys.stderr,
+        )
+        return 2
     return 0
 
 

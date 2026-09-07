@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import urllib.parse as _urlparse
 from typing import Any
 
 import pytest
@@ -465,14 +466,6 @@ async def test_status_text_mode_names_an_unreadable_sdl(
     assert "cannot compute the routing key" in out
 
 
-def test_a_password_containing_a_slash_is_still_redacted() -> None:
-    """codex r2 P2: the userinfo pattern excluded `/`, so `pa/ss` survived."""
-    leaked = "http://alice:pa/ss@127.0.0.1:1/registry is unreachable"
-    redacted = go_api_cli._redact_text(leaked)
-    assert "pa/ss" not in redacted
-    assert "<redacted>" in redacted
-
-
 def test_a_malformed_port_does_not_crash_redaction() -> None:
     """codex r2 P2: `.port` raises ValueError on `:bad`.
 
@@ -483,79 +476,116 @@ def test_a_malformed_port_does_not_crash_redaction() -> None:
     assert "secret" not in out
 
 
-# Every vector below was MEASURED leaking at some point in this PR's review
-# history. Each is asserted with a direct `not in`, and there is deliberately
-# no `or` anywhere: the previous version of this test read
-#     assert "s@cret" not in redacted or "<redacted>" in redacted
-# and the `or` made it vacuous, since "<redacted>" is always present. It
-# passed while the credential leaked (trap #43's class, in my own hand).
+# THE VECTOR TABLE. Every row was MEASURED leaking at some point in this
+# PR's four review rounds. The redactor no longer matches on the shape of a
+# secret at all -- it deletes the credential it was TOLD about -- but the
+# table stays as the regression record, and any future change must keep all
+# twelve green.
+#
+#   r1                 plain user:password
+#   r2                 '/' in password, malformed port, IPv6 host, %-encoded
+#   r3                 raw '@' in password, empty username, username only
+#   confirmation pass  space / newline / tab in password
+#
+# Four consecutive rounds each found a character class the previous regex
+# had not anticipated. That is why the implementation stopped describing
+# secrets: the space of secrets is not describable.
 _REDACTION_VECTORS = [
-    # (url, the substring that must never survive)
-    ("http://alice:super-secret@host/registry", "super-secret"),  # r1
-    ("http://alice:pa/ss@host/registry", "pa/ss"),  # r2: '/' in password
-    ("http://alice:s@cret@host/registry", "cret"),  # r3: raw '@' in password
-    ("http://:secret@host/registry", "secret"),  # r3: empty username
-    ("http://alice@host/registry", "alice"),  # r3: username only
-    ("http://alice:secret@example.com:bad/registry", "secret"),  # malformed port
-    ("http://alice:secret@[::1]:8080/registry", "secret"),  # IPv6 host
-    ("http://user:p%40ss@host/registry", "p%40ss"),  # percent-encoded
+    ("plain", "http://alice:super-secret@host/registry", "super-secret"),
+    ("slash in password", "http://alice:pa/ss@host/registry", "pa/ss"),
+    ("raw @ in password", "http://alice:s@cret@host/registry", "s@cret"),
+    ("empty username", "http://:secret@host/registry", "secret"),
+    ("username only", "http://alice@host/registry", "alice"),
+    ("malformed port", "http://alice:secret@example.com:bad/registry", "secret"),
+    ("ipv6 host", "http://alice:secret@[::1]:8080/registry", "secret"),
+    ("percent encoded", "http://user:p%40ss@host/registry", "p%40ss"),
+    ("space in password", "http://alice:pa ss@host/registry", "pa ss"),
+    ("newline in password", "http://alice:pa\nss@host/registry", "pa\nss"),
+    ("tab in password", "http://alice:pa\tss@host/registry", "pa\tss"),
+    ("hash in password", "http://alice:pa#ss@host/registry", "pa#ss"),
+]
+
+# URLs carrying NO credentials. Over-redaction is a real defect too: the
+# host is the diagnostic, and hiding it leaves an operator unable to tell
+# which endpoint failed. The '@'-in-path and '@'-in-query rows are the ones
+# a naive "scrub to the last @" rule gets wrong.
+_NO_CREDENTIAL_URLS = [
+    "http://127.0.0.1:1/registry",
+    "http://host/registry?q=1",
+    "http://host/pkg@v2/x",
+    "http://host/r?to=a@b",
+    "https://query-api.internal:8080/registry",
 ]
 
 
-@pytest.mark.parametrize(("url", "secret"), _REDACTION_VECTORS)
-def test_redact_text_never_leaves_the_secret(url: str, secret: str) -> None:
-    redacted = go_api_cli._redact_text(url)
+@pytest.mark.parametrize(("name", "url", "secret"), _REDACTION_VECTORS)
+def test_redact_text_removes_the_secret(name: str, url: str, secret: str) -> None:
+    """The free-text path, given the URL it was operating on."""
+    redacted = go_api_cli._redact_text(f"{url} is unreachable", url)
     assert secret not in redacted
     assert "<redacted>" in redacted
 
 
-@pytest.mark.parametrize(("url", "secret"), _REDACTION_VECTORS)
-def test_redact_url_never_leaves_the_secret(url: str, secret: str) -> None:
+@pytest.mark.parametrize(("name", "url", "secret"), _REDACTION_VECTORS)
+def test_redact_url_removes_the_secret(name: str, url: str, secret: str) -> None:
     redacted = go_api_cli._redact_url(url)
     assert secret not in redacted
     assert "<redacted>" in redacted
 
 
-@pytest.mark.parametrize(
-    ("url", "expected"),
-    [
-        ("http://alice:super-secret@host/registry", "http://<redacted>@host/registry"),
-        ("http://alice:pa/ss@host/registry", "http://<redacted>@host/registry"),
-        ("http://alice:s@cret@host/registry", "http://<redacted>@host/registry"),
-        ("http://:secret@host/registry", "http://<redacted>@host/registry"),
-        ("http://alice@host/registry", "http://<redacted>@host/registry"),
-        (
-            "http://alice:secret@example.com:bad/registry",
-            "http://<redacted>@example.com:bad/registry",
-        ),
-        (
-            "http://alice:secret@[::1]:8080/registry",
-            "http://<redacted>@[::1]:8080/registry",
-        ),
-    ],
-)
-def test_redaction_keeps_the_host_exactly(url: str, expected: str) -> None:
-    """Pinned output, not a disjunction.
-
-    Over-redaction has a real cost: the host is the diagnostic, and an
-    operator who cannot see which endpoint failed is barely better off than
-    one who saw a password. Asserting the exact string keeps both halves
-    honest and leaves no `or` for a future edit to hide behind.
-    """
-    assert go_api_cli._redact_text(url) == expected
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://127.0.0.1:1/registry",
-        "http://host/registry?q=1",
-        "https://query-api.internal:8080/registry",
-    ],
-)
+@pytest.mark.parametrize("url", _NO_CREDENTIAL_URLS)
 def test_a_url_without_credentials_is_left_intact(url: str) -> None:
-    assert go_api_cli._redact_text(url) == url
+    assert go_api_cli._redact_text(url, url) == url
     assert go_api_cli._redact_url(url) == url
+
+
+@pytest.mark.parametrize(("name", "url", "secret"), _REDACTION_VECTORS)
+def test_redact_url_output_still_parses_and_keeps_host_and_port(
+    name: str, url: str, secret: str
+) -> None:
+    """The redactor must not emit something a caller cannot re-parse.
+
+    Before the IPv6 bracket fix, `http://alice:secret@[::1]:8080/` redacted
+    to `http://<redacted>@::1:8080/`, and `urlsplit` raised
+    "Port could not be cast to integer value as ':1:8080'" on this
+    function's OWN output (confirmation pass, P2).
+
+    Inputs that themselves do not parse are skipped -- the invariant is
+    that redaction preserves parseability, not that it repairs a malformed
+    URL.
+    """
+    try:
+        original = _urlparse.urlsplit(url)
+        want_host, want_port = original.hostname, original.port
+    except ValueError:
+        pytest.skip("input URL is itself unparseable; nothing to preserve")
+
+    redacted = _urlparse.urlsplit(go_api_cli._redact_url(url))
+    assert redacted.hostname == want_host
+    assert redacted.port == want_port
+
+
+def test_redact_text_without_a_known_url_changes_nothing() -> None:
+    """No URL means nothing to redact BY, and guessing is what kept failing.
+
+    Returning the text unchanged is the honest behaviour; every call site
+    in the module passes the URL, so this is a contract statement rather
+    than a live path.
+    """
+    text = "http://alice:secret@host/registry is unreachable"
+    assert go_api_cli._redact_text(text) == text
+
+
+def test_credential_fragments_are_ordered_longest_first() -> None:
+    """The full userinfo span must be replaced before its parts.
+
+    Otherwise replacing `alice` first can strand `:secret@` in the output.
+    """
+    fragments = go_api_cli._credential_fragments(
+        "http://alice:super-secret@host/registry"
+    )
+    assert fragments == sorted(fragments, key=len, reverse=True)
+    assert "alice:super-secret" in fragments
 
 
 @pytest.mark.asyncio

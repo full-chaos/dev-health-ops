@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/capacityforecast"
@@ -100,7 +102,7 @@ func (r *queryResolver) Catalog(ctx context.Context, orgID string, dimension *mo
 // comment for the full scope split).
 //
 // The two-branch org-id check below is COPIED IN SHAPE from
-// FeatureFlags above (schema.resolvers.go:146-164), not invented here --
+// FeatureFlags above (schema.resolvers.go:390-412), not invented here --
 // `analytics` is not the first ported resolver to take a client-supplied
 // `orgId` argument (nine others already do: FeatureFlags plus the
 // Catalog/DevMetric/DevScopeSearch/etc. stubs), and FeatureFlags already
@@ -123,8 +125,18 @@ func (r *queryResolver) Catalog(ctx context.Context, orgID string, dimension *mo
 // boundary, and adding superuser support later is additive, never a
 // revert.
 func (r *queryResolver) Analytics(ctx context.Context, orgID string, batch model.AnalyticsRequestInput) (*model.AnalyticsResult, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast/CapacityForecasts/
+	// ThroughputForecast's CHAOS-5349 r1 P2 precedent): a rejected request
+	// used to produce no span, no attribute, and no metric at all, making
+	// "this operation is being called and rejected" indistinguishable from
+	// "this operation is receiving no traffic". finish still runs after
+	// Resolve completes on the success path, same as before.
+	spanCtx, finish := startAnalyticsSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "Authorization required",
 			Path:    graphql.GetPath(ctx),
@@ -134,6 +146,7 @@ func (r *queryResolver) Analytics(ctx context.Context, orgID string, batch model
 		}
 	}
 	if claims.OrgID != orgID {
+		finish("denied", attribute.String("denial_reason", "org_mismatch"), attribute.String("org_id", claims.OrgID))
 		return nil, &gqlerror.Error{
 			Message: "cannot query analytics for a different organization",
 			Path:    graphql.GetPath(ctx),
@@ -143,10 +156,6 @@ func (r *queryResolver) Analytics(ctx context.Context, orgID string, batch model
 		}
 	}
 
-	// The returned ctx carries the span; finish must run after Resolve
-	// actually completes so the span measures the resolver's real work
-	// (see startFeatureFlagsSpan's doc comment for the bug this fixes).
-	spanCtx, finish := startAnalyticsSpan(ctx)
 	result, err := analytics.Resolve(spanCtx, r.ClickHouse, orgID, batch)
 	if err != nil {
 		finish("error")
@@ -186,8 +195,15 @@ func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.F
 // by construction: it passes claims.OrgID, never the orgID argument, to
 // workgraph.ResolveEdges.
 func (r *queryResolver) WorkGraphEdges(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphEdgesResult, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast's CHAOS-5349 r1 P2 precedent): a
+	// rejected request used to produce no span, no attribute, and no metric
+	// at all.
+	spanCtx, finish := startWorkGraphEdgesSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -197,7 +213,6 @@ func (r *queryResolver) WorkGraphEdges(ctx context.Context, orgID string, filter
 		}
 	}
 
-	spanCtx, finish := startWorkGraphEdgesSpan(ctx)
 	result, err := workgraph.ResolveEdges(spanCtx, r.ClickHouse, claims.OrgID, filters)
 	if err != nil {
 		finish("error")
@@ -282,8 +297,15 @@ func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model
 // "authorized org always wins" authorization convention as WorkGraphEdges
 // above.
 func (r *queryResolver) WorkGraphFlow(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphFlowResult, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast's CHAOS-5349 r1 P2 precedent): a
+	// rejected request used to produce no span, no attribute, and no metric
+	// at all.
+	spanCtx, finish := startWorkGraphFlowSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -293,7 +315,6 @@ func (r *queryResolver) WorkGraphFlow(ctx context.Context, orgID string, filters
 		}
 	}
 
-	spanCtx, finish := startWorkGraphFlowSpan(ctx)
 	result, err := workgraph.ResolveFlow(spanCtx, r.ClickHouse, claims.OrgID, filters)
 	if err != nil {
 		finish("error")
@@ -313,8 +334,15 @@ func (r *queryResolver) WorkGraphFlow(ctx context.Context, orgID string, filters
 // workgraph package doc comment. Same "authorized org always wins"
 // authorization convention as WorkGraphEdges above.
 func (r *queryResolver) WorkGraphArtifacts(ctx context.Context, orgID string, filters *model.WorkGraphEdgeFilterInput) (*model.WorkGraphArtifactsResult, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast's CHAOS-5349 r1 P2 precedent): a
+	// rejected request used to produce no span, no attribute, and no metric
+	// at all.
+	spanCtx, finish := startWorkGraphArtifactsSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -324,7 +352,6 @@ func (r *queryResolver) WorkGraphArtifacts(ctx context.Context, orgID string, fi
 		}
 	}
 
-	spanCtx, finish := startWorkGraphArtifactsSpan(ctx)
 	result, err := workgraph.ResolveArtifacts(spanCtx, r.ClickHouse, claims.OrgID, filters)
 	if err != nil {
 		finish("error")
@@ -352,8 +379,17 @@ func (r *queryResolver) WorkGraphArtifacts(ctx context.Context, orgID string, fi
 // client is asking about" -- a caller cannot read another org's flags by
 // passing a different orgId than their own envelope carries.
 func (r *queryResolver) FeatureFlags(ctx context.Context, orgID string, provider *string, project *string, includeArchived *bool, limit int) (*model.FeatureFlagRegistryResult, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast's CHAOS-5349 r1 P2 precedent): a
+	// rejected request used to produce no span, no attribute, and no metric
+	// at all. finish still runs after Resolve completes on the success
+	// path, same as before (see startFeatureFlagsSpan's doc comment for the
+	// original zero-duration-span bug this discipline fixes).
+	spanCtx, finish := startFeatureFlagsSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "Authorization required",
 			Path:    graphql.GetPath(ctx),
@@ -363,6 +399,7 @@ func (r *queryResolver) FeatureFlags(ctx context.Context, orgID string, provider
 		}
 	}
 	if claims.OrgID != orgID {
+		finish("denied", attribute.String("denial_reason", "org_mismatch"), attribute.String("org_id", claims.OrgID))
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -377,10 +414,6 @@ func (r *queryResolver) FeatureFlags(ctx context.Context, orgID string, provider
 		includeArchivedValue = *includeArchived
 	}
 
-	// The returned ctx carries the span; finish must run after Resolve
-	// actually completes so the span measures the resolver's real work
-	// (see startFeatureFlagsSpan's doc comment for the bug this fixes).
-	spanCtx, finish := startFeatureFlagsSpan(ctx)
 	result, err := featureflags.Resolve(spanCtx, r.ClickHouse, orgID, provider, project, includeArchivedValue, limit)
 	if err != nil {
 		finish("error")
@@ -616,8 +649,16 @@ func (r *queryResolver) ThroughputForecast(ctx context.Context, orgID string, in
 // construction: it passes claims.OrgID, never orgID, to
 // operatingreview.Resolve.
 func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input model.OperatingReviewInput) (*model.OperatingReview, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast's CHAOS-5349 r1 P2 precedent): a
+	// rejected request used to produce no span, no attribute, and no metric
+	// at all. finish still runs after Resolve completes on the success
+	// path, same discipline startFeatureFlagsSpan's doc comment documents.
+	spanCtx, finish := startOperatingReviewSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -627,10 +668,6 @@ func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input
 		}
 	}
 
-	// The returned ctx carries the span; finish must run after Resolve
-	// actually completes so the span measures the resolver's real work
-	// (same discipline startFeatureFlagsSpan's doc comment documents).
-	spanCtx, finish := startOperatingReviewSpan(ctx)
 	result, err := operatingreview.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.TeamID, input.WeekStart)
 	if err != nil {
 		finish("error")
@@ -662,8 +699,16 @@ func (r *queryResolver) TestopsRisk(ctx context.Context, orgID string, input mod
 
 // ComplexityTimeseries is the resolver for the complexityTimeseries field.
 func (r *queryResolver) ComplexityTimeseries(ctx context.Context, input model.ComplexityTimeseriesInput) (*model.ComplexityTimeseriesResult, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast's CHAOS-5349 r1 P2 precedent): a
+	// rejected request used to produce no span, no attribute, and no metric
+	// at all. finish still runs after Resolve completes on the success
+	// path, same discipline startFeatureFlagsSpan's doc comment documents.
+	spanCtx, finish := startComplexityTimeseriesSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -673,10 +718,6 @@ func (r *queryResolver) ComplexityTimeseries(ctx context.Context, input model.Co
 		}
 	}
 
-	// The returned ctx carries the span; finish must run after Resolve
-	// actually completes so the span measures the resolver's real work
-	// (same discipline startFeatureFlagsSpan's doc comment documents).
-	spanCtx, finish := startComplexityTimeseriesSpan(ctx)
 	result, err := complexitytimeseries.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.Granularity, input.Scope, input.RepoIds, input.Limit)
 	if err != nil {
 		finish("error")
@@ -688,8 +729,16 @@ func (r *queryResolver) ComplexityTimeseries(ctx context.Context, input model.Co
 
 // Hotspots is the resolver for the hotspots field.
 func (r *queryResolver) Hotspots(ctx context.Context, input model.HotspotsInput) (*model.HotspotsResult, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast's CHAOS-5349 r1 P2 precedent): a
+	// rejected request used to produce no span, no attribute, and no metric
+	// at all. finish still runs after Resolve completes on the success
+	// path, same discipline startFeatureFlagsSpan's doc comment documents.
+	spanCtx, finish := startHotspotsSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -699,10 +748,6 @@ func (r *queryResolver) Hotspots(ctx context.Context, input model.HotspotsInput)
 		}
 	}
 
-	// The returned ctx carries the span; finish must run after Resolve
-	// actually completes so the span measures the resolver's real work
-	// (same discipline startFeatureFlagsSpan's doc comment documents).
-	spanCtx, finish := startHotspotsSpan(ctx)
 	result, err := hotspots.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.RepoIds, input.Limit)
 	if err != nil {
 		finish("error")
@@ -732,8 +777,16 @@ func (r *queryResolver) Hotspots(ctx context.Context, input model.HotspotsInput)
 // behavior by construction: it passes claims.OrgID, never input.OrgID, to
 // cognitiveload.Resolve.
 func (r *queryResolver) CognitiveLoad(ctx context.Context, input model.CognitiveLoadInput) (*model.CognitiveLoadResult, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast's CHAOS-5349 r1 P2 precedent): a
+	// rejected request used to produce no span, no attribute, and no metric
+	// at all. finish still runs after Resolve completes on the success
+	// path, same discipline startFeatureFlagsSpan's doc comment documents.
+	spanCtx, finish := startCognitiveLoadSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -743,10 +796,6 @@ func (r *queryResolver) CognitiveLoad(ctx context.Context, input model.Cognitive
 		}
 	}
 
-	// The returned ctx carries the span; finish must run after Resolve
-	// actually completes so the span measures the resolver's real work
-	// (same discipline startFeatureFlagsSpan's doc comment documents).
-	spanCtx, finish := startCognitiveLoadSpan(ctx)
 	result, err := cognitiveload.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceDate, input.UntilDate, input.TeamID, input.RepoID)
 	if err != nil {
 		finish("error")
@@ -776,8 +825,16 @@ func (r *queryResolver) CognitiveLoad(ctx context.Context, input model.Cognitive
 // never trusted for scoping" behavior by construction: it passes
 // claims.OrgID, never input.OrgID, to reviewedges.Resolve.
 func (r *queryResolver) ReviewEdges(ctx context.Context, input model.ReviewEdgesInput) (*model.ReviewEdgesResult, error) {
+	// The span now starts BEFORE the authorization guard (org-scoping span
+	// sweep, following CapacityForecast's CHAOS-5349 r1 P2 precedent): a
+	// rejected request used to produce no span, no attribute, and no metric
+	// at all. finish still runs after Resolve completes on the success
+	// path, same discipline startFeatureFlagsSpan's doc comment documents.
+	spanCtx, finish := startReviewEdgesSpan(ctx)
+
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
 		return nil, &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -787,10 +844,6 @@ func (r *queryResolver) ReviewEdges(ctx context.Context, input model.ReviewEdges
 		}
 	}
 
-	// The returned ctx carries the span; finish must run after Resolve
-	// actually completes so the span measures the resolver's real work
-	// (same discipline startFeatureFlagsSpan's doc comment documents).
-	spanCtx, finish := startReviewEdgesSpan(ctx)
 	result, err := reviewedges.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceDate, input.UntilDate, input.RepoIds, input.Limit)
 	if err != nil {
 		finish("error")

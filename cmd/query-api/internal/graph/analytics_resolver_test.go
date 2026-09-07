@@ -81,7 +81,7 @@ func TestAnalytics_RejectsMismatchedOrgIDArgument(t *testing.T) {
 	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
 	// The GraphQL argument names a DIFFERENT org than the authenticated
 	// claim -- this is the exact shape FeatureFlags's precedent guards
-	// against (schema.resolvers.go:156-164), copied here in shape, not
+	// against (schema.resolvers.go:390-412), copied here in shape, not
 	// string (see the Analytics resolver's own doc comment for why the
 	// message text is not copied forward).
 	_, err := r.Query().Analytics(ctx, "org-2", model.AnalyticsRequestInput{})

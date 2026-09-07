@@ -483,27 +483,25 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 		// omitted would read that source with no guard ever firing.
 		RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
 	}
-	// CHAOS-4773: NO RecordInvestmentRepoJoinDedupCollisions call here,
-	// deliberately, corrected after codex round 2 (P2, EXECUTED) caught
-	// round 1's own mistake -- CompileFlowMatrix routes TEAM/REPO/WORK_TYPE
-	// to fixed, hand-written templates BEFORE reaching
-	// compileFlowMatrixInvestmentDimension (flowmatrix.go:176-190), which
-	// never call investmentContextFor at all; and
-	// compileFlowMatrixInvestmentDimension's own call (flowmatrix.go:268)
-	// passes investmentContextFor a ONE-element dimensions list containing
-	// only req.Dimension, which in that branch is always
-	// AUTHOR/THEME/SUBCATEGORY, never REPO -- so
-	// dimensionListHas(dimensions, DimensionRepo) is always false there
-	// too. The repos join investmentContextFor's REPO branch adds is
-	// therefore structurally UNREACHABLE from any flow-matrix request, for
-	// any dimension, by any path -- unlike RecordArgMaxNullTransitionGuard
-	// above, which DOES apply here (it observes
-	// LatestWorkUnitInvestmentsSource() generally, not this specific join).
-	// Round 1's guard (`resolveUseInvestment(...) && req.Dimension ==
-	// DimensionRepo`) could still evaluate true (e.g. an explicit
-	// flowMatrix.useInvestment=true with dimension=REPO), firing an
-	// irrelevant scan and burning the org's telemetry cooldown for a query
-	// that never touches repos at all.
+	// CHAOS-5426: the CHAOS-4773 "structurally unreachable" reasoning that
+	// used to live here no longer holds. CompileFlowMatrix now routes
+	// REPO through compileFlowMatrixInvestmentDimension (flowmatrix.go)
+	// whenever resolveUseInvestment resolves true for it, exactly like
+	// AUTHOR/THEME/SUBCATEGORY already did -- so
+	// investmentContextFor([]Dimension{DimensionRepo}, ...)'s `LEFT JOIN
+	// repos AS r FINAL` (investment.go) IS reachable from a real
+	// flowMatrix request now. Wire the same telemetry
+	// resolveOneTimeseries/resolveOneBreakdown/resolveSankeyCoverage
+	// already carry for every other investment-repo-dimension surface:
+	// gated on the SAME flowMatrixUsesInvestmentSource(req) check above
+	// (so a non-investment REPO flowMatrix, which never compiles the
+	// repos join, still fires nothing) plus req.Dimension == DimensionRepo
+	// specifically (TEAM/AUTHOR/THEME/SUBCATEGORY investment queries never
+	// compile this join either -- investmentContextFor only adds it when
+	// dimensionListHas(dimensions, DimensionRepo)).
+	if flowMatrixUsesInvestmentSource(req) && req.Dimension == DimensionRepo {
+		RecordInvestmentRepoJoinDedupCollisions(ctx, client, orgID)
+	}
 	nodes, edges, execErr := ExecuteFlowMatrix(ctx, client, nodesQuery, edgesQuery)
 	if execErr != nil {
 		// Swallow: analytics.py:959-961 logs and degrades to empty.

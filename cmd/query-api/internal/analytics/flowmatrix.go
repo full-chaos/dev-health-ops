@@ -38,11 +38,11 @@ const primaryWorkItemTeamAttributionSource = `(
 )`
 
 // FlowMatrixRequest is the Go port of compiler.py's FlowMatrixRequest
-// dataclass (compiler.py:119-129), restricted to the TEAM/REPO/WORK_TYPE
-// same-dimension path this file implements (compiler.py:495-518) -- the
-// AUTHOR/THEME/SUBCATEGORY "else" branch (compiler.py:519-533) routes
-// through the investment-CTE machinery this increment does not yet port;
-// see the analytics package doc comment for that scope.
+// dataclass (compiler.py:119-129). CHAOS-5426: TEAM and REPO now honour
+// UseInvestment exactly like AUTHOR/THEME/SUBCATEGORY do -- see
+// CompileFlowMatrix's doc comment for the current routing shape. Only
+// WORK_TYPE stays permanently on the fixed hand-written template path
+// (compiler.py:495-518), regardless of UseInvestment.
 type FlowMatrixRequest struct {
 	Dimension     Dimension
 	Measure       Measure
@@ -159,12 +159,30 @@ type compiledQuery struct {
 }
 
 // CompileFlowMatrix ports compile_flow_matrix (compiler.py:450-534,
-// e9ea257ff) in full: TEAM/REPO/WORK_TYPE's fixed-template branch below,
-// AND the AUTHOR/THEME/SUBCATEGORY "else" branch (compiler.py:519-533,
-// CHAOS-4538), which reuses the same sankey_nodes_template/
+// e9ea257ff) in full: WORK_TYPE's permanently-fixed template branch
+// below, AND the AUTHOR/THEME/SUBCATEGORY "else" branch (compiler.py:
+// 519-533, CHAOS-4538), which reuses the same sankey_nodes_template/
 // sankey_edges_template shape sankey.go's CompileSankey builds, over
 // investmentContextFor's investment machinery -- see
 // compileFlowMatrixInvestmentDimension below.
+//
+// CHAOS-5426 (Go-only extension, see that ticket's expected-divergence
+// note): TEAM and REPO now resolve UseInvestment exactly like AUTHOR/
+// THEME/SUBCATEGORY -- resolveUseInvestment(their own one-element
+// dimension list, req.UseInvestment) -- and route through
+// compileFlowMatrixInvestmentDimension whenever it resolves true,
+// reading LatestWorkUnitInvestmentsSource()/repoAllocationInvestmentSource()
+// (via investmentContextFor) instead of the raw work_item_cycle_times/
+// work_item_team_attributions tables the fixed templates below read.
+// Neither TEAM nor REPO is in resolveUseInvestment's auto-route set
+// ({THEME, SUBCATEGORY, WORK_TYPE}), so this only fires when the caller
+// sends an explicit useInvestment=true (web's useChordFlow.ts always
+// does) -- an unset/false UseInvestment for TEAM/REPO reaches the fixed-
+// template branch below UNCHANGED, byte-identical to before this port.
+// Python's compile_flow_matrix does NOT get this fix (chris's standing
+// no-further-Python-GraphQL-work rule) -- Python's chord for TEAM/REPO
+// keeps reading work_item_cycle_times regardless of use_investment; this
+// is a deliberate, ticketed Go/Python divergence, not a parity bug.
 //
 // Deliberately mirrors Python's error-boundary shape: everything in this
 // function (dimension/measure validation, plus the filtered-flow-matrix
@@ -175,19 +193,31 @@ type compiledQuery struct {
 // wants Python's swallow-to-empty-FlowMatrixResult behavior.
 func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, filters *model.FilterInput) (nodes compiledQuery, edges compiledQuery, err error) {
 	switch req.Dimension {
-	case DimensionTeam, DimensionRepo, DimensionWorkType:
-		if hasActiveFilters(filters) {
-			// Ports _reject_filtered_same_dimension_flow_matrix
-			// (compiler.py:537-550) verbatim: CHAOS-2487, fail honestly
-			// rather than silently return org-wide/unfiltered data for a
-			// same-dimension flow matrix.
-			return compiledQuery{}, compiledQuery{}, newValidationError(
-				"filters", string(req.Dimension),
-				"flowMatrix filters are not supported for same-dimension %s queries yet (CHAOS-2487); "+
-					"remove filters or use theme/subcategory.", req.Dimension)
+	case DimensionTeam, DimensionRepo:
+		if resolveUseInvestment([]Dimension{req.Dimension}, req.UseInvestment) {
+			return compileFlowMatrixInvestmentDimension(req, orgID, timeoutSeconds, filters)
 		}
+	case DimensionWorkType:
+		// WORK_TYPE never reads the investment source, regardless of
+		// UseInvestment -- see flowMatrixUsesInvestmentSource's doc
+		// comment.
 	default:
 		return compileFlowMatrixInvestmentDimension(req, orgID, timeoutSeconds, filters)
+	}
+
+	if hasActiveFilters(filters) {
+		// Ports _reject_filtered_same_dimension_flow_matrix
+		// (compiler.py:537-550) verbatim: CHAOS-2487, fail honestly
+		// rather than silently return org-wide/unfiltered data for a
+		// same-dimension flow matrix. Only reached for the fixed-template
+		// path now (TEAM/REPO with useInvestment=true already returned
+		// above, through compileFlowMatrixInvestmentDimension, which
+		// supports filters via translateFilters exactly like AUTHOR/
+		// THEME/SUBCATEGORY).
+		return compiledQuery{}, compiledQuery{}, newValidationError(
+			"filters", string(req.Dimension),
+			"flowMatrix filters are not supported for same-dimension %s queries yet (CHAOS-2487); "+
+				"remove filters or use theme/subcategory.", req.Dimension)
 	}
 
 	common := []clickhouse.Binding{
@@ -239,18 +269,17 @@ func CompileFlowMatrix(req FlowMatrixRequest, orgID string, timeoutSeconds int, 
 // deliberately duplicating the switch's case list rather than changing
 // CompileFlowMatrix's signature to return the decision, so the two stay
 // visually adjacent and a future dimension added to one switch is easy to
-// spot missing from the other. TEAM/REPO/WORK_TYPE NEVER read the
-// investment source regardless of UseInvestment (CompileFlowMatrix's
-// `case` branch above ignores the flag entirely for those three); every
-// other dimension resolves via resolveUseInvestment exactly as
-// compileFlowMatrixInvestmentDimension does below.
+// spot missing from the other. CHAOS-5426: only WORK_TYPE now NEVER reads
+// the investment source regardless of UseInvestment (CompileFlowMatrix's
+// `case DimensionWorkType` branch skips the resolveUseInvestment check
+// entirely); TEAM, REPO, and every other dimension resolve via
+// resolveUseInvestment exactly as compileFlowMatrixInvestmentDimension
+// does below.
 func flowMatrixUsesInvestmentSource(req FlowMatrixRequest) bool {
-	switch req.Dimension {
-	case DimensionTeam, DimensionRepo, DimensionWorkType:
+	if req.Dimension == DimensionWorkType {
 		return false
-	default:
-		return resolveUseInvestment([]Dimension{req.Dimension}, req.UseInvestment)
 	}
+	return resolveUseInvestment([]Dimension{req.Dimension}, req.UseInvestment)
 }
 
 // compileFlowMatrixInvestmentDimension ports compile_flow_matrix's
@@ -259,10 +288,13 @@ func flowMatrixUsesInvestmentSource(req FlowMatrixRequest) bool {
 // sankey_nodes_template([dimension], ...) and
 // sankey_edges_template(dimension, dimension, ...) (source==target: a
 // same-dimension self-join, the flow-matrix "chord" shape) over
-// _get_context_params's investment machinery, unlike TEAM/REPO/WORK_TYPE
-// above, which use fixed hand-written templates that never read
+// _get_context_params's investment machinery. CHAOS-5426: TEAM and REPO
+// route here too now, whenever CompileFlowMatrix's own
+// resolveUseInvestment check resolves true for them; only WORK_TYPE
+// stays permanently on the fixed hand-written templates that never read
 // use_investment at all -- the split this whole package's doc comments
-// call "by DIMENSION, not by the flag" (CHAOS-4538 brief §2).
+// used to call "by DIMENSION, not by the flag" (CHAOS-4538 brief §2) is
+// now "by DIMENSION, except WORK_TYPE, filtered by the flag".
 //
 // useInvestment here is resolveUseInvestment's per-request resolution
 // (req.UseInvestment, i.e. FlowMatrixRequestInput's OWN useInvestment

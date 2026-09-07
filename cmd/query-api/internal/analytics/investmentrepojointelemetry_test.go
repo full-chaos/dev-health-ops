@@ -250,7 +250,17 @@ func TestResolve_Breakdown_InvestmentRepo_FiresRepoJoinDedupCheck(t *testing.T) 
 // dimension=THEME (the investment path, to prove this isn't reachable from
 // there either, now or if someone "fixes" the dimension check without
 // understanding why it can never be reachable).
-func TestResolve_FlowMatrix_RepoDimension_NeverFiresRepoJoinDedupCheck(t *testing.T) {
+// TestResolve_FlowMatrix_RepoDimensionInvestment_FiresRepoJoinDedupCheck
+// is CHAOS-5426's flip of this test's old "never fires" pin.
+// CompileFlowMatrix's REPO branch now routes through
+// compileFlowMatrixInvestmentDimension whenever useInvestment resolves
+// true for it (flowmatrix.go), reaching investmentContextFor with a
+// dimensions list that DOES contain DimensionRepo -- the same "LEFT JOIN
+// repos AS r FINAL" join resolveOneTimeseries/resolveOneBreakdown/
+// resolveSankeyCoverage already wire this telemetry for (investment.go's
+// doc comment, CHAOS-4773). resolveFlowMatrix wires the identical
+// `if ... && req.Dimension == DimensionRepo` gate (resolve.go).
+func TestResolve_FlowMatrix_RepoDimensionInvestment_FiresRepoJoinDedupCheck(t *testing.T) {
 	resetRepoJoinDedupCollisionCooldown(t)
 	orgs := spyRepoJoinDedupCollisions(t)
 
@@ -276,8 +286,39 @@ func TestResolve_FlowMatrix_RepoDimension_NeverFiresRepoJoinDedupCheck(t *testin
 	if _, err := Resolve(context.Background(), client, "org-fm-repo", batch); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
+	if len(*orgs) != 1 || (*orgs)[0] != "org-fm-repo" {
+		t.Fatalf("recorded orgs = %v, want [org-fm-repo] -- flow matrix's investment REPO dimension now compiles the same repos join timeseries/breakdown/sankey already telemeter (CHAOS-5426)", *orgs)
+	}
+}
+
+// TestResolve_FlowMatrix_RepoDimensionNonInvestment_NeverFiresRepoJoinDedupCheck
+// pins the OTHER half of CHAOS-5426: a REPO flowMatrix that does NOT
+// resolve to the investment source (useInvestment omitted, and REPO is
+// not in resolveUseInvestment's auto-route set) must stay on the fixed
+// work_item_cycle_times templates, byte-identical to before this port --
+// no repos join is ever compiled, so this check must never fire.
+func TestResolve_FlowMatrix_RepoDimensionNonInvestment_NeverFiresRepoJoinDedupCheck(t *testing.T) {
+	resetRepoJoinDedupCollisionCooldown(t)
+	orgs := spyRepoJoinDedupCollisions(t)
+
+	client := (&routingFakeClient{}).
+		on("excess_repo_versions", &fakeRowScanner{rows: [][]any{{int64(5)}}}).
+		on("SELECT", &fakeRowScanner{})
+
+	batch := model.AnalyticsRequestInput{
+		FlowMatrix: &model.FlowMatrixRequestInput{
+			Dimension: model.DimensionInputRepo,
+			Measure:   model.MeasureInputCount,
+			DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+			MaxNodes:  50,
+			MaxEdges:  200,
+		},
+	}
+	if _, err := Resolve(context.Background(), client, "org-fm-repo-noinv", batch); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
 	if len(*orgs) != 0 {
-		t.Fatalf("recorded orgs = %v, want none -- flow matrix's REPO dimension uses fixed templates that never join repos", *orgs)
+		t.Fatalf("recorded orgs = %v, want none -- a non-investment REPO flow matrix uses the fixed templates that never join repos", *orgs)
 	}
 }
 

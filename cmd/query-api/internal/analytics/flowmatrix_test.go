@@ -503,6 +503,193 @@ func TestCompileFlowMatrix_ThemeSubcategory_CompilesInlinedSource(t *testing.T) 
 	}
 }
 
+// TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_RoutesToInvestmentSource
+// is CHAOS-5426's golden-shape lock: TEAM and REPO, with an explicit
+// useInvestment=true, must compile through compileFlowMatrixInvestmentDimension
+// (investmentContextFor's bridge) -- reading work_unit_investments (TEAM) /
+// the repo-allocation source (REPO) via dbColumn's investment mapping
+// (ut.team_label / r.repo, validate.go:176-183) -- NOT the fixed
+// work_item_cycle_times/work_item_team_attributions templates the same
+// dimensions compile to when useInvestment is false. Mirrors
+// TestCompileFlowMatrix_ThemeSubcategory_CompilesInlinedSource's shape
+// assertions (no leading WITH, real SELECT) plus the source-table swap
+// this ticket's whole point is.
+func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_RoutesToInvestmentSource(t *testing.T) {
+	useInvestment := true
+	cases := []struct {
+		dim        Dimension
+		wantDimCol string
+		wantSource string
+	}{
+		{DimensionTeam, "ut.team_label", "work_unit_investments"},
+		{DimensionRepo, "r.repo", "work_unit_investments"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.dim), func(t *testing.T) {
+			req := FlowMatrixRequest{
+				Dimension:     tc.dim,
+				Measure:       MeasureCount,
+				StartDate:     mustDate(t, "2026-01-01"),
+				EndDate:       mustDate(t, "2026-01-31"),
+				MaxNodes:      50,
+				MaxEdges:      200,
+				UseInvestment: &useInvestment,
+			}
+			nodes, edges, err := CompileFlowMatrix(req, "org-1", 30, nil)
+			if err != nil {
+				t.Fatalf("dimension %v: CompileFlowMatrix error = %v", tc.dim, err)
+			}
+			for _, q := range []struct {
+				name string
+				sql  string
+			}{{"nodes", nodes.sql}, {"edges", edges.sql}} {
+				trimmed := strings.TrimSpace(q.sql)
+				if !strings.HasPrefix(trimmed, "SELECT") {
+					t.Fatalf("dimension %v %s SQL must start with a literal SELECT, got prefix: %q", tc.dim, q.name, trimmed[:min(40, len(trimmed))])
+				}
+				if strings.Contains(q.sql, "\nWITH ") || strings.HasPrefix(trimmed, "WITH") {
+					t.Errorf("dimension %v %s SQL must never contain a top-level WITH clause, got: %s", tc.dim, q.name, q.sql)
+				}
+				if !strings.Contains(q.sql, tc.wantDimCol) {
+					t.Errorf("dimension %v %s SQL missing investment dimension column %q -- did not route through compileFlowMatrixInvestmentDimension", tc.dim, q.name, tc.wantDimCol)
+				}
+				if !strings.Contains(q.sql, tc.wantSource) {
+					t.Errorf("dimension %v %s SQL missing investment source table %q", tc.dim, q.name, tc.wantSource)
+				}
+				if strings.Contains(q.sql, "work_item_cycle_times") {
+					t.Errorf("dimension %v %s SQL still reads work_item_cycle_times -- CHAOS-5426 regression, useInvestment=true must not fall back to the fixed template", tc.dim, q.name)
+				}
+			}
+		})
+	}
+}
+
+// TestCompileFlowMatrix_TeamRepo_UseInvestmentFalse_StaysOnFixedTemplate
+// is the other half of the golden-shape lock: TEAM/REPO with an EXPLICIT
+// useInvestment=false must stay byte-identical to the pre-CHAOS-5426
+// fixed hand-written templates -- resolveUseInvestment's forceInvestment
+// wins over the (empty, for TEAM/REPO) dimension auto-route set, exactly
+// like AUTHOR/THEME/SUBCATEGORY's own explicit-false handling (validate.go
+// doc comment). TestCompileFlowMatrix_TeamRepoWorkType_BindingsAndTemplate
+// already pins the UNSET (nil) case; this pins the explicit-false case
+// separately since nil and false are NOT the same value for
+// resolveUseInvestment in general (only happen to agree for TEAM/REPO
+// because neither is in the auto-route set).
+func TestCompileFlowMatrix_TeamRepo_UseInvestmentFalse_StaysOnFixedTemplate(t *testing.T) {
+	useInvestment := false
+	const wantTimeout = 30
+	cases := []struct {
+		dim          Dimension
+		wantNodesSQL string
+		wantEdgesSQL string
+	}{
+		{DimensionTeam,
+			fmt.Sprintf(flowMatrixTeamNodesTemplate, settingsMaxExecutionTime(wantTimeout)),
+			fmt.Sprintf(flowMatrixTeamEdgesTemplate, settingsMaxExecutionTime(wantTimeout))},
+		{DimensionRepo,
+			fmt.Sprintf(flowMatrixRepoNodesTemplate, settingsMaxExecutionTime(wantTimeout)),
+			fmt.Sprintf(flowMatrixRepoEdgesTemplate, settingsMaxExecutionTime(wantTimeout))},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.dim), func(t *testing.T) {
+			req := FlowMatrixRequest{
+				Dimension:     tc.dim,
+				Measure:       MeasureCount,
+				StartDate:     mustDate(t, "2026-01-01"),
+				EndDate:       mustDate(t, "2026-01-31"),
+				MaxNodes:      50,
+				MaxEdges:      200,
+				UseInvestment: &useInvestment,
+			}
+			nodes, edges, err := CompileFlowMatrix(req, "org-1", wantTimeout, nil)
+			if err != nil {
+				t.Fatalf("CompileFlowMatrix(%v) error = %v", tc.dim, err)
+			}
+			if nodes.sql != tc.wantNodesSQL {
+				t.Errorf("nodes SQL mismatch for %v -- explicit useInvestment=false must stay byte-identical to the fixed template", tc.dim)
+			}
+			if edges.sql != tc.wantEdgesSQL {
+				t.Errorf("edges SQL mismatch for %v -- explicit useInvestment=false must stay byte-identical to the fixed template", tc.dim)
+			}
+		})
+	}
+}
+
+// TestCompileFlowMatrix_TeamRepo_UseInvestmentFalse_StillRejectsActiveFilters
+// confirms CHAOS-2487's rejection survives this port UNCHANGED on the
+// non-investment path specifically (not just when the flag is unset, as
+// TestCompileFlowMatrix_RejectsActiveFiltersForSameDimension already
+// pins) -- an explicit false must not accidentally bypass it.
+func TestCompileFlowMatrix_TeamRepo_UseInvestmentFalse_StillRejectsActiveFilters(t *testing.T) {
+	useInvestment := false
+	req := FlowMatrixRequest{
+		Dimension:     DimensionTeam,
+		Measure:       MeasureCount,
+		StartDate:     mustDate(t, "2026-01-01"),
+		EndDate:       mustDate(t, "2026-01-31"),
+		MaxNodes:      50,
+		MaxEdges:      200,
+		UseInvestment: &useInvestment,
+	}
+	filters := &model.FilterInput{
+		Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputRepo, Ids: []string{"repo-1"}},
+	}
+	_, _, err := CompileFlowMatrix(req, "org-1", 30, filters)
+	if err == nil {
+		t.Fatal("expected rejection for filtered same-dimension flow matrix with useInvestment=false")
+	}
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected *ValidationError, got %T: %v", err, err)
+	}
+}
+
+// TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_HonoursFilters is the
+// filter-side half of "exactly like the AUTHOR/THEME/SUBCATEGORY branch
+// does": once TEAM/REPO route through compileFlowMatrixInvestmentDimension,
+// active filters are translated (translateFilters), not rejected --
+// CHAOS-2487's rejection is specific to the non-investment fixed-template
+// path, which cannot express a filter at all.
+func TestCompileFlowMatrix_TeamRepo_UseInvestmentTrue_HonoursFilters(t *testing.T) {
+	useInvestment := true
+	req := FlowMatrixRequest{
+		Dimension:     DimensionTeam,
+		Measure:       MeasureCount,
+		StartDate:     mustDate(t, "2026-01-01"),
+		EndDate:       mustDate(t, "2026-01-31"),
+		MaxNodes:      50,
+		MaxEdges:      200,
+		UseInvestment: &useInvestment,
+	}
+	filters := &model.FilterInput{
+		Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputRepo, Ids: []string{"repo-1"}},
+	}
+	nodes, edges, err := CompileFlowMatrix(req, "org-1", 30, filters)
+	if err != nil {
+		t.Fatalf("expected the investment path to honour (not reject) an active filter, got error: %v", err)
+	}
+	// translateFilters' scope.level=repo default branch (filtertranslation.go)
+	// emits this exact fragment against defaultFilterColumns().Repo -- assert
+	// the real shape, not just "compiling succeeded", so a future change that
+	// silently drops the filter clause while still returning no error is
+	// caught here too.
+	const wantClause = "AND repo_id IN {scope_ids:Array(String)}"
+	for _, q := range []struct {
+		name     string
+		sql      string
+		bindings []clickhouse.Binding
+	}{{"nodes", nodes.sql, nodes.bindings}, {"edges", edges.sql, edges.bindings}} {
+		if !strings.Contains(q.sql, wantClause) {
+			t.Errorf("%s SQL missing translated filter clause %q, got: %s", q.name, wantClause, q.sql)
+		}
+		got := bindingMap(q.bindings)
+		ids, ok := got["scope_ids"].([]string)
+		if !ok || len(ids) != 1 || ids[0] != "repo-1" {
+			t.Errorf("%s scope_ids binding = %v, want [repo-1]", q.name, got["scope_ids"])
+		}
+	}
+}
+
 // --- ExecuteFlowMatrix -----------------------------------------------------
 
 func TestExecuteFlowMatrix_Success(t *testing.T) {

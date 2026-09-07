@@ -35,11 +35,22 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["operation_for_digest", "known_operations", "catalog_entries"]
+__all__ = [
+    "operation_for_digest",
+    "known_operations",
+    "catalog_entries",
+    "catalog_loaded_successfully",
+]
 
 _CATALOG_PATH = Path(__file__).parent / "go_api_operations.json"
 
 _catalog_loaded = False
+#: Whether the ONE load attempt actually succeeded. Without this, a catalog
+#: that failed to parse and a catalog that is legitimately empty are the same
+#: observable state -- and `status` would print an empty table with exit 0 for
+#: both, which is the exact 'two states that look identical' failure this
+#: whole change exists to stop (codex r1, P2).
+_catalog_load_ok = False
 _digest_to_operation: dict[str, str] = {}
 
 
@@ -64,6 +75,8 @@ def _load() -> None:
                 )
             mapping[digest] = operation
         _digest_to_operation.update(mapping)
+        global _catalog_load_ok
+        _catalog_load_ok = True
         logger.info(
             "go_api_operation_catalog.loaded",
             extra={"operation_count": len(mapping)},
@@ -116,3 +129,17 @@ def catalog_entries() -> tuple[tuple[str, str], ...]:
             (operation, digest) for digest, operation in _digest_to_operation.items()
         )
     )
+
+
+def catalog_loaded_successfully() -> bool:
+    """Whether the catalog file was read and parsed without error.
+
+    ``catalog_entries()`` returning empty is ambiguous on its own: it means
+    EITHER the file failed to load (fail-closed, an incident) OR the file is
+    genuinely empty. Per-request dispatch does not care -- both mean "nothing
+    is Go-eligible", the safe default. An operator staring at
+    ``dev-hops go-api routing status`` cares enormously, so the diagnostic
+    surfaces the difference instead of printing an empty table either way.
+    """
+    _load()
+    return _catalog_load_ok

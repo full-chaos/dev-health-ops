@@ -172,3 +172,52 @@ def test_missing_files_fail_rather_than_pass_vacuously(
     """
     assert checker.main(["--root", str(tmp_path)]) == 1
     assert "not found" in capsys.readouterr().err
+
+
+def test_a_prose_mention_inside_the_history_section_does_not_count(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The digest must be in a table ROW, not merely somewhere below the heading.
+
+    codex r1 (P2): a substring search over the section passed when the
+    digest appeared in a sentence after the heading. That records nothing
+    an operator can read as history -- and "get the checker green" is
+    exactly the pressure this gate exists to resist.
+    """
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    doc_path.write_text(
+        doc_path.read_text()
+        + f"\nWe moved the digest to {moved} in a hurry and will tidy later.\n"
+    )
+
+    assert checker.main(["--root", str(tree)]) == 1
+    assert "is NOT recorded" in capsys.readouterr().err
+
+
+def test_a_stub_row_with_empty_cells_does_not_count(
+    tree: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A row is only a record if it actually says when and what moved it."""
+    sdl = tree / checker.SDL_RELATIVE
+    sdl.write_bytes(sdl.read_bytes() + b"\n# a one-line SDL change\n")
+    moved = checker.compute_schema_digest(sdl)
+
+    pin_path = tree / checker.PIN_RELATIVE
+    pin = json.loads(pin_path.read_text())
+    pin["schema_digest"] = moved
+    pin_path.write_text(json.dumps(pin, indent=2))
+
+    doc_path = tree / checker.HISTORY_DOC_RELATIVE
+    doc_path.write_text(doc_path.read_text() + f"\n| `{moved}` |  |  |  |\n")
+
+    assert checker.main(["--root", str(tree)]) == 1
+    assert "is NOT recorded" in capsys.readouterr().err

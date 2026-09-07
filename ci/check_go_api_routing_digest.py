@@ -69,6 +69,24 @@ def compute_schema_digest(sdl_path: Path) -> str:
     return "sha256:" + hashlib.sha256(sdl_path.read_bytes()).hexdigest()
 
 
+def _digest_appears_in_a_history_row(history_section: str, digest: str) -> bool:
+    """True iff ``digest`` appears inside a markdown table row.
+
+    A history row is a line that starts with ``|``, carries the digest, and
+    has at least the four cells the table declares (digest, in force from,
+    moved by, notes) -- so a bare ``| sha256:... |`` stub does not count as
+    having written anything down either.
+    """
+    for line in history_section.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or digest not in stripped:
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) >= 4 and all(cells[:4]):
+            return True
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -139,10 +157,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     history = doc_text.split(HISTORY_HEADING, 1)[1]
-    if actual not in history:
+    # A TABLE ROW, not a prose mention (codex r1, P2). A substring search
+    # over the section passed when the digest merely appeared in a sentence
+    # after the heading, which records nothing an operator can read as
+    # history -- and "make the checker green" is exactly the pressure this
+    # gate exists to resist. Require a markdown row that carries the digest.
+    if not _digest_appears_in_a_history_row(history, actual):
         print(
             f"FAIL: schema digest {actual} is pinned and correct, but is NOT "
-            f"recorded in the '{HISTORY_HEADING}' table of "
+            f"recorded as a ROW in the '{HISTORY_HEADING}' table of "
             f"{HISTORY_DOC_RELATIVE}.\n"
             "\n"
             "  Updating the pin alone hides the consequence. A digest move\n"

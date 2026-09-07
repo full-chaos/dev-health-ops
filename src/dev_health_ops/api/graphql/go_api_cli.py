@@ -50,12 +50,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-from .go_api_operation_catalog import catalog_entries
+from .go_api_operation_catalog import (
+    catalog_entries,
+    catalog_loaded_successfully,
+)
 from .go_api_schema_digest import current_schema_digest
 
 __all__ = ["register_commands"]
@@ -73,6 +78,41 @@ _RUNBOOK = (
     "docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md "
     "(section: When the schema digest moves)"
 )
+
+
+def _redact_url(url: str) -> str:
+    """Strip ``user:password@`` from a URL before it reaches any output.
+
+    Every message in this module quotes the URL it failed on, which is the
+    right diagnostic -- but a URL can carry credentials in its userinfo,
+    and this lane's binding rule is that credential material is never
+    printed. Found by codex r1 (P2): `http://alice:super-secret@host` had
+    its password echoed verbatim into stderr on an unreachable-host error.
+    """
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "<unparseable url>"
+    if not parts.username and not parts.password:
+        return url
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    return urllib.parse.urlunsplit(
+        (parts.scheme, f"<redacted>@{host}", parts.path, parts.query, parts.fragment)
+    )
+
+
+#: Matches ``//user:password@`` inside arbitrary text. Used on exception
+#: strings, which are not URLs and cannot be parsed as one, but which can
+#: still embed the URL that failed (urllib and the socket layer both do
+#: this for some error classes).
+_USERINFO_IN_TEXT = re.compile(r"//[^/\s:@]+:[^/\s@]*@")
+
+
+def _redact_text(text: str) -> str:
+    """Strip ``//user:password@`` from free text (an exception message)."""
+    return _USERINFO_IN_TEXT.sub("//<redacted>@", text)
 
 
 class GoPlaneUnavailable(RuntimeError):
@@ -109,34 +149,39 @@ def _fetch_go_plane_registry(base_url: str) -> GoPlaneRegistry:
     # problem. An operator-supplied URL is exactly where that typo lives.
     if not base_url.lower().startswith(("http://", "https://")):
         raise GoPlaneUnavailable(
-            f"query-api URL must be http:// or https://, got {base_url!r}"
+            f"query-api URL must be http:// or https://, got {_redact_url(base_url)!r}"
         )
     url = base_url.rstrip("/") + "/registry"
+    # Everything below quotes `shown`, never `url`: `url` may carry
+    # credentials in its userinfo and must not reach stderr.
+    shown = _redact_url(url)
     try:
         with urllib.request.urlopen(url, timeout=_REGISTRY_TIMEOUT_SECONDS) as resp:
             if resp.status != 200:
-                raise GoPlaneUnavailable(f"{url} returned HTTP {resp.status}")
+                raise GoPlaneUnavailable(f"{shown} returned HTTP {resp.status}")
             payload = json.loads(resp.read().decode("utf-8"))
     except GoPlaneUnavailable:
         raise
     except urllib.error.HTTPError as exc:
         raise GoPlaneUnavailable(
-            f"{url} returned HTTP {exc.code} -- a 404 usually means the "
+            f"{shown} returned HTTP {exc.code} -- a 404 usually means the "
             "running query-api predates GET /registry, or its /query route "
             "is unmounted (CLICKHOUSE_URI / GO_API_REGISTRY_POSTGRES_URI / "
             "GO_API_ENVELOPE_* unset)"
         ) from exc
     except Exception as exc:
-        raise GoPlaneUnavailable(f"{url} is unreachable: {exc}") from exc
+        raise GoPlaneUnavailable(
+            f"{shown} is unreachable: {_redact_text(str(exc))}"
+        ) from exc
 
     if not isinstance(payload, dict):
-        raise GoPlaneUnavailable(f"{url} returned a non-object JSON body")
+        raise GoPlaneUnavailable(f"{shown} returned a non-object JSON body")
     schema_digest = payload.get("schema_digest")
     if not isinstance(schema_digest, str) or not schema_digest:
-        raise GoPlaneUnavailable(f"{url} returned no usable schema_digest")
+        raise GoPlaneUnavailable(f"{shown} returned no usable schema_digest")
     entries = payload.get("operations")
     if not isinstance(entries, list):
-        raise GoPlaneUnavailable(f"{url} returned no usable operations list")
+        raise GoPlaneUnavailable(f"{shown} returned no usable operations list")
     operations: dict[str, str] = {}
     for entry in entries:
         if (
@@ -144,8 +189,17 @@ def _fetch_go_plane_registry(base_url: str) -> GoPlaneRegistry:
             or not isinstance(entry.get("operation"), str)
             or not isinstance(entry.get("document_digest"), str)
         ):
-            raise GoPlaneUnavailable(f"{url} returned a malformed operations entry")
-        operations[entry["operation"]] = entry["document_digest"]
+            raise GoPlaneUnavailable(f"{shown} returned a malformed operations entry")
+        operation = entry["operation"]
+        if operation in operations:
+            # Silently keeping the last one would let a malformed or
+            # tampered registry hide a second, different document digest
+            # for the same operation -- and preflight 3 would then compare
+            # against whichever copy happened to win (codex r1, P3).
+            raise GoPlaneUnavailable(
+                f"{shown} lists operation {operation!r} more than once"
+            )
+        operations[operation] = entry["document_digest"]
     return GoPlaneRegistry(schema_digest=schema_digest, operations=operations)
 
 
@@ -277,7 +331,7 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
             session,
             schema_digest=local_digest,
             candidate_build=ns.candidate_build,
-            operations=operations,
+            operations={op: catalog[op] for op in operations},
         )
         unproven = [op for op in operations if op not in proven]
         if unproven and not ns.acknowledge_unproven:
@@ -334,9 +388,14 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
 async def _cmd_routing_status(ns: argparse.Namespace) -> int:
     from dev_health_ops.db import get_postgres_session
 
-    from .go_api_routing_admin import count_rows_by_schema_digest, routing_status_rows
+    from .go_api_routing_admin import (
+        OperationStatus,
+        count_rows_by_schema_digest,
+        routing_status_rows,
+    )
 
     catalog = catalog_entries()
+    catalog_ok = catalog_loaded_successfully()
     local_digest = current_schema_digest()
 
     base_url = _query_api_url(ns)
@@ -350,11 +409,26 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
     else:
         go_error = "no --query-api-url and GO_API_QUERY_API_URL is unset"
 
-    async with get_postgres_session() as session:
-        statuses = await routing_status_rows(
-            session, live_schema_digest=local_digest, catalog=catalog
-        )
-        digest_counts = await count_rows_by_schema_digest(session)
+    # codex r1 (P1): this block used to be unguarded, so `status` raised a
+    # traceback and exited 1 whenever Postgres was unreachable -- directly
+    # contradicting this command's whole contract. `status` is what an
+    # operator runs WHEN THINGS ARE BROKEN; a diagnostic that dies because
+    # the thing it diagnoses is down is useless exactly when it is needed,
+    # and it is the same "two states, one silence" mistake in a new place:
+    # an operator would see a stack trace and learn nothing about the
+    # planes' digests, which this command CAN still report without a
+    # database.
+    statuses: list[OperationStatus] = []
+    digest_counts: dict[str, int] = {}
+    db_error: str | None = None
+    try:
+        async with get_postgres_session() as session:
+            statuses = await routing_status_rows(
+                session, live_schema_digest=local_digest, catalog=catalog
+            )
+            digest_counts = await count_rows_by_schema_digest(session)
+    except Exception as exc:
+        db_error = f"{type(exc).__name__}: {exc}"
 
     if ns.json:
         print(
@@ -366,6 +440,8 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
                     "planes_agree": (
                         go_digest == local_digest if go_digest is not None else None
                     ),
+                    "registry_db_error": db_error,
+                    "catalog_loaded": catalog_ok,
                     "rows_by_schema_digest": digest_counts,
                     "operations": [
                         {
@@ -402,6 +478,20 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
             )
     else:
         print(f"go plane schema_digest     : UNREACHABLE ({go_error})")
+    if not catalog_ok:
+        print(
+            "!! CATALOG UNAVAILABLE: api/graphql/go_api_operations.json failed "
+            "to load. Nothing can be reported per operation, and NOTHING is "
+            "Go-eligible in this process. This is NOT the same as an empty "
+            "catalog -- regenerate with scripts/go_api/generate_operation_catalog.py"
+        )
+    if db_error is not None:
+        print(f"registry database        : UNREACHABLE ({db_error})")
+        print(
+            "  Routing rows cannot be read, so MATCH/STALE/MISSING is unknown "
+            "-- this is NOT evidence that nothing is enabled."
+        )
+        return 0
     print("rows by schema_digest:")
     if digest_counts:
         for digest, count in sorted(digest_counts.items()):

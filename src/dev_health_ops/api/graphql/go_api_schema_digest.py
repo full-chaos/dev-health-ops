@@ -34,7 +34,11 @@ things enforce that:
 
 * ``tests/api/graphql/test_go_api_schema_digest.py`` pins this function's
   output against ``registrydump -schema-digest`` (the same producer the
-  binary uses internally), so the ALGORITHMS provably match.
+  binary uses internally), so the ALGORITHMS provably match. (The DOCUMENT
+  digest already had cross-language parity coverage in
+  ``test_go_api_document_digest.py``; it was the SCHEMA digest producer
+  that nothing measured against Go -- codex r1 corrected an overbroad
+  claim here.)
 * ``dev-hops go-api routing enable`` refuses unless the RUNNING
   query-api's ``GET /registry`` reports this exact value, so the
   DEPLOYMENTS provably match at the moment rows are written.

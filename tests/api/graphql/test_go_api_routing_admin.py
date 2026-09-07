@@ -321,11 +321,15 @@ async def test_proof_is_scoped_to_the_exact_build_and_digest(
     operation, document_digest = CATALOG[0]
     other_build = "0" * 40
 
-    for schema_digest, build, stage, terminal_state in (
-        (LIVE, other_build, ENABLEMENT_PROOF_STAGE, "match"),  # wrong build
-        (SUPERSEDED, BUILD, ENABLEMENT_PROOF_STAGE, "match"),  # wrong digest
-        (LIVE, BUILD, "dual_run", "match"),  # earlier stage
-        (LIVE, BUILD, ENABLEMENT_PROOF_STAGE, "mismatch"),  # failed proof
+    other_document = "f" * 64
+    for schema_digest, build, doc, stage, terminal_state in (
+        (LIVE, other_build, document_digest, ENABLEMENT_PROOF_STAGE, "match"),
+        (SUPERSEDED, BUILD, document_digest, ENABLEMENT_PROOF_STAGE, "match"),
+        # codex r1 (P2): the 4th column. A proof against a DIFFERENT
+        # registered document must not authorize this one.
+        (LIVE, BUILD, other_document, ENABLEMENT_PROOF_STAGE, "match"),
+        (LIVE, BUILD, document_digest, "dual_run", "match"),
+        (LIVE, BUILD, document_digest, ENABLEMENT_PROOF_STAGE, "mismatch"),
     ):
         # ProofRun carries a 4-column FK to CandidateBuild, so a proof can
         # only be recorded against a REGISTERED build -- the schema already
@@ -335,14 +339,14 @@ async def test_proof_is_scoped_to_the_exact_build_and_digest(
         await register_candidate_build(
             session,
             schema_digest=schema_digest,
-            document_digest=document_digest,
+            document_digest=doc,
             selected_operation=operation,
             candidate_build=build,
         )
         await record_proof_run(
             session,
             schema_digest=schema_digest,
-            document_digest=document_digest,
+            document_digest=doc,
             selected_operation=operation,
             candidate_build=build,
             request_identity="test",
@@ -356,7 +360,7 @@ async def test_proof_is_scoped_to_the_exact_build_and_digest(
             session,
             schema_digest=LIVE,
             candidate_build=BUILD,
-            operations=[operation],
+            operations={operation: document_digest},
         )
         == frozenset()
     )
@@ -378,7 +382,7 @@ async def test_proof_is_scoped_to_the_exact_build_and_digest(
         session,
         schema_digest=LIVE,
         candidate_build=BUILD,
-        operations=[operation],
+        operations={operation: document_digest},
     ) == frozenset({operation})
 
 

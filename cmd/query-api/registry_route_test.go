@@ -183,3 +183,73 @@ func TestLogRoutingStateDrift_UnreachableRegistryReportsFailureNotEmptiness(t *t
 		t.Fatalf("unreachable registry was reported as stale rows; got %q", logged)
 	}
 }
+
+// classifyRoutingDrift's three outcomes, at the UNIT tier.
+//
+// codex r1 (P3) mutated `live > 0` to `live == 0` and the unit tests stayed
+// green -- only the Postgres-testcontainer tests under the integration tag
+// caught it, so a plain `go test ./...` could not. The decision is the whole
+// point of this file; these drive it directly so the cheap tier catches an
+// inversion.
+func TestClassifyRoutingDrift_EmptyTableIsNotAnIncident(t *testing.T) {
+	lines := classifyRoutingDrift(map[string]int64{}, "sha256:live")
+	if len(lines) != 1 {
+		t.Fatalf("want 1 line, got %d: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "table is empty") {
+		t.Fatalf("empty table not reported as empty: %q", lines[0])
+	}
+	if strings.Contains(lines[0], "STALE") {
+		t.Fatalf("empty table reported as stale: %q", lines[0])
+	}
+}
+
+func TestClassifyRoutingDrift_LiveRowsAreNotStale(t *testing.T) {
+	lines := classifyRoutingDrift(
+		map[string]int64{"sha256:live": 15, "sha256:old": 12}, "sha256:live")
+	if len(lines) != 1 {
+		t.Fatalf("want 1 line, got %d: %v", len(lines), lines)
+	}
+	if strings.Contains(lines[0], "STALE") {
+		t.Fatalf("rows exist at the live digest but were reported STALE: %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "15 at live schema digest sha256:live") {
+		t.Fatalf("live count not reported: %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "12 at other digests") {
+		t.Fatalf("superseded rows not counted separately: %q", lines[0])
+	}
+}
+
+func TestClassifyRoutingDrift_RowsOnlyAtASupersededDigestAreStale(t *testing.T) {
+	// The exact 2026-09-01 census.
+	lines := classifyRoutingDrift(map[string]int64{"sha256:67b87d38": 12}, "sha256:29d509cd")
+	if len(lines) != 1 {
+		t.Fatalf("want 1 line, got %d: %v", len(lines), lines)
+	}
+	for _, want := range []string{
+		"ROUTING ROWS STALE", "12 rows at sha256:67b87d38",
+		"0 at sha256:29d509cd", "dev-hops go-api routing enable",
+	} {
+		if !strings.Contains(lines[0], want) {
+			t.Fatalf("stale line missing %q: %q", want, lines[0])
+		}
+	}
+}
+
+// Multiple superseded digests each get their own line, in sorted order --
+// Go randomises map iteration, and a log an operator cannot diff between
+// restarts is not a log they will trust.
+func TestClassifyRoutingDrift_StaleDigestsAreSortedAndComplete(t *testing.T) {
+	lines := classifyRoutingDrift(
+		map[string]int64{"sha256:ccc": 1, "sha256:aaa": 2, "sha256:bbb": 3},
+		"sha256:live")
+	if len(lines) != 3 {
+		t.Fatalf("want one line per stale digest, got %d: %v", len(lines), lines)
+	}
+	for i, want := range []string{"sha256:aaa", "sha256:bbb", "sha256:ccc"} {
+		if !strings.Contains(lines[i], want) {
+			t.Fatalf("line %d = %q, want it to name %s (sorted order)", i, lines[i], want)
+		}
+	}
+}

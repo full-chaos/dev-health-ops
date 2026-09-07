@@ -36,6 +36,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -148,7 +149,6 @@ func logRoutingStateDrift(pool *pgxpool.Pool, schemaDigest string) {
 	defer rows.Close()
 
 	counts := map[string]int64{}
-	var total int64
 	for rows.Next() {
 		var digest string
 		var count int64
@@ -157,20 +157,40 @@ func logRoutingStateDrift(pool *pgxpool.Pool, schemaDigest string) {
 			return
 		}
 		counts[digest] = count
-		total += count
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
 		log.Printf("query-api: routing-state drift check failed mid-read: %v", rowsErr)
 		return
 	}
 
+	for _, line := range classifyRoutingDrift(counts, schemaDigest) {
+		log.Print(line)
+	}
+}
+
+// classifyRoutingDrift turns a per-digest row census into the log lines that
+// describe it.
+//
+// Split out from logRoutingStateDrift as a PURE function on purpose (codex
+// r1, P3): while the decision lived inline behind a real pgxpool query, the
+// only tests that could reach it were the Postgres-testcontainer ones under
+// the integration tag, so inverting `live > 0` to `live == 0` left the
+// unit-tier tests green. The three outcomes here are the entire point of
+// this file, and the tier that runs on every `go test ./...` must be able
+// to catch one being flipped.
+//
+// Returns one line for the live/empty cases and one per stale digest.
+func classifyRoutingDrift(counts map[string]int64, schemaDigest string) []string {
+	var total int64
+	for _, count := range counts {
+		total += count
+	}
+
 	if total == 0 {
-		log.Printf("query-api: routing rows: table is empty at live schema digest %s -- no operation is enabled for Go (default posture, not an incident)", schemaDigest)
-		return
+		return []string{fmt.Sprintf("query-api: routing rows: table is empty at live schema digest %s -- no operation is enabled for Go (default posture, not an incident)", schemaDigest)}
 	}
 	if live := counts[schemaDigest]; live > 0 {
-		log.Printf("query-api: routing rows: %d at live schema digest %s, %d at other digests", live, schemaDigest, total-live)
-		return
+		return []string{fmt.Sprintf("query-api: routing rows: %d at live schema digest %s, %d at other digests", live, schemaDigest, total-live)}
 	}
 
 	// The failure this file exists for. Sorted, because Go randomises map
@@ -181,7 +201,9 @@ func logRoutingStateDrift(pool *pgxpool.Pool, schemaDigest string) {
 		staleDigests = append(staleDigests, digest)
 	}
 	sort.Strings(staleDigests)
+	lines := make([]string, 0, len(staleDigests))
 	for _, digest := range staleDigests {
-		log.Printf("query-api: ROUTING ROWS STALE: %d rows at %s, 0 at %s -- these rows are keyed to a schema digest this binary does not compute, so NO operation is reachable and every request silently falls back to Python. The SDL moved after they were written. Re-run `dev-hops go-api routing enable` against THIS image; see docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md (section: When the schema digest moves)", counts[digest], digest, schemaDigest)
+		lines = append(lines, fmt.Sprintf("query-api: ROUTING ROWS STALE: %d rows at %s, 0 at %s -- these rows are keyed to a schema digest this binary does not compute, so NO operation is reachable and every request silently falls back to Python. The SDL moved after they were written. Re-run `dev-hops go-api routing enable` against THIS image; see docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md (section: When the schema digest moves)", counts[digest], digest, schemaDigest))
 	}
+	return lines
 }

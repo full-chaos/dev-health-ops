@@ -196,3 +196,197 @@ def test_a_non_http_query_api_url_is_refused_before_opening_anything(
     assert _enable(query_api_url="file:///etc/hostname") == 2
     err = capsys.readouterr().err
     assert "must be http:// or https://" in err
+
+
+# --- codex r1 fixes -------------------------------------------------------
+
+
+def test_url_credentials_never_reach_the_error_output(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A URL can carry `user:password@`, and this lane never prints credentials.
+
+    codex r1 (P2): `http://alice:super-secret@127.0.0.1:1` echoed the
+    password verbatim into stderr on the unreachable-host path.
+    """
+    assert _enable(query_api_url="http://alice:super-secret@127.0.0.1:1") == 2
+    err = capsys.readouterr().err
+    assert "super-secret" not in err
+    assert "alice" not in err
+    assert "<redacted>" in err
+    # Still diagnostic: the host must survive redaction, or the operator
+    # cannot tell which endpoint failed.
+    assert "127.0.0.1:1" in err
+
+
+def test_credentials_are_redacted_from_a_non_http_scheme_refusal(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert _enable(query_api_url="ftp://bob:hunter2@example.invalid") == 2
+    err = capsys.readouterr().err
+    assert "hunter2" not in err
+    assert "must be http:// or https://" in err
+
+
+def test_a_duplicated_operation_in_the_registry_body_is_refused(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Collapsing duplicates silently would let preflight 3 compare against
+    whichever copy happened to win (codex r1, P3)."""
+    catalog = dict(catalog_entries())
+    payload = registry_payload()
+    payload["operations"].append(
+        {"operation": "featureFlags", "document_digest": "0" * 64}
+    )
+    assert catalog  # guard against a vacuous pass on an empty catalog
+    with FakeQueryAPI(payload) as url:
+        assert _enable(query_api_url=url) == 2
+    err = capsys.readouterr().err
+    assert "more than once" in err
+    assert "featureFlags" in err
+
+
+# --- `status` must survive the thing it diagnoses being down --------------
+#
+# These live HERE, not in test_go_api_cli_enable_db.py, deliberately. That
+# file is gated on DEV_HEALTH_POSTGRES_TEST_URI, so in CI it SKIPS -- and a
+# regression test for a BLOCKING finding that skips on the gate is no
+# coverage at all. Neither test needs a database; the whole point is that
+# there isn't one.
+
+
+@pytest.mark.asyncio
+async def test_status_survives_an_unreachable_registry_database(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r1 P1 (BLOCKING): `status` raised and exited 1 when Postgres was down.
+
+    That contradicted the command's entire contract. `status` is what an
+    operator runs WHEN THINGS ARE BROKEN -- a diagnostic that dies because
+    the thing it diagnoses is down is useless exactly when it is needed,
+    and a traceback tells them nothing about the plane digests it can
+    still report without a database.
+
+    No scratch DB fixture here on purpose: the point is that there is no
+    reachable database at all.
+    """
+    import contextlib
+
+    import dev_health_ops.db as db_module
+
+    @contextlib.asynccontextmanager
+    async def dead_session():
+        raise RuntimeError("connection refused: registry postgres is down")
+        yield  # pragma: no cover - unreachable, satisfies the generator protocol
+
+    monkeypatch.setattr(db_module, "get_postgres_session", dead_session)
+
+    assert (
+        await go_api_cli._cmd_routing_status(
+            argparse.Namespace(query_api_url=None, json=False)
+        )
+        == 0
+    ), "status must not fail when the registry database is unreachable"
+
+    out = capsys.readouterr().out
+    assert "UNREACHABLE" in out
+    assert "connection refused" in out
+    # What it CAN still answer without a database, it must answer.
+    assert current_schema_digest() in out
+    # And it must not let an operator read "no rows" out of "cannot read rows".
+    assert "NOT evidence that nothing is enabled" in out
+
+
+@pytest.mark.asyncio
+async def test_status_json_reports_the_database_error_field(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import contextlib
+    import json as json_module
+
+    import dev_health_ops.db as db_module
+
+    @contextlib.asynccontextmanager
+    async def dead_session():
+        raise RuntimeError("boom")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db_module, "get_postgres_session", dead_session)
+
+    assert (
+        await go_api_cli._cmd_routing_status(
+            argparse.Namespace(query_api_url=None, json=True)
+        )
+        == 0
+    )
+    payload = json_module.loads(capsys.readouterr().out)
+    assert payload["registry_db_error"] is not None
+    assert "boom" in payload["registry_db_error"]
+    assert payload["rows_by_schema_digest"] == {}
+    assert payload["operations"] == []
+
+
+@pytest.mark.asyncio
+async def test_status_distinguishes_a_failed_catalog_load_from_an_empty_one(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r1 P2: both printed an empty table and exited 0.
+
+    Per-request dispatch is right not to care -- both mean "nothing is
+    Go-eligible", the safe default. An operator reading `status` cares
+    enormously: one is the normal posture and the other is a broken
+    deployment. Reporting them identically is the same "two states, one
+    silence" defect this whole change exists to end.
+    """
+    import contextlib
+
+    import dev_health_ops.db as db_module
+
+    @contextlib.asynccontextmanager
+    async def dead_session():
+        raise RuntimeError("db down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db_module, "get_postgres_session", dead_session)
+    monkeypatch.setattr(go_api_cli, "catalog_entries", lambda: ())
+    monkeypatch.setattr(go_api_cli, "catalog_loaded_successfully", lambda: False)
+
+    assert (
+        await go_api_cli._cmd_routing_status(
+            argparse.Namespace(query_api_url=None, json=False)
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "CATALOG UNAVAILABLE" in out
+    assert "NOT the same as an empty catalog" in out
+
+
+@pytest.mark.asyncio
+async def test_status_does_not_cry_wolf_when_the_catalog_is_merely_empty(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The converse, so the warning stays meaningful.
+
+    A guard that fires in the healthy case teaches operators to ignore it.
+    """
+    import contextlib
+
+    import dev_health_ops.db as db_module
+
+    @contextlib.asynccontextmanager
+    async def dead_session():
+        raise RuntimeError("db down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(db_module, "get_postgres_session", dead_session)
+    monkeypatch.setattr(go_api_cli, "catalog_entries", lambda: ())
+    monkeypatch.setattr(go_api_cli, "catalog_loaded_successfully", lambda: True)
+
+    assert (
+        await go_api_cli._cmd_routing_status(
+            argparse.Namespace(query_api_url=None, json=False)
+        )
+        == 0
+    )
+    assert "CATALOG UNAVAILABLE" not in capsys.readouterr().out

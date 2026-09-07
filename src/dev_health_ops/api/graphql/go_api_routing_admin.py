@@ -32,11 +32,11 @@ subsystem exists to tell apart (the same reasoning
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -220,29 +220,44 @@ async def operations_with_enablement_proof(
     *,
     schema_digest: str,
     candidate_build: str,
-    operations: Iterable[str],
+    operations: Mapping[str, str],
 ) -> frozenset[str]:
     """Which of ``operations`` have a ``deployed_executed``/``match``
     proof run for EXACTLY this ``(schema_digest, candidate_build)``.
 
     Scoped to the exact tuple on purpose: plan section 8.3's rule is that
     a proof is evidence for one immutable 4-column key and is "never
-    carried forward across any of the four changing". A proof recorded
+    carried forward across any of the four changing". ``operations`` is
+    therefore a mapping of ``operation -> document_digest``, not a bare
+    list of names: the document digest is one of those four columns. A proof recorded
     against an older build, or against the SDL as it was before a schema
     move, says nothing about the build being enabled now -- which is the
     entire lesson of the digest move this command exists to recover from.
     """
-    wanted = list(operations)
-    if not wanted:
+    if not operations:
         return frozenset()
+    # The key is FOUR columns, and `document_digest` is not optional
+    # (codex r1, P2 -- it was missing, so a proof recorded against a
+    # DIFFERENT registered document could authorize an enablement).
+    # Matched as an explicit tuple-OR rather than two independent `IN`
+    # lists: `selected_operation IN (...) AND document_digest IN (...)`
+    # is a cross product and would accept exactly the mismatch under test.
     result = await session.execute(
         select(ProofRun.selected_operation)
         .where(
             ProofRun.schema_digest == schema_digest,
             ProofRun.candidate_build == candidate_build,
-            ProofRun.selected_operation.in_(wanted),
             ProofRun.stage == ENABLEMENT_PROOF_STAGE,
             ProofRun.terminal_state == ENABLEMENT_PROOF_TERMINAL_STATE,
+            or_(
+                *(
+                    and_(
+                        ProofRun.selected_operation == operation,
+                        ProofRun.document_digest == document_digest,
+                    )
+                    for operation, document_digest in operations.items()
+                )
+            ),
         )
         .distinct()
     )
@@ -307,11 +322,15 @@ async def routing_status_rows(
             session,
             schema_digest=live_schema_digest,
             candidate_build=build,
-            operations=[
-                operation
+            # The row's OWN document_digest, not the catalog's: this reports
+            # what is actually in the table, and a row whose document digest
+            # has drifted from the catalog must not borrow the catalog's
+            # proof.
+            operations={
+                operation: row.document_digest
                 for operation, row in live_by_operation.items()
                 if row.current_candidate_build == build
-            ],
+            },
         )
 
     statuses: list[OperationStatus] = []

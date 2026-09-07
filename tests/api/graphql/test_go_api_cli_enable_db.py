@@ -322,3 +322,49 @@ async def test_status_json_reports_plane_disagreement(
     assert payload["planes_agree"] is False
     assert payload["go_plane_schema_digest"] == stale
     assert payload["python_plane_schema_digest"] == current_schema_digest()
+
+
+# --- codex r1 fixes -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_proof_for_a_different_document_does_not_authorize_enablement(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r1 P2: `document_digest` was missing from the proof lookup.
+
+    The proof key is FOUR columns (plan section 8.3 -- "a proof is evidence
+    for exactly one tuple, never carried forward across any of the four
+    changing"). With only three matched, a `deployed_executed`/`match`
+    proof recorded against a DIFFERENT registered document authorized the
+    enablement.
+    """
+    catalog = dict(catalog_entries())
+    wrong_document = "0" * 64
+    assert wrong_document != catalog["featureFlags"]
+
+    async with session_factory() as session:
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=wrong_document,
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+        )
+        await record_proof_run(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=wrong_document,
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+            request_identity="test",
+            stage=ENABLEMENT_PROOF_STAGE,
+            terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+        )
+        await session.commit()
+
+    with FakeQueryAPI(registry_payload()) as url:
+        assert await go_api_cli._cmd_routing_enable(_ns(query_api_url=url)) == 2
+
+    assert ENABLEMENT_PROOF_STAGE in capsys.readouterr().err
+    assert await _rows(session_factory) == [], "a wrong-document proof enabled a row"

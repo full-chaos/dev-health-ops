@@ -299,21 +299,30 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4286 (Done)",
     },
     "compounding_risk": {
-        # CHAOS-4287: the ticket and this citation both said :502, which is
-        # inside _repo_to_team_map_for_compounding_risk, not the writer. The
-        # writer is :568 (REPO scope, post_bridge). TEAM scope is now its own
-        # entry below, "compounding_risk_team" (CHAOS-5084) -- see that row
-        # and internal/jobs/metrics/daily/families.json's phase_notes for both.
-        "citation": "Python: `job_daily.py:568 _write_compounding_risk_for_day` (repo scope, native)",
-        "ticket": "CHAOS-4287",
+        # CHAOS-5308: `_write_compounding_risk_for_day` (job_daily.py) --
+        # the Python REPO-scope writer this citation used to name -- is
+        # deleted outright, along with its own orchestrator
+        # (build_compounding_risk_rows_for_day, compounding_risk.py) and the
+        # standalone `dev-hops metrics compounding-risk` CLI backfill
+        # (job_compounding_risk.py) that was its last other caller.
+        # CompoundingRiskExecutor (Go) is the sole writer of REPO-scope
+        # compounding_risk_daily rows now, no Python fallback left. TEAM
+        # scope is its own family entry below, "compounding_risk_team"
+        # (CHAOS-5084) -- see that row and
+        # internal/jobs/metrics/daily/families.json's phase_notes for both.
+        "citation": "Go: `internal/jobs/metrics/daily/compounding_risk_native_executor.go` (`CompoundingRiskExecutor`)",
+        "ticket": "CHAOS-4287/CHAOS-5308 (Done)",
     },
     "compounding_risk_team": {
         # CHAOS-5084: the TEAM-scope half of compounding_risk, split into its
         # own family entry because it is a SEPARATE finalize-scope writer to
         # the SAME table (compounding_risk_daily) -- see the "compounding_risk"
         # row above and families.json's phase_notes for both.
-        "citation": "Python: `job_daily.py:613 _write_compounding_risk_team_rows_for_day` (team scope, now native, finalize scope)",
-        "ticket": "CHAOS-5084",
+        # `_write_compounding_risk_team_rows_for_day` (job_daily.py) is
+        # deleted outright -- CompoundingRiskTeamExecutor (Go) is the sole
+        # writer of TEAM-scope rows now, no Python fallback left.
+        "citation": "Go: `internal/jobs/metrics/daily/compounding_risk_team_native_executor.go` (`CompoundingRiskTeamExecutor`)",
+        "ticket": "CHAOS-5084 (Done)",
     },
     "team_cognitive_load": {
         # CHAOS-5141: fully native, no Python remainder at all. The

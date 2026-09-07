@@ -575,7 +575,24 @@ check_live_python_oracles() {
   # going forward. Proving "Python still agrees with itself" stops being the
   # protection that matters once Python is no longer in the loop.
 
-  printf 'go test -count=1: internal/jobs/metrics/daily/repouser (frozen repo_user_commit golden vs live Python)\n'
+  # internal/jobs/metrics/daily/repouser's live-Python rot guard
+  # (TestRepoUserCommitGoldenMatchesLivePython, formerly run combined with
+  # TestPysumGoldenMatchesLivePython below) was retired here: its producer,
+  # compute_daily_metrics (repo_user_commit), was DELETED (CHAOS-5308/
+  # CHAOS-3092), not merely un-called -- RepoUserCommitExecutor (native Go)
+  # is the sole producer now. The frozen golden
+  # (tests/fixtures/repo_user_commit_python_golden.json) stays; Go's own
+  # TestComputeMatchesFrozenPythonGolden/TestComputeMatchesFrozenGoldenExhaustively
+  # (compute_test.go/golden_full_test.go) are the regression guard going
+  # forward. Proving "Python still agrees with itself" stops being the
+  # protection that matters once Python is no longer in the loop -- same
+  # shape as the issueprlinks/filehotspots retirements above.
+  #
+  # TestPysumGoldenMatchesLivePython (CHAOS-4824) is UNRELATED to
+  # repo_user_commit's own compute -- it guards the code-ownership Gini pysum
+  # helper, which has its own live caller elsewhere -- so it keeps running
+  # alone, solo, below.
+  printf 'go test -count=1: internal/jobs/metrics/daily/repouser (pysum golden vs live Python, CHAOS-4824)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -585,20 +602,12 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestRepoUserCommitGoldenMatchesLivePython|TestPysumGoldenMatchesLivePython)$' \
+        -run '^(TestPysumGoldenMatchesLivePython)$' \
         ./internal/jobs/metrics/daily/repouser
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  proof_file="${proof_dir}/repo-user-commit-golden"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: repo_user_commit golden rot guard did not compare against live Python\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  # Checked SEPARATELY (same reasoning throughout this function): a single
-  # proof marker would be satisfied by whichever guard happened to run.
   proof_file="${proof_dir}/pysum-golden"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: pysum golden (CHAOS-4824) rot guard did not compare against live Python\n' >&2

@@ -160,7 +160,6 @@ semantics that a version change can move.
 | `internal/scheduler/fixed` | 143s | kiac | — | — | yes | Self-seeding PostgreSQL. |
 | `internal/streamhandlers` | 113s | — | kiac | — | **no** | Sensitive. `argMax` tie-break over `(occurred_at, event_id)`; migration 077 states outright that a tie lets ClickHouse "return either key". Weight is *almost entirely container startup* (six tests, fresh container each) — the biggest per-package saving. |
 | `internal/storage/postgres` | 91s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (7 creation sites across this package -- 6 that literally `CREATE ROLE`, plus `provision_script_integration_test.go`'s `TestProvisionScriptGrantsNoTablePrivileges`, whose roles come from an external `psql --file=provision_river_roles.sql` invocation -- each self-cleaning via `containers.DropRole`; plus 3 same-package pure consumers of `domain_grant_reconciliation_integration_test.go`'s shared `startGrantHarness` fixture a `CREATE ROLE` grep could not see -- `coordinator_statement_privileges`, `posture_diagnostics`, `fixed_engine_statement_privileges`, and `provision_script`'s other test, `TestProvisionScriptNeverWipesMigrateGrants`). Otherwise pure PostgreSQL. |
-| `internal/testsupport/computeparity` | 50s | — | **host** | — | **no** | Creates FIXED-name databases (`parity_left`, `parity_right`, `parity_capacity_*`) through a fixture tool outside the harness, and provisions them with `--reset`. On a shared cluster one lane drops another's live database. Also sensitive: `capacity_table_parity` uses `FINAL` on `ReplacingMergeTree(computed_at)`. Out of CHAOS-4661 scope; tracked as CHAOS-4677. |
 | `internal/jobs/report` | 33s | kiac | kiac | — | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
 | `internal/scheduler/sync` | 32s | kiac | — | — | yes | Pure PostgreSQL. |
 | `cmd/dev-health-worker` | 24s | kiac | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. Role names parameterised by CHAOS-4661; still host-bound overall for Valkey -- moving PostgreSQL alone does not move the package until Valkey is also resolved (CHAOS-4666). |
@@ -189,12 +188,15 @@ semantics that a version change can move.
 | `internal/cacheinvalidation` | 2s | — | — | **host** | yes | Valkey only. |
 | `internal/streamrunner` | 2s | — | — | **host** | yes | Valkey only. |
 
-**Nine packages carry engine-sensitive ClickHouse SQL and cannot be proven by
-CI at all** — 1416s, 76.5% of the total integration weight. Three of them
-(`computeparity`, `jobs/report`, `jobs/metrics/remaining`) are sensitive only
-in *some* files; splitting those files into their own packages would let the
-neutral remainder defer to CI, which is a worthwhile follow-up but is not done
-here.
+**Eight packages carry engine-sensitive ClickHouse SQL and cannot be proven by
+CI at all** — roughly 1366s (down from 1416s/nine packages pre-CHAOS-5336:
+`internal/testsupport/computeparity`'s ~50s row is gone with the package
+itself, retired along with dora/capacity's Python producers; re-measure rather
+than trust this percentage exactly), about three quarters of the total
+integration weight. Two of them (`jobs/report`, `jobs/metrics/remaining`) are
+sensitive only in *some* files; splitting those files into their own packages
+would let the neutral remainder defer to CI, which is a worthwhile follow-up
+but is not done here.
 
 Two classifications were left explicitly uncertain rather than guessed:
 `jobs/metrics/daily/repo_user_commit_org_scope` (queries `FROM work_items FINAL`
@@ -347,28 +349,25 @@ result is eventually `Close`d. A suite that caches across tests needs a
 ### And check nothing creates a datastore behind the harness's back
 
 The check above is necessary but not sufficient, because it only sees resources
-the harness created. `internal/testsupport/computeparity` passes it — both its
-callers close their instance correctly — and is still unsafe on a shared
-cluster, because it creates **fixed-name** databases (`parity_left`,
-`parity_right`, `parity_capacity_*`) through a separate fixture tool and
-provisions them with `--reset`. Two lanes then collide on the same names and one
-drops the other's live database. The tool's ownership marker does not help: it
-is the same table name in every lane, so it distinguishes a fixture database
-from a real one but not one lane's from another's.
+the harness created. `internal/testsupport/computeparity` used to be the
+example that passed the closing check above yet was still unsafe on a shared
+cluster: it created **fixed-name** databases (`parity_left`, `parity_right`,
+`parity_capacity_*`) through a separate fixture tool
+(`scripts/worker/compute_parity_fixtures.py`) and provisioned them with
+`--reset`. Two lanes then collided on the same names and one dropped the
+other's live database. The tool's ownership marker did not help: it was the
+same table name in every lane, so it distinguished a fixture database from a
+real one but not one lane's from another's. Both the package and the fixture
+tool are now retired (CHAOS-5336, dora/capacity's Python producers deleted
+outright) — kept here as the worked example of the question below, which
+still applies to any future out-of-band creator.
 
 **So the second question is: does anything here create a datastore the harness
 does not own?** Any creator that is not the harness is a potential collision and
 a potential orphan, because nothing will namespace it and nothing will drop it.
-Swept at the time of writing: no Go test issues `CREATE DATABASE` directly, and
-`scripts/worker/compute_parity_fixtures.py` is the only out-of-band creator in
-the repository, used by four call sites in that one package.
-
-That package is therefore **host-only until its names are namespaced** — which
-leaves it in an uncomfortable spot worth stating plainly: it is
-engine-sensitive *and* host-only, so it cannot be proven by kiac
-(destructive), and its host containers run 26.6.1 rather than production's
-26.7 line. CI's own services moved to 26.7 in CHAOS-4851, so the CI half of
-this constraint has lifted; the host-only half has not.
+As of `internal/testsupport/computeparity`'s retirement, no Go test issues
+`CREATE DATABASE` directly and no out-of-band fixture tool remains in the
+repository — re-sweep before trusting that this stays true.
 
 ### Orphans
 

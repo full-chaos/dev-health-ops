@@ -40,7 +40,7 @@ class FakeClickHouseSink:
 
 @pytest.mark.asyncio
 async def test_get_backlog_aggregates_latest_day_for_org_scope() -> None:
-    from dev_health_ops.metrics.job_capacity import get_backlog_from_sink
+    from dev_health_ops.metrics.capacity_queries import get_backlog_from_sink
 
     sink = FakeClickHouseSink(
         rows=[
@@ -61,7 +61,7 @@ async def test_get_backlog_aggregates_latest_day_for_org_scope() -> None:
 
 @pytest.mark.asyncio
 async def test_capacity_throughput_reader_uses_rmt_final() -> None:
-    from dev_health_ops.metrics.job_capacity import load_throughput_from_sink
+    from dev_health_ops.metrics.capacity_queries import load_throughput_from_sink
 
     sink = FakeClickHouseSink(rows=[(date(2026, 1, 1), 3)])
     sink.org_id = "org-1"

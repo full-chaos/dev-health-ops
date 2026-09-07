@@ -5,26 +5,18 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
+// CHAOS-5336 dropped this golden's "dora" section (and ComputeDORA's
+// matching case here) along with job_dora.py/compute_dora.py -- the native
+// DORAExecutor has no Python fallback left to guard against drifting from.
+// ComputeDORA's frozen-golden coverage moved to its own dedicated file with
+// no generator: see dora_frozen_golden_test.go /
+// tests/fixtures/dora_metrics_python_golden.json, same shape as the earlier
+// hotspot_score split. capacity is untouched here -- compute_capacity.py
+// stays live (the GraphQL capacity resolver calls it directly, a separate
+// epic), so this shared golden's live-Python drift check still applies to it.
 type goldenFixture struct {
-	DORA []struct {
-		Day         string `json:"day"`
-		Deployments []struct {
-			RepoID     string `json:"repo_id"`
-			Status     string `json:"status"`
-			DeployedAt string `json:"deployed_at"`
-			StartedAt  string `json:"started_at"`
-			MergedAt   string `json:"merged_at"`
-		} `json:"deployments"`
-		Incidents []struct {
-			RepoID     string `json:"repo_id"`
-			StartedAt  string `json:"started_at"`
-			ResolvedAt string `json:"resolved_at"`
-		} `json:"incidents"`
-		Expected []DORAMetric `json:"expected"`
-	} `json:"dora"`
 	Capacity []struct {
 		History     []int     `json:"history"`
 		Values      []int     `json:"values"`
@@ -51,32 +43,6 @@ func TestPythonNumericalGoldenParity(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-	for index, testCase := range fixture.DORA {
-		day, err := time.Parse("2006-01-02", testCase.Day)
-		if err != nil {
-			t.Fatal(err)
-		}
-		deployments := make([]Deployment, 0, len(testCase.Deployments))
-		for _, value := range testCase.Deployments {
-			deployments = append(deployments, Deployment{
-				RepoID: value.RepoID, Status: value.Status,
-				DeployedAt: parseTime(t, value.DeployedAt),
-				StartedAt:  parseTime(t, value.StartedAt),
-				MergedAt:   parseTime(t, value.MergedAt),
-			})
-		}
-		incidents := make([]Incident, 0, len(testCase.Incidents))
-		for _, value := range testCase.Incidents {
-			incidents = append(incidents, Incident{
-				RepoID:     value.RepoID,
-				StartedAt:  parseTime(t, value.StartedAt),
-				ResolvedAt: parseTime(t, value.ResolvedAt),
-			})
-		}
-		if got := ComputeDORA(day, deployments, incidents); !equalJSON(got, testCase.Expected) {
-			t.Fatalf("dora case %d = %#v, want %#v", index, got, testCase.Expected)
-		}
-	}
 	for index, testCase := range fixture.Capacity {
 		if got := IntegerPercentiles(testCase.Values, testCase.Percentiles); !equalJSON(got, testCase.Expected) {
 			t.Fatalf("capacity percentiles case %d = %#v, want %#v", index, got, testCase.Expected)
@@ -92,18 +58,6 @@ func TestPythonNumericalGoldenParity(t *testing.T) {
 			t.Fatalf("release confidence case %d = %f, want %f", index, got, testCase.Expected)
 		}
 	}
-}
-
-func parseTime(t *testing.T, value string) time.Time {
-	t.Helper()
-	if value == "" {
-		return time.Time{}
-	}
-	result, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return result
 }
 
 func close(left, right float64) bool {

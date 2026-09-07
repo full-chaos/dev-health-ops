@@ -68,6 +68,17 @@ def compute_code_ownership_gini(
 
     0.0 = Perfect equality (all authors contribute exactly equally)
     1.0 = Perfect inequality (one author contributes everything)
+
+    CHAOS-5308/CHAOS-3092: this function's job_daily.py caller (the
+    repo_user_commit feeder loop's code_ownership_gini_by_repo argument) is
+    deleted -- but it has a SECOND, real, unrelated caller:
+    tests/fixtures/generate_pysum_golden.py (CHAOS-4824's Go-naive-sum vs
+    CPython-Neumaier-compensated-sum golden generator) imports and calls it
+    directly, with its own Go rot-guard
+    (internal/jobs/metrics/daily/repouser/pysum_golden_rot_guard_test.go).
+    Found only by checking every deletion candidate's callers repo-wide, not
+    just within job_daily.py -- do not re-delete this without re-verifying
+    that golden's dependency is also gone.
     """
     if not window_stats:
         return 0.0

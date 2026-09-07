@@ -14,9 +14,7 @@ from typing import (
 
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
-    DeploymentRow,
     IncidentRow,
-    PipelineRunRow,
     PullRequestReviewRow,
     PullRequestRow,
 )
@@ -56,16 +54,6 @@ class DataLoader(Protocol):
         repo_name: str | None = None,
     ) -> tuple[list[Any], list[Any]]:
         """Load work items and transitions."""
-        raise NotImplementedError()
-
-    async def load_cicd_data(
-        self,
-        start: datetime,
-        end: datetime,
-        repo_id: uuid.UUID | None,
-        repo_name: str | None = None,
-    ) -> tuple[list[PipelineRunRow], list[DeploymentRow]]:
-        """Load CI pipeline runs and deployments."""
         raise NotImplementedError()
 
     async def load_incidents(

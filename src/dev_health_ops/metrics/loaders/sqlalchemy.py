@@ -15,9 +15,7 @@ from dev_health_ops.metrics.loaders.base import (
 )
 from dev_health_ops.metrics.schemas import (
     CommitStatRow,
-    DeploymentRow,
     IncidentRow,
-    PipelineRunRow,
     PullRequestReviewRow,
     PullRequestRow,
 )
@@ -215,45 +213,6 @@ class SqlAlchemyDataLoader(DataLoader):
         items = [to_dataclass(WorkItem, i) for i in items_raw]
         transitions = [to_dataclass(WorkItemStatusTransition, t) for t in trans_raw]
         return items, transitions
-
-    async def load_cicd_data(
-        self,
-        start: datetime,
-        end: datetime,
-        repo_id: uuid.UUID | None,
-        repo_name: str | None = None,
-    ) -> tuple[list[PipelineRunRow], list[DeploymentRow]]:
-        params = {"start": start.isoformat(), "end": end.isoformat()}
-        repo_filter = ""
-        if repo_id:
-            params["repo_id"] = str(repo_id)
-            repo_filter = " AND repo_id = :repo_id"
-
-        pipe_query = f"SELECT * FROM ci_pipeline_runs WHERE finished_at >= :start AND finished_at < :end {repo_filter}"
-        deploy_query = f"SELECT * FROM deployments WHERE deployed_at >= :start AND deployed_at < :end {repo_filter}"
-
-        pipes: list[PipelineRunRow] = []
-        deploys: list[DeploymentRow] = []
-        with self.engine.connect() as conn:
-            p_rows = conn.execute(text(pipe_query), params).mappings().all()
-            d_rows = conn.execute(text(deploy_query), params).mappings().all()
-
-            for pr in p_rows:
-                pd = dict(pr)
-                pd["finished_at"] = _to_dt(pd.get("finished_at"))
-                pd["started_at"] = _to_dt(pd.get("started_at"))
-                pd["queued_at"] = _to_dt(pd.get("queued_at"))
-                pipes.append(pd)  # type: ignore
-
-            for dr in d_rows:
-                dd = dict(dr)
-                dd["deployed_at"] = _to_dt(dd.get("deployed_at"))
-                dd["merged_at"] = _to_dt(dd.get("merged_at"))
-                dd["started_at"] = _to_dt(dd.get("started_at"))
-                dd["finished_at"] = _to_dt(dd.get("finished_at"))
-                deploys.append(dd)  # type: ignore
-
-        return pipes, deploys
 
     async def load_incidents(
         self,

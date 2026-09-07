@@ -51,8 +51,6 @@ from dev_health_ops.metrics.prometheus import (
     DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE,
 )
 from dev_health_ops.metrics.remaining_scope_contract import (
-    CapacityScope,
-    DoraScope,
     MembershipBackfillScope,
     RecommendationsScope,
     parse_scope,
@@ -1783,47 +1781,6 @@ async def _run_daily_direct(
     return result
 
 
-async def _run_capacity(execution: _Execution, scope: CapacityScope) -> dict[str, Any]:
-    from dev_health_ops.metrics.job_capacity import run_capacity_forecast
-
-    if execution.generation_seed is None:
-        raise RuntimeError("capacity execution is missing its generation seed")
-    results = await run_capacity_forecast(
-        db_url=require_clickhouse_uri(),
-        org_id=execution.organization_id,
-        team_id=scope.team_id,
-        work_scope_id=scope.work_scope_id,
-        target_items=scope.target_items,
-        target_date=date.fromisoformat(scope.target_date)
-        if scope.target_date
-        else None,
-        history_days=scope.history_days,
-        simulations=scope.simulations,
-        all_teams=scope.all_teams,
-        persist=True,
-        seed=execution.generation_seed,
-    )
-    return {"family": execution.family, "forecast_count": len(results)}
-
-
-async def _run_dora(execution: _Execution, scope: DoraScope) -> dict[str, Any]:
-    from dev_health_ops.metrics.job_dora import run_dora_metrics_job
-
-    await run_in_threadpool(
-        run_dora_metrics_job,
-        db_url=require_clickhouse_uri(),
-        day=date.fromisoformat(scope.day),
-        backfill_days=scope.backfill_days,
-        repo_id=uuid.UUID(scope.repo_id) if scope.repo_id else None,
-        repo_name=scope.repo_name,
-        sink=scope.sink,
-        metrics=scope.metrics,
-        interval=scope.interval,
-        org_id=execution.organization_id,
-    )
-    return {"family": execution.family, "day": scope.day}
-
-
 async def _run_recommendations(
     execution: _Execution, scope: RecommendationsScope
 ) -> dict[str, Any]:
@@ -1879,8 +1836,6 @@ async def _run_membership(
 
 _RemainingRunner = Callable[[_Execution, Any], Awaitable[dict[str, Any]]]
 _REMAINING_RUNNERS: dict[str, _RemainingRunner] = {
-    "capacity": _run_capacity,
-    "dora": _run_dora,
     "recommendations": _run_recommendations,
     "membership_backfill": _run_membership,
 }
@@ -2740,10 +2695,11 @@ async def _run_until_client_disconnect(
 # plain int, gets no rows_written key at all -- "not applicable", never
 # coerced to a false 0.
 #
-# dora and capacity's native Go executors report their own rows_written
-# through CompatibilityOutcome directly (dora_native.go/capacity_native.go)
-# and never call this HTTP bridge, so they are not listed here. complexity
-# is gone from _REMAINING_RUNNERS entirely (CHAOS-4291: the native
+# dora and capacity are gone from _REMAINING_RUNNERS entirely (CHAOS-5336:
+# both native Go executors -- dora_native.go/capacity_native.go -- have no
+# Python fallback, and job_dora.py/job_capacity.py are deleted outright), so
+# their old evidence-key entries here are moot rather than fixed. complexity
+# is gone from _REMAINING_RUNNERS entirely too (CHAOS-4291: the native
 # ComplexityExecutor has no Python fallback), so its old "deliberate gap"
 # entry here is moot rather than fixed.
 #
@@ -2767,7 +2723,6 @@ async def _run_until_client_disconnect(
 # existing test call sites (tests/test_recommendations_task.py), deferred
 # as a separate, larger change.
 _EVIDENCE_ROW_COUNT_KEYS: dict[str, str] = {
-    "capacity": "forecast_count",
     "membership_backfill": "memberships_written",
 }
 

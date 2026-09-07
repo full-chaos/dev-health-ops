@@ -101,7 +101,21 @@ difference worth failing on, not a tidier implementation to wave through.
 
 ### 4. Seed from producers, never by hand
 
-`scripts/worker/compute_parity_fixtures.py`:
+**`scripts/worker/compute_parity_fixtures.py` is RETIRED (CHAOS-5336):** its
+only two `KINDS` were `metrics.dora` (`job_dora.run_dora_metrics_job`) and
+`metrics.capacity` (`job_capacity.run_capacity_forecast`), and both
+`job_dora.py`/`job_capacity.py` and their two Go callers
+(`dora_table_parity_integration_test.go`/`capacity_table_parity_integration_test.go`)
+were deleted outright once DORA and capacity finished their native ports with
+no live Python producer left to compare against. Standing rule: a
+Python-producer fixture script retires with the last `KINDS` entry that used
+it, same as a gate stage retires with the compute it invoked. The recipe below
+stays as the SHAPE a future two-sided family should follow with its own
+producer script -- `internal/testsupport/computeparity`'s Go-side machinery
+(`Table`, `Compare`, `RunProducer`, ...) is general-purpose and still live,
+used by `chschema.go` and `icfinalize/parity_golden_test.go`.
+
+Former recipe (`scripts/worker/compute_parity_fixtures.py`, before deletion):
 
 ```bash
 compute_parity_fixtures.py provision --dsn "$LEFT"  --reset

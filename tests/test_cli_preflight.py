@@ -56,7 +56,12 @@ def _run_cli(*args: str, env_overrides: dict[str, str] | None = None):
 # Commands that must fast-fail when no database/org is configured, plus the
 # requirement tokens expected to appear in the error message.
 _MISSING_CASES = [
-    (("metrics", "compounding-risk"), ("ClickHouse", "organization")),
+    # CHAOS-5308: `metrics compounding-risk` used to be the exemplar here
+    # for a command requiring BOTH ClickHouse AND organization together --
+    # its whole CLI verb (job_compounding_risk.py) is deleted now, no
+    # remaining Python producer of this family at any scope. No other verb
+    # below requires both tokens together; nothing replaces this row.
+    #
     # CHAOS-5055: daily/rebuild/dora/complexity/release-impact/capacity
     # dispatch to dev-health-workerctl (worker/Postgres-scoped) instead of
     # connecting to ClickHouse directly -- they need --org, not
@@ -82,7 +87,10 @@ _MISSING_CASES = [
     ),
     (("audit", "perf"), ("ClickHouse",)),
     (("audit", "schema"), ("ClickHouse",)),
-    (("investment", "materialize"), ("ClickHouse",)),
+    # CHAOS-5173: `investment materialize` deleted entirely -- the native
+    # River kind (`investment.materialize`) plus `workerctl investment
+    # trigger` are the only entry points now, neither of which goes through
+    # this CLI's preflight.
     (
         (
             "admin",
@@ -186,49 +194,24 @@ def test_missing_config_fast_fails_with_usage(
         assert token in result.stderr
 
 
-def test_configured_command_passes_preflight() -> None:
-    """A configured command gets past preflight (no 'missing required input')."""
-    result = _run_cli(
-        "metrics",
-        "compounding-risk",
-        env_overrides={
-            "CLICKHOUSE_URI": "clickhouse://ch:ch@localhost:9/default",
-            "ORG_ID": "org-test",
-        },
-    )
-
-    # Preflight passed: it may still fail to connect, but not on a missing input.
-    assert "missing required input" not in result.stderr
+# CHAOS-5308: test_configured_command_passes_preflight used to live here,
+# exercising `metrics compounding-risk` (CLICKHOUSE_URI + ORG_ID both set)
+# to prove a fully-configured command clears preflight -- its sole subject
+# is deleted whole (job_compounding_risk.py), and no other command needs
+# BOTH ClickHouse and organization together the way it did, so nothing
+# replaces it.
 
 
-def test_investment_materialize_accepts_clickhouse_via_db_flag() -> None:
-    """`investment materialize` carries its ClickHouse DSN on --db, not
-    --analytics-db; the preflight must accept it and not false-positive."""
-    result = _run_cli(
-        "investment",
-        "materialize",
-        "--db",
-        "clickhouse://ch:ch@localhost:9/default",
-    )
-
-    assert "missing required input" not in result.stderr
-
-
-def test_investment_materialize_rejects_unsupported_db_scheme_cleanly() -> None:
-    # Was test_work_graph_build_rejects_unsupported_db_scheme_cleanly: the
-    # `dev-hops work-graph build` CLI itself is deleted (CHAOS-4924). The
-    # scheme rejection this proves lives in the generic sink factory
-    # (src/dev_health_ops/metrics/sinks/factory.py), shared by every CLI
-    # command that takes a ClickHouse DSN on --db, so any such command
-    # exercises the same path -- investment materialize stands in, same
-    # substitution as test_investment_materialize_accepts_clickhouse_via_db_
-    # flag above.
-    result = _run_cli("investment", "materialize", "--db", "sqlite:///x.db")
-
-    assert result.returncode == 2, result.stderr
-    assert "Traceback" not in result.stderr
-    assert "Unknown or unsupported sink scheme 'sqlite'" in result.stderr
-    assert "Only ClickHouse is supported" in result.stderr
+# test_work_graph_build_rejects_unsupported_db_scheme_cleanly and
+# test_investment_materialize_{accepts_clickhouse_via_db_flag,
+# rejects_unsupported_db_scheme_cleanly} used to live here. Both subjects
+# are now deleted CLI verbs: `dev-hops work-graph build` (CHAOS-4924) and
+# `dev-hops investment materialize` (CHAOS-5173). The scheme-rejection
+# behavior they proved lives in the generic sink factory
+# (src/dev_health_ops/metrics/sinks/factory.py), shared by every CLI command
+# that takes a ClickHouse DSN on --db -- already covered by
+# test_sync_rejects_unsupported_analytics_scheme_cleanly below, so nothing
+# replaces these.
 
 
 def test_service_credentials_rejects_non_postgres_db_flag_cleanly(tmp_path) -> None:
@@ -258,27 +241,15 @@ def test_sync_rejects_unsupported_analytics_scheme_cleanly() -> None:
     assert "Only ClickHouse is supported" in result.stderr
 
 
-@pytest.mark.parametrize(
-    "args",
-    [
-        ("investment", "materialize", "--db", "sqlite:///x.db"),
-        # CHAOS-5055: `metrics capacity` no longer takes its own --db / reads
-        # a ClickHouse DSN directly -- it dispatches to dev-health-workerctl
-        # (org/team-scoped), so this case no longer applies here.
-        # CHAOS-5307: `recommendations compute` deleted entirely (the whole
-        # `dev-hops recommendations` group had exactly this one verb) -- no
-        # replacement case needed here.
-    ],
-)
-def test_clickhouse_commands_reject_unsupported_analytics_scheme_cleanly(
-    args: tuple[str, ...],
-) -> None:
-    result = _run_cli(*args)
-
-    assert result.returncode == 2, result.stderr
-    assert "Traceback" not in result.stderr
-    assert "Unknown or unsupported sink scheme 'sqlite'" in result.stderr
-    assert "Only ClickHouse is supported" in result.stderr
+# test_clickhouse_commands_reject_unsupported_analytics_scheme_cleanly was
+# deleted here (CHAOS-5173): its parametrize list held exactly one live case,
+# `investment materialize`, and that verb is now gone entirely (the native
+# River kind + `workerctl investment trigger` are the only entry points).
+# CHAOS-5055 and CHAOS-5307 had already emptied the other two cases this
+# test once covered -- deleting the case-less test itself, rather than
+# leaving a vacuous `@pytest.mark.parametrize("args", [])`, matches how
+# CHAOS-5307 handled the equivalent zero-verbs-left shape for the
+# `dev-hops recommendations` group.
 
 
 def test_admin_license_create_is_not_a_postgres_preflight_false_positive() -> None:
@@ -298,13 +269,12 @@ def test_admin_license_create_is_not_a_postgres_preflight_false_positive() -> No
     assert "LICENSE_PRIVATE_KEY" in result.stdout
 
 
-def test_help_lists_requirements_in_epilog() -> None:
-    result = _run_cli("metrics", "compounding-risk", "--help")
-
-    assert result.returncode == 0
-    assert "Requires:" in result.stdout
-    assert "ClickHouse" in result.stdout
-    assert "organization" in result.stdout
+# CHAOS-5308: test_help_lists_requirements_in_epilog used to live here,
+# exercising `metrics compounding-risk --help`'s "Requires: ClickHouse,
+# organization" epilog line -- its sole subject is deleted whole
+# (job_compounding_risk.py). cli.py's own `_COMMAND_REQUIREMENTS` registry
+# entry for ("metrics", "compounding-risk") is deleted too (same commit),
+# so there is no epilog left to render, let alone assert on.
 
 
 def test_unrelated_command_has_no_requirements() -> None:

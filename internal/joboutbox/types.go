@@ -18,6 +18,23 @@ var (
 	ErrLeaseLost            = errors.New("worker outbox claim is no longer owned")
 	ErrContractRejected     = errors.New("worker outbox contract rejected")
 	ErrPolicyRejected       = errors.New("worker outbox policy rejected")
+	// ErrDeliveryAlreadyTerminal reports that a publish found an existing,
+	// AGREEING outbox row whose status is already terminal for the relay:
+	// 'delivered' (the relay's claim SQL takes only 'pending' and expired
+	// 'claimed', so it will never pick the row up again) or 'dead'.
+	//
+	// It is NOT a failure of the publish. The envelope matched field for
+	// field, so there is nothing to reject and nothing to write; what it
+	// reports is that the publish did not put a NEW delivery in front of the
+	// domain row, which the plain nil return used to be indistinguishable
+	// from. Sync run 115e6246 accumulated 624 of those nil returns on one
+	// outbox row over thirteen hours while 17 units sat undelivered, and the
+	// only visible symptom was a progress bar that stopped moving.
+	//
+	// Callers decide. A publisher whose domain row is already being served by
+	// a live delivery is fine and logs it; the sync dispatcher treats it as
+	// the signal that recovery -- not another republish -- owns the row.
+	ErrDeliveryAlreadyTerminal = errors.New("worker outbox delivery is already terminal")
 	ErrRiverInsert          = errors.New("worker outbox River insert failed")
 	errInjectedCrash        = errors.New("injected worker outbox crash")
 )

@@ -5,7 +5,9 @@ package joboutbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -836,6 +838,137 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	// THE 624 FALSE SUCCESSES, made observable.
+	//
+	// The dispatcher republished sync run 115e6246's units on every countdown
+	// for thirteen hours. Producer.Publish's ON CONFLICT DO NOTHING found the
+	// existing row, compared job_kind / contract_version / payload_hash /
+	// prerequisite_completion_key, agreed on all four, and returned nil --
+	// never looking at `status`. The row was 'delivered', which the relay's
+	// claim SQL will never pick up again, so every one of those publishes put
+	// nothing in front of the unit and reported success.
+	//
+	// RED CONTROL: before ErrDeliveryAlreadyTerminal existed, the delivered and
+	// dead cases below both returned a plain nil, indistinguishable from the
+	// pending case that genuinely does have a delivery coming.
+	t.Run("republishing onto a terminal outbox row reports itself", func(t *testing.T) {
+		producer, err := NewProducer(admin, registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		republish := func(t *testing.T, unitID string) error {
+			t.Helper()
+			organizationID := fixture.orgID
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			return producer.Publish(ctx, tx, jobcontract.KindSyncProviderUnit, jobcontract.Envelope{
+				ContractVersion: 1,
+				CorrelationID:   "strand-integration-" + unitID,
+				IdempotencyKey:  "sync.provider_unit:" + unitID,
+				OrganizationID:  &organizationID,
+				Domain:          jobcontract.DomainLink{Type: "sync_run_unit", ID: unitID},
+				Payload:         jobcontract.ProviderUnitPayload{UnitID: unitID},
+			})
+		}
+
+		t.Run("delivered", func(t *testing.T) {
+			resetStrandTables(t, ctx, admin)
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			unitID := seedSyncStrandUnit(t, ctx, admin, fixture.orgID, syncStrandUnitSpec{
+				runStatus: "dispatching", unitStatus: "dispatching", now: now,
+			})
+			outboxID := deliverStrandSeed(t, ctx, fixture, now,
+				jobcontract.KindSyncProviderUnit, "sync.provider_unit:"+unitID,
+				"sync_run_unit", unitID, jobcontract.ProviderUnitPayload{UnitID: unitID})
+			jobID := riverJobFor(t, ctx, admin, outboxID)
+
+			err := republish(t, unitID)
+			if !errors.Is(err, ErrDeliveryAlreadyTerminal) {
+				t.Fatalf("Publish() = %v, want ErrDeliveryAlreadyTerminal -- this is the return that "+
+					"reported 624 successful publishes into a dead row", err)
+			}
+			// Both facts, or an operator reading the log cannot get from the
+			// warning to the River row that actually died.
+			if !strings.Contains(err.Error(), "status=delivered") {
+				t.Fatalf("error %q does not name the row's status", err.Error())
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("river_job_id=%d", jobID)) {
+				t.Fatalf("error %q does not name river job %d", err.Error(), jobID)
+			}
+			// The dedupe key embeds the domain id and this text reaches
+			// operator logs, so it must NOT be echoed back.
+			if strings.Contains(err.Error(), unitID) {
+				t.Fatalf("error %q echoes the unit id; the message must carry only the fixed status "+
+					"literal and River's own job id", err.Error())
+			}
+			// Published, just not newly delivered: every publisher that owns no
+			// repair path must keep treating this as success.
+			if !IsPublished(err) {
+				t.Fatal("IsPublished() rejected an already-staged envelope; every non-dispatch publisher " +
+					"would start failing on an ordinary idempotent republish")
+			}
+		})
+
+		t.Run("dead", func(t *testing.T) {
+			resetStrandTables(t, ctx, admin)
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			unitID := seedSyncStrandUnit(t, ctx, admin, fixture.orgID, syncStrandUnitSpec{
+				runStatus: "dispatching", unitStatus: "dispatching", now: now,
+			})
+			outboxID := deliverStrandSeed(t, ctx, fixture, now,
+				jobcontract.KindSyncProviderUnit, "sync.provider_unit:"+unitID,
+				"sync_run_unit", unitID, jobcontract.ProviderUnitPayload{UnitID: unitID})
+			// ck_worker_job_outbox_delivery_state forbids a non-'delivered' row
+			// from keeping river_job_id/delivered_at, so both are cleared with
+			// the status -- this is the shape the relay itself writes when it
+			// exhausts an outbox row.
+			if _, err := admin.Exec(ctx, `
+				UPDATE public.worker_job_outbox
+				SET status = 'dead', river_job_id = NULL, delivered_at = NULL
+				WHERE id = $1`, outboxID); err != nil {
+				t.Fatal(err)
+			}
+
+			err := republish(t, unitID)
+			if !errors.Is(err, ErrDeliveryAlreadyTerminal) {
+				t.Fatalf("Publish() = %v, want ErrDeliveryAlreadyTerminal for a dead row", err)
+			}
+			if !strings.Contains(err.Error(), "status=dead") ||
+				!strings.Contains(err.Error(), "river_job_id=none") {
+				t.Fatalf("error %q must name the dead status and say the delivery is gone", err.Error())
+			}
+		})
+
+		t.Run("pending", func(t *testing.T) {
+			resetStrandTables(t, ctx, admin)
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			unitID := seedSyncStrandUnit(t, ctx, admin, fixture.orgID, syncStrandUnitSpec{
+				runStatus: "dispatching", unitStatus: "dispatching", now: now,
+			})
+			outboxID := deliverStrandSeed(t, ctx, fixture, now,
+				jobcontract.KindSyncProviderUnit, "sync.provider_unit:"+unitID,
+				"sync_run_unit", unitID, jobcontract.ProviderUnitPayload{UnitID: unitID})
+			// Exactly what a rearm leaves behind.
+			if _, err := admin.Exec(ctx, `
+				UPDATE public.worker_job_outbox
+				SET status = 'pending', river_job_id = NULL, delivered_at = NULL
+				WHERE id = $1`, outboxID); err != nil {
+				t.Fatal(err)
+			}
+
+			// A pending row IS reachable by the relay's claim SQL, so a
+			// delivery genuinely is coming and this must stay a plain nil.
+			// Without this case the sentinel could be returned for every
+			// conflict and the two other subtests would still pass.
+			if err := republish(t, unitID); err != nil {
+				t.Fatalf("Publish() = %v, want nil: a pending row is still claimable by the relay", err)
+			}
+		})
 	})
 
 	// The blocker, made executable. Without the CHAOS-3997 grants the repair

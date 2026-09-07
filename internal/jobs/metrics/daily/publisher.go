@@ -70,7 +70,7 @@ func (publisher *PostgresPublisher) PublishDispatchTx(
 			)
 		}
 	}
-	if err != nil {
+	if !joboutbox.IsPublished(err) {
 		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
 			// Keep BOTH sentinels reachable, matching the remaining-metrics
 			// publisher: callers classify on ErrInvalidState, and the outbox
@@ -131,7 +131,7 @@ func (publisher *PostgresPublisher) PublishRedriveDispatchTx(
 	if !descriptor.Executable() {
 		return fmt.Errorf("%w: daily dispatch route is not executable", ErrInvalidState)
 	}
-	if err := publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope); err != nil {
+	if err := publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsDispatch, envelope); !joboutbox.IsPublished(err) {
 		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
 			return fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}
@@ -162,7 +162,7 @@ func (publisher *PostgresPublisher) PublishPartition(
 	}
 	if err := publisher.producer.PublishStandalone(
 		ctx, jobcontract.KindDailyMetricsPartition, envelope,
-	); err != nil {
+	); !joboutbox.IsPublished(err) {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil
@@ -203,7 +203,7 @@ func (publisher *PostgresPublisher) PublishRedrivePartitionTx(
 		},
 		Payload: jobcontract.DailyMetricsPartitionPayload{PartitionID: partition.ID},
 	}
-	if err := publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsPartition, envelope); err != nil {
+	if err := publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsPartition, envelope); !joboutbox.IsPublished(err) {
 		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
 			return fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}
@@ -234,7 +234,7 @@ func (publisher *PostgresPublisher) PublishFinalizeTx(
 	}
 	if err := publisher.producer.Publish(
 		ctx, tx, jobcontract.KindDailyMetricsFinalize, envelope,
-	); err != nil {
+	); !joboutbox.IsPublished(err) {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil
@@ -283,7 +283,7 @@ func (publisher *PostgresPublisher) PublishRedriveFinalizeTx(
 	if !descriptor.Executable() {
 		return fmt.Errorf("%w: daily finalize route is not executable", ErrInvalidState)
 	}
-	if err := publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsFinalize, envelope); err != nil {
+	if err := publisher.producer.Publish(ctx, tx, jobcontract.KindDailyMetricsFinalize, envelope); !joboutbox.IsPublished(err) {
 		if errors.Is(err, joboutbox.ErrContractRejected) || errors.Is(err, joboutbox.ErrPolicyRejected) {
 			return fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}

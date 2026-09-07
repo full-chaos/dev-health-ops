@@ -125,7 +125,12 @@ func (publisher *PostgresPublisher) PublishPartitionTx(
 			)
 		}
 	}
-	if err != nil {
+	// joboutbox.IsPublished, not `err != nil`: an already-terminal outbox row
+	// means the envelope is durably staged and there was nothing to insert,
+	// which for this publisher has always been -- and remains -- a success.
+	// This publisher owns no repair path and holds no logger; the caller that
+	// ACTS on ErrDeliveryAlreadyTerminal is the provider-unit dispatch path.
+	if !joboutbox.IsPublished(err) {
 		if errors.Is(err, joboutbox.ErrContractRejected) ||
 			errors.Is(err, joboutbox.ErrPolicyRejected) {
 			// Keep BOTH sentinels reachable. Callers switch on ErrInvalidState

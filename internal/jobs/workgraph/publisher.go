@@ -82,21 +82,26 @@ FROM public.work_graph_execution_requests WHERE id = $1::uuid`, request.ID).Scan
 	if !ok {
 		return ErrUnavailable
 	}
+	// Every arm below is normalised through workGraphPublished: work-graph requests carry a CALLER-supplied
+	// idempotency key (work_graph_execution_requests.idempotency_key), so a
+	// re-issued request legitimately lands on an already-delivered row, and
+	// that has always been a success here. This writer holds no logger and
+	// owns no repair path.
 	if descriptor.Executable() {
 		if request.PrerequisiteCompletionKey == "" {
-			return writer.producer.Publish(ctx, tx, string(request.Kind), envelopeFor(request))
+			return workGraphPublished(writer.producer.Publish(ctx, tx, string(request.Kind), envelopeFor(request)))
 		}
-		return writer.producer.PublishAfter(
+		return workGraphPublished(writer.producer.PublishAfter(
 			ctx, tx, string(request.Kind), envelopeFor(request),
 			request.PrerequisiteCompletionKey,
-		)
+		))
 	}
 	if request.PrerequisiteCompletionKey == "" {
-		return writer.producer.PublishDeferred(ctx, tx, string(request.Kind), envelopeFor(request))
+		return workGraphPublished(writer.producer.PublishDeferred(ctx, tx, string(request.Kind), envelopeFor(request)))
 	}
-	return writer.producer.PublishDeferredAfter(
+	return workGraphPublished(writer.producer.PublishDeferredAfter(
 		ctx, tx, string(request.Kind), envelopeFor(request), request.PrerequisiteCompletionKey,
-	)
+	))
 }
 
 func validRequest(request Request) bool {
@@ -244,4 +249,20 @@ func domainFor(kind Kind) string {
 	default:
 		return "investment_request"
 	}
+}
+
+// workGraphPublished collapses joboutbox.ErrDeliveryAlreadyTerminal to nil.
+//
+// It is a helper rather than an inline branch in each of the four arms above
+// because four copies of the same swallow is how one of them eventually stops
+// matching the others. The sentinel means the envelope IS durably staged and
+// there was nothing to insert; for this writer that has always been success,
+// and nothing here can act on the distinction. Every other producer error --
+// contract rejection, policy rejection, an unavailable database -- passes
+// through unchanged.
+func workGraphPublished(err error) error {
+	if joboutbox.IsPublished(err) {
+		return nil
+	}
+	return err
 }

@@ -215,10 +215,29 @@ func (writer teamAutoimportPostSyncWriter) PublishTx(
 		Domain:          jobcontract.DomainLink{Type: "sync_run", ID: plan.SyncRunID},
 		Payload:         jobcontract.TeamAutoimportPayload{SyncRunID: plan.SyncRunID},
 	}
+	// postSyncPublished: a re-run of the fanout for the same sync run lands on
+	// the already-delivered row for this fixed key, which has always been a
+	// success here. See its doc comment.
 	if descriptor.Executable() {
-		return writer.producer.Publish(ctx, tx, jobcontract.KindTeamAutoimport, envelope)
+		return postSyncPublished(writer.producer.Publish(ctx, tx, jobcontract.KindTeamAutoimport, envelope))
 	}
-	return writer.producer.PublishDeferred(ctx, tx, jobcontract.KindTeamAutoimport, envelope)
+	return postSyncPublished(writer.producer.PublishDeferred(ctx, tx, jobcontract.KindTeamAutoimport, envelope))
+}
+
+// postSyncPublished collapses joboutbox.ErrDeliveryAlreadyTerminal to nil for
+// the two post-sync handoff writers.
+//
+// Both key their envelope on "post-sync:<sync run id>:<kind>", a FIXED key per
+// run, so a fanout that runs twice for one sync run necessarily conflicts with
+// the first publish's row. That was a silent success before the sentinel
+// existed and it stays one: the handoff is durably staged, and neither writer
+// holds a logger or owns a repair path. Contract, policy and availability
+// errors still propagate.
+func postSyncPublished(err error) error {
+	if joboutbox.IsPublished(err) {
+		return nil
+	}
+	return err
 }
 
 // teamRepoOwnershipPostSyncWriter stages the CHAOS-4365 item 1b
@@ -263,9 +282,9 @@ func (writer teamRepoOwnershipPostSyncWriter) PublishTx(
 		Payload:         jobcontract.TeamRepoOwnershipDerivationPayload{SyncRunID: plan.SyncRunID},
 	}
 	if descriptor.Executable() {
-		return writer.producer.Publish(ctx, tx, jobcontract.KindTeamRepoOwnershipDerivation, envelope)
+		return postSyncPublished(writer.producer.Publish(ctx, tx, jobcontract.KindTeamRepoOwnershipDerivation, envelope))
 	}
-	return writer.producer.PublishDeferred(ctx, tx, jobcontract.KindTeamRepoOwnershipDerivation, envelope)
+	return postSyncPublished(writer.producer.PublishDeferred(ctx, tx, jobcontract.KindTeamRepoOwnershipDerivation, envelope))
 }
 
 var postSyncFanoutNamespace = uuid.MustParse("0713fbcf-ec5c-49dc-b7dc-18ae3de17536")

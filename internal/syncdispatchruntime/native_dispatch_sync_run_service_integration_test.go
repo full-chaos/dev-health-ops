@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,11 @@ CREATE TABLE public.worker_job_outbox (
   queue text NOT NULL, priority int NOT NULL, max_attempts int NOT NULL,
   scheduled_at timestamptz NOT NULL, status text NOT NULL, attempt_count int NOT NULL,
   next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
+  -- Both columns exist in alembic 0046 and are read by Producer.Publish's
+  -- conflict branch (it reports ErrDeliveryAlreadyTerminal with the row's
+  -- status and its River job id). This fixture omitted them, which made every
+  -- publish onto an existing row fail as 42703 rather than answering.
+  river_job_id bigint NULL, delivered_at timestamptz NULL,
   created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
 );`); err != nil {
 		t.Fatal(err)
@@ -201,6 +207,118 @@ func newTestDispatchServiceWith(t *testing.T, pool *pgxpool.Pool, registry *fake
 		t.Fatalf("NewNativeDispatchSyncRunService: %v", err)
 	}
 	return service
+}
+
+// A republish onto an ALREADY-TERMINAL outbox row must be reported, not
+// counted as a queued unit.
+//
+// This is the mechanism behind sync run 115e6246's 624 "successful" dispatch
+// passes. The dispatcher reclaims a stale 'dispatching' unit and republishes
+// it; Producer.Publish's ON CONFLICT DO NOTHING finds the existing row, agrees
+// on kind / contract_version / payload_hash / prerequisite_completion_key, and
+// -- before joboutbox.ErrDeliveryAlreadyTerminal -- returned nil without
+// looking at status. A 'delivered' row is never claimed by the relay again, so
+// the unit got no delivery and the pass reported one anyway.
+//
+// RED CONTROL: on the code this replaces, the second pass logs
+// dispatch_sync_run.dispatched with queued_units=1 and emits neither line
+// asserted below.
+func TestDispatchReportsAPublishOntoATerminalDelivery(t *testing.T) {
+	withDispatchServicePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
+		seedDispatchRoute(t, ctx, pool)
+		markReferenceDiscoverySucceeded(t, ctx, pool)
+		now := pgNow()
+		unitID := "00000000-0000-4000-8000-0000000000fd"
+		// markReferenceDiscoverySucceeded already inserts the run row.
+		if _, err := pool.Exec(ctx, `
+INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,updated_at)
+VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','planned',$4)`,
+			unitID, discoveryTestOrg, discoveryTestRun, now); err != nil {
+			t.Fatal(err)
+		}
+
+		// Pass 1 stages the row for real, so pass 2's envelope is byte-identical
+		// to it. Constructing the conflicting row by hand would have to
+		// reproduce the canonical payload hash, and getting that wrong would
+		// make Publish report ErrContractRejected instead -- the test would
+		// then pass for the wrong reason.
+		if err := newTestDispatchService(t, pool).Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("first Dispatch: %v", err)
+		}
+		var outboxID string
+		if err := pool.QueryRow(ctx, `SELECT id::text FROM worker_job_outbox WHERE dedupe_key=$1`,
+			"sync.provider_unit:"+unitID).Scan(&outboxID); err != nil {
+			t.Fatalf("first pass staged no outbox row, so nothing below tests anything: %v", err)
+		}
+		// The exact shape all 17 of run 115e6246's rows were in: delivered,
+		// bound to a River job that then died.
+		if _, err := pool.Exec(ctx, `
+UPDATE worker_job_outbox SET status='delivered', river_job_id=127714, delivered_at=$2 WHERE id=$1::uuid`,
+			outboxID, now); err != nil {
+			t.Fatal(err)
+		}
+		// Back to planned so pass 2 claims and republishes it, rather than
+		// waiting out the stale-dispatch window inside the test.
+		if _, err := pool.Exec(ctx, `UPDATE sync_run_units SET status='planned', updated_at=$2 WHERE id=$1::uuid`,
+			unitID, now); err != nil {
+			t.Fatal(err)
+		}
+
+		var captured bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		service, err := NewNativeDispatchSyncRunService(pool, logger, &fakeBudgetEstimator{},
+			mustDispatchProducer(t, pool), &fakeJobRegistry{
+				descriptors: map[string]jobruntime.Descriptor{
+					jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river"),
+				},
+			})
+		if err != nil {
+			t.Fatalf("NewNativeDispatchSyncRunService: %v", err)
+		}
+		if err := service.Dispatch(ctx, dispatchTestArgs()); err != nil {
+			t.Fatalf("second Dispatch: %v, want nil -- a terminal delivery is an observation about ONE "+
+				"unit and must not abort the whole run's pass", err)
+		}
+
+		logged := captured.String()
+		if !strings.Contains(logged, "dispatch_sync_run.publish_hit_terminal_delivery") {
+			t.Fatalf("no per-unit warning in %q; this line is the only place the unit id appears, and "+
+				"River's own error row carries nothing but the fixed \"dev-health job failed\" string", logged)
+		}
+		if !strings.Contains(logged, unitID) {
+			t.Fatalf("the warning does not name the unit: %q", logged)
+		}
+		if !strings.Contains(logged, "dispatch_sync_run.terminal_delivery_publishes") {
+			t.Fatalf("no pass summary in %q", logged)
+		}
+		// The unit must NOT be counted as queued: it was reporting these as
+		// queued for thirteen hours that hid the strand.
+		if strings.Contains(logged, `"queued_units":1`) {
+			t.Fatalf("the pass counted a terminal-delivery publish as a queued unit: %q", logged)
+		}
+		// And no second outbox row was minted -- the dedupe key still holds.
+		var rows int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM worker_job_outbox WHERE job_kind=$1`,
+			jobcontract.KindSyncProviderUnit).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 1 {
+			t.Fatalf("got %d outbox rows, want 1", rows)
+		}
+	})
+}
+
+func mustDispatchProducer(t *testing.T, pool *pgxpool.Pool) *joboutbox.Producer {
+	t.Helper()
+	producer, err := joboutbox.NewProducer(pool, &fakeJobRegistry{
+		descriptors: map[string]jobruntime.Descriptor{
+			jobcontract.KindSyncProviderUnit: providerUnitDescriptor("river"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("joboutbox.NewProducer: %v", err)
+	}
+	return producer
 }
 
 // TestDispatchReturnsNilWhenTheTransportReferenceIsStale pins the

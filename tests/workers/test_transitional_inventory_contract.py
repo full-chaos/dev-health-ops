@@ -54,7 +54,7 @@ def test_real_tree_passes_the_gate():
 def test_inventory_is_non_empty_and_matches_audit_row_count():
     inventory = checker.load_inventory(_INVENTORY_PATH)
     assert inventory["row_count"] == len(inventory["rows"])
-    # 147 Wave-0 audit rows + 5 added in CUT-01 round-2 hardening (Codex
+    # 137 Wave-0 audit rows + 5 added in CUT-01 round-2 hardening (Codex
     # HIGH-1): the missed chord(...)() dispatch, plus a fail-closed row for
     # each celery-canvas (chain/chord/group) import in the tree, + 1 added
     # in round-3 hardening (an ordinary two-hop API trigger the call-graph

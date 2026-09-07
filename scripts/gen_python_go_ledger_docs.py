@@ -236,11 +236,11 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "producer": "`cmd/dev-health-worker/operational.go:120-131`",
         "trigger": "manual (billing event enqueues run)",
         "gate": "`descriptor.Executable()` (route=river)",
-        "writer": "Python `system_ops.py:25 send_billing_notification`",
-        "tables": "Python-owned (email dispatch; no dedicated table)",
-        "evidence": "argued — code read",
-        "state": "bridge",
-        "ticket": "CHAOS-3952 (idempotency-key gap) + CHAOS-4440 (stale docstring)",
+        "writer": "Go `internal/jobs/operational/billinghandler.go` (`BillingHandler.Work`) -- owns the completion fence, the owner-email lookup, all seven email renderings and the provider send; no Python callback",
+        "tables": "`public.billing_notifications` (Go) for the `claimed_at`/`completed_at` completion fence; `public.users`/`public.memberships`/`public.organizations` read-only for the owner lookup",
+        "evidence": "argued — code read + `internal/jobs/operational/testdata/billing_email/*.json` golden fixtures generated from the retired Python renderer",
+        "state": "native",
+        "ticket": "n/a — Python `system_ops.py send_billing_notification`, its fence helpers, `api/services/billing_emails.py` and the `/api/internal/worker-operational/billing` route DELETED entirely (CHAOS-5353)",
     },
     "operational.webhook_delivery": {
         "producer": "`cmd/dev-health-worker/operational.go:132-143`",
@@ -518,17 +518,12 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "system_ops.py": {
         "category": "a",
-        "evidence": "imported worker_operational.py:15-18 (health_check, phone_home_heartbeat, send_billing_notification)",
-        "ticket": "n/a",
-    },
-    "system_ops_metrics.py": {
-        "category": "c",
-        "evidence": "CHAOS-3952: sole importer is system_ops.py (BILLING_NOTIFICATION_COMPLETION_FENCE_TOTAL counter for the durable completion-fence outcomes on the live send_billing_notification path) — dual Prometheus/OTel instrument builder module, same shape as work_graph/investment/llm_telemetry_metrics.py",
+        "evidence": "imported worker_operational.py (phone_home_heartbeat only, serving /heartbeat) — CHAOS-5353 deleted send_billing_notification and its fence helpers from this module",
         "ticket": "n/a",
     },
     "system_tasks.py": {
         "category": "c",
-        "evidence": "corrected 2026-09-06 (CHAOS-5320): NOT a dead shim, but for a different reason than before — `api/webhooks/router.py`'s `process_webhook_event` import and `api/billing/router.py`'s `send_billing_notification`/`.delay(...)` call site (both gated behind `route_requires_celery`) are DELETED; `route_requires_celery` itself is deleted (job_routes.py). `system_tasks.py`'s only remaining live importer is `workers/tasks.py`'s barrel re-export, which registers its `@celery_app.task`-decorated functions with the Celery app at import time for the worker process — unrelated to whether any router still dispatches to them.",
+        "evidence": "corrected 2026-09-06 (CHAOS-5320): NOT a dead shim, but for a different reason than before — `api/webhooks/router.py`'s `process_webhook_event` import and `api/billing/router.py`'s `send_billing_notification`/`.delay(...)` call site (both gated behind `route_requires_celery`) are DELETED; `route_requires_celery` itself is deleted (job_routes.py). CHAOS-5353 then deleted `send_billing_notification` itself, so this shim now re-exports only `health_check` and `phone_home_heartbeat`. `system_tasks.py`'s only remaining live importer is `workers/tasks.py`'s barrel re-export, which registers its `@celery_app.task`-decorated functions with the Celery app at import time for the worker process — unrelated to whether any router still dispatches to them.",
         "ticket": "CHAOS-4439 (dead worker modules) -- the router-coordination caveat from the prior entry no longer applies",
     },
     "system_webhooks.py": {

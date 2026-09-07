@@ -43,7 +43,6 @@ late_ack_excluded_tasks = (
     "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
     "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
     "dev_health_ops.workers.tasks.phone_home_heartbeat",
-    "dev_health_ops.workers.system_ops.send_billing_notification",
     # CHAOS-2699's debounced recompute flush task. Valkey's SETNX debounce
     # guard is the durability/dedup layer here, not Celery's acks-late
     # redelivery -- reuses the existing `default` queue, no task_queues/compose

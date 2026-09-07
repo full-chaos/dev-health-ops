@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 84,
+  "row_count": 83,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -401,12 +401,12 @@
       "notes": "registry kind metrics.remaining.membership_backfill"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:49",
+      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:13",
       "surface": "health_check",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/system_ops.py",
-        "line": 49
+        "line": 13
       },
       "queue_or_cadence": "default (implicit)",
       "dispatches": "n/a",
@@ -425,36 +425,12 @@
       "notes": "no dispatch call site found anywhere (not .delay/apply_async/getattr/Beat) - likely celery inspect only, confirm intent | Verified during CUT-01: repo-wide search for .delay/apply_async/send_task/getattr-indirection/Beat/CLI finds zero dispatch sites for health_check (only the task decorator and two `__all__`/import re-exports exist). Celery `inspect`/`ping` commands are the only conceivable callers and are being replaced by Go health/readiness/metrics endpoints (CUT-04)."
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:58",
-      "surface": "send_billing_notification",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/system_ops.py",
-        "line": 58
-      },
-      "queue_or_cadence": "webhooks",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "operational.billing_notification"
-      },
-      "target_kind_id": "kind:operational.billing_notification",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
-      "deletion_evidence_requirement": "Deleted once registry kind `operational.billing_notification` no longer routes through the HTTP compatibility bridge.",
-      "acceptance_test_id": "tests/api/test_worker_operational_bridge.py::test_internal_bridge_passes_only_durable_billing_reference",
-      "notes": "registry kind operational.billing_notification; task name has no .tasks. prefix (dev_health_ops.workers.system_ops.send_billing_notification)"
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:522",
+      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:22",
       "surface": "phone_home_heartbeat",
       "class": "celery_task",
       "source": {
         "file": "src/dev_health_ops/workers/system_ops.py",
-        "line": 522
+        "line": 22
       },
       "queue_or_cadence": "default",
       "dispatches": "invoked by api/internal/worker_operational.py::process_heartbeat_reference via phone_home_heartbeat.run() (HTTP bridge, not Beat)",
@@ -569,12 +545,12 @@
       "notes": "transport-routes.json kind reference_discovery, route=river, rollback_route=celery; the deployed sync_dispatch_transport_routes row is transport='river', paused=false, generation=2 (a production dump on 2026-08-22 under CHAOS-4082 disproved this note's earlier claim that it was still 'celery'; 0049 seeds 'celery' and no migration flips it, but an operator applied it with `dev-health-workerctl routes apply`), so the native Go coordinator is the RUNNING route, not merely the checked-in one"
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:169",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:168",
       "surface": "dispatch-scheduled-syncs",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 169
+        "line": 168
       },
       "queue_or_cadence": "300s",
       "dispatches": "dispatch_scheduled_syncs",
@@ -593,12 +569,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:174",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:173",
       "surface": "reconcile-sync-dispatch",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 174
+        "line": 173
       },
       "queue_or_cadence": "60s",
       "dispatches": "reconcile_sync_dispatch",
@@ -617,12 +593,12 @@
       "notes": "checkedInReconcilerActivation.syncMutation=true activates the continuous Go reconcile loop; Celery Beat is not required for native sync-dispatch progress"
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:182",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:181",
       "surface": "dispatch-go-external-ingest-recompute-bridge",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 182
+        "line": 181
       },
       "queue_or_cadence": "10s",
       "dispatches": "dispatch_external_ingest_recompute_bridge",
@@ -641,12 +617,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:188",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:187",
       "surface": "monitor-queue-depths",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 188
+        "line": 187
       },
       "queue_or_cadence": "60s",
       "dispatches": "monitor_queue_depths",
@@ -665,12 +641,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:200",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:199",
       "surface": "prune-rate-limit-observations",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 200
+        "line": 199
       },
       "queue_or_cadence": "crontab(hour=5,minute=0) UTC",
       "dispatches": "prune_rate_limit_observations",
@@ -689,12 +665,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:209",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:208",
       "surface": "prune-external-ingest-batches",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 209
+        "line": 208
       },
       "queue_or_cadence": "crontab(hour=5,minute=15) UTC",
       "dispatches": "prune_external_ingest_batches",
@@ -1540,7 +1516,7 @@
         "line": 364
       },
       "queue_or_cadence": "webhooks / ops",
-      "dispatches": "send_billing_notification",
+      "dispatches": "BillingHandler.Work",
       "dispatch_mechanism": "job_registry_descriptor",
       "owner_role": "primary",
       "target_owner": {
@@ -1548,12 +1524,12 @@
         "value": "operational.billing_notification"
       },
       "target_kind_id": "kind:operational.billing_notification",
-      "current_implementation_state": "python_compatibility",
+      "current_implementation_state": "native_go",
       "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (internal/worker/*/v1/execute) backed by the corresponding src/dev_health_ops/api/internal/*.py runner.",
-      "deletion_evidence_requirement": "registry.json kind `operational.billing_notification` passes Registry.ValidateStartup with a concrete non-HTTP-bridge handler, the compatibility runner import is removed from the Python API, and a non-empty baseline parity dataset matches product data (not just job status).",
-      "acceptance_test_id": "tests/api/test_worker_operational_bridge.py::test_internal_bridge_passes_only_durable_billing_reference",
-      "notes": ""
+      "compatibility_dependency": "None. CHAOS-5353 deletes send_billing_notification, billing_emails.py and the /api/internal/worker-operational/billing route entirely; BillingHandler.Work (internal/jobs/operational/billinghandler.go) owns the completion fence, the owner-email lookup, all seven email renderings and the provider send -- no Python callback of any kind.",
+      "deletion_evidence_requirement": "Already satisfied by this PR: registry.json kind `operational.billing_notification` passes Registry.ValidateStartup with BillingHandler as its concrete non-HTTP-bridge handler, and the compatibility runner import is removed from the Python API.",
+      "acceptance_test_id": "tests/api/test_worker_operational_bridge.py::test_internal_bridge_no_longer_exposes_a_billing_route",
+      "notes": "CHAOS-5353: was the last operational COMPAT bridge; the seven email bodies are pinned byte-for-byte against the retired Python renderer by internal/jobs/operational/testdata/billing_email/*.json"
     },
     {
       "id": "registry_kind:contracts/jobs/v1/registry.json:396",

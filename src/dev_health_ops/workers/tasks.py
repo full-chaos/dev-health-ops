@@ -19,7 +19,6 @@ from dev_health_ops.workers.sync_units import (
 from dev_health_ops.workers.system_tasks import (
     health_check,
     phone_home_heartbeat,
-    send_billing_notification,
 )
 from dev_health_ops.workers.task_utils import (
     _extract_provider_token,
@@ -60,5 +59,4 @@ __all__ = [
     "run_sync_reference_discovery",
     "run_sync_unit",
     "run_post_sync_team_autoimport",
-    "send_billing_notification",
 ]

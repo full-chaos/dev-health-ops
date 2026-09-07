@@ -270,6 +270,28 @@ def _anchor(func: Any, root: Path) -> tuple[str | None, int | None, bool]:
     return str(resolved), line, False
 
 
+def _resolver_qualname(func: Any) -> str | None:
+    """``<module>.<qualname>`` for a resolver's underlying callable -- stable
+    across line churn (name-anchor fix, board ticket aa): unlike ``_anchor``'s ``line``, this only
+    changes when the resolver itself is renamed or moved to a different
+    module, never when an unrelated edit shifts it up or down the file. This
+    is what GraphQL resolver rows anchor by drift-checking against, instead
+    of the file:line pair every other edit to ``schema.py``/``models/*.py``
+    would otherwise move.
+    """
+    if func is None:
+        return None
+    try:
+        target = inspect.unwrap(func)
+    except (TypeError, ValueError):
+        target = func
+    module = getattr(target, "__module__", None)
+    qualname = getattr(target, "__qualname__", None)
+    if not module or not qualname:
+        return None
+    return f"{module}.{qualname}"
+
+
 def _walk_routes(routes: Any, prefix: str = "") -> list[tuple[str, Any]]:
     """Every leaf route under ``routes``, with its FULLY RESOLVED path.
 
@@ -416,7 +438,8 @@ def discover_graphql(root: Path, graphql_schema=GRAPHQL_SCHEMA) -> list[dict]:
             resolver = getattr(definition, "base_resolver", None)
             if resolver is None:
                 continue
-            file, line, in_ops = _anchor(getattr(resolver, "wrapped_func", None), root)
+            wrapped_func = getattr(resolver, "wrapped_func", None)
+            file, line, in_ops = _anchor(wrapped_func, root)
             records.append(
                 {
                     "kind": root_kinds.get(type_name, "graphql_field"),
@@ -428,6 +451,13 @@ def discover_graphql(root: Path, graphql_schema=GRAPHQL_SCHEMA) -> list[dict]:
                     "python_name": getattr(definition, "python_name", None),
                     "file": file,
                     "line": line,
+                    # name-anchor fix (board ticket aa): what a row's source.qualname drift-checks
+                    # against -- see _resolver_qualname. Stable across line
+                    # churn; unset (None) only when the resolver's callable
+                    # has no __module__/__qualname__ at all (not observed on
+                    # this tree; every strawberry base_resolver wraps a real
+                    # module-level function or bound method).
+                    "qualname": _resolver_qualname(wrapped_func),
                     "resolver_in_ops_source": in_ops,
                 }
             )

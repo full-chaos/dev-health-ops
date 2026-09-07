@@ -69,7 +69,20 @@ Fails (exit 1, with a human-readable report) when:
      ``server_action``) is accepted without a checker code change.
   5. STALE ANCHOR -- a matched row's ``source`` file:line is not where the
      served endpoint/resolver is defined, or (GraphQL) its ``surface_kind``
-     disagrees with what the served schema says the field is; or
+     disagrees with what the served schema says the field is; or (name-anchor
+     fix, board ticket aa) for a GraphQL row specifically, its
+     ``source.qualname`` (module path + resolver function/class qualname) is
+     absent -- MISSING QUALNAME ANCHOR -- or disagrees with the served
+     resolver's own qualname. GraphQL rows drift-check on qualname, never on
+     line number: every resolver lives in ``api/graphql/schema.py`` or a
+     ``models/*.py`` file it imports, and comparing file:line meant ANY edit
+     anywhere above a resolver in that file -- a blank line, a comment,
+     nothing to do with the resolver -- shifted every resolver below it and
+     forced a full baseline re-anchor unrelated to what actually changed
+     (trap #39/#42). ``source.line`` is still carried on GraphQL rows as a
+     human navigation hint, refreshed opportunistically, but is never itself
+     checked. REST rows are unaffected -- their file:line anchor still
+     drift-checks by exact equality, unchanged; or
      EXTERNAL SURFACE WITHOUT PROVENANCE -- a row owning a surface whose
      handler comes from a third-party package (fastapi's ``/docs`` and
      ``/openapi.json``, strawberry's GraphQL router, the prometheus
@@ -1035,12 +1048,50 @@ def check(
         # row was matched ON, so they agree by construction. What still needs
         # checking is the ANCHOR: the row's file:line must be where the served
         # endpoint/resolver actually is.
+        #
+        # GraphQL rows are the one exception to "file:line must match
+        # exactly" (name-anchor fix, board ticket aa, hit as trap #39/#42
+        # four times in one night): every GraphQL resolver lives in
+        # api/graphql/schema.py or a models/*.py file it imports, so ANY
+        # edit anywhere above a resolver in that file -- including a blank
+        # line or a comment, nothing to do with the resolver itself --
+        # shifts every resolver below it and would make a literal file:line
+        # comparison call it stale, forcing a full baseline re-anchor for a
+        # change that touched no resolver at all. GraphQL rows instead
+        # drift-check on `source.qualname` (module path + function/class
+        # qualname, from the served resolver's own callable via
+        # discover_ops_routes._resolver_qualname) -- stable across line
+        # churn, and only ever changes when the resolver itself is renamed
+        # or moved to a different module. `source.line` is kept on GraphQL
+        # rows purely as a human navigation hint (refreshed opportunistically
+        # when a row is re-anchored for a real qualname change) and is never
+        # itself a pass/fail signal. REST rows are unaffected: their file:line
+        # anchor still drift-checks by exact equality, unchanged.
         surface = surface_map[row_key]
         live_file, live_line = surface.get("file"), surface.get("line")
         in_ops_source = surface.get(
             "endpoint_in_ops_source", surface.get("resolver_in_ops_source")
         )
-        if in_ops_source:
+        if in_ops_source and surface["_surface_type"] == "graphql":
+            live_qualname = surface.get("qualname")
+            row_qualname = src.get("qualname")
+            if not row_qualname:
+                errors.append(
+                    f"MISSING QUALNAME ANCHOR: row {rid!r} anchors "
+                    f"{_describe_key(row_key)} with source.file/source.line only -- "
+                    "GraphQL resolver rows must also carry source.qualname (module "
+                    "path + resolver function/class qualname); line-number-only "
+                    "anchoring is what forces a baseline rewrite on every unrelated "
+                    "schema.py edit"
+                )
+            elif row_qualname != live_qualname:
+                errors.append(
+                    f"STALE ANCHOR: row {rid!r} anchors {_describe_key(row_key)} at "
+                    f"qualname {row_qualname!r}, but the served resolver's qualname "
+                    f"is {live_qualname!r} (content drift -- the resolver moved or "
+                    "was renamed; re-anchor the row)"
+                )
+        elif in_ops_source:
             if (src["file"], src["line"]) != (live_file, live_line):
                 errors.append(
                     f"STALE ANCHOR: row {rid!r} anchors {_describe_key(row_key)} at "

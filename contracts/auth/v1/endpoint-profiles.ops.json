@@ -18557,7 +18557,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/models/data_health.py",
-        "line": 197
+        "line": 197,
+        "qualname": "dev_health_ops.api.graphql.models.data_health.DataHealth.metric_lineage"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -18622,7 +18623,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 177
+        "line": 177,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_scope_search"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -18687,7 +18689,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 191
+        "line": 191,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_metric_catalog"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -18752,7 +18755,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 202
+        "line": 202,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_metric"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -18817,7 +18821,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 216
+        "line": 216,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_evidence_search"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -18882,7 +18887,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 231
+        "line": 231,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_data_health"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -18947,7 +18953,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 246
+        "line": 246,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_status_snapshot"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19012,7 +19019,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 260
+        "line": 260,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_change_summary"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19077,7 +19085,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 274
+        "line": 274,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.dev_work_graph_neighbors"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19142,7 +19151,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 288
+        "line": 288,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.catalog"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19207,7 +19217,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 313
+        "line": 313,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.analytics"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19272,7 +19283,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 333
+        "line": 333,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.product_telemetry_dashboard"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19337,7 +19349,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 343
+        "line": 343,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.product_telemetry_platform_dashboard"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19402,7 +19415,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 358
+        "line": 358,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.home"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19467,7 +19481,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 412
+        "line": 412,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.work_graph_edges"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19532,7 +19547,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 424
+        "line": 424,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.pr"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19597,7 +19613,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 439
+        "line": 439,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.work_graph_flow"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19662,7 +19679,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 453
+        "line": 453,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.work_graph_artifacts"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19727,7 +19745,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 467
+        "line": 467,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.feature_flags"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19792,7 +19811,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 488
+        "line": 488,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.feature_flag_events"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19857,7 +19877,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 507
+        "line": 507,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.work_item_team_attributions"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19922,7 +19943,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 529
+        "line": 529,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.work_unit_team_attributions"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -19987,7 +20009,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 551
+        "line": 551,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.security_alerts"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20052,7 +20075,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 564
+        "line": 564,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.security_overview"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20117,7 +20141,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 576
+        "line": 576,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.saved_reports"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20182,7 +20207,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 586
+        "line": 586,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.saved_report"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20247,7 +20273,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 595
+        "line": 595,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.report_runs"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20312,7 +20339,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 605
+        "line": 605,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.capacity_forecast"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20377,7 +20405,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 617
+        "line": 617,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.capacity_forecasts"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20442,7 +20471,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 629
+        "line": 629,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.throughput_forecast"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20507,7 +20537,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 641
+        "line": 641,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.operating_review"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20572,7 +20603,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 653
+        "line": 653,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.data_health"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20637,7 +20669,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 662
+        "line": 662,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.bus_factor"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20702,7 +20735,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 674
+        "line": 674,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.compounding_risk"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20767,7 +20801,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 690
+        "line": 690,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.testops_risk"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20832,7 +20867,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 707
+        "line": 707,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.complexity_timeseries"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20897,7 +20933,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 722
+        "line": 722,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.hotspots"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -20962,7 +20999,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 737
+        "line": 737,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.cognitive_load"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21027,7 +21065,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 753
+        "line": 753,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.review_edges"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21092,7 +21131,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 768
+        "line": 768,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.recommendations"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21157,7 +21197,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 783
+        "line": 783,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.experiments"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21222,7 +21263,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 804
+        "line": 804,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.ai_impact_summary"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21287,7 +21329,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 817
+        "line": 817,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.ai_comparison"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21352,7 +21395,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 830
+        "line": 830,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.ai_review_load"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21417,7 +21461,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 843
+        "line": 843,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.ai_risk_breakdown"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21482,7 +21527,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 856
+        "line": 856,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.ai_opportunities"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21547,7 +21593,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 873
+        "line": 873,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.improve_opportunities"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21612,7 +21659,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 892
+        "line": 892,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.ai_governance_summary"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21677,7 +21725,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 908
+        "line": 908,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.ai_workflow_drilldown"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21742,7 +21791,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 929
+        "line": 929,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.ai_attributed_prs"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21807,7 +21857,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 951
+        "line": 951,
+        "qualname": "dev_health_ops.api.graphql.schema.Query.ai_attribution_overview"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21872,7 +21923,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 978
+        "line": 978,
+        "qualname": "dev_health_ops.api.graphql.schema.Mutation.create_saved_report"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -21937,7 +21989,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 987
+        "line": 987,
+        "qualname": "dev_health_ops.api.graphql.schema.Mutation.update_saved_report"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -22002,7 +22055,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 997
+        "line": 997,
+        "qualname": "dev_health_ops.api.graphql.schema.Mutation.delete_saved_report"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -22067,7 +22121,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 1006
+        "line": 1006,
+        "qualname": "dev_health_ops.api.graphql.schema.Mutation.clone_saved_report"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -22132,7 +22187,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/schema.py",
-        "line": 1015
+        "line": 1015,
+        "qualname": "dev_health_ops.api.graphql.schema.Mutation.trigger_report"
       },
       "gaps": [
         "GraphQL resolver credential/action classification not individually re-derived per field in this pass (58 resolvers); every resolver runs inside the same Strawberry context built once per HTTP/WS request via context.py, which requires an authenticated ops_access_token_hs256 session (get_current_user-equivalent) before any resolver executes -- see docs/reference/auth/endpoint-profiles.md GraphQL section. Per-field/mutation entitlement + resource-resolver scoping not enumerated."
@@ -22197,7 +22253,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/subscriptions.py",
-        "line": 60
+        "line": 60,
+        "qualname": "dev_health_ops.api.graphql.subscriptions.Subscription.metrics_updated"
       },
       "gaps": [
         "Authentication is established at CONNECT, not per operation: the check runs once in get_context before the socket is accepted and is not re-evaluated for each message yielded over the socket's lifetime. A field or mutation re-enters get_context on every HTTP request; a subscription does not. Any claim about per-message authorization on these three rows would be an assumption, so none is made.",
@@ -22264,7 +22321,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/subscriptions.py",
-        "line": 97
+        "line": 97,
+        "qualname": "dev_health_ops.api.graphql.subscriptions.Subscription.task_status"
       },
       "gaps": [
         "Authentication is established at CONNECT, not per operation: the check runs once in get_context before the socket is accepted and is not re-evaluated for each message yielded over the socket's lifetime. A field or mutation re-enters get_context on every HTTP request; a subscription does not. Any claim about per-message authorization on these three rows would be an assumption, so none is made.",
@@ -22331,7 +22389,8 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/graphql/subscriptions.py",
-        "line": 134
+        "line": 134,
+        "qualname": "dev_health_ops.api.graphql.subscriptions.Subscription.sync_progress"
       },
       "gaps": [
         "Authentication is established at CONNECT, not per operation: the check runs once in get_context before the socket is accepted and is not re-evaluated for each message yielded over the socket's lifetime. A field or mutation re-enters get_context on every HTTP request; a subscription does not. Any claim about per-message authorization on these three rows would be an assumption, so none is made.",

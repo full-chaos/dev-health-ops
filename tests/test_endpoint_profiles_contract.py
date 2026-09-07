@@ -774,9 +774,23 @@ def test_gate_catches_a_graphql_row_naming_a_field_the_schema_does_not_serve(
     )
 
 
-def test_gate_catches_a_graphql_row_anchored_at_the_wrong_line(tmp_path):
-    """The row names a field the schema really serves, but anchors it
-    somewhere the resolver is not defined."""
+_RESOLVER_MODULE = "dev_health_ops.api.graphql.schema"
+
+
+def _resolver_qualname(python_name: str) -> str:
+    """The qualname discover_ops_routes.py reports for
+    `_schema_with_resolver`'s `Query.<python_name>` resolver -- module path +
+    `Query.<python_name>`, matching `_resolver_qualname`'s own
+    `<module>.<qualname>` shape there."""
+    return f"{_RESOLVER_MODULE}.Query.{python_name}"
+
+
+def test_gate_catches_a_graphql_row_missing_a_qualname_anchor(tmp_path):
+    """The row names a field the schema really serves and anchors it at the
+    right file:line, but carries no source.qualname. GraphQL rows anchor by
+    resolver NAME now, not line number (name-anchor fix, board ticket aa) --
+    a row missing that name-anchor is caught even when its line happens to
+    be correct."""
     root = _minimal_valid_root(tmp_path)
     _write(root / _SCHEMA_FILE, _schema_with_resolver("resolve_real_name"))
     row = _minimal_valid_row(
@@ -785,12 +799,68 @@ def test_gate_catches_a_graphql_row_anchored_at_the_wrong_line(tmp_path):
         method=None,
         route=None,
         graphql_field_name="resolve_real_name",
-        source={"file": _SCHEMA_FILE, "line": 1},
+        source={"file": _SCHEMA_FILE, "line": _RESOLVER_ANCHOR_LINE},
     )
     inventory_path, schema_path, cc_path = _paths(root)
     _write_inventory(root, [_minimal_valid_row(), row])
     errors = checker.check(root, inventory_path, schema_path, cc_path)
-    assert any("STALE ANCHOR" in e and "content drift" in e for e in errors), errors
+    assert any(
+        "MISSING QUALNAME ANCHOR" in e and "resolve_real_name" in e for e in errors
+    ), errors
+
+
+def test_gate_catches_a_graphql_row_with_a_stale_qualname(tmp_path):
+    """The row names a field the schema really serves, but its
+    source.qualname no longer names the served resolver -- the resolver
+    moved to a different module/class, real content drift that a line-only
+    check would also have caught, and the qualname check must too."""
+    root = _minimal_valid_root(tmp_path)
+    _write(root / _SCHEMA_FILE, _schema_with_resolver("resolve_real_name"))
+    row = _minimal_valid_row(
+        id="graphql:field:resolve_real_name",
+        surface_kind="graphql_field",
+        method=None,
+        route=None,
+        graphql_field_name="resolve_real_name",
+        source={
+            "file": _SCHEMA_FILE,
+            "line": _RESOLVER_ANCHOR_LINE,
+            "qualname": f"{_RESOLVER_MODULE}.Query.a_totally_different_function",
+        },
+    )
+    inventory_path, schema_path, cc_path = _paths(root)
+    _write_inventory(root, [_minimal_valid_row(), row])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert any(
+        "STALE ANCHOR" in e and "qualname" in e and "content drift" in e for e in errors
+    ), errors
+
+
+def test_gate_ignores_graphql_line_drift_when_qualname_still_matches(tmp_path):
+    """The fix this test guards: a GraphQL row's source.line can be
+    completely wrong -- as if an unrelated edit shifted every resolver below
+    it in schema.py, the exact trap #39/#42 failure mode -- and the gate
+    stays green as long as source.qualname still names the real resolver.
+    Line number is a human navigation hint on GraphQL rows now, never a
+    pass/fail signal."""
+    root = _minimal_valid_root(tmp_path)
+    _write(root / _SCHEMA_FILE, _schema_with_resolver("resolve_real_name"))
+    row = _minimal_valid_row(
+        id="graphql:field:resolve_real_name",
+        surface_kind="graphql_field",
+        method=None,
+        route=None,
+        graphql_field_name="resolve_real_name",
+        source={
+            "file": _SCHEMA_FILE,
+            "line": 999,  # nowhere near the real resolver -- must not matter
+            "qualname": _resolver_qualname("resolve_real_name"),
+        },
+    )
+    inventory_path, schema_path, cc_path = _paths(root)
+    _write_inventory(root, [_minimal_valid_row(), row])
+    errors = checker.check(root, inventory_path, schema_path, cc_path)
+    assert errors == [], errors
 
 
 def test_gate_catches_a_stray_top_level_key(tmp_path):

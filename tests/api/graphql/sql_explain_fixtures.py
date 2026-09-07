@@ -131,52 +131,6 @@ async def _fixture_testops_risk(sink: CapturingSink) -> None:
 
 
 # ---------------------------------------------------------------------------
-# forecast
-# ---------------------------------------------------------------------------
-
-
-async def _fixture_forecast(sink: CapturingSink) -> None:
-    from dev_health_ops.api.graphql.resolvers.forecast import (
-        _load_incident_overlay,
-        _load_review_overlay,
-        _load_throughput_history,
-        _load_work_item_overlay,
-    )
-
-    context = FakeGraphQLContext(client=sink, org_id=SAMPLE_ORG_ID)
-    history_weeks = 12
-
-    # Without work_scope_id.
-    await _load_throughput_history(
-        context,
-        team_ids=[SAMPLE_TEAM_ID],
-        work_scope_id=None,
-        history_weeks=history_weeks,
-    )
-    await _load_work_item_overlay(
-        context,
-        team_ids=[SAMPLE_TEAM_ID],
-        work_scope_id=None,
-        history_weeks=history_weeks,
-    )
-    # With work_scope_id branch.
-    await _load_throughput_history(
-        context,
-        team_ids=[SAMPLE_TEAM_ID],
-        work_scope_id="scope-1",
-        history_weeks=history_weeks,
-    )
-    await _load_work_item_overlay(
-        context,
-        team_ids=[SAMPLE_TEAM_ID],
-        work_scope_id="scope-1",
-        history_weeks=history_weeks,
-    )
-    await _load_review_overlay(context, history_weeks=history_weeks)
-    await _load_incident_overlay(context, history_weeks=history_weeks)
-
-
-# ---------------------------------------------------------------------------
 # home
 # ---------------------------------------------------------------------------
 
@@ -186,33 +140,6 @@ async def _fixture_home(sink: CapturingSink) -> None:
 
     context = FakeGraphQLContext(client=sink, org_id=SAMPLE_ORG_ID)
     await resolve_home(context)
-
-
-# ---------------------------------------------------------------------------
-# capacity
-# ---------------------------------------------------------------------------
-
-
-async def _fixture_capacity(sink: CapturingSink) -> None:
-    from dev_health_ops.api.graphql.models.inputs import CapacityForecastFilterInput
-    from dev_health_ops.api.graphql.resolvers.capacity import (
-        resolve_capacity_forecasts,
-    )
-
-    context = FakeGraphQLContext(client=sink, org_id=SAMPLE_ORG_ID)
-
-    # No filters — bare query.
-    await resolve_capacity_forecasts(context, filters=None)
-
-    # Each filter branch contributes a different WHERE clause.
-    filters = CapacityForecastFilterInput(
-        team_id=SAMPLE_TEAM_ID,
-        work_scope_id="scope-1",
-        from_date=SAMPLE_DAY - timedelta(days=30),
-        to_date=SAMPLE_DAY,
-        limit=25,
-    )
-    await resolve_capacity_forecasts(context, filters=filters)
 
 
 # ---------------------------------------------------------------------------
@@ -580,12 +507,16 @@ async def _fixture_analytics(sink: CapturingSink) -> None:
 # ---------------------------------------------------------------------------
 
 
+# CHAOS-5349 removed the "forecast" and "capacity" fixtures. Their resolvers
+# (resolvers/forecast.py, resolvers/capacity.py) are deleted -- query-api serves
+# capacityForecast/capacityForecasts/throughputForecast natively -- so there is
+# no Python SQL left for this EXPLAIN contract to plan. The equivalent coverage
+# now lives on the Go side: cmd/query-api/capacity_forecast_seeded_integration_
+# test.go runs those reads against a real, migrated ClickHouse.
 ALL_RESOLVER_SQL_FIXTURES: list[tuple[str, ResolverSQLFixture]] = [
     ("compounding_risk", _fixture_compounding_risk),
     ("testops_risk", _fixture_testops_risk),
-    ("forecast", _fixture_forecast),
     ("home", _fixture_home),
-    ("capacity", _fixture_capacity),
     ("work_graph", _fixture_work_graph),
     ("recommendations", _fixture_recommendations),
     ("operating_review", _fixture_operating_review),

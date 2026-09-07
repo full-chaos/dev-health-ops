@@ -1,5 +1,28 @@
 """Throughput-based capacity forecasting.
 
+ORACLE for the Go throughput-forecast kernel
+(``cmd/query-api/internal/throughputforecast``) via
+``tests/fixtures/generate_throughput_forecast_golden.py``, re-executed against
+live Python by the corpus guard
+``TestEveryDiscoverableCorpusStillMatchesLivePython``; not a production path;
+production importers: none.
+
+CHAOS-5349 deleted this module's EXECUTION path -- ``resolvers/forecast.py``,
+which held the seven ClickHouse reads and the resolver itself -- and query-api
+serves ``throughputForecast`` natively. Every symbol below survived the
+per-symbol import sweep: each is imported by the golden generator, by
+``tests/metrics/test_forecast.py``, or both, so there was no resolver-only
+function here to delete (unlike ``compute_capacity.py``, which lost three dead
+loaders). Retained on the ``metrics/compounding_risk.py`` precedent: delete the
+oracle and the Go port's bit-for-bit fixture stops proving anything, because
+nothing is left to disagree with it.
+
+The Go port is pinned to this module by IEEE-754 bit pattern, not by tolerance
+-- see that package's kernel_golden_test.go for why, and note that this
+module's ``_percentile`` is NOT ``compute_capacity._percentile``: same name,
+different algebraic form, different rounding, and both fusable into an FMA on
+arm64.
+
 This module intentionally sits beside the existing Monte-Carlo capacity model.
 It uses an empirical rolling-window approach instead of simulation:
 

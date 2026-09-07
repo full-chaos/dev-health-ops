@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -17,6 +16,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
@@ -79,21 +80,23 @@ type productionStreamStorage struct {
 	domainRole  string
 	riverSchema string
 	recompute   *externalrecompute.Controller
-	bridge      operationalBridgeSettings
+	pagerduty   pagerdutyWebhookSettings
 	logger      *slog.Logger
 }
 
-// operationalBridgeSettings is the transitional Python worker-bridge wiring the
-// PagerDuty handler needs. It is kept out of the handler construction path's
-// signature so the bridge can be deleted with its compatibility reconciler.
-type operationalBridgeSettings struct {
-	baseURL       string
-	token         secrets.Value
-	timeout       time.Duration
-	allowInsecure bool
-	// transport names the single owner of the PagerDuty webhook stream. The
-	// Go consumer is constructed only when it names River.
-	transport string
+// pagerdutyWebhookSettings is what the native PagerDuty webhook reconciler
+// needs beyond the shared connections: the credential cipher for the REST
+// hydration fallback, the OAuth app identity that cipher's hydrator refreshes
+// with, and the Prometheus fragment its entitlement refusals land on.
+//
+// It replaces operationalBridgeSettings (CHAOS-4105). That struct existed to
+// carry the Python worker bridge's URL, token and transport flag; there is no
+// bridge and no second runtime left, so none of those fields have a reader.
+type pagerdutyWebhookSettings struct {
+	cipher        providerfoundation.FernetDecryptor
+	oauthClientID secrets.Value
+	oauthSecret   secrets.Value
+	metrics       *providerfoundation.Metrics
 }
 
 // newExternalRecomputeController is the one place this binary constructs the
@@ -135,16 +138,28 @@ func openProductionStreamStorage(ctx context.Context, cfg config.Config, logger 
 		domainPool.Close()
 		return nil, dependencyUnavailable("stream_valkey_open_failed")
 	}
+	// The PagerDuty webhook reconciler decrypts the binding's own credential
+	// for its REST hydration fallback. Building the cipher here rather than at
+	// first use means a misconfigured key stops the process at startup instead
+	// of surfacing as a single failed delivery days later.
+	cipher, err := providerfoundation.NewFernetDecryptor(
+		cfg.SettingsEncryptionKey, cfg.SettingsEncryptionSalt.Reveal(),
+	)
+	if err != nil {
+		valkeyClient.Close()
+		_ = clickHouse.Close()
+		domainPool.Close()
+		return nil, dependencyUnavailable("stream_credential_cipher_unconfigured")
+	}
 	return &productionStreamStorage{
 		clickHouse: clickHouse, domainPool: domainPool, valkey: valkeyClient,
 		domainRole: cfg.DomainDatabaseRole, riverSchema: cfg.RiverDatabaseSchema,
 		logger: logger,
-		bridge: operationalBridgeSettings{
-			baseURL:       cfg.OperationalBridgeURL,
-			token:         cfg.OperationalBridgeToken,
-			timeout:       cfg.OperationalBridgeTimeout,
-			allowInsecure: cfg.OperationalBridgeAllowInsecure,
-			transport:     cfg.PagerDutyWebhookTransport,
+		pagerduty: pagerdutyWebhookSettings{
+			cipher:        cipher,
+			oauthClientID: cfg.PagerDutyOAuthClientID,
+			oauthSecret:   cfg.PagerDutyOAuthSecret,
+			metrics:       providerfoundation.NewMetrics(),
 		},
 	}, nil
 }
@@ -177,17 +192,6 @@ func (storage *productionStreamStorage) ValkeyReady(ctx context.Context) error {
 func (storage *productionStreamStorage) Handler(kind streamHandlerKind, observer streamhandlers.ExternalIngestObserver) (streamrunner.Handler, error) {
 	if storage == nil {
 		return nil, errStreamDependencyUnavailable
-	}
-	// Stream ownership is a policy precondition, not a dependency, so it is
-	// decided before any storage check: an operator who starts this profile
-	// before the route flips gets the actionable answer rather than a storage
-	// error. ErrInvalidConfig is deliberate — it stops the process instead of
-	// leaving it live with a closed readiness gate, because a contradiction
-	// between the requested profile and the stream's owner is operator error
-	// and must be impossible to miss.
-	if kind == pagerdutyHandlerKind &&
-		storage.bridge.transport != config.PagerDutyTransportRiver {
-		return nil, streamrunner.ErrInvalidConfig
 	}
 	if storage.clickHouse == nil {
 		return nil, errStreamDependencyUnavailable
@@ -223,28 +227,26 @@ func (storage *productionStreamStorage) Handler(kind streamHandlerKind, observer
 		}
 		return streamhandlers.NewExternalIngestHandler(repository, sink, storage.recompute, observer)
 	case pagerdutyHandlerKind:
-		// Ownership was already proven above: while the transport names Celery
-		// the Python ingress still dispatches its task, reconciles, and XDELs
-		// entries, so a Go consumer here would let both reconcile one event and
-		// let Python delete an entry pending in the Go group. The route flips
-		// at cutover (CUT-14/18).
+		// This consumer is now the ONLY consumer of pagerduty-webhooks:*.
+		// CHAOS-4105 deleted the Python Celery task, the ingress .delay call
+		// that fed it, and the transport flag that used to arbitrate between
+		// the two runtimes; nothing else reconciles these entries or XDELs
+		// them, so there is no ownership precondition left to check.
 		//
-		// Receipts are the crash-safe half of this handler and are native Go.
-		// The reconciliation effect is not: it is forwarded to the Python worker
-		// bridge until the locked-graph port lands (CUT-20).
+		// Receipts and reconciliation are both native Go: the receipt store
+		// owns the crash window, and the reconciler writes the canonical rows
+		// through the same providersync effect sinks the pull route uses.
 		receipts, err := pagerduty.NewPostgresReceiptStore(storage.domainPool)
 		if err != nil {
 			return nil, err
 		}
-		reconciler, err := pagerduty.NewHTTPCompatibilityReconciler(
-			&http.Client{Timeout: storage.bridge.timeout},
-			pagerduty.HTTPCompatibilityConfig{
-				Endpoint: strings.TrimRight(storage.bridge.baseURL, "/") +
-					"/api/internal/worker-operational/pagerduty",
-				BearerToken:           storage.bridge.token.Reveal(),
-				AllowInsecureInternal: storage.bridge.allowInsecure,
-			},
-		)
+		reconciler, err := pagerduty.NewNativeReconciler(pagerduty.NativeReconcilerConfig{
+			Pool:        storage.domainPool,
+			Entitlement: providersync.PostgresIncidentEntitlement{Pool: storage.domainPool},
+			Receipts:    receipts,
+			Sinks:       storage.pagerDutyWebhookSinks,
+			Hydrator:    storage.pagerDutyIncidentHydrator,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -588,4 +590,64 @@ func (component streamStorageLifecycle) Shutdown(context.Context) error {
 		component.storage.Close()
 	}
 	return nil
+}
+
+// pagerDutyWebhookSinks builds the effect writers one webhook reconciliation
+// commits through. They are the SAME types cmd/dev-health-worker constructs
+// for the native pull route (provider_sync.go), with the same entitlement and
+// the same ClickHouse connection -- the only difference is the lease, which
+// here is the webhook's receipt claim rather than a sync-unit lease.
+func (storage *productionStreamStorage) pagerDutyWebhookSinks(
+	providerInstanceID string, lease providerfoundation.LeaseGuard,
+) providersync.PagerDutyWebhookSinks {
+	entitlement := providersync.PostgresIncidentEntitlement{Pool: storage.domainPool}
+	return providersync.PagerDutyWebhookSinks{
+		IncidentFamily: providersync.PagerDutyIncidentFamilyClickHouseEffects{
+			Conn: storage.clickHouse, Lease: lease, ProviderInstanceID: providerInstanceID,
+			Entitlement: entitlement, Metrics: storage.pagerduty.metrics,
+		},
+		Services: providersync.PagerDutyServicesClickHouseEffects{
+			Conn: storage.clickHouse, Lease: lease, ProviderInstanceID: providerInstanceID,
+			Entitlement: entitlement, Metrics: storage.pagerduty.metrics,
+		},
+		Users: providersync.PagerDutyUsersClickHouseEffects{
+			Conn: storage.clickHouse, Lease: lease, ProviderInstanceID: providerInstanceID,
+			Entitlement: entitlement, Metrics: storage.pagerduty.metrics,
+		},
+	}
+}
+
+// pagerDutyIncidentHydrator builds the REST fallback for a webhook payload too
+// sparse to normalize. It resolves the binding's own credential through the
+// shared CredentialResolver, so OAuth refresh and region selection stay in one
+// place rather than being reimplemented for the webhook path.
+func (storage *productionStreamStorage) pagerDutyIncidentHydrator(
+	graph pagerduty.LockedGraph, lease providerfoundation.LeaseGuard,
+) providersync.PagerDutyIncidentHydrator {
+	doer := &http.Client{
+		Timeout: 45 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	return pagerduty.CredentialIncidentHydrator{
+		Resolver: providerfoundation.CredentialResolver{
+			Repository: providerfoundation.PostgresCredentialRepository{Pool: storage.domainPool},
+			Decryptor:  storage.pagerduty.cipher,
+			Hydrator: providerfoundation.PagerDutyOAuthHydrator{
+				Repository: providerfoundation.PostgresPagerDutyOAuthTokenRepository{
+					Pool: storage.domainPool,
+				},
+				Cipher:          storage.pagerduty.cipher,
+				Doer:            doer,
+				AppClientID:     storage.pagerduty.oauthClientID,
+				AppClientSecret: storage.pagerduty.oauthSecret,
+			},
+		},
+		Doer:         doer,
+		Retry:        providerfoundation.DefaultRetryPolicy(),
+		Lease:        lease,
+		OrgID:        graph.OrgID,
+		CredentialID: graph.CredentialID,
+	}
 }

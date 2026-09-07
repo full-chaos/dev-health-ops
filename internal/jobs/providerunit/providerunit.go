@@ -247,6 +247,18 @@ const (
 	retryCauseReleaseFailed    = "release_for_retry_failed"
 	retryCauseFailWriteFailed  = "terminal_write_failed"
 	retryCauseExecution        = "execution_failed"
+	// The DEFERRAL persistence paths (codex r2, P2). These are the arms where
+	// the work itself did not fail -- a chunk continuation, a provider rate
+	// limit, a shared-budget collision -- and only the write that RECORDS the
+	// deferral did. Left unwrapped they were the worst case of all: the
+	// durable trace says "dev-health job failed [retryable]" while the actual
+	// fault is a database write on a healthy unit's happy path, so an operator
+	// reading it looks at the provider instead of the store.
+	retryCauseChunkDeferUnsupported  = "chunk_continuation_unsupported_repository"
+	retryCauseChunkDeferFailed       = "chunk_continuation_defer_failed"
+	retryCauseRateLimitEpisodeFailed = "rate_limit_episode_read_failed"
+	retryCauseRateLimitDeferFailed   = "rate_limit_defer_failed"
+	retryCauseBudgetDeferFailed      = "budget_contention_defer_failed"
 )
 
 func exhaustedFailureCategory(claim providersync.Claim) string {
@@ -776,13 +788,15 @@ func (handler *Handler) Work(
 	if delay, continuation := providersync.ChunkContinuationDelay(err); continuation {
 		deferrer, supported := handler.Repository.(ChunkContinuationRepository)
 		if !supported {
-			return jobruntime.Retryable(err)
+			return jobruntime.Retryable(jobruntime.WithSafeCauseText(err,
+				safeCause(retryCauseChunkDeferUnsupported, session.Claim, execution, err)))
 		}
 		availableAt := completedAt.Add(delay)
 		if deferErr := deferrer.DeferChunkContinuation(
 			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
 		); deferErr != nil {
-			return jobruntime.Retryable(deferErr)
+			return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
+				safeCause(retryCauseChunkDeferFailed, session.Claim, execution, deferErr)))
 		}
 		handler.ProviderMetrics.RecordChunkContinuation(session.Claim.Provider, session.Claim.Dataset)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
@@ -798,14 +812,16 @@ func (handler *Handler) Work(
 		if deferrer, supported := handler.Repository.(RateLimitDeferralRepository); supported {
 			episode, episodeErr := deferrer.RateLimitEpisode(context.WithoutCancel(ctx), session.Claim)
 			if episodeErr != nil {
-				return jobruntime.Retryable(episodeErr)
+				return jobruntime.Retryable(jobruntime.WithSafeCauseText(episodeErr,
+					safeCause(retryCauseRateLimitEpisodeFailed, session.Claim, execution, episodeErr)))
 			}
 			plan, granted := planRateLimitDeferral(retryAfter, episode, session.Claim.ID, completedAt)
 			if granted {
 				if deferErr := deferrer.DeferForRateLimit(
 					context.WithoutCancel(ctx), session.Claim, plan.notBefore, completedAt,
 				); deferErr != nil {
-					return jobruntime.Retryable(deferErr)
+					return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
+						safeCause(retryCauseRateLimitDeferFailed, session.Claim, execution, deferErr)))
 				}
 				handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "rate_limited", err)
@@ -837,7 +853,8 @@ func (handler *Handler) Work(
 		if deferErr := handler.Repository.DeferForBudgetContention(
 			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
 		); deferErr != nil {
-			return jobruntime.Retryable(deferErr)
+			return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
+				safeCause(retryCauseBudgetDeferFailed, session.Claim, execution, deferErr)))
 		}
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "deferred", err)

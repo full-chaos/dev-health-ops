@@ -56,20 +56,41 @@ def _alert(name: str) -> dict[str, Any]:
     return matches[0]
 
 
+# Go line comments, stripped before any metric name is looked for. Without
+# this, deleting a real emission while leaving its name in a nearby ``//``
+# comment still satisfies the pin (codex r2, P3) -- the check would be
+# measuring what the source SAYS rather than what it EMITS, and these
+# functions are heavily commented: every metric name in this codebase is
+# discussed in prose right beside the line that writes it.
+_GO_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+
 def _write_prometheus_body(path: Path) -> str:
-    """The body of this file's own ``WritePrometheus``, and nothing else.
+    """The body of this file's own ``WritePrometheus``, comments removed.
 
     Scoped to that one function for the same reason the artifact-skip test
-    scopes its search: a metric name that appears only in a comment, a dead
-    helper, or a test double must not satisfy a pin about what the live scrape
-    endpoint emits.
+    scopes its search: a metric name that appears only in a dead helper or a
+    test double must not satisfy a pin about what the live scrape endpoint
+    emits.
     """
     text = path.read_text(encoding="utf-8")
     start = re.search(r"^func \([^)]+\) WritePrometheus\(", text, re.MULTILINE)
     assert start, f"no WritePrometheus function in {path}"
     following = re.search(r"^func ", text[start.end() :], re.MULTILINE)
     end = start.end() + (following.start() if following else len(text) - start.end())
-    return text[start.start() : end]
+    return _GO_LINE_COMMENT.sub(" ", text[start.start() : end])
+
+
+def test_the_write_prometheus_reader_ignores_comments() -> None:
+    """The comment stripper, pinned -- the emission check depends on it.
+
+    Without it the whole file degrades to "is this string mentioned anywhere
+    near the metrics code", which a deleted metric would still satisfy for as
+    long as its explanatory comment survived.
+    """
+    emitted = _write_prometheus_body(SYNCRECONCILER_LOOP)
+    assert "sync_dispatch_unreclaimable_candidates" in emitted
+    assert "//" not in emitted, "comments survived the strip"
 
 
 # PromQL duration literals (``[15m]``, ``[1h]``) are stripped before

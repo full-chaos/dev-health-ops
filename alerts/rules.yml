@@ -298,11 +298,25 @@ groups:
       # is exactly the trade-off already documented on the exhausted-delivery
       # rule. `min_over_time` is what makes the common case -- nothing is being
       # terminalized at all -- reliable.
+      #
+      # THE LABEL SETS MUST MATCH, and the matcher is explicit (codex r2, P2).
+      # The first attempt at the fix above read
+      # `min_over_time(gauge[15m]) > 0 and sum by (instance) (increase(...)) == 0`,
+      # which is VALID PromQL that can never produce a result: a bare
+      # `min_over_time` keeps every target label the gauge carries (`job`,
+      # `instance`, ...) while `sum by (instance)` keeps only `instance`, and
+      # default `and` matching requires the FULL label sets to be equal. So
+      # `{job="reconciler",instance="r1"}` never matches `{instance="r1"}` and
+      # the alert is silently dead -- strictly worse than the fleet-wide
+      # suppression it was fixing, because that one at least fired sometimes.
+      # Both sides are now aggregated `by (instance)` so their label sets are
+      # identical, AND the matcher names `on (instance)` explicitly so a future
+      # edit to either side cannot quietly reintroduce the mismatch.
       - alert: SyncDispatchUnreclaimableCandidatesNotTerminalizing
         expr: |
           (
-            min_over_time(sync_dispatch_unreclaimable_candidates[15m]) > 0
-            and
+            min by (instance) (min_over_time(sync_dispatch_unreclaimable_candidates[15m])) > 0
+            and on (instance)
             sum by (instance) (increase(sync_dispatch_unreclaimable_terminalized_total[15m])) == 0
           )
         for: 15m

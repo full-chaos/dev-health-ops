@@ -783,6 +783,7 @@ func (dependencies *reconcilerDependencies) domainReady(ctx context.Context) err
 		return errReconcilerDependencyUnavailable
 	}
 	if err := dependencies.database.DomainReady(ctx); err != nil {
+		dependencies.logDependencyCheckFailure(ctx, "domain_postgres", err)
 		return errReconcilerDependencyUnavailable
 	}
 	return nil
@@ -793,6 +794,7 @@ func (dependencies *reconcilerDependencies) queueReady(ctx context.Context) erro
 		return errReconcilerDependencyUnavailable
 	}
 	if err := dependencies.database.QueueReady(ctx); err != nil {
+		dependencies.logDependencyCheckFailure(ctx, "queue_postgres", err)
 		return errReconcilerDependencyUnavailable
 	}
 	return nil
@@ -803,10 +805,32 @@ func (dependencies *reconcilerDependencies) coordinatorReady(ctx context.Context
 		return errReconcilerDependencyUnavailable
 	}
 	if err := dependencies.database.CoordinatorReady(ctx); err != nil {
+		dependencies.logDependencyCheckFailure(ctx, "coordinator_postgres", err)
 		dependencies.logCoordinatorPostureGaps(ctx)
 		return errReconcilerDependencyUnavailable
 	}
 	return nil
+}
+
+// logDependencyCheckFailure is domainReady/queueReady/coordinatorReady/
+// riverSchemaReady's single reporting path (CHAOS-5435), mirroring
+// cmd/dev-health-worker/dependencies.go's helper of the same name.
+// health.Registry never surfaces a CheckFunc's returned error anywhere
+// (registry.go: "Error text is deliberately never returned by the HTTP
+// surface"), so before this existed a readiness refusal reached an operator
+// as a bare check name with no reason. err is always this package's own
+// postgres.Check*Authorization / postgres.*Ready result, which already
+// documents that it never exposes catalog or driver connection material, so
+// its text is safe to log directly here.
+func (dependencies *reconcilerDependencies) logDependencyCheckFailure(ctx context.Context, check string, err error) {
+	if dependencies == nil || dependencies.logger == nil || err == nil {
+		return
+	}
+	dependencies.logger.ErrorContext(ctx, "reconciler readiness dependency check failed",
+		"error_category", "dependency_unavailable",
+		"check", check,
+		"error", err.Error(),
+	)
 }
 
 // logCoordinatorPostureGaps re-derives, in a separate best-effort diagnostic
@@ -867,6 +891,7 @@ func (dependencies *reconcilerDependencies) riverSchemaReady(schema string) heal
 			return errReconcilerDependencyUnavailable
 		}
 		if err := dependencies.database.RiverSchemaReady(ctx, schema); err != nil {
+			dependencies.logDependencyCheckFailure(ctx, "river_schema", err)
 			return errReconcilerDependencyUnavailable
 		}
 		return nil

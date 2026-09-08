@@ -128,9 +128,10 @@ type Stats struct {
 	// it only exists because the cascade now chains. They are reported in the
 	// run's log line, deliberately NOT as a metric label: the counter's
 	// `source` vocabulary is closed and a hop count would make it unbounded.
-	RepoCascadeHop1     int `json:"repo_cascade_hop1"`
-	RepoCascadeHop2Plus int `json:"repo_cascade_hop2_plus"`
-	RepoCascadeMaxHops  int `json:"repo_cascade_max_hops"`
+	RepoCascadeHop1       int `json:"repo_cascade_hop1"`
+	RepoCascadeHop2Plus   int `json:"repo_cascade_hop2_plus"`
+	RepoCascadeMaxHops    int `json:"repo_cascade_max_hops"`
+	RepoOwnershipFallback int `json:"repo_ownership_fallback"`
 }
 
 // Materializer holds the collaborators one org-scoped run needs. All three are
@@ -296,21 +297,45 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	var pending []preprocessed
 	outcomes := make(map[int]categorize.CategorizationOutcome, len(components))
 	all := make([]preprocessed, 0, len(components))
+	issueIDs, _, _ := collectNodeIDs(components)
+	ownershipAsOf := cfg.ComputedAt
+	if ownershipAsOf.IsZero() {
+		ownershipAsOf = time.Now().UTC()
+	}
+	teamRepoDonors, err := m.reader.FetchTeamRepoDonors(ctx, issueIDs, cfg.OrgID, ownershipAsOf)
+	if err != nil {
+		return Stats{}, fmt.Errorf("fetch team repository donors: %w", err)
+	}
+	teamDonorsByIssue := make(map[string][]chquery.TeamRepoDonor)
+	for _, donor := range teamRepoDonors {
+		teamDonorsByIssue[donor.WorkItemID] = append(teamDonorsByIssue[donor.WorkItemID], donor)
+	}
 
 	for index, component := range components {
 		cascade := repoCascades[index]
-		result, err := MaterializeComponent(MaterializeComponentInput{
+		componentInput := MaterializeComponentInput{
 			Component: component, WorkItems: entities.WorkItems, PRs: entities.PRs, Commits: entities.Commits,
 			EdgeRepoIDs: edgeRepoIDs, PRChurn: entities.PRChurn, CommitChurn: entities.CommitChurn,
 			ActiveHours: entities.ActiveHours, ParentTitles: entities.ParentTitles, EpicTitles: entities.EpicTitles,
 			FromTS: cfg.FromTS, ToTS: cfg.ToTS,
 			CascadeRepoID: cascade.RepoID, CascadeRepoSource: cascade.Source,
-		})
+		}
+		result, err := MaterializeComponent(componentInput)
 		if err != nil {
 			return Stats{}, fmt.Errorf("assemble component %d: %w", index, err)
 		}
 		if result.Skipped != "" {
 			continue // no bounds, or entirely outside the window
+		}
+		var componentDonors []chquery.TeamRepoDonor
+		for _, node := range component.Nodes {
+			if node.Type == "issue" {
+				componentDonors = append(componentDonors, teamDonorsByIssue[node.ID]...)
+			}
+		}
+		result.RepoEffort = allocateTeamOwnership(result, componentInput, componentDonors)
+		if len(result.RepoEffort) > 0 && result.RepoEffort[0].AllocationSource == allocationSourceTeamOwnership {
+			stats.RepoOwnershipFallback++
 		}
 		entry := preprocessed{index: index, result: result}
 		all = append(all, entry)
@@ -334,6 +359,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	modelVersion := categorize.EffectiveModelVersion(cfg.ProviderName, resolvedModelName(cfg))
 
 	// SKIP-EXISTING. Runs only when not forced, and only over the pending set.
+	m.logger.InfoContext(ctx, "investment team repository fallback", "org_id", cfg.OrgID, "run_id", cfg.RunID, "components", stats.RepoOwnershipFallback)
 	skippedExisting := map[int]struct{}{}
 	if len(pending) > 0 && !cfg.Force {
 		keys := make([]chquery.InvestmentKey, 0, len(pending))

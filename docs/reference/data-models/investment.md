@@ -4,6 +4,8 @@ summary: Latest work-unit Investment record, effort value, distributions, eviden
 content_type: reference
 owner: platform-api
 source_of_truth:
+  - internal/jobs/investment/teamownership.go
+  - internal/jobs/investment/chquery/teamownership.go
   - internal/jobs/investment/hierarchycascade.go
   - internal/jobs/investment/materialize.go
   - src/dev_health_ops/investment_taxonomy.py
@@ -45,6 +47,40 @@ multiple components. Inherited effort rows use
 `allocation_source=hierarchy_cascade`; existing churn allocation keeps precedence.
 This repository inheritance does not change the
 [work-item team attribution rules](../../contribute/architecture/team-attribution.md).
+
+## Team ownership fallback
+
+After direct repository and hierarchy evidence, unresolved units can use the
+latest persisted primary team attribution of their member issues. Eligible
+sources are `native_team`, `issue_project`, `project_ownership`, and
+`repo_ownership`. Membership and manual sources are excluded. `linked_issue`
+is also excluded from this fallback because its current persisted evidence does
+not identify the donor's source; that donor can itself come from membership.
+Existing linked PR and hierarchy behavior keeps its precedence.
+
+Each active donor team contributes all its live, sync-derived
+`team_repo_ownership` records. The reader accepts `native`, `jira_legacy`,
+`provider_access`, and `inferred` ownership sources. It validates the ownership
+interval at the materialization timestamp and joins to this organization's
+current repository catalog. Name-only ownership resolves by provider and
+case-insensitive full repository name. Missing, expired, future, manual,
+foreign-organization, and unmatched repository records cannot supply a share.
+A failed donor query fails materialization before new output is written.
+
+The distinct union of eligible repository IDs receives equal shares, `1/N`.
+Multiple teams owning the same repository and repeated ownership generations do
+not multiply effort. Ranking fields (`is_primary`, `specificity`, `priority`)
+are not effort weights. This is an allocation convention, not measured churn.
+Each repository row carries `allocation_source=team_ownership` and
+`repo_source=team:<sorted contributing team IDs>`. The unit's scalar `repo_id`
+stays null; no single repository is selected as primary.
+
+Both zero-effort and positive-effort units keep their total effort. Allocation
+weights sum to one; allocated effort sums to the unit's effort. Units without
+eligible ownership keep their existing unassigned allocation and stay in the
+denominator. Repeated materialization writes a new allocation generation, and
+readers select only the latest generation for each unit. Categorization and
+work-unit identities do not change.
 
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`
 

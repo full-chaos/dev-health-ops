@@ -1905,7 +1905,17 @@ attribution` log record scoped by `org_id` and `run_id`. The `own_signal`,
 `cascade_hop2_plus`, and `cascade_max_hops` to show transitive inheritance. These
 are log fields, not Prometheus counters or a successful-run completion signal.
 See [Investment repository inheritance](../data-models/investment.md#repository-inheritance)
-for the allocation precedence and persisted evidence.
+for the allocation precedence and persisted evidence. These counts describe the
+hierarchy stage, before the final team ownership fallback.
+
+The `investment team repository fallback` log record reports how many in-window
+components received the final equal-share fallback. The run statistics expose
+this count as `repo_ownership_fallback`. No new CLI option is required. Inspect
+persisted `work_unit_repo_effort` rows from the latest generation to distinguish
+`team_ownership` from direct churn and `hierarchy_cascade`. A zero count can mean
+that stronger evidence already resolved the units or that no eligible ownership
+exists; it is not a read-failure fallback. See
+[Team ownership fallback](../data-models/investment.md#team-ownership-fallback).
 
 ---
 

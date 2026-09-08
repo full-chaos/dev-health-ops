@@ -26,6 +26,11 @@ children after direct repository evidence. That compute-time repository cascade
 is separate from the work-item team precedence below. Its multi-pass behavior,
 ambiguity rules, and persisted provenance are defined in
 [Investment repository inheritance](../../reference/data-models/investment.md#repository-inheritance).
+The final [team ownership fallback](../../reference/data-models/investment.md#team-ownership-fallback)
+uses only the latest primary ownership-based issue attribution and live,
+non-manual repository ownership. It unions all eligible repositories across the
+member issues' teams and assigns equal shares; it does not use person membership
+or change this page's primary attribution precedence.
 
 > **Restoration note (2026-08-19, CHAOS-3968).** This page was deleted on 2026-07-27 when
 > `.github/docs-legacy/` was removed, with no replacement of equivalent scope. It is restored here

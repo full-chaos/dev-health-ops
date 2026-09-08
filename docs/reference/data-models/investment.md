@@ -4,6 +4,8 @@ summary: Latest work-unit Investment record, effort value, distributions, eviden
 content_type: reference
 owner: platform-api
 source_of_truth:
+  - internal/jobs/investment/hierarchycascade.go
+  - internal/jobs/investment/materialize.go
   - src/dev_health_ops/investment_taxonomy.py
   - src/dev_health_ops/work_graph/investment/
   - src/dev_health_ops/api/queries/investment.py
@@ -18,6 +20,31 @@ An Investment work-unit record contains a tenant-scoped work-unit identity, inte
 The request path uses the latest materialized row for each organization and work unit. Multi-repository allocation can distribute a unit's effort across repositories while preserving the total effort invariant.
 
 Theme and subcategory distributions are probabilistic contributions, not duplicated labels. See [Investment taxonomy](../taxonomies/investment.md) and [Weighting and aggregation](../metrics/weighting-and-aggregation.md).
+
+## Repository inheritance
+
+The native materializer first uses a work unit's own repository evidence. A
+single repository on its graph edges, or a single repository from its PR or
+commit churn allocations, can also supply repository evidence to related units.
+Churn allocations that name multiple repositories or contain a missing repository
+cannot supply a single-repository inheritance result.
+
+For a unit without its own repository result, the materializer checks ancestors
+before direct children. The resolved relatives in a tier must agree on one
+repository. Each pass reads the same prior results and publishes its new results
+together. Further passes can inherit from units resolved by earlier passes. A
+resolved unit keeps its result. The cascade stops when a pass adds no result or
+after ten passes; each parent-chain walk is also cycle-safe and bounded to ten
+levels. Units without a valid result remain unassigned.
+
+Inheritance preserves work-unit identities, component boundaries, effort, and
+categorization. Persisted `repo_source` is `own_edges`, `ancestor:<issue_id>`, or
+`children`, as applicable. The ancestor form names the original issue whose own
+repository evidence supplied the result, including when inheritance crosses
+multiple components. Inherited effort rows use
+`allocation_source=hierarchy_cascade`; existing churn allocation keeps precedence.
+This repository inheritance does not change the
+[work-item team attribution rules](../../contribute/architecture/team-attribution.md).
 
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`
 

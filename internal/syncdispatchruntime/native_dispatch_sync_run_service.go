@@ -414,6 +414,14 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 	emitClaimSnapshotDeferral(ctx, service.logger, run.id, deferredOutsideSnapshot)
 
 	riverQueued := 0
+	// terminalDeliveryPublishes counts units whose publish landed on an
+	// already-terminal outbox row (joboutbox.ErrDeliveryAlreadyTerminal).
+	// Tracked SEPARATELY from riverQueued rather than folded into it: this
+	// pass put no delivery in front of those units, and it was exactly that
+	// distinction going unrecorded -- 624 passes reporting success while 17
+	// units were never delivered -- that made sync run 115e6246's strand
+	// invisible for thirteen hours.
+	terminalDeliveryPublishes := 0
 	var unroutableUnits []budgetUnit
 	var invalidClaimUnits []invalidClaimUnit
 	for _, unit := range claimedUnits {
@@ -471,6 +479,39 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 				Payload:         jobcontract.ProviderUnitPayload{UnitID: unit.id},
 			}
 			if err := service.producer.Publish(ctx, tx, jobcontract.KindSyncProviderUnit, envelope); err != nil {
+				// A publish that lands on an ALREADY-TERMINAL outbox row is
+				// not a dispatch failure -- the envelope agreed field for
+				// field, there is nothing to reject, and aborting the whole
+				// pass over it would strand the run's other units too. What it
+				// is, is proof that this republish put no new delivery in
+				// front of the unit: joboutbox's relay never claims a
+				// 'delivered' or 'dead' row again.
+				//
+				// Before joboutbox.ErrDeliveryAlreadyTerminal existed this
+				// returned nil and the unit was counted in riverQueued, which
+				// is how sync run 115e6246 reported 624 successful dispatch
+				// passes over thirteen hours while 17 units were never
+				// delivered at all. The unit is deliberately NOT counted here:
+				// riverQueued means "a delivery is on its way", and it was
+				// that meaning quietly becoming false that made the strand
+				// invisible.
+				//
+				// Recovery is joboutbox.StrandRepair's provider-unit shape,
+				// which rearms the row to 'pending' while its delivery budget
+				// lasts; this pass logs and moves on rather than republishing
+				// into the same dead end again.
+				if errors.Is(err, joboutbox.ErrDeliveryAlreadyTerminal) {
+					service.logger.WarnContext(ctx,
+						"dispatch_sync_run.publish_hit_terminal_delivery",
+						slog.String("sync_run_id", run.id),
+						slog.String("unit_id", unit.id),
+						slog.String("provider", unit.provider),
+						slog.String("dataset_key", unit.datasetKey),
+						slog.String("error", err.Error()),
+					)
+					terminalDeliveryPublishes++
+					continue
+				}
 				return err
 			}
 			riverQueued++
@@ -503,6 +544,18 @@ func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args 
 		service.logger.WarnContext(ctx, "dispatch_sync_run.unroutable_units_terminalized",
 			slog.String("sync_run_id", run.id), slog.Int("unroutable_units", terminalized),
 			slog.String("error_category", featureDisabledErrorCategory))
+	}
+
+	// Emitted before the commit branches so it is reported whether or not this
+	// pass also queued something: a run can have some units delivering
+	// normally while others sit behind dead deliveries, and folding the two
+	// into one summary is what hid the second group.
+	if terminalDeliveryPublishes > 0 {
+		service.logger.WarnContext(ctx, "dispatch_sync_run.terminal_delivery_publishes",
+			slog.String("sync_run_id", run.id),
+			slog.Int("terminal_delivery_publishes", terminalDeliveryPublishes),
+			slog.Int("queued_units", riverQueued),
+		)
 	}
 
 	if riverQueued > 0 {

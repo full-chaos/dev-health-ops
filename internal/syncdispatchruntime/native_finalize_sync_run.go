@@ -943,12 +943,12 @@ WHERE org_id = $1 AND sync_config_id = ANY($2::uuid[])`, orgID, configIDs); err 
 
 // upsertPostSyncOutboxWakeup mirrors the exact CASE-based "feature_disabled
 // wins, earliest eligible time otherwise wins" upsert shape already proven in
-// production Go for kind='finalize_sync_run' (repository_postgres.go's
-// upsertFinalizeSQL), and verified against the real Python
+// production Go for kind='finalize_sync_run'
+// (internal/syncrunrollup.ArmFinalizeSQL), and verified against the real Python
 // dispatch_outbox.py::upsert_outbox_wakeup (the `terminal_denial`/
 // `live_claim` case expressions there match one-for-one). Kept as its own
-// literal here (kind='post_sync') rather than generalizing upsertFinalizeSQL
-// across packages, to avoid touching that already-tested production query.
+// literal here (kind='post_sync') rather than generalizing ArmFinalizeSQL
+// across kinds, to avoid touching that already-tested production query.
 func upsertPostSyncOutboxWakeup(ctx context.Context, tx pgx.Tx, orgID, syncRunID string, availableAt time.Time) error {
 	_, err := tx.Exec(ctx, `
 INSERT INTO public.sync_dispatch_outbox (

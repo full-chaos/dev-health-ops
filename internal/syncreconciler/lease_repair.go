@@ -192,6 +192,20 @@ func (repair *LeaseRepair) Step(ctx context.Context, now time.Time, limit int) (
 					// anywhere else in this package.
 					return LeaseRepairResult{}, ErrUnavailable
 				}
+				// Bump keeps the counters live and nothing else -- it never
+				// writes sync_runs.status or completed_at. If THIS repair
+				// terminalizes a run's last non-terminal unit, the run has to
+				// reach the finalizer, and the finalizer only re-evaluates a
+				// run whose dispatch-outbox row is re-armed. Without this the
+				// run stays open forever with every unit terminal, exactly as
+				// measured on run 115e6246 through the sibling sweep path.
+				// providersync's own per-unit commit has always done both, one
+				// line apart; both recovery writers did only the Bump.
+				if armErr := syncrunrollup.ArmFinalize(
+					ctx, tx, candidate.syncRunID, candidate.orgID, now,
+				); armErr != nil {
+					return LeaseRepairResult{}, ErrUnavailable
+				}
 			}
 		}
 		if err != nil {

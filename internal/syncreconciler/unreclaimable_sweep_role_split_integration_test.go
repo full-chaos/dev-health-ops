@@ -92,6 +92,34 @@ func splitSchemaDDL() []string {
 		// describing production.
 		"CREATE TABLE public.integrations (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_sources (id uuid PRIMARY KEY)",
+		// The finalizer's wakeup row. Every terminal-status write in this
+		// package now re-arms it in the same transaction
+		// (syncrunrollup.ArmFinalize) so a run whose LAST non-terminal unit a
+		// recovery path terminalizes still reaches the finalizer -- without
+		// this table the write is a 42P01 and the whole pass fails closed,
+		// which is how the gap was found. Shape copied from this package's
+		// materializer fixture, which derives it from alembic.
+		`CREATE TABLE public.sync_dispatch_outbox (
+			id uuid PRIMARY KEY,
+			org_id text NOT NULL,
+			sync_run_id uuid NOT NULL,
+			kind text NOT NULL,
+			status text NOT NULL,
+			available_at timestamptz NOT NULL,
+			attempts integer NOT NULL,
+			last_error text,
+			dispatched_at timestamptz,
+			claim_token text,
+			claim_expires_at timestamptz,
+			claim_transport text,
+			claim_route_generation bigint,
+			dispatched_transport text,
+			dispatched_route_generation bigint,
+			transport_job_id text,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			UNIQUE (sync_run_id, kind)
+		)`,
 		`CREATE TABLE public.sync_runs (
 			id uuid NOT NULL,
 			org_id text NOT NULL,
@@ -263,6 +291,14 @@ func splitTablesPresent() map[string]bool {
 		"sync_run_units":      true,
 		"worker_job_routes":   true,
 		"worker_job_outbox":   true,
+		// The finalizer's wakeup row. The sweep re-arms it in the same
+		// transaction as its terminal unit write (syncrunrollup.ArmFinalize),
+		// so the domain role's grant on it is now load-bearing for this pass.
+		// Listing it here does NOT hand-grant anything: splitGrantStatements
+		// derives the privileges from the production RolePosture manifest, so
+		// if that manifest does not permit the write, this harness stays red --
+		// which is the CHAOS-4035 property this file exists for.
+		"sync_dispatch_outbox": true,
 	}
 }
 

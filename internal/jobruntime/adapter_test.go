@@ -511,6 +511,98 @@ func TestAdapterLogsTheWrappedCauseBehindAFailedJob(t *testing.T) {
 	}
 }
 
+// The WithSafeCauseText half of the same contract: a SEPARATELY SUPPLIED cause
+// reaches the WARN line while the error's own message stays out of it
+// entirely.
+//
+// This is what the provider-unit handler needs and WithSafeCause cannot give
+// it. providerfoundation.ProviderError's Error() embeds the request path and a
+// bounded snippet of the provider's response body (CHAOS-4582), so promoting
+// the error's own message would leak both on every provider 4xx -- and the
+// consequence of having no usable option at all was that
+// internal/jobs/providerunit had ZERO opt-ins and every provider-unit failure
+// left nothing but "dev-health job failed [retryable]".
+//
+// Both directions are asserted. Surfacing the supplied text is the point;
+// keeping the error's own text OUT is the safety property, and it is asserted
+// as a direct negative rather than an `a or b` form that passes whether or not
+// the leak happened.
+func TestAdapterLogsASuppliedSafeCauseWithoutTheErrorsOwnText(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	observer := &recordingObserver{}
+	unvetted := errors.New("provider request failed: authentication status=401 body=token ghp_do_not_log is invalid")
+	const supplied = "category=auth provider=github dataset=cicd provider_status=401"
+	adapter := newRetentionAdapter(t, HandlerFunc[RetentionCleanupArgs](func(context.Context, *Execution[RetentionCleanupArgs]) error {
+		return Retryable(WithSafeCauseText(unvetted, supplied))
+	}), observer, &recordingClaim{state: ClaimProceed}, &recordingLease{}, &logs)
+
+	workErr := adapter.Work(context.Background(), retentionJob(t, 1))
+	if workErr == nil {
+		t.Fatal("expected a retryable transport error")
+	}
+	// The River-facing error must stay the bounded literal: this widens what
+	// reaches structured logs, never what crosses into River.
+	if workErr.Error() != "dev-health job failed [retryable]" {
+		t.Fatalf("the bounded River-facing error widened: %q", workErr.Error())
+	}
+	// Identity is untouched, so classify() and every errors.Is at the HANDLER's
+	// own call sites still see exactly the error it returned. Asserted on the
+	// wrapper directly, not on workErr: transportError deliberately builds the
+	// River-facing safeError from choice.category alone and never wraps the
+	// handler error, so an errors.Is against workErr would be false whether or
+	// not this wrapper preserved anything.
+	if wrapped := WithSafeCauseText(unvetted, supplied); !errors.Is(wrapped, unvetted) {
+		t.Fatal("WithSafeCauseText broke errors.Is on the wrapped error")
+	}
+
+	var found bool
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("log line is not JSON: %v: %s", err, line)
+		}
+		if record["msg"] != "job failed" {
+			continue
+		}
+		found = true
+		cause, _ := record["cause"].(string)
+		if cause != supplied {
+			t.Fatalf("cause = %q, want exactly the supplied text %q", cause, supplied)
+		}
+		if strings.Contains(cause, "ghp_do_not_log") {
+			t.Fatalf("cause %q leaked the error's own unvetted text", cause)
+		}
+	}
+	if !found {
+		t.Fatalf("no WARN \"job failed\" log line found; logs:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "ghp_do_not_log") {
+		t.Fatalf("the unvetted error text reached a log line somewhere:\n%s", logs.String())
+	}
+}
+
+// WithSafeCauseText's own edge cases, asserted directly: a nil error and an
+// empty cause are both pass-throughs, so a call site that computes its cause
+// conditionally cannot accidentally manufacture an error or an empty log field.
+func TestWithSafeCauseTextIsAPassThroughOnEmptyInputs(t *testing.T) {
+	t.Parallel()
+	if got := WithSafeCauseText(nil, "category=auth"); got != nil {
+		t.Fatalf("WithSafeCauseText(nil, ...) = %v, want nil", got)
+	}
+	underlying := errors.New("boom")
+	if got := WithSafeCauseText(underlying, ""); got != underlying {
+		t.Fatalf("WithSafeCauseText(err, \"\") = %v, want the error unchanged", got)
+	}
+	if _, ok := SafeCause(WithSafeCauseText(underlying, "")); ok {
+		t.Fatal("an empty cause was still opted in; a log field would render blank")
+	}
+	cause, ok := SafeCause(WithSafeCauseText(underlying, "category=auth"))
+	if !ok || cause != "category=auth" {
+		t.Fatalf("SafeCause = %q/%v, want the supplied text", cause, ok)
+	}
+}
+
 // TestAdapterNeverLogsAnUnmarkedHandlerErrorsCause is the more important
 // half of the CHAOS-4242 logging contract: an ordinary handler error --
 // exactly the shape TestAdapterMiddlewareOutcomesAreSafeAndDeterministic

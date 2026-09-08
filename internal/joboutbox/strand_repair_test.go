@@ -154,7 +154,22 @@ func TestStrandRepairQueriesCarryTheirLoadBearingGuards(t *testing.T) {
 	for name, query := range queries {
 		// The terminal predicate: without it, a job River will still run is
 		// deleted and its work double-driven.
-		if !strings.Contains(query, "'completed', 'discarded', 'cancelled'") {
+		//
+		// The provider-unit shape's terminal set is NARROWER on purpose --
+		// 'completed' is excluded, because a provider unit's domain row cannot
+		// distinguish "the handler ACKed without finishing" from "the handler
+		// never ran" and the SyncRunUnit CAS owns that case. Asserted as its
+		// own literal rather than relaxed to a substring, so deleting either
+		// state from either set still fails here.
+		terminalStates := "'completed', 'discarded', 'cancelled'"
+		if name == providerUnitShapeName {
+			terminalStates = "'discarded', 'cancelled'"
+			if strings.Contains(query, "'completed'") {
+				t.Fatal("the provider_unit query accepts a completed delivery; " +
+					"a completed job was ACKed by the handler and is the CAS's business, not this repair's")
+			}
+		}
+		if !strings.Contains(query, terminalStates) {
 			t.Fatalf("the %s query lost its terminal-state predicate", name)
 		}
 		// The disposition must be REPORTED, not filtered. Filtering a refusal
@@ -222,6 +237,48 @@ func TestStrandRepairQueriesCarryTheirLoadBearingGuards(t *testing.T) {
 	if strings.Contains(finalize, "run.finalization_status IN ('pending', 'running', 'failed')") {
 		t.Fatal("the finalize query treats 'running' as claimable outright; classifyLease does not")
 	}
+	// THE DISJOINTNESS SPLIT, pinned by text.
+	//
+	// Three paths can act on a provider-unit outbox row and two of them recover
+	// work while one destroys it, so overlap is a correctness bug, not
+	// untidiness. Deleting either predicate below compiles, passes every other
+	// test in this package, and silently puts this repair into a race with
+	// either joboutbox.TerminalDeliveryRepair or
+	// syncreconciler.UnreclaimableSweep -- which is exactly the class of
+	// silent-overlap defect the sweep's own doc comment refuses to leave to
+	// timing arguments.
+	providerUnit := queries[providerUnitShapeName]
+	if !strings.Contains(providerUnit, "job.attempt >= job.max_attempts") {
+		t.Fatal("the provider_unit query lost the river-budget predicate that keeps it disjoint from " +
+			"TerminalDeliveryRepair, which takes 'discarded' with `attempt < max_attempts`")
+	}
+	if !strings.Contains(providerUnit, "outbox.attempt_count < outbox.max_attempts") {
+		t.Fatal("the provider_unit query lost the outbox-delivery-budget predicate; without it this repair " +
+			"and UnreclaimableSweep select the same rows, and it is also the only thing bounding the rearm loop")
+	}
+	// The domain half. Every one of these was true of all 17 units on sync run
+	// 115e6246, and each removal admits a row some other owner is responsible
+	// for: a leased unit (LeaseRepair), an attempted unit (its own retry
+	// ladder), or a rolled-up run (nothing is waiting on it).
+	for _, predicate := range []string{
+		"unit.status = 'dispatching'",
+		"unit.attempts = 0",
+		"unit.lease_owner IS NULL",
+		"unit.lease_expires_at IS NULL",
+		"run.status IN ('planned', 'dispatching', 'running')",
+	} {
+		if !strings.Contains(providerUnit, predicate) {
+			t.Fatalf("the provider_unit query lost its %q guard", predicate)
+		}
+	}
+	// The uuid cast must be on the ARGUMENT, never on unit.id. CHAOS-4092:
+	// casting a bigint/uuid primary key to text is not sargable and turned a
+	// sibling repair into a 9.5h crash loop.
+	if strings.Contains(providerUnit, "unit.id::text = outbox.args") {
+		t.Fatal("the provider_unit query casts unit.id to text in its join; that is not sargable " +
+			"against the primary key (CHAOS-4092). Cast the argument to uuid behind the format guard instead")
+	}
+
 	// The work-graph shape must bind kind as well as id, and accept only the
 	// two states PostgresStore.Claim will reclaim.
 	workGraph := queries["workgraph"]
@@ -293,9 +350,10 @@ func TestStrandShapeFormsDifferOnlyInLocking(t *testing.T) {
 
 func strandQueriesUnderTest() map[string]string {
 	return map[string]string{
-		"partition": repairStrandedPartitionSQL,
-		"finalize":  repairStrandedFinalizeSQL,
-		"workgraph": repairStrandedWorkGraphSQL,
+		"partition":           repairStrandedPartitionSQL,
+		"finalize":            repairStrandedFinalizeSQL,
+		"workgraph":           repairStrandedWorkGraphSQL,
+		providerUnitShapeName: repairStrandedProviderUnitSQL,
 	}
 }
 

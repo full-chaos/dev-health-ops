@@ -39,6 +39,27 @@ def test_go_worker_alerts_cover_phase_one_runtime_signals() -> None:
         "GoWorkerStreamPendingTooOld": "worker_stream_oldest_pending_seconds",
         "GoWorkerQueueControlPoolPressure": "worker_database_pool_saturation_ratio",
         "GoWorkerTelemetryTargetDown": "dev-health-go-",
+        # CHAOS-5428. Three rules, not one, because the signals fail in
+        # different directions and a single rule cannot express them:
+        #
+        #  - the sweep SELECTING work it never destroys (its candidate gauge
+        #    read against its terminalized counter). This is the shape that
+        #    kept 17 units of run 115e6246 unreachable for thirteen hours
+        #    while every tick logged them at WARN and nothing alerted;
+        #  - the sweep failing its PASS -- which zeroes the candidate gauge,
+        #    identically to a healthy idle system, so the rule above is
+        #    structurally unable to fire while the safety net is broken;
+        #  - the recovery side of the same strand, joboutbox.StrandRepair
+        #    rearming provider-unit deliveries repeatedly.
+        "SyncDispatchUnreclaimableCandidatesNotTerminalizing": (
+            "sync_dispatch_unreclaimable_candidates"
+        ),
+        "SyncDispatchUnreclaimableSweepFailing": (
+            "sync_dispatch_unreclaimable_sweep_failures_total"
+        ),
+        "ProviderUnitStrandRearmsClimbing": (
+            "worker_outbox_reconciler_provider_unit_strands_rearmed_total"
+        ),
     }
 
     assert set(alerts) == set(expected_metrics)

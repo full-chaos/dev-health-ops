@@ -55,16 +55,31 @@ func (publisher *OutboxPublisher) Publish(
 	if publisher == nil || publisher.producer == nil {
 		return ErrEngineUnavailable
 	}
+	var err error
 	switch {
 	case executable && request.PrerequisiteCompletionKey != "":
-		return publisher.producer.PublishAfter(ctx, tx, request.Kind, request.Envelope, request.PrerequisiteCompletionKey)
+		err = publisher.producer.PublishAfter(ctx, tx, request.Kind, request.Envelope, request.PrerequisiteCompletionKey)
 	case executable:
-		return publisher.producer.Publish(ctx, tx, request.Kind, request.Envelope)
+		err = publisher.producer.Publish(ctx, tx, request.Kind, request.Envelope)
 	case request.PrerequisiteCompletionKey != "":
-		return publisher.producer.PublishDeferredAfter(ctx, tx, request.Kind, request.Envelope, request.PrerequisiteCompletionKey)
+		err = publisher.producer.PublishDeferredAfter(ctx, tx, request.Kind, request.Envelope, request.PrerequisiteCompletionKey)
 	default:
-		return publisher.producer.PublishDeferred(ctx, tx, request.Kind, request.Envelope)
+		err = publisher.producer.PublishDeferred(ctx, tx, request.Kind, request.Envelope)
 	}
+	// Normalised HERE rather than at the engine's call site, because the
+	// engine treats ANY publish error as fatal for the occurrence and rolls
+	// the whole transaction back. Several fixed-schedule producers key their
+	// envelope on a generation rather than a timestamp
+	// (producers.go's work-graph build, "<generation>:<kind>:<org>"), so the
+	// same key is republished on every occurrence in that generation and lands
+	// on an already-'delivered' row as a matter of routine. Letting
+	// joboutbox.ErrDeliveryAlreadyTerminal reach the engine would fail those
+	// occurrences forever. The envelope is durably staged either way, which is
+	// exactly what IsPublished means.
+	if !joboutbox.IsPublished(err) {
+		return err
+	}
+	return nil
 }
 
 // coldStartBaselineReason marks the first recorded occurrence of a schedule.

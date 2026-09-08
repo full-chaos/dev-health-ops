@@ -367,8 +367,23 @@ services:
     image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
     labels:
       dev-health.io/worker-group: reconciler
+  # CHAOS-3092 made "no Celery consumer serves provider units" true of every
+  # deployment, which is exactly the assertion SweepModeActive encodes -- so the
+  # sweep ships ACTIVE rather than as an operator opt-in. Shadow, its former
+  # default, selects the strand and refuses to write: sync run 115e6246's 17
+  # units were logged as candidates every second for thirteen hours and never
+  # terminalized.
+  #
+  # A FLAG, not an environment entry: CHAOS-4020's contract for these two
+  # surfaces is that only credentials render through `environment:` and every
+  # other setting is visible in `command:` where `docker compose config` shows
+  # it (tests/workers/test_go_worker_cli_contract.py). The interpolation keeps
+  # the override an operator expects -- SYNC_UNRECLAIMABLE_SWEEP still wins from
+  # the shell or the .env beside this file. Reconciler-only, because the flag is
+  # scoped to that binary and any other group would exit 2 on an unknown flag.
     command:
       - --shutdown-timeout=60s
+      - --unreclaimable-sweep=${SYNC_UNRECLAIMABLE_SWEEP:-active}
       - *flag-http-addr
       - *flag-river-schema
       - *flag-domain-role

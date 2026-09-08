@@ -63,6 +63,33 @@ func createSweepFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			failed_units int NOT NULL DEFAULT 0,
 			total_units int NOT NULL DEFAULT 0
 		)`,
+		// The finalizer's wakeup row. Shape copied from this package's
+		// materializer fixture (materializer_integration_test.go:685), which
+		// derives it from alembic; the production route-fence TRIGGER is
+		// deliberately absent here for the same reason it is absent there --
+		// its only branch fires on a claim_token transition, and nothing the
+		// sweep writes takes a claim.
+		`CREATE TABLE public.sync_dispatch_outbox (
+			id uuid PRIMARY KEY,
+			org_id text NOT NULL,
+			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
+			kind text NOT NULL,
+			status text NOT NULL,
+			available_at timestamptz NOT NULL,
+			attempts integer NOT NULL,
+			last_error text,
+			dispatched_at timestamptz,
+			claim_token text,
+			claim_expires_at timestamptz,
+			claim_transport text,
+			claim_route_generation bigint,
+			dispatched_transport text,
+			dispatched_route_generation bigint,
+			transport_job_id text,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			UNIQUE (sync_run_id, kind)
+		)`,
 		`CREATE TABLE public.sync_run_units (
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,
@@ -479,9 +506,12 @@ func TestUnreclaimableSweepYieldsToAConcurrentDispatcherTouch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	candidates, err := sweep.selectUnreclaimable(ctx, tx, now, 100)
+	candidates, deferred, err := sweep.selectUnreclaimable(ctx, tx, now, 100)
 	if err != nil {
 		t.Fatalf("select: %v", err)
+	}
+	if deferred != 0 {
+		t.Fatalf("deferredToRepair = %d, want 0 -- neither fixture row has outbox delivery budget left", deferred)
 	}
 	if len(candidates) != 2 {
 		t.Fatalf("selected %d candidates, want 2", len(candidates))
@@ -734,7 +764,13 @@ func seedSweepDelivery(
 	// A spent budget by default. For a discarded job that is what makes it
 	// unrecoverable and therefore sweepable; for every other state the column
 	// is not read at all.
-	return seedSweepDeliveryWithBudget(t, ctx, pool, unitID, jobState, jobError, 5, 5)
+	// outboxAttemptCount 5 of 5 = the OUTBOX delivery budget is SPENT, which
+	// is what puts the row on this sweep's side of the boundary with
+	// joboutbox.StrandRepair's provider-unit shape (see
+	// selectPublishedDedupeKeysSQL). Every caller of this helper is asserting
+	// sweep behavior, so the spent budget is the right default; a caller that
+	// wants the repair-owned half asks for it explicitly.
+	return seedSweepDeliveryWithBudget(t, ctx, pool, unitID, jobState, jobError, 5, 5, 5)
 }
 
 // seedSweepDeliveryWithBudget exists so a test can put a discarded job on
@@ -750,6 +786,7 @@ func seedSweepDeliveryWithBudget(
 	jobError string,
 	attempt int,
 	maxAttempts int,
+	outboxAttemptCount int,
 ) int64 {
 	t.Helper()
 	var jobID int64
@@ -783,8 +820,9 @@ func seedSweepDeliveryWithBudget(
 			priority, max_attempts, scheduled_at, status, next_attempt_at,
 			attempt_count, river_job_id, delivered_at
 		) VALUES ($1, 'sync.provider_unit', 1, '{}'::jsonb, $2, 'sync',
-			1, 5, now(), 'delivered', now(), 1, $3, now())`,
+			1, 5, now(), 'delivered', now(), $4, $3, now())`,
 		unreclaimableDedupeKey(unitID), "sha256:"+strings.Repeat("0", 64), jobID,
+		outboxAttemptCount,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -953,6 +991,217 @@ func TestUnreclaimableSweepSparesAUnitWhoseDeliveryWasRearmed(t *testing.T) {
 	}
 }
 
+// A delivered row whose OUTBOX delivery budget is not spent belongs to
+// joboutbox.StrandRepair's provider-unit shape, which will rearm it, not to
+// this sweep, which would destroy it. The two select the SAME River states by
+// design (cancelled at any attempt, discarded with River's budget spent), so
+// attempt_count on the outbox row is the only thing separating them.
+//
+// RED CONTROL: before selectPublishedDedupeKeysSQL projected
+// delivery_budget_remaining, this row was an ordinary dead delivery and the
+// sweep terminalized it -- destroying a unit a restore blip had merely
+// knocked over, which is the exact outcome lane-sync-diag measured on sync
+// run 115e6246 and the reason the repair shape exists. Candidates must be 0
+// and DeferredToRepair 1: "recovery owns this" and "nothing to do" are
+// different findings and must not report identically.
+func TestUnreclaimableSweepDefersAUnitWhoseOutboxDeliveryBudgetRemains(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(81)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	// River's budget IS spent (5/5 discarded), so this row is squarely in the
+	// states this sweep takes -- only the outbox attempt_count of 1 of 5, the
+	// production shape lane-sync-diag measured, holds it back.
+	seedSweepDeliveryWithBudget(t, ctx, pool, unit, "discarded",
+		"dev-health job failed [retryable]", 5, 5, 1)
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 0 || result.Terminalized != 0 {
+		t.Fatalf("result = %+v, want the repair-owned delivery left alone", result)
+	}
+	if result.DeferredToRepair != 1 {
+		t.Fatalf("DeferredToRepair = %d, want 1 -- the refusal must be counted, not silently dropped",
+			result.DeferredToRepair)
+	}
+	if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "dispatching" {
+		t.Fatalf("unit status = %q, want it untouched for the repair to rearm", status)
+	}
+}
+
+// A run whose LAST non-terminal unit the sweep terminalizes must reach the
+// finalizer.
+//
+// syncrunrollup.Bump keeps completed_units/failed_units live and writes nothing
+// else -- never sync_runs.status, never completed_at. What closes a run is
+// finalize_sync_run, and the finalizer only re-evaluates a run whose
+// dispatch-outbox row has been re-armed to 'pending'. A pass that correctly
+// declined while this unit was still open leaves that row 'dispatched' with
+// nothing scheduled to reconsider it.
+//
+// MEASURED, not hypothetical: this sweep terminalized the last 17 non-terminal
+// units of run 115e6246-6e8c-5f53-a2c4-f6b109daba68 at 09:31:48-09:32:50Z on
+// 2026-09-07. The counters went to 44 success / 19 failed of 63 -- every unit
+// terminal -- and the run sat status='dispatching' with completed_at NULL, its
+// finalize row untouched since 03:23:26Z, with nothing left able to close it.
+//
+// RED CONTROL: without the ArmFinalize call in terminalize(), the row below
+// stays 'dispatched' and this test fails on that assertion.
+func TestUnreclaimableSweepArmsTheFinalizerAfterTerminalizing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(82)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	seedSweepDelivery(t, ctx, pool, unit, "cancelled",
+		"JobCancelError: dev-health job failed [validation]")
+	// The exact state 115e6246's finalize row was in: a finalizer already ran,
+	// correctly declined while the unit was open, and left the row dispatched.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			dispatched_at, dispatched_transport, dispatched_route_generation,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, 'finalize_sync_run', 'dispatched', $4, 38, $4, 'river', 1, $4, $4)`,
+		sweepUnitID(83), sweepOrg, sweepRun, now.Add(-6*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Terminalized != 1 {
+		t.Fatalf("Terminalized = %d, want 1 -- nothing below tests anything if the unit survived", result.Terminalized)
+	}
+
+	var status string
+	var dispatchedAt, claimExpires *time.Time
+	var lastError *string
+	var availableAt time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT status, dispatched_at, last_error, claim_expires_at, available_at
+		FROM public.sync_dispatch_outbox
+		WHERE sync_run_id = $1 AND kind = 'finalize_sync_run'`, sweepRun).
+		Scan(&status, &dispatchedAt, &lastError, &claimExpires, &availableAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "pending" {
+		t.Fatalf("finalize row status = %q, want pending -- the run has every unit terminal and "+
+			"nothing else in the system re-evaluates it", status)
+	}
+	// The dispatch stamp and any stale claim must be cleared with the status,
+	// or the row is 'pending' and still unclaimable.
+	if dispatchedAt != nil {
+		t.Fatalf("finalize row keeps dispatched_at = %v; a re-armed row must look unclaimed", dispatchedAt)
+	}
+	if claimExpires != nil {
+		t.Fatalf("finalize row keeps claim_expires_at = %v", claimExpires)
+	}
+	if lastError != nil {
+		t.Fatalf("finalize row keeps last_error = %v", *lastError)
+	}
+	// Availability moved EARLIER (it was already 6h in the past, so it stays
+	// there) -- LEAST, never GREATEST: a re-arm must not push a due finalizer
+	// further out.
+	if availableAt.After(now) {
+		t.Fatalf("finalize row available_at = %s is in the future; the re-arm delayed the finalizer", availableAt)
+	}
+}
+
+// The counterpart: a run whose finalize row was parked by the entitlement gate
+// must NOT be re-armed. That row is a decision, not a pending step, and
+// re-arming it puts the run back in the finalizer's queue forever.
+//
+// This is the half a "does the status become pending" test alone would miss,
+// and the reason ArmFinalizeSQL repeats its feature_disabled predicate on
+// every column rather than collapsing it.
+func TestUnreclaimableSweepLeavesAFeatureDisabledFinalizeRowParked(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(84)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	seedSweepDelivery(t, ctx, pool, unit, "cancelled",
+		"JobCancelError: dev-health job failed [validation]")
+	parkedAt := now.Add(-6 * time.Hour)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			dispatched_at, last_error, created_at, updated_at
+		) VALUES ($1, $2, $3, 'finalize_sync_run', 'dispatched', $4, 1, $4, 'feature_disabled', $4, $4)`,
+		sweepUnitID(85), sweepOrg, sweepRun, parkedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	var status string
+	var lastError *string
+	var dispatchedAt *time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT status, last_error, dispatched_at FROM public.sync_dispatch_outbox
+		WHERE sync_run_id = $1 AND kind = 'finalize_sync_run'`, sweepRun).
+		Scan(&status, &lastError, &dispatchedAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "dispatched" || lastError == nil || *lastError != "feature_disabled" || dispatchedAt == nil {
+		t.Fatalf("parked finalize row = status %q last_error %v dispatched_at %v; "+
+			"an entitlement-terminated run must stay parked, not be re-queued forever",
+			status, lastError, dispatchedAt)
+	}
+}
+
+// The BOUNDARY, from this side: at attempt_count == max_attempts the outbox
+// delivery budget is spent, recovery is out of road, and this sweep owns the
+// row.
+//
+// Its pair is TestUnreclaimableSweepDefersAUnitWhoseOutboxDeliveryBudgetRemains
+// one value below. Together they pin the exact point the ownership flips, which
+// a test at only one end cannot: a predicate written with the wrong comparison
+// (<= instead of <, or >= instead of >) passes one of them and fails the other,
+// and passes neither pair if the split is dropped entirely.
+func TestUnreclaimableSweepSelectsAUnitWhoseDeliveryBudgetIsSpent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	unit := sweepUnitID(86)
+	seedSweepUnit(t, ctx, pool, strandedSpec(unit, "repo-metadata", "light", now))
+	// Identical to the deferral test in every respect EXCEPT the outbox
+	// attempt_count: 5 of 5 rather than 1 of 5.
+	seedSweepDeliveryWithBudget(t, ctx, pool, unit, "discarded",
+		"dev-health job failed [retryable]", 5, 5, 5)
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Candidates != 1 || result.Terminalized != 1 {
+		t.Fatalf("result = %+v, want the spent-budget delivery terminalized -- once recovery cannot "+
+			"rearm the row, this sweep is the only thing left that can resolve the unit", result)
+	}
+	if result.DeferredToRepair != 0 {
+		t.Fatalf("DeferredToRepair = %d, want 0 -- the budget is spent, nothing is deferring",
+			result.DeferredToRepair)
+	}
+	if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "failed" {
+		t.Fatalf("unit status = %q, want failed", status)
+	}
+}
+
 // THE CAS, executed rather than argued.
 //
 // The liveness proof is taken on the queue-control pool, outside the domain
@@ -1058,7 +1307,7 @@ func TestUnreclaimableSweepLeavesRecoverableDiscardedDeliveriesToTheOutboxRepair
 			// The exact error the outbox repair keys on, so the row is a genuine
 			// candidate for it rather than being excluded for some other reason.
 			seedSweepDeliveryWithBudget(t, ctx, pool, unit, "discarded",
-				"Stuck job rescued by JobRescuer", testCase.attempt, testCase.maxAttempts)
+				"Stuck job rescued by JobRescuer", testCase.attempt, testCase.maxAttempts, 5)
 
 			result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
 			if err != nil {

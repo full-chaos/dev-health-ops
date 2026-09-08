@@ -589,20 +589,47 @@ None covers another's ground.
 | River rescuer | River maintenance, on the elected leader | A job still present in `running` past `max(RescueStuckJobsAfter, kind timeout)` |
 | Lease repair | `internal/syncreconciler/lease_repair.go` | A sync unit `running` with an expired lease |
 | Terminal delivery repair | `internal/joboutbox/terminal_delivery_repair.go` | A `sync.provider_unit` delivery that ended terminal with work unfinished |
-| Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease, no heartbeat and no attempts, whose pair the capability matrix declines (no outbox row) **or** whose River delivery is provably dead (CHAOS-4097) |
-| Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished (CHAOS-3997) |
+| Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease, no heartbeat and no attempts, whose pair the capability matrix declines (no outbox row) **or** whose River delivery is provably dead *and* whose outbox delivery budget is spent (CHAOS-4097) |
+| Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished (CHAOS-3997), **or** a `sync.provider_unit` row whose delivery died in transport while the unit never held a lease |
 
-Two of those four can select the same provider unit, so their predicates are
+Three of those five can select the same provider unit, so their predicates are
 disjoint **by construction** rather than by ordering — they run in different
 reconcile loops, and a timing argument is exactly what stops being true during
-an incident. The outbox terminal-delivery repair takes a `discarded` job with
-`attempt < max_attempts`; the unreclaimable sweep takes `cancelled` at any
+an incident.
+
+The first split is by River state and River's own attempt budget. The outbox
+terminal-delivery repair takes a `discarded` job with `attempt < max_attempts`
+and River's unhandled-kind rescue sentinel as its last error; the unreclaimable
+sweep and the strand repair's provider-unit shape take `cancelled` at any
 attempt count, or `discarded` only once `attempt >= max_attempts`. A discarded
-job with attempts remaining therefore belongs to the repair, which can still
-mint a replacement delivery, and the sweep must not terminalize it out from
-under that recovery (CHAOS-4097). The general rule when adding a fifth seam:
-state its population as a predicate that is provably disjoint from the other
-four, not as a claim about which loop runs first.
+job with attempts remaining therefore belongs to the terminal-delivery repair,
+which can still mint a replacement delivery, and neither other seam may
+terminalize or rearm it out from under that recovery (CHAOS-4097).
+
+The second split separates the two seams that share those states, and it is
+**not** by River state — they select the same ones deliberately. It is
+`worker_job_outbox.attempt_count` against that row's own `max_attempts`. While a
+delivery budget remains the row belongs to the strand repair, which rearms it to
+`pending` so the relay mints a fresh delivery; once the budget is spent the
+sweep may terminalize the unit. `attempt_count` is the right clock because it is
+the only one that survives a rearm — neither rearm path resets it — whereas
+`sync_run_units.attempts` is `0` for every candidate either seam selects at all
+and so separates nothing. This also bounds recovery: a permanently broken
+transport costs at most a handful of rearms before the sweep takes the row,
+rather than an unbounded rearm loop the sweep could never break into.
+
+The provider-unit shape exists because of the restore-window strand measured on
+sync run `115e6246`: a Postgres restore burned all five River attempts for 17
+units inside a 77-second window, leaving `delivered` outbox rows pointing at
+discarded jobs and units `dispatching` with `attempts = 0` and no lease. Lease
+repair cannot see them (there is no lease to expire), the dispatcher's
+republishes are silent no-ops, and before this shape existed the sweep's
+terminalization was the only outcome available — turning a transport blip into
+lost coverage. A restore blip must cost a retry, not an hour.
+
+The general rule when adding a sixth seam: state its population as a predicate
+that is provably disjoint from the other five, not as a claim about which loop
+runs first.
 
 The strand repair performs the pair-matched CAS described above, reads
 `worker_job_runs` on the domain pool rather than inferring the claim from a
@@ -640,11 +667,41 @@ group, not only the one that executes it.**
 
 ### A safety net has an off state, and the off state is invisible
 
-The unreclaimable sweep runs in one of three modes — `off`, `shadow`
-(default), or `active` — set by `--unreclaimable-sweep` with
-`SYNC_UNRECLAIMABLE_SWEEP` as the environment fallback. An unrecognised value
-is rejected rather than defaulted, because `active` is an assertion about the
-deployment and a typo must not quietly become one.
+The unreclaimable sweep runs in one of three modes — `off`, `shadow`, or
+`active` — set by `--unreclaimable-sweep` with `SYNC_UNRECLAIMABLE_SWEEP` as the
+environment fallback. An unrecognised value is rejected rather than defaulted,
+because `active` is an assertion about the deployment and a typo must not
+quietly become one.
+
+**`active` is the shipped value, and `shadow` is only the compiled fallback.**
+Every deploy shape in this repo sets it for `dev-health-reconciler`: the
+go-workers compose overlay, the Helm values, the Kubernetes ConfigMap and both
+`.env.example` files carry `SYNC_UNRECLAIMABLE_SWEEP=active`, while the
+docker-compose and swarm stacks carry
+`--unreclaimable-sweep=${SYNC_UNRECLAIMABLE_SWEEP:-active}` in `command:` —
+CHAOS-4020's contract for those two surfaces is that only credentials render
+through `environment:`, so the flag is where a reader (and `docker compose
+config`) can see it. The interpolated default keeps the operator override
+either form would give. `ParseSweepMode("")` still answers `shadow` so a binary
+run with no configuration at all cannot destroy work, but nothing ships in that
+state any more.
+
+That changed because the original justification for shadow-by-default — "every
+deployment gets would-terminalize observability at zero write risk" — was only
+half true in practice. No deploy shape ever set a value, so every deployment was
+in shadow *by accident*, and the observability half had nothing acting on it:
+sync run `115e6246`'s 17 stranded units were selected and reported every second
+for thirteen hours and never terminalized. The assertion `active` encodes ("no
+Celery consumer serves provider units for this deployment") is also now
+unconditionally true — CHAOS-3092 deleted that compute outright — so there is no
+deployment for which it could be false.
+
+The reconciler logs the resolved mode once at startup
+(`syncreconciler.unreclaimable_sweep_mode_resolved`, with `mode` and a `source`
+of `configured` or `default`). Before that line, the only way to learn a
+deployment's mode was to read the body of a WARN the sweep emits solely when it
+has candidates — so an unconfigured deployment and a deliberately-shadowed one
+were indistinguishable.
 
 `off` returns a nil sweep, so the pipeline never calls it. That is the correct
 mitigation for a broken sweep and it is also a trap: a merged fix looks deployed

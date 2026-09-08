@@ -179,6 +179,88 @@ func deterministicTerminalCategory(err error) (string, bool) {
 	return "", false
 }
 
+// safeCause builds the STATIC, non-secret cause text attached to every failure
+// return in Work and reconcileRouteFault.
+//
+// Why this exists at all: before it, `rg WithSafeCause internal/jobs/providerunit
+// internal/providersync` found nothing. Every durable trace of a provider-unit
+// failure was River's synthesized "dev-health job failed [retryable]"
+// (internal/jobruntime/errors.go safeError) with an empty trace. Sync run
+// 115e6246 burned all five attempts for 17 units inside a 77-second window and
+// left five identical copies of that string on each; the cause of the largest
+// sync incident of the day is now permanently unrecoverable, and five minutes
+// of logging would have made it self-explanatory.
+//
+// Why jobruntime.WithSafeCause could not simply be used: it promotes the
+// error's OWN message, and providerfoundation.ProviderError.Error() embeds the
+// request path and a bounded snippet of the provider's response body
+// (providerfoundation/types.go, CHAOS-4582). Those are exactly the "upstream
+// response content the runtime has no way to vet" WithSafeCause's own doc
+// forbids. So the cause is CONSTRUCTED here from fields that are provably
+// static or numeric, and jobruntime.WithSafeCauseText carries it instead.
+//
+// EVERY field below is either a compile-time literal or a bounded identifier:
+//
+//   - category: one of the const literals at the top of this file, or
+//     "provider_unit_exhausted"/"route_reconciliation_required".
+//   - provider / dataset: registry keys from providersync.Descriptor, not user
+//     input.
+//   - class / status: providerfoundation.ErrorClass (a fixed enum) and an HTTP
+//     status integer. Deliberately NOT Path or Body.
+//   - attempt / max_attempts: integers from the River job row.
+//
+// The unit id is deliberately absent: it is already on every lifecycle log line
+// this handler emits (logLifecycle), and the adapter's own WARN carries job_id
+// and attempt, so repeating it here would add an organization-linkable
+// identifier to a string for no diagnostic gain.
+func safeCause(
+	category string,
+	claim providersync.Claim,
+	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
+	err error,
+) string {
+	cause := fmt.Sprintf("category=%s provider=%s dataset=%s",
+		category, claim.Provider, claim.Dataset)
+	if execution != nil {
+		cause += fmt.Sprintf(" attempt=%d/%d", execution.Attempt, execution.Definition.MaxAttempts)
+	}
+	// The provider's own classification, when there is one. This is the half
+	// that makes a 4xx tell apart from a 5xx tell apart from a connection
+	// refused, which on the 115e6246 shape is the entire question.
+	var providerErr *providerfoundation.ProviderError
+	if errors.As(err, &providerErr) {
+		cause += fmt.Sprintf(" provider_error_class=%s", providerErr.Class)
+		if providerErr.StatusCode != 0 {
+			cause += fmt.Sprintf(" provider_status=%d", providerErr.StatusCode)
+		}
+	}
+	return cause
+}
+
+// exhaustedRetryCause names the class of a failure that is NOT terminal yet, so
+// the retry ladder itself becomes readable. A restore window looks exactly like
+// a provider outage in the durable row without it -- which is precisely what
+// made 115e6246 undiagnosable after the fact.
+const (
+	retryCauseUnitNotClaimable = "unit_not_claimable"
+	retryCauseClaimFailed      = "claim_failed"
+	retryCauseReleaseFailed    = "release_for_retry_failed"
+	retryCauseFailWriteFailed  = "terminal_write_failed"
+	retryCauseExecution        = "execution_failed"
+	// The DEFERRAL persistence paths (codex r2, P2). These are the arms where
+	// the work itself did not fail -- a chunk continuation, a provider rate
+	// limit, a shared-budget collision -- and only the write that RECORDS the
+	// deferral did. Left unwrapped they were the worst case of all: the
+	// durable trace says "dev-health job failed [retryable]" while the actual
+	// fault is a database write on a healthy unit's happy path, so an operator
+	// reading it looks at the provider instead of the store.
+	retryCauseChunkDeferUnsupported  = "chunk_continuation_unsupported_repository"
+	retryCauseChunkDeferFailed       = "chunk_continuation_defer_failed"
+	retryCauseRateLimitEpisodeFailed = "rate_limit_episode_read_failed"
+	retryCauseRateLimitDeferFailed   = "rate_limit_defer_failed"
+	retryCauseBudgetDeferFailed      = "budget_contention_defer_failed"
+)
+
 func exhaustedFailureCategory(claim providersync.Claim) string {
 	if claim.Provider == "github" && claim.Dataset == "files" {
 		return GitHubFilesInventoryFailureCategory
@@ -565,11 +647,16 @@ func (handler *Handler) reconcileRouteFault(
 			context.WithoutCancel(ctx), claim, RouteReconciliationCategory,
 			startedAt, handler.now(),
 		); failErr != nil {
-			return jobruntime.Retryable(failErr)
+			return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
+				safeCause(retryCauseFailWriteFailed, claim, execution, failErr)))
 		}
 		handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultFailed)
 		handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "failed", configurationErr)
-		return jobruntime.Retryable(routeReconciliationError(configurationErr))
+		// ErrRouteReconciliationRequired's own message is a compile-time
+		// literal and ValidateClaim's messages name a field and its rule, never
+		// a value, so plain WithSafeCause is correct here -- this is the one
+		// failure path in this file whose error text is vettable as-is.
+		return jobruntime.Retryable(jobruntime.WithSafeCause(routeReconciliationError(configurationErr)))
 	}
 	releaseErr := handler.Repository.ReleaseForRetry(
 		context.WithoutCancel(ctx), claim, handler.now(),
@@ -577,11 +664,12 @@ func (handler *Handler) reconcileRouteFault(
 	fault.Released = releaseErr == nil
 	handler.observeRouteFault(fault)
 	if releaseErr != nil {
-		return jobruntime.Retryable(releaseErr)
+		return jobruntime.Retryable(jobruntime.WithSafeCauseText(releaseErr,
+			safeCause(retryCauseReleaseFailed, claim, execution, releaseErr)))
 	}
 	handler.observeLeaseRecovery(claim, jobruntime.SyncLeaseResultRetrying)
 	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_finished", "retrying", configurationErr)
-	return jobruntime.Retryable(routeReconciliationError(configurationErr))
+	return jobruntime.Retryable(jobruntime.WithSafeCause(routeReconciliationError(configurationErr)))
 }
 
 func routeReconciliationError(configurationErr error) error {
@@ -633,10 +721,16 @@ func (handler *Handler) Work(
 		AllowExpiredRecovery: true,
 	})
 	if err != nil {
+		// claim carries nothing yet (Claim failed), so the cause is built from
+		// the classification alone. Both arms get one: a unit that is never
+		// claimable and a unit whose claim query failed are opposite problems
+		// and read identically in River's error row without this.
 		if errors.Is(err, providersync.ErrUnitNotClaimable) {
-			return jobruntime.Retryable(err)
+			return jobruntime.Retryable(jobruntime.WithSafeCauseText(err,
+				safeCause(retryCauseUnitNotClaimable, providersync.Claim{}, execution, err)))
 		}
-		return jobruntime.Permanent(err)
+		return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
+			safeCause(retryCauseClaimFailed, providersync.Claim{}, execution, err)))
 	}
 	handler.logLifecycle(ctx, execution, claim, "sync_provider_unit_started", "", nil)
 	descriptor, descriptorPresent := providersync.Descriptor(claim.Provider, claim.Dataset)
@@ -694,13 +788,15 @@ func (handler *Handler) Work(
 	if delay, continuation := providersync.ChunkContinuationDelay(err); continuation {
 		deferrer, supported := handler.Repository.(ChunkContinuationRepository)
 		if !supported {
-			return jobruntime.Retryable(err)
+			return jobruntime.Retryable(jobruntime.WithSafeCauseText(err,
+				safeCause(retryCauseChunkDeferUnsupported, session.Claim, execution, err)))
 		}
 		availableAt := completedAt.Add(delay)
 		if deferErr := deferrer.DeferChunkContinuation(
 			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
 		); deferErr != nil {
-			return jobruntime.Retryable(deferErr)
+			return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
+				safeCause(retryCauseChunkDeferFailed, session.Claim, execution, deferErr)))
 		}
 		handler.ProviderMetrics.RecordChunkContinuation(session.Claim.Provider, session.Claim.Dataset)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
@@ -716,14 +812,16 @@ func (handler *Handler) Work(
 		if deferrer, supported := handler.Repository.(RateLimitDeferralRepository); supported {
 			episode, episodeErr := deferrer.RateLimitEpisode(context.WithoutCancel(ctx), session.Claim)
 			if episodeErr != nil {
-				return jobruntime.Retryable(episodeErr)
+				return jobruntime.Retryable(jobruntime.WithSafeCauseText(episodeErr,
+					safeCause(retryCauseRateLimitEpisodeFailed, session.Claim, execution, episodeErr)))
 			}
 			plan, granted := planRateLimitDeferral(retryAfter, episode, session.Claim.ID, completedAt)
 			if granted {
 				if deferErr := deferrer.DeferForRateLimit(
 					context.WithoutCancel(ctx), session.Claim, plan.notBefore, completedAt,
 				); deferErr != nil {
-					return jobruntime.Retryable(deferErr)
+					return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
+						safeCause(retryCauseRateLimitDeferFailed, session.Claim, execution, deferErr)))
 				}
 				handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 				handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "rate_limited", err)
@@ -736,11 +834,13 @@ func (handler *Handler) Work(
 				context.WithoutCancel(ctx), session.Claim, RateLimitCategory,
 				startedAt, completedAt,
 			); failErr != nil {
-				return jobruntime.Retryable(failErr)
+				return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
+					safeCause(retryCauseFailWriteFailed, session.Claim, execution, failErr)))
 			}
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
-			return jobruntime.Permanent(err)
+			return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
+				safeCause(RateLimitCategory, session.Claim, execution, err)))
 		}
 	}
 	// A healthy shared request bucket can be full when sibling provider units
@@ -753,7 +853,8 @@ func (handler *Handler) Work(
 		if deferErr := handler.Repository.DeferForBudgetContention(
 			context.WithoutCancel(ctx), session.Claim, availableAt, completedAt,
 		); deferErr != nil {
-			return jobruntime.Retryable(deferErr)
+			return jobruntime.Retryable(jobruntime.WithSafeCauseText(deferErr,
+				safeCause(retryCauseBudgetDeferFailed, session.Claim, execution, deferErr)))
 		}
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "deferred", err)
@@ -768,7 +869,8 @@ func (handler *Handler) Work(
 		// never armed, leaving the run nonterminal. Stay retryable so a later
 		// attempt can record it, exactly as the route-reconciliation path does.
 		if failErr := handler.failTerminal(ctx, session.Claim, category, err, startedAt, completedAt); failErr != nil {
-			return jobruntime.Retryable(failErr)
+			return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
+				safeCause(retryCauseFailWriteFailed, session.Claim, execution, failErr)))
 		}
 		// Only AFTER the durable transition, for the same reason
 		// observeLeaseRecovery is: a lost CAS leaves the unit retryable, and a
@@ -780,7 +882,11 @@ func (handler *Handler) Work(
 		handler.observeDuplicateNaturalKeyCollision(session.Claim, category, err)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
-		return jobruntime.Permanent(err)
+		// The deterministic category IS the answer here -- all_artifacts_unreadable,
+		// auth, not_found, pagination_incomplete, feature_disabled and the rest
+		// are each a compile-time literal at the top of this file.
+		return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
+			safeCause(category, session.Claim, execution, err)))
 	}
 	if execution.Attempt >= execution.Definition.MaxAttempts {
 		// The collector's contract forbids recording a failed CAS attempt, so
@@ -798,16 +904,23 @@ func (handler *Handler) Work(
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 		}
-		return jobruntime.Retryable(err)
+		return jobruntime.Retryable(jobruntime.WithSafeCauseText(err,
+			safeCause(exhaustedFailureCategory(session.Claim), session.Claim, execution, err)))
 	}
 	if releaseErr := handler.Repository.ReleaseForRetry(
 		context.WithoutCancel(ctx), session.Claim, completedAt,
 	); releaseErr != nil {
-		return jobruntime.Retryable(releaseErr)
+		return jobruntime.Retryable(jobruntime.WithSafeCauseText(releaseErr,
+			safeCause(retryCauseReleaseFailed, session.Claim, execution, releaseErr)))
 	}
 	handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultRetrying)
 	handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "retrying", err)
-	return jobruntime.Retryable(err)
+	// The ORDINARY retry. This is the arm all five of run 115e6246's attempts
+	// took, and the one that left nothing behind: without a cause here a
+	// restore window, a provider outage and a connection refusal are the same
+	// "dev-health job failed [retryable]" string.
+	return jobruntime.Retryable(jobruntime.WithSafeCauseText(err,
+		safeCause(retryCauseExecution, session.Claim, execution, err)))
 }
 
 // providerRateLimitDelay reports whether the failure is a provider rate limit

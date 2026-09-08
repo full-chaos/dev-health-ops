@@ -335,6 +335,14 @@ services:
       # this set. Omitted defaults to contract 1 (rollout-safe); see
       # deploy/go-workers/README.md's rollout note.
       OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
+      # CHAOS-3092 made "no Celery consumer serves provider units" true of
+      # every deployment, which is exactly the assertion SweepModeActive
+      # encodes -- so the sweep ships ACTIVE here rather than as an operator
+      # opt-in. Shadow, its former default, selects the strand and refuses to
+      # write: sync run 115e6246's 17 units were logged as candidates every
+      # second for thirteen hours and never terminalized. Override with
+      # SYNC_UNRECLAIMABLE_SWEEP=shadow (or off) in the environment.
+      SYNC_UNRECLAIMABLE_SWEEP: ${SYNC_UNRECLAIMABLE_SWEEP:-active}
     depends_on:
       go-worker-migrate:
         condition: service_completed_successfully

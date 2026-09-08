@@ -205,6 +205,45 @@ type safeCauseError struct{ error }
 func (wrapped *safeCauseError) SafeLogCause() string { return wrapped.error.Error() }
 func (wrapped *safeCauseError) Unwrap() error        { return wrapped.error }
 
+// WithSafeCauseText attaches a SEPARATELY SUPPLIED, static cause string to err,
+// leaving err's own message out of the log entirely.
+//
+// WithSafeCause above promotes err.Error() itself, which requires the whole
+// message to be vettable. That rules it out for a large and important class of
+// handler error: providerfoundation.ProviderError's Error() embeds the request
+// PATH and a bounded snippet of the provider's RESPONSE BODY (types.go's Path
+// and Body fields, CHAOS-4582), so a provider unit that fails on a 4xx cannot
+// use WithSafeCause at all -- and the result was that the provider-unit and
+// provider-sync packages had ZERO call sites of either, leaving every durable
+// trace of a failure as the fixed string "dev-health job failed [retryable]".
+// Sync run 115e6246 burned five River attempts in 77 seconds and left nothing
+// but five copies of that string; the cause is now permanently unrecoverable.
+//
+// The contract on `cause` is the same as WithSafeCause's, and it is the CALLER's
+// to keep: a static format string plus non-secret identifiers -- a category, a
+// provider name, a dataset key, an error class, an HTTP status, an attempt
+// number. Never a message derived from err.Error(), a URL, a response body, or
+// anything else the runtime cannot vet. Deriving `cause` from err defeats the
+// entire point of this function existing separately.
+//
+// err itself is returned unchanged through Error() and Unwrap(), so every
+// errors.Is / errors.As upstream keeps matching, and classify() still sees
+// exactly the error it saw before.
+func WithSafeCauseText(err error, cause string) error {
+	if err == nil || cause == "" {
+		return err
+	}
+	return &safeCauseTextError{error: err, cause: cause}
+}
+
+type safeCauseTextError struct {
+	error
+	cause string
+}
+
+func (wrapped *safeCauseTextError) SafeLogCause() string { return wrapped.cause }
+func (wrapped *safeCauseTextError) Unwrap() error        { return wrapped.error }
+
 // Retryable marks an expected transient handler failure.
 func Retryable(err error) error { return mark(CategoryRetryable, err, false) }
 

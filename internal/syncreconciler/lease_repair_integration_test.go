@@ -229,6 +229,34 @@ func TestLeaseRepairPostgresContract(t *testing.T) {
 
 func createLeaseRepairIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
 	for _, statement := range []string{
+		// The finalizer's wakeup row. Every terminal-status write in this
+		// package now re-arms it in the same transaction
+		// (syncrunrollup.ArmFinalize) so a run whose LAST non-terminal unit a
+		// recovery path terminalizes still reaches the finalizer -- without
+		// this table the write is a 42P01 and the whole pass fails closed,
+		// which is how the gap was found. Shape copied from this package's
+		// materializer fixture, which derives it from alembic.
+		`CREATE TABLE public.sync_dispatch_outbox (
+			id uuid PRIMARY KEY,
+			org_id text NOT NULL,
+			sync_run_id uuid NOT NULL,
+			kind text NOT NULL,
+			status text NOT NULL,
+			available_at timestamptz NOT NULL,
+			attempts integer NOT NULL,
+			last_error text,
+			dispatched_at timestamptz,
+			claim_token text,
+			claim_expires_at timestamptz,
+			claim_transport text,
+			claim_route_generation bigint,
+			dispatched_transport text,
+			dispatched_route_generation bigint,
+			transport_job_id text,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL,
+			UNIQUE (sync_run_id, kind)
+		)`,
 		`CREATE TABLE public.sync_runs (
 			id uuid PRIMARY KEY,
 			org_id text NOT NULL,

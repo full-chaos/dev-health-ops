@@ -123,6 +123,7 @@ const (
 	sweepStepBucketLock         = "org/provider/cost_class advisory lock, shared with dispatch (CHAOS-4586)"
 	sweepStepUnitLock           = "sync_run_units row lock, ascending order (CHAOS-4586)"
 	sweepStepRollupBump         = "sync_runs rollup recompute (CHAOS-4586)"
+	sweepStepArmFinalize        = "finalize_sync_run re-arm after terminalization"
 	sweepStepCommit             = "commit domain transaction"
 )
 
@@ -177,9 +178,19 @@ type SweepMode string
 const (
 	// SweepModeOff disables the sweep outright.
 	SweepModeOff SweepMode = "off"
-	// SweepModeShadow selects and reports without writing. The default, so
-	// every deployment gets would-terminalize observability at zero write risk
-	// and with no activation step.
+	// SweepModeShadow selects and reports without writing.
+	//
+	// It remains the COMPILED default of ParseSweepMode("") -- deliberately, so
+	// a binary run with no configuration at all cannot destroy work -- but it
+	// is no longer what ships: every deploy shape in this repo now sets
+	// SYNC_UNRECLAIMABLE_SWEEP=active for dev-health-reconciler. The original
+	// justification for shadow-by-default, "every deployment gets
+	// would-terminalize observability at zero write risk", turned out to be
+	// only half implemented in practice: no deploy shape ever set a VALUE, so
+	// every deployment was in shadow by accident rather than by choice, and the
+	// observability half had nothing acting on it. Sync run 115e6246's 17 units
+	// were selected and reported every second for thirteen hours and never
+	// terminalized.
 	SweepModeShadow SweepMode = "shadow"
 	// SweepModeActive permits terminalization.
 	//
@@ -187,6 +198,19 @@ const (
 	// provider units for this deployment. That assertion used to be a separate
 	// environment variable; collapsing it into the mode keeps one knob instead
 	// of two saying the same thing (CHAOS-4020).
+	//
+	// That declaration is now UNCONDITIONALLY TRUE. CHAOS-3092 deleted the
+	// Celery provider-unit compute outright -- there is no consumer left to
+	// serve a provider unit in any deployment, so there is no deployment for
+	// which the assertion could be false. It is therefore the shipped value in
+	// every deploy shape here, not an operator opt-in, and an operator who
+	// wants the old behaviour sets SYNC_UNRECLAIMABLE_SWEEP=shadow (or off)
+	// explicitly.
+	//
+	// Active does NOT mean the sweep is the first thing to reach a strand.
+	// joboutbox.StrandRepair's provider-unit shape recovers a row while its
+	// outbox delivery budget lasts and this sweep only takes it once that is
+	// spent -- see selectPublishedDedupeKeysSQL below.
 	SweepModeActive SweepMode = "active"
 )
 
@@ -243,6 +267,16 @@ type UnreclaimableSweepResult struct {
 	// pass and the write was abandoned. It is distinct from a zero
 	// Terminalized, which is also what a pass with nothing to do returns.
 	DeclinedRouteChange bool
+	// DeferredToRepair counts units this pass declined to select because
+	// joboutbox.StrandRepair's provider-unit shape still owns them -- their
+	// outbox delivery budget is not spent (see selectPublishedDedupeKeysSQL).
+	//
+	// It is reported rather than dropped for the same reason every other
+	// refusal in this file is: without it, "recovery is handling this strand"
+	// and "the sweep found nothing" are the same observation, and telling
+	// those apart is the whole point of the shadow-mode reporting this file
+	// already had to add once after shipping without it.
+	DeferredToRepair int
 }
 
 // routeFence is the durable route's identity at one instant: which transport
@@ -475,11 +509,12 @@ func (sweep *UnreclaimableSweep) Step(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	candidates, err := sweep.selectUnreclaimable(ctx, tx, now, limit)
+	candidates, deferredToRepair, err := sweep.selectUnreclaimable(ctx, tx, now, limit)
 	if err != nil {
 		return UnreclaimableSweepResult{}, err
 	}
 	result.Candidates = len(candidates)
+	result.DeferredToRepair = deferredToRepair
 	seenRuns := make(map[string]struct{}, len(candidates))
 	seenPairs := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
@@ -663,7 +698,7 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 	tx pgx.Tx,
 	now time.Time,
 	limit int,
-) ([]unreclaimableCandidate, error) {
+) ([]unreclaimableCandidate, int, error) {
 	ageCutoff := now.Add(-sweep.config.Age)
 	idleCutoff := now.Add(-sweep.config.Idle)
 	selected := make([]unreclaimableCandidate, 0, limit)
@@ -671,12 +706,16 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 	cursorCreatedAt := time.Time{}
 	cursorID := "00000000-0000-0000-0000-000000000000"
 	scanned := 0
+	// Accumulated across pages, like `scanned`: a candidate deferred to
+	// joboutbox.StrandRepair on page 1 is still deferred once page 3 fills the
+	// selection, and a per-page value would report only the last page's.
+	deferredToRepair := 0
 	for len(selected) < limit && scanned < unreclaimableMaximumScan {
 		page, err := scanUnreclaimablePage(
 			ctx, tx, ageCutoff, idleCutoff, cursorCreatedAt, cursorID, limit,
 		)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if len(page) == 0 {
 			break
@@ -684,13 +723,14 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 		scanned += len(page)
 		last := page[len(page)-1]
 		cursorCreatedAt, cursorID = last.createdAt, last.id
-		unpublished, delivered, err := partitionPublishedUnits(ctx, tx, page)
+		unpublished, delivered, pageDeferred, err := partitionPublishedUnits(ctx, tx, page)
+		deferredToRepair += pageDeferred
 		if err != nil {
-			return nil, err
+			return nil, deferredToRepair, err
 		}
 		dead, err := sweep.deadDeliveries(ctx, delivered)
 		if err != nil {
-			return nil, err
+			return nil, deferredToRepair, err
 		}
 		for _, candidate := range unpublished {
 			if !sweep.unroutable(candidate) {
@@ -711,7 +751,7 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 			break
 		}
 	}
-	return selected, nil
+	return selected, deferredToRepair, nil
 }
 
 // riverOwnsProviderUnits reads the DURABLE transport route.
@@ -962,9 +1002,40 @@ func scanUnreclaimablePage(
 // no proof", which is dropped. A row rearmed back to 'pending' by
 // internal/joboutbox.TerminalDeliveryRepair is precisely that case: a
 // replacement delivery is on its way and the unit is not ours to destroy.
+//
+// delivery_budget_remaining is the SECOND half of that same principle, and it
+// is a correctness predicate, not an optimisation.
+//
+// internal/joboutbox/strand_repair.go's repairStrandedProviderUnitSQL recovers
+// exactly the population this sweep destroys -- a 'delivered' outbox row whose
+// River job is cancelled, or discarded with its attempt budget spent, while the
+// unit is still 'dispatching' with no lease and no attempt (lane-sync-diag's
+// sync run 115e6246: a Postgres restore burned all five River attempts in a
+// 77-second window before the handler ever claimed the unit). River state
+// cannot separate the two paths, because they select the same River states by
+// design; `unit.attempts` cannot either, because it is 0 for every candidate
+// this sweep selects at all (see selectUnreclaimableCandidatesSQL above).
+//
+// `attempt_count < max_attempts` on the OUTBOX row is what separates them. It
+// is the only clock that survives a rearm -- neither strand_repair's UPDATE nor
+// TerminalDeliveryRepair's resets attempt_count -- so it expresses "recovery
+// still has a delivery to spend on this unit" and its complement expresses
+// "recovery is out of road". A row with budget left belongs to the repair and
+// is NOT ours to destroy; once the budget is spent this sweep is the last
+// resort, which is what the doc comment on selectTerminalDeliveryStatesSQL
+// below has always claimed it is.
+//
+// Ordering the two loops would be the wrong fix for the same reason
+// selectTerminalDeliveryStatesSQL gives: they run in different reconcile
+// passes, and a timing argument stops being true during an incident -- which is
+// exactly when both are live.
 const selectPublishedDedupeKeysSQL = `
 SELECT dedupe_key,
-	CASE WHEN status = 'delivered' THEN river_job_id END AS delivered_job_id
+	CASE WHEN status = 'delivered' THEN river_job_id END AS delivered_job_id,
+	CASE
+		WHEN status = 'delivered' AND attempt_count < max_attempts THEN true
+		ELSE false
+	END AS delivery_budget_remaining
 FROM public.worker_job_outbox
 WHERE dedupe_key = ANY($1)
 `
@@ -977,39 +1048,48 @@ WHERE dedupe_key = ANY($1)
 // A published row with no usable river_job_id belongs to NEITHER slice: it is
 // dropped outright. That is the fail-closed default the original filter had,
 // and it is kept -- absence of proof is not proof of death.
+//
+// A published row whose DELIVERY BUDGET is not yet spent also belongs to
+// neither slice, for the stronger reason given on selectPublishedDedupeKeysSQL:
+// it is joboutbox.StrandRepair's to recover, not this sweep's to destroy. That
+// one is COUNTED (deferredToRepair) rather than merely dropped -- a refusal
+// this sweep cannot tell apart from "nothing to do" is the exact failure mode
+// this file records twice already.
 func partitionPublishedUnits(
 	ctx context.Context,
 	tx pgx.Tx,
 	page []unreclaimableCandidate,
-) (unpublished []unreclaimableCandidate, delivered []unreclaimableCandidate, err error) {
+) (unpublished []unreclaimableCandidate, delivered []unreclaimableCandidate, deferredToRepair int, err error) {
 	keys := make([]string, 0, len(page))
 	for _, candidate := range page {
 		keys = append(keys, unreclaimableDedupeKey(candidate.id))
 	}
 	rows, err := tx.Query(ctx, selectPublishedDedupeKeysSQL, keys)
 	if err != nil {
-		return nil, nil, sweepUnavailable(sweepStepOutboxQuery, err)
+		return nil, nil, 0, sweepUnavailable(sweepStepOutboxQuery, err)
 	}
 	defer rows.Close()
 	type publication struct {
-		jobID int64
-		known bool
+		jobID           int64
+		known           bool
+		budgetRemaining bool
 	}
 	published := make(map[string]publication, len(keys))
 	for rows.Next() {
 		var key string
 		var jobID *int64
-		if err := rows.Scan(&key, &jobID); err != nil {
-			return nil, nil, sweepUnavailable(sweepStepOutboxScan, err)
+		var budgetRemaining bool
+		if err := rows.Scan(&key, &jobID, &budgetRemaining); err != nil {
+			return nil, nil, 0, sweepUnavailable(sweepStepOutboxScan, err)
 		}
-		record := publication{}
+		record := publication{budgetRemaining: budgetRemaining}
 		if jobID != nil && *jobID > 0 {
-			record = publication{jobID: *jobID, known: true}
+			record = publication{jobID: *jobID, known: true, budgetRemaining: budgetRemaining}
 		}
 		published[key] = record
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, sweepUnavailable(sweepStepOutboxRows, err)
+		return nil, nil, 0, sweepUnavailable(sweepStepOutboxRows, err)
 	}
 	unpublished = make([]unreclaimableCandidate, 0, len(page))
 	delivered = make([]unreclaimableCandidate, 0, len(page))
@@ -1023,10 +1103,16 @@ func partitionPublishedUnits(
 		if !record.known {
 			continue
 		}
+		if record.budgetRemaining {
+			// joboutbox.StrandRepair's provider-unit shape owns this row while
+			// its outbox delivery budget lasts. Counted, not silently dropped.
+			deferredToRepair++
+			continue
+		}
 		candidate.delivery = terminalDelivery{dedupeKey: key, jobID: record.jobID}
 		delivered = append(delivered, candidate)
 	}
-	return unpublished, delivered, nil
+	return unpublished, delivered, deferredToRepair, nil
 }
 
 // The liveness read. state is compared as text so this file never has to
@@ -1067,6 +1153,44 @@ func partitionPublishedUnits(
 // terminal", and it is the correct one: it is not a regression (nothing
 // reached that row before this change either), and widening it would mean
 // racing the repair for rows the repair may legitimately want.
+//
+// # THE THREE-WAY SPLIT (CHAOS-5428), stated once, here
+//
+// The two states above are ALSO taken by joboutbox.StrandRepair's
+// provider-unit shape (repairStrandedProviderUnitSQL). That is deliberate and
+// unavoidable: a delivery that died in transport and one that is beyond saving
+// look identical in River. So River state alone no longer separates all three
+// paths, and the second axis is worth naming explicitly rather than leaving a
+// future reader to rediscover it from three files.
+//
+// Let A = job.attempt (River's budget for ONE delivery) and
+//
+//	    C = outbox.attempt_count (deliveries spent on this row, across rearms).
+//
+//		                          | River state       | River budget | Outbox budget
+//		  TerminalDeliveryRepair  | discarded + the   | A <  max     | C <  max
+//		  (recover, replacement   | rescue sentinel   |              |
+//		   delivery)              |                   |              |
+//		  StrandRepair provider   | cancelled, or     | A >= max for | C <  max
+//		  shape (recover, rearm)  | discarded         | discarded    |
+//		  THIS sweep (destroy)    | cancelled, or     | A >= max for | C >= max
+//		                          | discarded         | discarded    |
+//
+// Row 1 and row 2 are disjoint on the River budget: their attempt predicates
+// are exact complements for 'discarded', and row 1 never matches 'cancelled'.
+// Rows 2 and 3 are disjoint on the OUTBOX budget, which is the only clock that
+// survives a rearm -- neither rearm path resets attempt_count, while
+// sync_run_units.attempts is 0 for every candidate rows 2 and 3 select at all
+// and therefore separates nothing.
+//
+// The direction matters as much as the disjointness: recovery holds the row
+// while a delivery budget remains, and only once it is spent may this sweep
+// destroy the unit. That is what makes the sweep the last resort its own
+// documentation claims, instead of a race for the same rows.
+//
+// TestProviderUnitPathsAreDisjointAcrossTheAttemptCountRange walks C from 0 to
+// max and asserts EXACTLY ONE of the three predicates matches at every value,
+// so this table cannot quietly stop being true.
 //
 // The join is on river_job.id, a bigint, against a bigint array. CHAOS-4092 is
 // the reason that is stated: casting River's primary key to text is not
@@ -1267,6 +1391,29 @@ func (sweep *UnreclaimableSweep) terminalize(
 	if rowsAffected > 0 {
 		if _, _, _, err := syncrunrollup.Bump(ctx, tx, candidate.syncRunID); err != nil {
 			return 0, sweepUnavailable(sweepStepRollupBump, err)
+		}
+		// Bump keeps the COUNTERS live and nothing else -- it never writes
+		// sync_runs.status or completed_at, deliberately. What closes a run is
+		// finalize_sync_run, and the finalizer only re-evaluates a run whose
+		// dispatch-outbox row is re-armed; a pass that correctly declined
+		// while this unit was still open leaves that row 'dispatched' with
+		// nothing scheduled to reconsider it.
+		//
+		// Measured: this sweep terminalized the last 17 non-terminal units of
+		// run 115e6246-6e8c-5f53-a2c4-f6b109daba68 at 09:31:48-09:32:50Z on
+		// 2026-09-07. The counters went to 44 success / 19 failed / 63 total,
+		// every unit terminal -- and the run sat status='dispatching',
+		// completed_at NULL, its finalize row untouched since 03:23:26Z, with
+		// nothing left in the system that could ever close it.
+		//
+		// providersync's per-unit commit paths always did both, one line
+		// apart; the two RECOVERY writers did only the Bump. Same transaction
+		// as the unit write and the Bump, never after: a crash between them
+		// reaches the same permanently-open state through a narrower window.
+		if err := syncrunrollup.ArmFinalize(
+			ctx, tx, candidate.syncRunID, candidate.orgID, now,
+		); err != nil {
+			return 0, sweepUnavailable(sweepStepArmFinalize, err)
 		}
 	}
 	return rowsAffected, nil

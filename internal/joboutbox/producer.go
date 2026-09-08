@@ -154,14 +154,31 @@ ON CONFLICT (dedupe_key) DO NOTHING`,
 	if command.RowsAffected() == 1 {
 		return nil
 	}
-	var existingKind, existingHash, existingPrerequisite string
+	var existingKind, existingHash, existingPrerequisite, existingStatus string
 	var existingVersion int
+	// `status` is read alongside the agreement fields, in the same round trip.
+	// Before this, the conflict branch compared kind, contract_version,
+	// payload_hash and prerequisite_completion_key, found them identical, and
+	// returned nil -- WITHOUT ever looking at status. A 'delivered' row is
+	// terminal for the relay (repository.go's claim SQL takes only 'pending'
+	// and expired 'claimed'), so every such publish was a no-op reported as a
+	// success. See ErrDeliveryAlreadyTerminal.
+	//
+	// `river_job_id` is deliberately NOT read here, though it would make the
+	// error more useful. This SELECT is on the hot publish path of EVERY job
+	// kind, so every column it names becomes a column every fixture and every
+	// deployment must already have -- and twenty in-tree integration fixtures
+	// build worker_job_outbox without it, which turned an idempotent
+	// republish into a 42501/42703 for unrelated packages. The status alone
+	// answers the question this error exists to ask, and the dead job is one
+	// query away from the dedupe key the caller already holds.
 	err = tx.QueryRow(ctx, `
 SELECT job_kind, contract_version, payload_hash,
-       COALESCE(prerequisite_completion_key, '')
+       COALESCE(prerequisite_completion_key, ''), status
 FROM public.worker_job_outbox
 WHERE dedupe_key = $1`, envelope.IdempotencyKey).
-		Scan(&existingKind, &existingVersion, &existingHash, &existingPrerequisite)
+		Scan(&existingKind, &existingVersion, &existingHash, &existingPrerequisite,
+			&existingStatus)
 	if errors.Is(err, pgx.ErrNoRows) || err != nil {
 		return ErrUnavailable
 	}
@@ -169,7 +186,55 @@ WHERE dedupe_key = $1`, envelope.IdempotencyKey).
 		existingHash != payloadHash || existingPrerequisite != prerequisiteCompletionKey {
 		return fmt.Errorf("%w: dedupe_key_conflicts_with_existing_row", ErrContractRejected)
 	}
+	// Checked AFTER the agreement comparison, deliberately: a row that
+	// DISAGREES is a contract fault and must keep reporting itself as one,
+	// whatever its status happens to be.
+	if terminalOutboxStatus(existingStatus) {
+		// The status is the fact a caller needs, and it is one of four fixed
+		// literals -- no tenant data, no credential material. The dedupe key is
+		// deliberately NOT included: it embeds the domain id, and this error
+		// text reaches operator-facing logs.
+		return fmt.Errorf("%w: status=%s", ErrDeliveryAlreadyTerminal, existingStatus)
+	}
 	return nil
+}
+
+// terminalOutboxStatus names the two statuses from which the relay will never
+// mint another delivery. 'pending' and 'claimed' are both still reachable by
+// Repository's claim SQL, so a publish that lands on one of those genuinely
+// has a delivery coming and reports plain success.
+//
+// Listed positively rather than as an exclusion: a status added to
+// ck_worker_job_outbox_status later is then treated as NON-terminal by default,
+// which is the direction that fails quiet rather than the direction that turns
+// a healthy publish into a warning nobody can act on.
+func terminalOutboxStatus(status string) bool {
+	return status == "delivered" || status == "dead"
+}
+
+// IsPublished reports whether a Publish* call left the envelope durably in the
+// outbox, whether or not THIS call was the one that put a delivery in front of
+// it.
+//
+// It exists so the distinction ErrDeliveryAlreadyTerminal draws is a decision
+// every publisher makes EXPLICITLY, rather than one they inherit. Most
+// publishers here have no logger and no repair path of their own -- the
+// daily-metrics, work-graph, remaining-metrics and fixed-schedule publishers
+// are DB-only seams by design -- and for them "the row is already delivered"
+// has always been a successful outcome and still is; without this helper they
+// would each have to grow an errors.Is branch that swallows the sentinel, and
+// a swallow is exactly what makes a new signal invisible again.
+//
+// The one caller that does NOT use this is
+// internal/syncdispatchruntime's provider-unit publish, which acts on the
+// sentinel: joboutbox.StrandRepair, not another republish, owns a unit whose
+// delivery is already terminal.
+//
+// Note what this does NOT collapse: a contract or policy rejection, or an
+// unavailable database, all still report false. Only the terminal-delivery
+// observation is treated as published.
+func IsPublished(err error) bool {
+	return err == nil || errors.Is(err, ErrDeliveryAlreadyTerminal)
 }
 
 func descriptorAllowsPublish(descriptor jobruntime.Descriptor, deferred bool) bool {
@@ -197,11 +262,17 @@ func (producer *Producer) PublishStandalone(
 		defer cancel()
 		_ = tx.Rollback(rollbackCtx)
 	}()
-	if err := producer.Publish(ctx, tx, kind, envelope); err != nil {
-		return err
+	// The sentinel is carried out to the caller, but it must not skip the
+	// commit: Publish's own writes are already part of this transaction on
+	// every other path, and an agreeing terminal row means there was simply
+	// nothing to insert -- rolling back here would additionally discard
+	// anything the caller put in the same transaction.
+	publishErr := producer.Publish(ctx, tx, kind, envelope)
+	if !IsPublished(publishErr) {
+		return publishErr
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrUnavailable
 	}
-	return nil
+	return publishErr
 }

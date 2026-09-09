@@ -36,20 +36,25 @@ import (
 func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 	tests := []struct {
 		name string
-		// check is the log record's "check" field. wantSubstring is a
-		// distinguishing fragment of the REAL underlying error each
-		// construction below actually produces (verified live, not
-		// invented) -- asserting only non-empty (as an earlier draft of
-		// this test did) would pass even if the wrong message were logged;
-		// codex r1 F-2.
-		check         string
-		wantSubstring string
-		run           func(t *testing.T, storage *productionStreamStorage) error
+		// check is the log record's "check" field. wantSubstrings lists the
+		// REAL underlying error shapes this construction can actually
+		// produce (verified live, not invented) -- asserting only non-empty
+		// (as an earlier draft of this test did) would pass even if the
+		// wrong message were logged; codex r1 F-2. domain_postgres/clickhouse
+		// dial a closed local listener, which is refused ("connection
+		// refused") on most stacks but was measured to time out instead
+		// ("i/o timeout", CHAOS-5478) on at least one hosted CI runner's
+		// network stack -- both are the SAME dependency-unavailable class
+		// (a dial failure), so either is accepted; a bare non-network string
+		// (e.g. a driver-internal error unrelated to dialing) is not.
+		check          string
+		wantSubstrings []string
+		run            func(t *testing.T, storage *productionStreamStorage) error
 	}{
 		{
-			name:          "domain_postgres",
-			check:         "domain_postgres",
-			wantSubstring: "connection refused",
+			name:           "domain_postgres",
+			check:          "domain_postgres",
+			wantSubstrings: []string{"connection refused", "i/o timeout"},
 			run: func(t *testing.T, storage *productionStreamStorage) error {
 				storage.domainPool = newRefusedDomainPool(t)
 				storage.domainRole = "domain_role"
@@ -58,9 +63,9 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 			},
 		},
 		{
-			name:          "clickhouse",
-			check:         "clickhouse",
-			wantSubstring: "connection refused",
+			name:           "clickhouse",
+			check:          "clickhouse",
+			wantSubstrings: []string{"connection refused", "i/o timeout"},
 			run: func(t *testing.T, storage *productionStreamStorage) error {
 				storage.clickHouse = newRefusedClickHouseConn(t)
 				return storage.ClickHouseReady(contextWithTimeout(t))
@@ -71,8 +76,9 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 			check: "valkey",
 			// The mock server's own literal PING reply body (serveMockRESP
 			// below) -- the wire-level Valkey error text, per F-2's
-			// suggested fix.
-			wantSubstring: "simulated ping failure",
+			// suggested fix. Not a dial failure, so only the one exact shape
+			// is accepted.
+			wantSubstrings: []string{"simulated ping failure"},
 			run: func(t *testing.T, storage *productionStreamStorage) error {
 				storage.valkey = newFailingValkeyClient(t)
 				return storage.ValkeyReady(contextWithTimeout(t))
@@ -100,8 +106,15 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 			if underlying == "" {
 				t.Fatalf("%s: log error is empty, want the underlying dependency error", testCase.name)
 			}
-			if !strings.Contains(underlying, testCase.wantSubstring) {
-				t.Fatalf("%s: log error = %q, want it to contain %q (the real underlying failure, not an arbitrary non-empty string)", testCase.name, underlying, testCase.wantSubstring)
+			matched := false
+			for _, want := range testCase.wantSubstrings {
+				if strings.Contains(underlying, want) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				t.Fatalf("%s: log error = %q, want it to contain one of %q (the real underlying failure class, not an arbitrary non-empty string)", testCase.name, underlying, testCase.wantSubstrings)
 			}
 		})
 	}

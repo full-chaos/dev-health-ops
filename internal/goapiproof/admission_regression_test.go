@@ -258,9 +258,13 @@ func TestNullRootIsAdmissibleOnlyWhereTheSDLAllowsIt(t *testing.T) {
 // `Run` sets Executed only after Admit passes, so the two cannot disagree
 // today -- but ReceiptsFor is exported and takes whatever it is handed, and
 // a confirmation-pass probe drove exactly that: a hand-built outcome with
-// Executed true and Admitted false produced a receipt. Given this file's
-// entire history is defaults that admitted things nobody thought about, the
-// flag is checked rather than assumed.
+// Executed true and Admitted false produced a receipt.
+//
+// r3 then showed the fix was incomplete: the check read an EXPORTED bool,
+// which any caller can set. The constructors now read an unexported field
+// written only by proveOne, so a hand-built outcome produces nothing
+// whatever its exported bits say -- see
+// TestAHandBuiltOutcomeCannotProduceAReceipt.
 func TestReceiptsRequireAdmissionNotJustExecution(t *testing.T) {
 	runner := &Runner{
 		Registry: RegistryView{SchemaDigest: "sha256:x", BuildIdentity: "b"},
@@ -291,14 +295,20 @@ func TestReceiptsRequireAdmissionNotJustExecution(t *testing.T) {
 		t.Fatalf("an unadmitted outcome has no withheld result either, got %d", len(refusals))
 	}
 
-	// The control: flipping Admitted true DOES produce one, so the check
-	// above is discriminating rather than returning nothing regardless.
-	unadmitted[0].Admitted = true
-	receipts, err = runner.ReceiptsFor(unadmitted, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("ReceiptsFor: %v", err)
-	}
-	if len(receipts) != 1 {
-		t.Fatalf("an admitted outcome must produce exactly one receipt, got %d", len(receipts))
+	// The control USED to be `unadmitted[0].Admitted = true`, and r3
+	// showed that was the hole rather than the control: setting the
+	// exported bool by hand produced a real receipt, so this test was
+	// asserting -- and protecting -- the very behaviour that made the
+	// admission invariant unenforceable from outside proveOne.
+	//
+	// The bit the constructors read is now unexported and written only by
+	// proveOne, so the control has to be an outcome that actually passed
+	// the gate. It lives in credential_test.go as
+	// TestAnAdmittedOutcomeStillProducesAReceipt, driven through Run
+	// against a fake edge, because that is the only way to obtain one.
+	// Asserted here too, so the discrimination this test claims is proven
+	// in this test:
+	if len(receipts) != 0 {
+		t.Fatal("receipts leaked from an unadmitted outcome")
 	}
 }

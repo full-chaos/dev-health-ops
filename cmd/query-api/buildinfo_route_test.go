@@ -178,3 +178,55 @@ func TestProofRouteRefusesAnUndeclaredPosture(t *testing.T) {
 		t.Fatalf("the refusal must name its reason, got %q", output)
 	}
 }
+
+// r3 P1, and the reason this PR touches cmd/query-api at all.
+//
+// Only /query/proof carried provenance headers; the NORMAL /query route
+// was mounted raw. So the Python edge's CHAOS-5479 pass-through forwarded
+// a header the Go handler never set, every canary/primary measurement was
+// unbindable, and the prover -- correctly refusing to certify what it
+// cannot bind -- downgraded all of them to `unsupported`. Nothing could
+// ever be proven.
+//
+// Both routes now use the same wrapper, so they cannot drift into
+// disagreeing about what they claim.
+func TestTheNormalQueryRouteCarriesProvenanceHeaders(t *testing.T) {
+	const commit = "ffd9e5d5dc8ee21de5befa1bae47ba9195be135e"
+	served := false
+	handler := withProofProvenance(func(w http.ResponseWriter, _ *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"featureFlags":[]}}`))
+	}, commit)
+
+	recorder := httptest.NewRecorder()
+	handler(recorder, httptest.NewRequest(http.MethodPost, "/query", nil))
+
+	if !served {
+		t.Fatal("the wrapped handler must still run")
+	}
+	if got := recorder.Header().Get(buildHeaderName); got != commit {
+		t.Fatalf("the serving build must be on a NORMAL /query response, got %q -- without it no canary or primary operation can ever be proven", got)
+	}
+	if got := recorder.Header().Get(planeHeaderName); got != "go" {
+		t.Fatalf("plane header = %q, want go", got)
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+}
+
+// An unstamped build must not produce an empty header that reads as a
+// binding. Absent is a true statement; empty is a claim of nothing.
+func TestAnUnstampedBuildSetsNoBuildHeader(t *testing.T) {
+	handler := withProofProvenance(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}, "")
+
+	recorder := httptest.NewRecorder()
+	handler(recorder, httptest.NewRequest(http.MethodPost, "/query", nil))
+
+	if _, present := recorder.Header()[http.CanonicalHeaderKey(buildHeaderName)]; present {
+		t.Fatal("an unstamped build must set NO build header rather than an empty one")
+	}
+}

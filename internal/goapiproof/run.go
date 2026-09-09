@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -128,7 +129,21 @@ type Outcome struct {
 	// without it; they are separate fields so a regression that sets
 	// Executed some other way shows up in the report rather than reading
 	// as a legitimate measurement.
-	Admitted      bool   `json:"admitted"`
+	Admitted bool `json:"admitted"`
+	// admitted is the SEALED form of the field above, and the one every
+	// receipt constructor actually reads.
+	//
+	// r3 found the exported bool is not a boundary: a caller in any
+	// package can build an Outcome with Admitted=true, hand it to
+	// ReceiptsFor, and get a deployed_executed/match receipt for a pair of
+	// responses that never passed Admit. R57 made Admit the only door on
+	// the PRODUCTION path; it did not make it the only door.
+	//
+	// This field is unexported, so nothing outside this package can set
+	// it, and it is written in exactly one place -- proveOne, from Admit's
+	// own verdict. The exported bool stays for the report, where it is
+	// what a human reads; this is what the code trusts.
+	admitted      bool
 	RefusalReason string `json:"refusal_reason,omitempty"`
 	RefusalDetail string `json:"refusal_detail,omitempty"`
 	Route         string `json:"route"`
@@ -329,7 +344,7 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receipt, error) {
 	receipts := make([]Receipt, 0, len(outcomes))
 	for _, outcome := range outcomes {
-		if !outcome.Executed || !outcome.Admitted {
+		if !outcome.Executed || !outcome.admitted {
 			continue
 		}
 		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
@@ -376,13 +391,13 @@ func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receip
 func (r *Runner) RefusalReceipts(outcomes []Outcome, observedAt time.Time, cause string) ([]Receipt, error) {
 	admitted := 0
 	for _, outcome := range outcomes {
-		if outcome.Executed && outcome.Admitted {
+		if outcome.Executed && outcome.admitted {
 			admitted++
 		}
 	}
 	receipts := make([]Receipt, 0, len(outcomes))
 	for _, outcome := range outcomes {
-		if !outcome.Executed || !outcome.Admitted {
+		if !outcome.Executed || !outcome.admitted {
 			continue
 		}
 		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
@@ -550,6 +565,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		return refuse(admission.Reason, admission.Detail)
 	}
 	outcome.Admitted = true
+	outcome.admitted = true
 	// Recorded from the admission, never re-derived from the route: the
 	// receipt must state the binding that was actually checked.
 	outcome.EdgeBuildBinding = admission.EdgeBuildBinding
@@ -750,7 +766,7 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 		// The error is returned verbatim from net/http, which includes the
 		// URL but never a header value -- no credential can reach a log
 		// through this path.
-		return Observation{}, fmt.Errorf("request failed: %w", err)
+		return Observation{}, fmt.Errorf("request to %s failed (the error is not quoted: an HTTP client routinely embeds the URL it was given, credentials and all): %w", EndpointLabel(url), redactTransportError(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 
@@ -866,4 +882,24 @@ func (r *Runner) reviewEvidence(outcome Outcome, refusal string, measured, attem
 		return r.Config.ReviewEvidence
 	}
 	return string(encoded)
+}
+
+// redactTransportError strips the URL an HTTP client embeds in its own
+// error text.
+//
+// net/url's *url.Error redacts userinfo when IT formats the URL, which is
+// exactly what made this class hard to see: the sanitised nested copy sits
+// next to whatever the outer wrap prints. But the redaction depends on the
+// URL having parsed WITH userinfo -- on the no-"//" form it has not, and
+// the credential rides through in the opaque part.
+//
+// So the URL is removed rather than trusted: the operation and the
+// underlying error are kept, the URL is replaced by a rebuilt label. The
+// caller has already named the endpoint safely.
+func redactTransportError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return fmt.Errorf("%s: %w", urlErr.Op, urlErr.Err)
+	}
+	return err
 }

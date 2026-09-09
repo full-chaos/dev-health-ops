@@ -194,3 +194,24 @@ func TestTheMinterRespectsACallerDeadline(t *testing.T) {
 		t.Fatalf("the caller's deadline was ignored: blocked for %s", elapsed)
 	}
 }
+
+// r3 P2: the overflow refusal existed but never fired. A helper that
+// overruns the limit also makes cmd.Run() return an error, and the
+// run-failure branch was checked first -- so the operator was told "could
+// not be run" about a case we deliberately detect and have a precise
+// message for. Truncation was fixed in r2; the diagnosis had moved.
+func TestOverflowIsReportedAsOverflowNotAsAFailedRun(t *testing.T) {
+	// Exactly the limit in JWT-shaped bytes, then more -- r2's attack.
+	helper := writeHelper(t, "#!/bin/sh\nhead -c 8192 /dev/zero | tr '\\0' 'a'\nprintf 'aaaa'\n")
+
+	_, err := mintBearer(context.Background(), []string{helper})
+	if err == nil {
+		t.Fatal("output past the limit must be refused")
+	}
+	if !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("the error must say the output was too long, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "could not be run") {
+		t.Fatalf("an overflow was reported as a failed run: %v", err)
+	}
+}

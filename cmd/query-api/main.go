@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 // otelServiceName is this binary's OTEL_SERVICE_NAME fallback (CHAOS-5408) --
@@ -231,7 +232,18 @@ func main() {
 			log.Fatalf("query-api: build /query route: %v", buildErr)
 		}
 		defer cleanup()
-		mux.HandleFunc("/query", handlers.Query)
+		// Wrapped, not raw. The provenance headers are what let a proof
+		// receipt be bound to the process that actually served the
+		// request, and until CHAOS-5479 only /query/proof carried them --
+		// so the Python edge's pass-through forwarded a header the normal
+		// route never set, and every canary/primary measurement was
+		// unbindable. A prover cannot certify what it cannot bind, so it
+		// downgraded all of them: the gate was correct and useless.
+		//
+		// The same wrapper as the proof route, deliberately: one
+		// implementation, so the two routes cannot drift into disagreeing
+		// about what they claim.
+		mux.HandleFunc("/query", withProofProvenance(handlers.Query, version.Current("query-api").Commit))
 		// GET /registry: what THIS process registers, and the schema digest
 		// it computed. Mounted with /query, not beside /healthz, on purpose
 		// -- it describes /query's registration set, so an unconfigured

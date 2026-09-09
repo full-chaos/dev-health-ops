@@ -469,7 +469,16 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 		Route:          RouteEdge,
 		Executed:       true,
 		Admitted:       true,
-		TerminalState:  TerminalStateMatch,
+		// admitted is the UNEXPORTED bit the receipt constructors read
+		// (r3 P1). Settable here only because this test lives in the
+		// package: from anywhere else a hand-built outcome produces
+		// nothing, which is exactly the point -- see
+		// TestAHandBuiltOutcomeCannotProduceAReceipt. These two tests are
+		// about what happens to a receipt AFTER admission, so they need an
+		// admitted outcome without driving a whole run to obtain one.
+		admitted:         true,
+		EdgeBuildBinding: EdgeBuildPresent,
+		TerminalState:    TerminalStateMatch,
 	}}
 	runner := &Runner{
 		Registry: RegistryView{SchemaDigest: testSchemaDigest, BuildIdentity: testCandidateBuild},
@@ -537,7 +546,16 @@ func TestAStableBuildStillProducesAnEnablingReceipt(t *testing.T) {
 		Route:          RouteEdge,
 		Executed:       true,
 		Admitted:       true,
-		TerminalState:  TerminalStateMatch,
+		// admitted is the UNEXPORTED bit the receipt constructors read
+		// (r3 P1). Settable here only because this test lives in the
+		// package: from anywhere else a hand-built outcome produces
+		// nothing, which is exactly the point -- see
+		// TestAHandBuiltOutcomeCannotProduceAReceipt. These two tests are
+		// about what happens to a receipt AFTER admission, so they need an
+		// admitted outcome without driving a whole run to obtain one.
+		admitted:         true,
+		EdgeBuildBinding: EdgeBuildPresent,
+		TerminalState:    TerminalStateMatch,
 	}}
 	runner := &Runner{
 		Registry: RegistryView{SchemaDigest: testSchemaDigest, BuildIdentity: testCandidateBuild},

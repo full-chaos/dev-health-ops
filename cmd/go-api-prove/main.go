@@ -121,7 +121,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written (team-lead ruling R51)")
 	flag.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	flag.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
-	flag.StringVar(&f.proofBearerExec, "proof-bearer-exec", "", "JSON argv of a helper printing a FRESH effective-principal envelope on stdout, e.g. '[\"/opt/job5/mint-envelope.sh\",\"--org\",\"70d529e0\"]'. Re-run as the previous envelope ages out; required when the envelope's TTL is shorter than the run (it is: 60s). argv, not a shell string, so no credential can reach the process table and nothing is interpolated into a shell. The helper's stdout and stderr are NEVER reported by this command")
+	flag.StringVar(&f.proofBearerExec, "proof-bearer-exec", "", "JSON argv of a helper printing a FRESH effective-principal envelope on stdout, e.g. '[\"/opt/job5/mint-envelope.sh\",\"--org\",\"70d529e0\"]'. Re-run as the previous envelope ages out; required when the envelope's TTL is shorter than the run (it is: 60s). argv, not a shell string, so nothing is interpolated into a shell. NOTE: argv IS visible in the process table -- a secret passed as an ARGUMENT here is readable by any user on the box, so the helper must read its own credential rather than be handed one (CHAOS-5511 tracks passing it through an inherited file descriptor). The helper's stdout and stderr are NEVER reported by this command")
 	flag.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file cmd/query-api/query_route.go` JSON output (required)")
 	flag.StringVar(&f.postgresURI, "postgres-uri", os.Getenv("POSTGRES_URI"), "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
 	flag.StringVar(&f.orgID, "org", "", "org id every request is made for (required)")
@@ -174,6 +174,24 @@ func run() error {
 		return err
 	}
 
+	// Refused at parse time, before any request is built. A rebuilt label
+	// keeps a credential out of this program's OWN messages; only refusal
+	// keeps it off the command line, where the process table and every log
+	// that records an invocation can already read it.
+	for _, flagged := range []struct{ name, value string }{
+		{"-registry-url", f.registryURL},
+		{"-buildinfo-url", f.buildInfoURL},
+		{"-edge-url", f.edgeURL},
+		{"-proof-url", f.proofURL},
+	} {
+		if flagged.value == "" {
+			continue
+		}
+		if err := goapiproof.RefuseCredentialsInURL(flagged.name, flagged.value); err != nil {
+			return err
+		}
+	}
+
 	ctx := context.Background()
 	client := &http.Client{Timeout: f.timeout}
 
@@ -211,7 +229,7 @@ func run() error {
 	cancelBuild()
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
-			return fmt.Errorf("%w\n  the deployed query-api must identify its build at %s before any receipt can be written", err, f.buildInfoURL)
+			return fmt.Errorf("%w\n  the deployed query-api must identify its build at %s before any receipt can be written", err, goapiproof.EndpointLabel(f.buildInfoURL))
 		}
 		return err
 	}
@@ -417,7 +435,11 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	if proofURL == "" {
 		proofURL = "(none: shadow-mode operations cannot be measured in this deployment)"
 	}
-	fmt.Printf("go-api-prove: edge=%s proof_route=%s\n", f.edgeURL, proofURL)
+	// Rebuilt labels even on the HAPPY path: this line is copied into
+	// tickets and pasted into chat, which is exactly how a credential
+	// outlives the terminal it was typed in. r3 found this one, and it is
+	// printed on every successful run rather than only on failure.
+	fmt.Printf("go-api-prove: edge=%s proof_route=%s\n", goapiproof.EndpointLabel(f.edgeURL), labelledProofURL(proofURL))
 	// State the build-binding strength per route rather than leaving a
 	// reader to assume it is uniform: the proof route binds the build per
 	// request from the serving process's own response header; the edge
@@ -592,6 +614,14 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 	cmd.Stderr = io.Discard
 
 	err := cmd.Run()
+	// Overflow is checked FIRST. r3 found the specific message never
+	// fired: a helper that overruns the limit also makes cmd.Run() return
+	// an error, so the run-failure branch classified it as "could not be
+	// run" and the operator was told the wrong thing about a case we
+	// deliberately detect.
+	if bounded.overflowed {
+		return "", fmt.Errorf("the envelope minting helper printed more than %d bytes on stdout; refusing rather than using a truncated value, which would fail remotely as an ordinary 401 (its output is deliberately not reported here -- check the helper's own logs)", mintStdoutLimit)
+	}
 	if ctxErr := ctx.Err(); errors.Is(ctxErr, context.DeadlineExceeded) {
 		return "", fmt.Errorf("the envelope minting helper did not finish within %s and was killed (its output is deliberately not reported here -- check the helper's own logs)", mintTimeout)
 	}
@@ -603,9 +633,6 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 		return "", errors.New("the envelope minting helper could not be run (its output is deliberately not reported here -- check the helper's own logs)")
 	}
 
-	if bounded.overflowed {
-		return "", fmt.Errorf("the envelope minting helper printed more than %d bytes on stdout; refusing rather than using a truncated value, which would fail remotely as an ordinary 401 (its output is deliberately not reported here -- check the helper's own logs)", mintStdoutLimit)
-	}
 	minted := strings.TrimSpace(stdout.String())
 	if minted == "" {
 		return "", errors.New("the envelope minting helper printed nothing on stdout")
@@ -641,4 +668,13 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 	l.remaining -= n
 	// Report the full length: the caller wrote it, we chose to drop it.
 	return len(p), err
+}
+
+// labelledProofURL renders a proof URL safely, passing through the
+// placeholder text used when no proof route is configured.
+func labelledProofURL(proofURL string) string {
+	if !strings.HasPrefix(proofURL, "http") {
+		return proofURL
+	}
+	return goapiproof.EndpointLabel(proofURL)
 }

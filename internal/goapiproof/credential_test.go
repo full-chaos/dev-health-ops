@@ -580,3 +580,184 @@ func TestAnUnboundMismatchStaysAMismatch(t *testing.T) {
 		t.Fatalf("the absent binding must still be recorded: %q", outcomes[0].EdgeBuildBinding)
 	}
 }
+
+// r3 P1: the exported Admitted bool was not a boundary. A caller in any
+// package could build an Outcome with the bit already set and get an
+// enablement-shaped receipt for responses that never passed Admit.
+//
+// R57 made Admit the only door on the production path; this makes it the
+// only door. The receipt constructors read an UNEXPORTED field that only
+// proveOne writes, so the hand-built outcome below produces nothing --
+// whatever its exported bits say.
+func TestAHandBuiltOutcomeCannotProduceAReceipt(t *testing.T) {
+	runner := &Runner{
+		Registry: RegistryView{SchemaDigest: "sha256:29d509cd", BuildIdentity: "b18e56fa7"},
+		Config: Config{
+			OrgID: "70d529e0", Window: DefaultWindow(),
+			Auth: AuthContext{PrincipalKind: "stored_account", Audience: "query-api", KeyID: "k"},
+		},
+	}
+	forged := []Outcome{{
+		Operation:      "featureFlags",
+		DocumentDigest: "06ca28a0",
+		Route:          RouteEdge,
+		// Everything a receipt needs, asserted by the caller rather than
+		// established by the gate.
+		Executed:         true,
+		Admitted:         true,
+		EdgeBuildBinding: EdgeBuildPresent,
+		TerminalState:    TerminalStateMatch,
+	}}
+
+	receipts, err := runner.ReceiptsFor(forged, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 0 {
+		t.Fatalf("a hand-built outcome produced %d receipt(s): the admission bit is a claim by the caller, not a verdict by the gate", len(receipts))
+	}
+
+	refusals, err := runner.RefusalReceipts(forged, time.Now().UTC(), "build moved")
+	if err != nil {
+		t.Fatalf("RefusalReceipts: %v", err)
+	}
+	if len(refusals) != 0 {
+		t.Fatalf("a hand-built outcome produced %d refusal receipt(s)", len(refusals))
+	}
+}
+
+// The control: an outcome that DID pass Admit still produces its receipt.
+// Without this the test above would pass against a constructor that never
+// produces anything.
+func TestAnAdmittedOutcomeStillProducesAReceipt(t *testing.T) {
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	edge := &fakeEdge{goBody: body, pythonBody: body}
+	runner := newRunner(t, edge, "canary")
+	edge.goBuild = runner.Registry.BuildIdentity
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 1 {
+		t.Fatalf("an admitted outcome must still produce its receipt, got %d", len(receipts))
+	}
+}
+
+// r3 P1: a VALUE copy of a Credential leaked. The redaction methods had
+// pointer receivers, so fmt fell through to the struct printer for a copy.
+// My own tests passed because they only ever formatted the pointer -- so
+// this formats BOTH, through every verb that reaches fmt differently.
+func TestCredentialRedactsAsBothValueAndPointer(t *testing.T) {
+	const secret = "review-value-copy-secret-7d3f"
+	pointer := StaticCredential("Authorization", "edge access token", secret)
+	value := *pointer // the copy that leaked
+
+	for name, rendered := range map[string]string{
+		"pointer %v":     fmt.Sprintf("%v", pointer),
+		"pointer %+v":    fmt.Sprintf("%+v", pointer),
+		"pointer %#v":    fmt.Sprintf("%#v", pointer),
+		"pointer %s":     fmt.Sprintf("%s", pointer),
+		"pointer Sprint": fmt.Sprint(pointer),
+		"value %v":       fmt.Sprintf("%v", value),
+		"value %+v":      fmt.Sprintf("%+v", value),
+		"value %#v":      fmt.Sprintf("%#v", value),
+		"value %s":       fmt.Sprintf("%s", value),
+		"value Sprint":   fmt.Sprint(value),
+	} {
+		if strings.Contains(rendered, secret) {
+			t.Fatalf("%s exposed the credential: %s", name, rendered)
+		}
+		if !strings.Contains(rendered, "REDACTED") {
+			t.Fatalf("%s did not render the redaction: %s", name, rendered)
+		}
+	}
+
+	// And a copy still WORKS -- sharing one state rather than being inert.
+	request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/x", nil)
+	if err := value.Apply(context.Background(), request); err != nil {
+		t.Fatalf("a copied credential must still authenticate: %v", err)
+	}
+	if request.Header.Get("Authorization") != secret {
+		t.Fatal("the copy did not carry the credential")
+	}
+}
+
+// r3 P2: whitespace is an empty credential wearing a disguise -- the
+// server answers the same 401 either way.
+func TestAWhitespaceOnlyCredentialIsRefused(t *testing.T) {
+	request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/x", nil)
+	for _, value := range []string{"", "   ", "\t", "\n", "Bearer    "} {
+		credential := StaticCredential("Authorization", "edge access token", value)
+		if err := credential.Apply(context.Background(), request); err == nil {
+			t.Fatalf("credential %q was installed", value)
+		}
+	}
+}
+
+// r3 P1 / lane-routing-verbs: a URL is never printed raw, and the obvious
+// url.Redacted() is NOT safe -- on a URL with no "//" the parser reads the
+// username as the scheme, User is nil, and Redacted() returns the password
+// verbatim. EndpointLabel rebuilds instead.
+func TestEndpointLabelNeverEmitsACredential(t *testing.T) {
+	const secret = "supersecret"
+	for name, raw := range map[string]string{
+		"ordinary userinfo":     "http://alice:" + secret + "@host:8090/registry",
+		"no scheme separator":   "alice:" + secret + "@host/registry",
+		"scheme-relative":       "//alice:" + secret + "@host/registry",
+		"password only":         "http://:" + secret + "@host/registry",
+		"credential in path":    "http://host/" + secret,
+		"credential in query":   "http://host/r?token=" + secret,
+		"credential in framgnt": "http://host/r#" + secret,
+	} {
+		t.Run(name, func(t *testing.T) {
+			label := EndpointLabel(raw)
+			if strings.Contains(label, secret) {
+				t.Fatalf("EndpointLabel(%q) = %q -- it emitted the password", raw, label)
+			}
+			// The USERNAME too. lane-routing-verbs shipped a boundary that
+			// kept the password safe and then named the offending scheme in
+			// its refusal -- and on the no-"//" form the scheme IS the
+			// username. Checking only the password is how that passes
+			// review: on that form EVERY field you might safely name has
+			// become part of the credential.
+			if strings.Contains(label, "alice") {
+				t.Fatalf("EndpointLabel(%q) = %q -- it emitted the username", raw, label)
+			}
+		})
+	}
+
+	// It still SAYS something useful, or an operator cannot tell which
+	// endpoint failed.
+	if got := EndpointLabel("http://alice:s3cret@query-api.test:8090/registry"); got != "http://query-api.test" {
+		t.Fatalf("got %q, want a rebuilt scheme://host label", got)
+	}
+}
+
+// The refusal at the flag boundary, including the form that defeats a
+// userinfo check.
+func TestRefuseCredentialsInURL(t *testing.T) {
+	for name, raw := range map[string]string{
+		"userinfo":            "http://alice:s3cret@host/registry",
+		"username only":       "http://alice@host/registry",
+		"no scheme separator": "alice:s3cret@host/registry",
+		"not http":            "file:///etc/passwd",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := RefuseCredentialsInURL("-registry-url", raw)
+			if err == nil {
+				t.Fatalf("%q was accepted", raw)
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Fatalf("the refusal echoed the credential: %v", err)
+			}
+		})
+	}
+	if err := RefuseCredentialsInURL("-registry-url", "http://query-api.test:8090/registry"); err != nil {
+		t.Fatalf("an ordinary URL was refused: %v", err)
+	}
+}

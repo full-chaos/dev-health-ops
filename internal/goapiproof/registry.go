@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -45,6 +46,87 @@ type buildInfoBody struct {
 	Modified  bool   `json:"modified"`
 }
 
+// EndpointLabel is a safe name for an endpoint, built from parsed parts
+// only. NOTHING in this package ever prints a raw URL.
+//
+// The obvious implementation is url.Redacted(), and it is wrong. Measured:
+//
+//	url.Parse("alice:supersecret@host/registry")
+//	  scheme="alice" opaque="supersecret@host/registry" user=<nil>
+//	  Redacted() => "alice:supersecret@host/registry"
+//
+// With no "//" the parser reads the USERNAME as the scheme, the rest
+// becomes opaque, User is nil, and Redacted() has nothing to redact -- so
+// it hands back the password in full. A reviewer trying a
+// credential-carrying URL without "//" is exactly who finds that.
+//
+// So this does not redact. It REBUILDS from scheme and hostname and never
+// touches the input string. A string that cannot be parsed cannot be
+// reasoned about safely; one that can be parsed does not need redacting,
+// because its safe parts can simply be re-emitted. The scheme is
+// allowlisted to http/https for the same reason: on the no-"//" form the
+// scheme IS the username, so emitting it unchecked would be the leak.
+//
+// Ported from go_api_cli.py's _endpoint_label, which reached this shape
+// after five review rounds -- four leaks from matching the credential's
+// character class, then one more from deleting a known literal, which
+// still leaked on the no-"//" form. Credit to lane-routing-verbs for the
+// pointer; Go's parser has the same hole for the same reason.
+//
+// The port is deliberately omitted: it is one more thing that can be
+// malformed in the code whose whole job is not to fail interestingly.
+func EndpointLabel(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "(unparseable endpoint)"
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "(unparseable endpoint)"
+	}
+	if parsed.Hostname() == "" {
+		return "(unparseable endpoint)"
+	}
+	return parsed.Scheme + "://" + parsed.Hostname()
+}
+
+// ErrCredentialInURL is returned for a URL carrying embedded credentials.
+var ErrCredentialInURL = errors.New("goapiproof: URL carries embedded credentials")
+
+// RefuseCredentialsInURL rejects a URL with userinfo, or one this package
+// cannot safely describe.
+//
+// EndpointLabel keeps a credential out of THIS program's messages; only
+// refusal keeps it off the command line, where the process table, the
+// shell history and every log that records an invocation can already read
+// it. So both: refuse at the boundary, and never print a raw URL even
+// then, because a URL can reach an error from somewhere the boundary does
+// not cover.
+//
+// The no-"//" form is refused as unparseable rather than inspected for
+// userinfo, because that is exactly the form where User is nil while a
+// credential is present -- checking User there would wave it through.
+func RefuseCredentialsInURL(flagName, raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("goapiproof: %s is not a valid URL (its value is not printed here)", flagName)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("goapiproof: %s must be an http:// or https:// URL (its value is not printed here). A URL written without a // parses with its USERNAME as the scheme, which is why this is refused rather than inspected", flagName)
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("%w: %s carries userinfo (its value is not printed here). An embedded credential reaches the process table and every log that records a command line -- pass it through %s or %s instead",
+			ErrCredentialInURL, flagName, edgeBearerEnvVarName, proofBearerEnvVarName)
+	}
+	return nil
+}
+
+// Named here rather than imported from the command, so this package's
+// message does not depend on which binary is calling it.
+const (
+	edgeBearerEnvVarName  = "GO_API_PROVE_BEARER"
+	proofBearerEnvVarName = "GO_API_PROVE_PROOF_BEARER"
+)
+
 // FetchRegistry asks the RUNNING process what it serves.
 //
 // Never a checkout, never a checked-in mirror: the six-day outage
@@ -61,11 +143,11 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return RegistryView{}, fmt.Errorf("goapiproof: read %s: %w", registryURL, err)
+		return RegistryView{}, fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(registryURL), err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		return RegistryView{}, fmt.Errorf("goapiproof: %s answered HTTP %d", registryURL, response.StatusCode)
+		return RegistryView{}, fmt.Errorf("goapiproof: %s answered HTTP %d", EndpointLabel(registryURL), response.StatusCode)
 	}
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
@@ -77,10 +159,10 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 		return RegistryView{}, fmt.Errorf("goapiproof: decode registry body: %w", err)
 	}
 	if parsed.SchemaDigest == "" {
-		return RegistryView{}, fmt.Errorf("goapiproof: %s reported an empty schema digest", registryURL)
+		return RegistryView{}, fmt.Errorf("goapiproof: %s reported an empty schema digest", EndpointLabel(registryURL))
 	}
 	if len(parsed.Operations) == 0 {
-		return RegistryView{}, fmt.Errorf("goapiproof: %s registers no operations -- there is nothing to prove", registryURL)
+		return RegistryView{}, fmt.Errorf("goapiproof: %s registers no operations -- there is nothing to prove", EndpointLabel(registryURL))
 	}
 
 	view := RegistryView{
@@ -122,18 +204,18 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("goapiproof: read %s: %w", buildInfoURL, err)
+		return "", fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(buildInfoURL), err)
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	switch response.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		return "", fmt.Errorf("%w: %s answered 404, so this deployment predates the /buildinfo route", ErrNoBuildIdentity, buildInfoURL)
+		return "", fmt.Errorf("%w: %s answered 404, so this deployment predates the /buildinfo route", ErrNoBuildIdentity, EndpointLabel(buildInfoURL))
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return "", fmt.Errorf("goapiproof: %s rejected the %s credential (HTTP %d) -- /buildinfo checks the effective-principal envelope, not the edge access token", buildInfoURL, credential.Kind(), response.StatusCode)
+		return "", fmt.Errorf("goapiproof: %s rejected the %s credential (HTTP %d) -- /buildinfo checks the effective-principal envelope, not the edge access token", EndpointLabel(buildInfoURL), credential.Kind(), response.StatusCode)
 	default:
-		return "", fmt.Errorf("goapiproof: %s answered HTTP %d", buildInfoURL, response.StatusCode)
+		return "", fmt.Errorf("goapiproof: %s answered HTTP %d", EndpointLabel(buildInfoURL), response.StatusCode)
 	}
 
 	body, err := io.ReadAll(response.Body)

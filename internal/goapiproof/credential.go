@@ -67,6 +67,26 @@ type Credential struct {
 	// level further out.
 	validate func(string) error
 
+	// state holds everything MUTABLE, behind a pointer, and that shape is
+	// load-bearing twice over.
+	//
+	// r3 found that a VALUE copy of a Credential leaked: the redaction
+	// methods had pointer receivers, so `%v` of a copy fell through to
+	// fmt's struct printer and rendered the cached token in full. My own
+	// tests passed because they only ever formatted the pointer.
+	//
+	// Value receivers fix that -- their method set covers both forms --
+	// but a value receiver on a struct containing a sync.Mutex copies the
+	// lock, which `go vet` correctly refuses. Moving the mutable state
+	// behind a pointer solves both at once: Credential itself is a small
+	// immutable descriptor that is safe to copy, copies share one state,
+	// and the only field fmt could print for it is an address.
+	state *credentialState
+}
+
+// credentialState is the mutable half. Unexported, reachable only through
+// the methods below, and never rendered by any of them.
+type credentialState struct {
 	mu       sync.Mutex
 	cached   string
 	mintedAt time.Time
@@ -81,7 +101,7 @@ type Credential struct {
 // not the only caller a future change might add; refusing at the moment of
 // use means no path can send a bare "Bearer ", whoever built it.
 func StaticCredential(header, kind, value string) *Credential {
-	return &Credential{header: header, kind: kind, cached: value}
+	return &Credential{header: header, kind: kind, state: &credentialState{cached: value}}
 }
 
 // redacted is what every formatting verb renders instead of the value.
@@ -90,22 +110,19 @@ const redacted = "goapiproof.Credential{kind:%q, header:%q, value:REDACTED}"
 // String, GoString and Format together close every fmt path to the cached
 // value. r2 found `%v` printing a token in full; %+v, %#v and Sprint reach
 // fmt differently, so all four are pinned by test.
-func (c *Credential) String() string {
-	if c == nil {
-		return "goapiproof.Credential(nil)"
-	}
+func (c Credential) String() string {
 	return fmt.Sprintf(redacted, c.kind, c.header)
 }
 
 // GoString covers %#v, which ignores String and would otherwise render the
 // struct literally, cached token included.
-func (c *Credential) GoString() string { return c.String() }
+func (c Credential) GoString() string { return c.String() }
 
 // Format covers the remaining verbs -- %+v, %s, %q and anything else a
 // future caller reaches for -- so no verb falls through to the default
 // struct printer. A credential must not depend on the caller choosing a
 // safe verb.
-func (c *Credential) Format(f fmt.State, verb rune) {
+func (c Credential) Format(f fmt.State, verb rune) {
 	_, _ = io.WriteString(f, c.String())
 }
 
@@ -122,7 +139,7 @@ func (c *Credential) Format(f fmt.State, verb rune) {
 // stale value. A run that cannot authenticate must refuse by name, not
 // quietly retry with something the server will reject.
 func MintedCredential(header, kind string, freshFor time.Duration, mint func(context.Context) (string, error)) *Credential {
-	return &Credential{header: header, kind: kind, mint: mint, freshFor: freshFor}
+	return &Credential{header: header, kind: kind, mint: mint, freshFor: freshFor, state: &credentialState{}}
 }
 
 // WithShapeValidator returns c with a shape check applied to every minted
@@ -136,12 +153,12 @@ func (c *Credential) WithShapeValidator(validate func(string) error) *Credential
 // a value: it belongs in the run report, where it shows an operator that
 // the refresh is working without putting a credential anywhere near a log.
 func (c *Credential) Mints() int {
-	if c == nil {
+	if c == nil || c.state == nil {
 		return 0
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.mints
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+	return c.state.mints
 }
 
 // ValidateEnvelopeShape rejects a value that cannot be an
@@ -185,20 +202,24 @@ func (c *Credential) Kind() string {
 // value returns a usable credential, minting a new one when the cached
 // one has aged past freshFor.
 func (c *Credential) value(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
 	if c.mint == nil {
-		if c.cached == "" {
+		if isEmptyCredential(c.state.cached) {
 			// A bare "Bearer " is answered 401, which is
 			// indistinguishable in a report from a rejected credential --
 			// the confusion this whole file exists to remove. Refuse at
 			// the source (r2 P2).
-			return "", fmt.Errorf("the %s credential is empty", c.kind)
+			// TrimSpace, not == "": r3 installed `Authorization: "Bearer    "`
+			// from GO_API_PROVE_BEARER="   ", which the server answers 401 --
+			// the same indistinguishable-401 an empty one produces. Whitespace
+			// is an empty credential wearing a disguise.
+			return "", fmt.Errorf("the %s credential is empty or whitespace", c.kind)
 		}
-		return c.cached, nil
+		return c.state.cached, nil
 	}
-	if c.cached != "" && c.freshFor > 0 && time.Since(c.mintedAt) < c.freshFor {
-		return c.cached, nil
+	if c.state.cached != "" && c.freshFor > 0 && time.Since(c.state.mintedAt) < c.freshFor {
+		return c.state.cached, nil
 	}
 	minted, err := c.mint(ctx)
 	if err != nil {
@@ -217,8 +238,8 @@ func (c *Credential) value(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("the %s minter returned something that is not a %s: %w", c.kind, c.kind, err)
 		}
 	}
-	c.cached, c.mintedAt = minted, time.Now()
-	c.mints++
+	c.state.cached, c.state.mintedAt = minted, time.Now()
+	c.state.mints++
 	return minted, nil
 }
 
@@ -239,4 +260,35 @@ func (c *Credential) Apply(ctx context.Context, request *http.Request) error {
 	}
 	request.Header.Set(c.header, value)
 	return nil
+}
+
+// isEmptyCredential reports whether a header value carries no actual
+// credential.
+//
+// Not simply == "": r3 installed `Authorization: "Bearer    "` from
+// GO_API_PROVE_BEARER="   ", which the server answers 401 -- the same
+// indistinguishable-401 an empty value produces. And not simply
+// TrimSpace either, because by the time the value reaches here it already
+// carries the "Bearer " scheme, so the whitespace that matters is AFTER
+// the scheme. Whitespace is an empty credential wearing a disguise, and it
+// has to be undressed at the same place the disguise was put on.
+func isEmptyCredential(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return true
+	}
+	// Cut the RAW value, not a trimmed copy. Trimming first removes the
+	// separator that "Bearer    " consists of -- TrimSpace turns it into
+	// "Bearer", Cut then finds no space, and the whitespace-only token
+	// reads as a whole credential. That was this function's first version,
+	// and the probe that caught it is why the case list below is in a
+	// test rather than in my head.
+	scheme, token, found := strings.Cut(value, " ")
+	if !found {
+		// A bare token with no scheme -- non-empty by the check above.
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(scheme), "Bearer") {
+		return strings.TrimSpace(token) == ""
+	}
+	return false
 }

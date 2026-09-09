@@ -68,6 +68,18 @@ type AdmissionInput struct {
 	// ResponseRoot is the GraphQL field this operation's registered
 	// document selects at the top of `data`.
 	ResponseRoot string
+	// RootNullable is whether the SDL declares that field NULLABLE.
+	//
+	// Round 2's F4: refusing every null root made the two operations whose
+	// root IS nullable unprovable. `capacityForecast` and
+	// `throughputForecast` are declared without `!`, and their resolver
+	// says so in as many words -- "A null result is a TOLERATED empty (no
+	// history, or no positive item ...)". Both planes returning null there
+	// is a correct answer and real parity; refusing it would mean this
+	// command could never prove those two operations against an org with
+	// no history. For the other thirteen the root is non-null in the SDL,
+	// so a null is the operation failing to produce its own result.
+	RootNullable bool
 
 	Candidate, Baseline         Observation
 	CandidateSnap, BaselineSnap Snapshot
@@ -193,7 +205,7 @@ func admitResponseRoot(in AdmissionInput) Admission {
 		name string
 		snap Snapshot
 	}{{"candidate", in.CandidateSnap}, {"baseline", in.BaselineSnap}} {
-		if detail := emptyRootDetail(leg.name, in.ResponseRoot, leg.snap); detail != "" {
+		if detail := emptyRootDetail(leg.name, in.ResponseRoot, in.RootNullable, leg.snap); detail != "" {
 			return refused(RefusalEmptyResponseRoot, detail)
 		}
 	}
@@ -202,7 +214,7 @@ func admitResponseRoot(in AdmissionInput) Admission {
 
 // emptyRootDetail returns why this snapshot does not carry a resolved
 // result for root, or "" when it does.
-func emptyRootDetail(leg, root string, snap Snapshot) string {
+func emptyRootDetail(leg, root string, nullable bool, snap Snapshot) string {
 	if !snap.DataPresent || snap.Data == nil {
 		return fmt.Sprintf("%s returned no data at all", leg)
 	}
@@ -216,11 +228,28 @@ func emptyRootDetail(leg, root string, snap Snapshot) string {
 	}
 	switch typed := value.(type) {
 	case nil:
-		return fmt.Sprintf("%s returned %q = null: a null root is not a resolved result", leg, root)
+		if nullable {
+			return ""
+		}
+		return fmt.Sprintf("%s returned %q = null, and the SDL declares that field non-null: a null root is the operation failing to produce its own result", leg, root)
 	case map[string]any:
 		if len(typed) == 0 {
 			return fmt.Sprintf("%s returned %q as an empty object", leg, root)
 		}
+		// An object carrying only __typename resolved no actual fields.
+		// gqlgen adds __typename to every selection set, so this shape is
+		// what a resolver returning nothing looks like on the wire (round
+		// 2's F5, reproduced: it was admitted).
+		if len(typed) == 1 {
+			if _, only := typed["__typename"]; only {
+				return fmt.Sprintf("%s returned %q carrying only __typename: no field of the operation's own result resolved", leg, root)
+			}
+		}
+	case string, float64, bool, int, int64:
+		// Every registered operation's root is an object or a connection.
+		// A scalar there is not the operation's result whatever it says
+		// (round 2's F5).
+		return fmt.Sprintf("%s returned %q as a scalar (%T): no registered operation has a scalar root", leg, root, typed)
 	case []any:
 		// An empty LIST is a legitimate result -- "this org has no feature
 		// flags" is a real answer, and refusing it would make the

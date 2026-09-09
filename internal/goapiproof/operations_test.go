@@ -2,6 +2,9 @@ package goapiproof
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -226,5 +229,81 @@ func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
 	// paths that can never match.
 	if sharedRoots != 3 {
 		t.Fatalf("expected 3 operations whose response root differs from their name, got %d", sharedRoots)
+	}
+}
+
+// RootNullable is a hand-kept mirror of the SDL, so it can drift from it.
+// This derives the truth from contracts/graphql/v1/schema.graphql itself --
+// a root declared without a trailing `!` is nullable -- and fails if the
+// table disagrees.
+//
+// It exists because round 2's F4 was exactly this class in the other
+// direction: the code assumed a fact about the schema (no root is nullable)
+// that the schema did not support, and two of fifteen operations became
+// unprovable as a result. A guard that reads the schema cannot make that
+// assumption.
+func TestResponseRootNullabilityMatchesTheSDL(t *testing.T) {
+	sdl, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "contracts", "graphql", "v1", "schema.graphql"))
+	if err != nil {
+		t.Fatalf("read SDL: %v", err)
+	}
+
+	checked := 0
+	for _, operation := range KnownOperations() {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatalf("SpecFor(%q): %v", operation, err)
+		}
+		pattern := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(spec.ResponseRoot) + `\([^)]*\)\s*:\s*([^\n]+)$`)
+		match := pattern.FindSubmatch(sdl)
+		if match == nil {
+			t.Errorf("%s: root field %q not found in the SDL", operation, spec.ResponseRoot)
+			continue
+		}
+		checked++
+		declaration := strings.TrimSpace(string(match[1]))
+		nullable := !strings.HasSuffix(declaration, "!")
+		if spec.RootNullable != nullable {
+			t.Errorf("%s: RootNullable=%v but the SDL declares %q (nullable=%v)",
+				operation, spec.RootNullable, declaration, nullable)
+		}
+	}
+
+	// Non-vacuity: every operation must have been resolved against the SDL.
+	// A regex that stopped matching would otherwise leave this test silently
+	// checking nothing.
+	if checked != len(KnownOperations()) {
+		t.Fatalf("only %d of %d roots were found in the SDL -- the match has stopped working",
+			checked, len(KnownOperations()))
+	}
+	// And both answers must actually occur, or the comparison is trivial.
+	nullableCount := 0
+	for _, operation := range KnownOperations() {
+		spec, _ := SpecFor(operation)
+		if spec.RootNullable {
+			nullableCount++
+		}
+	}
+	if nullableCount == 0 || nullableCount == len(KnownOperations()) {
+		t.Fatalf("all %d roots share one nullability: this test cannot discriminate", len(KnownOperations()))
+	}
+}
+
+// repoRootFromTest walks up to the module root.
+func repoRootFromTest(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not find the repository root")
+		}
+		dir = parent
 	}
 }

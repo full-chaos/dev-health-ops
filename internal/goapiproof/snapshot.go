@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 )
 
@@ -53,9 +54,18 @@ func DecodeSnapshot(body []byte) (Snapshot, error) {
 	// A JSON decoder stops at the end of the first value and ignores
 	// everything after it, so two materially different bodies can decode to
 	// the same envelope and compare equal (confirmation pass C3: a 67-byte
-	// candidate and a 39-byte baseline compared as match). More() reports
-	// whether anything remains; the admission gate refuses when it does.
-	snapshot.TrailingBytes = decoder.More()
+	// candidate and a 39-byte baseline compared as match).
+	//
+	// More() is NOT the check for this, which is round 2's F6: its
+	// implementation is `err == nil && c != ']' && c != '}'`, so a body
+	// ending in a stray `}` or `]` -- the likeliest real shape, a serializer
+	// emitting one closing brace too many -- makes More() report FALSE and
+	// sails through. Reproduced: `{"data":{...}}}` gave TrailingBytes=false.
+	// Token() answers the question actually being asked: is there anything
+	// at all after the value, EOF or not.
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		snapshot.TrailingBytes = true
+	}
 	if raw, ok := envelope["data"]; ok {
 		snapshot.DataPresent = true
 		if err := decodeWithNumbers(raw, &snapshot.Data); err != nil {

@@ -80,6 +80,12 @@ type OperationSpec struct {
 	// from the failure.
 	ResponseRoot string
 
+	// RootNullable mirrors the SDL: whether ResponseRoot is declared
+	// WITHOUT a trailing `!`. Only capacityForecast and throughputForecast
+	// are; TestResponseRootNullabilityMatchesTheSDL derives the truth from
+	// contracts/graphql/v1/schema.graphql and fails if this drifts.
+	RootNullable bool
+
 	// Parity is this operation's declared comparator configuration.
 	Parity Options
 }
@@ -118,6 +124,7 @@ const volatileForecastIdentity = "freshly generated per request: an identical re
 var operationSpecs = map[string]OperationSpec{
 	"capacityForecast": {
 		ResponseRoot: "capacityForecast",
+		RootNullable: true,
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{"orgId": orgID, "input": map[string]any{}}
 		},
@@ -274,6 +281,7 @@ var operationSpecs = map[string]OperationSpec{
 	// (lane-goapi-parity, CHAOS-5451).
 	"throughputForecast": {
 		ResponseRoot: "throughputForecast",
+		RootNullable: true,
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{"orgId": orgID, "input": map[string]any{}}
 		},

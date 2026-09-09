@@ -154,3 +154,100 @@ func TestEmptyListRootIsStillAdmitted(t *testing.T) {
 			out[0].Admitted, out[0].TerminalState, out[0].RefusalReason, out[0].RefusalDetail)
 	}
 }
+
+// Round 2's F6. `decoder.More()` is implemented as
+// `err == nil && c != ']' && c != '}'`, so a body ending in a stray `}` or
+// `]` -- a serializer emitting one closing brace too many, the likeliest
+// real shape -- reported FALSE and sailed through the check added to close
+// C3. Reproduced before the fix: `{"data":{...}}}` gave TrailingBytes=false.
+func TestTrailingClosingTokensAreDetected(t *testing.T) {
+	for _, body := range []string{
+		`{"data":{"featureFlags":[]}}}`,
+		`{"data":{"featureFlags":[]}}]`,
+		`{"data":{"featureFlags":[]}}{"x":1}`,
+		`{"data":{"featureFlags":[]}} garbage`,
+	} {
+		snapshot, err := DecodeSnapshot([]byte(body))
+		if err != nil {
+			continue // an outright decode failure is also a refusal
+		}
+		if !snapshot.TrailingBytes {
+			t.Errorf("%q has bytes after its JSON value but TrailingBytes=false", body)
+		}
+	}
+	// The control: a clean body must NOT be flagged, or the check refuses
+	// every measurement and proves nothing.
+	clean, err := DecodeSnapshot([]byte(`{"data":{"featureFlags":[]}}`))
+	if err != nil {
+		t.Fatalf("DecodeSnapshot: %v", err)
+	}
+	if clean.TrailingBytes {
+		t.Fatal("a clean body must not be flagged as carrying trailing bytes")
+	}
+}
+
+// Round 2's F5. A scalar root, or an object carrying only __typename, is
+// what a resolver producing nothing looks like on the wire -- gqlgen adds
+// __typename to every selection set. Both were admitted before the fix.
+func TestMeaninglessRootsAreRefused(t *testing.T) {
+	for name, root := range map[string]any{
+		"scalar":        "just-a-string",
+		"typename only": map[string]any{"__typename": "FeatureFlagRegistryResult"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			snapshot := Snapshot{DataPresent: true, Data: map[string]any{"featureFlags": root}}
+			got := Admit(AdmissionInput{
+				Route: RouteEdge, NamedBuild: "b", ResponseRoot: "featureFlags",
+				Candidate:     Observation{StatusCode: 200, Plane: "go"},
+				Baseline:      Observation{StatusCode: 200, Plane: "python"},
+				CandidateSnap: snapshot, BaselineSnap: snapshot,
+			})
+			if got.Admitted {
+				t.Fatalf("%s root must not be admitted", name)
+			}
+			if got.Reason != RefusalEmptyResponseRoot {
+				t.Fatalf("expected %s, got %s", RefusalEmptyResponseRoot, got.Reason)
+			}
+		})
+	}
+}
+
+// Round 2's F4, in both directions. capacityForecast and throughputForecast
+// declare a NULLABLE root and their resolver documents null as a tolerated
+// empty, so both planes returning null is real parity and must be
+// admissible -- refusing it made those two operations unprovable against an
+// org with no history. Every other operation's root is non-null in the SDL,
+// where a null means the operation failed to produce its own result.
+func TestNullRootIsAdmissibleOnlyWhereTheSDLAllowsIt(t *testing.T) {
+	for _, testCase := range []struct {
+		operation string
+		nullable  bool
+	}{
+		{"capacityForecast", true},
+		{"throughputForecast", true},
+		{"featureFlags", false},
+		{"hotspots", false},
+	} {
+		t.Run(testCase.operation, func(t *testing.T) {
+			spec, err := SpecFor(testCase.operation)
+			if err != nil {
+				t.Fatalf("SpecFor: %v", err)
+			}
+			if spec.RootNullable != testCase.nullable {
+				t.Fatalf("%s: RootNullable=%v want %v", testCase.operation, spec.RootNullable, testCase.nullable)
+			}
+			snapshot := Snapshot{DataPresent: true, Data: map[string]any{spec.ResponseRoot: nil}}
+			got := Admit(AdmissionInput{
+				Route: RouteEdge, NamedBuild: "b",
+				ResponseRoot: spec.ResponseRoot, RootNullable: spec.RootNullable,
+				Candidate:     Observation{StatusCode: 200, Plane: "go"},
+				Baseline:      Observation{StatusCode: 200, Plane: "python"},
+				CandidateSnap: snapshot, BaselineSnap: snapshot,
+			})
+			if got.Admitted != testCase.nullable {
+				t.Fatalf("%s: a null root gave admitted=%v, want %v (%s)",
+					testCase.operation, got.Admitted, testCase.nullable, got.Detail)
+			}
+		})
+	}
+}

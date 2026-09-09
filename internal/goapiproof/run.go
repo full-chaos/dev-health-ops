@@ -387,6 +387,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		Route:         outcome.Route,
 		NamedBuild:    r.Registry.BuildIdentity,
 		ResponseRoot:  spec.ResponseRoot,
+		RootNullable:  spec.RootNullable,
 		Candidate:     candidate,
 		Baseline:      baseline,
 		CandidateSnap: candidateSnapshot,
@@ -451,11 +452,20 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 
 // decodeLeg turns one leg's body into a Snapshot, or names why it cannot.
 //
-// A non-finite literal is NOT a decode failure: Python's json emits NaN and
-// Infinity, Go's rejects them, and parity rule 3 makes a non-finite value a
-// mismatch rather than an unreadable response. It is surfaced as an
-// admission-shaped refusal here only because a Snapshot cannot represent
-// it; the runner records the mismatch instead. See ErrNonFiniteNumber.
+// Non-finite numbers are handled at TWO levels, and round 2's F9 was right
+// that the earlier comment blurred them:
+//
+//   - In the COMPARATOR, parity rule 3 stands unchanged: a decoded value
+//     that is NaN or Infinity is always a mismatch, never tolerance-compared
+//     (compare.go's compareNumber, pinned by TestCompareNonFiniteAlwaysMismatches).
+//   - At the WIRE, a body containing a bare `NaN`/`Infinity` LITERAL is not
+//     valid JSON. Go's decoder rejects it outright, so there is no decoded
+//     value to compare and no Snapshot to build. Under the admission
+//     invariant an unreadable body is refused rather than guessed at.
+//
+// Those are not in conflict: the first is about a value, the second about
+// bytes that never became one. The refusal names the cause specifically so
+// an operator is not left reading it as a generic decode failure.
 func decodeLeg(leg string, observation Observation) (Snapshot, Admission) {
 	snapshot, err := DecodeSnapshot(observation.Body)
 	if err == nil {

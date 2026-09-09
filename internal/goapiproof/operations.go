@@ -66,6 +66,20 @@ type OperationSpec struct {
 	// exactly like a routing failure. Check the SDL, never infer.
 	Variables func(orgID string, window Window) map[string]any
 
+	// ResponseRoot is the GraphQL field the operation's REGISTERED
+	// DOCUMENT selects at the top of `data` -- which is not always the
+	// operation name. flowMatrix, investmentBreakdown and investmentFull
+	// all select `analytics`, because query_route.go's operation keys are
+	// its own Mux/PostgresSwitch keys, chosen to disambiguate several
+	// registered documents that share a root field.
+	//
+	// It exists so every declared parity path can be checked against the
+	// subtree it will actually be compared against. Assigning declarations
+	// by operation NAME produced paths that matched nothing -- which fails
+	// the run correctly, but for a reason nobody would have understood
+	// from the failure.
+	ResponseRoot string
+
 	// Parity is this operation's declared comparator configuration.
 	Parity Options
 }
@@ -87,20 +101,23 @@ const volatileForecastIdentity = "freshly generated per request: an identical re
 //
 //   - VolatileFields: values regenerated per request (forecastId,
 //     computedAt). Populated below from the 2026-09-07 live measurement.
-//   - FloatTierB: merged floating-point aggregates, per CHAOS-5451's
-//     measured ClickHouse thread-order nondeterminism. EMPTY today ON
-//     PURPOSE: lane-goapi-parity owns the field list with source lines and
-//     an evidence path, and inventing entries ahead of that evidence would
-//     relax fields nobody measured -- while an invented entry that matched
-//     nothing would fail every run. Add them here, each with its written
-//     reason, when that list arrives.
+//   - FloatTierB: leaves whose value derives from a ClickHouse FLOATING-POINT
+//     aggregate, per CHAOS-5451. Populated below from lane-goapi-parity's
+//     read of the actual SQL, with the source line for each.
 //   - BaselineDefects: differences where PYTHON is wrong and Go is right
-//     (CHAOS-5448, CHAOS-5450). EMPTY today for the same reason: the exact
-//     field paths come from lane-goapi-parity. Until they land, those
-//     differences are recorded as ordinary mismatches -- which is the
-//     honest state, not a gap being papered over.
+//     (CHAOS-5447/5448/5449), each citing its ticket, evidence path and the
+//     field subtree it covers.
+//
+// Which operation a declaration belongs to is decided by the operation's
+// REGISTERED DOCUMENT, not by its name: several operations select a
+// differently-named root field (investmentBreakdown and investmentFull both
+// select `analytics`; flowMatrix does too), and evidenceQualityStats is in
+// investmentBreakdown's document but NOT investmentFull's. Assigning by
+// name would have produced entries that match nothing -- which fails the
+// run, correctly, but for a reason nobody would have understood.
 var operationSpecs = map[string]OperationSpec{
 	"capacityForecast": {
+		ResponseRoot: "capacityForecast",
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{"orgId": orgID, "input": map[string]any{}}
 		},
@@ -109,16 +126,25 @@ var operationSpecs = map[string]OperationSpec{
 			"data.capacityForecast.computedAt": volatileForecastIdentity,
 		}},
 	},
+	// capacityForecasts (the LIST) deliberately declares NOTHING. Its
+	// resolver reads stored columns back rather than recomputing, so its
+	// forecastId/computedAt are not per-request values and its
+	// throughputMean/throughputStddev are not recomputed aggregates
+	// (lane-goapi-parity, CHAOS-5451 read of the resolver). An earlier
+	// draft here copied the singular operation's volatile pair onto it;
+	// those entries would have matched nothing -- the list nests under
+	// edges.node -- and failed every run as stale. CHAOS-5450 (Python's
+	// naive timestamp on this path) is NOT pinned yet: lane-goapi-parity is
+	// still confirming the spec citation, and a baseline-defect entry
+	// added ahead of that would excuse a difference nobody has justified.
 	"capacityForecasts": {
+		ResponseRoot: "capacityForecasts",
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{"orgId": orgID, "filters": map[string]any{}}
 		},
-		Parity: Options{VolatileFields: map[string]string{
-			"data.capacityForecasts.forecastId": volatileForecastIdentity,
-			"data.capacityForecasts.computedAt": volatileForecastIdentity,
-		}},
 	},
 	"cognitiveLoad": {
+		ResponseRoot: "cognitiveLoad",
 		Variables: func(orgID string, w Window) map[string]any {
 			return map[string]any{"input": map[string]any{
 				"orgId": orgID, "sinceDate": w.SinceDate, "untilDate": w.UntilDate,
@@ -127,6 +153,7 @@ var operationSpecs = map[string]OperationSpec{
 		},
 	},
 	"complexityTimeseries": {
+		ResponseRoot: "complexityTimeseries",
 		Variables: func(orgID string, w Window) map[string]any {
 			return map[string]any{"input": map[string]any{
 				"orgId": orgID, "sinceUtc": w.SinceUTC, "untilUtc": w.UntilUTC,
@@ -136,6 +163,7 @@ var operationSpecs = map[string]OperationSpec{
 		},
 	},
 	"featureFlags": {
+		ResponseRoot: "featureFlags",
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{
 				"orgId": orgID, "provider": nil, "project": nil,
@@ -144,6 +172,7 @@ var operationSpecs = map[string]OperationSpec{
 		},
 	},
 	"flowMatrix": {
+		ResponseRoot: "analytics",
 		Variables: func(orgID string, w Window) map[string]any {
 			return map[string]any{"orgId": orgID, "batch": map[string]any{
 				"flowMatrix": map[string]any{
@@ -153,25 +182,71 @@ var operationSpecs = map[string]OperationSpec{
 				},
 			}}
 		},
+		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket: "CHAOS-5448",
+			Reason: "Python omits FINAL on work_item_cycle_times (templates.py:304/:397) where Go has it (flowmatrix.go:732/:802), so Python counts superseded ReplacingMergeTree row versions and its answer converges onto Go's only after a background merge. Go is correct. Evidence: /var/lib/oci-cache/lane-scratch/lane-goapi-parity/5448/repro.txt",
+			Paths:  []string{"data.analytics.flowMatrix.nodes.value", "data.analytics.flowMatrix.edges.value"},
+		}}},
 	},
+	// hotspots.riskScore is deliberately NOT Tier B, and the reasoning is
+	// worth keeping: it is a STORED Float64 column in file_hotspot_daily
+	// (migration 007:48) that both planes read via argMax, so no float
+	// arithmetic happens and CHAOS-5451's engine nondeterminism does not
+	// apply. The measured divergence is ~1e-2 relative -- seven orders of
+	// magnitude above a 1e-9 tolerance -- so Tier B would not have excused
+	// it anyway; it is a real defect, not last-bit noise
+	// (lane-goapi-parity, correcting the field list it was handed).
 	"hotspots": {
+		ResponseRoot: "hotspots",
 		Variables: func(orgID string, w Window) map[string]any {
 			return map[string]any{"input": map[string]any{
 				"orgId": orgID, "sinceUtc": w.SinceUTC, "untilUtc": w.UntilUTC,
 				"repoIds": nil, "teamIds": nil, "limit": 50,
 			}}
 		},
+		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket: "CHAOS-5447",
+			Reason: "Python argMaxes on computed_at alone and can therefore select a different physical row than Go for the same file. Go is correct. Covers the whole rows subtree because a different row differs in every field, not only riskScore. Evidence: /var/lib/oci-cache/lane-scratch/lane-goapi-parity/5447/repro.txt",
+			Paths:  []string{"data.hotspots.rows"},
+		}}},
 	},
-	"investmentBreakdown": {Variables: investmentVariables},
-	"investmentFull":      {Variables: investmentVariables},
+	// Both select the `analytics` root field, but NOT the same subtree:
+	// evidenceQualityStats is in investmentBreakdown's registered document
+	// and absent from investmentFull's, so declaring it on both would leave
+	// a permanently-stale entry on one of them.
+	"investmentBreakdown": {
+		ResponseRoot: "analytics",
+		Variables:    investmentVariables,
+		Parity: Options{FloatTierB: map[string]string{
+			"data.analytics.evidenceQualityStats.mean":   "avgIf(evidence_quality) -- ClickHouse float aggregate, order-nondeterministic (investmentquality.go:250, CHAOS-5451)",
+			"data.analytics.evidenceQualityStats.stddev": "stddevPopIf(evidence_quality) -- ClickHouse float aggregate; 20 identical runs over 5M rows gave 9 distinct values (investmentquality.go:251, CHAOS-5451)",
+			"data.analytics.breakdowns.items.value":      "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Derived from CHAOS-5451's rule rather than an observed divergence, and this table's payload always sets useInvestment=true; on the non-investment path the same measure is an exact integer sum",
+		}},
+	},
+	"investmentFull": {
+		ResponseRoot: "analytics",
+		Variables:    investmentVariables,
+		Parity: Options{FloatTierB: map[string]string{
+			"data.analytics.breakdowns.items.value": "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Same rule-derived entry as investmentBreakdown's. The sankey values on this document are NOT declared: they were not read or measured, so a divergence there stays a loud mismatch rather than a silent tolerance",
+		}},
+	},
 	"operatingReview": {
+		ResponseRoot: "operatingReview",
 		Variables: func(orgID string, w Window) map[string]any {
 			return map[string]any{"orgId": orgID, "input": map[string]any{
 				"weekStart": w.WeekStart, "teamId": nil,
 			}}
 		},
+		Parity: Options{FloatTierB: map[string]string{
+			"data.operatingReview.sections.metrics.value":            "avg()/sum() over Float64 (operatingreview.go:413-418,483-485,562-568,641,695,736,780,822,880) -- ClickHouse float aggregate, order-nondeterministic (CHAOS-5451). This is why two identical requests seconds apart on the SAME plane disagreed",
+			"data.operatingReview.sections.metrics.delta.value":      "derived from the same float aggregates as sections.metrics.value (CHAOS-5451)",
+			"data.operatingReview.sections.metrics.delta.priorValue": "derived from the same float aggregates as sections.metrics.value (CHAOS-5451)",
+			"data.operatingReview.sections.metrics.delta.absolute":   "derived from the same float aggregates as sections.metrics.value (CHAOS-5451)",
+			"data.operatingReview.sections.metrics.delta.percent":    "derived from the same float aggregates as sections.metrics.value (CHAOS-5451)",
+		}},
 	},
 	"reviewEdges": {
+		ResponseRoot: "reviewEdges",
 		Variables: func(orgID string, w Window) map[string]any {
 			return map[string]any{"input": map[string]any{
 				"orgId": orgID, "sinceDate": w.SinceDate, "untilDate": w.UntilDate,
@@ -179,18 +254,47 @@ var operationSpecs = map[string]OperationSpec{
 			}}
 		},
 	},
+	// The overlay `threshold` fields, estimateCoverage.ratio and
+	// rollingWindows.meanWeeklyThroughput are deliberately absent: the
+	// thresholds are hardcoded constants (kernel.go:70), and the other two
+	// are integer sums divided once in Go. All three are exact, and a
+	// tolerance on an exact field excuses a real defect
+	// (lane-goapi-parity, CHAOS-5451).
 	"throughputForecast": {
+		ResponseRoot: "throughputForecast",
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{"orgId": orgID, "input": map[string]any{}}
 		},
-		Parity: Options{VolatileFields: map[string]string{
-			"data.throughputForecast.forecastId": volatileForecastIdentity,
-			"data.throughputForecast.computedAt": volatileForecastIdentity,
-		}},
+		Parity: Options{
+			VolatileFields: map[string]string{
+				"data.throughputForecast.forecastId": volatileForecastIdentity,
+				"data.throughputForecast.computedAt": volatileForecastIdentity,
+			},
+			FloatTierB: map[string]string{
+				"data.throughputForecast.reviewBottleneck.value": "avg(pr_first_review_p50_hours) -- ClickHouse float aggregate (throughputforecast/clickhouse.go:393, CHAOS-5451)",
+				"data.throughputForecast.reviewBottleneck.score": "derived from reviewBottleneck.value (CHAOS-5451)",
+				"data.throughputForecast.wipCongestion.value":    "avg(wip_count_end_of_day) -- ClickHouse float aggregate (clickhouse.go:169, CHAOS-5451)",
+				"data.throughputForecast.wipCongestion.score":    "derived from wipCongestion.value (CHAOS-5451)",
+				"data.throughputForecast.incidentLoad.value":     "sum(incidents_count)/weeks -- ClickHouse float aggregate (clickhouse.go:490, CHAOS-5451)",
+				"data.throughputForecast.incidentLoad.score":     "derived from incidentLoad.value (CHAOS-5451)",
+				"data.throughputForecast.primaryRisk.value":      "a copy of whichever overlay is primary, so it inherits that overlay's float aggregate (CHAOS-5451)",
+				"data.throughputForecast.primaryRisk.score":      "a copy of whichever overlay is primary (CHAOS-5451)",
+				"data.throughputForecast.staleWip.p50AgeHours":   "avg(wip_age_p50_hours) -- ClickHouse float aggregate (clickhouse.go:237, CHAOS-5451)",
+				"data.throughputForecast.staleWip.p90AgeHours":   "avg(wip_age_p90_hours) -- ClickHouse float aggregate (clickhouse.go:238, CHAOS-5451)",
+			},
+		},
 	},
-	"workGraphArtifacts": {Variables: workGraphVariables},
-	"workGraphEdges":     {Variables: workGraphVariables},
-	"workGraphFlow":      {Variables: workGraphVariables},
+	"workGraphArtifacts": {Variables: workGraphVariables, ResponseRoot: "workGraphArtifacts"},
+	"workGraphEdges": {
+		ResponseRoot: "workGraphEdges",
+		Variables:    workGraphVariables,
+		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket: "CHAOS-5449",
+			Reason: "Python's un-deduped read returned 1000 rows carrying only 738 distinct edgeIds; Go's argMax dedup returned 1000 distinct edges and is a strict superset. Go is correct. Evidence: /var/lib/oci-cache/lane-scratch/lane-goapi-parity/5449/analysis.txt",
+			Paths:  []string{"data.workGraphEdges.edges"},
+		}}},
+	},
+	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
 }
 
 // investmentVariables is shared by investmentBreakdown and investmentFull.

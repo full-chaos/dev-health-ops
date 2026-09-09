@@ -304,21 +304,20 @@ appear here.
 
 ## Float comparison: engine nondeterminism and the Tier-B rule
 
-ClickHouse merges partial aggregate states in thread-completion order, so
-`avg`/`sum`/`stddevPop` over `Float64` differ by 1–2 ULP **run to run on
-both planes**. Measured under CHAOS-5451: 20 runs of `stddevPop` over 5M
-rows gave 9 distinct values; the same query with `max_threads=1` gave 1.
-That is engine behaviour, not a Go-vs-Python defect, and not a flake to
-retry — comparing such a field exactly manufactures a mismatch on a
-correct pair of planes, which is what the 2026-09-07 enablement harness
-did by treating every float as Tier A.
+ClickHouse merges partial aggregate states in thread-completion order and
+float addition is non-associative, so the same aggregate over the same
+rows returns different last-bit values run to run — on BOTH planes. Over
+5,000,000 `Float64` rows (CH 26.7.6.57): 20 identical `stddevPop` runs gave
+9 distinct values, `avg` gave 4, `max_threads=1` gave 1. Evidence:
+`lane-scratch/lane-goapi-parity/5451/ch-float-aggregate-nondeterminism.txt`.
+Comparing such a field exactly manufactures a mismatch on a correct pair of
+planes — which the 2026-09-07 enablement harness did — and is not a flake.
 
-CHAOS-4381 parity rule 3 is therefore enforced as a committed
-per-operation Tier-B table (`internal/goapiproof/operations.go`, beside
-`volatile_fields`): a named field compares with 1e-9 relative tolerance,
-everything else stays Tier A (exact), and an entry matching no compared
-field **fails the run**. A field qualifies only if it is a merged
-floating-point aggregate.
+CHAOS-4381 parity rule 3 is therefore a committed per-operation Tier-B
+table (`internal/goapiproof/operations.go`, beside `volatile_fields`): a
+leaf deriving from a ClickHouse FLOAT aggregate compares at 1e-9 relative;
+integer aggregates, constants and stored columns stay Tier A (exact); an
+entry matching no compared field **fails the run**.
 
 ## Status
 

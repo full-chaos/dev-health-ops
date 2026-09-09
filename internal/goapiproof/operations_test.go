@@ -132,9 +132,9 @@ func TestVolatileExclusionsAreRootedAtTheirOperation(t *testing.T) {
 			t.Fatalf("SpecFor(%q): %v", operation, err)
 		}
 		for path, reason := range spec.Parity.VolatileFields {
-			prefix := "data." + operation + "."
+			prefix := "data." + spec.ResponseRoot + "."
 			if !strings.HasPrefix(path, prefix) {
-				t.Fatalf("%s declares exclusion %q outside its own subtree (want prefix %q)", operation, path, prefix)
+				t.Fatalf("%s declares exclusion %q outside the subtree its document selects (want prefix %q)", operation, path, prefix)
 			}
 			if len(strings.TrimSpace(reason)) < 40 {
 				t.Fatalf("%s exclusion %q has no written reason (got %q)", operation, path, reason)
@@ -154,12 +154,11 @@ func TestWindowValidateRejectsAnIncompleteWindow(t *testing.T) {
 	}
 }
 
-// Every declared Tier-B entry must carry a written reason, and be rooted
-// at its own operation's subtree. The table is empty today (the field
-// list is lane-goapi-parity's, with source lines and evidence), so this
-// guards the entries that are about to be added rather than the ones that
-// are there -- the check has to exist BEFORE the first entry, or the
-// first entry is the one nobody checked.
+// Every declared Tier-B entry must carry a written reason and sit inside
+// the subtree its operation's REGISTERED DOCUMENT selects -- which is not
+// always the operation's name. Checking against the name is what an
+// earlier version of this test did, and it rejected every correct
+// investment/flowMatrix path (those documents select `analytics`).
 func TestTierBDeclarationsAreReasonedAndRooted(t *testing.T) {
 	for _, operation := range KnownOperations() {
 		spec, err := SpecFor(operation)
@@ -167,9 +166,9 @@ func TestTierBDeclarationsAreReasonedAndRooted(t *testing.T) {
 			t.Fatalf("SpecFor(%q): %v", operation, err)
 		}
 		for path, reason := range spec.Parity.FloatTierB {
-			prefix := "data." + operation + "."
+			prefix := "data." + spec.ResponseRoot + "."
 			if !strings.HasPrefix(path, prefix) {
-				t.Errorf("%s declares Tier-B path %q outside its own subtree (want prefix %q)", operation, path, prefix)
+				t.Errorf("%s declares Tier-B path %q outside the subtree its document selects (want prefix %q)", operation, path, prefix)
 			}
 			if len(strings.TrimSpace(reason)) < 20 {
 				t.Errorf("%s Tier-B path %q has no written reason (got %q)", operation, path, reason)
@@ -194,11 +193,38 @@ func TestBaselineDefectDeclarationsNameATicketAndPaths(t *testing.T) {
 				t.Errorf("%s baseline defect %s cites no field paths, so it excuses nothing", operation, defect.Ticket)
 			}
 			for _, path := range defect.Paths {
-				prefix := "data." + operation
+				prefix := "data." + spec.ResponseRoot
 				if path != prefix && !strings.HasPrefix(path, prefix+".") {
-					t.Errorf("%s baseline defect %s cites %q outside its own subtree", operation, defect.Ticket, path)
+					t.Errorf("%s baseline defect %s cites %q outside the subtree its document selects (want prefix %q)", operation, defect.Ticket, path, prefix)
 				}
 			}
 		}
+	}
+}
+
+// ResponseRoot is load-bearing for every declaration check above, so it
+// must be present and must not be quietly assumed equal to the operation
+// name -- three of the fifteen operations select a differently-named root.
+func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
+	sharedRoots := 0
+	for _, operation := range KnownOperations() {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatalf("SpecFor(%q): %v", operation, err)
+		}
+		if spec.ResponseRoot == "" {
+			t.Errorf("%s declares no ResponseRoot, so its parity paths cannot be checked", operation)
+		}
+		if spec.ResponseRoot != operation {
+			sharedRoots++
+		}
+	}
+	// flowMatrix, investmentBreakdown and investmentFull all select
+	// `analytics`. If this ever reads 0, either the documents changed or
+	// someone "tidied" ResponseRoot into a copy of the operation name --
+	// and the parity-path checks above would silently start passing for
+	// paths that can never match.
+	if sharedRoots != 3 {
+		t.Fatalf("expected 3 operations whose response root differs from their name, got %d", sharedRoots)
 	}
 }

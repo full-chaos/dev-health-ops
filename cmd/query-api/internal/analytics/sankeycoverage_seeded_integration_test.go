@@ -979,7 +979,8 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWit
 //
 //	in scope:     one-match, key-without-dot, two-matching, mixed,
 //	              dense-positive
-//	out of scope: non-matching, empty-map, empty-key, dense-zero
+//	out of scope: non-matching, empty-map, empty-key, dense-zero,
+//	              negative-weight, nan-weight
 //
 // dense-zero is the case that matters and the reason this test was rewritten.
 // It carries `feature_delivery.build` and `feature_delivery.ship` KEYS at
@@ -993,10 +994,11 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWit
 // returns the key itself, so `feature_delivery` matches `feature_delivery`.
 //
 // Every unit carries equal effort and one repository, so each contributes
-// exactly 1.0 and the denominator is a COUNT of in-scope units: 7 unfiltered,
-// 4 filtered. Under the old ARRAY JOIN the filtered figure was 5, because the
-// two-matching unit was counted twice -- so this test also pins the
-// multiplicity fix from the selection side.
+// exactly 1.0 and the denominator is a COUNT of in-scope units. The counts are
+// derived from the table above rather than written down here, so adding a row
+// cannot leave a stale number in this comment -- which is exactly what
+// happened once already, when the dense rows were added and this paragraph
+// still described the seven-row fixture.
 func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveWeightUnits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -1047,6 +1049,26 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveW
 		// it until these two rows existed.
 		{"wu-dense-positive", "map('feature_delivery.build', 1.0, 'feature_delivery.ship', 0, 'quality.test', 0, 'maintenance.debt', 0)", true},
 		{"wu-dense-zero", "map('feature_delivery.build', 0, 'feature_delivery.ship', 0, 'quality.test', 1.0, 'maintenance.debt', 0)", false},
+
+		// OUT-OF-CONTRACT weights. The platform contract calls these
+		// probabilities -- "subcat probs sum to theme probs" (root AGENTS.md,
+		// Work Graph + Investment) -- so neither shape should exist. But the
+		// column is a bare Map(String, Float64) with no constraint
+		// (migrations/clickhouse/017_investment_materialize_tables.sql:12) and
+		// no clamp on the write path, so both are reachable from a
+		// misbehaving producer.
+		//
+		// These rows PIN what `kv.2 > 0` does with them; they do not rule on
+		// what it SHOULD do. Both are excluded, which is the contract-
+		// consistent reading -- a negative or undefined weight is not positive
+		// evidence that the work belongs to the category -- and it is the same
+		// answer the predicate gives without special-casing either. If someone
+		// later decides a negative weight should be a loud data-quality signal
+		// rather than a silent exclusion, this is the test that will tell them
+		// the current behaviour is silent, instead of leaving them to discover
+		// it from a coverage number that quietly went down.
+		{"wu-negative-weight", "map('feature_delivery.build', -1.0, 'quality.test', 1.0)", false},
+		{"wu-nan-weight", "map('feature_delivery.build', nan, 'quality.test', 1.0)", false},
 	}
 	wantFiltered := 0.0
 	for _, sh := range shapes {
@@ -1121,8 +1143,8 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveW
 		Why: &model.WhyFilterInput{WorkCategory: []string{"feature_delivery"}},
 	})
 	if math.Abs(got-wantFiltered) > tol {
-		t.Errorf("filtered repo_total = %v, want %v -- one per IN-SCOPE unit. %v means wu-dense-zero is being selected, i.e. the predicate is testing key PRESENCE rather than positive weight and the filter has stopped filtering; %v means the two-matching unit is counted twice, i.e. the ARRAY JOIN multiplicity is back; below %v means a shape that should be in scope is being dropped, which is a selection regression",
-			got, wantFiltered, wantFiltered+1, wantFiltered+2, wantFiltered)
+		t.Errorf("filtered repo_total = %v, want %v -- one per IN-SCOPE unit (%d of %d seeded shapes). Reading the gap: ABOVE want usually means the predicate has gone back to testing key PRESENCE rather than positive weight, since every seeded shape carries a feature_delivery entry and only some carry weight -- the out-of-contract negative/NaN rows sit here too. Well above want, or a non-integer, means row multiplicity is back (an ARRAY JOIN over the subcategory column re-entering the query). BELOW want means a shape that should be in scope is being dropped, which is a selection regression and a different defect",
+			got, wantFiltered, int(wantFiltered), len(shapes))
 	}
 }
 

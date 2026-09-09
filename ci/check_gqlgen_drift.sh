@@ -65,7 +65,7 @@ fi
 #
 # Line numbers are dropped so an unrelated insertion elsewhere in a generated
 # file does not churn every entry. Something must take their place, because
-# content alone is ambiguous: 58 of these entries are comment lines, and two
+# content alone is ambiguous: 139 of these entries are comment lines, and two
 # genuinely different changes -- the same comment text removed from two
 # different types -- normalise to one identical entry, so the guard would see
 # one where there are two and a swap between them as no change at all.

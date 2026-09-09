@@ -258,3 +258,41 @@ def test_the_readme_documents_the_safe_command() -> None:
         "generated.go and models_gen.go before regenerating and does not put "
         "them back when the run fails -- observed exiting 1 with an empty error."
     )
+
+
+def test_the_guards_comment_count_matches_the_allowlist() -> None:
+    """The rationale cites a number; prose drifts from the file it describes.
+
+    ci/check_gqlgen_drift.sh justifies the entry format by saying how many
+    entries are comment lines. That number has been wrong TWICE: first 81,
+    which was a per-FILE line count, then 58, from an awk that split the
+    entry on tabs and so missed every INDENTED comment (the majority). A
+    wrong number in the rationale is how a reader talks themselves out of the
+    format, and it survived two hand-corrections, which is the argument for
+    computing it here instead. Asserted against the real file rather than
+    pinned, so a deliberate re-bless updates one number and this test says
+    which.
+    """
+    match = re.search(r"(\d+) of these entries are comment lines", GUARD.read_text())
+    assert match, (
+        "ci/check_gqlgen_drift.sh no longer states how many entries are comment "
+        "lines. That sentence is the justification for the entry format; if it "
+        "moved, move this assertion with it."
+    )
+    claimed = int(match.group(1))
+
+    entries = [
+        ln for ln in ALLOWLIST.read_text().splitlines() if ln and not ln.startswith("#")
+    ]
+    actual = 0
+    for entry in entries:
+        parts = entry.split("\t", 2)
+        if len(parts) == 3 and parts[2][1:].lstrip().startswith("//"):
+            actual += 1
+
+    assert claimed == actual, (
+        f"ci/check_gqlgen_drift.sh claims {claimed} of the allowlist entries are "
+        f"comment lines; {actual} of them are. Update the comment (or re-bless "
+        "the allowlist), because that count is the stated reason the entry "
+        "format carries a declaration at all."
+    )

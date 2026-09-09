@@ -28,6 +28,7 @@ TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
 CHECK_GO_TIMEOUT_SECONDS = 120
 
 EXPECTED_PACKAGES = {
+    "internal/goapiproof",
     "cmd/dev-health-reconciler",
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
@@ -427,10 +428,14 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # own machinery (computeparity.go/computeparity_test.go, neither
     # integration-tagged) had no importer left anywhere in the repo either,
     # so the whole package was deleted, not just its two integration files.
-    # CURRENT TOTAL: 51 -- the one number to bump when a new
+    # CHAOS-5425 added internal/goapiproof's first //go:build integration
+    # file (receipt_integration_test.go: the `prove` verb's receipt writer
+    # and the enablement-proof predicate, against a real Postgres with the
+    # registry's actual FK and CHECK constraints). 51 -> 52.
+    # CURRENT TOTAL: 52 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "51 package(s) discovered, 0 denylisted, 51 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 51 package(s)" in result.stdout
+    assert "52 package(s) discovered, 0 denylisted, 52 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 52 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -489,7 +494,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # includes the providersync shard-1 package, same as every other count
     # in this comment block.
     # CURRENT TOTAL: 51 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 51
+    assert len(flattened) == len(set(flattened)) == 52
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1946,7 +1951,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # 50 (51 discovered - 1 for the providersync shard-1 package).
     # CURRENT TOTAL: 50 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 50
+    assert len(selected_packages) == len(set(selected_packages)) == 51
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from dev_health_ops.models.reports import ReportRun
 from dev_health_ops.reports.export import start_report_run
+from tests._alembic_heads import application_schema_head
 
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
@@ -241,4 +242,4 @@ def test_0098_downgrade_and_reupgrade_converge(
 
     command.upgrade(_migration_config(), "application_schema@head")
     assert _INDEX in _index_map(migrated_to_0097.engine)
-    assert _revisions(migrated_to_0097.engine) == {"0127"}
+    assert _revisions(migrated_to_0097.engine) == {application_schema_head()}

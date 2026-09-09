@@ -24,6 +24,8 @@ import sqlalchemy as sa
 from alembic import command
 from sqlalchemy.engine import make_url
 
+from tests._alembic_heads import application_schema_head
+
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 
 pytestmark = pytest.mark.skipif(
@@ -107,7 +109,7 @@ async def test_application_schema_status_ancestor_walk(scratch_database) -> None
     await asyncio.to_thread(_upgrade_to, sync_url, "application_schema@head")
     satisfied, heads = await application_schema_status(async_url)
     assert satisfied is True
-    assert heads == ("0127",)
+    assert heads == (application_schema_head(),)
 
 
 @pytest.mark.asyncio

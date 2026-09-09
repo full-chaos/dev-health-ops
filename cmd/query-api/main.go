@@ -226,12 +226,12 @@ func main() {
 	// configured, nothing to check" contract for that state.
 	var ready func(context.Context) error
 	if routeCfg, ok := loadQueryRouteConfig(); ok {
-		queryHandler, registryHandler, readyFn, cleanup, buildErr := buildQueryRoute(routeCfg)
+		handlers, readyFn, cleanup, buildErr := buildQueryRoute(routeCfg)
 		if buildErr != nil {
 			log.Fatalf("query-api: build /query route: %v", buildErr)
 		}
 		defer cleanup()
-		mux.HandleFunc("/query", queryHandler)
+		mux.HandleFunc("/query", handlers.Query)
 		// GET /registry: what THIS process registers, and the schema digest
 		// it computed. Mounted with /query, not beside /healthz, on purpose
 		// -- it describes /query's registration set, so an unconfigured
@@ -239,7 +239,18 @@ func main() {
 		// than answer for a route that does not exist. `dev-hops go-api
 		// routing enable` treats that 404 as a refusal, which is correct:
 		// there is nothing to enable into. See registry_route.go.
-		mux.HandleFunc("/registry", registryHandler)
+		mux.HandleFunc("/registry", handlers.Registry)
+		// GET /buildinfo: which BUILD this process is. Separate from
+		// /registry on purpose (team-lead ruling R51, 2026-09-09):
+		// /registry's own doc comment states its body is exactly the
+		// schema digest and the operation map and is "not an invitation
+		// to add build paths, env, or pool state later", and that
+		// restriction is worth keeping. This route answers the different
+		// question CHAOS-5425 needs -- a proof receipt names the build
+		// that served it, and until now the only available answer was an
+		// operator-typed sha nothing verified. See buildinfo_route.go.
+		mux.HandleFunc("/buildinfo", handlers.BuildInfo)
+		mountProofRoute(mux, handlers.Proof)
 		ready = readyFn
 		// CHAOS-4710 deliverable 3: the mount-confirmation log line used to
 		// live here as a hand-typed, six-of-twelve literal (stale since
@@ -254,6 +265,12 @@ func main() {
 		// is, assigned directly, not returned from a helper).
 	} else {
 		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_* unset) -- staying Wave-0 empty")
+		// Say so about the proof route too, with its own explicit zero.
+		// Previously this branch logged nothing about /query/proof, so an
+		// operator reading the log could not tell "the proof route is off"
+		// from "nobody ever considered it" -- the same conflation the
+		// registered/not-registered lines exist to prevent (codex r1 F8).
+		mountProofRoute(mux, nil)
 	}
 	mux.HandleFunc("/readyz", readyzHandler(ready))
 

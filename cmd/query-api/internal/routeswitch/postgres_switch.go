@@ -80,6 +80,14 @@ type PostgresSwitch struct {
 	pool            *pgxpool.Pool
 	schemaDigest    string
 	documentDigests map[string]string
+	// reachable is the mode set this instance treats as reachable.
+	// NewPostgresSwitch sets reachableModes (production: canary|primary);
+	// NewProofSwitch widens it by "shadow" for the measurement-only
+	// route. Kept as a field rather than a second Enabled implementation
+	// so both share ONE registry lookup -- a copied query is exactly the
+	// thing that would get the (schema_digest, document_digest,
+	// selected_operation) key wrong.
+	reachable map[string]bool
 }
 
 // NewPostgresSwitch builds a PostgresSwitch. pool must not be nil.
@@ -94,7 +102,7 @@ func NewPostgresSwitch(pool *pgxpool.Pool, schemaDigest string, documentDigests 
 	for k, v := range documentDigests {
 		copied[k] = v
 	}
-	return &PostgresSwitch{pool: pool, schemaDigest: schemaDigest, documentDigests: copied}
+	return &PostgresSwitch{pool: pool, schemaDigest: schemaDigest, documentDigests: copied, reachable: reachableModes}
 }
 
 // Enabled implements Switch. It queries `go_api_routing_state` for the
@@ -134,5 +142,5 @@ func (s *PostgresSwitch) Enabled(operation string) bool {
 		log.Printf("routeswitch: PostgresSwitch lookup failed for operation %q: %v", operation, err)
 		return false
 	}
-	return reachableModes[mode]
+	return s.reachable[mode]
 }

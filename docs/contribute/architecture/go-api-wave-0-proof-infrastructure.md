@@ -302,6 +302,23 @@ appear here.
 | `sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706` | before 2026-09-01 | superseded by `33b3f3f21d` | The twelve 2026-09-01 rows were seeded here and died the same day |
 | `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88` | 2026-09-01 | `33b3f3f21d` (#2065, widen `TimeseriesBucket.value` nullability) | Current |
 
+## Float comparison: engine nondeterminism and the Tier-B rule
+
+ClickHouse merges partial aggregate states in thread-completion order and
+float addition is non-associative, so the same aggregate over the same
+rows returns different last-bit values run to run — on BOTH planes. Over
+5,000,000 `Float64` rows (CH 26.7.6.57): 20 identical `stddevPop` runs gave
+9 distinct values, `avg` gave 4, `max_threads=1` gave 1. Evidence:
+`lane-scratch/lane-goapi-parity/5451/ch-float-aggregate-nondeterminism.txt`.
+Comparing such a field exactly manufactures a mismatch on a correct pair of
+planes — which the 2026-09-07 enablement harness did — and is not a flake.
+
+CHAOS-4381 parity rule 3 is therefore a committed per-operation Tier-B
+table (`internal/goapiproof/operations.go`, beside `volatile_fields`): a
+leaf deriving from a ClickHouse FLOAT aggregate compares at 1e-9 relative;
+integer aggregates, constants and stored columns stay Tier A (exact); an
+entry matching no compared field **fails the run**.
+
 ## Status
 
 As of 2026-08-27, every Wave 0 deliverable exists and is tested: the

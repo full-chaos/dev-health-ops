@@ -30,6 +30,8 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy.engine import Engine, make_url
 
+from tests._alembic_heads import application_schema_head
+
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
 _CANDIDATE_BUILD = "go_api_candidate_build"
@@ -351,4 +353,4 @@ def test_0114_downgrade_and_reupgrade_converge(
 
     command.upgrade(_migration_config(), "application_schema@head")
     assert sa.inspect(migrated_to_0113.engine).has_table(_CANDIDATE_BUILD)
-    assert _revisions(migrated_to_0113.engine) == {"0127"}
+    assert _revisions(migrated_to_0113.engine) == {application_schema_head()}

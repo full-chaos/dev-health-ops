@@ -172,8 +172,16 @@ class TestPostgresUpgrade:
         )
         scripts = ScriptDirectory.from_config(cfg)
 
-        assert set(scripts.get_heads()) == {"0066", "0127"}
-        assert scripts.get_revision("application_schema@head").revision == "0127"
+        # The application_schema head is DERIVED, not pinned: a literal here
+        # fails every migration that moves the head, for a reason unrelated to
+        # what this asserts. The claim is that the two branches stay separate --
+        # "0066" stays literal because it is a fixed, authorized cutover point,
+        # and pinning it is what makes an accidental third branch visible.
+        application_schema_head = scripts.get_revision(
+            "application_schema@head"
+        ).revision
+        assert scripts.get_revision("river_cutover@head").revision == "0066"
+        assert set(scripts.get_heads()) == {"0066", application_schema_head}
         assert _database_has_revision(cfg, ("0096",), "0065")
         assert not _database_has_revision(cfg, ("0096",), "0066")
 

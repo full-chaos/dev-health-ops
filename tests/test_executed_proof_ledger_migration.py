@@ -40,6 +40,7 @@ from dev_health_ops.models import (
     SyncRunStatus,
     SyncRunUnit,
 )
+from tests._alembic_heads import application_schema_head
 
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
@@ -317,7 +318,7 @@ def test_0109_backfill_is_idempotent_and_downgrade_is_clean(
     assert _revisions(engine) == {"0108"}
 
     command.upgrade(_migration_config(), "application_schema@head")
-    assert _revisions(engine) == {"0127"}
+    assert _revisions(engine) == {application_schema_head()}
     assert _ledger(engine) == first
 
 

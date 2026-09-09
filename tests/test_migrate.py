@@ -64,9 +64,21 @@ class TestAlembicDirResolution:
             heads = script.get_heads()
             revisions = list(script.walk_revisions())
 
-        assert set(heads) == {"0066", "0127"}
+        # The application_schema head is DERIVED, not pinned. A literal here
+        # ("0127" until CHAOS-5425's 0128 moved it) fails every migration that
+        # advances the branch, for a reason unrelated to what this asserts.
+        # The claim is that the graph has EXACTLY TWO heads and they are the
+        # two named branches -- so an accidental third branch, or a head that
+        # is not reachable by its own label, still fails loudly.
+        #
+        # "0066" stays literal because it is a fixed, authorized cutover
+        # point rather than a moving tip; pinning it is what makes a stray
+        # river_cutover revision visible.
+        application_schema_head = script.get_revision(
+            "application_schema@head"
+        ).revision
         assert script.get_revision("river_cutover@head").revision == "0066"
-        assert script.get_revision("application_schema@head").revision == "0127"
+        assert set(heads) == {"0066", application_schema_head}
         assert revisions
 
     def test_no_two_migrations_declare_the_same_revision_id(self):

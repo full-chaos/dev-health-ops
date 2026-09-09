@@ -884,7 +884,29 @@ func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
 // the ClickHouse Ping's fail-fast-at-boot discipline -- see that check's
 // own comment for why it does not substitute for the live one in
 // readinessCheck.
-func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, http.HandlerFunc, func(context.Context) error, func(), error) {
+// queryRouteHandlers groups what buildQueryRoute mounts.
+//
+// A struct rather than a longer positional return list: CHAOS-5425 added
+// the third and fourth handlers (/query/proof and /buildinfo), and a
+// six-value positional return is exactly where two same-typed
+// http.HandlerFunc values get swapped at a call site with nothing to
+// catch it -- /query and /query/proof differ ONLY in reachability, so a
+// swap would silently make shadow operations reachable to real traffic.
+type queryRouteHandlers struct {
+	// Query is /query: production reachability, canary|primary only.
+	Query http.HandlerFunc
+	// Proof is the same pipeline over a measurement-only Switch that also
+	// admits shadow. Mounted only by mountProofRoute, which refuses in a
+	// production posture and without an explicit opt-in.
+	Proof http.HandlerFunc
+	// Registry is GET /registry.
+	Registry http.HandlerFunc
+	// BuildInfo is GET /buildinfo -- which build this process is,
+	// authenticated with the same envelope verifier /query uses.
+	BuildInfo http.HandlerFunc
+}
+
+func buildQueryRoute(cfg queryRouteConfig) (queryRouteHandlers, func(context.Context) error, func(), error) {
 	// CHAOS-5013: the schema digest routeswitch.PostgresSwitch needs for
 	// its own routing-state lookups is computed directly from the
 	// embedded SDL, not read from an operator-supplied env var and
@@ -898,7 +920,7 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, http.HandlerFunc, 
 
 	chClient, err := newQueryRouteClickHouseClient(cfg.ClickHouseURI)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return queryRouteHandlers{}, nil, nil, err
 	}
 	// Eager readiness check, matching cmd/dev-health-worker's own
 	// documented contract for this exact env var (deploy/go-workers/
@@ -917,18 +939,18 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, http.HandlerFunc, 
 	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := chClient.Ping(pingCtx); err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("query-api: ClickHouse readiness check failed (CLICKHOUSE_URI must be the NATIVE protocol port, not the HTTP port -- see deploy/go-workers/README.md): %w", err)
+		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: ClickHouse readiness check failed (CLICKHOUSE_URI must be the NATIVE protocol port, not the HTTP port -- see deploy/go-workers/README.md): %w", err)
 	}
 
 	pgPool, err := pgxpool.New(context.Background(), cfg.RegistryPostgresURI)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return queryRouteHandlers{}, nil, nil, err
 	}
 
 	verifier, err := principal.NewVerifier(cfg.EnvelopeJWKSPath, cfg.EnvelopeIssuer, cfg.EnvelopeAudience)
 	if err != nil {
 		pgPool.Close()
-		return nil, nil, nil, nil, err
+		return queryRouteHandlers{}, nil, nil, err
 	}
 	// CHAOS-4708: eager readiness check, matching the ClickHouse Ping
 	// above's "measurement that did not happen must FAIL, loudly"
@@ -943,13 +965,19 @@ func buildQueryRoute(cfg queryRouteConfig) (http.HandlerFunc, http.HandlerFunc, 
 	// readiness check below does not substitute for THIS eager Ping.
 	if err := verifier.CheckJWKS(); err != nil {
 		pgPool.Close()
-		return nil, nil, nil, nil, fmt.Errorf("query-api: JWKS readiness check failed (GO_API_ENVELOPE_JWKS_PATH must point to a readable, non-empty, valid Ed25519 JWKS document): %w", err)
+		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: JWKS readiness check failed (GO_API_ENVELOPE_JWKS_PATH must point to a readable, non-empty, valid Ed25519 JWKS document): %w", err)
 	}
 
-	handler, registryHandler := newQueryHandler(chClient, pgPool, verifier, schemaDigest)
+	handler, proofHandler, registryHandler := newQueryHandler(chClient, pgPool, verifier, schemaDigest)
+	handlers := queryRouteHandlers{
+		Query:     handler,
+		Proof:     proofHandler,
+		Registry:  registryHandler,
+		BuildInfo: newBuildInfoHandler(verifier),
+	}
 	cleanup := func() { pgPool.Close() }
 	ready := readinessCheck(chClient, pgPool, verifier)
-	return handler, registryHandler, ready, cleanup, nil
+	return handlers, ready, cleanup, nil
 }
 
 // readinessCheck returns a func that checks ALL THREE of /query's live
@@ -1137,7 +1165,7 @@ func mountedRouteLogMessage(digestByOperation map[string]string) string {
 	)
 }
 
-func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) (http.HandlerFunc, http.HandlerFunc) {
+func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, verifier *principal.Verifier, schemaDigest string) (http.HandlerFunc, http.HandlerFunc, http.HandlerFunc) {
 	// digestByOperation is this route's registered-document inventory:
 	// operation name -> the sha256 digest of that operation's registered
 	// document text. CHAOS-4369 Wave 3 generalizes what Wave 1/2 hardcoded
@@ -1233,6 +1261,33 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		routeMux.Register(operation, gqlHandler)
 	}
 
+	// CHAOS-5425: the SAME pipeline is built a second time over a
+	// measurement-only Switch, so a shadow-mode operation can be executed
+	// on the deployed build without exposing it to real traffic. Both
+	// handlers share newDocumentDispatchHandler below -- byte-identical
+	// ingress, body-size contract, document resolution, bearer/envelope
+	// verification and org context. ONLY the Switch differs, which is the
+	// entire point: a proof must exercise the real path, and a second
+	// hand-written copy of this closure would be a second path.
+	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitch(pgPool, schemaDigest, digestByOperation))
+	for operation := range digestByOperation {
+		proofMux.Register(operation, gqlHandler)
+	}
+
+	return newDocumentDispatchHandler(routeMux, operationByDigest, verifier),
+		newDocumentDispatchHandler(proofMux, operationByDigest, verifier),
+		registryHandler
+}
+
+// newDocumentDispatchHandler builds the per-request pipeline both /query
+// and /query/proof serve: method check, the Python edge's body-size
+// contract, registered-document resolution, bearer/envelope verification,
+// org context, and dispatch through the supplied Mux.
+//
+// It takes the Mux rather than the Switch so the two routes cannot drift
+// in anything EXCEPT reachability -- the property the proof route exists
+// to vary, and the only one it is allowed to.
+func newDocumentDispatchHandler(routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1309,7 +1364,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 		routeMux.Dispatch(operation, w, r)
-	}, registryHandler
+	}
 }
 
 // operationForDocument resolves a request's raw query text to a

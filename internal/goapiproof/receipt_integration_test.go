@@ -484,8 +484,8 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteReceipts: %v", err)
 	}
-	if written != 1 {
-		t.Fatalf("the run must stay visible: wrote %d rows, want 1", written)
+	if len(written) != 1 || !written["featureFlags"] {
+		t.Fatalf("the run must stay visible: wrote %v, want featureFlags", written)
 	}
 
 	// ZERO rows may satisfy the enablement predicate.

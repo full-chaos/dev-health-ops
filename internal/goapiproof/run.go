@@ -280,10 +280,19 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 //
 // Only ADMITTED outcomes produce a receipt: a refusal is a measurement that
 // did not happen, and the run report is where those are visible.
+//
+// Both flags are checked, not just Executed. `Run` sets Executed only after
+// Admit passes, so today they cannot disagree -- but this is an EXPORTED
+// function that will take whatever outcomes a caller hands it, and the
+// entire history of this file is defaults that admitted things nobody had
+// thought about. A confirmation pass drove exactly that probe: a
+// hand-built outcome with Executed set and Admitted false produced a
+// receipt. Unreachable from the command, one line to make unreachable
+// everywhere.
 func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receipt, error) {
 	receipts := make([]Receipt, 0, len(outcomes))
 	for _, outcome := range outcomes {
-		if !outcome.Executed {
+		if !outcome.Executed || !outcome.Admitted {
 			continue
 		}
 		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
@@ -330,7 +339,7 @@ func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receip
 func (r *Runner) RefusalReceipts(outcomes []Outcome, observedAt time.Time, cause string) ([]Receipt, error) {
 	admitted := 0
 	for _, outcome := range outcomes {
-		if outcome.Executed {
+		if outcome.Executed && outcome.Admitted {
 			admitted++
 		}
 	}
@@ -340,7 +349,7 @@ func (r *Runner) RefusalReceipts(outcomes []Outcome, observedAt time.Time, cause
 
 	receipts := make([]Receipt, 0, len(outcomes))
 	for _, outcome := range outcomes {
-		if !outcome.Executed {
+		if !outcome.Executed || !outcome.Admitted {
 			continue
 		}
 		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
@@ -365,14 +374,26 @@ func (r *Runner) RefusalReceipts(outcomes []Outcome, observedAt time.Time, cause
 	return receipts, nil
 }
 
-// WriteReceipts writes a whole run's receipts, each atomically.
-func WriteReceipts(ctx context.Context, db Querier, receipts []Receipt) (int, error) {
-	written := 0
+// WriteReceipts writes a whole run's receipts, each atomically, and returns
+// the operations it actually wrote.
+//
+// It returns the SET rather than a count so the per-outcome
+// `receipt_written` flag can be set from what really happened. Reporting a
+// run-level `receipts_written=N` while every outcome still said
+// `receipt_written: false` was a small lie of exactly the kind this
+// instrument exists not to tell (confirmation pass, P3).
+//
+// A partial write is reported partially rather than rolled back: each
+// receipt is individually atomic, and losing a whole run's evidence to one
+// bad row would be worse than an honest partial record. The caller emits
+// the report either way.
+func WriteReceipts(ctx context.Context, db Querier, receipts []Receipt) (map[string]bool, error) {
+	written := map[string]bool{}
 	for _, receipt := range receipts {
 		if _, err := WriteAtomic(ctx, db, receipt); err != nil {
 			return written, err
 		}
-		written++
+		written[receipt.SelectedOperation] = true
 	}
 	return written, nil
 }

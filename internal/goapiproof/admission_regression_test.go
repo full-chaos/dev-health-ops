@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // cEdge answers both legs with full control over status, body and headers.
@@ -249,5 +250,55 @@ func TestNullRootIsAdmissibleOnlyWhereTheSDLAllowsIt(t *testing.T) {
 					testCase.operation, got.Admitted, testCase.nullable, got.Detail)
 			}
 		})
+	}
+}
+
+// Receipt construction requires ADMISSION, not merely Executed.
+//
+// `Run` sets Executed only after Admit passes, so the two cannot disagree
+// today -- but ReceiptsFor is exported and takes whatever it is handed, and
+// a confirmation-pass probe drove exactly that: a hand-built outcome with
+// Executed true and Admitted false produced a receipt. Given this file's
+// entire history is defaults that admitted things nobody thought about, the
+// flag is checked rather than assumed.
+func TestReceiptsRequireAdmissionNotJustExecution(t *testing.T) {
+	runner := &Runner{
+		Registry: RegistryView{SchemaDigest: "sha256:x", BuildIdentity: "b"},
+		Config:   Config{OrgID: "70d529e0", Window: DefaultWindow()},
+	}
+	unadmitted := []Outcome{{
+		Operation:      "featureFlags",
+		DocumentDigest: "d",
+		Route:          RouteEdge,
+		Executed:       true,
+		Admitted:       false,
+		TerminalState:  TerminalStateMatch,
+	}}
+
+	receipts, err := runner.ReceiptsFor(unadmitted, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 0 {
+		t.Fatalf("an unadmitted outcome must produce no receipt, got %d", len(receipts))
+	}
+
+	refusals, err := runner.RefusalReceipts(unadmitted, time.Now().UTC(), "build moved")
+	if err != nil {
+		t.Fatalf("RefusalReceipts: %v", err)
+	}
+	if len(refusals) != 0 {
+		t.Fatalf("an unadmitted outcome has no withheld result either, got %d", len(refusals))
+	}
+
+	// The control: flipping Admitted true DOES produce one, so the check
+	// above is discriminating rather than returning nothing regardless.
+	unadmitted[0].Admitted = true
+	receipts, err = runner.ReceiptsFor(unadmitted, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 1 {
+		t.Fatalf("an admitted outcome must produce exactly one receipt, got %d", len(receipts))
 	}
 }

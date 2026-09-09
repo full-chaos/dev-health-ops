@@ -254,18 +254,27 @@ func run() error {
 		return receiptErr
 	}
 
+	var writeErr error
 	if !f.dryRun && pool != nil {
 		written, err := goapiproof.WriteReceipts(ctx, pool, receipts)
-		summary.ReceiptsWritten = written
-		if err != nil {
-			return fmt.Errorf("writing receipts after a completed run: %w", err)
+		summary.ReceiptsWritten = len(written)
+		for i := range outcomes {
+			outcomes[i].ReceiptWritten = written[outcomes[i].Operation]
 		}
+		// Held, not returned: the report below is exactly the evidence
+		// somebody needs to see when a write fails halfway, and returning
+		// here would drop it -- "report the problem and return" is the trap
+		// that loses the failure signal.
+		writeErr = err
 	}
-	if stabilityErr != nil {
+	for _, err := range []error{stabilityErr, writeErr} {
+		if err == nil {
+			continue
+		}
 		if runErr == nil {
-			runErr = stabilityErr
+			runErr = err
 		} else {
-			runErr = fmt.Errorf("%w; additionally: %v", runErr, stabilityErr)
+			runErr = fmt.Errorf("%w; additionally: %v", runErr, err)
 		}
 	}
 

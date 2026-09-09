@@ -122,6 +122,15 @@ type Stats struct {
 	RepoCascadeAncestor   int `json:"repo_cascade_ancestor"`
 	RepoCascadeChildren   int `json:"repo_cascade_children"`
 	RepoCascadeUnassigned int `json:"repo_cascade_unassigned"`
+	// RepoCascadeHop1/Hop2Plus/MaxHops (CHAOS-5459) describe HOW FAR the
+	// fixed-point cascade had to reach. Hop 1 is the pre-fix behaviour --
+	// inheriting directly from a relative with its own signal; anything above
+	// it only exists because the cascade now chains. They are reported in the
+	// run's log line, deliberately NOT as a metric label: the counter's
+	// `source` vocabulary is closed and a hop count would make it unbounded.
+	RepoCascadeHop1     int `json:"repo_cascade_hop1"`
+	RepoCascadeHop2Plus int `json:"repo_cascade_hop2_plus"`
+	RepoCascadeMaxHops  int `json:"repo_cascade_max_hops"`
 }
 
 // Materializer holds the collaborators one org-scoped run needs. All three are
@@ -218,10 +227,24 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// the batch has been examined.
 	ownRepoByComponent := make(map[int]*uuid.UUID, len(components))
 	for index, component := range components {
-		ownRepoByComponent[index] = collectSingleRepoID(component.Edges, edgeRepoIDs)
+		repoID := collectSingleRepoID(component.Edges, edgeRepoIDs)
+		if repoID == nil {
+			// CHAOS-5459: a component whose repo comes from its own PR or
+			// commit CHURN is just as much an "own signal" as one whose edges
+			// carry a repo_id -- it is the same claim ("this unit's own work
+			// happened in repo X"), arrived at from the PR/commit node id
+			// instead of the edge row. Seeding only from edges meant a
+			// PR-linked parent was invisible to its own children: measured on
+			// org 70d529e0, `own_edges` appears on 648 issues while pr_churn
+			// resolves 497 units per run, and NONE of the 198 unresolved
+			// sub-issues had a parent with an `own_edges` repo.
+			repoID = churnRepoForComponent(component, entities)
+		}
+		ownRepoByComponent[index] = repoID
 	}
 	issueComponent := buildIssueComponentIndex(components)
 	repoCascades := computeRepoHierarchyCascade(components, ownRepoByComponent, entities.WorkItems, issueComponent)
+	maxHops := 0
 	for _, cascade := range repoCascades {
 		switch {
 		case cascade.Source == RepoSourceChildren:
@@ -229,7 +252,20 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		case cascade.Source != "":
 			stats.RepoCascadeAncestor++
 		}
+		// Hop buckets, not a new metric label: the counter's `source`
+		// vocabulary stays closed, and a cascade that starts reaching further
+		// than it used to shows up in the run's log line instead.
+		switch {
+		case cascade.Hops <= 1:
+			stats.RepoCascadeHop1++
+		default:
+			stats.RepoCascadeHop2Plus++
+		}
+		if cascade.Hops > maxHops {
+			maxHops = cascade.Hops
+		}
 	}
+	stats.RepoCascadeMaxHops = maxHops
 	stats.RepoCascadeOwn = 0
 	for _, repoID := range ownRepoByComponent {
 		if repoID != nil {
@@ -237,6 +273,21 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 	}
 	stats.RepoCascadeUnassigned = len(components) - stats.RepoCascadeOwn - stats.RepoCascadeAncestor - stats.RepoCascadeChildren
+
+	// CHAOS-5458: these counters were computed and DISCARDED before this
+	// change, so "is repo attribution degrading" could only be answered by an
+	// ad-hoc ClickHouse query after the fact.
+	m.logger.InfoContext(ctx, "investment repo attribution",
+		"org_id", cfg.OrgID, "run_id", cfg.RunID,
+		"components", stats.Components,
+		"own_signal", stats.RepoCascadeOwn,
+		"hierarchy_ancestor", stats.RepoCascadeAncestor,
+		"hierarchy_children", stats.RepoCascadeChildren,
+		"cascade_hop1", stats.RepoCascadeHop1,
+		"cascade_hop2_plus", stats.RepoCascadeHop2Plus,
+		"cascade_max_hops", stats.RepoCascadeMaxHops,
+		"unassigned", stats.RepoCascadeUnassigned,
+	)
 
 	// PREPROCESS. Every component is assembled deterministically first, then
 	// split into "needs an LLM call" and "already has its answer". The split

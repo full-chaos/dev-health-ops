@@ -1898,6 +1898,15 @@ dev-hops work-graph build --db "$CLICKHOUSE_URI" \
 
 > **CHAOS-5173:** the `dev-hops investment materialize` verb was deleted — it was a separate, direct-Python-compute entry point from the `investment.materialize` River kind, which is NATIVE and runs through the same worker dispatch/idempotency every other kind does. Use `dev-health-workerctl investment trigger --org <uuid> [--from <YYYY-MM-DD>] [--to <YYYY-MM-DD>] --review-evidence "<text>" [--dry-run]` to enqueue a fresh run through the native executor instead. It drops every flag with no Go-side equivalent (`--window-days`, `--repo-id`, `--team-id`, every LLM flag, `--force`, `--persist-evidence-snippets`, `--allow-unscoped`, `--analytics-db`/`--db`) — only an org id and an optional `--from`/`--to` window exist on the request.
 
+During preprocessing, the native materializer emits an `investment repo
+attribution` log record scoped by `org_id` and `run_id`. The `own_signal`,
+`hierarchy_ancestor`, `hierarchy_children`, and `unassigned` counts partition the
+`components` count. The record also includes `cascade_hop1`,
+`cascade_hop2_plus`, and `cascade_max_hops` to show transitive inheritance. These
+are log fields, not Prometheus counters or a successful-run completion signal.
+See [Investment repository inheritance](../data-models/investment.md#repository-inheritance)
+for the allocation precedence and persisted evidence.
+
 ---
 
 ## Recommendations

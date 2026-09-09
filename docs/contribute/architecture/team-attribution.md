@@ -21,6 +21,12 @@ lifecycle: active
 **Related:** [Platform architecture](platform.md), [Data and storage boundaries](data-and-storage.md),
 [Work Graph reference](../../reference/data-models/work-graph.md), [Work Graph guide](../../use/code-and-relationships/work-graph.md)
 
+Investment work units can also inherit a repository through issue ancestry or
+children after direct repository evidence. That compute-time repository cascade
+is separate from the work-item team precedence below. Its multi-pass behavior,
+ambiguity rules, and persisted provenance are defined in
+[Investment repository inheritance](../../reference/data-models/investment.md#repository-inheritance).
+
 > **Restoration note (2026-08-19, CHAOS-3968).** This page was deleted on 2026-07-27 when
 > `.github/docs-legacy/` was removed, with no replacement of equivalent scope. It is restored here
 > substantially verbatim from git history (`git show e23ede618^:.github/docs-legacy/architecture/team-attribution.md`).

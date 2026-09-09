@@ -107,7 +107,11 @@ func NewPostgresSwitch(pool *pgxpool.Pool, schemaDigest string, documentDigests 
 // is logged rather than silently swallowed: an unreachable registry and
 // "not canaried yet" must not read as the same signal to an operator (the
 // same reasoning as go_api_registry_telemetry's lookup-outcome counters
-// on the Python side).
+// on the Python side). A digest MISS -- the key resolves but no row
+// exists for it -- is its own distinct, observable case (CHAOS-5415):
+// it means delegation is silently reverting to Python for this
+// operation, which looks identical to "not canaried yet" unless it is
+// counted and logged separately; see recordDigestMiss.
 func (s *PostgresSwitch) Enabled(operation string) bool {
 	documentDigest, ok := s.documentDigests[operation]
 	if !ok {
@@ -123,9 +127,11 @@ func (s *PostgresSwitch) Enabled(operation string) bool {
 		s.schemaDigest, documentDigest, operation,
 	).Scan(&mode)
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			log.Printf("routeswitch: PostgresSwitch lookup failed for operation %q: %v", operation, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			recordDigestMiss(ctx, operation, s.schemaDigest, documentDigest)
+			return false
 		}
+		log.Printf("routeswitch: PostgresSwitch lookup failed for operation %q: %v", operation, err)
 		return false
 	}
 	return reachableModes[mode]

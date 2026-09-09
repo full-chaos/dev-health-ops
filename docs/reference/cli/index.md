@@ -1905,7 +1905,37 @@ attribution` log record scoped by `org_id` and `run_id`. The `own_signal`,
 `cascade_hop2_plus`, and `cascade_max_hops` to show transitive inheritance. These
 are log fields, not Prometheus counters or a successful-run completion signal.
 See [Investment repository inheritance](../data-models/investment.md#repository-inheritance)
-for the allocation precedence and persisted evidence.
+for the allocation precedence and persisted evidence. These counts describe the
+hierarchy stage, before the final team ownership fallback.
+
+The `investment team repository fallback` log record reports what the final
+equal-share fallback did with every component in the run. `allocated`,
+`own_repo`, `stronger_allocation`, `direct_repo_evidence`, `no_eligible_owner`
+and `window_skipped` partition the `components` count: they always sum to it.
+`repo_shares` counts the repository rows the fallback wrote, and `donor_rows`
+and `donor_issues` report the read side -- how much eligible ownership evidence
+the run loaded. `ownership_as_of` names the timestamp the ownership intervals
+were evaluated at, which is the run's own `computed_at`, never wall-clock time.
+
+**Every one of these fields is emitted on every run, including when its value is
+zero.** A field that disappears at zero cannot be told apart from a field that
+was never computed, so a zero is always written out. This matters for reading
+the record: a zero `allocated` on its own is ambiguous. With a high `own_repo`
+or `direct_repo_evidence` it means stronger evidence already resolved the units,
+which is the healthy case. With a high `no_eligible_owner` AND `donor_rows=0` it
+means no eligible ownership reached the run at all, which points at the team and
+repository-ownership sync, not at this allocator. A failed donor read is neither
+case -- it fails the run before anything is written.
+
+The run statistics expose the same counts as `repo_ownership_fallback`,
+`repo_ownership_own_repo`, `repo_ownership_stronger_allocation`,
+`repo_ownership_direct_repo_evidence`, `repo_ownership_no_eligible_owner`,
+`repo_ownership_window_skipped`, `repo_ownership_repo_shares`,
+`repo_ownership_donor_rows` and `repo_ownership_donor_issues`. No new CLI option
+is required. Inspect persisted `work_unit_repo_effort` rows from the latest
+generation to distinguish `team_ownership` from direct churn and
+`hierarchy_cascade`. See
+[Team ownership fallback](../data-models/investment.md#team-ownership-fallback).
 
 ---
 

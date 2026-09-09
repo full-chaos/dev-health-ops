@@ -131,6 +131,47 @@ type Stats struct {
 	RepoCascadeHop1     int `json:"repo_cascade_hop1"`
 	RepoCascadeHop2Plus int `json:"repo_cascade_hop2_plus"`
 	RepoCascadeMaxHops  int `json:"repo_cascade_max_hops"`
+	// RepoOwnership* (CHAOS-5460) partition every in-window component by what
+	// the final team-ownership fallback did with it, plus the two read-side
+	// counts that distinguish "no unit needed the fallback" from "ownership
+	// never arrived". Fallback + OwnRepo + StrongerEffort + DirectRepo +
+	// NoEligibleOwner + WindowSkipped always sum to Components, and EVERY one
+	// is emitted on every run even when zero -- a field that disappears at
+	// zero cannot be told apart from a field that was never computed.
+	RepoOwnershipFallback       int `json:"repo_ownership_fallback"`
+	RepoOwnershipOwnRepo        int `json:"repo_ownership_own_repo"`
+	RepoOwnershipStrongerEffort int `json:"repo_ownership_stronger_allocation"`
+	RepoOwnershipDirectRepo     int `json:"repo_ownership_direct_repo_evidence"`
+	RepoOwnershipNoEligible     int `json:"repo_ownership_no_eligible_owner"`
+	RepoOwnershipWindowSkipped  int `json:"repo_ownership_window_skipped"`
+	RepoOwnershipDonorRows      int `json:"repo_ownership_donor_rows"`
+	RepoOwnershipDonorIssues    int `json:"repo_ownership_donor_issues"`
+	RepoOwnershipRepoShares     int `json:"repo_ownership_repo_shares"`
+}
+
+// logOwnershipFallback emits the team-ownership fallback record. CHAOS-5460:
+// every field is emitted on EVERY run, zero included, and this is the only
+// place that record is written, so no return path can quietly skip it. A zero
+// `allocated` is ambiguous on its own -- it can mean stronger evidence already
+// resolved every unit, or that ownership sync produced nothing -- and only the
+// sibling counters separate those two. `donor_rows` and `donor_issues` are the
+// read side: zero there with a nonzero `no_eligible_owner` names the ownership
+// pipeline, not this allocator.
+func (m *Materializer) logOwnershipFallback(ctx context.Context, cfg Config, stats Stats, ownershipAsOf time.Time) {
+	m.logger.InfoContext(ctx, "investment team repository fallback",
+		"org_id", cfg.OrgID, "run_id", cfg.RunID,
+		"components", stats.Components,
+		"allocated", stats.RepoOwnershipFallback,
+		"repo_shares", stats.RepoOwnershipRepoShares,
+		"own_repo", stats.RepoOwnershipOwnRepo,
+		"stronger_allocation", stats.RepoOwnershipStrongerEffort,
+		"direct_repo_evidence", stats.RepoOwnershipDirectRepo,
+		"no_eligible_owner", stats.RepoOwnershipNoEligible,
+		"window_skipped", stats.RepoOwnershipWindowSkipped,
+		"donor_rows", stats.RepoOwnershipDonorRows,
+		"donor_issues", stats.RepoOwnershipDonorIssues,
+		"ownership_as_of", ownershipAsOf.Format(time.RFC3339Nano),
+	)
 }
 
 // Materializer holds the collaborators one org-scoped run needs. All three are
@@ -197,12 +238,24 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	stats.TotalComponents = len(components)
 	stats.Components = len(components)
 
+	// The as-of basis is resolved BEFORE the zero-component return so the
+	// fallback record below can be emitted on that path too.
+	ownershipAsOf := cfg.ComputedAt
+	if ownershipAsOf.IsZero() {
+		ownershipAsOf = time.Now().UTC()
+	}
+
 	if len(components) == 0 {
 		// materialize.py:1217-1226 returns the component stats and nothing
 		// else. Note it reports components=0 and OMITS total_components, so the
 		// two disagree on this path in the reference; Stats carries both and
 		// they are both zero here, which is the same information.
 		m.logger.InfoContext(ctx, "no work graph components found for investment materialization")
+		// EVERY run emits the fallback record, this path included. An empty org
+		// is exactly where "the fallback allocated nothing" and "the fallback
+		// never ran" are hardest to tell apart, so the all-zero record is more
+		// load-bearing here than on a busy run, not less.
+		m.logOwnershipFallback(ctx, cfg, stats, ownershipAsOf)
 		return stats, nil
 	}
 
@@ -296,21 +349,55 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	var pending []preprocessed
 	outcomes := make(map[int]categorize.CategorizationOutcome, len(components))
 	all := make([]preprocessed, 0, len(components))
+	issueIDs, _, _ := collectNodeIDs(components)
+	teamRepoDonors, err := m.reader.FetchTeamRepoDonors(ctx, issueIDs, cfg.OrgID, ownershipAsOf)
+	if err != nil {
+		return Stats{}, fmt.Errorf("fetch team repository donors: %w", err)
+	}
+	teamDonorsByIssue := make(map[string][]chquery.TeamRepoDonor)
+	for _, donor := range teamRepoDonors {
+		teamDonorsByIssue[donor.WorkItemID] = append(teamDonorsByIssue[donor.WorkItemID], donor)
+	}
+	stats.RepoOwnershipDonorRows = len(teamRepoDonors)
+	stats.RepoOwnershipDonorIssues = len(teamDonorsByIssue)
 
 	for index, component := range components {
 		cascade := repoCascades[index]
-		result, err := MaterializeComponent(MaterializeComponentInput{
+		componentInput := MaterializeComponentInput{
 			Component: component, WorkItems: entities.WorkItems, PRs: entities.PRs, Commits: entities.Commits,
 			EdgeRepoIDs: edgeRepoIDs, PRChurn: entities.PRChurn, CommitChurn: entities.CommitChurn,
 			ActiveHours: entities.ActiveHours, ParentTitles: entities.ParentTitles, EpicTitles: entities.EpicTitles,
 			FromTS: cfg.FromTS, ToTS: cfg.ToTS,
 			CascadeRepoID: cascade.RepoID, CascadeRepoSource: cascade.Source,
-		})
+		}
+		result, err := MaterializeComponent(componentInput)
 		if err != nil {
 			return Stats{}, fmt.Errorf("assemble component %d: %w", index, err)
 		}
 		if result.Skipped != "" {
+			stats.RepoOwnershipWindowSkipped++
 			continue // no bounds, or entirely outside the window
+		}
+		var componentDonors []chquery.TeamRepoDonor
+		for _, node := range component.Nodes {
+			if node.Type == "issue" {
+				componentDonors = append(componentDonors, teamDonorsByIssue[node.ID]...)
+			}
+		}
+		var ownershipOutcome string
+		result.RepoEffort, ownershipOutcome = allocateTeamOwnership(result, componentInput, componentDonors)
+		switch ownershipOutcome {
+		case ownershipOutcomeAllocated:
+			stats.RepoOwnershipFallback++
+			stats.RepoOwnershipRepoShares += len(result.RepoEffort)
+		case ownershipOutcomeOwnRepo:
+			stats.RepoOwnershipOwnRepo++
+		case ownershipOutcomeStrongerEffort:
+			stats.RepoOwnershipStrongerEffort++
+		case ownershipOutcomeDirectRepo:
+			stats.RepoOwnershipDirectRepo++
+		default:
+			stats.RepoOwnershipNoEligible++
 		}
 		entry := preprocessed{index: index, result: result}
 		all = append(all, entry)
@@ -332,6 +419,8 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	fallbackCount := len(outcomes)
 
 	modelVersion := categorize.EffectiveModelVersion(cfg.ProviderName, resolvedModelName(cfg))
+
+	m.logOwnershipFallback(ctx, cfg, stats, ownershipAsOf)
 
 	// SKIP-EXISTING. Runs only when not forced, and only over the pending set.
 	skippedExisting := map[int]struct{}{}

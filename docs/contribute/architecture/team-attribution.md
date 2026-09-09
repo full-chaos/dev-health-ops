@@ -26,6 +26,22 @@ children after direct repository evidence. That compute-time repository cascade
 is separate from the work-item team precedence below. Its multi-pass behavior,
 ambiguity rules, and persisted provenance are defined in
 [Investment repository inheritance](../../reference/data-models/investment.md#repository-inheritance).
+The final [team ownership fallback](../../reference/data-models/investment.md#team-ownership-fallback)
+uses only the latest primary ownership-based issue attribution and live,
+non-manual repository ownership. It unions all eligible repositories across the
+member issues' teams and assigns equal shares; it does not use person membership
+or change this page's primary attribution precedence.
+
+That fallback is bound by the §0.4 provider coverage contract below and is
+tested across the whole `{jira, gitlab, github, linear}` x
+`{teams, projects, members, issues}` matrix, never Linear-only. Two of those
+cells are negative by contract and are asserted as negatives, not skipped:
+**members** -- `assignee_membership` and `author_membership` attributions, and
+`team_memberships` rows, never donate a repository share even when their team
+owns live repositories -- and **manual** ownership, which stays a fallback
+record and never a donor. GitHub's `projects` cell is n/a because the repository
+is the scope there. The precedence table and the per-cell coverage are in
+[Investment: team ownership fallback](../../reference/data-models/investment.md#team-ownership-fallback).
 
 > **Restoration note (2026-08-19, CHAOS-3968).** This page was deleted on 2026-07-27 when
 > `.github/docs-legacy/` was removed, with no replacement of equivalent scope. It is restored here

@@ -262,10 +262,21 @@ func TestCascadeGateAllowsAuthorWhenOneOfMultipleOwningTeamsMatches(t *testing.T
 // R74 ruling (chris via team-lead, 2026-09-09, decision log 93c4f16842d8):
 // a repo with NO team_repo_ownership row at all is "ownership_unknown, not
 // a data miss" -- the gate does not apply, membership passes through
-// unchanged. It asserts against ownershipUnknownBlocksMembership itself
-// (not a hardcoded outcome) so it stays correct even though R74 says never
-// to revisit the constant's value.
+// unchanged.
+//
+// codex round 2, P3: this test PREVIOUSLY derived its expectation from
+// `!ownershipUnknownBlocksMembership` instead of a hardcoded value, so
+// flipping that constant (an accidental one, since R74 says the value is
+// never revisited) would silently redefine "correct" instead of failing --
+// zero regression protection against exactly the mistake this test exists
+// to catch. Now hardcoded to R74's actual decided outcome (membership
+// passes through), with a SEPARATE assertion that the constant itself still
+// reads false -- a flip of either one alone now fails this test.
 func TestCascadeGateOwnershipUnknownMatchesConfiguredDefault(t *testing.T) {
+	if ownershipUnknownBlocksMembership {
+		t.Fatal("ownershipUnknownBlocksMembership = true, want false (R74's decided value -- never revisit, see project_ops_team_mapped_to_nothing.md)")
+	}
+
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
 
@@ -282,28 +293,17 @@ func TestCascadeGateOwnershipUnknownMatchesConfiguredDefault(t *testing.T) {
 		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
 	}
 	teamID, _, candidates := derived.Resolve(subject)
-	gotPassed := GithubWorkItemDerivationStringValue(teamID) == "team-x"
-	wantPassed := !ownershipUnknownBlocksMembership
-	if gotPassed != wantPassed {
-		t.Fatalf("assignee_membership passed the gate = %t, want %t (ownershipUnknownBlocksMembership=%t)",
-			gotPassed, wantPassed, ownershipUnknownBlocksMembership)
+	if got := GithubWorkItemDerivationStringValue(teamID); got != "team-x" {
+		t.Fatalf("primary team id = %q, want team-x (R74: ownership-unknown passes membership through)", got)
 	}
-	if wantPassed {
-		var unassigned *GithubWorkItemDerivationCandidate
-		for index := range candidates {
-			if candidates[index].Source == "unassigned" {
-				unassigned = &candidates[index]
-			}
+	var unassigned *GithubWorkItemDerivationCandidate
+	for index := range candidates {
+		if candidates[index].Source == "unassigned" {
+			unassigned = &candidates[index]
 		}
-		if unassigned != nil {
-			t.Fatalf("candidates = %+v, want assignee_membership to have resolved, not unassigned", candidates)
-		}
-	} else {
-		for _, candidate := range candidates {
-			if candidate.Source == "assignee_membership" {
-				t.Fatalf("candidates = %+v, want NO assignee_membership row (ownershipUnknownBlocksMembership=true)", candidates)
-			}
-		}
+	}
+	if unassigned != nil {
+		t.Fatalf("candidates = %+v, want assignee_membership to have resolved, not unassigned", candidates)
 	}
 }
 

@@ -68,21 +68,42 @@ type githubWorkItemTeamAttributionRow struct {
 	// persisted to work_item_team_attributions (excluded from the INSERT
 	// column list in WriteGitHubWorkItemEffect and from
 	// newGitHubTeamAttributionColumns's oracle-comparison projection, both
-	// deliberately). Carried here ONLY so WriteGitHubWorkItemEffect --
-	// the actual metrics-capable write boundary -- can derive the
-	// membership-layer telemetry label (chris/team-lead, 2026-08-26) from
-	// candidate.Priority (already on teamattribution.GithubWorkItemDerivationCandidate,
-	// no new field there) without threading a *providerfoundation.Metrics
-	// through the pure build*/resolve chain in between.
-	Priority int `json:"-"`
+	// deliberately -- both are explicit field lists, not JSON-tag-driven,
+	// so a real tag here does not leak into either).
+	//
+	// A REAL json tag, not `json:"-"` (codex round 2, P1, CHAOS-4320: fixed
+	// a bug that predates this ticket, present since CHAOS-4321): this row
+	// does not go straight from buildGitHubWorkItemTeamAttributions to
+	// WriteGitHubWorkItemEffect -- it is `json.Marshal`ed into a
+	// json.RawMessage (marshalGitHubWorkItemDerivedRows /
+	// githubWorkItemDerivedSurfaces.derivedRows) as part of the effects/
+	// outbox layer, then `json.Unmarshal`ed back into this same struct type
+	// in validateGitHubWorkItemDerivedEffect before WriteGitHubWorkItemEffect
+	// ever sees it. A field tagged `json:"-"` is dropped by the marshal
+	// step and is therefore ALWAYS its zero value by the time the write
+	// boundary reads it -- carried here ONLY so WriteGitHubWorkItemEffect
+	// can derive the membership-layer telemetry label (chris/team-lead,
+	// 2026-08-26) from candidate.Priority, this field silently meant
+	// row.Priority was ALWAYS 0 in production regardless of the real
+	// admin_override/provider_fallback layer, since the ticket that added
+	// it. Verified directly: json.Marshal of a `json:"-"` int field emits
+	// `{}` for it, and unmarshaling that back into a fresh struct reads 0
+	// regardless of the original value -- the exact round-trip this row
+	// goes through.
+	Priority int `json:"priority"`
 	// OwnershipReason mirrors Priority's carry-not-persist pattern above,
 	// for CHAOS-4320's ownership_checked telemetry (codex round 1, P1): set
 	// from candidate.OwnershipReason ONLY for a winning assignee_membership/
 	// author_membership row, so WriteGitHubWorkItemEffect can tell a
 	// genuinely-confirmed owner apart from an R74 ownership-unknown
 	// pass-through, which used to collapse into one "owned" label with no
-	// way to distinguish them.
-	OwnershipReason string `json:"-"`
+	// way to distinguish them. Same real-tag requirement as Priority above
+	// (codex round 2, P1): `json:"-"` here made WriteGitHubWorkItemEffect
+	// always see "" and always fall back to "owned", making round 1's F1
+	// fix a no-op in production despite passing every unit test that calls
+	// Resolve()/buildGitHubWorkItemTeamAttributions directly and skips the
+	// effects/outbox JSON round-trip.
+	OwnershipReason string `json:"ownership_reason"`
 }
 
 // githubWorkItemStateDurationDailyRow mirrors

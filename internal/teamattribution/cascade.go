@@ -771,6 +771,18 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 				membershipReason = GithubWorkItemDerivationReasonWithPrefix(membershipSkipReasons, "ambiguous_provider_membership")
 			}
 		}
+		// codex round 2, P3: this branch is ALSO currently unreachable given
+		// ownershipUnknownBlocksMembership's DECIDED value (R74, false) --
+		// same class as MembershipOwnershipReasonNotOwned's unreachability
+		// noted above, for a different structural reason: teamOwnsSubjectRepo
+		// only returns owns=false for MembershipOwnershipReasonUnknown when
+		// ownershipUnknownBlocksMembership is true, so with it pinned false a
+		// membership candidate is NEVER rejected for this reason, and
+		// membershipSkipReasons can never contain it. Kept (not removed,
+		// unlike deleting NotOwned's handling would be) because R74 sets the
+		// CONSTANT's value, not this composition's correctness -- if that
+		// constant's value is ever revisited, this branch becomes reachable
+		// again with no further code change needed.
 		if membershipReason == "" && GithubWorkItemDerivationHasReason(membershipSkipReasons, MembershipOwnershipReasonUnknown) {
 			membershipReason = MembershipOwnershipReasonUnknown
 		}

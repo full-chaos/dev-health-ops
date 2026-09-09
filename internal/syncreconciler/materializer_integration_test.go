@@ -30,6 +30,11 @@ const (
 	materializerRetryingDispatch = "00000000-0000-4000-8000-00000000410c"
 	materializerFeatureDisabled  = "00000000-0000-4000-8000-00000000410d"
 	materializerDiscoveryRetry   = "00000000-0000-4000-8000-00000000410e"
+	// CHAOS-4359: the three run identities for the dispatch materializer's
+	// 'planned' gap and the finalize refusal that must survive it.
+	materializerPlannedDispatch  = "00000000-0000-4000-8000-00000000410f"
+	materializerFreshPlanned     = "00000000-0000-4000-8000-000000004110"
+	materializerStaleGenFinalize = "00000000-0000-4000-8000-000000004111"
 )
 
 func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
@@ -270,6 +275,135 @@ func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
 		}
 		assertMaterializerDiscoveryOutboxState(t, ctx, pool, materializerDiscoveryRetry, "dispatched", 1)
 	})
+
+	// CHAOS-4359 (1): reproduces live local-stack run
+	// 837d069b-09af-5661-bf10-97b09addbd40 (org 70d529e0) verbatim -- eight
+	// units still 'planned' with attempts 0 beside 'success' and 'failed'
+	// siblings, and a dispatch_sync_run outbox row stuck 'dispatched' via
+	// 'river' since 2026-08-29 02:16, attempts unchanged at 9 across eleven
+	// days of healthy reconciler ticks. The candidate CTE selects this run
+	// (unit.status = 'planned' is its first disjunct) but the UPDATE guard's
+	// EXISTS re-check re-confirms only the 'dispatching' and 'retrying'
+	// disjuncts, so the row is chosen and then silently refused: no other
+	// path resets a dispatch_sync_run delivery, and TerminalDeliveryRepair's
+	// three River-terminal branches need a discarded/cancelled job, which a
+	// delivery that COMPLETED does not have. The run never dispatches again.
+	t.Run("planned units behind a stale River dispatch delivery re-arm once", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 8, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		stranded := now.Add(-11 * 24 * time.Hour)
+		seedRun(t, ctx, pool, materializerPlannedDispatch, "dispatching", stranded)
+		// The live mix, not a single-unit reduction: a 'planned' unit is the
+		// only reason this run is a candidate, and the terminal siblings are
+		// what make it look finished to every other repair.
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004305",
+			materializerPlannedDispatch, "planned", nil, stranded)
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004306",
+			materializerPlannedDispatch, "success", nil, stranded)
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004307",
+			materializerPlannedDispatch, "failed", nil, stranded)
+		seedMaterializerDispatchedOutbox(t, ctx, pool, materializerPlannedDispatch,
+			"river-planned-job", stranded)
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 1 {
+			t.Fatalf("planned-unit graph did not rearm exactly once: %#v", result)
+		}
+		assertMaterializerDispatchState(t, ctx, pool, materializerPlannedDispatch, "pending", nil, 1)
+
+		result, err = materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 0 {
+			t.Fatalf("planned-unit graph amplified on second pass: %#v", result)
+		}
+		assertMaterializerDispatchState(t, ctx, pool, materializerPlannedDispatch, "pending", nil, 1)
+	})
+
+	// CHAOS-4359 (1), the other half of the same clause: a 'planned' unit
+	// says NOTHING about how long the current delivery has had to run,
+	// because a unit stays 'planned' for the whole window between publishing
+	// dispatch_sync_run and that job claiming its units. Admitting 'planned'
+	// without the delivery's OWN staleness gate would reset a freshly
+	// published row on the very next one-second tick and make the kernel
+	// publish a second dispatch job for the same run, every tick, until the
+	// first one finally executed -- CHAOS-4357 round 2's P1 amplification,
+	// reproduced on a different kind. The grace window
+	// (SYNC_UNIT_DISPATCH_STALE_SECONDS, $2) is what stops it.
+	t.Run("a freshly dispatched planned-unit delivery within the grace window is not amplified", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 9, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		seedRun(t, ctx, pool, materializerFreshPlanned, "dispatching", now.Add(-2*time.Hour))
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004308",
+			materializerFreshPlanned, "planned", nil, now.Add(-5*time.Minute))
+		// Dispatched 5 minutes ago -- well after the 15-minute cutoff, so
+		// still inside its grace period to be claimed and start executing.
+		seedMaterializerDispatchedOutbox(t, ctx, pool, materializerFreshPlanned,
+			"river-fresh-planned-job", now.Add(-5*time.Minute))
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Dispatch != 0 {
+			t.Fatalf("fresh in-flight planned-unit delivery was touched: %#v", result)
+		}
+		assertMaterializerDispatchState(t, ctx, pool, materializerFreshPlanned,
+			"dispatched", ptrString("river"), 1)
+	})
+
+	// CHAOS-5462 / CHAOS-4359 (2): the materializer's finalize guard refuses
+	// EVERY River-dispatched finalize row, and that refusal is deliberate,
+	// not the same omission as the dispatch gap above. The materializer runs
+	// on the coordinator role: it cannot read river_job, so it has no
+	// evidence a River finalize delivery is dead, and it does not read
+	// sync_dispatch_transport_routes, so it has no route-generation fence
+	// either. Re-arming from domain readiness alone would therefore both
+	// double-deliver a live finalize and resurrect stale-generation history.
+	//
+	// The row below is live local-stack shape: sync_run
+	// aedd0504-ad9f-5d71-8b25-b03f0ce4665f's finalize delivery, dispatched
+	// 2026-08-28 03:41 at route generation 4 while the current
+	// finalize_sync_run route is river generation 2 -- and its run is
+	// finalize-READY by every clause of finalizeReadyRunPredicate, so the
+	// candidate CTE does select it. Only this guard keeps it out.
+	// CHAOS-5456's TerminalDeliveryRepair backstop is what may re-arm this
+	// class, queue-side, and only once generation, route, claim and River
+	// liveness all hold. This subtest is the fence: it fails the moment a
+	// change to materializeFinalizeSQL lets the coordinator re-arm one.
+	t.Run("a River-dispatched finalize row is never re-armed by the materializer", func(t *testing.T) {
+		resetMaterializerIntegrationTables(t, ctx, pool)
+		now := time.Date(2026, time.July, 24, 10, 0, 0, 0, time.UTC)
+		cutoff := now.Add(-15 * time.Minute)
+		stranded := now.Add(-12 * 24 * time.Hour)
+		seedRun(t, ctx, pool, materializerStaleGenFinalize, "dispatching", stranded)
+		// Every unit terminal and no discovery ledger: finalizeReadyRunPredicate
+		// holds, so readiness is NOT what excludes this row.
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-000000004309",
+			materializerStaleGenFinalize, "success", nil, stranded)
+		seedUnit(t, ctx, pool, "00000000-0000-4000-8000-00000000430a",
+			materializerStaleGenFinalize, "failed", nil, stranded)
+		seedMaterializerFinalizeDispatchedOutbox(t, ctx, pool, materializerStaleGenFinalize,
+			"river-stale-generation-finalize-job", stranded, 4)
+
+		assertMaterializerFinalizeIsReady(t, ctx, pool, materializerStaleGenFinalize, true)
+
+		result, err := materializer.Step(ctx, now, cutoff, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Finalize != 0 {
+			t.Fatalf("stale-generation River finalize row was re-armed: %#v", result)
+		}
+		assertMaterializerFinalizeState(t, ctx, pool, materializerStaleGenFinalize,
+			"dispatched", ptrString("river"), 4)
+	})
 }
 
 func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
@@ -420,29 +554,58 @@ func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 				discoveryClaimTransport, discoveryClaimGeneration)
 		}
 
-		for _, queued := range []struct {
-			runID string
-			kind  string
-			jobID string
-		}{
-			{materializerDispatchMissing, "dispatch_sync_run", "river-dispatch-queued"},
-			{materializerFinalize, "finalize_sync_run", "river-finalize-queued"},
-		} {
+		// The finalize row stays the "delivery state unchanged" witness: the
+		// materializer refuses every River-dispatched finalize delivery by
+		// design, whatever its age, because it can see neither River job
+		// state nor the route generation (see materializeFinalizeSQL's own
+		// comment, and CHAOS-5462).
+		{
 			var riverStatus string
 			var riverTransport, riverJobID *string
 			var riverAttempts int
 			if err := pool.QueryRow(ctx, `
 				SELECT status, dispatched_transport, transport_job_id, attempts
 				FROM public.sync_dispatch_outbox
-				WHERE sync_run_id = $1 AND kind = $2`,
-				queued.runID, queued.kind,
+				WHERE sync_run_id = $1 AND kind = 'finalize_sync_run'`,
+				materializerFinalize,
 			).Scan(&riverStatus, &riverTransport, &riverJobID, &riverAttempts); err != nil {
 				t.Fatal(err)
 			}
 			if riverStatus != "dispatched" || riverTransport == nil || *riverTransport != "river" ||
-				riverJobID == nil || *riverJobID != queued.jobID || riverAttempts != 1 {
-				t.Fatalf("queued River %s delivery was rearmed: %s/%v/%v/%d",
-					queued.kind, riverStatus, riverTransport, riverJobID, riverAttempts)
+				riverJobID == nil || *riverJobID != "river-finalize-queued" || riverAttempts != 1 {
+				t.Fatalf("queued River finalize_sync_run delivery was rearmed: %s/%v/%v/%d",
+					riverStatus, riverTransport, riverJobID, riverAttempts)
+			}
+		}
+
+		// CHAOS-4359: materializerDispatchMissing is the stranded dispatch
+		// shape -- a 'planned' unit behind a River delivery dispatched two
+		// hours ago, well past this Step's fifteen-minute grace window. It
+		// USED to be asserted here as a second "unchanged" witness, which
+		// encoded the very omission CHAOS-4359 reports: the candidate CTE
+		// selects it and the UPDATE guard then refused it forever. It now
+		// re-arms, and this is the stronger property for a concurrency test
+		// to hold: TWO replicas racing the same statement re-arm it EXACTLY
+		// ONCE, to 'pending' with every delivery field cleared, never twice
+		// and never into a torn half-cleared row. The unique
+		// (sync_run_id, kind) key is what arbitrates, and
+		// assertMaterializerOutboxCount above proves no second row appeared.
+		assertMaterializerDispatchState(t, ctx, pool, materializerDispatchMissing, "pending", nil, 1)
+		{
+			var jobID *string
+			var dispatchedAt *time.Time
+			var generation *int64
+			if err := pool.QueryRow(ctx, `
+				SELECT transport_job_id, dispatched_at, dispatched_route_generation
+				FROM public.sync_dispatch_outbox
+				WHERE sync_run_id = $1 AND kind = 'dispatch_sync_run'`,
+				materializerDispatchMissing,
+			).Scan(&jobID, &dispatchedAt, &generation); err != nil {
+				t.Fatal(err)
+			}
+			if jobID != nil || dispatchedAt != nil || generation != nil {
+				t.Fatalf("re-armed dispatch_sync_run kept delivery identity: %v/%v/%v",
+					jobID, dispatchedAt, generation)
 			}
 		}
 
@@ -1058,6 +1221,94 @@ func assertMaterializerDispatchState(
 	if transport == nil || *transport != *wantTransport {
 		t.Fatalf("dispatch state for %s transport = %v, want %s",
 			runID, transport, *wantTransport)
+	}
+}
+
+// seedMaterializerFinalizeDispatchedOutbox seeds a finalize_sync_run outbox
+// row in the shape markRiverDispatchedSQL leaves behind, at a CHOSEN route
+// generation -- the generation is a parameter because CHAOS-5462's live row
+// carries a stale one (4) against a current river route at generation 2, and
+// the materializer must refuse it without ever reading the route table.
+func seedMaterializerFinalizeDispatchedOutbox(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID, jobID string,
+	dispatchedAt time.Time,
+	routeGeneration int64,
+) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.sync_dispatch_outbox (
+			id, org_id, sync_run_id, kind, status, available_at, attempts,
+			dispatched_at, dispatched_transport, dispatched_route_generation,
+			transport_job_id, created_at, updated_at
+		) VALUES (
+			gen_random_uuid(), 'org-materializer', $1, 'finalize_sync_run',
+			'dispatched', $2, 1, $2, 'river', $4, $3, $2, $2
+		)`,
+		runID, dispatchedAt, jobID, routeGeneration); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertMaterializerFinalizeState(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID, wantStatus string,
+	wantTransport *string,
+	wantGeneration int64,
+) {
+	t.Helper()
+	var (
+		status     string
+		transport  *string
+		generation *int64
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT status, dispatched_transport, dispatched_route_generation
+		FROM public.sync_dispatch_outbox
+		WHERE sync_run_id = $1 AND kind = 'finalize_sync_run'`,
+		runID,
+	).Scan(&status, &transport, &generation); err != nil {
+		t.Fatal(err)
+	}
+	if status != wantStatus {
+		t.Fatalf("finalize state for %s = %s, want %s", runID, status, wantStatus)
+	}
+	if wantTransport == nil {
+		if transport != nil {
+			t.Fatalf("finalize transport for %s = %v, want nil", runID, transport)
+		}
+	} else if transport == nil || *transport != *wantTransport {
+		t.Fatalf("finalize transport for %s = %v, want %s", runID, transport, *wantTransport)
+	}
+	if generation == nil || *generation != wantGeneration {
+		t.Fatalf("finalize route generation for %s = %v, want %d",
+			runID, generation, wantGeneration)
+	}
+}
+
+// assertMaterializerFinalizeIsReady is the non-vacuity control for the fence
+// subtest: it evaluates the SHARED readiness contract
+// (readyFinalizeDomainSQL, which is finalizeReadyRunPredicate verbatim) so a
+// "the row was not re-armed" assertion cannot pass merely because the run was
+// never a finalize candidate in the first place.
+func assertMaterializerFinalizeIsReady(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	runID string,
+	want bool,
+) {
+	t.Helper()
+	var ready bool
+	if err := pool.QueryRow(ctx, readyFinalizeDomainSQL, runID).Scan(&ready); err != nil {
+		t.Fatal(err)
+	}
+	if ready != want {
+		t.Fatalf("finalize readiness for %s = %t, want %t", runID, ready, want)
 	}
 }
 

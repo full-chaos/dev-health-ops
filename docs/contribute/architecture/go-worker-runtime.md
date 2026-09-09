@@ -655,7 +655,17 @@ permanent and silent — the materializer selects the run every pass, writes
 nothing, and reports success. Run `115e6246` sat in that state for over a day.
 The fix is on the queue side, where River's own state IS readable, and its
 write is bounded by the coordinator's readiness verdict; it does not weaken the
-materializer's guard. Every pass emits
+materializer's guard. CHAOS-4359 originally proposed replacing that guard with
+an `EXISTS` re-check of the readiness predicate, mirroring the CHAOS-4357
+discovery fix; that half was dispositioned as superseded with an executed
+proof, because readiness is true for the whole life of a healthy finalize
+delivery, so a coordinator-side re-arm double-delivers — and, deleting the
+clause on a live fixture, re-arms `aedd0504`'s generation-4 row that the fence
+below exists to keep out. The guard is now pinned by
+`TestMaterializerRedispatchesStaleUnitsExactlyOnce`'s "a River-dispatched
+finalize row is never re-armed by the materializer" subtest so it cannot be
+removed as dead weight. CHAOS-4359's OTHER half — the `dispatch_sync_run`
+guard's missing `planned` disjunct — was a real gap and is fixed. Every pass emits
 `syncreconciler.ready_finalize_pass` with its counters spelled out **including
 the zeros**, which is what makes "this backstop ran and found nothing"
 distinguishable from "this backstop was never reached" — the exact
@@ -885,6 +895,21 @@ The fix is structural, not a bigger number:
   counted (`sync_reconciler_stage_failures_total{stage}`,
   `sync_reconciler_stage_duration_seconds{stage}`) — visible on its own,
   whether or not it changes the tick's overall outcome.
+* The materializer emits `syncreconciler.materializer_pass` on **every** pass
+  (CHAOS-4359), carrying `dispatch` / `finalize` / `discovery` /
+  `discovery_rearmed` / `post_sync` with the zeros included, plus `ran`,
+  `failed_step` and `sqlstate`. Same contract, and the same reason, as
+  `ready_finalize_pass` and `orphaned_unit_pass`: a stage that ran and found
+  nothing has to be distinguishable in the log from one that never ran. It had
+  none of this before — the four affected-row counts were computed, returned on
+  `MaterializerResult`, and dropped by the pipeline, so a dispatch wakeup being
+  re-armed (or silently not being re-armed) was invisible at every level, which
+  is how CHAOS-4359's `planned` gap stranded five runs unobserved for eleven
+  days. The counts are published after `Materializer.Step` commits its own
+  transaction, so none of them can describe rolled-back work. `dispatch` is an
+  affected-row total including fresh inserts, **not** a re-arm count;
+  `discovery_rearmed` is the only narrow recovery count today (CHAOS-4357
+  round 2) and the dispatch equivalent is a CHAOS-4359 follow-up.
 * Critically, **the process no longer dies for this**. `Loop.run` only tears
   the process down for an error class it cannot self-heal from; a stage
   degrading (wrapped in `syncreconciler.ErrDegradedStage`, produced only when

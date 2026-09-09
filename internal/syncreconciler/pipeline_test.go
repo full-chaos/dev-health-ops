@@ -1,9 +1,13 @@
 package syncreconciler
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,6 +133,181 @@ func noopTerminalOutboxClose() pipelineTerminalOutboxCloseFunc {
 	return func(context.Context, time.Time, int) (TerminalOutboxCloseResult, error) {
 		return TerminalOutboxCloseResult{}, nil
 	}
+}
+
+// CHAOS-4359: the materializer had no per-pass telemetry at all -- its four
+// affected-row counts were computed, returned, and dropped, so a dispatch
+// wakeup being re-armed (or silently not being re-armed) was invisible at
+// every log level. This pins the line, its message, and every field, in all
+// three shapes an operator has to tell apart: a pass that did work, a pass
+// that ran and found nothing, and a pass that never ran because an earlier
+// stage aborted the tick. The zero-pass subtest is the load-bearing one --
+// a counter that only appears when it is non-zero cannot answer "did this
+// stage run", which is the whole reason ready_finalize_pass and
+// orphaned_unit_pass emit their zeros too.
+func TestMutationPipelineEmitsMaterializerPassEveryPass(t *testing.T) {
+	now := time.Date(2026, time.July, 23, 18, 0, 0, 0, time.UTC)
+
+	buildPipeline := func(
+		t *testing.T,
+		repairErr error,
+		result MaterializerResult,
+		materializerErr error,
+	) *MutationPipeline {
+		t.Helper()
+		publish := AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) {
+			return "", nil
+		})
+		postSync := PostSyncHandoff(func(context.Context, TransportClaim) error { return nil })
+		pipeline, err := NewMutationPipeline(
+			pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+				return LeaseRepairResult{}, repairErr
+			}),
+			pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+				return TerminalDeliveryRepairResult{}, nil
+			}),
+			pipelineMaterializerFunc(func(context.Context, time.Time, time.Time, int) (MaterializerResult, error) {
+				return result, materializerErr
+			}),
+			pipelineKernelFunc(func(
+				context.Context, time.Time, int, time.Duration,
+				AtLeastOncePublisher, PostSyncHandoff,
+			) (KernelResult, error) {
+				return KernelResult{}, nil
+			}),
+			pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+				return Observation{}, nil
+			}),
+			publish,
+			postSync,
+			nil,
+			noopTerminalOutboxClose(),
+			noopOrphanedUnitRepair(),
+			DefaultMutationPipelineConfig(),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pipeline
+	}
+
+	// capture runs one Step with slog redirected, and returns the ONE
+	// materializer_pass record. It fails if there is not exactly one: a line
+	// emitted twice would double-count a pass just as badly as one never
+	// emitted, and neither is visible from a single-record read.
+	capture := func(t *testing.T, pipeline *MutationPipeline) map[string]any {
+		t.Helper()
+		var buf bytes.Buffer
+		original := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		defer slog.SetDefault(original)
+		_, _ = pipeline.Step(context.Background(), now, 17)
+		slog.SetDefault(original)
+
+		var found []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			if line == "" {
+				continue
+			}
+			record := map[string]any{}
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				t.Fatalf("log line is not JSON: %s (%v)", line, err)
+			}
+			if record["msg"] == "syncreconciler.materializer_pass" {
+				found = append(found, record)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("want exactly 1 syncreconciler.materializer_pass record, got %d\nlog:\n%s",
+				len(found), buf.String())
+		}
+		return found[0]
+	}
+
+	// assertFields checks PRESENCE first and value second, on every field:
+	// a field silently dropped (the failure this whole line exists to
+	// prevent) is indistinguishable from a zero if you only compare values.
+	assertFields := func(t *testing.T, record map[string]any, want map[string]any) {
+		t.Helper()
+		for _, key := range []string{
+			"ran", "dispatch", "finalize", "discovery", "discovery_rearmed",
+			"post_sync", "failed_step", "sqlstate", "limit", "now",
+		} {
+			if _, ok := record[key]; !ok {
+				t.Fatalf("materializer_pass is missing field %q: %#v", key, record)
+			}
+		}
+		for key, expected := range want {
+			got, ok := record[key]
+			if !ok {
+				t.Fatalf("materializer_pass is missing field %q: %#v", key, record)
+			}
+			if got != expected {
+				t.Fatalf("materializer_pass %q = %#v, want %#v", key, got, expected)
+			}
+		}
+	}
+
+	t.Run("a pass that did work reports every count", func(t *testing.T) {
+		pipeline := buildPipeline(t, nil, MaterializerResult{
+			Dispatch: 3, Finalize: 2, Discovery: 5, DiscoveryRearmed: 4, PostSync: 1,
+		}, nil)
+		assertFields(t, capture(t, pipeline), map[string]any{
+			"ran":               true,
+			"dispatch":          float64(3),
+			"finalize":          float64(2),
+			"discovery":         float64(5),
+			"discovery_rearmed": float64(4),
+			"post_sync":         float64(1),
+			"failed_step":       "",
+			"sqlstate":          "",
+			"limit":             float64(17),
+			"now":               now.UTC().Format(time.RFC3339Nano),
+		})
+	})
+
+	t.Run("an idle pass still reports its zeros", func(t *testing.T) {
+		pipeline := buildPipeline(t, nil, MaterializerResult{}, nil)
+		assertFields(t, capture(t, pipeline), map[string]any{
+			"ran":               true,
+			"dispatch":          float64(0),
+			"finalize":          float64(0),
+			"discovery":         float64(0),
+			"discovery_rearmed": float64(0),
+			"post_sync":         float64(0),
+			"failed_step":       "",
+			"sqlstate":          "",
+		})
+	})
+
+	t.Run("a faulted pass names the statement that failed", func(t *testing.T) {
+		pipeline := buildPipeline(t, nil, MaterializerResult{},
+			materializerUnavailable(materializerStepDispatch, nil))
+		assertFields(t, capture(t, pipeline), map[string]any{
+			"ran":         true,
+			"dispatch":    float64(0),
+			"failed_step": materializerStepDispatch,
+		})
+	})
+
+	t.Run("a pass the tick aborted before the materializer reports ran=false", func(t *testing.T) {
+		// A non-context lease-repair failure aborts the tick, so the
+		// materializer never runs. Its counts would be zero either way --
+		// `ran` is the only thing that separates this from the idle pass
+		// above, which is exactly why it is on the line.
+		pipeline := buildPipeline(t, errors.New("injected lease repair failure"),
+			MaterializerResult{Dispatch: 9}, nil)
+		assertFields(t, capture(t, pipeline), map[string]any{
+			"ran":               false,
+			"dispatch":          float64(0),
+			"finalize":          float64(0),
+			"discovery":         float64(0),
+			"discovery_rearmed": float64(0),
+			"post_sync":         float64(0),
+			"failed_step":       "",
+			"sqlstate":          "",
+		})
+	})
 }
 
 func TestMutationPipelineRunsCommittedStagesBeforeObservation(t *testing.T) {

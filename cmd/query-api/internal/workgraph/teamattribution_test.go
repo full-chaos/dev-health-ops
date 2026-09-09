@@ -269,8 +269,9 @@ func TestResolveWorkUnitTeamAttributions_NoTruncationSignalBelowLimit(t *testing
 // a sufficient truncation signal, add a counter too): this is the layer
 // the resolveWorkUnitTeamAttributions-level tests above cannot reach --
 // they swap recordWorkUnitTeamAttributionsTruncation WHOLESALE, which
-// proves the call site's "len(results) == limit" wiring but never
-// exercises defaultRecordWorkUnitTeamAttributionsTruncation's own body
+// proves the call site's "probe row genuinely came back (len(rawResults)
+// > limit)" wiring but never exercises
+// defaultRecordWorkUnitTeamAttributionsTruncation's own body
 // (same "injection seam masks the layer behind it" shape
 // analytics/investmentmembershiptelemetry_test.go's
 // TestDefaultRecordStaleInvestmentMembershipScope_RecordsToRealMeter doc

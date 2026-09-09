@@ -258,8 +258,10 @@ func TestResolveWorkUnitTeamAttributions_FiltersRealEngine(t *testing.T) {
 }
 
 // TestResolveWorkUnitTeamAttributions_TruncationSignalRealEngine is the
-// real-engine half of CHAOS-3969's truncation-signal proof (the fake-client
-// half is TestResolveWorkUnitTeamAttributions_TruncationSignalFiresAtLimit
+// real-engine half of CHAOS-3969's truncation-signal proof (the
+// fake-client half is
+// TestResolveWorkUnitTeamAttributions_TruncationSignalFiresWhenProbeRowReturned
+// / TestResolveWorkUnitTeamAttributions_NoTruncationSignalWhenExactlyAtLimit
 // in teamattribution_test.go): seeds MORE qualifying work units than a
 // small test-local limit override, exercises the real query end to end,
 // and asserts BOTH that the result is capped at `limit` AND that

@@ -85,7 +85,11 @@ func ResolveWorkUnitTeamAttributions(ctx context.Context, client QueryClient, or
 // the truncation signal (recordWorkUnitTeamAttributionsTruncation) without
 // seeding workUnitTeamAttributionsMaxRows (5000) fixture rows -- see
 // teamattribution_integration_test.go's
-// TestResolveWorkUnitTeamAttributions_TruncationSignalFiresAtLimit.
+// TestResolveWorkUnitTeamAttributions_TruncationSignalRealEngine (genuine
+// truncation) and
+// TestResolveWorkUnitTeamAttributions_NoTruncationSignalWhenExactlyAtLimit
+// / TestResolveWorkUnitTeamAttributions_TruncationSignalFiresWhenProbeRowReturned
+// (teamattribution_test.go, the fake-client TRUNC-1 pair).
 //
 // TRUNC-1 (codex round chaos-3969-r1, P2, team-lead-ruled fix-before-open):
 // the original version sent `LIMIT {limit}` to ClickHouse and fired the
@@ -394,7 +398,7 @@ func defaultRecordWorkUnitTeamAttributionsTruncation(ctx context.Context, orgID 
 // wired up, not a regression this file introduces.
 var workUnitTeamAttributionsTruncationCounter = mustCounter(
 	"devhealth_query_api_workgraph_truncation_total",
-	"workgraph package reads whose result hit their row cap (LIMIT == returned row count); family/op attributes identify which read",
+	"workgraph package reads whose limit+1 probe row genuinely came back (more rows exist beyond the caller-visible cap); family/op attributes identify which read",
 )
 
 func mustCounter(name, description string) metric.Int64Counter {
@@ -421,8 +425,9 @@ func mustCounter(name, description string) metric.Int64Counter {
 // TestDefaultRecordWorkUnitTeamAttributionsTruncation_LogsAndIncrementsCounter),
 // independent of resolveWorkUnitTeamAttributions-level tests that swap
 // the OUTER recordWorkUnitTeamAttributions var entirely -- those only
-// prove the "len(results) == limit" call-site wiring, not this function's
-// own body. teamattribution_integration_test.go additionally proves the
+// prove the "probe row genuinely came back (len(rawResults) > limit)"
+// call-site wiring, not this function's own body.
+// teamattribution_integration_test.go additionally proves the
 // REAL counter (this var's default, unswapped) increments end to end
 // against a real truncating ClickHouse read, via this package's shared
 // realMeterReader (main_test.go) -- the log line's real-engine proof and

@@ -28,6 +28,7 @@ import pytest
 import sqlalchemy as sa
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy.engine import Engine, make_url
 
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
@@ -113,6 +114,24 @@ def migrated_to_0113(
                 )
                 connection.exec_driver_sql(f'DROP DATABASE "{database_name}"')
         admin_engine.dispose()
+
+
+def _application_schema_head() -> str:
+    """The head revision of the ``application_schema`` branch, derived.
+
+    Previously hardcoded (``"0127"``), which meant every migration that
+    moved the head failed this test for a reason unrelated to what it
+    asserts -- CHAOS-5425's 0128 was the instance that surfaced it. The
+    claim here is "downgrading 0114 and re-upgrading converges back on
+    head", and that claim does not mention a number: reading the head from
+    the same ScriptDirectory alembic itself uses keeps the assertion
+    honest without pinning it to today's tip.
+    """
+    heads = ScriptDirectory.from_config(_migration_config()).get_revisions(
+        "application_schema@head"
+    )
+    assert len(heads) == 1, f"expected one application_schema head, got {heads}"
+    return heads[0].revision
 
 
 def _revisions(engine: Engine) -> set[str]:
@@ -351,4 +370,4 @@ def test_0114_downgrade_and_reupgrade_converge(
 
     command.upgrade(_migration_config(), "application_schema@head")
     assert sa.inspect(migrated_to_0113.engine).has_table(_CANDIDATE_BUILD)
-    assert _revisions(migrated_to_0113.engine) == {"0127"}
+    assert _revisions(migrated_to_0113.engine) == {_application_schema_head()}

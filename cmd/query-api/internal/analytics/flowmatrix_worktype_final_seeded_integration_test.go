@@ -49,67 +49,9 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
-
-// seededFlowMatrixSchemaDDL is the pair of tables the WORK_TYPE templates
-// actually read, copied from the real migrations rather than invented:
-// work_item_cycle_times (001_metrics_v2.sql:137-155, plus 024_add_org_id.sql:37's
-// org_id) and work_items (009_raw_work_items.sql:1-28, plus its org_id).
-// The engines and sorting keys are the load-bearing part -- a plain
-// MergeTree here would make FINAL a no-op and the test vacuous.
-const seededFlowMatrixSchemaDDL = `
-CREATE TABLE work_item_cycle_times (
-  work_item_id String,
-  provider LowCardinality(String),
-  day Date,
-  work_scope_id LowCardinality(String),
-  team_id Nullable(String),
-  team_name Nullable(String),
-  assignee Nullable(String),
-  type LowCardinality(String),
-  status LowCardinality(String),
-  created_at DateTime('UTC'),
-  started_at Nullable(DateTime('UTC')),
-  completed_at Nullable(DateTime('UTC')),
-  cycle_time_hours Nullable(Float64),
-  lead_time_hours Nullable(Float64),
-  computed_at DateTime('UTC'),
-  org_id String DEFAULT 'default'
-) ENGINE ReplacingMergeTree(computed_at)
-PARTITION BY toYYYYMM(day)
-ORDER BY (provider, work_item_id);
-
-CREATE TABLE work_items (
-  repo_id UUID,
-  work_item_id String,
-  provider String,
-  title String,
-  description Nullable(String),
-  type String,
-  status String,
-  status_raw String,
-  project_key String,
-  project_id String,
-  assignees Array(String),
-  reporter String,
-  created_at DateTime64(3),
-  updated_at DateTime64(3),
-  started_at Nullable(DateTime64(3)),
-  completed_at Nullable(DateTime64(3)),
-  closed_at Nullable(DateTime64(3)),
-  labels Array(String),
-  story_points Nullable(Float64),
-  sprint_id String,
-  sprint_name String,
-  parent_id String,
-  epic_id String,
-  url String,
-  last_synced DateTime64(3),
-  org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced)
-ORDER BY (repo_id, work_item_id);
-`
 
 const (
 	// The seeded repo every work item belongs to. The WORK_TYPE edges
@@ -225,11 +167,15 @@ func startSeededFlowMatrixClickHouse(t *testing.T, ctx context.Context, orgID st
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	for _, stmt := range splitSQLStatements(seededFlowMatrixSchemaDDL) {
-		if err := conn.Exec(ctx, stmt); err != nil {
-			t.Fatalf("exec DDL %q: %v", stmt, err)
-		}
-	}
+	// The REAL migration chain, never hand-typed DDL. This test's entire
+	// claim rests on work_item_cycle_times being
+	// ReplacingMergeTree(computed_at) sorted by (provider, work_item_id) --
+	// a hand-written CREATE TABLE would keep the test green while a
+	// migration changed the production engine or sorting key underneath it,
+	// which is exactly the failure mode internal/testsupport/chschema's
+	// package doc was written to remove.
+	chschema.Apply(ctx, t, inst)
+	assertCycleTimesDedupContract(t, ctx, conn)
 
 	seedWorkItems(t, ctx, conn, orgID, map[string]string{
 		"wi-stale": "Bug",
@@ -245,6 +191,33 @@ func startSeededFlowMatrixClickHouse(t *testing.T, ctx context.Context, orgID st
 
 	assertUnmergedParts(t, ctx, conn)
 	return inst, conn
+}
+
+// assertCycleTimesDedupContract pins the two schema properties this file
+// depends on, read back from the migrated table rather than assumed:
+// the engine must collapse duplicate versions by computed_at, and `day`
+// must NOT be part of the sorting key. If a future migration adds `day`
+// to the key, the two seeded versions of wi-stale stop being duplicates,
+// FINAL stops changing the answer, and every assertion below would go
+// green for the wrong reason. Failing loudly here is the difference
+// between a regression test and a decorative one.
+func assertCycleTimesDedupContract(t *testing.T, ctx context.Context, conn stdclickhouse.Conn) {
+	t.Helper()
+	var engineFull, sortingKey string
+	row := conn.QueryRow(ctx,
+		"SELECT engine_full, sorting_key FROM system.tables WHERE database = currentDatabase() AND name = 'work_item_cycle_times'")
+	if err := row.Scan(&engineFull, &sortingKey); err != nil {
+		t.Fatalf("read work_item_cycle_times schema from the migrated database: %v", err)
+	}
+	if !strings.Contains(engineFull, "ReplacingMergeTree(computed_at)") {
+		t.Fatalf("work_item_cycle_times engine is %q; this test only means something while the table "+
+			"collapses duplicate versions by computed_at", engineFull)
+	}
+	if strings.Contains(sortingKey, "day") {
+		t.Fatalf("work_item_cycle_times sorting key is %q -- `day` has entered the dedup key, so the two "+
+			"seeded versions of wi-stale are no longer duplicates and FINAL can no longer change the "+
+			"answer; this fixture must be redesigned rather than left passing vacuously", sortingKey)
+	}
 }
 
 // assertUnmergedParts fails the test if ClickHouse merged the seeded parts

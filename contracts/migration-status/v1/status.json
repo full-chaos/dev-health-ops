@@ -8,7 +8,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -22,7 +22,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -36,7 +36,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -50,7 +50,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -64,7 +64,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -78,7 +78,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -92,7 +92,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -106,7 +106,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -120,7 +120,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -134,7 +134,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -148,7 +148,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -162,7 +162,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -176,7 +176,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -190,7 +190,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -204,7 +204,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -218,7 +218,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -232,7 +232,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -246,7 +246,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -260,7 +260,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -274,7 +274,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -288,7 +288,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -302,7 +302,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -316,7 +316,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -330,7 +330,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -344,7 +344,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -358,7 +358,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -372,7 +372,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -386,7 +386,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -400,7 +400,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -414,7 +414,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -428,7 +428,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -442,7 +442,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -456,7 +456,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -472,7 +472,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {
@@ -489,7 +489,7 @@
       },
       "deployed": {
         "revision": "eadfd3955327668fbb61a1bd1756ff317aaf6706",
-        "read_at": "2026-09-09T04:27:20.002694457Z",
+        "read_at": "2026-09-09T06:26:46.369607417Z",
         "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
       },
       "proof": {

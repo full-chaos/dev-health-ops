@@ -178,7 +178,7 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 	if err != nil {
 		return err
 	}
-	opsSha, err := headSha(root)
+	opsSha, renderCommit, err := renderShas(root)
 	if err != nil {
 		return err
 	}
@@ -194,6 +194,7 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 		// silently stops running on the other.
 		RenderedAt:   time.Now().UTC().Truncate(time.Second),
 		OpsSha:       opsSha,
+		RenderCommit: renderCommit,
 		SchemaDigest: pin,
 	}
 
@@ -306,8 +307,8 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 			len(violations), migrationmatrix.FormatViolations(violations))
 		return fmt.Errorf("migration matrix contract failed after render")
 	}
-	fmt.Printf("rendered %s at %s (ops %s, %d routing rows, %d proof runs)\n",
-		docRelative, snapshot.RenderedAt.UTC().Format(time.RFC3339), opsSha[:12],
+	fmt.Printf("rendered %s at %s (main merge-base %s, render commit %s, %d routing rows, %d proof runs)\n",
+		docRelative, snapshot.RenderedAt.UTC().Format(time.RFC3339), opsSha[:12], renderCommit[:12],
 		len(snapshot.Operations), snapshot.ProofRunTotal)
 	return nil
 }
@@ -422,11 +423,57 @@ func writeJSON(path string, value any) error {
 	return nil
 }
 
-func headSha(root string) (string, error) {
-	cmd := exec.Command("git", "-C", root, "rev-parse", "HEAD")
-	out, err := cmd.Output()
+// renderShas returns (merge-base with main, HEAD).
+//
+// The FIRST is what the freshness gate checks for ancestry, and it must be a
+// commit that is already on main -- because a squash merge replaces the
+// branch's own commits with a single new one, leaving the originals
+// unreachable from main forever. A render that recorded its branch tip took
+// main red for every subsequent PR the moment #2389 landed: the check
+// correctly reported "not an ancestor" about a commit that could not
+// possibly be one.
+//
+// The merge-base is the right anchor because it is the last main commit the
+// render actually observed. It survives the squash, and it still bounds
+// staleness: a render made from a branch that forked weeks ago carries a
+// correspondingly old merge-base and ages out on schedule.
+func renderShas(root string) (string, string, error) {
+	head, err := gitOutput(root, "rev-parse", "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
+		return "", "", err
+	}
+
+	// On main itself the merge-base IS HEAD, so this yields the same value;
+	// on a branch it is the fork point. Both refs are tried because a clone
+	// may carry a local `main` with no `origin/` remote-tracking ref.
+	for _, ref := range []string{"origin/main", "main"} {
+		if _, err := gitOutput(root, "rev-parse", "--verify", "--quiet", ref+"^{commit}"); err != nil {
+			continue
+		}
+		base, err := gitOutput(root, "merge-base", ref, "HEAD")
+		if err != nil {
+			continue
+		}
+		return base, head, nil
+	}
+
+	// No main to fork from (a detached checkout of an unrelated tree, or a
+	// fresh repo with no main yet). Fall back to HEAD and SAY SO -- a wrong
+	// value written silently is exactly what caused the incident this
+	// function exists to prevent.
+	fmt.Fprintln(os.Stderr,
+		"warning: neither origin/main nor main resolves here, so ops_sha falls back to HEAD.\n"+
+			"         If this render is on a branch that will be SQUASH-merged, the freshness\n"+
+			"         gate will fail on main afterwards -- re-render from a checkout that can\n"+
+			"         see main.")
+	return head, head, nil
+}
+
+func gitOutput(root string, args ...string) (string, error) {
+	full := append([]string{"-C", root}, args...)
+	out, err := exec.Command("git", full...).Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

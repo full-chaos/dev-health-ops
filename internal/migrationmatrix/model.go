@@ -156,8 +156,22 @@ type Render struct {
 	SchemaVersion int `json:"schema_version"`
 	// RenderedAt is when -render ran.
 	RenderedAt time.Time `json:"rendered_at"`
-	// OpsSha is the ops commit the render was made at.
+	// OpsSha is the MERGE-BASE with main at render time -- the last commit
+	// on main that the render observed -- NOT the commit the render ran on.
+	//
+	// This distinction is load-bearing, and getting it wrong took main red.
+	// The freshness gate checks ops_sha for ancestry of HEAD; when a branch
+	// records its own tip here, that tip is squash-merged into a NEW commit
+	// and the original is never reachable from main again. The check then
+	// fails on main for every subsequent PR, permanently, by construction --
+	// not because anything rotted. The merge-base survives the squash (it is
+	// already on main), and it still bounds staleness, because a render made
+	// from a long-stale branch has a correspondingly old merge-base.
 	OpsSha string `json:"ops_sha"`
+	// RenderCommit is the commit actually checked out when -render ran.
+	// Recorded for the audit trail and NEVER ancestry-checked, precisely
+	// because a branch commit legitimately stops existing after a squash.
+	RenderCommit string `json:"render_commit,omitempty"`
 	// SchemaDigest is the current contracts/graphql/v1/schema-digest.json pin.
 	SchemaDigest string `json:"schema_digest"`
 	// FleetReadAt is when the image labels were read (zero if not read).

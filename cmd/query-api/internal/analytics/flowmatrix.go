@@ -763,11 +763,20 @@ const flowMatrixWorkTypeEnrichedSelect = `
 // `INNER JOIN work_items AS wi FINAL` here is likewise real but binds to
 // `wi`, not `wct`.
 //
-// NOT COVERED BY CHAOS-5448's fixture: that test exercises the WORK_TYPE
-// dimension only (sites 1 and 3). The mechanism is identical here and
-// the reasoning carries over, but no seeded test reaches THIS template,
-// so treat its correctness as argued-by-analogy rather than measured
-// until a REPO-dimension fixture exists.
+// MEASURED, CHAOS-5448 (this comment previously read "argued-by-analogy
+// rather than measured until a REPO-dimension fixture exists" -- that
+// fixture now exists). TestFlowMatrixRepoNodes_FinalExcludesSuperseded
+// CycleTimeVersions runs THIS template against the same seeded rows the
+// WORK_TYPE tests use: one work item whose winning version sits outside
+// the window. With `FINAL` the seeded repo counts 2 work items; without
+// it, 3. Verified by removing the token and watching only the REPO test
+// go red while both WORK_TYPE tests stayed green, so the coverage is
+// genuinely per-site and not inherited.
+//
+// Scope of that claim: the REPO NODES template only. The REPO EDGES
+// template reads through flowMatrixRepoEnrichedSelect, which already
+// carried `wct FINAL` before CHAOS-4516 and is not one of the three
+// exposed sites.
 const flowMatrixRepoNodesTemplate = `
 SELECT
     'REPO' AS dimension,

@@ -79,6 +79,10 @@ const (
 	// ids a caller sees are "WORK_TYPE:Bug", never a bare "Bug".
 	nodeBug   = "WORK_TYPE:Bug"
 	nodeStory = "WORK_TYPE:Story"
+
+	// The REPO-dimension node id for the one seeded repo, same
+	// dimension-prefixed shape (flowmatrix.go:987).
+	nodeSeedRepo = "REPO:" + flowMatrixSeedRepoID
 )
 
 // seededCycleTimeRow is one work_item_cycle_times row. Only the columns
@@ -375,15 +379,15 @@ func TestFlowMatrixWorkType_PythonUnfinalReadConvergesOntoTheFinalRead(t *testin
 	// SQL: whatever the Go template says, the "Python" variant is it
 	// minus FINAL.
 	goNodesSQL := renderWorkTypeNodesSQLForTest(orgID)
-	pythonNodesSQL := withoutCycleTimesFinal(t, goNodesSQL)
+	pythonNodesSQL := withoutCycleTimesFinal(t, "flowMatrixWorkTypeNodesTemplate", goNodesSQL)
 
-	preMergeUnfinal := scanBugNodeValue(t, ctx, conn, pythonNodesSQL)
+	preMergeUnfinal := scanNodeValue(t, ctx, conn, pythonNodesSQL, "Bug")
 	if preMergeUnfinal != 2 {
 		t.Fatalf("pre-merge un-FINAL read returned Bug = %v, want 2; the fixture is not exercising the "+
 			"superseded-version condition this test exists to demonstrate", preMergeUnfinal)
 	}
 
-	preMergeFinal := scanBugNodeValue(t, ctx, conn, goNodesSQL)
+	preMergeFinal := scanNodeValue(t, ctx, conn, goNodesSQL, "Bug")
 	if preMergeFinal != 1 {
 		t.Fatalf("pre-merge FINAL read returned Bug = %v, want 1", preMergeFinal)
 	}
@@ -392,7 +396,7 @@ func TestFlowMatrixWorkType_PythonUnfinalReadConvergesOntoTheFinalRead(t *testin
 		t.Fatalf("OPTIMIZE TABLE work_item_cycle_times FINAL: %v", err)
 	}
 
-	postMergeUnfinal := scanBugNodeValue(t, ctx, conn, pythonNodesSQL)
+	postMergeUnfinal := scanNodeValue(t, ctx, conn, pythonNodesSQL, "Bug")
 	if postMergeUnfinal != preMergeFinal {
 		t.Errorf("after the merge the un-FINAL read returned Bug = %v, but the FINAL read returned %v; "+
 			"the two are expected to CONVERGE, which is what makes the FINAL read the correct steady state",
@@ -426,18 +430,22 @@ func renderWorkTypeNodesSQLForTest(orgID string) string {
 // test if it is not there -- so a future edit that drops FINAL from the
 // template cannot silently turn this test into a comparison of two
 // identical queries.
-func withoutCycleTimesFinal(t *testing.T, sql string) string {
+func withoutCycleTimesFinal(t *testing.T, templateName, sql string) string {
 	t.Helper()
 	const withFinal = "FROM work_item_cycle_times AS wct FINAL"
 	const withoutFinal = "FROM work_item_cycle_times AS wct"
 	if !strings.Contains(sql, withFinal) {
-		t.Fatalf("flowMatrixWorkTypeNodesTemplate no longer contains %q -- FINAL was removed from the "+
-			"template, which is the exact regression CHAOS-5448 pinned; see this file's package doc comment", withFinal)
+		t.Fatalf("%s no longer contains %q -- FINAL was removed from the template, which is the exact "+
+			"regression CHAOS-5448 pinned; see this file's package doc comment", templateName, withFinal)
 	}
 	return strings.ReplaceAll(sql, withFinal, withoutFinal)
 }
 
-func scanBugNodeValue(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, sql string) float64 {
+// scanNodeValue runs a rendered nodes query on the raw driver connection
+// and returns the value of the node whose id is wantNodeID, failing if no
+// such node comes back. Takes the id rather than hardcoding one so the
+// WORK_TYPE and REPO variants share one scanner.
+func scanNodeValue(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, sql, wantNodeID string) float64 {
 	t.Helper()
 	rows, err := conn.Query(ctx, sql)
 	if err != nil {
@@ -450,13 +458,113 @@ func scanBugNodeValue(t *testing.T, ctx context.Context, conn stdclickhouse.Conn
 		if err := rows.Scan(&dimension, &nodeID, &value); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if nodeID == "Bug" {
+		if nodeID == wantNodeID {
 			return value
 		}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("rows: %v", err)
 	}
-	t.Fatalf("no Bug node returned by:\n%s", sql)
+	t.Fatalf("no %q node returned by:\n%s", wantNodeID, sql)
 	return 0
+}
+
+// TestFlowMatrixRepoNodes_FinalExcludesSupersededCycleTimeVersions covers
+// CHAOS-4516 FIX SITE 2 of 3, flowMatrixRepoNodesTemplate, which the
+// WORK_TYPE tests above do not reach.
+//
+// Site 2 carried "argued-by-analogy rather than measured" until this
+// test: the mechanism is identical to sites 1 and 3 -- Python omits
+// `FINAL` on `wct` at sql/templates.py:325 where this template has it --
+// but an identical MECHANISM is not an executed result, and CHAOS-4516's
+// fix-shape ruling asks for measurement per site, not per family.
+//
+// It reuses the same seeded fixture deliberately. wi-stale's winning
+// version sits on 2026-09-20, outside the window, so the one seeded repo
+// holds TWO work items in the window under FINAL (wi-bug, wi-story) and
+// THREE without it. Reusing the fixture is what makes the comparison
+// across the three sites exact rather than approximate: same rows, same
+// window, only the template differs.
+//
+// SCOPE, stated so nobody reads more into a green than it carries: this
+// covers the REPO NODES template only. The REPO EDGES template reads
+// through flowMatrixRepoEnrichedSelect, which already carried `wct FINAL`
+// before CHAOS-4516 and is explicitly not one of the three exposed sites;
+// it also joins work_item_team_attributions, which this fixture does not
+// seed, so it would return no rows here regardless.
+func TestFlowMatrixRepoNodes_FinalExcludesSupersededCycleTimeVersions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	const orgID = "chaos-5448-seeded-repo-nodes"
+	inst, conn := startSeededFlowMatrixClickHouse(t, ctx, orgID)
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	if err != nil {
+		t.Fatalf("construct ClickHouse query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// UseInvestment left nil: resolveUseInvestment (investment.go:447-458)
+	// returns false for REPO, so this takes the fixed-template path --
+	// flowMatrixRepoNodesTemplate, the site under test -- and not
+	// compileFlowMatrixInvestmentTeamRepoDimension.
+	req := workTypeFlowMatrixRequest()
+	req.Dimension = DimensionRepo
+
+	nodesQuery, _, err := CompileFlowMatrix(req, orgID, 30, nil)
+	if err != nil {
+		t.Fatalf("CompileFlowMatrix(REPO): %v", err)
+	}
+	// t.Errorf, deliberately NOT t.Fatalf: a text check is a linter, not a
+	// regression test, and stopping here would leave the BEHAVIOURAL
+	// assertion below unrun on exactly the mutation this test exists to
+	// catch. Reporting both -- the missing token and the wrong count -- is
+	// what makes a failure diagnosable.
+	if !strings.Contains(nodesQuery.sql, "FROM work_item_cycle_times AS wct FINAL") {
+		t.Errorf("flowMatrixRepoNodesTemplate no longer reads work_item_cycle_times with FINAL -- that is the "+
+			"CHAOS-4516 fix site 2 this test pins:\n%s", nodesQuery.sql)
+	}
+
+	nodes, err := queryNodes(ctx, client, nodesQuery)
+	if err != nil {
+		t.Fatalf("queryNodes(REPO): %v", err)
+	}
+
+	repoCount, ok := nodeValueByID(nodes, nodeSeedRepo)
+	if !ok {
+		t.Fatalf("no %s node with a non-nil value in %+v", nodeSeedRepo, nodes)
+	}
+	if repoCount != 2 {
+		t.Errorf("nodes[%s].value = %v, want 2 (wi-bug and wi-story); 3 means the superseded 2026-09-03 "+
+			"version of wi-stale was counted, i.e. FINAL is missing from flowMatrixRepoNodesTemplate",
+			nodeSeedRepo, repoCount)
+	}
+
+	// Same control as the WORK_TYPE convergence test, applied to this
+	// template: Python's variant is this exact SQL minus one token, so the
+	// two texts cannot drift apart, and it must DISAGREE here or the
+	// fixture is not exercising site 2 at all.
+	pythonSQL := withoutCycleTimesFinal(t, "flowMatrixRepoNodesTemplate", renderRepoNodesSQLForTest(orgID))
+	unfinal := scanNodeValue(t, ctx, conn, pythonSQL, flowMatrixSeedRepoID)
+	if unfinal != 3 {
+		t.Fatalf("the un-FINAL REPO read returned %v, want 3; the superseded version is not reaching it, "+
+			"so this test proves nothing about site 2", unfinal)
+	}
+}
+
+// renderRepoNodesSQLForTest is renderWorkTypeNodesSQLForTest's REPO twin
+// -- same binding inlining, different template.
+func renderRepoNodesSQLForTest(orgID string) string {
+	sql := fmt.Sprintf(flowMatrixRepoNodesTemplate, "")
+	replacements := [][2]string{
+		{"{start_date:Date}", "toDate('" + flowMatrixSeedWindowStart + "')"},
+		{"{end_date:Date}", "toDate('" + flowMatrixSeedWindowEnd + "')"},
+		{"{org_id:String}", "'" + orgID + "'"},
+		{"{limit_per_dim:UInt32}", "50"},
+	}
+	for _, r := range replacements {
+		sql = strings.ReplaceAll(sql, r[0], r[1])
+	}
+	return sql
 }

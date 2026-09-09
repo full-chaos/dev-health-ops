@@ -753,7 +753,18 @@ The fix is to widen both sibling bindings from `=` to a key prefix, which belong
 with CHAOS-5453 remedy 2 (widening the sweep's `attempts = 0` guard): the same
 family of query, changed once, with its own guard matrix.
 
-Every pass emits `syncreconciler.orphaned_unit_pass` with all twelve counters
+**The delivery must be provably THIS row's own.** A `river_job_id` is refused
+when non-positive (`ck_worker_job_outbox_delivery_state` requires it NOT NULL
+when delivered, and nothing requires it positive — a `0` would otherwise read as
+"the row was reaped"), and a present job is refused unless its relay metadata's
+`worker_outbox_id` names this exact outbox row, mirroring the sibling seam. A
+row whose own envelope disagrees with itself — `payload.unit_id` is not
+`domain.id` — is refused too: `jobcontract` does not enforce that equality, but
+`internal/jobs/providerunit`'s handler does and answers `DomainMismatch`, so a
+replacement minted from such a row would be refused on arrival. All three are
+counted (`skipped_job_identity`, `skipped_envelope_identity`), never filtered.
+
+Every pass emits `syncreconciler.orphaned_unit_pass` with all thirteen counters
 spelled out **including the zeros**, and every failure carries the driver
 SQLSTATE — this seam's INSERT is the first domain-role write to
 `worker_job_outbox` anywhere in the reconciler, so a missing grant is a live

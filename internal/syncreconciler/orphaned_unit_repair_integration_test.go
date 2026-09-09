@@ -306,6 +306,22 @@ type liveShape struct {
 	// deleting a row it had itself completed.
 	riverState string
 	riverKind  string
+	// riverJobIDOverride replaces the outbox row's river_job_id with a literal
+	// value after the row is written. 0 is a real, schema-legal shape:
+	// ck_worker_job_outbox_delivery_state only requires NOT NULL when
+	// delivered, and nothing constrains it to be positive.
+	riverJobIDOverride *int64
+	// riverMetadataOutboxID, when set, is written into the River job's
+	// metadata.worker_outbox_id instead of this run's own outbox id -- the
+	// cross-linked shape the sibling seam guards against.
+	riverMetadataOutboxID string
+
+	// replacement, when set, seeds a SECOND outbox row for the same unit under
+	// a reclaim key, in the given status, with its own River job in the given
+	// state. This is how a replacement delivery that is already OUT is modelled.
+	replacementKey        string
+	replacementStatus     string
+	replacementRiverState string
 }
 
 func liveShapeDefault(now time.Time) liveShape {
@@ -426,8 +442,20 @@ func (h *orphanHarness) seed(t *testing.T, ctx context.Context, now time.Time, s
 
 	var jobID int64
 	if shape.riverState != "" {
+		metadataOutbox := shape.riverMetadataOutboxID
+		if metadataOutbox == "" {
+			metadataOutbox = liveOutboxID
+		}
 		inserted, err := h.river.Insert(ctx, providerUnitRiverArgs{UnitID: liveUnitID},
-			&river.InsertOpts{Queue: "sync_provider"})
+			&river.InsertOpts{
+				Queue: "sync_provider",
+				// The relay stamps this metadata on every job it inserts
+				// (internal/joboutbox/inserter.go's relayMetadata). A fixture
+				// without it can never exercise a guard that reads it.
+				Metadata: []byte(`{"worker_outbox_id":"` + metadataOutbox +
+					`","payload_hash":"sha256:` + strings.Repeat("0", 64) +
+					`","contract_version":1}`),
+			})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -495,6 +523,9 @@ func (h *orphanHarness) seed(t *testing.T, ctx context.Context, now time.Time, s
 	if shape.outboxPrerequisit != "" {
 		prerequisite = shape.outboxPrerequisit
 	}
+	if shape.riverJobIDOverride != nil && shape.outboxStatus == "delivered" {
+		riverJobID = *shape.riverJobIDOverride
+	}
 	if _, err := h.admin.Exec(ctx, `
 		INSERT INTO public.worker_job_outbox
 			(id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority,
@@ -506,7 +537,69 @@ func (h *orphanHarness) seed(t *testing.T, ctx context.Context, now time.Time, s
 		riverJobID, deliveredAt, prerequisite); err != nil {
 		t.Fatal(err)
 	}
+
+	if shape.replacementKey != "" {
+		h.seedReplacement(t, ctx, now, shape)
+	}
 	return jobID
+}
+
+// seedReplacement writes a SECOND outbox row for the same unit under a reclaim
+// key -- the state the system is in once this repair has already acted once and
+// the relay has taken the replacement onward. Its River job is seeded in
+// replacementRiverState, so an arm can model a replacement delivery that is
+// genuinely still in flight.
+func (h *orphanHarness) seedReplacement(
+	t *testing.T, ctx context.Context, now time.Time, shape liveShape,
+) {
+	t.Helper()
+	args := providerUnitEnvelopeJSON(t, liveOrgID, "sync_run_unit", liveUnitID, shape.replacementKey)
+	replacementID := joboutbox.OutboxRowID(shape.replacementKey)
+
+	var riverJobID any
+	var deliveredAt any
+	if shape.replacementStatus == "delivered" {
+		inserted, err := h.river.Insert(ctx, providerUnitRiverArgs{UnitID: liveUnitID},
+			&river.InsertOpts{
+				Queue: "sync_provider",
+				Metadata: []byte(`{"worker_outbox_id":"` + replacementID.String() +
+					`","payload_hash":"sha256:` + strings.Repeat("0", 64) +
+					`","contract_version":1}`),
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch shape.replacementRiverState {
+		case "", "available":
+			// River's own default for a freshly inserted job: genuinely live.
+		case "running":
+			if _, err := h.admin.Exec(ctx,
+				`UPDATE river.river_job SET state='running', attempted_at=$2 WHERE id=$1`,
+				inserted.Job.ID, now.Add(-time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+		case "completed":
+			if _, err := h.admin.Exec(ctx,
+				`UPDATE river.river_job SET state='completed', finalized_at=$2 WHERE id=$1`,
+				inserted.Job.ID, now.Add(-time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatalf("unknown replacement river state %q", shape.replacementRiverState)
+		}
+		riverJobID = inserted.Job.ID
+		deliveredAt = now.Add(-time.Hour)
+	}
+	if _, err := h.admin.Exec(ctx, `
+		INSERT INTO public.worker_job_outbox
+			(id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority,
+			 max_attempts, scheduled_at, status, attempt_count, next_attempt_at, river_job_id,
+			 delivered_at, created_at, updated_at)
+		VALUES ($1, $2, 'sync.provider_unit', 1, $3::json, $4, 'sync_provider', 2, 5, $5, $6, 1, $5, $7, $8, $5, $5)`,
+		replacementID, shape.replacementKey, args, payloadHashOf(t, args),
+		now.Add(-2*time.Hour), shape.replacementStatus, riverJobID, deliveredAt); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (h *orphanHarness) step(t *testing.T, ctx context.Context, now time.Time) OrphanedUnitRepairResult {
@@ -878,7 +971,7 @@ func TestOrphanedUnitRepairGuardMatrix(t *testing.T) {
 		name    string
 		clause  string
 		mutate  func(*liveShape)
-		want    func(OrphanedUnitRepairResult) error
+		want    func(OrphanedUnitRepairResult, int) error
 		preSeed func(*testing.T, context.Context)
 	}{
 		{
@@ -1073,6 +1166,74 @@ func TestOrphanedUnitRepairGuardMatrix(t *testing.T) {
 			},
 			want: wantCounters(0, 0, nil, ""),
 		},
+		// ---- r1 (luna) findings F1-F4, reproduced as arms rather than argued.
+		// Each encodes the behaviour the finding says is REQUIRED; an arm that
+		// fails before the fix is the finding CONFIRMED, one that passes is it
+		// REFUTED. Written before either was known.
+		{
+			// F1: the replacement this repair already minted has been taken by
+			// the relay and is 'delivered' with a LIVE River job. The live-row
+			// guard only names 'pending'/'claimed', so it does NOT exclude the
+			// unit -- if nothing else refuses, a second replacement is minted
+			// on top of a delivery that is genuinely still running.
+			name:   "a_replacement_delivery_is_already_out_and_live",
+			clause: "no second delivery while a replacement is in flight (r1 F1)",
+			mutate: func(s *liveShape) {
+				s.riverState = "completed"
+				s.replacementKey = liveBaseKey + "/reclaim/1"
+				s.replacementStatus = "delivered"
+				s.replacementRiverState = "running"
+			},
+			want: wantNoNewRow(2),
+		},
+		{
+			// F2: jobcontract's ProviderUnitPayload.validate only checks that
+			// unit_id is a UUID -- it does NOT require it to equal domain.id.
+			// The HANDLER does (providerunit.go returns DomainMismatch), so a
+			// replacement minted from such a row is refused on arrival: a
+			// strand replacing a strand.
+			name:   "envelope_payload_and_domain_name_different_units",
+			clause: "payload.unit_id == domain.id before minting (r1 F2)",
+			mutate: func(s *liveShape) {
+				s.outboxRawArgs = `{"contract_version":1,"correlation_id":"sync-run:` + liveRunID +
+					`","domain":{"id":"` + liveUnitID + `","type":"sync_run_unit"},` +
+					`"idempotency_key":"` + liveBaseKey + `","organization_id":"` + liveOrgID +
+					`","payload":{"unit_id":"` + otherUnit + `"}}`
+			},
+			want: wantNoNewRowAndCounter(1,
+				func(r OrphanedUnitRepairResult) int { return r.SkippedEnvelopeIdentity },
+				"SkippedEnvelopeIdentity"),
+		},
+		{
+			// F3: the sibling seam binds the River job by its relay metadata
+			// (worker_outbox_id) as well as by id, so a job belonging to a
+			// DIFFERENT delivery cannot license a repair.
+			name:   "river_job_metadata_names_another_outbox_row",
+			clause: "the River job must be THIS row's own delivery (r1 F3)",
+			mutate: func(s *liveShape) {
+				s.riverState = "completed"
+				s.riverMetadataOutboxID = "00000000-0000-4000-8000-0000000000ff"
+			},
+			want: wantNoNewRowAndCounter(1,
+				func(r OrphanedUnitRepairResult) int { return r.SkippedJobIdentity },
+				"SkippedJobIdentity"),
+		},
+		{
+			// F4: ck_worker_job_outbox_delivery_state requires river_job_id NOT
+			// NULL when delivered, and nothing requires it positive. The
+			// sibling scan refuses riverJobID <= 0; a LEFT JOIN reads 0 as "the
+			// row was reaped" and repairs a malformed row.
+			name:   "river_job_id_is_zero",
+			clause: "a non-positive river_job_id is malformed, not missing (r1 F4)",
+			mutate: func(s *liveShape) {
+				s.riverState = "missing"
+				zero := int64(0)
+				s.riverJobIDOverride = &zero
+			},
+			want: wantNoNewRowAndCounter(1,
+				func(r OrphanedUnitRepairResult) int { return r.SkippedJobIdentity },
+				"SkippedJobIdentity"),
+		},
 		{
 			name:   "reclaim_budget_is_spent",
 			clause: "maxProviderUnitReclaims",
@@ -1105,8 +1266,10 @@ func TestOrphanedUnitRepairGuardMatrix(t *testing.T) {
 				arm.preSeed(t, ctx)
 			}
 			result := h.step(t, ctx, now)
-			if err := arm.want(result); err != nil {
-				t.Fatalf("clause under test: %s\n%v\nresult: %+v", arm.clause, err, result)
+			rowsAfter := len(h.rowsForUnit(t, ctx))
+			if err := arm.want(result, rowsAfter); err != nil {
+				t.Fatalf("clause under test: %s\n%v\nresult: %+v rows_after=%d",
+					arm.clause, err, result, rowsAfter)
 			}
 		})
 	}
@@ -1116,8 +1279,8 @@ func wantCounters(
 	found, rearmed int,
 	counter func(OrphanedUnitRepairResult) int,
 	counterName string,
-) func(OrphanedUnitRepairResult) error {
-	return func(result OrphanedUnitRepairResult) error {
+) func(OrphanedUnitRepairResult, int) error {
+	return func(result OrphanedUnitRepairResult, _ int) error {
 		if result.Found != found {
 			return fmt.Errorf("Found = %d, want %d", result.Found, found)
 		}
@@ -1132,8 +1295,47 @@ func wantCounters(
 	}
 }
 
-func wantRearm(n int) func(OrphanedUnitRepairResult) error {
-	return func(result OrphanedUnitRepairResult) error {
+// wantNoNewRow asserts the pass minted NOTHING, by the only measure that
+// matters for these arms: the number of outbox rows for the unit is unchanged.
+// Counting rows rather than reading ReArmed is deliberate -- ReArmed is the
+// repair's own account of itself, and an arm testing whether the repair is
+// honest cannot take its word for it.
+func wantNoNewRow(existingRows int) func(OrphanedUnitRepairResult, int) error {
+	return func(result OrphanedUnitRepairResult, rowsAfter int) error {
+		if result.ReArmed != 0 {
+			return fmt.Errorf("ReArmed = %d, want 0", result.ReArmed)
+		}
+		if rowsAfter != existingRows {
+			return fmt.Errorf("outbox rows for the unit = %d, want %d (a row was minted)",
+				rowsAfter, existingRows)
+		}
+		return nil
+	}
+}
+
+// wantNoNewRowAndCounter is wantNoNewRow plus the standing "count the refusal,
+// never filter it away" rule: a guard whose refusals are invisible cannot be
+// told apart from one that never fires.
+func wantNoNewRowAndCounter(
+	existingRows int,
+	counter func(OrphanedUnitRepairResult) int,
+	counterName string,
+) func(OrphanedUnitRepairResult, int) error {
+	base := wantNoNewRow(existingRows)
+	return func(result OrphanedUnitRepairResult, rowsAfter int) error {
+		if err := base(result, rowsAfter); err != nil {
+			return err
+		}
+		if counter(result) != 1 {
+			return fmt.Errorf("%s = %d, want 1 -- the refusal must be COUNTED",
+				counterName, counter(result))
+		}
+		return nil
+	}
+}
+
+func wantRearm(n int) func(OrphanedUnitRepairResult, int) error {
+	return func(result OrphanedUnitRepairResult, _ int) error {
 		if result.ReArmed != n {
 			return fmt.Errorf("ReArmed = %d, want %d", result.ReArmed, n)
 		}

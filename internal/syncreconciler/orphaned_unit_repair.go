@@ -147,7 +147,7 @@ import (
 // Every predicate below was mutated one clause at a time against real
 // PostgreSQL 18 with River's own migrated schema, in an isolated tree copy
 // (this worktree is never mutated; each arm is restored by sha256 before the
-// next). 21 of 27 turn a NAMED subtest red. The six that do not are recorded
+// next). 24 of 30 turn a NAMED subtest red. The six that do not are recorded
 // here rather than left as an unexplained gap, because "no test went red" and
 // "the clause cannot be reached" look identical in a matrix that only counts:
 //
@@ -172,7 +172,18 @@ import (
 //     for a future predicate change that makes zero reachable.
 //
 // The full matrix, with the mutation and the killing subtest for each of the
-// 21, is in the lane's mutants-final/summary.json evidence.
+// 24, is in the lane's evidence. Three of those arms (M27-M29) pin the identity
+// guards added after round 1 reproduced them as real: an envelope that
+// disagrees with itself, a non-positive transport id, and a River job whose
+// relay metadata names a different outbox row.
+//
+// A fourth round-1 finding -- that a replacement already 'delivered' with a
+// LIVE River job is not excluded by the live-row guard, so a second delivery
+// could be minted on top of it -- was REPRODUCED AND REFUTED: the
+// replacement-key NOT EXISTS in readOrphanedSourceRowSQL refuses it, measured
+// by the a_replacement_delivery_is_already_out_and_live arm. No code changed;
+// the arm stays, because it pins WHICH clause carries that invariant, and the
+// answer is not the one the design's prose would lead a reader to expect.
 type OrphanedUnitRepair struct {
 	queryQueue  func(context.Context, string, ...any) (pgx.Rows, error)
 	beginDomain func(context.Context) (pgx.Tx, error)
@@ -201,14 +212,25 @@ type OrphanedUnitRepairResult struct {
 	DeliveryMissing   int
 	DeliveryCompleted int
 
-	SkippedJobLive       int
-	SkippedJobIdentity   int
-	SkippedOtherRepair   int
-	SkippedReclaimBudget int
-	SkippedNotOrphaned   int
-	SkippedPrerequisite  int
-	SkippedEnvelope      int
-	SkippedRaceLost      int
+	SkippedJobLive int
+	// SkippedJobIdentity counts a delivery whose River job is not, or is not
+	// provably, THIS row's own: a non-positive transport id, a job of another
+	// kind, or a job whose relay metadata names a different outbox row.
+	SkippedJobIdentity int
+	// SkippedEnvelopeIdentity counts a row whose own envelope disagrees with
+	// itself -- payload.unit_id is not domain.id. jobcontract does not enforce
+	// that equality (ProviderUnitPayload.validate only checks the UUID shape),
+	// but internal/jobs/providerunit's handler DOES and answers DomainMismatch,
+	// so a replacement minted from such a row is refused on arrival. Counted
+	// rather than filtered: a row of this shape means a PRODUCER is writing
+	// disagreeing envelopes, which is worth seeing.
+	SkippedEnvelopeIdentity int
+	SkippedOtherRepair      int
+	SkippedReclaimBudget    int
+	SkippedNotOrphaned      int
+	SkippedPrerequisite     int
+	SkippedEnvelope         int
+	SkippedRaceLost         int
 
 	RemainingBudget int
 }
@@ -240,6 +262,7 @@ const (
 	dispositionOrphanMissing    = "orphan_delivery_missing"
 	dispositionOrphanCompleted  = "orphan_delivery_completed"
 	dispositionSkipJobIdentity  = "skip_job_identity"
+	dispositionSkipEnvelope     = "skip_envelope_identity"
 	dispositionSkipOtherRepair  = "skip_other_repair"
 	dispositionSkipOrphanedLive = "skip_job_live"
 )
@@ -317,6 +340,8 @@ func (repair *OrphanedUnitRepair) Step(
 			result.SkippedJobLive++
 		case dispositionSkipJobIdentity:
 			result.SkippedJobIdentity++
+		case dispositionSkipEnvelope:
+			result.SkippedEnvelopeIdentity++
 		case dispositionSkipOtherRepair:
 			result.SkippedOtherRepair++
 		default:
@@ -570,7 +595,17 @@ func (repair *OrphanedUnitRepair) failed(ctx context.Context, step string, cause
 		"sqlstate", sqlstate,
 		"error", detail,
 	)
-	return fmt.Errorf("orphaned-unit %s: %w", step, ErrUnavailable)
+	if cause == nil {
+		return fmt.Errorf("orphaned-unit %s: %w", step, ErrUnavailable)
+	}
+	// BOTH wrapped, deliberately. The pipeline's stageSQLState (pipeline.go)
+	// recovers a stage's SQLSTATE with errors.As over *pgconn.PgError -- so
+	// collapsing to ErrUnavailable alone kept the SQLSTATE in THIS file's log
+	// line but dropped it from the stage-level failure telemetry an operator
+	// actually alerts on. Wrapping both keeps errors.Is(ErrUnavailable) true
+	// for the caller's continue-safe classification AND leaves the driver error
+	// reachable for the stage counter (r1 finding F5).
+	return fmt.Errorf("orphaned-unit %s: %w: %w", step, ErrUnavailable, cause)
 }
 
 func (repair *OrphanedUnitRepair) logOutcome(
@@ -587,6 +622,7 @@ func (repair *OrphanedUnitRepair) logOutcome(
 		"delivery_completed", result.DeliveryCompleted,
 		"skipped_job_live", result.SkippedJobLive,
 		"skipped_job_identity", result.SkippedJobIdentity,
+		"skipped_envelope_identity", result.SkippedEnvelopeIdentity,
 		"skipped_other_repair", result.SkippedOtherRepair,
 		"skipped_reclaim_budget", result.SkippedReclaimBudget,
 		"skipped_not_orphaned", result.SkippedNotOrphaned,
@@ -764,8 +800,15 @@ var selectOrphanedUnitDeliverySQL = `
 	SELECT outbox.id::text, outbox.dedupe_key, unit.id::text, unit.sync_run_id::text,
 		outbox.river_job_id,
 		CASE
+			WHEN outbox.args #>> '{payload,unit_id}'
+				IS DISTINCT FROM outbox.args #>> '{domain,id}'
+				THEN '` + dispositionSkipEnvelope + `'
+			WHEN outbox.river_job_id <= 0 THEN '` + dispositionSkipJobIdentity + `'
 			WHEN job.id IS NULL THEN '` + dispositionOrphanMissing + `'
 			WHEN job.kind <> outbox.job_kind THEN '` + dispositionSkipJobIdentity + `'
+			WHEN job.metadata ->> 'worker_outbox_id'
+				IS DISTINCT FROM outbox.id::text
+				THEN '` + dispositionSkipJobIdentity + `'
 			WHEN job.state::text = 'completed' AND job.finalized_at IS NOT NULL
 				THEN '` + dispositionOrphanCompleted + `'
 			WHEN job.state::text IN ('discarded', 'cancelled')

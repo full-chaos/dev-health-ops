@@ -494,31 +494,38 @@ def test_worker_and_beat_are_required_with_real_healthchecks() -> None:
     assert "profiles" not in services["worker"]
     assert "profiles" not in services["beat"]
 
-    # Codex finding (HIGH, 2026-08-05): `celery inspect ping` only proves
-    # the control-plane RPC answers, not that the task pool executes queued
-    # work -- a wedged pool can keep answering ping. Both healthchecks now
-    # invoke a dedicated probe script that round-trips a REAL task through a
-    # required queue (worker) or reads a worker-written receipt with a
-    # bounded timestamp (beat) -- see
-    # test_worker_probe_dispatches_a_real_task_through_a_required_queue and
-    # test_beat_sentinel_reads_a_freshness_bounded_worker_receipt below for
-    # execution-level proof these scripts do what they claim, and
-    # test_worker_probe_times_out_against_a_wedged_pool for the RED case.
+    # CHAOS-4065: no Celery fleet in the acceptance gate. Both containers'
+    # own process is an inert placeholder (`sleep infinity`); the real work
+    # is the healthcheck itself, which re-executes the same production Go
+    # code the corresponding cadence uses in prod
+    # (cmd/ask-dev-jobs-probe) fresh on every tick -- a query/delete
+    # failure against the stack's real Postgres reports unhealthy, exactly
+    # as a wedged Celery pool used to.
+    assert services["worker"]["entrypoint"] == ["sleep", "infinity"]
+    assert services["beat"]["entrypoint"] == ["sleep", "infinity"]
+
     worker_check = services["worker"]["healthcheck"]
     assert worker_check["test"] == [
         "CMD",
-        "python",
-        "/app/scripts/acceptance/healthcheck_worker_probe.py",
+        "/usr/local/bin/ask-dev-jobs-probe",
+        "queue-depth",
     ]
     assert worker_check["retries"] > 1
 
     beat_check = services["beat"]["healthcheck"]
     assert beat_check["test"] == [
         "CMD",
-        "python",
-        "/app/scripts/acceptance/healthcheck_beat_sentinel.py",
+        "/usr/local/bin/ask-dev-jobs-probe",
+        "retention",
     ]
     assert beat_check["retries"] > 1
+
+    # `worker` needs River's schema (river-migrate); `beat`'s retention
+    # tables are plain Alembic tables and need only `migrate` -- see
+    # cmd/ask-dev-jobs-probe's package doc comment for why these two
+    # checks have different prerequisites.
+    assert "river-migrate" in services["worker"]["depends_on"]
+    assert "migrate" in services["beat"]["depends_on"]
 
 
 def test_quota_env_documents_what_production_code_actually_reads() -> None:
@@ -673,11 +680,12 @@ def test_launcher_boots_required_jobs_fleet_and_gates_acr_optionally() -> None:
     launcher = _LAUNCHER.read_text(encoding="utf-8")
     # CHAOS-3463 split this in two: the jobs fleet is still REQUIRED, it is
     # just started after `fixtures world-restore` rather than before it.
-    # `worker`/`beat` were concurrent writers racing the restore's
-    # empty-target precondition (beat dispatches monitor-queue-depths from
-    # the moment it starts). Both lists, and the fact that BOTH are brought
-    # up, are asserted -- a split that quietly dropped the fleet would leave
-    # the "API+jobs" gate framing unmet.
+    # `worker`/`beat` (CHAOS-4065: now Go-native probe containers, not
+    # Celery) were concurrent writers racing the restore's empty-target
+    # precondition -- their healthchecks execute real queries/deletes as
+    # soon as the containers are up. Both lists, and the fact that BOTH are
+    # brought up, are asserted -- a split that quietly dropped the fleet
+    # would leave the "API+jobs" gate framing unmet.
     assert (
         "boot_services=(postgres pgbouncer clickhouse valkey migrate ask-dev-scripted-openai api)"
         in launcher
@@ -1134,63 +1142,36 @@ def test_resolve_acr_parent_compose_rejects_a_missing_explicit_override() -> Non
     assert "does not exist" in result.stderr
 
 
-# --- worker/beat probe scripts: static (no-live-infra) coverage. The
-# behavioral proof that these actually detect a wedged pool -- Codex's
-# explicit "RED-verify by wedging it (pool=solo + blocking task)" -- is a
-# live docker-compose proof (see PR description), not a unit test: it needs
-# a real broker, a real second worker process, and a real blocking task,
-# which is exactly the class of live-infra dependency this repo's other
-# acceptance/live tests are already kept out of the fast unit tier for. ---
+# --- worker/beat healthchecks: CHAOS-4065 replaced the two Celery-only
+# Python probe scripts (healthcheck_worker_probe.py, healthcheck_beat_
+# sentinel.py -- deleted) with cmd/ask-dev-jobs-probe, a Go binary that
+# re-executes the real production code for each cadence directly. Its own
+# behavioral coverage lives in cmd/ask-dev-jobs-probe/main_test.go (Go unit
+# tests: subcommand validation, env-fallback parsing, receipt shape); the
+# live round-trip against a real Postgres/River schema is the acceptance
+# run itself, not a Python unit test -- same reasoning the deleted scripts'
+# comment gave for why their RED-verify was a live proof, not a unit test.
+# What THIS file still owns is that neither deleted script is referenced
+# anywhere live. ---
 
 
-def test_worker_probe_targets_a_required_queue_with_a_bounded_wait() -> None:
-    source = _WORKER_PROBE_SCRIPT.read_text(encoding="utf-8")
-    # "monitoring" must be a queue this stack's `worker` service actually
-    # consumes (compose.yml's `-Q ...,monitoring`) -- a probe routed to a
-    # queue nothing consumes would time out unconditionally, proving
-    # nothing about the pool's health either way.
-    assert '_PROBE_QUEUE = "monitoring"' in source
+def test_no_reference_to_the_deleted_celery_healthcheck_scripts_remains() -> None:
+    assert not _WORKER_PROBE_SCRIPT.exists()
+    assert not _BEAT_SENTINEL_SCRIPT.exists()
+    overlay_source = _OVERLAY.read_text(encoding="utf-8")
+    launcher_source = _LAUNCHER.read_text(encoding="utf-8")
+    for needle in ("healthcheck_worker_probe.py", "healthcheck_beat_sentinel.py"):
+        assert needle not in overlay_source
+        assert needle not in launcher_source
+
+
+def test_ask_dev_jobs_probe_binary_is_built_into_the_runner_image() -> None:
+    dockerfile = (_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    assert "./cmd/ask-dev-jobs-probe" in dockerfile
     assert (
-        '_PROBE_TASK_NAME = "dev_health_ops.workers.tasks.monitor_queue_depths"'
-        in source
+        "COPY --from=go-migrator-builder /out/ask-dev-jobs-probe "
+        "/usr/local/bin/ask-dev-jobs-probe" in dockerfile
     )
-    assert "task_id=" in source, (
-        "must be uniquely identified, not a bare fire-and-forget"
-    )
-    assert ".get(timeout=" in source, "must actually block for the receipt"
-
-
-def test_beat_sentinel_reads_a_freshness_bounded_worker_receipt() -> None:
-    source = _BEAT_SENTINEL_SCRIPT.read_text(encoding="utf-8")
-    assert "CELERY_RESULT_BACKEND" in source
-    assert "celery-task-meta-" in source
-    assert "_FRESHNESS_WINDOW_SECONDS" in source
-    # Matches by result SHAPE, not task name (the default Redis result
-    # payload carries no task name) -- assert the actual fingerprint field.
-    assert '"queues"' in source
-
-
-def test_beat_sentinel_date_parsing_handles_naive_and_aware_timestamps() -> None:
-    import importlib.util
-    from datetime import timezone
-
-    spec = importlib.util.spec_from_file_location(
-        "healthcheck_beat_sentinel", _BEAT_SENTINEL_SCRIPT
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    naive = module._parse_date_done("2026-08-05T13:45:28.474000")
-    assert naive is not None
-    assert naive.tzinfo == timezone.utc
-
-    aware = module._parse_date_done("2026-08-05T13:45:28.474000+00:00")
-    assert aware is not None
-    assert aware.tzinfo is not None
-
-    assert module._parse_date_done("not-a-timestamp") is None
-    assert module._parse_date_done(None) is None
 
 
 # ---------------------------------------------------------------------------

@@ -19,10 +19,15 @@
 #   "Last verified" (markdown)  a HUMAN's claim about the hand-curated citation
 #                               and CLI-verb rows. Forgeable by editing a line,
 #                               which is why the failure message says so out loud.
-#   ops_sha (last-render.json)  the sha `-render` actually read from, written by
-#                               the tool via `git rev-parse HEAD`. Not typeable
-#                               by hand, so it is the half of the freshness claim
-#                               that cannot be faked.
+#   ops_sha (last-render.json)  the MERGE-BASE with main at render time, written
+#                               by the tool. Not typeable by hand, so it is the
+#                               half of the freshness claim that cannot be faked.
+#                               It is the merge-base and NOT the render commit
+#                               because a squash merge makes a branch commit
+#                               unreachable from main forever -- recording the
+#                               branch tip here took main red for every PR after
+#                               #2389 landed. `render_commit` records the actual
+#                               commit for the audit trail and is never checked.
 #
 #   freshness  Pure bash + git. No Go toolchain, no venv, no network. It runs
 #              UNCONDITIONALLY on every PR -- and that is the entire point: a
@@ -182,16 +187,26 @@ Re-verify, then commit:
   [ "${#ops_sha}" -eq 40 ] || die "check_migration_matrix: ops_sha '${ops_sha}' is ${#ops_sha} characters, not 40"
 
   git -C "${ROOT}" cat-file -e "${ops_sha}^{commit}" 2>/dev/null || die \
-    "check_migration_matrix: the render claims to have been made at ${ops_sha}, which is not a
-commit in this repository. If CI made a shallow checkout, this job needs fetch-depth: 0.
+    "check_migration_matrix: ops_sha ${ops_sha} is not a commit in this repository.
+
+The likeliest cause is a render that recorded its own BRANCH tip. A squash
+merge replaces a branch's commits with one new commit, so the original is
+never reachable from main again and this check fails on main forever -- which
+is exactly what #2389 did. ops_sha must be the MERGE-BASE with main (the last
+main commit the render observed), which survives a squash; the render commit
+itself is recorded separately as render_commit and is deliberately NOT checked.
+A shallow CI checkout (needs fetch-depth: 0) is the other, rarer cause.
 
 Re-verify, then commit:
   ${REVERIFY_COMMAND}"
 
   git -C "${ROOT}" merge-base --is-ancestor "${ops_sha}" HEAD || die \
-    "check_migration_matrix: the render was made at ${ops_sha}, which is NOT an ancestor of HEAD.
-The generated cells on this page were produced from a tree this branch does not
-contain, so they describe something other than what is about to merge.
+    "check_migration_matrix: ops_sha ${ops_sha} is NOT an ancestor of HEAD.
+
+Same cause as above: ops_sha must be the merge-base with main, not the commit
+the render ran on. A branch tip recorded here disappears at squash-merge and
+strands this check on main. If ops_sha IS a merge-base and still is not an
+ancestor, the render came from an unrelated history.
 
 Re-verify, then commit:
   ${REVERIFY_COMMAND}"

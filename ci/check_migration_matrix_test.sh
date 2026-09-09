@@ -58,7 +58,8 @@ fixture() {
   if [ "${ops_sha}" = "SENTINEL" ]; then
     ops_sha="${verified_sha}"
   fi
-  printf '{\n  "rendered_at": "%s",\n  "ops_sha": "%s"\n}\n' "${rendered_at}" "${ops_sha}" \
+  printf '{\n  "rendered_at": "%s",\n  "ops_sha": "%s",\n  "render_commit": "%s"\n}\n' \
+    "${rendered_at}" "${ops_sha}" "${ops_sha}" \
     > "${repo}/contracts/migration-status/v1/last-render.json"
 
   # The caller may want a literal cell (an abbreviation, a foreign sha, or
@@ -138,6 +139,81 @@ check_message_names_the_command() {
   fi
 }
 check_message_names_the_command
+
+# THE REGRESSION CASE. This is the one that was missing, and its absence took
+# main red for every PR the moment #2389 squash-merged.
+#
+# A squash merge replaces a branch's commits with ONE new commit on main. The
+# branch's own commits are then unreachable from main forever -- so a render
+# that recorded its branch tip as ops_sha strands the ancestry check on main
+# permanently, reporting "not an ancestor" about a commit that could not
+# possibly be one. Nothing in the fixtures above could catch it: every one of
+# them renders and checks within a single linear history, which is exactly the
+# shape a squash merge is not.
+#
+# So this case builds the real shape: a branch off main, a render on the
+# branch, a squash of that branch onto main, and then the check running on
+# main with the branch commits gone. The merge-base recorded by a fixed
+# `-render` survives; the branch tip does not.
+check_survives_a_squash_merge() {
+  local repo="${WORK}/squash" fork_point rc=0 output
+  mkdir -p "${repo}/docs" "${repo}/contracts/migration-status/v1"
+  git -C "${repo}" init -q -b main
+  git -C "${repo}" config user.email test@example.com
+  git -C "${repo}" config user.name test
+  git -C "${repo}" config commit.gpgsign false
+
+  printf '# matrix\n\nseed\n' > "${repo}/docs/go-migration-matrix.md"
+  printf '{}\n' > "${repo}/contracts/migration-status/v1/last-render.json"
+  git -C "${repo}" add -A
+  git -C "${repo}" commit -qm 'main: seed'
+  fork_point="$(git -C "${repo}" rev-parse HEAD)"
+
+  # A branch, a render on it. `-render` records the MERGE-BASE with main
+  # (the fork point), never the branch tip.
+  git -C "${repo}" checkout -q -b feature
+  # shellcheck disable=SC2016  # markdown backticks in a printf FORMAT string.
+  printf '# matrix\n\n**Last verified:** `%s` (ops main, 2026-09-04) -- read against.\n' \
+    "${fork_point}" > "${repo}/docs/go-migration-matrix.md"
+  printf '{\n  "rendered_at": "%s",\n  "ops_sha": "%s",\n  "render_commit": "%s"\n}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${fork_point}" "BRANCHTIPPLACEHOLDER" \
+    > "${repo}/contracts/migration-status/v1/last-render.json"
+  git -C "${repo}" add -A
+  git -C "${repo}" commit -qm 'feature: render'
+  local branch_tip
+  branch_tip="$(git -C "${repo}" rev-parse HEAD)"
+  # Record the real branch tip in render_commit, as a fixed -render would.
+  sed -i "s/BRANCHTIPPLACEHOLDER/${branch_tip}/" \
+    "${repo}/contracts/migration-status/v1/last-render.json"
+  git -C "${repo}" add -A
+  git -C "${repo}" commit -qm 'feature: record render_commit'
+  branch_tip="$(git -C "${repo}" rev-parse HEAD)"
+
+  # SQUASH onto main. main gains ONE new commit carrying the tree; the
+  # branch's own commits are not in main's history at all.
+  git -C "${repo}" checkout -q main
+  git -C "${repo}" merge -q --squash feature
+  git -C "${repo}" commit -qm 'main: squashed feature (#1)'
+  git -C "${repo}" branch -q -D feature
+
+  # Precondition: the branch tip really is unreachable from main now. If this
+  # ever stops holding, the test is no longer exercising the bug.
+  if git -C "${repo}" merge-base --is-ancestor "${branch_tip}" HEAD 2>/dev/null; then
+    printf 'FAIL squash_merge: the branch tip is still an ancestor of main; the fixture does not reproduce a squash\n'
+    FAILED=$((FAILED + 1))
+    return
+  fi
+
+  output="$(MATRIX_ROOT="${repo}" MATRIX_MAX_AGE_DAYS=7 bash "${UNDER_TEST}" freshness 2>&1)" || rc=$?
+  if [ "${rc}" -eq 0 ]; then
+    printf 'ok   squash_merge (a merge-base ops_sha survives a squash merge onto main)\n'
+    PASSED=$((PASSED + 1))
+  else
+    printf 'FAIL squash_merge: the check must stay green on main after a squash; rc=%d\n%s\n' "${rc}" "${output}"
+    FAILED=$((FAILED + 1))
+  fi
+}
+check_survives_a_squash_merge
 
 printf '\n%d passed, %d failed\n' "${PASSED}" "${FAILED}"
 [ "${FAILED}" -eq 0 ]

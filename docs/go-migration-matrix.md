@@ -80,7 +80,15 @@ The gate checks **two** shas, for the two halves of the page:
 | Sha | Whose claim | Checked for |
 |---|---|---|
 | **Last verified** (this line) | a human's, about the hand-curated citation and CLI-verb rows | 40-hex, ancestor of `HEAD`, age <= `MATRIX_MAX_AGE_DAYS` (default 7) |
-| `ops_sha` in [`last-render.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/migration-status/v1/last-render.json) | the tool's, about the generated cells | same three, and it is written by `git rev-parse HEAD` inside `-render`, so it cannot be typed by hand |
+| `ops_sha` in [`last-render.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/migration-status/v1/last-render.json) | the tool's, about the generated cells | same three, and it is written by `-render` itself, so it cannot be typed by hand |
+
+`ops_sha` is the **merge-base with main** at render time -- the last main commit the render observed -- not
+the commit `-render` ran on. That distinction is load-bearing: a squash merge replaces a branch's commits
+with one new commit, so a branch tip recorded here becomes unreachable from main and strands the ancestry
+check on main permanently. #2389 shipped exactly that mistake and reddened `go-quality` for every PR until
+it was fixed. The merge-base survives the squash and still bounds staleness, because a render from a
+long-stale branch carries a correspondingly old merge-base. The commit `-render` actually ran on is recorded
+beside it as `render_commit`, for the audit trail, and is deliberately never ancestry-checked.
 
 Re-verifying the generated half is one command plus a commit, and every staleness failure prints it verbatim
 along with the age in days:
@@ -144,41 +152,41 @@ _Deployed revisions read from: docker inspect dev-health-go-worker-1 dev-health-
 
 | Family | Scope | Executes | Output parity | Deployed revision (read at) | Deployed-executed proof | Open regressions |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ai_governance` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `ai_impact` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `ai_workflow` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `cicd` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `compounding_risk` | daily | POST_BRIDGE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `deploy` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `file_hotspots` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `file_risk_hotspots` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `incident` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `repo_user_commit` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `review_edges` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `team_wellbeing` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `testops_coverage` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `testops_pipeline` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `testops_risk` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `testops_test` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `work_graph_edges` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `work_item` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `work_item_attribution` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `work_item_estimate` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `work_item_state` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `benchmarking` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `compounding_risk_team` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `ic_finalize` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `team_cognitive_load` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `team_complexity` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `capacity` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `complexity` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `dora` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `membership_backfill` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `recommendations` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `release_impact` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `work_item_attribution` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
-| `investment.materialize` | workgraph | NATIVE | **DIVERGED** (CHAOS-5459, .remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes (internal/jobs/investment/hierarchycascade.go, materialize.go) are unmerged in PR #2382 with CHAOS-5460 stacked behind it) | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | **CHAOS-5459, CHAOS-5460** |
-| `workgraph.build` | workgraph | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `ai_governance` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `ai_impact` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `ai_workflow` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `cicd` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `compounding_risk` | daily | POST_BRIDGE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `deploy` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `file_hotspots` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `file_risk_hotspots` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `incident` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `repo_user_commit` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `review_edges` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `team_wellbeing` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `testops_coverage` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `testops_pipeline` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `testops_risk` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `testops_test` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `work_graph_edges` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `work_item` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `work_item_attribution` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `work_item_estimate` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `work_item_state` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `benchmarking` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `compounding_risk_team` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `ic_finalize` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `team_cognitive_load` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `team_complexity` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `capacity` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `complexity` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `dora` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `membership_backfill` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `recommendations` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `release_impact` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `work_item_attribution` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
+| `investment.materialize` | workgraph | NATIVE | **DIVERGED** (CHAOS-5459, .remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes (internal/jobs/investment/hierarchycascade.go, materialize.go) are unmerged in PR #2382 with CHAOS-5460 stacked behind it) | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | **CHAOS-5459, CHAOS-5460** |
+| `workgraph.build` | workgraph | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T06:26:46Z) | **none** | -- |
 <!-- END GENERATED MIGRATION STATUS V2 -->
 
 ### Per Go-API operation
@@ -201,7 +209,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-09T04:27:20Z from ops `53afb0285de4e492821142d640c15baebac4ba95`; SDL digest pin `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88`; fleet read 2026-09-09T04:27:20Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
+_Rendered 2026-09-09T06:26:46Z against main merge-base `de879327b0fabf7b7bd8b573995457516caa49e9`; SDL digest pin `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88`; fleet read 2026-09-09T06:26:46Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
 
 _Rows in `go_api_proof_run` at read time: **0**. Operations reachable to real clients with no deployed-executed proof: **11**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **12**._
 

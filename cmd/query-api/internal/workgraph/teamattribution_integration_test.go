@@ -13,6 +13,7 @@ import (
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -322,6 +323,48 @@ func TestResolveWorkUnitTeamAttributions_TruncationSignalRealEngine(t *testing.T
 	}
 	if !found {
 		t.Fatalf("truncation warning never logged; captured log output: %s", logBuf.String())
+	}
+
+	// CHAOS-3969 round 2 (team-lead review): the log line alone is not a
+	// sufficient signal -- a COUNTER must fire too, so an operator has
+	// something to alert on. This reads the REAL counter (this package's
+	// shared realMeterReader, main_test.go) after the SAME truncating
+	// call above -- the log-line proof and the counter proof are the
+	// identical call, not two separate setups -- through the unswapped
+	// recordWorkUnitTeamAttributionsTruncation/
+	// incrementWorkUnitTeamAttributionsTruncationCounter default chain
+	// (every OTHER test in this package that exercises truncation swaps
+	// those vars to a spy and restores them via t.Cleanup, so this is the
+	// only place in the suite that increments the real instrument).
+	var rm metricdata.ResourceMetrics
+	if err := realMeterReader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("reader.Collect error = %v", err)
+	}
+	sawCounter := false
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "devhealth_query_api_workgraph_truncation_total" {
+				continue
+			}
+			data, ok := m.Data.(metricdata.Sum[int64])
+			if !ok || len(data.DataPoints) != 1 {
+				t.Fatalf("counter data shape = %+v, want one int64 sum data point", m.Data)
+			}
+			dp := data.DataPoints[0]
+			sawCounter = true
+			if dp.Value != 1 {
+				t.Errorf("counter value = %d, want 1", dp.Value)
+			}
+			if got, ok := dp.Attributes.Value("family"); !ok || got.AsString() != "team_attribution" {
+				t.Errorf("counter family attribute = %v (present=%v), want team_attribution", got, ok)
+			}
+			if got, ok := dp.Attributes.Value("op"); !ok || got.AsString() != "work_unit_team_attributions" {
+				t.Errorf("counter op attribute = %v (present=%v), want work_unit_team_attributions", got, ok)
+			}
+		}
+	}
+	if !sawCounter {
+		t.Fatalf("devhealth_query_api_workgraph_truncation_total was never recorded")
 	}
 
 	// Negative case: a limit above the real row count must NOT log.

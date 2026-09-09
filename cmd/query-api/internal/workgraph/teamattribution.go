@@ -33,6 +33,10 @@ import (
 	"log/slog"
 	"strings"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
@@ -325,4 +329,72 @@ func defaultRecordWorkUnitTeamAttributionsTruncation(ctx context.Context, orgID 
 		"limit", limit,
 		"reason", "returned row count equals the cap; more matching work units may exist (CHAOS-3969)",
 	)
+	incrementWorkUnitTeamAttributionsTruncationCounter(ctx)
+}
+
+// workUnitTeamAttributionsTruncationCounter is CHAOS-3969 round 2's
+// addition (team-lead review): a WARN log alone gives an operator
+// something to grep, not something to ALERT on. This closes that gap
+// with a counter, using the SAME otel.Meter(<package import path>) +
+// typed-instrument idiom every other instrument in this binary already
+// uses (graph/telemetry.go's mustCounter-backed per-resolver counters,
+// this package's own membership_telemetry.go histogram,
+// analytics/telemetry.go, analytics/investmentmembershiptelemetry.go,
+// routeswitch/telemetry.go) -- reused here, not a new metrics mechanism.
+//
+// ONE counter, not a per-operation counter, labeled by family/op: a
+// future truncation-prone read (e.g. a later WorkItemTeamAttributions
+// port) adds itself as a new family/op label combination on this SAME
+// series instead of minting a second
+// devhealth_query_api_workgraph_<op>_truncation_total counter -- an
+// operator alerts on ONE series ("is anything in workgraph truncating"),
+// then drills into the family/op labels to see which read.
+//
+// Same "no otel.SetMeterProvider call exists in production yet" caveat
+// membership_telemetry.go's histogram already documents: today this is a
+// structural placeholder against the global no-op provider until one is
+// wired up, not a regression this file introduces.
+var workUnitTeamAttributionsTruncationCounter = mustCounter(
+	"devhealth_query_api_workgraph_truncation_total",
+	"workgraph package reads whose result hit their row cap (LIMIT == returned row count); family/op attributes identify which read",
+)
+
+func mustCounter(name, description string) metric.Int64Counter {
+	meter := otel.Meter("github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph")
+	counter, err := meter.Int64Counter(name, metric.WithDescription(description))
+	if err != nil {
+		// Same otel guarantee membership_telemetry.go's
+		// mustMembershipRatioHistogram and graph/telemetry.go's mustCounter
+		// both rely on: the *Counter method never returns a nil instrument
+		// even on error from a broken meter provider, so falling back to a
+		// noop provider keeps every call site nil-safe without its own
+		// error handling.
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
+}
+
+// incrementWorkUnitTeamAttributionsTruncationCounter is a package var,
+// not a plain call inline, for the same injectable-observable reason
+// this package's recordMembershipRowsPerEndpoint (membership_telemetry.go)
+// and recordWorkUnitTeamAttributionsTruncation above are: a test needs to
+// prove defaultRecordWorkUnitTeamAttributionsTruncation increments the
+// counter specifically (teamattribution_test.go's
+// TestDefaultRecordWorkUnitTeamAttributionsTruncation_LogsAndIncrementsCounter),
+// independent of resolveWorkUnitTeamAttributions-level tests that swap
+// the OUTER recordWorkUnitTeamAttributions var entirely -- those only
+// prove the "len(results) == limit" call-site wiring, not this function's
+// own body. teamattribution_integration_test.go additionally proves the
+// REAL counter (this var's default, unswapped) increments end to end
+// against a real truncating ClickHouse read, via this package's shared
+// realMeterReader (main_test.go) -- the log line's real-engine proof and
+// the counter's real-engine proof are the SAME test, reading the SAME
+// truncating call's two independent signals.
+var incrementWorkUnitTeamAttributionsTruncationCounter = defaultIncrementWorkUnitTeamAttributionsTruncationCounter
+
+func defaultIncrementWorkUnitTeamAttributionsTruncationCounter(ctx context.Context) {
+	workUnitTeamAttributionsTruncationCounter.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("family", "team_attribution"),
+		attribute.String("op", "work_unit_team_attributions"),
+	))
 }

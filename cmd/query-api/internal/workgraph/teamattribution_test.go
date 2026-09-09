@@ -1,7 +1,10 @@
 package workgraph
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -217,5 +220,56 @@ func TestResolveWorkUnitTeamAttributions_NoTruncationSignalBelowLimit(t *testing
 	}
 	if calls != 0 {
 		t.Fatalf("truncation signal fired when result was below limit: %d calls", calls)
+	}
+}
+
+// TestDefaultRecordWorkUnitTeamAttributionsTruncation_LogsAndIncrementsCounter
+// is CHAOS-3969 round 2's proof (team-lead review: a WARN log alone is not
+// a sufficient truncation signal, add a counter too): this is the layer
+// the resolveWorkUnitTeamAttributions-level tests above cannot reach --
+// they swap recordWorkUnitTeamAttributionsTruncation WHOLESALE, which
+// proves the call site's "len(results) == limit" wiring but never
+// exercises defaultRecordWorkUnitTeamAttributionsTruncation's own body
+// (same "injection seam masks the layer behind it" shape
+// analytics/investmentmembershiptelemetry_test.go's
+// TestDefaultRecordStaleInvestmentMembershipScope_RecordsToRealMeter doc
+// comment names). This test calls the default implementation directly,
+// swaps ONLY incrementWorkUnitTeamAttributionsTruncationCounter (a spy,
+// not the real meter -- the real meter is proven separately, against a
+// REAL truncating ClickHouse read, by
+// teamattribution_integration_test.go's
+// TestResolveWorkUnitTeamAttributions_TruncationSignalRealEngine), and
+// asserts BOTH the log line and the counter-increment seam fire from the
+// SAME call -- the log line's wording/fields are unchanged by this round.
+func TestDefaultRecordWorkUnitTeamAttributionsTruncation_LogsAndIncrementsCounter(t *testing.T) {
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+	var counterCalls int
+	previous := incrementWorkUnitTeamAttributionsTruncationCounter
+	incrementWorkUnitTeamAttributionsTruncationCounter = func(context.Context) { counterCalls++ }
+	t.Cleanup(func() { incrementWorkUnitTeamAttributionsTruncationCounter = previous })
+
+	defaultRecordWorkUnitTeamAttributionsTruncation(context.Background(), "org1", 5000)
+
+	if counterCalls != 1 {
+		t.Fatalf("counter increment seam called %d times, want 1", counterCalls)
+	}
+
+	var record map[string]any
+	line := strings.TrimSpace(logBuf.String())
+	if line == "" {
+		t.Fatalf("no log line emitted")
+	}
+	if err := json.Unmarshal([]byte(line), &record); err != nil {
+		t.Fatalf("log line is not valid JSON: %s: %v", line, err)
+	}
+	if record["msg"] != "query_api.workgraph.work_unit_team_attributions.truncated" {
+		t.Fatalf("log msg = %v, want unchanged truncation message", record["msg"])
+	}
+	if record["org_id"] != "org1" || record["limit"] != float64(5000) {
+		t.Fatalf("log fields = %+v, want org_id=org1 limit=5000", record)
 	}
 }

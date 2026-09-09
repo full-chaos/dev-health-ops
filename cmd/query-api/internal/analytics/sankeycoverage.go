@@ -348,9 +348,12 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// the column is a Map despite its _json name.
 		//
 		// The Python plane still carries the ARRAY JOIN, so the two planes now
-		// disagree on FILTERED coverage by design. Registered as a
-		// baseline_defect for InvestmentFull rather than hidden (R60: the Go
-		// plane is the source of truth here).
+		// disagree on FILTERED coverage by design (R60: the Go plane is the
+		// source of truth here). Tracked as a follow-up baseline defect for
+		// the InvestmentFull operation -- deliberately NOT "registered", since
+		// the registry it belongs in ships on CHAOS-5425's branch and does not
+		// exist on main yet. Saying "registered" here would have described a
+		// file that cannot be opened.
 		//
 		// UNFILTERED output is byte-identical: no ARRAY JOIN was ever appended
 		// without a work-category filter, and the predicate only changes shape

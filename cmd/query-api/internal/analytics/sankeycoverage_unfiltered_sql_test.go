@@ -23,10 +23,35 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 )
 
-// subcategoryArrayJoin is the exact join CHAOS-5498 removed. Naming it in full
-// keeps this test blind to the unrelated evidence_ref ARRAY JOIN that the team
-// subquery legitimately carries.
-const subcategoryArrayJoin = "ARRAY JOIN CAST(subcategory_distribution_json"
+// hasSubcategoryArrayJoin reports whether sql contains ANY `ARRAY JOIN` over
+// the subcategory column, in any spelling.
+//
+// It began life as a match on the single literal
+// `ARRAY JOIN CAST(subcategory_distribution_json`, which is the exact join
+// CHAOS-5498 removed -- and a review mutation walked straight past it with
+// `ARRAY JOIN mapKeys(subcategory_distribution_json) AS alternate_kv`: same
+// defect, same column, different spelling, test still green. A guard that only
+// recognises the one form the defect happened to take the first time is a
+// guard against a commit, not against a class.
+//
+// So the test is on the pairing -- an ARRAY JOIN clause that mentions the
+// subcategory column -- which no re-spelling of the cast, the alias, or the
+// extraction function can slip past. It stays blind to the unrelated
+// `ARRAY JOIN ... AS evidence_ref` in the team-vote subquery, which reads
+// structural_evidence_json and must keep working: that join is why a blanket
+// "no ARRAY JOIN" assertion cannot be used here, and it failed on this test's
+// very first run.
+func hasSubcategoryArrayJoin(sql string) bool {
+	const col = "subcategory_distribution_json"
+	for _, clause := range strings.Split(sql, "ARRAY JOIN")[1:] {
+		// Only the clause itself, not the rest of the statement: stop at the
+		// next newline, which is where the compiler ends every join it emits.
+		if line, _, _ := strings.Cut(clause, "\n"); strings.Contains(line, col) {
+			return true
+		}
+	}
+	return false
+}
 
 func TestCompileSankeyCoverage_UnfilteredSQLUnchangedByUnitSelection(t *testing.T) {
 	req, err := SankeyRequestFromInput(model.SankeyRequestInput{
@@ -64,7 +89,7 @@ func TestCompileSankeyCoverage_UnfilteredSQLUnchangedByUnitSelection(t *testing.
 			if err != nil {
 				t.Fatalf("compileSankeyCoverage: %v", err)
 			}
-			if strings.Contains(compiled.sql, subcategoryArrayJoin) {
+			if hasSubcategoryArrayJoin(compiled.sql) {
 				t.Errorf("unfiltered coverage SQL contains the subcategory ARRAY JOIN -- CHAOS-5498 removed it, and reintroducing it re-weights every effort-weighted column by each unit's matching-subcategory count:\n%s", compiled.sql)
 			}
 			if strings.Contains(compiled.sql, "subcategory_kv") {
@@ -102,7 +127,7 @@ func TestCompileSankeyCoverage_UnfilteredSQLUnchangedByUnitSelection(t *testing.
 	if !strings.Contains(withCategory.sql, "arrayExists(k -> splitByChar('.', k)[1] IN {work_categories:Array(String)}, mapKeys(subcategory_distribution_json))") {
 		t.Errorf("work-category filtered SQL is missing the unit-selecting predicate; without it the two negative assertions above pass vacuously:\n%s", withCategory.sql)
 	}
-	if strings.Contains(withCategory.sql, subcategoryArrayJoin) {
+	if hasSubcategoryArrayJoin(withCategory.sql) {
 		t.Errorf("work-category filtered SQL still contains the subcategory ARRAY JOIN:\n%s", withCategory.sql)
 	}
 }

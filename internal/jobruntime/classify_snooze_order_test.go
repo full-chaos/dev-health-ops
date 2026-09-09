@@ -62,6 +62,7 @@ func TestClassifyHonoursASnoozeMarkerAheadOfTheLiveContext(t *testing.T) {
 		wantCategory ErrorCategory
 		wantSnooze   time.Duration
 		wantCancel   bool
+		wantReason   Reason
 	}{
 		{
 			// The reported defect, on a real job kind's path
@@ -114,6 +115,33 @@ func TestClassifyHonoursASnoozeMarkerAheadOfTheLiveContext(t *testing.T) {
 			name: "snooze marker survives an expired context deadline",
 			ctx:  expired(), err: billingAmbiguousSnooze, attempt: 1, maxAttempts: 4,
 			wantResult: ResultRetry, wantCategory: CategoryRetryable, wantSnooze: 16 * time.Minute,
+		},
+		{
+			// WithReason's own contract names RetryableAfter/BudgetContention/
+			// RateLimited among the markers it decorates, so the bounded Reason
+			// must survive the snooze branch -- including the branch's new
+			// position ahead of the context checks. Without this case the
+			// suite is a false negative: deleting `reason: marked.reason` from
+			// classify's snooze return leaves every other assertion green
+			// (r1 P3-1, proven by that exact mutation).
+			name: "a reasoned snooze keeps its bounded reason while draining",
+			ctx:  drained(),
+			err: WithReason(RetryableAfter(errors.New("pids budget still contended"), 45*time.Second),
+				ReasonCapacityExhausted),
+			attempt: 1, maxAttempts: 3,
+			wantResult: ResultRetry, wantCategory: CategoryRetryable, wantSnooze: 45 * time.Second,
+			wantReason: ReasonCapacityExhausted,
+		},
+		{
+			// The non-snooze marked path's reason must keep flowing too: the
+			// fix split one `errors.As` block into two, and this is the half
+			// that still runs after the context branches.
+			name:    "a reasoned permanent failure keeps its reason on a live context",
+			ctx:     context.Background(),
+			err:     WithReason(Permanent(errors.New("scope is malformed")), ReasonInvalidState),
+			attempt: 1, maxAttempts: 3,
+			wantResult: ResultCancel, wantCategory: CategoryPermanent, wantCancel: true,
+			wantReason: ReasonInvalidState,
 		},
 
 		// ------------------------------------------------------------------
@@ -179,6 +207,10 @@ func TestClassifyHonoursASnoozeMarkerAheadOfTheLiveContext(t *testing.T) {
 			}
 			if choice.cancel != test.wantCancel {
 				t.Fatalf("classify() cancel = %v, want %v", choice.cancel, test.wantCancel)
+			}
+			if choice.reason != test.wantReason {
+				t.Fatalf("classify() reason = %q, want %q -- the bounded Reason must "+
+					"survive whichever branch answered", choice.reason.String(), test.wantReason.String())
 			}
 			// A snoozed decision must reach River as a real JobSnoozeError,
 			// not as a safe error or a JobCancel wrapper.

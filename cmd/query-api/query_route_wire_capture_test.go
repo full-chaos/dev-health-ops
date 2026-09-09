@@ -59,3 +59,41 @@ func TestRegisteredFeatureFlagsDocument_MatchesCapturedWireFixture(t *testing.T)
 		)
 	}
 }
+
+// TestRegisteredPrDetailDocument_MatchesCapturedWireFixture is CHAOS-4991's
+// evidence-bar requirement for the `pr` operation, same discipline as
+// TestRegisteredFeatureFlagsDocument_MatchesCapturedWireFixture above.
+//
+// testdata/wire_capture/pr_captured.graphql was produced by IMPORTING the
+// web repo's own, live, pinned `wireForm()` (scripts/graphql-wire-parity.ts
+// -- the exact function that repo's own CI wire-parity gate calls) and
+// invoking it directly against the real `PR_DETAIL_QUERY` export
+// (web/src/lib/graphql/queries.ts:94-138) via `tsx`, so `@urql/core` was
+// resolved from the web repo's own pinned node_modules -- the same
+// `createRequest` -> `formatDocument` -> `stringifyDocument` pipeline
+// `fetchExchange` calls in production, not a hand-rolled reimplementation
+// of its rules. This differs from featureflags_captured.graphql's
+// mechanism (an actual HTTP request captured off a real listener) only in
+// HOW the real urql code was invoked -- both paths call the identical
+// pinned `@urql/core` functions in the identical order; see this file's
+// own package-level precedent doc comment and
+// testdata/wire_capture/README.md's "pr" section for the full method and
+// why a live-HTTP capture was not required to meet the same evidence bar.
+func TestRegisteredPrDetailDocument_MatchesCapturedWireFixture(t *testing.T) {
+	captured, err := os.ReadFile("testdata/wire_capture/pr_captured.graphql")
+	if err != nil {
+		t.Fatalf("read captured wire fixture: %v", err)
+	}
+
+	gotDigest := digestHex(string(captured))
+	wantDigest := digestHex(registeredPrDetailDocument)
+
+	if gotDigest != wantDigest {
+		t.Fatalf(
+			"registeredPrDetailDocument digest %s does NOT match the digest of the captured wire form (%s) -- "+
+				"a real client's pr request would 404 against this route once/if enabled (CHAOS-4696-class defect). "+
+				"captured fixture:\n%s\n\nregistered const:\n%s",
+			wantDigest, gotDigest, string(captured), registeredPrDetailDocument,
+		)
+	}
+}

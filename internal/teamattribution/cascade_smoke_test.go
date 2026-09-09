@@ -139,12 +139,15 @@ func TestBuildLinkedIssueIndexInheritsFromAttributedDonor(t *testing.T) {
 // PROVENANCE: assignee_membership must no longer appear in the candidate
 // list at all.
 //
-// This is ALSO CHAOS-4320's differential fixture: compute_work_items.py has
-// no equivalent gate (the ticket's baseline_defect, R60 -- pinned here, not
-// fixed there, per the "no new Python compute code" rule) -- Python
-// resolving this exact input still emits an assignee_membership row for
-// team-member as provenance. Go's correct output (that row ABSENT) is what
-// this test pins.
+// This test executes ONLY Go -- it is not a differential fixture and does
+// not itself run compute_work_items.py against this input. The Python gap
+// this pins Go's correct behavior against (compute_work_items.py has no
+// equivalent ownership gate -- the ticket's baseline_defect, R60, pinned
+// here and not fixed there, per the "no new Python compute code" rule) was
+// established separately, via the live 14-day ClickHouse before/after
+// measurement, not by executing Python in this file. Go's correct output
+// for this input (the assignee_membership row for team-member ABSENT) is
+// what this test pins.
 func TestCascadeGateDropsAssigneeWhoseTeamDoesNotOwnTheRepo(t *testing.T) {
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"

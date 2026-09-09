@@ -477,6 +477,17 @@ is_primary, confidence, evidence, computed_at)`)
 	// same batch would then double-count the rows that DID make it through
 	// the first, failed attempt.
 	primaryRows := make([]githubWorkItemTeamAttributionRow, 0, len(rows))
+	// membershipRows (codex round 3, P1, fixed): EVERY assignee_membership/
+	// author_membership row that made it into the batch, primary or not --
+	// NOT just primaryRows. ownership_checked answers "how often did the
+	// gate's outcome matter at all," and most gated candidates never win
+	// primary (repo_ownership and every higher-precedence source in `order`
+	// outrank membership whenever they also resolve) -- restricting this
+	// counter to primaryRows the way the membership-layer counter below
+	// deliberately does (CHAOS-4244: only the winner counts for THAT
+	// series) would make ownership_checked silently blind to most real
+	// gate activity, defeating the reason it exists.
+	membershipRows := make([]githubWorkItemTeamAttributionRow, 0, len(rows))
 	for _, row := range rows {
 		if err := batch.Append(
 			identity.OrgID, githubWorkItemDerivedRepoID(row.RepoID), row.WorkItemID,
@@ -488,6 +499,9 @@ is_primary, confidence, evidence, computed_at)`)
 		}
 		if row.IsPrimary == 1 {
 			primaryRows = append(primaryRows, row)
+		}
+		if row.Source == "assignee_membership" || row.Source == "author_membership" {
+			membershipRows = append(membershipRows, row)
 		}
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
@@ -505,45 +519,48 @@ is_primary, confidence, evidence, computed_at)`)
 		// resolved it. HERE, at the actual metrics-capable write boundary --
 		// not inside resolveMembership/resolve(), which stay pure. row.Priority
 		// is carried (not persisted) exactly for this: see its doc comment on
-		// githubWorkItemTeamAttributionRow.
+		// githubWorkItemTeamAttributionRow. Deliberately primary-only (unlike
+		// ownership_checked below): this series measures the WINNING outcome
+		// (CHAOS-4244), not every candidate.
 		if row.Source == "assignee_membership" || row.Source == "author_membership" {
 			layer := "provider_fallback"
 			if row.Priority == 0 {
 				layer = "admin_override"
 			}
 			sink.Metrics.RecordTeamAttributionMembershipLayer(layer)
-			// CHAOS-4320 (R74; codex round 1, P1, fixed): a winning
-			// assignee_membership/author_membership row only exists because
-			// teamOwnsSubjectRepo let it through -- either the resolved team
-			// genuinely owns the repo, or ownership data for the repo is
-			// entirely absent (R74: pass-through, still counted).
-			// row.OwnershipReason is carried (not persisted) exactly so this
-			// write boundary CAN tell the two apart -- "owned" (a real
-			// team_repo_ownership match) vs "ownership_unknown" (the R74
-			// pass-through) -- rather than collapsing both to "owned" the
-			// way an earlier version of this code did (that version had no
-			// access back to the GithubWorkItemDerivationContext that made
-			// the distinction, only the already-decided row; the fix is
-			// threading the reason through the row instead, same pattern as
-			// row.Priority above).
-			reason := row.OwnershipReason
-			if reason == "" {
-				// Defensive only: every winning assignee_membership/
-				// author_membership row is stamped by Resolve() before it
-				// can reach bySource, so this should be unreachable in
-				// practice -- but an empty label would silently violate
-				// RecordTeamAttributionOwnershipChecked's bounded
-				// vocabulary (collapsing to "other"), which is worse than
-				// falling back to the historically-accurate default.
-				reason = "owned"
-			}
-			sink.Metrics.RecordTeamAttributionOwnershipChecked(reason)
 		} else if row.Source == "unassigned" {
 			if reason, ok := strings.CutPrefix(row.Evidence, "no_candidate:"); ok &&
 				reason == teamattribution.MembershipOwnershipReasonUnknown {
 				sink.Metrics.RecordTeamAttributionOwnershipChecked(reason)
 			}
 		}
+	}
+	// CHAOS-4320 (R74; codex round 1 P1 fixed, round 3 P1 fixed): every
+	// assignee_membership/author_membership row that survived into the
+	// batch only exists because teamOwnsSubjectRepo let it through --
+	// either the resolved team genuinely owns the repo, or ownership data
+	// for the repo is entirely absent (R74: pass-through, still counted).
+	// row.OwnershipReason is carried (not persisted) exactly so this write
+	// boundary can tell the two apart -- "owned" vs "ownership_unknown" --
+	// rather than collapsing both to "owned" the way an earlier version of
+	// this code did.
+	for _, row := range membershipRows {
+		reason := row.OwnershipReason
+		if reason == "" {
+			// round 3, P1, fixed: this is NOT "unreachable, default to
+			// owned" the way an earlier version of this code assumed --
+			// EffectBatch rows are a durable, replay-able outbox payload, so
+			// a row enqueued by a PRIOR binary build (before OwnershipReason
+			// existed, or before it was actually surviving the JSON round
+			// trip) can genuinely reach this code with the field absent --
+			// json.Unmarshal cannot distinguish "absent" from "explicitly
+			// empty" on a plain string. Guessing "owned" for a value we
+			// cannot actually attest is worse than not counting it: skip,
+			// rather than assert a specific reason we do not have evidence
+			// for.
+			continue
+		}
+		sink.Metrics.RecordTeamAttributionOwnershipChecked(reason)
 	}
 	return nil
 }

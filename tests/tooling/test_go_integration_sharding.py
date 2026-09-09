@@ -1853,7 +1853,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # UNCHANGED at 153. TestGitHubWorkItemTeamAttributionRowSurvivesThe-
     # EffectsJSONRoundTrip and TestGitHubWorkItemTeamAttributionRowNo-
     # ExportedFieldReadsBackZero are both in-memory, non-integration tests.
-    assert len(expected_provider_tests) == 1339
+    # CHAOS-4320 round 3 (two codex P1 fixes, red-first pinned): +2 ordinary
+    # top-level (1339 -> 1341), integration-tagged UNCHANGED at 153.
+    # TestWriteGitHubWorkItemEffectCountsOwnershipCheckedOnEveryMembershipRow
+    # (the writer must count ownership_checked on every non-primary
+    # membership row, not just primaryRows, and must skip rather than guess
+    # "owned" on an empty reason) and TestBuildGitHubWorkItemTeamAttributions-
+    # CarriesOwnershipReasonFromTheRealResolver (a mutation-resistant pin
+    # that the real builder, not a hand-built row, carries OwnershipReason
+    # through) are both in-memory, non-integration tests.
+    assert len(expected_provider_tests) == 1341
 
     assert len(expected_integration_tests) == 153
     assert expected_integration_tests < expected_provider_tests
@@ -1871,7 +1880,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1339
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1341
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1973,7 +1982,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1339
+    assert len(selected_tests) == len(set(selected_tests)) == 1341
     assert set(selected_tests) == expected_tests
 
 

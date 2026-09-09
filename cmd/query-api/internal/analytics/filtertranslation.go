@@ -59,11 +59,32 @@ func translateScopeFilter(level model.ScopeLevelInput, ids []string, teamColumn,
 
 // translateWorkCategoryFilter ports translate_work_category_filter
 // (filter_translation.py:88-115).
-func translateWorkCategoryFilter(categories []string, useInvestment bool) filterClause {
+func translateWorkCategoryFilter(categories []string, useInvestment bool, columns filterColumns) filterClause {
 	if len(categories) == 0 {
 		return emptyFilterClause()
 	}
 	if useInvestment {
+		// CHAOS-5498: the unit-selecting form. mapKeys, not the
+		// CAST-to-Array(Tuple(...)) the ARRAY JOIN uses -- the column is
+		// Map(String, Float64) despite its _json name, so this reads the keys
+		// directly with no cast and no Float64 -> Float32 narrowing, and the
+		// value half is never needed to answer "is this unit in scope".
+		//
+		// Selection is IDENTICAL to the ARRAY JOIN form; only the multiplicity
+		// differs. Measured on a real engine over one row of every shape a Map
+		// can hold -- the ARRAY JOIN returned
+		// [a-match d-key-no-dot f-two-matching f-two-matching g-mixed] and
+		// this form returned the same set with f-two-matching ONCE. Empty maps
+		// and empty keys are excluded by both (no category means out of scope
+		// under a category filter), and a key with no dot is included by both.
+		// A malformed-JSON case cannot exist: the column is a Map, so the type
+		// system forbids it.
+		if columns.WorkCategorySelectsUnits {
+			return filterClause{
+				sql:      " AND arrayExists(k -> splitByChar('.', k)[1] IN {work_categories:Array(String)}, mapKeys(subcategory_distribution_json))",
+				bindings: []clickhouse.Binding{{Name: "work_categories", Value: categories}},
+			}
+		}
 		return filterClause{
 			sql:      " AND splitByChar('.', subcategory_kv.1)[1] IN {work_categories:Array(String)}",
 			bindings: []clickhouse.Binding{{Name: "work_categories", Value: categories}},
@@ -94,6 +115,20 @@ type filterColumns struct {
 	Team   string
 	Repo   string
 	Author string
+
+	// WorkCategorySelectsUnits opts a caller into the UNIT-SELECTING form of
+	// the work-category predicate instead of the default row-multiplying one
+	// (CHAOS-5498). Default false, so every existing caller is byte-identical.
+	//
+	// The default form reads `subcategory_kv.1`, which only resolves because
+	// the caller has also appended `ARRAY JOIN CAST(subcategory_distribution_json
+	// ...) AS subcategory_kv`. That join is REQUIRED by breakdown/sankey/
+	// timeseries/flowmatrix, whose measures genuinely read `subcategory_kv.2`
+	// -- for them the multiplied rows ARE the data. The coverage query is the
+	// one caller that never reads the value: it needs the filter only to
+	// decide WHICH UNITS are in scope, and the multiplication silently
+	// re-weights its effort-weighted columns.
+	WorkCategorySelectsUnits bool
 }
 
 func defaultFilterColumns() filterColumns {
@@ -171,7 +206,7 @@ func translateFilters(filters *model.FilterInput, useInvestment bool, cols filte
 	}
 
 	if filters.Why != nil && len(filters.Why.WorkCategory) > 0 {
-		clause := translateWorkCategoryFilter(filters.Why.WorkCategory, useInvestment)
+		clause := translateWorkCategoryFilter(filters.Why.WorkCategory, useInvestment, cols)
 		sql += clause.sql
 		bindings = append(bindings, clause.bindings...)
 	}

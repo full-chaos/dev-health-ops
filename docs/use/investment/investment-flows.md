@@ -50,8 +50,7 @@ repositories against each other.
 Either figure can be blank rather than zero. Blank means the view could not
 measure the split; zero means it measured it and found none.
 
-One caution when comparing views. Filtering by work category can shift all
-three coverage figures -- including the combined one -- because work items
-that match the filter in more than one way are weighted more heavily than
-those that match in only one. Compare a filtered view against another filtered
-view with the same filter, not against an unfiltered one.
+Filtering by work category narrows which work is counted and nothing else, so
+a filtered view and an unfiltered one can be read against each other directly.
+A work item that matches the category in more than one way still counts once.
+Views produced before this was corrected are not comparable with current ones.

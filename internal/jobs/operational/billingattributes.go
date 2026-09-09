@@ -241,9 +241,16 @@ func pythonNumberRepr(n json.Number) string {
 		return bi.String()
 	}
 	f, err := strconv.ParseFloat(text, 64)
-	if err != nil {
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
 		return text
 	}
+	// CHAOS-5402 confirmation pass (codex P1): ErrRange (magnitude beyond
+	// float64's range) still returns a VALID f = +-Inf alongside the
+	// error -- discarding it here and falling back to the raw JSON text
+	// ("1e400") was itself the bug. Python's float() never raises on
+	// overflow either; it saturates to inf/-inf the same way, so this
+	// case is not an error at all, just a value pythonFloatRepr must
+	// still render correctly.
 	return pythonFloatRepr(f)
 }
 
@@ -258,10 +265,21 @@ func pythonNumberRepr(n json.Number) string {
 // A float, unlike an int, always shows a decimal point (Python: "2.0",
 // never "2").
 func pythonFloatRepr(f float64) string {
-	if math.IsInf(f, 0) || math.IsNaN(f) {
-		// Unreachable via encoding/json (JSON cannot encode these) --
-		// defensive only.
-		return strconv.FormatFloat(f, 'g', -1, 64)
+	switch {
+	case math.IsNaN(f):
+		// Unreachable via encoding/json (a JSON number literal can never
+		// parse to NaN) -- defensive only, kept honest with Python's own
+		// repr(float("nan")) == "nan".
+		return "nan"
+	case math.IsInf(f, 1):
+		// Reachable: a JSON float literal beyond float64's range (e.g.
+		// "1e400") parses to +Inf via strconv.ParseFloat's ErrRange path
+		// (CHAOS-5402 confirmation-pass P1) -- Python's float() saturates
+		// to inf the same way, repr(float("inf")) == "inf" (lowercase,
+		// NOT Go's "+Inf").
+		return "inf"
+	case math.IsInf(f, -1):
+		return "-inf"
 	}
 	neg := math.Signbit(f)
 	abs := math.Abs(f)

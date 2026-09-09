@@ -661,6 +661,26 @@ func TestDecodeBillingAttributesCompositeNumbersMatchPythonRepr(t *testing.T) {
 	}
 }
 
+// TestDecodeBillingAttributesCompositeNumberOverflowMatchesPython is
+// CHAOS-5402's confirmation-pass P1 fix (chaos-5402-confirm-20260909T121743,
+// F4): a JSON float literal beyond float64's range (e.g. `1e400`) makes
+// strconv.ParseFloat return a valid ±Inf ALONGSIDE a non-nil ErrRange error
+// -- treating any non-nil error as "give up, return the raw literal text"
+// discarded that valid ±Inf and rendered the ORIGINAL JSON TEXT ("1e400")
+// instead of Python's `float("1e400")` == `inf` (Python's float() never
+// raises on overflow, it saturates to inf, same as here). Verified against
+// real `python3 -c` output.
+func TestDecodeBillingAttributesCompositeNumberOverflowMatchesPython(t *testing.T) {
+	decoded, err := DecodeBillingAttributes([]byte(`{"tier":[1e400,-1e400]}`))
+	if err != nil {
+		t.Fatalf("DecodeBillingAttributes: %v", err)
+	}
+	want := "[inf, -inf]"
+	if decoded.Tier != want {
+		t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
+	}
+}
+
 // TestDecodeBillingAttributesCompositeStringsEscapeNonPrintables is
 // CHAOS-5402's codex-round P1 fix: pythonStringRepr only escaped ASCII
 // control bytes (<0x20, 0x7f) -- Python's repr() escapes EVERY

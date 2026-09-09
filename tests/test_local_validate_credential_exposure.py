@@ -205,6 +205,20 @@ def test_remote_clickhouse_consumers_are_proxy_neutralised() -> None:
     )
 
 
+@pytest.mark.skipif(not _GATE.is_file(), reason="gate script missing")
+def test_proxy_off_isolates_testcontainers_hub_image_name_prefix() -> None:
+    """CHAOS-5024: bigboy's login shell exports TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX,
+    which rewrites the image names test_go_integration_sharding.py::test_prepull_*
+    observe pulled -- PROXY_OFF must unset it for every isolated invocation.
+    """
+    source = _GATE.read_text(encoding="utf-8")
+    proxy_off = re.search(r"^PROXY_OFF=\(.*\)$", source, re.M)
+    assert proxy_off, "PROXY_OFF array not found"
+    assert "-u TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX" in proxy_off.group(0), (
+        "PROXY_OFF no longer isolates TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX"
+    )
+
+
 _PROBE = 'bash "%s" --ch-query-probe "SELECT 1"'
 
 

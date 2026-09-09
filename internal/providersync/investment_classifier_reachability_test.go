@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,6 +48,18 @@ type investmentGoCallSitePremise struct {
 	// unreachability) true regardless of what fields a work-item-shaped Go
 	// struct declares.
 	ItemSourcedFields []string
+	// ConstantFieldValues maps a non-item-sourced ArtifactKey to the actual
+	// string value production assigns it, when that value can be resolved
+	// statically (a bare string literal, or `&x` where x is a var/const
+	// initialized from one). CHAOS-5413: this used to be assumed rather than
+	// derived -- a field NOT item-sourced was treated as if it were always
+	// empty, so a future change from `&emptyComponent` (value "") to some
+	// other non-item-sourced constant (still not item-sourced, so
+	// isItemSourced stays false) would go undetected by any assertion built
+	// only on ArtifactKeys/ItemSourcedFields. Deriving the actual value closes
+	// that gap: a changed constant changes this map, which changes the
+	// simulated artifact, which changes the derived unreachable-rule set.
+	ConstantFieldValues map[string]string
 }
 
 func (premise investmentGoCallSitePremise) hasArtifactKey(name string) bool {
@@ -115,6 +128,7 @@ func investmentParseGoCallSitePremise(
 	}
 
 	var artifactKeys, itemSourced []string
+	var constantValues map[string]string
 	for _, elt := range literal.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
@@ -135,14 +149,87 @@ func investmentParseGoCallSitePremise(
 		artifactKeys = append(artifactKeys, name)
 		if investmentExprReadsFrom(kv.Value, rangeVar) {
 			itemSourced = append(itemSourced, name)
+		} else if value, ok := investmentResolveConstantString(file, kv.Value); ok {
+			if constantValues == nil {
+				constantValues = make(map[string]string)
+			}
+			constantValues[name] = value
 		}
 	}
 	sort.Strings(artifactKeys)
 	sort.Strings(itemSourced)
 	return investmentGoCallSitePremise{
-		ArtifactKeys:      artifactKeys,
-		ItemSourcedFields: itemSourced,
+		ArtifactKeys:        artifactKeys,
+		ItemSourcedFields:   itemSourced,
+		ConstantFieldValues: constantValues,
 	}, nil
+}
+
+// investmentResolveConstantString statically resolves expr to a string value
+// when expr is either a bare string literal, or `&x` where x is a package- or
+// function-level var/const in file initialized from a string literal.
+// Returns ok=false for anything else (a function call, a struct field read,
+// etc.) rather than guessing -- callers must treat an unresolved field as
+// "unknown", never as empty.
+func investmentResolveConstantString(file *ast.File, expr ast.Expr) (string, bool) {
+
+	target := expr
+	if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+		target = unary.X
+	}
+	if lit, ok := target.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+		return investmentUnquote(lit.Value)
+	}
+	ident, ok := target.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+
+	var found string
+	var resolved bool
+	assign := func(rhs ast.Expr) {
+		if lit, ok := rhs.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			if value, ok := investmentUnquote(lit.Value); ok {
+				found, resolved = value, true
+			}
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch decl := n.(type) {
+		case *ast.AssignStmt:
+			if decl.Tok != token.DEFINE {
+				return true
+			}
+			for i, lhs := range decl.Lhs {
+				if lhsIdent, ok := lhs.(*ast.Ident); ok && lhsIdent.Name == ident.Name && i < len(decl.Rhs) {
+					assign(decl.Rhs[i])
+				}
+			}
+		case *ast.ValueSpec:
+			for i, name := range decl.Names {
+				if name.Name == ident.Name && i < len(decl.Values) {
+					assign(decl.Values[i])
+				}
+			}
+		}
+		return true
+	})
+	return found, resolved
+}
+
+// investmentUnquote strips the surrounding quotes from a Go string literal's
+// raw source text. Only handles the plain double-quoted case the reflector
+// expects to see in this file; anything else reports not-ok rather than
+// mis-decoding it.
+func investmentUnquote(raw string) (string, bool) {
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return "", false
+	}
+	value, err := strconv.Unquote(raw)
+	if err != nil {
+		return "", false
+	}
+	return value, true
 }
 
 // investmentEnclosingRangeVar returns the loop variable name of the innermost
@@ -209,6 +296,50 @@ func investmentReflectGoCallSite(t *testing.T) investmentGoCallSitePremise {
 			"derived from it would be vacuously true", path)
 	}
 	return premise
+}
+
+// TestInvestmentGoCallSiteReflectorResolvesConstantFieldValues is the
+// CHAOS-5413 regression: a field that is not item-sourced used to be treated
+// as interchangeable with "always empty" by every assertion built only on
+// ArtifactKeys/ItemSourcedFields. It is not -- `Component: &emptyComponent`
+// (value "") and a hypothetical `Component: &nonEmptyComponent` (value
+// "Data Platform") are both "present, not item-sourced", and only actually
+// resolving the constant's value tells them apart. Exercised against
+// synthetic source, not the real file, because the real file's Component IS
+// still the empty case -- this test's job is to prove the reflector would
+// catch it if that ever changed.
+func TestInvestmentGoCallSiteReflectorResolvesConstantFieldValues(t *testing.T) {
+	t.Parallel()
+	src := `package providersync
+
+func f(items []item) {
+	nonEmptyComponent := "Data Platform"
+	for _, item := range items {
+		_ = InvestmentArtifact{
+			Labels:    item.Labels,
+			Component: &nonEmptyComponent,
+			Title:     "static title",
+		}
+	}
+}
+`
+	premise, err := investmentParseGoCallSitePremise("synthetic.go", []byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if premise.isItemSourced("component") {
+		t.Fatal("component reads from a local var, not the item -- must not be item-sourced")
+	}
+	if got, ok := premise.ConstantFieldValues["component"]; !ok || got != "Data Platform" {
+		t.Fatalf("ConstantFieldValues[%q] = (%q, %v), want (\"Data Platform\", true) -- a "+
+			"non-item-sourced field's ACTUAL value must be derived from the source, not "+
+			"assumed empty; otherwise a future change from an empty constant to a non-empty "+
+			"one is invisible to every deadness assertion built on this premise", "component", got, ok)
+	}
+	// A bare string literal (no `&localVar` indirection) must resolve too.
+	if got, ok := premise.ConstantFieldValues["title"]; !ok || got != "static title" {
+		t.Fatalf("ConstantFieldValues[%q] = (%q, %v), want (\"static title\", true)", "title", got, ok)
+	}
 }
 
 // TestInvestmentGoCallSiteReflectorFailsWhenLiteralMissing is the tripwire's
@@ -320,10 +451,21 @@ func investmentCallSiteArtifact(
 	t.Helper()
 	artifact := InvestmentArtifact{Labels: labels}
 	if premise.hasArtifactKey("component") {
-		// Present in the literal, and never sourced from the work item, so it
-		// is always "". The premise test above is what keeps that second half
-		// true.
-		artifact.Component = investmentString("")
+		if premise.isItemSourced("component") {
+			t.Fatal("the call site now sources `component` from the work item itself; " +
+				"this helper cannot simulate a per-item value from a single static premise")
+		}
+		// CHAOS-5413: derived from the reflected premise, never hardcoded --
+		// a non-item-sourced field is still whatever constant production
+		// assigns it, and that constant is not always "".
+		value, ok := premise.ConstantFieldValues["component"]
+		if !ok {
+			t.Fatal("the call site's `component` value is not item-sourced but could not " +
+				"be resolved to a static constant either; investmentResolveConstantString " +
+				"needs to learn this new shape before the deadness derivation below can " +
+				"be trusted")
+		}
+		artifact.Component = investmentString(value)
 	}
 	if premise.hasArtifactKey("paths") {
 		t.Fatal("the call site supplies `paths`, so this helper can no longer " +

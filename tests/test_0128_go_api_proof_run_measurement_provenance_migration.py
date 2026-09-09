@@ -24,6 +24,7 @@ migration whose downgrade is untested is one you cannot roll back.
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -250,3 +251,54 @@ def test_0128_downgrade_removes_the_columns_and_the_constraint(
     for column in _COLUMNS:
         assert column not in remaining, f"downgrade left {_TABLE}.{column}"
     assert _CONSTRAINT not in _constraints(migrated, _TABLE)
+
+
+def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
+    """The Go integration suite builds these three tables from a hand-kept
+    DDL string (``registryDDL`` in
+    ``internal/goapiproof/receipt_integration_test.go``) so it can exercise
+    the real FK and CHECK constraints. A mirror that falls behind the
+    migrations would let those tests pass against a schema Postgres does not
+    have -- the "relaxed schema" failure that DDL's own comment warns about.
+
+    This check lives on the PYTHON side on purpose. Reading the alembic
+    files from the Go test made them inputs to the Go workflow, and
+    ``go.yml``'s path filters do not cover ``alembic/versions`` -- so a PR
+    changing only a migration would have satisfied ``go-quality``
+    vacuously (``tests/tooling/test_go_workflow_path_filters.py`` catches
+    exactly that). Python's own workflow already runs on these files, so
+    enforcing it here keeps the guard and costs no cross-language trigger.
+    """
+    repo_root = Path(__file__).parents[1]
+    ddl = (repo_root / "internal/goapiproof/receipt_integration_test.go").read_text(
+        encoding="utf-8"
+    )
+    column_pattern = re.compile(r'sa\.Column\(\s*"([a-z_]+)"')
+
+    checked = 0
+    missing: list[str] = []
+    for migration in (
+        "0114_add_go_api_operation_registry.py",
+        "0127_add_go_api_routing_provenance.py",
+        "0128_add_go_api_proof_run_measurement_provenance.py",
+    ):
+        source = (_ALEMBIC_DIR / "versions" / migration).read_text(encoding="utf-8")
+        for match in column_pattern.finditer(source):
+            column = match.group(1)
+            checked += 1
+            if f"\t{column} " not in ddl:
+                missing.append(f"{migration}: {column}")
+
+    assert not missing, (
+        "registryDDL does not declare these migrated columns -- update the "
+        f"mirror: {missing}"
+    )
+    # Non-vacuity: 28 columns match across the three migrations today. The
+    # floor sits well below that so an ordinary schema edit does not fail
+    # here, while a collapse to zero -- the pattern silently ceasing to
+    # match, which would make every assertion above a green no-op -- still
+    # does.
+    assert checked >= 20, (
+        f"only {checked} migrated columns were checked -- the column pattern "
+        "has stopped matching and this test is now vacuous"
+    )

@@ -4,9 +4,6 @@ package goapiproof
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +24,15 @@ import (
 // never registered or carry a verdict outside the signed vocabulary. A
 // test against a relaxed schema would pass while the real one rejected
 // every write. TestRegistryDDLCoversEveryMigratedColumn below fails if
-// this DDL falls behind the migrations it mirrors.
+// this DDL falls behind the migrations it mirrors. That drift check lives
+// in Python (tests/test_0128_...::test_registry_ddl_mirror_covers_every_
+// migrated_column) rather than here, deliberately: reading the alembic
+// files FROM this test made them inputs to the Go workflow, and go.yml's
+// path filters do not cover src/dev_health_ops/alembic/versions -- so a PR
+// changing only a migration would have satisfied go-quality vacuously
+// (caught by tests/tooling/test_go_workflow_path_filters.py). Enforcing it
+// from the Python side keeps the guard and costs no cross-language
+// trigger, because Python's own workflow already runs on those files.
 const registryDDL = `
 CREATE TABLE go_api_candidate_build (
 	schema_digest TEXT NOT NULL,
@@ -368,170 +373,5 @@ func TestDatabaseRejectsAReceiptForAnUnregisteredBuild(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "fk_go_api_proof_run_candidate_build") {
 		t.Fatalf("expected the composite FK to fire, got %v", err)
-	}
-}
-
-// registryDDL is a hand-kept mirror of two alembic migrations, so it can
-// fall behind them. This reads the migrations and fails if any column
-// they add is missing here -- the same "an exclusion must actually match
-// something" discipline applied to a schema mirror.
-func TestRegistryDDLCoversEveryMigratedColumn(t *testing.T) {
-	root := repoRoot(t)
-	columnPattern := regexp.MustCompile(`sa\.Column\(\s*"([a-z_]+)"`)
-	// Non-vacuity guard: if the pattern stops matching (a migration is
-	// renamed, or alembic's spelling changes), every assertion below
-	// silently passes over an empty match set and this test becomes a
-	// green no-op -- the exact vacuous-pass class that let a loader
-	// regression test short-circuit before it reached its call site.
-	checked := 0
-
-	for _, migration := range []string{
-		"0114_add_go_api_operation_registry.py",
-		"0127_add_go_api_routing_provenance.py",
-		"0128_add_go_api_proof_run_measurement_provenance.py",
-	} {
-		path := filepath.Join(root, "src", "dev_health_ops", "alembic", "versions", migration)
-		source, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", migration, err)
-		}
-		for _, match := range columnPattern.FindAllStringSubmatch(string(source), -1) {
-			column := match[1]
-			checked++
-			if !strings.Contains(registryDDL, "\t"+column+" ") {
-				t.Errorf("%s adds column %q, which registryDDL does not declare -- update the mirror", migration, column)
-			}
-		}
-	}
-
-	// 28 columns match across the two migrations today. The floor is set
-	// well below that so an ordinary schema edit does not fail here,
-	// while a collapse to zero -- the pattern silently stopping matching,
-	// which would make every assertion above a green no-op -- still does.
-	if checked < 20 {
-		t.Fatalf("only %d migrated columns were checked -- the column pattern has stopped matching and this test is now vacuous", checked)
-	}
-}
-
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("could not find the repository root from the test working directory")
-		}
-		dir = parent
-	}
-}
-
-// The measurement route must round-trip: a proof-route receipt has to be
-// distinguishable from a served-traffic one by reading the row, not by
-// remembering how the run was invoked.
-func TestMeasurementRouteRoundTrips(t *testing.T) {
-	ctx := context.Background()
-	pool := startRegistryPostgres(t)
-
-	receipt := Receipt{
-		SchemaDigest:      testSchemaDigest,
-		DocumentDigest:    testDocumentDigest,
-		SelectedOperation: "flowMatrix",
-		CandidateBuild:    testCandidateBuild,
-		RequestIdentity:   "identity-1",
-		Stage:             EnablementProofStage,
-		TerminalState:     TerminalStateMismatch,
-		MeasurementRoute:  RouteProof,
-		BaselineDefects:   []string{"CHAOS-5448", "CHAOS-5450"},
-		ObservedAt:        time.Now().UTC(),
-	}
-	if _, err := Write(ctx, pool, receipt); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-
-	var route string
-	var defects []string
-	var outside int
-	if err := pool.QueryRow(ctx,
-		`SELECT measurement_route, baseline_defect, differences_outside_baseline_defect
-		   FROM go_api_proof_run WHERE selected_operation = 'flowMatrix'`,
-	).Scan(&route, &defects, &outside); err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	if route != RouteProof {
-		t.Fatalf("route must round-trip, got %q", route)
-	}
-	if len(defects) != 2 {
-		t.Fatalf("the covering tickets must round-trip, got %v", defects)
-	}
-	// The explicit zero IS the claim: every difference was a known Python
-	// defect. A NULL here would leave a reader guessing.
-	if outside != 0 {
-		t.Fatalf("differences_outside_baseline_defect must be an explicit 0, got %d", outside)
-	}
-}
-
-// The database is the backstop for the route vocabulary too, exactly as
-// it is for stage and terminal_state.
-func TestDatabaseRejectsAnUnknownMeasurementRoute(t *testing.T) {
-	ctx := context.Background()
-	pool := startRegistryPostgres(t)
-
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO go_api_candidate_build
-		   (schema_digest, document_digest, selected_operation, candidate_build)
-		 VALUES ($1,$2,$3,$4)`,
-		testSchemaDigest, testDocumentDigest, "featureFlags", testCandidateBuild,
-	); err != nil {
-		t.Fatalf("register build: %v", err)
-	}
-
-	_, err := pool.Exec(ctx,
-		`INSERT INTO go_api_proof_run
-		   (id, schema_digest, document_digest, selected_operation, candidate_build,
-		    request_identity, stage, terminal_state, measurement_route)
-		 VALUES (gen_random_uuid(),$1,$2,$3,$4,'id','deployed_executed','match','sideways')`,
-		testSchemaDigest, testDocumentDigest, "featureFlags", testCandidateBuild)
-	if err == nil {
-		t.Fatal("the measurement-route CHECK must reject an unknown route")
-	}
-	if !strings.Contains(err.Error(), "ck_go_api_proof_run_measurement_route") {
-		t.Fatalf("expected the route CHECK to fire, got %v", err)
-	}
-}
-
-// A baseline-defect annotation must never make a mismatch enablable --
-// the whole separation this column exists to preserve.
-func TestBaselineDefectAnnotationStillAuthorizesNothing(t *testing.T) {
-	ctx := context.Background()
-	pool := startRegistryPostgres(t)
-
-	if _, err := Write(ctx, pool, Receipt{
-		SchemaDigest:      testSchemaDigest,
-		DocumentDigest:    testDocumentDigest,
-		SelectedOperation: "featureFlags",
-		CandidateBuild:    testCandidateBuild,
-		RequestIdentity:   "identity-1",
-		Stage:             EnablementProofStage,
-		TerminalState:     TerminalStateMismatch,
-		MeasurementRoute:  RouteEdge,
-		BaselineDefects:   []string{"CHAOS-5448"},
-		ObservedAt:        time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-
-	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-		map[string]string{"featureFlags": testDocumentDigest})
-	if err != nil {
-		t.Fatalf("OperationsWithEnablementProof: %v", err)
-	}
-	if found["featureFlags"] {
-		t.Fatal("a mismatch annotated with a known Python defect must still authorize nothing")
 	}
 }

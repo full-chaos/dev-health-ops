@@ -208,7 +208,7 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Parity: Options{BaselineDefects: []BaselineDefect{{
 			Ticket: "CHAOS-5447",
-			Reason: "Python argMaxes on computed_at alone and can therefore select a different physical row than Go for the same file. Go is correct. Covers the whole rows subtree because a different row differs in every field, not only riskScore. Evidence: /var/lib/oci-cache/lane-scratch/lane-goapi-parity/5447/repro.txt",
+			Reason: "Python argMaxes on computed_at ALONE where Go keys on (day, computed_at), so it can select a different physical row for the same file. Two distinct halves, only one of which is a tie: (a) INVERSION -- an older day recomputed later carries a newer computed_at and wins outright, no tie involved; (b) TIE -- on an identical computed_at Python falls back to ClickHouse's internal row order, measured at 31,072 of 100,000 seeded files resolving to the OLDER day against 0 of 100,000 for Go. Live shape: 17 of the 48 files present on both sides disagreed on churn in BOTH directions, and 22 of those 48 had identical churn/blame/cyclomatic but a different riskScore -- both-directions is the tell that this is row SELECTION, not arithmetic. Go is correct. Covers the whole rows subtree because a different row differs in every field, not only riskScore. Evidence: /var/lib/oci-cache/lane-scratch/lane-goapi-parity/5447/repro.txt",
 			Paths:  []string{"data.hotspots.rows"},
 		}}},
 	},

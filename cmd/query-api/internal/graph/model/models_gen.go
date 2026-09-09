@@ -1596,9 +1596,35 @@ type ReworkThemeAllocation struct {
 	ChurnLoc      int     `json:"churnLoc"`
 }
 
+// SankeyCoverage's three CHAOS-5483 fields are *float64 (SDL `Float`,
+// nullable) while the two original fields are float64 (SDL `Float!`).
+// That asymmetry is the contract, not an oversight: the Python plane
+// serves this operation today and returns null for all three (chris R60 --
+// the Go plane is the source of truth for these fields), and the Go plane
+// itself cannot measure them on the non-investment path, which reads raw
+// investment_metrics_daily with no repo_source column in sight. A
+// non-nullable Float would force a 0 into both cases, and "0% of this
+// org's coverage is team-fallback" is a confident false claim where null
+// is an honest absent one.
+//
+// HAND-EDITED, and it had to be: `gqlgen generate` cannot run on this
+// repo. gqlgen v0.17.66 is a direct require but `github.com/urfave/cli/v2`
+// has no go.sum entry, so `go run github.com/99designs/gqlgen` (the
+// command cmd/query-api/README.md:243 documents) fails outright; running
+// the same pinned version from a scratch module DELETES this file and
+// generated.go and then exits 1 with an empty error, reproduced on an
+// unmodified HEAD. Filed to team-lead 2026-09-09. These three fields are
+// byte-for-byte what gqlgen emits for three nullable `Float` fields --
+// compare SankeyEdge.Value below, generated from the same SDL type.
+// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and gets
+// overwritten wholesale by the next successful `gqlgen generate` -- the
+// durable copy of why lives in sankeycoverage.go's resolveSankeyCoverage.
 type SankeyCoverage struct {
-	TeamCoverage float64 `json:"teamCoverage"`
-	RepoCoverage float64 `json:"repoCoverage"`
+	TeamCoverage             float64  `json:"teamCoverage"`
+	RepoCoverage             float64  `json:"repoCoverage"`
+	DirectRepoCoverage       *float64 `json:"directRepoCoverage,omitempty"`
+	TeamFallbackRepoCoverage *float64 `json:"teamFallbackRepoCoverage,omitempty"`
+	RepoFanoutReposPerUnit    *float64 `json:"repoFanoutReposPerUnit,omitempty"`
 }
 
 // SankeyEdge.Value is *float64, not float64 -- CHAOS-4701, same shape as

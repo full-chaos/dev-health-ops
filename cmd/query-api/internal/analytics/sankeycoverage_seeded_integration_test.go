@@ -74,6 +74,7 @@ CREATE TABLE work_unit_repo_effort (
     effort_value Float64,
     allocation_weight Float64,
     allocation_source String,
+    repo_source Nullable(String),
     categorization_run_id String,
     computed_at DateTime64(3, 'UTC'),
     org_id String
@@ -113,6 +114,13 @@ ORDER BY (org_id, id);
 const (
 	seededCoverageRepo1 = "11111111-1111-1111-1111-111111111111"
 	seededCoverageRepo2 = "22222222-2222-2222-2222-222222222222"
+	// CHAOS-5483: a third repo so ONE team-fallback unit can fan out across
+	// THREE repos while the other fans out across two. Two would make the
+	// 1/N share 0.5, which is also what a broken constant-0.5 arm produces;
+	// three makes that unit's share 1/3. The two DIFFERENT widths are what
+	// give the fan-out ratio a denominator worth computing -- see
+	// TestResolveSankeyCoverage_SeededRealClickHouse_SplitPartitionsExactly.
+	seededCoverageRepo3 = "33333333-3333-3333-3333-333333333333"
 	seededCoverageTS    = "2026-01-02 00:00:00.000"
 )
 
@@ -264,6 +272,447 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares(t *testing.T) {
 	}
 	if math.Abs(got.RepoCoverage-wantRepo) > tol {
 		t.Errorf("RepoCoverage = %v, want %v", got.RepoCoverage, wantRepo)
+	}
+
+	// CHAOS-5483 rider on the ORIGINAL oracle: every wure row above was
+	// seeded before repo_source existed and carries NULL. Those rows are
+	// in the headline numerator (they have a repo_id), so the split must
+	// put all of them on the DIRECT side -- assigning them to neither
+	// half, which a positive `repo_source IN (own_edges, ancestor:%,
+	// children)` predicate would do, silently makes direct + fallback
+	// undercount the headline by 100% on any pre-089 org. This assertion
+	// is the cheapest place that mistake gets caught.
+	if got.DirectRepoCoverage == nil || got.TeamFallbackRepoCoverage == nil {
+		t.Fatalf("split fields must be populated on the investment path: direct=%v fallback=%v", got.DirectRepoCoverage, got.TeamFallbackRepoCoverage)
+	}
+	if math.Abs(*got.DirectRepoCoverage-wantRepo) > tol {
+		t.Errorf("DirectRepoCoverage = %v, want %v (every seeded repo_source is NULL, so the whole headline is direct)", *got.DirectRepoCoverage, wantRepo)
+	}
+	if *got.TeamFallbackRepoCoverage != 0 {
+		t.Errorf("TeamFallbackRepoCoverage = %v, want 0 (no team:%% rows seeded)", *got.TeamFallbackRepoCoverage)
+	}
+	if got.RepoFanoutReposPerUnit == nil || *got.RepoFanoutReposPerUnit != 0 {
+		t.Errorf("RepoFanoutReposPerUnit = %v, want a populated 0 (no fallback rows is a MEASUREMENT, not an absence)", got.RepoFanoutReposPerUnit)
+	}
+}
+
+// seededSplitUnitSourceRow is one work_unit_repo_effort row for the
+// CHAOS-5483 split fixture, written out longhand rather than through a
+// helper so each row's provenance and generation are readable beside the
+// number it is supposed to produce.
+type seededSplitUnitSourceRow struct {
+	workUnitID  string
+	repoID      string
+	effortValue float64
+	repoSource  string // "" => SQL NULL
+	computedAt  string
+}
+
+// TestResolveSankeyCoverage_SeededRealClickHouse_SplitPartitionsExactly is
+// CHAOS-5483's RED/GREEN test: the direct/hierarchy vs team-fallback split
+// of the repo-coverage numerator, against a real engine.
+//
+// WHY A REAL ENGINE, AGAIN. Three of the four properties below are
+// ClickHouse semantics, not Go logic, and a SQL-text assertion would
+// happily assert the wrong text for every one of them:
+//
+//   - repo_source is Nullable(String), so `repo_source LIKE 'team:%'` is
+//     Nullable(UInt8). sumIf ACCEPTS that without error and then
+//     three-valued logic silently drops every NULL-provenance row out of
+//     BOTH halves -- 1.4 of 5.0 assigned effort here. Reading the SQL
+//     predicts a type error; the engine says otherwise.
+//   - a bare argMax over a nullable column SKIPS NULLs, so a repo whose
+//     newest generation dropped its provenance keeps an older `team:`
+//     label and gets counted as fallback forever. wu-regen-null pins the
+//     tuple-wrapped form that fixes it.
+//   - the LEFT JOIN miss (wu-norepo) must land in neither half while
+//     staying out of the numerator entirely.
+//   - the partition itself is a float identity over sums the engine
+//     evaluates, not one Go computes.
+//
+// Hand-computed oracle (weights are repo_effort_value / effort_value):
+//
+//	wu-direct-2repos   0.6 (own_edges) + 0.4 (NULL provenance)  = 1.0 direct
+//	wu-ancestor-1repo  1.0 (ancestor:linear:ROOT-1)             = 1.0 direct
+//	wu-children-1repo  1.0 (children)                           = 1.0 direct
+//	wu-regen-null      1.0 (newest generation dropped team:)    = 1.0 direct
+//	wu-team-3repos     0.333.. x 3 (team:ALPHA,BETA)            = 1.0 fallback
+//	wu-team-2repos-b   0.5 x 2 (team:GAMMA)                     = 1.0 fallback
+//	wu-norepo          1.0 via the LEFT JOIN fallback, NULL repo_id, unassigned
+//
+//	repo_total = 7.0   assigned_repo = 6.0   direct = 4.0   fallback = 2.0
+//	fanout     = 5 team rows / 2 team units = 2.5
+//
+// TWO fallback units of DIFFERENT widths (3 repos and 2 repos) is deliberate
+// and is the only reason the fan-out assertion discriminates anything. With a
+// single fallback unit the denominator is 1, so `countIf / uniqExactIf` and
+// `countIf / 1` produce the identical number and the assertion cannot tell a
+// real distinct-unit count from a constant. At 5 rows over 2 units the correct
+// answer is 2.5; a denominator stuck at 1 yields 5.0, and counting units
+// instead of rows yields 2.0 -- three distinguishable values.
+func TestResolveSankeyCoverage_SeededRealClickHouse_SplitPartitionsExactly(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	inst, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = inst.Close(context.Background()) }()
+
+	opts, err := stdclickhouse.ParseDSN(inst.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	conn, err := stdclickhouse.Open(opts)
+	if err != nil {
+		t.Fatalf("open raw ClickHouse connection: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL + seededCoverageExtraDDL) {
+		if err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("exec DDL %q: %v", stmt, err)
+		}
+	}
+
+	// wu-regen-null needs TWO physical generations of the same
+	// (org, work_unit_id, repo_id) to survive to the argMax. The table is
+	// a ReplacingMergeTree keyed on exactly that tuple, so a background
+	// merge would collapse them and quietly turn this into a test of
+	// nothing. Stopping merges makes the measurement actually happen, and
+	// the row-count precondition below fails LOUDLY if it did not.
+	if err := conn.Exec(ctx, "SYSTEM STOP MERGES work_unit_repo_effort"); err != nil {
+		t.Fatalf("SYSTEM STOP MERGES work_unit_repo_effort: %v -- without it the wu-regen-null argMax case is vacuous", err)
+	}
+
+	const (
+		orgID = "seeded-coverage-split"
+		genT1 = "2026-01-02 00:00:00.000"
+		genT2 = "2026-01-02 06:00:00.000"
+	)
+
+	seedCoverageUnits(t, ctx, conn, orgID, []seededCoverageUnit{
+		{workUnitID: "wu-direct-2repos", effortValue: 100, repoID: seededCoverageRepo1, issueRef: "linear:ALPHA-1"},
+		{workUnitID: "wu-ancestor-1repo", effortValue: 50, repoID: seededCoverageRepo1, issueRef: "linear:ALPHA-1"},
+		{workUnitID: "wu-children-1repo", effortValue: 40, repoID: seededCoverageRepo2, issueRef: "linear:ALPHA-1"},
+		{workUnitID: "wu-regen-null", effortValue: 20, repoID: seededCoverageRepo1, issueRef: "linear:ALPHA-1"},
+		{workUnitID: "wu-team-3repos", effortValue: 90, repoID: "", issueRef: "linear:ALPHA-1"},
+		{workUnitID: "wu-team-2repos-b", effortValue: 60, repoID: "", issueRef: "linear:ALPHA-1"},
+		{workUnitID: "wu-norepo", effortValue: 25, repoID: "", issueRef: "linear:ALPHA-1"},
+	})
+
+	// wu-team-3repos mirrors what allocateTeamOwnership actually writes
+	// (internal/jobs/investment/teamownership.go): one row per owned repo,
+	// equal 1/N shares, repo_source "team:" + the sorted contributing team
+	// ids joined by comma. Three repos would need three distinct repo
+	// UUIDs, but this fixture only declares two in `repos`; the third is
+	// declared inline below so the FINAL-deduped repos join still resolves
+	// it.
+	rows := []seededSplitUnitSourceRow{
+		{"wu-direct-2repos", seededCoverageRepo1, 60, "own_edges", genT1},
+		{"wu-direct-2repos", seededCoverageRepo2, 40, "", genT1},
+		{"wu-ancestor-1repo", seededCoverageRepo1, 50, "ancestor:linear:ROOT-1", genT1},
+		{"wu-children-1repo", seededCoverageRepo2, 40, "children", genT1},
+		// Older generation carries a team: label; the newer one drops it.
+		// A bare argMax(repo_source, computed_at) skips the NULL and
+		// returns "team:ALPHA", misfiling 1.0 of direct effort as fallback.
+		{"wu-regen-null", seededCoverageRepo1, 20, "team:ALPHA", genT1},
+		{"wu-regen-null", seededCoverageRepo1, 20, "", genT2},
+		{"wu-team-3repos", seededCoverageRepo1, 30, "team:ALPHA,BETA", genT1},
+		{"wu-team-3repos", seededCoverageRepo2, 30, "team:ALPHA,BETA", genT1},
+		{"wu-team-3repos", seededCoverageRepo3, 30, "team:ALPHA,BETA", genT1},
+		// The SECOND fallback unit, deliberately a DIFFERENT width (2 repos,
+		// not 3) and a different team, so the fan-out denominator has
+		// something real to count. See this test's doc comment.
+		{"wu-team-2repos-b", seededCoverageRepo1, 30, "team:GAMMA", genT1},
+		{"wu-team-2repos-b", seededCoverageRepo2, 30, "team:GAMMA", genT1},
+	}
+	values := make([]string, 0, len(rows))
+	for _, r := range rows {
+		source := "NULL"
+		if r.repoSource != "" {
+			source = fmt.Sprintf("'%s'", r.repoSource)
+		}
+		values = append(values, fmt.Sprintf(
+			"('%s', toUUID('%s'), 'churn_loc', %v, 1.0, 'evidence', %s, 'run-1', toDateTime64('%s', 3, 'UTC'), '%s')",
+			r.workUnitID, r.repoID, r.effortValue, source, r.computedAt, orgID))
+	}
+	// `SETTINGS optimize_on_insert = 0` is load-bearing, and MEASURED: with
+	// ClickHouse's default (optimize_on_insert = 1) the Replacing merge
+	// logic runs over the inserted BLOCK itself, so wu-regen-null's two
+	// generations collapse to one before they ever reach a part -- the
+	// precondition below caught exactly that on this test's first run.
+	// SYSTEM STOP MERGES alone does NOT cover it: that stops background
+	// merges between parts, not the insert-time collapse within one.
+	if err := conn.Exec(ctx, "INSERT INTO work_unit_repo_effort (work_unit_id, repo_id, effort_metric, effort_value, allocation_weight, allocation_source, repo_source, categorization_run_id, computed_at, org_id) SETTINGS optimize_on_insert = 0 VALUES "+strings.Join(values, ", ")); err != nil {
+		t.Fatalf("seed work_unit_repo_effort: %v", err)
+	}
+
+	// Rule 4 ("a measurement that did not happen must FAIL, loudly"): if
+	// the two wu-regen-null generations were collapsed, the argMax case
+	// never ran and every assertion below would pass without testing it.
+	var regenRows uint64
+	regenCheck, err := conn.Query(ctx, "SELECT count() FROM work_unit_repo_effort WHERE org_id = ? AND work_unit_id = 'wu-regen-null'", orgID)
+	if err != nil {
+		t.Fatalf("wu-regen-null precondition query: %v", err)
+	}
+	if !regenCheck.Next() {
+		_ = regenCheck.Close()
+		t.Fatal("wu-regen-null precondition query returned no rows")
+	}
+	if err := regenCheck.Scan(&regenRows); err != nil {
+		_ = regenCheck.Close()
+		t.Fatalf("wu-regen-null precondition scan: %v", err)
+	}
+	_ = regenCheck.Close()
+	if regenRows != 2 {
+		t.Fatalf("wu-regen-null has %d physical rows, want 2 -- the ReplacingMergeTree collapsed the generations despite SYSTEM STOP MERGES, so the nullable-argMax case is VACUOUS, not passing", regenRows)
+	}
+
+	if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO work_item_team_attributions
+        (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at) VALUES
+        ('%[3]s', toUUID('%[1]s'), 'linear:ALPHA-1', 'linear', 'ALPHA', 'Alpha', 'native_team', 1, 'high', '', toDateTime64('%[2]s', 3, 'UTC'))`,
+		seededCoverageRepo1, genT1, orgID)); err != nil {
+		t.Fatalf("seed work_item_team_attributions: %v", err)
+	}
+
+	if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO repos
+        (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider, source_id) VALUES
+        (toUUID('%[1]s'), 'acme/one', NULL, toDateTime64('%[4]s', 3, 'UTC'), NULL, NULL, toDateTime64('%[4]s', 3, 'UTC'), '%[5]s', 'github', NULL),
+        (toUUID('%[2]s'), 'acme/two', NULL, toDateTime64('%[4]s', 3, 'UTC'), NULL, NULL, toDateTime64('%[4]s', 3, 'UTC'), '%[5]s', 'github', NULL),
+        (toUUID('%[3]s'), 'acme/three', NULL, toDateTime64('%[4]s', 3, 'UTC'), NULL, NULL, toDateTime64('%[4]s', 3, 'UTC'), '%[5]s', 'github', NULL)`,
+		seededCoverageRepo1, seededCoverageRepo2, seededCoverageRepo3, genT1, orgID)); err != nil {
+		t.Fatalf("seed repos: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	if err != nil {
+		t.Fatalf("construct ClickHouse query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	req, err := SankeyRequestFromInput(model.SankeyRequestInput{
+		Path:    []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputTheme},
+		Measure: model.MeasureInputCount,
+		DateRange: &model.DateRangeInput{
+			StartDate: mustGraphQLDate("2026-01-01"),
+			EndDate:   mustGraphQLDate("2026-01-08"),
+		},
+		MaxNodes: 16,
+		MaxEdges: 100,
+	})
+	if err != nil {
+		t.Fatalf("SankeyRequestFromInput: %v", err)
+	}
+
+	// PART 1 -- the NUMERATORS, read raw. The resolver divides by
+	// repo_total, and a partition asserted only in ratio space would still
+	// hold if both halves were scaled by the same wrong factor. The brief
+	// asks for the numerators to partition the assigned effort exactly, so
+	// they are read and compared as numerators here, before any division.
+	compiled, err := compileSankeyCoverage(req, orgID, 60, true, nil)
+	if err != nil {
+		t.Fatalf("compileSankeyCoverage: %v", err)
+	}
+	raw, err := client.Query(ctx, compiled.sql, compiled.bindings)
+	if err != nil {
+		t.Fatalf("execute compiled coverage SQL: %v\n%s", err, compiled.sql)
+	}
+	if !raw.Next() {
+		_ = raw.Close()
+		t.Fatal("compiled coverage SQL returned no rows")
+	}
+	var rawTotal, rawAssignedTeam, rawRepoTotal, rawAssignedRepo float64
+	var rawDirect, rawFallback, rawFanout *float64
+	if err := raw.Scan(&rawTotal, &rawAssignedTeam, &rawRepoTotal, &rawAssignedRepo, &rawDirect, &rawFallback, &rawFanout); err != nil {
+		_ = raw.Close()
+		t.Fatalf("scan compiled coverage SQL: %v", err)
+	}
+	_ = raw.Close()
+
+	const tol = 1e-9
+	if rawDirect == nil || rawFallback == nil || rawFanout == nil {
+		t.Fatalf("investment path must emit all three split columns non-NULL: direct=%v fallback=%v fanout=%v", rawDirect, rawFallback, rawFanout)
+	}
+	for _, c := range []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"repo_total", rawRepoTotal, 7.0},
+		{"assigned_repo", rawAssignedRepo, 6.0},
+		{"direct_repo", *rawDirect, 4.0},
+		{"team_fallback_repo", *rawFallback, 2.0},
+		{"fanout_repos_per_unit", *rawFanout, 2.5},
+	} {
+		if math.Abs(c.got-c.want) > tol {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+
+	// THE partition property. Tolerance rather than bit-equality is
+	// deliberate: the two halves are separate sumIf aggregates, so
+	// ClickHouse adds their terms in a different order than assigned_repo's
+	// single sumIf does, and IEEE-754 addition is not associative. The
+	// claim being pinned is that no row and no weight is lost or
+	// double-counted between the halves, which is exact; the last-bit
+	// rounding is not part of that claim.
+	if diff := math.Abs((*rawDirect + *rawFallback) - rawAssignedRepo); diff > tol {
+		t.Errorf("direct + fallback = %v, want assigned_repo = %v (diff %v) -- the split is not a partition", *rawDirect+*rawFallback, rawAssignedRepo, diff)
+	}
+
+	// PART 2 -- the same numbers as the resolver returns them, over the
+	// SAME denominator RepoCoverage uses.
+	got := resolveSankeyCoverage(ctx, client, orgID, req, 60, true, nil)
+	if got == nil {
+		t.Fatal("expected populated SankeyCoverage, got nil -- coverage degraded, check the investment_coverage.query_failed log")
+	}
+	if got.DirectRepoCoverage == nil || got.TeamFallbackRepoCoverage == nil || got.RepoFanoutReposPerUnit == nil {
+		t.Fatalf("split fields nil on the investment path: direct=%v fallback=%v fanout=%v", got.DirectRepoCoverage, got.TeamFallbackRepoCoverage, got.RepoFanoutReposPerUnit)
+	}
+	for _, c := range []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"RepoCoverage", got.RepoCoverage, 6.0 / 7.0},
+		{"DirectRepoCoverage", *got.DirectRepoCoverage, 4.0 / 7.0},
+		{"TeamFallbackRepoCoverage", *got.TeamFallbackRepoCoverage, 2.0 / 7.0},
+		{"RepoFanoutReposPerUnit", *got.RepoFanoutReposPerUnit, 2.5},
+	} {
+		if math.Abs(c.got-c.want) > tol {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+	if diff := math.Abs((*got.DirectRepoCoverage + *got.TeamFallbackRepoCoverage) - got.RepoCoverage); diff > tol {
+		t.Errorf("DirectRepoCoverage + TeamFallbackRepoCoverage = %v, want RepoCoverage = %v (diff %v)", *got.DirectRepoCoverage+*got.TeamFallbackRepoCoverage, got.RepoCoverage, diff)
+	}
+}
+
+// TestResolveSankeyCoverage_SeededRealClickHouse_FanoutIsArrayJoinInvariant
+// pins CHAOS-5483's own regression: the fan-out width must not change when a
+// work-category filter is applied, because the filter appends
+// `ARRAY JOIN ... subcategory_kv` and that multiplies every joined row by the
+// unit's surviving subcategory count.
+//
+// This is the executed repro of a real defect in the first version of this
+// change, kept as the guard rather than thrown away. That version computed
+// the width as `countIf(<fallback>) / uniqExactIf(work_unit_id, <fallback>)`
+// over joined rows; on the fixture below it reported 3 unfiltered and 6
+// filtered for identical underlying data -- one work unit fanned across three
+// repos, reported as six. The two SHARE columns never had this problem: the
+// ARRAY JOIN scales their numerator and denominator together, so they are
+// invariant by construction. A raw row COUNT is not, which is why the
+// numerator is now a distinct count over the (work unit, repo) PAIR.
+//
+// The fixture is deliberately minimal and separate from the split fixture
+// above: ONE team-fallback unit, THREE repo rows, and TWO subcategories that
+// BOTH survive a `feature_delivery` filter (so the multiplier is exactly 2,
+// not an accident of which rows the filter drops). The assertion is equality
+// between the two calls, not a hardcoded number -- what matters is that the
+// filter cannot move it.
+func TestResolveSankeyCoverage_SeededRealClickHouse_FanoutIsArrayJoinInvariant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	inst, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = inst.Close(context.Background()) }()
+
+	opts, err := stdclickhouse.ParseDSN(inst.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	conn, err := stdclickhouse.Open(opts)
+	if err != nil {
+		t.Fatalf("open raw ClickHouse connection: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL + seededCoverageExtraDDL) {
+		if err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("exec DDL %q: %v", stmt, err)
+		}
+	}
+
+	const orgID = "seeded-coverage-fanout-invariance"
+	repos := []string{seededCoverageRepo1, seededCoverageRepo2, seededCoverageRepo3}
+
+	// Two subcategories, both under feature_delivery, so a
+	// work_category=feature_delivery filter keeps BOTH ARRAY JOIN rows.
+	if err := conn.Exec(ctx, fmt.Sprintf(
+		"INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, provider, effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status, categorization_errors_json, categorization_model_version, categorization_input_hash, categorization_run_id, computed_at, work_unit_type, work_unit_name, org_id) VALUES "+
+			"('wu-fanout', toDateTime64('%[1]s', 3, 'UTC'), toDateTime64('2026-01-03 00:00:00.000', 3, 'UTC'), NULL, 'github', 'churn_loc', 90, map('feature_delivery', 1.0), map('feature_delivery.build', 0.5, 'feature_delivery.ship', 0.5), '{\"issues\":[\"linear:ALPHA-1\"],\"prs\":[]}', 0.5, 'moderate', 'ok', '', 'v1', 'h', 'run-1', toDateTime64('%[1]s', 3, 'UTC'), 'pr', 'seeded', '%[2]s')",
+		seededCoverageTS, orgID)); err != nil {
+		t.Fatalf("seed work_unit_investments: %v", err)
+	}
+
+	effortRows := make([]string, 0, len(repos))
+	repoRows := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		effortRows = append(effortRows, fmt.Sprintf(
+			"('wu-fanout', toUUID('%s'), 'churn_loc', 30, 1.0, 'team_ownership', 'team:ALPHA', 'run-1', toDateTime64('%s', 3, 'UTC'), '%s')",
+			repo, seededCoverageTS, orgID))
+		repoRows = append(repoRows, fmt.Sprintf(
+			"(toUUID('%[1]s'), 'acme/%[1]s', NULL, toDateTime64('%[2]s', 3, 'UTC'), NULL, NULL, toDateTime64('%[2]s', 3, 'UTC'), '%[3]s', 'github', NULL)",
+			repo, seededCoverageTS, orgID))
+	}
+	if err := conn.Exec(ctx, "INSERT INTO work_unit_repo_effort (work_unit_id, repo_id, effort_metric, effort_value, allocation_weight, allocation_source, repo_source, categorization_run_id, computed_at, org_id) SETTINGS optimize_on_insert = 0 VALUES "+strings.Join(effortRows, ", ")); err != nil {
+		t.Fatalf("seed work_unit_repo_effort: %v", err)
+	}
+	if err := conn.Exec(ctx, "INSERT INTO repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider, source_id) VALUES "+strings.Join(repoRows, ", ")); err != nil {
+		t.Fatalf("seed repos: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	if err != nil {
+		t.Fatalf("construct ClickHouse query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	req, err := SankeyRequestFromInput(model.SankeyRequestInput{
+		Path:    []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputTheme},
+		Measure: model.MeasureInputCount,
+		DateRange: &model.DateRangeInput{
+			StartDate: mustGraphQLDate("2026-01-01"),
+			EndDate:   mustGraphQLDate("2026-01-08"),
+		},
+		MaxNodes: 16,
+		MaxEdges: 100,
+	})
+	if err != nil {
+		t.Fatalf("SankeyRequestFromInput: %v", err)
+	}
+
+	fanoutFor := func(label string, filters *model.FilterInput) float64 {
+		t.Helper()
+		got := resolveSankeyCoverage(ctx, client, orgID, req, 60, true, filters)
+		if got == nil {
+			t.Fatalf("%s: expected populated SankeyCoverage, got nil", label)
+		}
+		if got.RepoFanoutReposPerUnit == nil {
+			t.Fatalf("%s: RepoFanoutReposPerUnit is nil on the investment path", label)
+		}
+		return *got.RepoFanoutReposPerUnit
+	}
+
+	unfiltered := fanoutFor("unfiltered", nil)
+	filtered := fanoutFor("work-category filter", &model.FilterInput{
+		Why: &model.WhyFilterInput{WorkCategory: []string{"feature_delivery"}},
+	})
+
+	// The unfiltered value is asserted absolutely as well, so a regression
+	// that breaks BOTH calls identically cannot pass the equality check
+	// alone: one unit fanned across three repos is a width of 3.
+	const tol = 1e-9
+	if math.Abs(unfiltered-3.0) > tol {
+		t.Errorf("unfiltered RepoFanoutReposPerUnit = %v, want 3 (one unit, three repo allocations)", unfiltered)
+	}
+	if math.Abs(filtered-unfiltered) > tol {
+		t.Errorf("RepoFanoutReposPerUnit moved under a work-category filter: unfiltered=%v filtered=%v -- the subcategory_kv ARRAY JOIN is multiplying the numerator, so the width is reported per filter rather than per repo", unfiltered, filtered)
 	}
 }
 

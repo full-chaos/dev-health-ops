@@ -130,6 +130,21 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 	assignedTeamCountExpr := fmt.Sprintf("countIf(%s)", assignedTeamExpr)
 	assignedRepoCountExpr := fmt.Sprintf("countIf(%s IS NOT NULL)", repoCol)
 
+	// CHAOS-5483: the three split columns. The non-investment path reads
+	// the raw investment_metrics_daily table, which has no wure join and
+	// therefore no repo_source at all -- so the split is NOT MEASURABLE
+	// there, and these are typed NULLs rather than zeros. Zero would read
+	// as "no team-fallback effort", which is a different (and false)
+	// claim; check 12 of the North Star ("missing is not healthy --
+	// unknown/stale/sparse/not-applicable/zero are distinct") is exactly
+	// this distinction. The CAST fixes the column type: a bare NULL
+	// literal is Nullable(Nothing), which the driver cannot scan into a
+	// *float64.
+	const notMeasurable = "CAST(NULL AS Nullable(Float64))"
+	directRepoExpr := notMeasurable
+	teamFallbackRepoExpr := notMeasurable
+	fanoutExpr := notMeasurable
+
 	repoFilterColumn := repoCol
 
 	if useInvestment {
@@ -194,6 +209,90 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		assignedTeamCountExpr = fmt.Sprintf("sumIf(%s, %s)", repoEffortCol, assignedTeamExpr)
 		assignedRepoCountExpr = fmt.Sprintf("sumIf(%s, %s IS NOT NULL)", repoEffortCol, repoAssignedCol)
 
+		// CHAOS-5483 -- splitting assigned_repo into the two claims it
+		// silently conflates.
+		//
+		// WHY THIS IS NEEDED AT ALL: after the NxM team-ownership fallback
+		// (#2394, CHAOS-5460) a work unit with no direct repo evidence but
+		// SOME owning team receives 1/N of its effort against EVERY repo
+		// that team owns -- ~9 repo rows per unit on the local org. That
+		// made the headline repo coverage read 100.0/100.0/99.5 (7d/30d/90d,
+		// 2026-09-09 07:51Z) where it had read 53.1/57.5/67.2 the same
+		// morning. The number did not get more precise; its MEANING changed.
+		// "We know which repo this work touched" and "this belongs to a team
+		// that happens to own nine repos" are different claims, and the
+		// headline can no longer tell them apart. chris ruled 2026-09-09
+		// 10:3xZ ("m1. Sure") that the API and UI must show them separately.
+		//
+		// THE PARTITION, and why the predicate is the COMPLEMENT of team:%
+		// rather than a positive list of the direct sources. The headline
+		// numerator above admits a row on `repoAssignedCol IS NOT NULL` --
+		// a repo_id test, NOT a repo_source test. A wure row can carry a
+		// repo_id with a NULL repo_source (every row written before
+		// migration 089 backfilled provenance, and any writer that sets a
+		// repo without one). Splitting on a positive list
+		// (`repo_source IN (own_edges, ancestor:%, children)`) would drop
+		// those rows out of BOTH halves, so direct + fallback would silently
+		// undercount the headline -- a partition that does not partition is
+		// the "inaccurate coverage claim is worse than an admitted gap"
+		// failure root AGENTS.md names. Testing the exact complement of
+		// `team:%` over the same rows and the same weights makes
+		// direct + fallback == assigned_repo true by construction, which
+		// TestResolveSankeyCoverage_SeededRealClickHouse_SplitPartitionsExactly
+		// asserts against a real engine. Direct therefore means "not the NxM
+		// team fallback": direct evidence, own_edges, ancestor:*, children,
+		// and repo-with-unknown-provenance.
+		//
+		// ifNull(..., 0) is load-bearing, and the reason is MEASURED, not
+		// argued -- it is not the type error you would expect. repo_source
+		// is Nullable(String) (migration 089), so `repo_source LIKE 'team:%'`
+		// is Nullable(UInt8); ClickHouse ACCEPTS that as a sumIf condition
+		// without complaint, and then three-valued logic does the damage
+		// quietly: for a row with NULL provenance the predicate is NULL, so
+		// `NOT (predicate)` is also NULL, and the row is excluded from the
+		// fallback half AND the direct half. Dropping this wrapper is worth
+		// 1.4 of 5.0 assigned effort on the seeded fixture (direct 4.0 ->
+		// 2.6) with no error anywhere -- exactly the silent-undercount shape
+		// the split exists to prevent. Executed proof: the red-3-no-ifnull
+		// run recorded in this change's TELL.
+		// `wure.work_unit_id != ''` is the same LEFT-JOIN-miss test the
+		// weight expression above uses -- a unit with no wure row at all
+		// falls back to the scalar work_unit_investments.repo_id, which is
+		// direct by definition and must never be classified as fallback.
+		isTeamFallback := "(wure.work_unit_id != '' AND ifNull(wure.repo_source LIKE 'team:%', 0))"
+		assignedRepoPredicate := fmt.Sprintf("%s IS NOT NULL", repoAssignedCol)
+		directRepoExpr = fmt.Sprintf("toNullable(sumIf(%s, %s AND NOT %s))", repoEffortCol, assignedRepoPredicate, isTeamFallback)
+		teamFallbackRepoExpr = fmt.Sprintf("toNullable(sumIf(%s, %s AND %s))", repoEffortCol, assignedRepoPredicate, isTeamFallback)
+
+		// Fan-out WIDTH, so a saturating fallback is visible as saturation
+		// rather than read as precision: team-fallback repo allocations
+		// divided by the distinct work units that produced them (~9.06 on
+		// the local org at the 07:51Z read -- 5310 rows over 586 units).
+		//
+		// BOTH halves are uniqExact over a KEY, and the numerator's key is
+		// the (work unit, repo) PAIR -- NOT countIf over joined rows, which
+		// is what this first shipped as and which was wrong. Executed
+		// repro on the real engine, one unit fanned across 3 repos with two
+		// subcategories under one theme: no filter -> 3 (correct); with a
+		// work-category filter -> 6. The filter appends
+		// `ARRAY JOIN ... subcategory_kv` (see hasWorkCategoryFilter below),
+		// which multiplies every joined row by the unit's surviving
+		// subcategory count. The two SHARE columns are immune -- the ARRAY
+		// JOIN scales their numerator and denominator alike -- but a raw row
+		// COUNT is not, so the width silently reported 2x with a filter
+		// applied and 1x without, for identical underlying data. Counting
+		// distinct (unit, repo) pairs is invariant under any row-multiplying
+		// join, and equals the row count exactly when none is present.
+		//
+		// uniqExact, not uniq: this is a small per-query figure where an
+		// approximate distinct count would make the ratio wobble between
+		// identical requests. Zero fallback rows yields 0, not a division by
+		// zero -- and 0 here is honest, because "no team-fallback rows" is a
+		// measurement, unlike the non-investment path's NULL above.
+		fanoutUnits := fmt.Sprintf("uniqExactIf(work_unit_investments.work_unit_id, %s)", isTeamFallback)
+		fanoutPairs := fmt.Sprintf("uniqExactIf((work_unit_investments.work_unit_id, wure.repo_id), %s)", isTeamFallback)
+		fanoutExpr = fmt.Sprintf("toNullable(if(%[1]s > 0, %[2]s / %[1]s, 0))", fanoutUnits, fanoutPairs)
+
 		// analytics.py:838 -- the repo predicate targets the RAW joined
 		// column on the investment path, not the display expression.
 		repoFilterColumn = "wure.repo_id"
@@ -224,11 +323,17 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		return compiledQuery{}, err
 	}
 
+	// CHAOS-5483 appends three columns AFTER the original four. Order is
+	// part of the contract with resolveSankeyCoverage's positional Scan --
+	// appending keeps the existing four positions untouched.
 	sql := fmt.Sprintf(`SELECT
     %s AS total,
     %s AS assigned_team,
     %s AS repo_total,
-    %s AS assigned_repo
+    %s AS assigned_repo,
+    %s AS direct_repo,
+    %s AS team_fallback_repo,
+    %s AS fanout_repos_per_unit
 FROM %s
 %s
 WHERE %s
@@ -236,6 +341,7 @@ WHERE %s
   %s
 %s`,
 		totalExpr, assignedTeamCountExpr, repoTotalExpr, assignedRepoCountExpr,
+		directRepoExpr, teamFallbackRepoExpr, fanoutExpr,
 		baseTable,
 		strings.Join(joins, "\n"),
 		dateFilter, orgFilter, filterClause.sql,
@@ -310,7 +416,16 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 	}
 
 	var total, assignedTeam, repoTotal, assignedRepo float64
-	if scanErr := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo); scanErr != nil {
+	// CHAOS-5483: *float64, not float64. The three split columns are
+	// Nullable(Float64) on BOTH paths (the non-investment path cannot
+	// measure them at all), and clickhouse-go's Float64.ScanRow only
+	// recognises **float64 as a nullable-aware destination -- a bare
+	// *float64 never observes the NULL and silently leaves 0 behind. Same
+	// driver mechanic and the same reason as breakdownRow.Value
+	// (CHAOS-4650) and TimeseriesBucket.Value (CHAOS-4657); see
+	// breakdown.go's doc comment for the branch-by-branch detail.
+	var directRepo, teamFallbackRepo, fanoutReposPerUnit *float64
+	if scanErr := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &directRepo, &teamFallbackRepo, &fanoutReposPerUnit); scanErr != nil {
 		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageScan, fmt.Errorf("scan: %w", scanErr))
 		return nil
 	}
@@ -329,5 +444,32 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 	if repoTotal > 0 {
 		coverage.RepoCoverage = assignedRepo / repoTotal
 	}
+
+	// CHAOS-5483. Three deliberate asymmetries with the two fields above:
+	//
+	//  1. These stay NIL when the query could not measure them (the
+	//     non-investment path), where the originals are 0. The originals
+	//     have no choice -- the SDL types them Float! -- but these are
+	//     nullable precisely so "not measurable here" survives to the UI
+	//     instead of arriving as a confident 0% team-fallback.
+	//  2. The shares are guarded on repoTotal, the SAME denominator
+	//     RepoCoverage uses. Using a different denominator would break the
+	//     one property this split exists to provide: direct + fallback
+	//     reads back as exactly the headline the cards already show.
+	//  3. RepoFanoutReposPerUnit is passed through unscaled. It is a WIDTH
+	//     (rows per unit, ~9 on the local org), not a share -- dividing it
+	//     by anything would make it a ratio of a ratio and it would stop
+	//     being the number that shows a saturating fallback for what it is.
+	if repoTotal > 0 {
+		if directRepo != nil {
+			share := *directRepo / repoTotal
+			coverage.DirectRepoCoverage = &share
+		}
+		if teamFallbackRepo != nil {
+			share := *teamFallbackRepo / repoTotal
+			coverage.TeamFallbackRepoCoverage = &share
+		}
+	}
+	coverage.RepoFanoutReposPerUnit = fanoutReposPerUnit
 	return coverage
 }

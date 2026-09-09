@@ -604,23 +604,32 @@ func TestDecodeBillingAttributesMatchesPythonDefaultsAndCoercion(t *testing.T) {
 
 // TestDecodeBillingAttributesPreservesCompositeStringFields is CHAOS-5402's
 // proof, using the ticket's own repro fixture. Python's
-// `str(attributes.get("tier", ""))` on `{"tier": ["Team"]}` renders
-// `"['Team']"` and STILL SENDS -- this was, and stays, off-contract (today's
+// `str(attributes.get("tier", ""))` on `{"tier": ["Team"]}` rendered
+// `"['Team']"` and STILL SENT -- this was, and stays, off-contract (today's
 // Stripe producers only ever write scalars), but a stored row that used to
 // render now permanently drops instead, which is a real parity regression,
 // not a stricter-and-fine tightening like the SMTP_PORT/EMAIL_PROVIDER ones
-// this file documents elsewhere. A composite value must render the way
-// Python's str() rendered it, not be rejected as malformed.
+// this file documents elsewhere. A composite value must be preserved, not
+// rejected as malformed.
+//
+// R60 (chris via team-lead, after three codex-round P1s trying to emulate
+// Python's exact str()/repr() -- number formatting, Unicode escaping, float
+// overflow, each fix opening the next gap): Go is the functionality of
+// record. The rendering is canonical, compact JSON text, not a Python-repr
+// simulation -- verified (see .codex-review-context.md) that nothing
+// downstream parses this string as Python syntax or as JSON; it is
+// interpolated as literal text into a hand-rolled str.format-style HTML
+// email template, read by a human.
 func TestDecodeBillingAttributesPreservesCompositeStringFields(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		raw  string
 		want string
 	}{
-		{"ticket's exact repro: a list of one string", `{"tier":["Team"]}`, "['Team']"},
-		{"a list of strings", `{"old_tier":["Team","Enterprise"]}`, "['Team', 'Enterprise']"},
-		{"a nested dict", `{"new_tier":{"name":"Team","seats":5}}`, "{'name': 'Team', 'seats': 5}"},
-		{"an empty list", `{"tier":[]}`, "[]"},
+		{"ticket's exact repro: a list of one string", `{"tier":["Team"]}`, `["Team"]`},
+		{"a list of strings", `{"old_tier":["Team","Enterprise"]}`, `["Team","Enterprise"]`},
+		{"a nested dict, keys sorted", `{"new_tier":{"seats":5,"name":"Team"}}`, `{"name":"Team","seats":5}`},
+		{"an empty list", `{"tier":[]}`, `[]`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			decoded, err := DecodeBillingAttributes([]byte(test.raw))
@@ -643,72 +652,49 @@ func TestDecodeBillingAttributesPreservesCompositeStringFields(t *testing.T) {
 	}
 }
 
-// TestDecodeBillingAttributesCompositeNumbersMatchPythonRepr is CHAOS-5402's
-// codex-round P1 fix: pythonRepr was rendering a json.Number's ORIGINAL
-// JSON literal text verbatim (e.g. "1.50", "-0") instead of Python's actual
-// str()/repr() of the equivalent int/float value ("1.5", "0" -- Python's
-// int() has no signed zero). Verified against real `python3 -c` output
-// (see .codex-review-context.md) for every case below.
-func TestDecodeBillingAttributesCompositeNumbersMatchPythonRepr(t *testing.T) {
-	decoded, err := DecodeBillingAttributes([]byte(
-		`{"tier":[1.50,-0,2.0,900719925474099312345678901234567890,1e16,1e-5,100000000000000.0]}`))
-	if err != nil {
-		t.Fatalf("DecodeBillingAttributes: %v", err)
-	}
-	want := "[1.5, 0, 2.0, 900719925474099312345678901234567890, 1e+16, 1e-05, 100000000000000.0]"
-	if decoded.Tier != want {
-		t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
-	}
-}
-
-// TestDecodeBillingAttributesCompositeNumberOverflowMatchesPython is
-// CHAOS-5402's confirmation-pass P1 fix (chaos-5402-confirm-20260909T121743,
-// F4): a JSON float literal beyond float64's range (e.g. `1e400`) makes
-// strconv.ParseFloat return a valid ±Inf ALONGSIDE a non-nil ErrRange error
-// -- treating any non-nil error as "give up, return the raw literal text"
-// discarded that valid ±Inf and rendered the ORIGINAL JSON TEXT ("1e400")
-// instead of Python's `float("1e400")` == `inf` (Python's float() never
-// raises on overflow, it saturates to inf, same as here). Verified against
-// real `python3 -c` output.
-func TestDecodeBillingAttributesCompositeNumberOverflowMatchesPython(t *testing.T) {
-	decoded, err := DecodeBillingAttributes([]byte(`{"tier":[1e400,-1e400]}`))
-	if err != nil {
-		t.Fatalf("DecodeBillingAttributes: %v", err)
-	}
-	want := "[inf, -inf]"
-	if decoded.Tier != want {
-		t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
-	}
-}
-
-// TestDecodeBillingAttributesCompositeStringsEscapeNonPrintables is
-// CHAOS-5402's codex-round P1 fix: pythonStringRepr only escaped ASCII
-// control bytes (<0x20, 0x7f) -- Python's repr() escapes EVERY
-// non-printable Unicode character (NEL, NBSP, zero-width space, line/
-// paragraph separators, ...), not just the ASCII C0 range; an ordinary
-// printable non-ASCII character (an emoji, here) must still render
-// literally, unescaped. Verified against real `python3 -c` output (see
-// .codex-review-context.md). Built entirely from explicit rune values --
-// never paste an invisible/non-printable character literally into this
-// source file.
-func TestDecodeBillingAttributesCompositeStringsEscapeNonPrintables(t *testing.T) {
-	nel, nbsp, zwsp, ls, ps, emoji := rune(0x0085), rune(0x00a0), rune(0x200b), rune(0x2028), rune(0x2029), rune(0x1f600)
-	input := "a" + string(nel) + string(nbsp) + string(zwsp) + string(ls) + string(ps) + "b" + string(emoji)
-	// Wrapped in a one-element list -- a plain string field renders via
-	// stringField's ordinary (non-composite) path, which does not call
-	// pythonStringRepr at all; the composite `[` prefix is what routes
-	// through pythonRepr/pythonStringRepr, the code under test.
-	raw, err := json.Marshal(map[string][]string{"tier": {input}})
+// TestDecodeBillingAttributesCanonicalJSONHandlesEveryValueShape is R60's
+// table test (superseding the deleted Python-repr-parity tests): numbers
+// (int, float, huge integer, scientific notation), Unicode (including
+// non-printable characters that used to need special escaping under the
+// old Python-repr scheme -- canonical JSON's own \uXXXX escaping handles
+// them with zero custom code), and nesting. No Python cross-check needed
+// here -- Go's encoding/json output IS the canonical answer (R60), not an
+// approximation of something else. json.Number preserves the ORIGINAL
+// literal text byte-for-byte (never reformatted), which is exactly what
+// makes this simpler and more predictable than trying to match Python:
+// what was stored is what renders, with no numeric-format opinion at all.
+func TestDecodeBillingAttributesCanonicalJSONHandlesEveryValueShape(t *testing.T) {
+	nel, zwsp, emoji := rune(0x0085), rune(0x200b), rune(0x1f600)
+	unicodeInput := "a" + string(nel) + string(zwsp) + "b" + string(emoji)
+	unicodeJSON, err := json.Marshal(unicodeInput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := DecodeBillingAttributes(raw)
-	if err != nil {
-		t.Fatalf("DecodeBillingAttributes: %v", err)
-	}
-	want := "['a\\x85\\xa0\\u200b\\u2028\\u2029b" + string(emoji) + "']"
-	if decoded.Tier != want {
-		t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
+
+	for _, test := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"literal numbers preserved verbatim, not reformatted",
+			`{"tier":[1.50,-0,2.0,900719925474099312345678901234567890,1e16,1e400]}`,
+			`[1.50,-0,2.0,900719925474099312345678901234567890,1e16,1e400]`},
+		{"non-printable + printable-non-ASCII characters via canonical JSON escaping",
+			`{"tier":[` + string(unicodeJSON) + `]}`,
+			`[` + string(unicodeJSON) + `]`},
+		{"nested composite, deterministic key order",
+			`{"tier":{"z":1,"a":[true,false,null]}}`,
+			`{"a":[true,false,null],"z":1}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoded, err := DecodeBillingAttributes([]byte(test.raw))
+			if err != nil {
+				t.Fatalf("DecodeBillingAttributes(%s) = %v, want nil error", test.raw, err)
+			}
+			if decoded.Tier != test.want {
+				t.Fatalf("rendered = %q, want %q", decoded.Tier, test.want)
+			}
+		})
 	}
 }
 

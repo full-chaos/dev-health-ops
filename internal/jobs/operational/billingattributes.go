@@ -5,12 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
-	"math/big"
-	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
 // ErrMalformedAttributes is a permanent, data-shaped condition: a stored
@@ -142,229 +138,57 @@ func stringField(fields map[string]json.RawMessage, name string, fallback string
 		return text, nil
 	}
 	if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
-		// CHAOS-5402: `str(attributes.get(name, default))` on a list/dict
-		// rendered Python's repr of it (e.g. `{"tier":["Team"]}` ->
-		// "['Team']") and Python still sent that. Rejecting here turned a
-		// previously-sendable stored row into a permanent drop -- a real
-		// parity regression, not one of this file's deliberate
-		// stricter-and-fine tightenings. Render it the same way instead.
-		value, err := decodeAnyPreservingNumberLiterals(raw)
+		// R60 (chris via team-lead, CHAOS-5402): Go is the functionality
+		// of record. Emulating Python's str()/repr() here (the original
+		// CHAOS-5402 approach) was an UNBOUNDED parity trap -- three P1s
+		// in three rounds (number formatting, Unicode escaping, float
+		// overflow), each one closing a gap that opened another. Rejecting
+		// a composite value outright (the pre-CHAOS-5402 behavior) turned
+		// a previously-sendable stored row into a permanent drop, which is
+		// the real defect; the FIX is to render it as canonical, compact
+		// JSON text -- Go's own native, well-defined, un-emulated
+		// rendering -- not to chase Python's exact string byte-for-byte.
+		// Verified before this change (see .codex-review-context.md): the
+		// rendered string is interpolated as literal text into a
+		// hand-rolled str.format-style HTML email template
+		// (billingemail.go's formatTemplate) -- nothing downstream parses
+		// it as Python syntax, as JSON, or at all; a human reads it in the
+		// email body, so a JSON-shaped rendering is exactly as legible as
+		// the repr-shaped one was. Python's repr output for this
+		// off-contract path is a recorded, accepted difference -- not
+		// chased here.
+		canonical, err := canonicalJSON(raw)
 		if err != nil {
 			return "", fmt.Errorf("%w: %s is not decodable: %v", ErrMalformedAttributes, name, err)
 		}
-		return pythonRepr(value), nil
+		return canonical, nil
 	}
 	return trimmed, nil
 }
 
-// decodeAnyPreservingNumberLiterals decodes raw into Go's standard
-// any-tree (map[string]any / []any / string / bool / nil), except JSON
-// numbers decode to json.Number (their original literal text) rather than
-// float64 -- so pythonRepr can render "5" as "5", not "5.0", the same
-// distinction Python's own int/float types keep.
-func decodeAnyPreservingNumberLiterals(raw json.RawMessage) (any, error) {
+// canonicalJSON re-renders raw (a JSON array or object) as compact JSON
+// text: map keys sorted (encoding/json's Marshal does this natively for a
+// map[string]any -- no custom sort needed), number literals preserved
+// byte-for-byte via json.Number (json.Marshal re-emits a Number's original
+// text verbatim, so "1.50" stays "1.50" and a huge integer never round-trips
+// through float64), and HTML-escaping of `<`/`>`/`&` disabled (this text
+// goes into a plain-text template substitution, not an HTML-escaping
+// context -- see stringField's call site for why). This is the canonical,
+// deterministic Go-native rendering R60 calls for.
+func canonicalJSON(raw json.RawMessage) (string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return nil, err
+		return "", err
 	}
-	return value, nil
-}
-
-// pythonRepr renders a decoded JSON value the way Python's str()/repr()
-// would render the equivalent value (CHAOS-5402) -- str(list)/str(dict) is
-// list.__repr__/dict.__repr__, which repr()s every element/key/value, so
-// this recurses with repr semantics throughout, not just at the top level.
-//
-// Known, deliberate gap: map[string]any key order is Go map order (random),
-// sorted here for determinism -- it does NOT reproduce Python's
-// insertion-preserving dict order. Acceptable: today's Stripe producers
-// only ever write scalars (this whole composite path is off-contract), so
-// this is a best-effort rendering of a hand-edited or future-producer row,
-// not a byte-exact parity contract the way the scalar fields above are.
-func pythonRepr(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return "None"
-	case bool:
-		if v {
-			return "True"
-		}
-		return "False"
-	case string:
-		return pythonStringRepr(v)
-	case json.Number:
-		return pythonNumberRepr(v)
-	case []any:
-		parts := make([]string, len(v))
-		for i, elem := range v {
-			parts[i] = pythonRepr(elem)
-		}
-		return "[" + strings.Join(parts, ", ") + "]"
-	case map[string]any:
-		keys := make([]string, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		parts := make([]string, len(keys))
-		for i, k := range keys {
-			parts[i] = pythonStringRepr(k) + ": " + pythonRepr(v[k])
-		}
-		return "{" + strings.Join(parts, ", ") + "}"
-	default:
-		return fmt.Sprintf("%v", v)
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
 	}
-}
-
-// pythonNumberRepr renders a json.Number the way Python's str()/repr()
-// renders the value `json.loads` would have produced for the same literal
-// (CHAOS-5402 codex-round P1): json.Number's ORIGINAL literal text (e.g.
-// "1.50", "-0") is NOT what Python prints -- Python parses a JSON integer
-// literal (no '.'/'e'/'E') into an arbitrary-precision int (str() is just
-// its canonical decimal digits, no leading zeros, "-0" collapses to "0"
-// since int has no signed zero) and a JSON float literal into a float64,
-// whose str() is the shortest round-tripping decimal (dropping trailing
-// zeros like "1.50" -> "1.5"). Verified against real `python3 -c` output
-// for every branch (see .codex-review-context.md / the test file).
-func pythonNumberRepr(n json.Number) string {
-	text := string(n)
-	if !strings.ContainsAny(text, ".eE") {
-		// Integer-shaped literal -> Python int (arbitrary precision).
-		bi, ok := new(big.Int).SetString(text, 10)
-		if !ok {
-			// json.Number is already validated by the decoder; this should
-			// be unreachable. Fall back to the raw text rather than panic.
-			return text
-		}
-		return bi.String()
-	}
-	f, err := strconv.ParseFloat(text, 64)
-	if err != nil && !errors.Is(err, strconv.ErrRange) {
-		return text
-	}
-	// CHAOS-5402 confirmation pass (codex P1): ErrRange (magnitude beyond
-	// float64's range) still returns a VALID f = +-Inf alongside the
-	// error -- discarding it here and falling back to the raw JSON text
-	// ("1e400") was itself the bug. Python's float() never raises on
-	// overflow either; it saturates to inf/-inf the same way, so this
-	// case is not an error at all, just a value pythonFloatRepr must
-	// still render correctly.
-	return pythonFloatRepr(f)
-}
-
-// pythonFloatRepr formats f the way Python's repr(float) does: the
-// shortest round-tripping decimal digits (same algorithm Go's
-// strconv.FormatFloat(..., -1, ...) uses), in FIXED notation when the
-// base-10 exponent of the leading digit is in [-4, 16), else SCIENTIFIC
-// notation with an always-signed, zero-padded-to-2-digits exponent (e.g.
-// "1e+16", "1e-05") -- both thresholds and the exponent format measured
-// directly against `python3 -c 'print(repr(x))'` across the full range
-// (see the test file's TestDecodeBillingAttributesCompositeNumbersMatchPythonRepr).
-// A float, unlike an int, always shows a decimal point (Python: "2.0",
-// never "2").
-func pythonFloatRepr(f float64) string {
-	switch {
-	case math.IsNaN(f):
-		// Unreachable via encoding/json (a JSON number literal can never
-		// parse to NaN) -- defensive only, kept honest with Python's own
-		// repr(float("nan")) == "nan".
-		return "nan"
-	case math.IsInf(f, 1):
-		// Reachable: a JSON float literal beyond float64's range (e.g.
-		// "1e400") parses to +Inf via strconv.ParseFloat's ErrRange path
-		// (CHAOS-5402 confirmation-pass P1) -- Python's float() saturates
-		// to inf the same way, repr(float("inf")) == "inf" (lowercase,
-		// NOT Go's "+Inf").
-		return "inf"
-	case math.IsInf(f, -1):
-		return "-inf"
-	}
-	neg := math.Signbit(f)
-	abs := math.Abs(f)
-	sci := strconv.FormatFloat(abs, 'e', -1, 64)
-	mantissa, expText, ok := strings.Cut(sci, "e")
-	if !ok {
-		return sci
-	}
-	exp, err := strconv.Atoi(expText)
-	if err != nil {
-		return sci
-	}
-	var out string
-	if exp >= -4 && exp < 16 {
-		out = strconv.FormatFloat(abs, 'f', -1, 64)
-		if !strings.Contains(out, ".") {
-			out += ".0"
-		}
-	} else {
-		sign := "+"
-		if exp < 0 {
-			sign = "-"
-			exp = -exp
-		}
-		out = fmt.Sprintf("%se%s%02d", mantissa, sign, exp)
-	}
-	if neg {
-		out = "-" + out
-	}
-	return out
-}
-
-// pythonStringRepr mirrors Python's str repr() quoting: single-quoted
-// unless the string contains a single quote and no double quote (then
-// double-quoted), with backslash/quote escaping, and every NON-PRINTABLE
-// character escaped -- not just the ASCII C0 control range. Go's
-// unicode.IsPrint categorization (L/M/N/P/S plus the ASCII space) matches
-// Python's printable-string rule closely enough to reproduce it exactly on
-// every case measured against real `python3 -c` output (ASCII control
-// bytes, NEL U+0085, NBSP U+00A0, zero-width space U+200B, line/paragraph
-// separators U+2028/U+2029, an unassigned-range codepoint, and an emoji
-// staying literal) -- see the test file for the comparison.
-func pythonStringRepr(s string) string {
-	quote := byte('\'')
-	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {
-		quote = '"'
-	}
-	var b strings.Builder
-	b.WriteByte(quote)
-	for _, r := range s {
-		switch r {
-		case '\\':
-			b.WriteString(`\\`)
-		case rune(quote):
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case '\n':
-			b.WriteString(`\n`)
-		case '\r':
-			b.WriteString(`\r`)
-		case '\t':
-			b.WriteString(`\t`)
-		default:
-			if unicode.IsPrint(r) {
-				b.WriteRune(r)
-			} else {
-				writePythonEscapedRune(&b, r)
-			}
-		}
-	}
-	b.WriteByte(quote)
-	return b.String()
-}
-
-// writePythonEscapedRune writes r in Python repr()'s escape form: `\xNN`
-// (2 hex digits) for a codepoint <= 0xff, `\uNNNN` (4 hex digits) for
-// <= 0xffff, `\UNNNNNNNN` (8 hex digits) beyond that -- verified against
-// real `python3 -c` output for one representative of each width.
-func writePythonEscapedRune(b *strings.Builder, r rune) {
-	switch {
-	case r <= 0xff:
-		fmt.Fprintf(b, `\x%02x`, r)
-	case r <= 0xffff:
-		fmt.Fprintf(b, `\u%04x`, r)
-	default:
-		fmt.Fprintf(b, `\U%08x`, r)
-	}
+	// json.Encoder.Encode always appends a trailing newline; this is a
+	// single-line rendered value, not a stream.
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }

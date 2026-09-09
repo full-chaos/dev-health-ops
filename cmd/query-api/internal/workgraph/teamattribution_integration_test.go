@@ -379,4 +379,60 @@ func TestResolveWorkUnitTeamAttributions_TruncationSignalRealEngine(t *testing.T
 	if strings.Contains(logBuf.String(), "work_unit_team_attributions.truncated") {
 		t.Fatalf("truncation warning logged when result was below limit: %s", logBuf.String())
 	}
+
+	// TRUNC-1 real-engine negative case (codex round chaos-3969-r1, P2,
+	// team-lead-ruled fix-before-open): a limit EXACTLY equal to the real
+	// row count (3 seeded work units, limit=3) must fire NEITHER the log
+	// NOR the counter -- this is the exact false positive codex found
+	// against a real engine, not just a fake one. The counter is a
+	// cumulative Sum, so this asserts the value is UNCHANGED from what it
+	// was after the genuine-truncation call above (still 1), not merely
+	// present.
+	var beforeRM metricdata.ResourceMetrics
+	if err := realMeterReader.Collect(ctx, &beforeRM); err != nil {
+		t.Fatalf("reader.Collect error = %v", err)
+	}
+	counterValueBefore := truncationCounterValue(t, beforeRM)
+
+	logBuf.Reset()
+	got, err = resolveWorkUnitTeamAttributions(ctx, client, orgID, nil, nil, 3)
+	if err != nil {
+		t.Fatalf("resolveWorkUnitTeamAttributions (limit == true count): %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d results, want all 3", len(got))
+	}
+	if strings.Contains(logBuf.String(), "work_unit_team_attributions.truncated") {
+		t.Fatalf("truncation warning logged for a limit exactly equal to the real row count (false positive, TRUNC-1): %s", logBuf.String())
+	}
+
+	var afterRM metricdata.ResourceMetrics
+	if err := realMeterReader.Collect(ctx, &afterRM); err != nil {
+		t.Fatalf("reader.Collect error = %v", err)
+	}
+	if got := truncationCounterValue(t, afterRM); got != counterValueBefore {
+		t.Fatalf("truncation counter incremented (%d -> %d) for a limit exactly equal to the real row count (false positive, TRUNC-1)", counterValueBefore, got)
+	}
+}
+
+// truncationCounterValue returns the current value of the
+// devhealth_query_api_workgraph_truncation_total counter's one data point
+// (family=team_attribution, op=work_unit_team_attributions is this
+// package's only series on it today), or 0 if it has never been recorded
+// yet.
+func truncationCounterValue(t *testing.T, rm metricdata.ResourceMetrics) int64 {
+	t.Helper()
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "devhealth_query_api_workgraph_truncation_total" {
+				continue
+			}
+			data, ok := m.Data.(metricdata.Sum[int64])
+			if !ok || len(data.DataPoints) != 1 {
+				t.Fatalf("counter data shape = %+v, want one int64 sum data point", m.Data)
+			}
+			return data.DataPoints[0].Value
+		}
+	}
+	return 0
 }

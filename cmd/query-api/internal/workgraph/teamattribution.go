@@ -43,13 +43,15 @@ import (
 )
 
 // workUnitTeamAttributionsMaxRows mirrors team_attribution.py's _MAX_ROWS.
-// Parity of record: this port does not reshape the read itself (the LIMIT
-// stays numerically identical to Python's), it only adds the truncation
-// SIGNAL Python's own cap has never had -- see
-// recordWorkUnitTeamAttributionsTruncation's doc comment, which is
-// CHAOS-3969's actual complaint (a tenant with >5000 matching work units
-// silently got an incomplete list, with no way for any caller, on either
-// plane, to know).
+// Parity of record: the CALLER-VISIBLE cap is numerically identical to
+// Python's (resolveWorkUnitTeamAttributions never returns more than this
+// many rows), it only adds the truncation SIGNAL Python's own cap has
+// never had -- see recordWorkUnitTeamAttributionsTruncation's doc
+// comment, which is CHAOS-3969's actual complaint (a tenant with >5000
+// matching work units silently got an incomplete list, with no way for
+// any caller, on either plane, to know). The SQL LIMIT sent to
+// ClickHouse is this value PLUS ONE (a probe row) -- see
+// resolveWorkUnitTeamAttributions' doc comment for why.
 const workUnitTeamAttributionsMaxRows = 5000
 
 // teamAttributionSourceRankSQL mirrors team_attribution.py's
@@ -84,6 +86,24 @@ func ResolveWorkUnitTeamAttributions(ctx context.Context, client QueryClient, or
 // seeding workUnitTeamAttributionsMaxRows (5000) fixture rows -- see
 // teamattribution_integration_test.go's
 // TestResolveWorkUnitTeamAttributions_TruncationSignalFiresAtLimit.
+//
+// TRUNC-1 (codex round chaos-3969-r1, P2, team-lead-ruled fix-before-open):
+// the original version sent `LIMIT {limit}` to ClickHouse and fired the
+// truncation signal whenever the returned row count == limit -- a tenant
+// whose TRUE matching count is EXACTLY `limit` (nothing beyond) produced a
+// false positive, indistinguishable from a tenant with more rows than
+// `limit`, because a plain LIMIT gives no way to tell "at the cap, nothing
+// more" from "capped, more exists". This version sends `LIMIT {limit+1}`
+// instead (one probe row beyond the caller-visible cap), reads back at
+// most `limit+1` rows, and returns only the first `limit` to the caller
+// (the caller-visible cap is UNCHANGED). The truncation signal now fires
+// if and only if the probe row actually came back (len(rawResults) >
+// limit) -- a real, certain signal instead of an inference from LIMIT's
+// own cutoff, at the cost of reading one extra row on every call
+// regardless of whether the cap is ever hit (cheap: one row, not a second
+// query -- unlike the follow-up-count() alternative
+// recordWorkUnitTeamAttributionsTruncation's doc comment already weighed
+// and rejected for cost reasons).
 func resolveWorkUnitTeamAttributions(ctx context.Context, client QueryClient, orgID string, workUnitIDs []string, teamID *string, limit int) ([]model.WorkUnitTeamAttribution, error) {
 	scope := newFilterScope(nil, nil)
 
@@ -160,7 +180,12 @@ func resolveWorkUnitTeamAttributions(ctx context.Context, client QueryClient, or
         LIMIT {limit:UInt64}
     `, teamAttributionSourceRankSQL, membershipRunSubquery(scope), legacyNodeMaxJoin, workUnitFilter, runScopePredicate, teamFilter)
 
-	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: uint64(limit)})
+	// probeLimit is limit+1 -- see this function's TRUNC-1 doc comment
+	// above. The bound SQL parameter is still named "limit" (the query
+	// text above says `LIMIT {limit:UInt64}`); only the VALUE sent is
+	// widened by one row.
+	probeLimit := limit + 1
+	bindings = append(bindings, clickhouse.Binding{Name: "limit", Value: uint64(probeLimit)})
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -168,20 +193,32 @@ func resolveWorkUnitTeamAttributions(ctx context.Context, client QueryClient, or
 	}
 	defer rows.Close()
 
-	var results []model.WorkUnitTeamAttribution
+	var rawResults []model.WorkUnitTeamAttribution
 	for rows.Next() {
 		var workUnitID, teamIDCol, teamNameCol, source, confidence string
 		var memberCount uint64
 		if scanErr := rows.Scan(&workUnitID, &teamIDCol, &teamNameCol, &source, &confidence, &memberCount); scanErr != nil {
 			return nil, fmt.Errorf("workgraph: resolve work unit team attributions scan: %w", scanErr)
 		}
-		results = append(results, rowToWorkUnitTeamAttribution(workUnitID, teamIDCol, teamNameCol, source, confidence, memberCount))
+		rawResults = append(rawResults, rowToWorkUnitTeamAttribution(workUnitID, teamIDCol, teamNameCol, source, confidence, memberCount))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("workgraph: resolve work unit team attributions rows: %w", err)
 	}
 
-	if len(results) == limit {
+	// The probe row actually came back: certain truncation, not an
+	// inference from LIMIT's own cutoff (TRUNC-1). Never fires for a
+	// tenant whose true count is exactly `limit` -- that tenant's read
+	// returns exactly `limit` rows here too (rawResults has `limit`, not
+	// `limit+1`, entries), the false-positive case codex round
+	// chaos-3969-r1 found.
+	genuinelyTruncated := len(rawResults) > limit
+	results := rawResults
+	if genuinelyTruncated {
+		results = rawResults[:limit]
+	}
+
+	if genuinelyTruncated {
 		recordWorkUnitTeamAttributionsTruncation(ctx, orgID, limit)
 	}
 
@@ -296,20 +333,21 @@ func mapTeamAttributionConfidence(raw string) model.TeamAttributionConfidence {
 //
 // ENGINEERING CALL, documented per this ticket's brief: a follow-up
 // `count()` query over the identical WHERE clauses (dropping ORDER
-// BY/LIMIT) would tell the caller the TRUE total instead of "likely
-// truncated" -- but it would double this read's ClickHouse cost on EVERY
-// request, not only the rare one actually near the cap, because there is
-// no way to know in advance whether the primary read is about to hit the
-// boundary without already having paid for the count. This port stays
-// parity-of-record on the READ itself (LIMIT is unchanged) and pays the
-// extra cost only in the one case that matters: when the primary result
-// comes back exactly `limit` rows long, which is the only condition
-// ClickHouse's LIMIT clause surfaces to a caller for free. A rare false
-// positive (an org whose TRUE count happens to equal `limit` exactly)
-// logs a warning for a request that was not actually truncated -- an
-// acceptable rate for an operator-facing signal that would otherwise not
-// exist at all; a false NEGATIVE is impossible (returning fewer than
-// `limit` rows can only happen when the read was not truncated).
+// BY/LIMIT) would tell the caller the TRUE total, not just that more than
+// `limit` rows exist -- but it would double this read's ClickHouse cost
+// on EVERY request, not only the rare one actually near the cap, because
+// there is no way to know in advance whether the primary read is about to
+// hit the boundary without already having paid for the count.
+// resolveWorkUnitTeamAttributions instead probes with `LIMIT limit+1`
+// (TRUNC-1, codex round chaos-3969-r1): one extra row on every call, not
+// a second query, and this function now fires only when that probe row
+// genuinely came back -- a CERTAIN signal, not an inference from a plain
+// LIMIT's own cutoff. The original version fired whenever the result
+// count equaled `limit`, which produced a false positive for a tenant
+// whose true count was exactly `limit` (nothing beyond); that case is
+// eliminated now, not merely documented as an accepted tradeoff. A false
+// NEGATIVE is still impossible (this function is only called when the
+// probe row actually came back).
 //
 // Substrate: slog.WarnContext, matching this binary's own established
 // degraded/near-limit signal convention (throughputforecast/resolve.go,

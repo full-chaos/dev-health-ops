@@ -62,8 +62,11 @@ func TestResolveWorkUnitTeamAttributions_QueryShape(t *testing.T) {
 	if v, ok := bindingValue(client.bindings[0], "team_id"); !ok || v != "team-1" {
 		t.Fatalf("team_id binding = %v, %v", v, ok)
 	}
-	if v, ok := bindingValue(client.bindings[0], "limit"); !ok || v != uint64(5000) {
-		t.Fatalf("limit binding = %v, %v", v, ok)
+	// TRUNC-1: the bound value is limit+1 (a probe row beyond the
+	// caller-visible cap), not limit itself -- see
+	// resolveWorkUnitTeamAttributions' TRUNC-1 doc comment.
+	if v, ok := bindingValue(client.bindings[0], "limit"); !ok || v != uint64(5001) {
+		t.Fatalf("limit binding = %v, %v, want probe value 5001 (limit+1)", v, ok)
 	}
 }
 
@@ -163,19 +166,54 @@ func TestMapTeamAttributionConfidence_UnrecognizedFallsBackToNone(t *testing.T) 
 	}
 }
 
-// TestResolveWorkUnitTeamAttributions_TruncationSignalFiresAtLimit is the
-// fake-client half of CHAOS-3969's truncation-signal proof: when the
-// result comes back with EXACTLY `limit` rows,
-// recordWorkUnitTeamAttributionsTruncation must fire, with the org id and
-// limit it was called with. The real-engine half (does this actually
-// happen when a real query truncates a real >limit seed) lives in
-// teamattribution_integration_test.go -- a fake client can only prove this
-// function's own "len(results) == limit" branch is wired, not that a real
-// truncated ClickHouse read reaches it.
-func TestResolveWorkUnitTeamAttributions_TruncationSignalFiresAtLimit(t *testing.T) {
+// TestResolveWorkUnitTeamAttributions_NoTruncationSignalWhenExactlyAtLimit
+// is TRUNC-1's red-first regression guard (codex round chaos-3969-r1, P2,
+// team-lead-ruled fix-before-open): a tenant whose TRUE matching count is
+// EXACTLY `limit` -- nothing beyond it -- must NOT fire the truncation
+// signal. Before the limit+1 probe fix, this fake response (exactly
+// `limit`=2 rows, nothing more for the probe to find) was the exact false
+// positive codex found: the old code fired whenever
+// len(results)==limit, unable to distinguish "at the cap, nothing more"
+// from "capped, more exists". RAN RED against the pre-fix code (git show
+// HEAD~1:cmd/query-api/internal/workgraph/teamattribution.go swapped in
+// temporarily): fired once with (org1, 2) instead of zero times. Green
+// now that the query probes limit+1 and only 2 rows exist to return.
+func TestResolveWorkUnitTeamAttributions_NoTruncationSignalWhenExactlyAtLimit(t *testing.T) {
 	client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{
 		{"wu-1", "", "", "unassigned", "none", uint64(1)},
 		{"wu-2", "", "", "unassigned", "none", uint64(1)},
+	}}}}
+
+	var calls int
+	previous := recordWorkUnitTeamAttributionsTruncation
+	recordWorkUnitTeamAttributionsTruncation = func(context.Context, string, int) { calls++ }
+	t.Cleanup(func() { recordWorkUnitTeamAttributionsTruncation = previous })
+
+	got, err := resolveWorkUnitTeamAttributions(context.Background(), client, "org1", nil, nil, 2)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d results, want 2", len(got))
+	}
+	if calls != 0 {
+		t.Fatalf("truncation signal fired for a tenant whose true count is exactly `limit` (false positive, TRUNC-1): %d calls", calls)
+	}
+}
+
+// TestResolveWorkUnitTeamAttributions_TruncationSignalFiresWhenProbeRowReturned
+// is TRUNC-1's positive case: when the query genuinely has more than
+// `limit` matching rows, the probe (LIMIT limit+1) returns `limit+1` raw
+// rows, resolveWorkUnitTeamAttributions must truncate the CALLER-VISIBLE
+// result back down to exactly `limit` (parity of record, unchanged cap)
+// and fire the truncation signal exactly once with (orgID, limit) -- the
+// same call-site contract as before TRUNC-1, just gated on a certain
+// condition now instead of an inferred one.
+func TestResolveWorkUnitTeamAttributions_TruncationSignalFiresWhenProbeRowReturned(t *testing.T) {
+	client := &fakeClient{responses: []*fakeRowScanner{{rows: [][]any{
+		{"wu-1", "", "", "unassigned", "none", uint64(1)},
+		{"wu-2", "", "", "unassigned", "none", uint64(1)},
+		{"wu-3", "", "", "unassigned", "none", uint64(1)}, // the limit+1 probe row
 	}}}}
 
 	var recorded []struct {
@@ -196,7 +234,10 @@ func TestResolveWorkUnitTeamAttributions_TruncationSignalFiresAtLimit(t *testing
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("got %d results, want 2", len(got))
+		t.Fatalf("got %d results, want exactly 2 (probe row must not leak to the caller)", len(got))
+	}
+	if got[0].WorkUnitID != "wu-1" || got[1].WorkUnitID != "wu-2" {
+		t.Fatalf("truncation kept the wrong rows: %+v", got)
 	}
 	if len(recorded) != 1 || recorded[0].orgID != "org1" || recorded[0].limit != 2 {
 		t.Fatalf("truncation signal not recorded correctly: %+v", recorded)

@@ -25,9 +25,12 @@ package analytics
 // path, NOT the dedup source timeseries.go's
 // nonInvestmentSourceAndDateFilter uses (analytics.py:673-677:
 // `table = ... if request.use_investment else "investment_metrics_daily"`).
-// Ported as written. Likewise the ARRAY JOIN for a work-category filter
-// is appended AFTER the LEFT JOINs, exactly where Python appends it
-// (analytics.py:829-834).
+// Ported as written. The ONE place this file no longer follows Python is
+// the work-category filter: Python appends an ARRAY JOIN over
+// subcategory_distribution_json (analytics.py:829-834) and this query does
+// not, because that join silently re-weighted every effort-weighted column
+// (CHAOS-5498 -- see the long note at the filter site). Selection is
+// identical; only the row multiplicity differs.
 
 import (
 	"context"
@@ -274,10 +277,13 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// is what this first shipped as and which was wrong. Executed
 		// repro on the real engine, one unit fanned across 3 repos with two
 		// subcategories under one theme: no filter -> 3 (correct); with a
-		// work-category filter -> 6. The filter appends
-		// `ARRAY JOIN ... subcategory_kv` (see hasWorkCategoryFilter below),
-		// which multiplies every joined row by the unit's surviving
-		// subcategory count. The two SHARE columns are immune -- the ARRAY
+		// work-category filter -> 6. At the time, the filter appended
+		// `ARRAY JOIN ... subcategory_kv`, which multiplied every joined row
+		// by the unit's surviving subcategory count. CHAOS-5498 has since
+		// removed that join from this query entirely, so this particular
+		// multiplication can no longer occur here -- the distinct-key form is
+		// kept anyway, because the merge-state reason below is independent of
+		// it. The two SHARE columns were thought immune -- the ARRAY
 		// JOIN scales their numerator and denominator alike -- but a raw row
 		// COUNT is not, so the width silently reported 2x with a filter
 		// applied and 1x without, for identical underlying data. Counting
@@ -299,8 +305,9 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// count() == count() FINAL == uniqExact((work_unit_id, repo_id)) ==
 		// 3612). No census of that table is reproducible over time without
 		// FINAL, an explicit latest-generation filter, or distinct-key
-		// counting. The ARRAY JOIN above only bites under a filter; merge
-		// state moves under every reader, always, with no query change at all.
+		// counting. That is the reason that still applies after CHAOS-5498:
+		// merge state moves under every reader, always, with no query change
+		// at all, whereas the ARRAY JOIN is gone from this query.
 		fanoutUnits := fmt.Sprintf("uniqExactIf(work_unit_investments.work_unit_id, %s)", isTeamFallback)
 		fanoutPairs := fmt.Sprintf("uniqExactIf((work_unit_investments.work_unit_id, wure.repo_id), %s)", isTeamFallback)
 		fanoutExpr = fmt.Sprintf("toNullable(if(%[1]s > 0, %[2]s / %[1]s, 0))", fanoutUnits, fanoutPairs)
@@ -315,35 +322,43 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		if needsAuthorJoin(filters) {
 			joins = append(joins, fmt.Sprintf("LEFT JOIN %s AS au ON au.work_unit_id = work_unit_investments.work_unit_id", workUnitAuthorsSource()))
 		}
-		// analytics.py:829-834 -- appended after the LEFT JOINs, as Python does.
+		// analytics.py:829-834 appends `ARRAY JOIN CAST(subcategory_distribution_json
+		// ...) AS subcategory_kv` here so a work-category filter can read
+		// `subcategory_kv.1`. CHAOS-5498 DELIBERATELY DIVERGES: this query does
+		// not append it, and filters on unit membership instead (see
+		// WorkCategorySelectsUnits in filtertranslation.go).
 		//
-		// 🛑 KNOWN DEFECT, PRE-EXISTING, NOT FIXED HERE. This ARRAY JOIN
-		// multiplies each unit's joined rows by ITS OWN surviving subcategory
-		// count, so a work-category filter re-weights units RELATIVE TO EACH
-		// OTHER and every effort-weighted column below inherits it -- including
-		// the pre-existing teamCoverage and repoCoverage, not just CHAOS-5483's
-		// split. Measured on a real engine, two equal-effort units (one
-		// subcategory vs two, the two-subcategory one repo-unassigned):
-		// repoCoverage 0.5 unfiltered -> 0.333 filtered, identical data. The
-		// same ARRAY JOIN is in the Python original
-		// (resolvers/analytics.py:829-834), so both planes agree on the wrong
-		// answer, which is why a parity port could not have caught it.
+		// WHY, measured rather than argued: that ARRAY JOIN multiplies each
+		// unit's rows by ITS OWN matching-subcategory count, so a work-category
+		// filter re-weighted units RELATIVE TO EACH OTHER and every
+		// effort-weighted column below inherited it -- including the
+		// long-standing teamCoverage and repoCoverage, not just CHAOS-5483's
+		// split. Two equal-effort units, one with one matching subcategory and
+		// one with two, the second repo-unassigned: repoCoverage read 0.5
+		// unfiltered and 0.333 filtered, on identical data. chris ruled the
+		// filter must SELECT units, never weight them.
 		//
-		// Deliberately left alone: correcting it changes a shipped, Python-
-		// parity number, and the correction is a SEMANTICS choice (aggregate at
-		// unit grain, or weight by subcategory_kv.2 so a filtered view means
-		// "coverage among work in this category") that belongs to the product,
-		// not to a split PR. Filed as CHAOS-5498; pinned meanwhile by
-		// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits_CHAOS5498,
-		// which fails loudly if the behaviour changes in either direction.
+		// The fix is a JOIN removal, not new arithmetic, which is why it needs
+		// no per-column changes: with no row multiplication there is nothing
+		// for the columns to compensate for. Selection is unchanged -- proven
+		// on a real engine over every shape a Map(String, Float64) can hold
+		// (empty map, empty key, key without a dot, one match, two matches,
+		// mixed): identical membership, differing only in that the ARRAY JOIN
+		// emitted the two-match unit twice. A malformed-JSON case cannot exist;
+		// the column is a Map despite its _json name.
 		//
-		// CHAOS-5483's split is an exact partition of the headline in every
-		// case measured, filtered and not, so it inherits this distortion
-		// rather than adding one. Fixing the split alone would break the
-		// partition and make it disagree with the coverage card beside it.
-		if hasWorkCategoryFilter(filters) {
-			joins = append(joins, "ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv")
-		}
+		// The Python plane still carries the ARRAY JOIN, so the two planes now
+		// disagree on FILTERED coverage by design (R60: the Go plane is the
+		// source of truth here). Tracked as a follow-up baseline defect for
+		// the InvestmentFull operation -- deliberately NOT "registered", since
+		// the registry it belongs in ships on CHAOS-5425's branch and does not
+		// exist on main yet. Saying "registered" here would have described a
+		// file that cannot be opened.
+		//
+		// UNFILTERED output is byte-identical: no ARRAY JOIN was ever appended
+		// without a work-category filter, and the predicate only changes shape
+		// inside that same branch. Pinned by
+		// TestCompileSankeyCoverage_UnfilteredSQLUnchangedByUnitSelection.
 	} else {
 		// analytics.py:673-679 -- the RAW daily table and its own date filter.
 		baseTable = "investment_metrics_daily"
@@ -355,6 +370,11 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		Team:   teamCol,
 		Repo:   repoFilterColumn,
 		Author: "author_email",
+		// CHAOS-5498: this is the ONE caller that never reads
+		// subcategory_kv.2 -- it needs the filter only to decide which units
+		// are in scope -- so it takes the unit-selecting predicate and skips
+		// the row-multiplying ARRAY JOIN above.
+		WorkCategorySelectsUnits: useInvestment,
 	})
 	if err != nil {
 		return compiledQuery{}, err
@@ -392,15 +412,6 @@ WHERE %s
 	bindings = append(bindings, filterClause.bindings...)
 
 	return compiledQuery{sql: sql, bindings: bindings}, nil
-}
-
-// hasWorkCategoryFilter ports _has_work_category_filter
-// (analytics.py:203-208). Note it tests why.work_category ONLY -- NOT
-// why.issue_type, which hasActiveFilters does test. Copying
-// hasActiveFilters' condition here would add the subcategory_kv ARRAY
-// JOIN for an issue-type-only filter, which Python never does.
-func hasWorkCategoryFilter(filters *model.FilterInput) bool {
-	return filters != nil && filters.Why != nil && len(filters.Why.WorkCategory) > 0
 }
 
 // resolveSankeyCoverage ports the execution half of

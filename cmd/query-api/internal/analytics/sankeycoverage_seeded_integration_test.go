@@ -758,45 +758,43 @@ func seedFilterReweightOrg(t *testing.T, ctx context.Context, conn stdclickhouse
 	}
 }
 
-// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits_CHAOS5498
-// is a CHARACTERIZATION test for the defect tracked as CHAOS-5498. It pins behaviour that is WRONG and that this
-// change does not fix, so that the defect is visible in the suite instead of
-// latent, and so whoever fixes it has a red-first anchor. Do not read a green
-// here as an endorsement of these numbers.
+// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWithoutReweighting
+// asserts CHAOS-5498's fix: a work-category filter SELECTS work units and
+// never weights them, so no effort-weighted column moves when one is applied
+// to the same underlying data.
 //
-// THE DEFECT, and it is NOT introduced by CHAOS-5483: a work-category filter
-// appends `ARRAY JOIN CAST(subcategory_distribution_json ...)` (see
-// hasWorkCategoryFilter in sankeycoverage.go). That multiplies each unit's
-// joined rows by ITS OWN surviving subcategory count -- so units are re-weighted
-// RELATIVE TO EACH OTHER, and every effort-weighted column in this query
-// inherits it, including the pre-existing teamCoverage and repoCoverage. The
-// same ARRAY JOIN is in the Python original at
-// src/dev_health_ops/api/graphql/resolvers/analytics.py:833, so both planes
-// share the behaviour. Filed as CHAOS-5498; the fix is a semantics decision
-// (aggregate at unit grain, or weight by subcategory_kv.2 so a filtered view
-// means "coverage among work in this category"), which is chris's call, not a
-// silent correction inside a split PR.
+// This test was born as a CHARACTERIZATION of the defect, pinning the wrong
+// numbers so they were visible rather than latent, and its failure message
+// told the next reader that a filtered repoCoverage of 0.5 -- together with
+// the filtered denominator dropping from 3 to 2 -- would mean the defect was
+// fixed and the test should be REPLACED rather than repaired. That is exactly
+// what happened, and this is the replacement.
 //
-// The reviewer that found this (round chaos-5483-pr1-r1, F1 P1) reported it
-// against the SPLIT columns. Reproducing it showed the opposite: the split is
-// an exact partition of the headline in every case measured, filtered and not
-// -- it inherits the distortion faithfully rather than adding one. Fixing the
-// split alone would BREAK the partition and make it disagree with the coverage
-// card beside it, which is strictly worse than a documented shared distortion.
+// THE DEFECT IT REPLACES, kept because the numbers are the reason the fix
+// looks the way it does: the filter used to append
+// `ARRAY JOIN CAST(subcategory_distribution_json ...) AS subcategory_kv`,
+// which multiplied each unit's rows by ITS OWN matching-subcategory count.
+// Units were therefore re-weighted RELATIVE TO EACH OTHER, and every
+// effort-weighted column inherited it -- including the long-standing
+// teamCoverage and repoCoverage, not only CHAOS-5483's split. Measured on a
+// real engine with two equal-effort units, one matching subcategory versus
+// two, the two-subcategory one repo-unassigned: repoCoverage read 0.5
+// unfiltered and 0.333 filtered, on identical data.
 //
-// Two scenarios, because the first one alone is misleading:
+// The fix removes the join rather than compensating for it, which is why no
+// column needed its own correction: with no row multiplication there is
+// nothing to compensate for.
 //
-//	assigned: both units resolve a repo. repoCoverage stays 1.0 across the
-//	  filter and looks immune -- it is merely SATURATED. The tell is the
-//	  denominator: repo_total moves 2 -> 3.
-//	unassigned: the two-subcategory unit resolves NO repo, so repoCoverage
-//	  becomes sensitive and moves 0.5 -> 0.333 on identical data, with the
-//	  split's raw NUMERATORS constant. (The resolver's exported shares divide
-//	  those numerators by repoTotal, and repoTotal is precisely what moves, so
-//	  the normalized fields do shift -- this test reads the raw columns for
-//	  that reason.) This is the scenario that proves the defect is the
-//	  headline's, not the split's.
-func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits_CHAOS5498(t *testing.T) {
+// Two scenarios, both retained from the characterization because each catches
+// something the other cannot:
+//
+//	assigned: every column must be IDENTICAL across the filter. Under the old
+//	  behaviour the shares looked stable here (repoCoverage was saturated at
+//	  1.0) while the DENOMINATOR moved 2 -> 3, so the denominator is what this
+//	  scenario actually guards.
+//	unassigned: repoCoverage is sensitive, and must now stay 0.5 across the
+//	  filter where it used to fall to 0.333.
+func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWithoutReweighting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
@@ -889,7 +887,10 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsU
 		wantRepoTotal, wantAssigned, wantDirect, wantFallback float64
 	}{
 		{"assigned/unfiltered", nil, 2, 2, 1, 1},
-		{"assigned/filtered", categoryFilter, 3, 3, 1, 2},
+		// IDENTICAL to unfiltered: both units match feature_delivery, so the
+		// filter selects both and weights neither. Under the old ARRAY JOIN
+		// this row read 3, 3, 1, 2.
+		{"assigned/filtered", categoryFilter, 2, 2, 1, 1},
 	} {
 		repoTotal, assigned, direct, fallback := read(orgAssigned, c.label, c.filters)
 		for _, got := range []struct {
@@ -933,7 +934,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsU
 	}{
 		{"unassigned/unfiltered repo_total", unfilteredTotal, 2},
 		{"unassigned/unfiltered assigned_repo", unfilteredAssigned, 1},
-		{"unassigned/filtered repo_total", filteredTotal, 3},
+		{"unassigned/filtered repo_total", filteredTotal, 2},
 		{"unassigned/filtered assigned_repo", filteredAssigned, 1},
 	} {
 		if math.Abs(c.got-c.want) > tol {
@@ -944,8 +945,8 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsU
 	if math.Abs(unfilteredAssigned/unfilteredTotal-0.5) > tol {
 		t.Errorf("unassigned/unfiltered repoCoverage = %v, want 0.5", unfilteredAssigned/unfilteredTotal)
 	}
-	if math.Abs(filteredAssigned/filteredTotal-1.0/3.0) > tol {
-		t.Errorf("unassigned/filtered repoCoverage = %v, want 0.333... -- if this is now 0.5 AND the filtered repo_total assertion above went from 3 to 2, the CHAOS-5498 re-weighting has been FIXED and this characterization test should be REPLACED by a real assertion (filtered 0.5 stays 0.5). If the ratio moved but repo_total is still 3, something else changed and this test is telling you about a different defect",
+	if math.Abs(filteredAssigned/filteredTotal-0.5) > tol {
+		t.Errorf("unassigned/filtered repoCoverage = %v, want 0.5 -- the filter must SELECT units, never weight them. A value of 0.333 here is the CHAOS-5498 defect returning: the work-category ARRAY JOIN has been reintroduced somewhere, re-weighting units by their matching-subcategory count",
 			filteredAssigned/filteredTotal)
 	}
 	// Raw NUMERATORS, not the resolver's shares: resolveSankeyCoverage divides
@@ -954,6 +955,213 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsU
 	if math.Abs(unfilteredDirect-filteredDirect) > tol || math.Abs(unfilteredFallback-filteredFallback) > tol {
 		t.Errorf("raw split numerators moved across the filter (direct %v->%v, fallback %v->%v) while the headline denominator moved -- the numerators are supposed to be constant here",
 			unfilteredDirect, filteredDirect, unfilteredFallback, filteredFallback)
+	}
+}
+
+// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveWeightUnits
+// pins WHICH units a work-category filter puts in scope: those carrying
+// POSITIVE weight in a matching category, not merely a key for one.
+//
+// CHAOS-5498 landed in two steps and this comment describes the SECOND, which
+// supersedes the first. Step one swapped a row-multiplying
+// `ARRAY JOIN CAST(subcategory_distribution_json ...)` for a row-selecting
+// `arrayExists` over the map KEYS, on the stated goal of changing multiplicity
+// while preserving membership exactly. Step two changed membership on purpose,
+// because the live A/B showed the preserved membership was itself wrong: both
+// the ARRAY JOIN and a key test match every unit on dense data, so the filter
+// excluded nobody. The predicate now tests the PAIR -- a matching category AND
+// positive weight.
+//
+// So membership IS the thing under test here, not the thing held constant. The
+// risk this test guards is a shape quietly entering or leaving the filtered
+// denominator without anyone intending it -- which is what happened between
+// those two steps, and was invisible to every fixture that existed at the
+// time.
+//
+// One unit per shape a Map(String, Float64) can hold. Note the column is a
+// MAP despite its _json name, so a malformed-JSON case cannot exist -- the
+// type system forbids it; the degenerate shapes are an empty map and an empty
+// key, not unparseable text.
+//
+// Expected membership under `work_category = feature_delivery`:
+//
+//	in scope:     one-match, key-without-dot, two-matching, mixed,
+//	              dense-positive
+//	out of scope: non-matching, empty-map, empty-key, dense-zero,
+//	              negative-weight, nan-weight
+//
+// dense-zero is the case that matters and the reason this test was rewritten.
+// It carries `feature_delivery.build` and `feature_delivery.ship` KEYS at
+// weight 0, exactly as production rows do, and it must be OUT of scope. Every
+// sparse row above passes under a presence test as well as a weight test, so
+// none of them can tell the two apart.
+//
+// "No category at all" (empty map, empty key) means OUT of scope under a
+// category filter, which is what the ARRAY JOIN did by producing no rows for
+// those units. A key with no dot IS in scope: splitByChar on a dotless key
+// returns the key itself, so `feature_delivery` matches `feature_delivery`.
+//
+// Every unit carries equal effort and one repository, so each contributes
+// exactly 1.0 and the denominator is a COUNT of in-scope units. The counts are
+// derived from the table above rather than written down here, so adding a row
+// cannot leave a stale number in this comment -- which is exactly what
+// happened once already, when the dense rows were added and this paragraph
+// still described the seven-row fixture.
+func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveWeightUnits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	inst, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = inst.Close(context.Background()) }()
+
+	opts, err := stdclickhouse.ParseDSN(inst.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	conn, err := stdclickhouse.Open(opts)
+	if err != nil {
+		t.Fatalf("open raw ClickHouse connection: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL + seededCoverageExtraDDL) {
+		if err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("exec DDL %q: %v", stmt, err)
+		}
+	}
+
+	const orgID = "seeded-coverage-selection"
+	shapes := []struct {
+		id      string
+		subcats string
+		inScope bool
+	}{
+		// SPARSE shapes -- only the keys that apply are present.
+		{"wu-one-match", "map('feature_delivery.build', 1.0)", true},
+		{"wu-key-without-dot", "map('feature_delivery', 1.0)", true},
+		{"wu-two-matching", "map('feature_delivery.build', 0.5, 'feature_delivery.ship', 0.5)", true},
+		{"wu-mixed", "map('feature_delivery.build', 0.5, 'quality.test', 0.5)", true},
+		{"wu-non-matching", "map('quality.test', 1.0)", false},
+		{"wu-empty-map", "map()", false},
+		{"wu-empty-key", "map('', 1.0)", false},
+
+		// DENSE shapes -- every key present, weight 0 where it does not
+		// apply. THIS IS WHAT PRODUCTION ACTUALLY LOOKS LIKE, and no sparse
+		// case can substitute for it: a predicate that tests key PRESENCE
+		// passes every sparse case above and still matches all 4977 units on
+		// the live org, where only 3514 carry positive feature_delivery
+		// weight. The filter was a no-op and nothing in this file could see
+		// it until these two rows existed.
+		{"wu-dense-positive", "map('feature_delivery.build', 1.0, 'feature_delivery.ship', 0, 'quality.test', 0, 'maintenance.debt', 0)", true},
+		{"wu-dense-zero", "map('feature_delivery.build', 0, 'feature_delivery.ship', 0, 'quality.test', 1.0, 'maintenance.debt', 0)", false},
+
+		// OUT-OF-CONTRACT weights. The platform contract calls these
+		// probabilities -- "subcat probs sum to theme probs" (root AGENTS.md,
+		// Work Graph + Investment) -- and the categorization path ENFORCES
+		// that: internal/jobs/investment/categorize/schema.go:136-143 rejects
+		// non-finite weights as `non_finite_weight` and negative ones as
+		// `negative_weight`, dropping the key rather than storing the value.
+		// So no known producer writes either shape today.
+		//
+		// They are pinned anyway, for two reasons that survive that. The
+		// column is a bare Map(String, Float64) with no constraint
+		// (migrations/clickhouse/017_investment_materialize_tables.sql:12), so
+		// the shapes stay REPRESENTABLE whatever the current writers do -- a
+		// backfill, a migration or a future producer is not bound by one
+		// validator on one path. And a reader should not depend on a
+		// guarantee enforced somewhere it cannot see; if that validator is
+		// ever relaxed, this test is what notices.
+		//
+		// These rows PIN what `kv.2 > 0` does with them; they do not rule on
+		// what it SHOULD do. Both are excluded, which is the contract-
+		// consistent reading -- a negative or undefined weight is not positive
+		// evidence that the work belongs to the category -- and it is the same
+		// answer the predicate gives without special-casing either. If someone
+		// later decides a negative weight should be a loud data-quality signal
+		// rather than a silent exclusion, this is the test that will tell them
+		// the current behaviour is silent, instead of leaving them to discover
+		// it from a coverage number that quietly went down.
+		{"wu-negative-weight", "map('feature_delivery.build', -1.0, 'quality.test', 1.0)", false},
+		{"wu-nan-weight", "map('feature_delivery.build', nan, 'quality.test', 1.0)", false},
+	}
+	wantFiltered := 0.0
+	for _, sh := range shapes {
+		if sh.inScope {
+			wantFiltered++
+		}
+		if err := conn.Exec(ctx, fmt.Sprintf(
+			"INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, provider, effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status, categorization_errors_json, categorization_model_version, categorization_input_hash, categorization_run_id, computed_at, work_unit_type, work_unit_name, org_id) VALUES "+
+				"('%[1]s', toDateTime64('%[2]s', 3, 'UTC'), toDateTime64('2026-01-03 00:00:00.000', 3, 'UTC'), NULL, 'github', 'churn_loc', 100, map('feature_delivery', 1.0), %[3]s, '{\"issues\":[\"linear:ALPHA-1\"],\"prs\":[]}', 0.5, 'moderate', 'ok', '', 'v1', 'h', 'run-1', toDateTime64('%[2]s', 3, 'UTC'), 'pr', 'seeded', '%[4]s')",
+			sh.id, seededCoverageTS, sh.subcats, orgID)); err != nil {
+			t.Fatalf("seed work_unit_investments %s: %v", sh.id, err)
+		}
+		if err := conn.Exec(ctx, fmt.Sprintf(
+			"INSERT INTO work_unit_repo_effort (work_unit_id, repo_id, effort_metric, effort_value, allocation_weight, allocation_source, repo_source, categorization_run_id, computed_at, org_id) SETTINGS optimize_on_insert = 0 VALUES ('%[1]s', toUUID('%[2]s'), 'churn_loc', 100, 1.0, 'seeded', 'own_edges', 'run-1', toDateTime64('%[3]s', 3, 'UTC'), '%[4]s')",
+			sh.id, seededCoverageRepo1, seededCoverageTS, orgID)); err != nil {
+			t.Fatalf("seed work_unit_repo_effort %s: %v", sh.id, err)
+		}
+	}
+	if err := conn.Exec(ctx, fmt.Sprintf(
+		"INSERT INTO repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider, source_id) VALUES (toUUID('%[1]s'), 'acme/one', NULL, toDateTime64('%[2]s', 3, 'UTC'), NULL, NULL, toDateTime64('%[2]s', 3, 'UTC'), '%[3]s', 'github', NULL)",
+		seededCoverageRepo1, seededCoverageTS, orgID)); err != nil {
+		t.Fatalf("seed repos: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	if err != nil {
+		t.Fatalf("construct ClickHouse query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	req, err := SankeyRequestFromInput(model.SankeyRequestInput{
+		Path:    []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputTheme},
+		Measure: model.MeasureInputCount,
+		DateRange: &model.DateRangeInput{
+			StartDate: mustGraphQLDate("2026-01-01"),
+			EndDate:   mustGraphQLDate("2026-01-08"),
+		},
+		MaxNodes: 16,
+		MaxEdges: 100,
+	})
+	if err != nil {
+		t.Fatalf("SankeyRequestFromInput: %v", err)
+	}
+
+	repoTotalFor := func(label string, filters *model.FilterInput) float64 {
+		t.Helper()
+		compiled, err := compileSankeyCoverage(req, orgID, 60, true, filters)
+		if err != nil {
+			t.Fatalf("%s: compileSankeyCoverage: %v", label, err)
+		}
+		rows, err := client.Query(ctx, compiled.sql, compiled.bindings)
+		if err != nil {
+			t.Fatalf("%s: execute compiled SQL: %v", label, err)
+		}
+		defer func() { _ = rows.Close() }()
+		if !rows.Next() {
+			t.Fatalf("%s: compiled SQL returned no rows", label)
+		}
+		var total, assignedTeam, repoTotal, assignedRepo float64
+		var dir, fb, fan *float64
+		if err := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &dir, &fb, &fan); err != nil {
+			t.Fatalf("%s: scan: %v", label, err)
+		}
+		return repoTotal
+	}
+
+	const tol = 1e-9
+	if got := repoTotalFor("unfiltered", nil); math.Abs(got-float64(len(shapes))) > tol {
+		t.Errorf("unfiltered repo_total = %v, want %v (every seeded unit contributes exactly 1.0)", got, len(shapes))
+	}
+	got := repoTotalFor("filtered", &model.FilterInput{
+		Why: &model.WhyFilterInput{WorkCategory: []string{"feature_delivery"}},
+	})
+	if math.Abs(got-wantFiltered) > tol {
+		t.Errorf("filtered repo_total = %v, want %v -- one per IN-SCOPE unit (%d of %d seeded shapes). Reading the gap: ABOVE want usually means the predicate has gone back to testing key PRESENCE rather than positive weight, since every seeded shape carries a feature_delivery entry and only some carry weight -- the out-of-contract negative/NaN rows sit here too. Well above want, or a non-integer, means row multiplicity is back (an ARRAY JOIN over the subcategory column re-entering the query). BELOW want means a shape that should be in scope is being dropped, which is a selection regression and a different defect",
+			got, wantFiltered, int(wantFiltered), len(shapes))
 	}
 }
 

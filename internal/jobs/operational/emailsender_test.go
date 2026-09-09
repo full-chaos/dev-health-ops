@@ -447,6 +447,7 @@ func smtpEnv(t *testing.T, host string, port int, extra map[string]string) {
 	// test binary (those already self-revert via t.Cleanup).
 	for _, name := range []string{
 		"SMTP_USE_TLS", "SMTP_TLS_CA_FILE", "SMTP_TLS_SERVER_NAME", "SMTP_USERNAME", "SMTP_PASSWORD",
+		"EMAIL_FROM_ADDRESS", "EMAIL_API_KEY", "RESEND_API_KEY",
 	} {
 		t.Setenv(name, "")
 		_ = os.Unsetenv(name)
@@ -523,22 +524,28 @@ func TestSMTPSenderRefusesAnUnreadableCAFile(t *testing.T) {
 	}
 }
 
-// TestSMTPSenderRefusesSetButEmptyTLSConfig is CHAOS-5400 r1's P1 fix: a
-// SMTP_TLS_CA_FILE/SMTP_TLS_SERVER_NAME value that is SET but
-// whitespace-only trims to "" and was being silently treated as ABSENT
-// (falling back to the default, no error) -- inconsistent with this file's
-// own established "set but empty is refused" discipline for
-// EMAIL_PROVIDER/EMAIL_FROM_ADDRESS/SMTP_HOST above. A misconfigured
-// operator (a typo'd whitespace value) must see a startup refusal, not
-// silent fallback to unconfigured defaults.
+// TestSMTPSenderRefusesSetButEmptyTLSConfig is CHAOS-5400 r1's P1 fix (plus
+// its confirmation-pass re-find, same class): a SMTP_TLS_CA_FILE/
+// SMTP_TLS_SERVER_NAME value that is SET but whitespace-only trims to "" and
+// was being silently treated as ABSENT (falling back to the default, no
+// error) -- inconsistent with this file's own established "set but empty is
+// refused" discipline for EMAIL_PROVIDER/EMAIL_FROM_ADDRESS/SMTP_HOST above.
+// A misconfigured operator (a typo'd whitespace value) must see a startup
+// refusal, not silent fallback to unconfigured defaults -- INCLUDING when
+// SMTP_USE_TLS is false/unset: the first fix nested the CA-file check
+// inside `if useTLS`, so a whitespace-typo'd SMTP_TLS_CA_FILE alongside
+// SMTP_USE_TLS=false silently validated nothing (codex confirmation-pass
+// P1, re-found of the original class) -- these two cases pin that fixed.
 func TestSMTPSenderRefusesSetButEmptyTLSConfig(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		extra   map[string]string
 		wantErr string
 	}{
-		{"empty CA file", map[string]string{"SMTP_USE_TLS": "true", "SMTP_TLS_CA_FILE": "   "}, "SMTP_TLS_CA_FILE"},
-		{"empty server name", map[string]string{"SMTP_USE_TLS": "true", "SMTP_TLS_SERVER_NAME": "   "}, "SMTP_TLS_SERVER_NAME"},
+		{"empty CA file, TLS on", map[string]string{"SMTP_USE_TLS": "true", "SMTP_TLS_CA_FILE": "   "}, "SMTP_TLS_CA_FILE"},
+		{"empty server name, TLS on", map[string]string{"SMTP_USE_TLS": "true", "SMTP_TLS_SERVER_NAME": "   "}, "SMTP_TLS_SERVER_NAME"},
+		{"empty CA file, TLS off", map[string]string{"SMTP_USE_TLS": "false", "SMTP_TLS_CA_FILE": "   "}, "SMTP_TLS_CA_FILE"},
+		{"empty server name, TLS off", map[string]string{"SMTP_USE_TLS": "false", "SMTP_TLS_SERVER_NAME": "   "}, "SMTP_TLS_SERVER_NAME"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			smtpEnv(t, "127.0.0.1", 1025, test.extra)

@@ -198,6 +198,15 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 		// EMAIL_PROVIDER/EMAIL_FROM_ADDRESS/SMTP_HOST above. A misconfigured
 		// (whitespace-typo'd) operator value must refuse loudly, not fall
 		// back unconfigured.
+		//
+		// CHAOS-5400 r1 confirmation pass (codex P1, re-found of the same
+		// class): the set-but-empty check for SMTP_TLS_CA_FILE must run
+		// UNCONDITIONALLY too, same as SMTP_TLS_SERVER_NAME -- nesting it
+		// inside `if useTLS` meant SMTP_USE_TLS=false silently skipped
+		// validating a whitespace-typo'd SMTP_TLS_CA_FILE. The value is
+		// still only ever USED (loaded into a cert pool) when useTLS is
+		// true; only the VALIDATION is unconditional, matching every other
+		// set-but-empty guard in this constructor.
 		tlsServerName := host
 		if override, set := configuredValue("SMTP_TLS_SERVER_NAME"); set {
 			if override == "" {
@@ -207,15 +216,16 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 			}
 			tlsServerName = override
 		}
+		caFile, caFileSet := configuredValue("SMTP_TLS_CA_FILE")
+		if caFileSet && caFile == "" {
+			slog.Error("billing notification SMTP TLS CA file is configured but empty",
+				"variable", "SMTP_TLS_CA_FILE")
+			return nil, errors.New("SMTP_TLS_CA_FILE is set but empty")
+		}
 		var tlsConfig *tls.Config
 		if useTLS {
 			tlsConfig = &tls.Config{ServerName: tlsServerName, MinVersion: tls.VersionTLS12}
-			if caFile, set := configuredValue("SMTP_TLS_CA_FILE"); set {
-				if caFile == "" {
-					slog.Error("billing notification SMTP TLS CA file is configured but empty",
-						"variable", "SMTP_TLS_CA_FILE")
-					return nil, errors.New("SMTP_TLS_CA_FILE is set but empty")
-				}
+			if caFileSet {
 				pool, err := loadSMTPTLSCAPool(caFile)
 				if err != nil {
 					slog.Error("billing notification SMTP TLS CA file is invalid",

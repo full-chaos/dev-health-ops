@@ -162,6 +162,21 @@ shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
 cmd/dev-health-workerctl	13
+# cmd/go-api-routing (CHAOS-5486, 2026-09-10): this package's FIRST
+# -tags=integration file, verbs_integration_test.go. It exists because an
+# adversarial round showed that four mutations at REAL call sites in this
+# package -- the DSN-leaking flag default restored inside runEnable, the
+# schema-agreement preflight disabled, the enabled_unproven WARNING
+# suppressed, and an ORDER BY tiebreak dropped -- all survived the whole
+# suite at 53.2% command coverage, because nothing ever ran a verb end to
+# end. Two of the four need a real database to kill.
+# TWO Testcontainers-backed tests, each taking a fresh Postgres container
+# so the real FK and the mode CHECK are exercised against a clean
+# database. MEASURED on bigboy 2026-09-10, whole package, -count=1: 8.009s
+# and 7.926s. Rounded up to 10 for CI headroom, the same treatment the
+# other per-test-container packages in this file get. Re-time if it gains
+# tests.
+cmd/go-api-routing	10
 cmd/query-api	110
 cmd/query-api/internal/analytics	22
 # cmd/query-api/internal/featureflags (CHAOS-5523, 2026-09-09): TWO
@@ -180,7 +195,7 @@ cmd/query-api/internal/routeswitch	5
 cmd/query-api/internal/workgraph	60
 internal/cacheinvalidation	2
 internal/externalrecompute	30
-internal/goapiproof	30
+internal/goapiproof	120
 internal/joboperator	13
 internal/joboutbox	12
 internal/jobrescue	5
@@ -199,6 +214,41 @@ internal/migrationmatrix	5
 # fresh Postgres container so the registry's real FK and CHECK constraints are
 # exercised against a clean database. Rounded up to 30 for shard-balance
 # headroom, the same treatment internal/jobs/investment gets below.
+# CHAOS-5486 raises it 30 -> 90: the enable/disable/status verb ports add
+# thirteen more integration tests to the SAME package, each one also taking a
+# fresh Postgres container for the same reason (the real FK, the mode CHECK and
+# the rollout CHECK are the database-level half of what these verbs promise).
+# Measured on bigboy 2026-09-09, whole package, -count=1: 85.24s and 79.26s on
+# two runs -- container startup is the variance, so the higher of the two is
+# what this is rounded from. 90 keeps the same shard-balance headroom the 30
+# carried, and holds shards 2/3 within 1s (893s/894s).
+# CHAOS-5486's review rounds then raised it 90 -> 110 -> 120: r2 added two
+# deterministic concurrency tests (each holds a blocking transaction open until
+# the other verb is provably waiting), r3 added a duplicate-row re-point test.
+# Measured on bigboy 2026-09-09, -count=1: 101.96s, then 113.98s, then 111.12s.
+# The step numbers match the ones recorded beside the shard-balance assertion
+# in tests/tooling/test_go_integration_sharding.py, deliberately: two records
+# of one history that disagree are worse than one.
+#
+# RE-MEASURED 2026-09-10 on the rebase onto 8a0590b22, whole package,
+# -count=1, twice: 108.80s and 109.70s. LOWER than the 113.98s the 120
+# was rounded from, even though this rebase ADDS one integration test
+# (the canary/primary re-point killer) -- container startup is the
+# variance and this host was quieter. 120 is left where it is rather than
+# lowered: it is an upper bound with headroom, the measurement still sits
+# under it, and moving a weight down to chase a quiet run is how a
+# manifest starts under-booking CI. The shard-balance assertion in
+# tests/tooling/test_go_integration_sharding.py was re-run against the 54
+# packages main now discovers (CHAOS-5523 and CHAOS-4806 each added one)
+# and shards 2/3 land at 933s/934s -- still within 1s.
+#
+# THAT AGREEMENT WAS BROKEN ONCE, BY REBASING, AND NOTHING CAUGHT IT. Four
+# successive rebases resolved this file by taking the newer side wholesale --
+# right for the WEIGHT, wrong for the COMMENT -- so the number advanced while
+# its justification reverted, and the file spent several hours recording 120
+# under prose explaining 90. ci/check_go.sh sums the numbers and never reads
+# the prose, so no test could have failed. If you resolve a conflict here,
+# read the result rather than the diff.
 # internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
 # measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run),
 # rounded up one further second to 35 for shard-balance headroom -- combined

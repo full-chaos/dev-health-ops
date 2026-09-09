@@ -98,13 +98,30 @@ func TestSelectLocksTheRowsItIsAboutToMove(t *testing.T) {
 // The mode assertion must lock what it asserts on, not lean on a lock taken by
 // a different statement -- that lock stops covering it the moment the other
 // statement's scope narrows.
+//
+// Re-pointed at the INVARIANT rather than a literal (codex r3, CONC-01).
+// It used to grep this file for one hand-written SQL string; that
+// statement is gone, replaced by a reuse of the shared ordered, LOCKING
+// predicate -- which made the property STRONGER (the assertion cannot
+// introduce a lock order of its own, and it now compares rows by their
+// full identity rather than collapsing duplicates by operation). A
+// source-text oracle that fails on a refactor which strengthens the
+// property is measuring the text, not the claim.
 func TestModeAssertionLocksTheRowsItReads(t *testing.T) {
-	marker := "SELECT selected_operation, mode FROM public.go_api_routing_state WHERE schema_digest = $1 FOR UPDATE"
 	source, err := os.ReadFile("routing_repoint.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(source), marker) {
+	if !strings.Contains(string(source), "goapiproof: re-read modes") {
+		t.Fatal("the mode re-read is gone: this verb's contract is that it never touches reachability, and the assertion is what proves it every run")
+	}
+	if !strings.Contains(string(source), `readRoutingRows(ctx, tx, selectRepointCandidatesSQL, request.SchemaDigest)`) {
+		t.Fatal("the mode re-read must run selectRepointCandidatesSQL -- the same ordered, LOCKING predicate the writes were driven from")
+	}
+	if !strings.Contains(string(source), "observed[rowKey{row.operation, row.documentDigest}]") {
+		t.Fatal("the re-read must be keyed by the row's FULL identity: keyed by operation alone it collapses duplicate document digests and can compare the wrong row")
+	}
+	if !strings.Contains(selectRepointCandidatesSQL, "FOR UPDATE") {
 		t.Fatal("the mode re-read must carry FOR UPDATE")
 	}
 }
@@ -127,5 +144,45 @@ func TestSummarizeReportsZerosExplicitly(t *testing.T) {
 func TestRepointRefusesNilPool(t *testing.T) {
 	if _, err := Repoint(t.Context(), nil, validRequest()); err == nil {
 		t.Fatal("Repoint(nil pool) = nil error, want a refusal")
+	}
+}
+
+// Trap #120 sweep, CHAOS-5486: every site that KEYS or ORDERS by
+// operation must carry the row's full identity, because this table's
+// primary key is (schema_digest, document_digest, selected_operation) and
+// one operation therefore has as many rows at a digest as it has document
+// digests.
+//
+// `sort.Slice` is not stable, so an ordering that ties on operation alone
+// leaves the tied rows in whatever order the algorithm happens to leave
+// them: the report's row order stops being a function of the data, an
+// operator diffing two runs sees rows swap for no reason, and no test can
+// pin the output at all.
+//
+// The input below is REVERSED within each operation on purpose. That is
+// what makes this a killer rather than a coincidence: with an
+// operation-only comparator the two tied rows are already "in order" as
+// far as the comparator can tell, so nothing moves them and the reversal
+// survives into the result.
+func TestRepointOutcomesAreOrderedByTheRowsFullIdentity(t *testing.T) {
+	outcomes := []RepointOutcome{
+		{Operation: "flowMatrix", DocumentDigest: "dddd"},
+		{Operation: "flowMatrix", DocumentDigest: "bbbb"},
+		{Operation: "featureFlags", DocumentDigest: "cccc"},
+		{Operation: "featureFlags", DocumentDigest: "aaaa"},
+	}
+	sortOutcomes(outcomes)
+
+	want := [][2]string{
+		{"featureFlags", "aaaa"},
+		{"featureFlags", "cccc"},
+		{"flowMatrix", "bbbb"},
+		{"flowMatrix", "dddd"},
+	}
+	for index, expected := range want {
+		got := [2]string{outcomes[index].Operation, outcomes[index].DocumentDigest}
+		if got != expected {
+			t.Fatalf("outcome %d = %v, want %v -- the report's order must be a function of the ROW, not of the operation alone", index, got, expected)
+		}
 	}
 }

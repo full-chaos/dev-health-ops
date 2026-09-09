@@ -255,8 +255,8 @@ def test_0128_downgrade_removes_the_columns_and_the_constraint(
 
 def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
     """The Go integration suite builds these three tables from a hand-kept
-    DDL string (``registryDDL`` in
-    ``internal/goapiproof/receipt_integration_test.go``) so it can exercise
+    DDL string (``registryschema.DDL`` in
+    ``internal/testsupport/registryschema/schema.go``) so it can exercise
     the real FK and CHECK constraints. A mirror that falls behind the
     migrations would let those tests pass against a schema Postgres does not
     have -- the "relaxed schema" failure that DDL's own comment warns about.
@@ -270,7 +270,7 @@ def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
     enforcing it here keeps the guard and costs no cross-language trigger.
     """
     repo_root = Path(__file__).parents[1]
-    ddl = (repo_root / "internal/goapiproof/receipt_integration_test.go").read_text(
+    ddl = (repo_root / "internal/testsupport/registryschema/schema.go").read_text(
         encoding="utf-8"
     )
     column_pattern = re.compile(r'sa\.Column\(\s*"([a-z_]+)"')

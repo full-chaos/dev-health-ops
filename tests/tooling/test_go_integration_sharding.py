@@ -32,6 +32,13 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-reconciler",
     "cmd/dev-health-worker",
     "cmd/dev-health-workerctl",
+    # CHAOS-5486: the routing verbs' first //go:build integration file --
+    # `enable` driven end to end against a real Postgres and a real HTTP
+    # server, because an adversarial round proved that disabling the
+    # schema-agreement preflight and suppressing the enabled_unproven
+    # WARNING, both at their real call sites in this package, survived the
+    # entire suite while nothing ever ran a verb.
+    "cmd/go-api-routing",
     "cmd/query-api",
     "cmd/query-api/internal/analytics",
     # CHAOS-5523: the featureFlagEvents port's own Testcontainers-backed
@@ -457,10 +464,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # integration file (config_integration_test.go: a DSN assembled from
     # discrete components reaching a real PostgreSQL and a real ClickHouse
     # with reserved characters intact). 55 -> 56.
-    # CURRENT TOTAL: 56 -- the one number to bump when a new
+    # CHAOS-5486 added cmd/go-api-routing's first //go:build integration
+    # file (verbs_integration_test.go: the enable verb driven end to end
+    # through the real dispatch against a real Postgres and a real HTTP
+    # server -- the two guards an adversarial round mutated at their real
+    # call sites and watched survive the whole suite). 56 -> 57.
+    # CURRENT TOTAL: 57 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "56 package(s) discovered, 0 denylisted, 56 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 56 package(s)" in result.stdout
+    assert "57 package(s) discovered, 0 denylisted, 57 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 57 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -524,8 +536,10 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-4806 added internal/jobs/metrics/daily/benchmarking: 53 -> 54.
     # CHAOS-5484 added internal/migrationmatrix: 54 -> 55.
     # CHAOS-5560 added internal/platform/config: 55 -> 56.
-    # CURRENT TOTAL: 56 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 56
+    # CHAOS-5486 added cmd/go-api-routing: 56 -> 57 (see the
+    # "package(s) discovered" comment above).
+    # CURRENT TOTAL: 57 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 57
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -550,7 +564,25 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # algorithm's actual output, not a bug in this PR's diff. Loosening the
     # tolerance to reflect it rather than silently widening it further:
     # re-tighten if a future change brings the gap back under 1s.
-    assert abs(estimated[2] - estimated[3]) <= 2
+    # CHAOS-5486 raised internal/goapiproof 30 -> 90, then its codex r2 fixes
+    # raised it again 90 -> 110 (seventeen more container-per-test integration
+    # tests in the same package, two of them deterministic concurrency tests;
+    # whole-package measured run 101.96s on bigboy). Shards 2/3 land at
+    # 903s/904s -- within 1s -- so the tolerance is re-tightened here as the
+    # note above asked, rather than left loose because it happens to pass.
+    # Raised again 110 -> 120 by r3's CONC-01 fix (one more duplicate-row
+    # re-point test; measured 113.98s). Shards 2/3 land at 908s/909s.
+    # Re-measured 2026-09-10 on the rebase onto 8a0590b22: 108.80s and
+    # 109.70s across two -count=1 runs, so 120 keeps its headroom and is
+    # left unchanged (see the ledger entry in ci/go_integration_shards.tsv
+    # for why a weight is not lowered to chase a quiet host). With the two
+    # packages main added since -- cmd/query-api/internal/featureflags and
+    # internal/jobs/metrics/daily/benchmarking -- shards 2/3 land at
+    # 933s/934s, still a gap of 1.
+    # r1's P3 fix then added cmd/go-api-routing at weight 10 (measured
+    # 8.009s / 7.926s across two -count=1 runs): shards 2/3 land at
+    # 939s/938s, still a gap of 1, so the tolerance stays tightened.
+    assert abs(estimated[2] - estimated[3]) <= 1
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()
@@ -2055,9 +2087,11 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # - 1 for the providersync shard-1 package).
     # CHAOS-5560 added internal/platform/config: 54 -> 55 (56 discovered
     # - 1 for the providersync shard-1 package).
-    # CURRENT TOTAL: 55 (== discovered-total-minus-one -- keep this in
+    # CHAOS-5486 added cmd/go-api-routing: 55 -> 56 (57 discovered - 1 for
+    # the providersync shard-1 package).
+    # CURRENT TOTAL: 56 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 55
+    assert len(selected_packages) == len(set(selected_packages)) == 56
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

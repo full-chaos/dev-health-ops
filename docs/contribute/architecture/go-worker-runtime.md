@@ -910,6 +910,26 @@ The fix is structural, not a bigger number:
   affected-row total including fresh inserts, **not** a re-arm count;
   `discovery_rearmed` is the only narrow recovery count today (CHAOS-4357
   round 2) and the dispatch equivalent is a CHAOS-4359 follow-up.
+* The CHAOS-4097 runaway report (`syncreconciler.dispatch_wakeup_attempts_exceeded`,
+  ERROR) is emitted on **transition** into the over-threshold set and then on a
+  growing interval — not once per tick (CHAOS-5470). It is a pure read of a
+  durable column, so a permanently stuck row used to produce one ERROR per
+  second forever; `sync_run 1410329c` ran that way at `attempts=1344` for days,
+  and a signal that never stops is the same as no signal. The line now carries
+  `reason` (`first_seen` / `attempts_advanced` / `interval_elapsed` /
+  `untracked`) and `state` — only `retrying` is reachable today, since nothing
+  quarantines a dispatch wakeup yet. **The count did not get quieter**:
+  `syncreconciler.runaway_dispatch_pass` states `total` / `sampled` /
+  `truncated` / `emitted` / `suppressed` / `tracked` on every pass, zeros
+  included, so every withheld ERROR is accounted for. Both bars — the interval
+  and the attempts step — double on every re-emission; growing only the
+  interval leaves the storm intact through the attempts branch, which never
+  consults it. A row is forgotten only when a report actually **delivered** and
+  was not truncated (an aborted tick, a faulted statement or a truncated sample
+  are not evidence a row cleared), with a six-hour TTL as the backstop and a
+  hard tracking cap past which a row is emitted rather than swallowed. No write
+  changed: `runawayDispatchAttempts` still decides nothing, and backoff plus a
+  terminal quarantine state remain CHAOS-5470 phase 2.
 * Critically, **the process no longer dies for this**. `Loop.run` only tears
   the process down for an error class it cannot self-heal from; a stage
   degrading (wrapped in `syncreconciler.ErrDegradedStage`, produced only when

@@ -21,9 +21,17 @@ const (
 	// and StageTerminalDeliveryRepair (see terminal_outbox_close.go's package
 	// doc comment).
 	StageTerminalOutboxClose StageName = "terminal_outbox_close"
-	StageMaterializer        StageName = "materializer"
-	StageKernel              StageName = "kernel"
-	StageObserver            StageName = "observer"
+	// StageOrphanedUnitRepair is CHAOS-5453's provider-unit backstop: a
+	// 'dispatching' unit whose worker_job_outbox delivery is terminal and whose
+	// River job COMPLETED or was reaped. It sits beside
+	// StageTerminalDeliveryRepair rather than inside it because the two are
+	// separated by grant, not by taste -- this one's write is a domain-role
+	// INSERT into worker_job_outbox and its evidence is a queue-role read of
+	// river_job (see orphaned_unit_repair.go's two-pools section).
+	StageOrphanedUnitRepair StageName = "orphaned_unit_repair"
+	StageMaterializer       StageName = "materializer"
+	StageKernel             StageName = "kernel"
+	StageObserver           StageName = "observer"
 )
 
 // orderedStages is the exhaustive, ordered list of stages MutationPipeline.Step
@@ -39,6 +47,7 @@ var orderedStages = []StageName{
 	StageUnreclaimableSweep,
 	StageTerminalDeliveryRepair,
 	StageTerminalOutboxClose,
+	StageOrphanedUnitRepair,
 	StageMaterializer,
 	StageKernel,
 	StageObserver,
@@ -70,6 +79,12 @@ type StageBudgets map[StageName]time.Duration
 //     sync_dispatch_outbox, the same table and pool Materializer already
 //     budgets 600ms for; sized identically since it is the same shape of
 //     work (bounded per-kind candidate scan + UPDATE ... RETURNING).
+//   - OrphanedUnitRepair (CHAOS-5453): one bounded LEFT JOIN survey of
+//     worker_job_outbox against river_job on the queue pool, then one domain
+//     transaction whose per-candidate work is two indexed reads and one
+//     INSERT. Sized like TerminalOutboxClose rather than like
+//     TerminalDeliveryRepair: the survey is the same bounded candidate scan,
+//     and it carries no equivalent of CHAOS-4092's cold-cache join.
 //   - Materializer: coordinator-exclusive wakeup materialization.
 //   - Kernel: the heaviest stage -- claims on the domain pool, delivers on the
 //     queue pool, and runs the publish closure (a River insert plus a domain
@@ -88,6 +103,7 @@ func DefaultStageBudgets() StageBudgets {
 		StageUnreclaimableSweep:     600 * time.Millisecond,
 		StageTerminalDeliveryRepair: 750 * time.Millisecond,
 		StageTerminalOutboxClose:    600 * time.Millisecond,
+		StageOrphanedUnitRepair:     600 * time.Millisecond,
 		StageMaterializer:           600 * time.Millisecond,
 		StageKernel:                 1000 * time.Millisecond,
 		StageObserver:               400 * time.Millisecond,

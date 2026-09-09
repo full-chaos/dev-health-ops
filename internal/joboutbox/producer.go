@@ -17,6 +17,23 @@ import (
 
 var producerNamespace = uuid.MustParse("5c945f3d-1ab2-5cba-9b3d-85562f024edc")
 
+// OutboxRowID derives a worker_job_outbox primary key from an envelope's
+// idempotency key. The row id is a pure function of that key -- it always has
+// been, since the very first Publish -- and this is the ONE place that says so.
+//
+// It is exported because a repair that mints a REPLACEMENT delivery for a
+// terminal one (internal/syncreconciler.OrphanedUnitRepair, CHAOS-5453) has to
+// produce a row indistinguishable from one this producer would have written,
+// and cannot reach Publish itself: the INSERT runs on the domain pool while its
+// evidence comes from the queue pool, and the two roles are separated by grant
+// (internal/storage/river/migrate.go). Copying the namespace constant into that
+// package instead would put a second definition of this identity in the tree,
+// which is exactly the drift the sibling repairs' shared-predicate comments are
+// written about.
+func OutboxRowID(idempotencyKey string) uuid.UUID {
+	return uuid.NewSHA1(producerNamespace, []byte(idempotencyKey))
+}
+
 // Producer inserts immutable job envelopes into the generic outbox. Callers
 // supply the transaction so a domain transition and its child handoff cannot
 // commit independently.
@@ -133,7 +150,7 @@ func (producer *Producer) publish(
 	hash := sha256.Sum256(encoded)
 	payloadHash := "sha256:" + hex.EncodeToString(hash[:])
 	now := producer.now().UTC()
-	id := uuid.NewSHA1(producerNamespace, []byte(envelope.IdempotencyKey))
+	id := OutboxRowID(envelope.IdempotencyKey)
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.worker_job_outbox (
     id, dedupe_key, job_kind, contract_version, args, payload_hash,

@@ -108,6 +108,8 @@ func identifierToStageName(identifier string) string {
 		return string(StageTerminalDeliveryRepair)
 	case "StageTerminalOutboxClose":
 		return string(StageTerminalOutboxClose)
+	case "StageOrphanedUnitRepair":
+		return string(StageOrphanedUnitRepair)
 	case "StageMaterializer":
 		return string(StageMaterializer)
 	case "StageKernel":

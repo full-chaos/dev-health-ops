@@ -239,7 +239,7 @@ why cross-role attribution makes this non-optional).
 | Component | Coordinator | Domain | Queue-control |
 | --- | --- | --- | --- |
 | Route controller (`workerctl/main.go:496-506`) | drives the controller: reads and updates the route rows | Celery quiescer: reads `sync_run_units` | River quiescer: River schema only |
-| Reconciler mutation pipeline (`dependencies.go:217-223`) | Materializer; the finalize-backstop readiness read inside terminal delivery repair | lease repair, kernel observe, observer | terminal delivery repair, River client |
+| Reconciler mutation pipeline (`dependencies.go:217-223`) | Materializer; the finalize-backstop readiness read inside terminal delivery repair | lease repair, kernel observe, observer, the orphaned-unit repair's `worker_job_outbox` INSERT | terminal delivery repair, River client, the orphaned-unit repair's `river_job` liveness read |
 
 **The rule this table enforces: a component's first statement determines the
 pool it must be constructed on. Check this table before wiring any new
@@ -581,7 +581,7 @@ repair row under [Rescue and repair seams](#rescue-and-repair-seams).
 
 ## Rescue and repair seams
 
-Six independent mechanisms recover work, and each covers a different failure.
+Seven independent mechanisms recover work, and each covers a different failure.
 None covers another's ground.
 
 | Seam | Where | Recovers |
@@ -592,8 +592,9 @@ None covers another's ground.
 | Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease, no heartbeat and no attempts, whose pair the capability matrix declines (no outbox row) **or** whose River delivery is provably dead *and* whose outbox delivery budget is spent (CHAOS-4097) |
 | Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished (CHAOS-3997), **or** a `sync.provider_unit` row whose delivery died in transport while the unit never held a lease |
 | Ready-finalizer backstop | `internal/syncreconciler/ready_finalize_repair.go` | A `finalize_sync_run` outbox row stuck `dispatched` because River's delivery ended **completed** (or its row was reaped) while the run itself never reached a terminal status and every unit is finished (CHAOS-5456) |
+| Orphaned-unit repair | `internal/syncreconciler/orphaned_unit_repair.go` | A `sync.provider_unit` unit stuck `dispatching` whose `worker_job_outbox` row is terminal (`delivered`) and whose River job **completed** or was reaped — recovered by minting a NEW outbox row under a reclaim key, never by re-arming the terminal one (CHAOS-5453) |
 
-Three of those five can select the same provider unit, so their predicates are
+Four of those seven can select the same provider unit, so their predicates are
 disjoint **by construction** rather than by ordering — they run in different
 reconcile loops, and a timing argument is exactly what stops being true during
 an incident.
@@ -628,8 +629,8 @@ republishes are silent no-ops, and before this shape existed the sweep's
 terminalization was the only outcome available — turning a transport blip into
 lost coverage. A restore blip must cost a retry, not an hour.
 
-The general rule when adding a seventh seam: state its population as a predicate
-that is provably disjoint from the other six, not as a claim about which loop
+The general rule when adding an eighth seam: state its population as a predicate
+that is provably disjoint from the other seven, not as a claim about which loop
 runs first.
 
 The sixth seam, the ready-finalizer backstop, is disjoint by River state in the
@@ -660,10 +661,115 @@ the zeros**, which is what makes "this backstop ran and found nothing"
 distinguishable from "this backstop was never reached" — the exact
 indistinguishability that made CHAOS-5456 expensive to find.
 
-Two runs stay deliberately outside this seam. `aedd0504`'s outbox row carries
+One run stays deliberately outside this seam. `aedd0504`'s outbox row carries
 dispatched generation 4 against a current generation of 2, so the route fence
-excludes it and its audited recovery belongs to CHAOS-5462. `1410329c` is a
-provider-unit strand with an absent River row, which is CHAOS-5453's ground.
+excludes it and its audited recovery belongs to CHAOS-5462. `1410329c` — the
+provider-unit strand with a reaped River row — is the seventh seam's ground,
+below.
+
+### The seventh seam: a provider unit behind a SETTLED delivery
+
+The seventh seam, orphaned-unit repair, splits from the three provider-unit
+seams above on River state alone, and it needs no attempt-count tie-break to do
+it. It
+admits exactly two River verdicts, and neither is reachable by any of them:
+
+| River verdict | Why no other seam sees it |
+| --- | --- |
+| the `river_job` row is **absent** | every other provider-unit path INNER JOINs `river_job`, so a delivery whose row the cleaner removed produces no candidate at all |
+| the job is **`completed`** | no other provider-unit path admits `completed`: the strand repair and the sweep take `discarded`/`cancelled`, and the terminal-delivery repair takes `discarded` |
+
+`discarded` and `cancelled` are refused outright here and counted as
+`skipped_other_repair`. They belong to the strand repair and the sweep, which
+are already separated between themselves by `attempt_count`; a third claimant
+layered on top of that split is how the overlap documented above arose in the
+first place. Where such a row is unreachable because `sync_run_units.attempts >
+0`, that is CHAOS-5453 remedy 2 — widening the sweep's `attempts = 0` guard — a
+different change to a different query.
+
+**Why this one mints a NEW outbox row instead of re-arming the terminal one.**
+Every other repair here returns a terminal row to `pending`. This one must not,
+for two independent reasons:
+
+1. *Correctness.* The relay inserts provider units with
+   `UniqueOpts{ByArgs: true, ByState: UniqueOptsByStateDefault()}`
+   (`inserter.go`'s `uniqueStatesForKind`), and that state set **includes
+   `completed`**. A row re-armed in place keeps its idempotency key, so it keeps
+   its River unique key; while the completed job's row is still present River
+   dedupes the replacement into it and the relay reports a delivery that never
+   happened. The sibling repairs are safe from this only because they accept
+   `discarded`/`cancelled` — the two states that set deliberately excludes.
+2. *Truthfulness.* The unit asked for a **continuation**. Delivery 1 really did
+   happen and really did complete; re-arming its row would destroy the only
+   durable record of that and present a fresh delivery as a retry of a finished
+   one.
+
+`worker_job_outbox.dedupe_key` is UNIQUE, so those two decisions are the same
+decision: a second live row for a unit requires a second key. Provenance is
+carried in the key itself — `sync.provider_unit:<unit id>/reclaim/<n>` — and the
+terminal row is left byte for byte as it was. `/` is chosen because
+`jobcontract`'s `safeIDPattern` admits it, so a reclaim key is a legal envelope
+idempotency key and the replacement round-trips through `jobcontract.Decode` and
+the relay's `prepareRow` exactly as an original does.
+
+**The bound.** `attempt_count` cannot bound this seam the way it bounds the
+other two: a new row starts at 0, so the clock that separates them resets by
+construction. The reclaim **generation** is the durable counter instead, it
+lives in the key, and it survives every restart and every replica. Three
+replacements is the cap. Past it the repair stops and counts
+`skipped_reclaim_budget`, which turns a deterministically broken transport into
+a bounded, legible stall rather than a self-renewing one.
+
+**Two pools, decided by grant.** The queue role holds `SELECT, UPDATE, DELETE`
+on `worker_job_outbox` and no `INSERT`; the domain role holds `SELECT, INSERT`
+and no access to the River schema at all. So the replacement row can only be
+inserted through the domain pool and the `river_job` liveness read can only run
+through the queue pool — the same two-jurisdiction shape the multi-pool table
+above prescribes, and the reason widening either role is not an option. The
+residual window between the two is closed the way the strand repair closes its
+own: the domain transaction re-proves every domain fact under a row lock on the
+unit, against the surveyed `(outbox id, dedupe key, river_job_id)` **triple**
+rather than the id alone. River's verdict itself needs no re-proof — a completed
+or deleted job never becomes live again.
+
+**The idle gate is not `updated_at`.** It is
+`COALESCE(last_heartbeat_at, created_at)`. The dispatcher's stale reclaim
+re-stamps `updated_at` on every redispatch pass, and for this population every
+one of those passes is a no-op that put no delivery in front of the unit — run
+`1410329c` reached 1,344 of them. An `updated_at` gate would be held open
+forever by the very loop this seam exists to break. CHAOS-5453 remedy 3 names a
+durable `last_progress_at` column as the real fix; this is the interim it also
+names, and it needs no migration.
+
+**A residual this seam creates.** Both sibling provider-unit queries bind the
+key with equality (`outbox.dedupe_key = 'sync.provider_unit:' || unit.id::text`),
+so neither can see a row under a reclaim key. A replacement delivery that River
+later *discards* or *cancels* is refused here (`skipped_other_repair`) and
+invisible there, so that generation stalls until someone looks. It cannot cost
+data — the sweep, the only destroy path, reads the base key alone and requires a
+cancelled or budget-spent discarded job there, which this seam's population never
+has — and the refusal is counted on every pass line rather than filtered away.
+The fix is to widen both sibling bindings from `=` to a key prefix, which belongs
+with CHAOS-5453 remedy 2 (widening the sweep's `attempts = 0` guard): the same
+family of query, changed once, with its own guard matrix.
+
+**The delivery must be provably THIS row's own.** A `river_job_id` is refused
+when non-positive (`ck_worker_job_outbox_delivery_state` requires it NOT NULL
+when delivered, and nothing requires it positive — a `0` would otherwise read as
+"the row was reaped"), and a present job is refused unless its relay metadata's
+`worker_outbox_id` names this exact outbox row, mirroring the sibling seam. A
+row whose own envelope disagrees with itself — `payload.unit_id` is not
+`domain.id` — is refused too: `jobcontract` does not enforce that equality, but
+`internal/jobs/providerunit`'s handler does and answers `DomainMismatch`, so a
+replacement minted from such a row would be refused on arrival. All three are
+counted (`skipped_job_identity`, `skipped_envelope_identity`), never filtered.
+
+Every pass emits `syncreconciler.orphaned_unit_pass` with all thirteen counters
+spelled out **including the zeros**, and every failure carries the driver
+SQLSTATE — this seam's INSERT is the first domain-role write to
+`worker_job_outbox` anywhere in the reconciler, so a missing grant is a live
+deployment risk rather than a theoretical one, and a collapsed error would read
+identically to a database outage.
 
 The strand repair performs the pair-matched CAS described above, reads
 `worker_job_runs` on the domain pool rather than inferring the claim from a

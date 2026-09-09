@@ -46,6 +46,17 @@ GENERATOR_INPUTS = (
     "go.sum",
 )
 
+# The guard's OWN machinery, as opposed to the generator's inputs above.
+# CHAOS-5489 round r3: these were missing from go.yml, so a PR that changed
+# only the guard script was classified non-Go and skipped go-quality -- the
+# guard did not run on the one change most able to break or weaken it. That
+# is the same vacuity this file already checks for the generator's inputs;
+# it simply was not checked for the checker.
+GUARD_INPUTS = (
+    "ci/check_gqlgen_drift.sh",
+    "ci/gqlgen_generate.sh",
+)
+
 
 def _go_yml_path_patterns() -> list[str]:
     """go.yml's own `on.pull_request.paths`, which ci/go_relevance.py reads."""
@@ -192,6 +203,25 @@ def test_every_generator_input_triggers_the_workflow_that_runs_the_guard() -> No
         "these generator inputs do not match go.yml's path filters, so a PR "
         f"touching only them skips go-quality and the drift guard with it: {unreachable}. "
         "Add each to go.yml's on.pull_request.paths with a comment saying why."
+    )
+
+
+def test_the_guards_own_files_trigger_the_workflow_that_runs_it() -> None:
+    """A guard that its own edits cannot trigger reviews nothing that matters.
+
+    The generator-input check above asks whether a change to what gqlgen READS
+    reaches the guard. This asks the other half: whether a change to the guard
+    ITSELF does. Round r3 found it did not -- `ci/check_gqlgen_drift.sh`
+    matched no path filter, so weakening or breaking the guard was precisely
+    the change that would not run it.
+    """
+    patterns = _go_yml_path_patterns()
+    unreachable = [p for p in GUARD_INPUTS if not _matches_any(p, patterns)]
+    assert not unreachable, (
+        "these files ARE the drift guard, but do not match go.yml's path filters, "
+        "so a PR touching only them is classified non-Go and never runs the guard "
+        f"against its own change: {unreachable}. Add each to go.yml's "
+        "on.pull_request.paths with a comment saying why."
     )
 
 

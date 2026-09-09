@@ -80,6 +80,13 @@ on:
       # this line a gqlgen.yml-only PR is classified non-Go and that check
       # passes vacuously, which is the shape CHAOS-5406 named.
       - 'cmd/query-api/gqlgen.yml'
+      # CHAOS-5489: the drift guard and its wrapper. Without these two
+      # lines a PR that changes ONLY the guard is classified non-Go, so
+      # go-quality is skipped and the guard does not run on the very
+      # change most able to break or weaken it -- the same vacuity this
+      # block already fixes for gqlgen.yml above.
+      - 'ci/check_gqlgen_drift.sh'
+      - 'ci/gqlgen_generate.sh'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
@@ -193,6 +200,13 @@ on:
       # this line a gqlgen.yml-only PR is classified non-Go and that check
       # passes vacuously, which is the shape CHAOS-5406 named.
       - 'cmd/query-api/gqlgen.yml'
+      # CHAOS-5489: the drift guard and its wrapper. Without these two
+      # lines a PR that changes ONLY the guard is classified non-Go, so
+      # go-quality is skipped and the guard does not run on the very
+      # change most able to break or weaken it -- the same vacuity this
+      # block already fixes for gqlgen.yml above.
+      - 'ci/check_gqlgen_drift.sh'
+      - 'ci/gqlgen_generate.sh'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'

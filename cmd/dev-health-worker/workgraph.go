@@ -70,7 +70,7 @@ func buildWorkgraphWorker(cfg config.Config, database workerDatabase, registry *
 	// cutover would appear complete while production kept running the old
 	// plane -- exactly the state this ticket exists to end, and one nothing
 	// downstream could detect. Same reasoning as workgraphBuildPreSteps'.
-	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, logger)
+	nativeInvestment, nativeErr := buildNativeInvestmentExecutor(cfg, specs, observer, logger)
 	if nativeErr != nil {
 		return workerFamily{}, nativeErr
 	}
@@ -400,7 +400,7 @@ func addWorkgraphWorker(workers *river.Workers, registry *jobruntime.Registry, s
 // not refuse a family that would not have touched it. addWorkgraphWorker turns
 // a nil into a refusal at the one place it matters -- the materialize case.
 func buildNativeInvestmentExecutor(
-	cfg config.Config, specs []jobruntime.HandlerSpec, logger *slog.Logger,
+	cfg config.Config, specs []jobruntime.HandlerSpec, observer jobruntime.Observer, logger *slog.Logger,
 ) (workgraph.NativeExecutor, error) {
 	materializeSelected := false
 	for _, spec := range specs {
@@ -430,6 +430,9 @@ func buildNativeInvestmentExecutor(
 	executor, executorErr := investment.NewNativeExecutor(reader, writer, logger)
 	if executorErr != nil {
 		return nil, errWorkerDependencyUnavailable
+	}
+	if collector := metricsCollectorFromObserver(observer); collector != nil {
+		executor.SetObserver(investment.CollectorRepoAttributionObserver{Collector: collector})
 	}
 	return executor, nil
 }

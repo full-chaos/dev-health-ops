@@ -331,11 +331,13 @@ func forecastToModel(
 	return &model.CapacityForecast{
 		// uuid4 per call on both sides, and never compared.
 		ForecastID: newForecastID(),
-		// str(datetime), NOT isoformat(): Python renders this field with str(),
-		// which uses a SPACE separator, while the throughputForecast resolver
-		// next door uses isoformat() and gets a "T". The two really do differ,
-		// and a client parsing both sees both shapes.
-		ComputedAt:          strDatetimeUTC(computedAt),
+		// CHAOS-5450 / R55: RFC 3339 with an explicit offset, the same
+		// helper the list resolver and throughputForecast now use, so all
+		// three render one instant identically. Python is frozen and still
+		// renders this field with str() (a SPACE separator) here and
+		// isoformat() next door; that difference is the recorded CHAOS-5450
+		// baseline defect, not something Go copies.
+		ComputedAt:          graphqldate.RFC3339UTC(computedAt),
 		TeamID:              teamID,
 		WorkScopeID:         workScopeID,
 		BacklogSize:         backlog,
@@ -373,25 +375,6 @@ func stringOrOrgWide(value *string) string {
 		return "org-wide"
 	}
 	return *value
-}
-
-// strDatetimeUTC reproduces Python's str(datetime) for a UTC-aware datetime.
-//
-// Not isoformat(): str() separates the date and time with a SPACE where
-// isoformat() uses "T". Both appear in this cutover -- capacity uses str(),
-// throughputForecast uses isoformat() -- and collapsing them to one shape would
-// silently change one of the two wire formats a client already parses.
-//
-// The fraction is six digits when the microsecond is non-zero and absent when
-// it is zero, which is Python's rule and not one any Go layout expresses
-// (".999999" trims trailing zeros and would render 123000 as ".123").
-func strDatetimeUTC(moment time.Time) string {
-	utc := moment.UTC()
-	rendered := utc.Format("2006-01-02 15:04:05")
-	if microseconds := utc.Nanosecond() / 1000; microseconds != 0 {
-		rendered += fmt.Sprintf(".%06d", microseconds)
-	}
-	return rendered + "+00:00"
 }
 
 // ResolveForecasts ports resolve_capacity_forecasts.

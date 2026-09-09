@@ -500,16 +500,27 @@ func TestResolveWorkItemOverlayReadsBothColumnsFromOneRow(t *testing.T) {
 	}
 }
 
-func TestIsoFormatUTCMatchesPythonIsoformat(t *testing.T) {
+// TestToModelRendersComputedAtAsRFC3339 replaces
+// TestIsoFormatUTCMatchesPythonIsoformat, which pinned this package's own
+// local isoFormatUTC helper. CHAOS-5450 / R55 made RFC 3339 with an
+// explicit "+00:00" the canonical form for every String-typed timestamp
+// field, and the three resolvers now share graphqldate.RFC3339UTC -- so
+// this asserts the resolver's OUTPUT against literals, and the identical
+// literals appear in the capacity resolvers' own tests. That is what makes
+// "all three agree byte for byte on the same instant" checkable without
+// wiring three packages together in one test.
+//
+// This resolver's rendering does NOT change: it already emitted this form.
+// The point of keeping the pin is that the shared helper is now the only
+// thing standing between all three fields and a silent divergence.
+func TestToModelRendersComputedAtAsRFC3339(t *testing.T) {
 	cases := []struct {
 		name   string
 		moment time.Time
 		want   string
 	}{
 		{
-			// isoformat(), not str(): a "T" separator. The capacity resolvers
-			// render the same kind of field with a SPACE.
-			name:   "T separator, six fractional digits",
+			name:   "T separator and a six-digit fraction",
 			moment: time.Date(2026, 9, 7, 1, 23, 45, 678901000, time.UTC),
 			want:   "2026-09-07T01:23:45.678901+00:00",
 		},
@@ -523,11 +534,17 @@ func TestIsoFormatUTCMatchesPythonIsoformat(t *testing.T) {
 			moment: time.Date(2026, 9, 7, 1, 23, 45, 0, time.UTC),
 			want:   "2026-09-07T01:23:45+00:00",
 		},
+		{
+			name:   "a non-UTC input is normalised",
+			moment: time.Date(2026, 9, 7, 3, 23, 45, 0, time.FixedZone("CEST", 2*3600)),
+			want:   "2026-09-07T01:23:45+00:00",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := isoFormatUTC(testCase.moment); got != testCase.want {
-				t.Errorf("got %q, want %q", got, testCase.want)
+			got := toModel("forecast-1", testCase.moment, forecastResult{}, nil, nil, nil)
+			if got.ComputedAt != testCase.want {
+				t.Errorf("computedAt: got %q, want %q", got.ComputedAt, testCase.want)
 			}
 		})
 	}

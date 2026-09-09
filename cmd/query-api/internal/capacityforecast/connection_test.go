@@ -74,8 +74,12 @@ func TestResolveForecastsMapsAPersistedRow(t *testing.T) {
 	if node.ForecastID != "forecast-1" {
 		t.Errorf("forecastId: got %q", node.ForecastID)
 	}
-	if node.ComputedAt != "2026-09-01 12:30:00+00:00" {
-		t.Errorf("computedAt: got %q, want Python's str(datetime) rendering", node.ComputedAt)
+	// CHAOS-5450 / R55: the LIST resolver's own pin. This is the path the
+	// parity run caught emitting a naive, space-separated timestamp on
+	// Python; Go now renders RFC 3339 with an explicit offset here, byte
+	// for byte the same as the singular resolver and throughputForecast.
+	if node.ComputedAt != "2026-09-01T12:30:00+00:00" {
+		t.Errorf("computedAt: got %q, want RFC 3339 with an explicit +00:00 offset", node.ComputedAt)
 	}
 	if node.BacklogSize != 200 {
 		t.Errorf("backlogSize: got %d, want 200", node.BacklogSize)

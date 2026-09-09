@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
 )
 
 // noHistoryForecastID is the literal Python puts in forecast_id when a scope has
@@ -233,7 +234,7 @@ func toModel(
 
 	forecast := &model.ThroughputForecast{
 		ForecastID:          forecastID,
-		ComputedAt:          isoFormatUTC(computedAt),
+		ComputedAt:          graphqldate.RFC3339UTC(computedAt),
 		TeamID:              result.teamID,
 		WorkScopeID:         result.workScopeID,
 		BacklogSize:         result.backlogSize,
@@ -277,25 +278,4 @@ func overlayToModel(overlay riskOverlay) *model.ThroughputRiskOverlay {
 		Threshold: overlay.threshold,
 		Active:    overlay.active,
 	}
-}
-
-// isoFormatUTC reproduces datetime.isoformat() for a UTC-aware datetime, which
-// is what Python puts in computedAt.
-//
-// Written out rather than handed to a Go layout string because Python's rule is
-// not one Go layout expresses: the fractional part is SIX digits when the
-// microsecond is non-zero and ENTIRELY ABSENT when it is zero -- never the
-// trailing-zero trimming Go's ".999999" does, which would render a microsecond
-// of 123000 as ".123". The offset is spelled "+00:00", not "Z".
-//
-// computedAt is volatile per call on both sides and can never be compared
-// against Python, so this is about the SHAPE a client parses, not about parity.
-func isoFormatUTC(moment time.Time) string {
-	utc := moment.UTC()
-	base := utc.Format("2006-01-02T15:04:05")
-	microseconds := utc.Nanosecond() / 1000
-	if microseconds != 0 {
-		base += fmt.Sprintf(".%06d", microseconds)
-	}
-	return base + "+00:00"
 }

@@ -88,10 +88,25 @@ New table: `capacity_forecasts`
 
 ### GraphQL Query
 
+> **`computedAt` is typed `String!` in the shipped schema, not `DateTime`**
+> (`contracts/graphql/v1/schema.graphql`, `CapacityForecast` and
+> `ThroughputForecast`). The sketch below states the INTENT; the shipped type
+> is what clients see. Under CHAOS-5450 / R55 that String carries **RFC 3339,
+> `T`-separated, with an explicit `+00:00` offset** — the same form
+> `throughputForecast` already emitted — rendered by the one shared helper
+> `graphqldate.RFC3339UTC`, on both the singular and the list resolver.
+> Before that ruling the three sibling fields used three different shapes and
+> the list path emitted no offset at all, which nothing caught because a
+> `String!` enforces no format. Moving the schema type to `DateTime` so the
+> scalar carries the contract is the real fix and is filed as follow-up work;
+> until then this note is the contract. The Python resolvers are frozen and
+> still emit their older `str(datetime)` shapes — recorded as the CHAOS-5450
+> baseline defect, not copied.
+
 ```graphql
 type CapacityForecast {
   forecastId: ID!
-  computedAt: DateTime!
+  computedAt: DateTime!   # shipped as String! carrying RFC 3339 — see the note above
   teamId: String
   workScopeId: String
   backlogSize: Int!

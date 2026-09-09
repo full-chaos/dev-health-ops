@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 )
 
 // A fake row scanner and client, same shape as hotspots_test.go's, per this
@@ -367,41 +368,53 @@ func TestRandomSeedIsFreshPerCall(t *testing.T) {
 	}
 }
 
-func TestStrDatetimeUTCMatchesPythonStr(t *testing.T) {
+// TestForecastToModelRendersComputedAtAsRFC3339 replaces the old
+// TestStrDatetimeUTCMatchesPythonStr, which pinned Python's str(datetime)
+// rendering -- a SPACE separator and no guarantee of an offset.
+//
+// CHAOS-5450 / R55 made RFC 3339 with an explicit "+00:00" the canonical
+// wire form for this String-typed field, shared with the list resolver and
+// with throughputForecast through graphqldate.RFC3339UTC. This asserts the
+// resolver's OUTPUT against a literal, never against the helper it calls:
+// comparing a function to itself proves nothing, and a literal is what
+// catches the helper being changed.
+func TestForecastToModelRendersComputedAtAsRFC3339(t *testing.T) {
 	cases := []struct {
 		name   string
 		moment time.Time
 		want   string
 	}{
 		{
-			// str(), not isoformat(): a SPACE separator. The throughputForecast
-			// resolver next door renders "T" for the same kind of field.
-			name:   "space separator, six fractional digits",
+			name:   "T separator and a six-digit fraction",
 			moment: time.Date(2026, 9, 7, 1, 23, 45, 678901000, time.UTC),
-			want:   "2026-09-07 01:23:45.678901+00:00",
+			want:   "2026-09-07T01:23:45.678901+00:00",
 		},
 		{
-			// Trailing zeros are KEPT: Python prints six digits or none.
-			// Go's ".999999" layout would render this as ".123".
+			// Python prints six digits or none -- Go's ".999999" layout would
+			// render this as ".123", which is a different instant to a parser
+			// that reads the fraction positionally.
 			name:   "trailing zeros survive",
 			moment: time.Date(2026, 9, 7, 1, 23, 45, 123000000, time.UTC),
-			want:   "2026-09-07 01:23:45.123000+00:00",
+			want:   "2026-09-07T01:23:45.123000+00:00",
 		},
 		{
 			name:   "a zero microsecond drops the fraction entirely",
 			moment: time.Date(2026, 9, 7, 1, 23, 45, 0, time.UTC),
-			want:   "2026-09-07 01:23:45+00:00",
+			want:   "2026-09-07T01:23:45+00:00",
 		},
 		{
-			name:   "a non-UTC input is normalised, not relabelled",
+			// Converted, not relabelled: the "+00:00" must be true of the
+			// value it is attached to.
+			name:   "a non-UTC input is normalised",
 			moment: time.Date(2026, 9, 7, 3, 23, 45, 0, time.FixedZone("CEST", 2*3600)),
-			want:   "2026-09-07 01:23:45+00:00",
+			want:   "2026-09-07T01:23:45+00:00",
 		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := strDatetimeUTC(testCase.moment); got != testCase.want {
-				t.Errorf("got %q, want %q", got, testCase.want)
+			got := forecastToModel(testCase.moment, nil, nil, 0, 0, nil, numerical.ForecastResult{})
+			if got.ComputedAt != testCase.want {
+				t.Errorf("computedAt: got %q, want %q", got.ComputedAt, testCase.want)
 			}
 		})
 	}

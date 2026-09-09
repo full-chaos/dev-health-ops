@@ -168,10 +168,14 @@ func ResolveLinkedIssues(ctx context.Context, client QueryClient, orgID, repoID 
 // PRCoreRow is FetchPRCoreRow's result shape: the PR core row's OWN
 // columns from `git_pull_requests`, plus `repo_name` pulled in via the
 // same LEFT JOIN against `repos` that _fetch_pr_row (pr.py:44-71) uses --
-// column for column, same nullability as the schema
-// (000_raw_tables.sql): every field but CreatedAt is nullable and is
-// passed through as-is, exactly as Python's dict-of-row-values does with
-// no coalescing.
+// column for column, same nullability as the schema (000_raw_tables.sql):
+// every field is nullable and passed through as-is, exactly as Python's
+// dict-of-row-values does with no coalescing, EXCEPT CreatedAt (DateTime64
+// NOT NULL) and the three trailing counts -- ChangesRequestedCount/
+// ReviewsCount/CommentsCount are UInt32 DEFAULT 0 NOT NULL columns, plain
+// (non-pointer) int fields here, not nullable either (CHAOS-4991 codex
+// round 1, F-2: this comment previously said "every field but CreatedAt",
+// which undercounted the non-nullable set by three).
 type PRCoreRow struct {
 	RepoName              *string
 	Title                 *string
@@ -353,17 +357,20 @@ func uint32PtrToIntPtr(v *uint32) *int {
 // ResolveReviews is the Go port of _fetch_reviews (pr.py:74-90): every
 // review row for one PR, ordered exactly as Python orders them
 // (submitted_at ASC, review_id ASC) and capped at the same LIMIT 500.
-// git_pull_request_reviews is a ReplacingMergeTree(last_synced) with no
-// FINAL here -- deliberately: same "would rather over-return a
-// not-yet-merged duplicate than pay for a forced merge on every read"
-// posture is NOT what's happening here, this is a bit-exact port of
-// pr.py's own query text, which itself has no FINAL. If a future need for
-// dedup-under-load arises here, that is a conscious follow-up, not
-// silently added by this port.
+// git_pull_request_reviews is a ReplacingMergeTree(last_synced); this
+// query reads it WITH FINAL, matching pr.py's own query text exactly
+// (`FROM git_pull_request_reviews FINAL`) -- an EARLIER version of this
+// doc comment and query incorrectly claimed Python's query has no FINAL
+// and omitted it here too (CHAOS-4991 codex round 1, F-1, CHAOS-4516
+// class: an RMT read without FINAL can return more than one physical
+// version of the same logical row -- confirmed here via a red-first
+// duplicate-version integration test, see
+// TestResolveReviews_FinalCollapsesDuplicateVersions in
+// pr_integration_test.go). Fixed to match Python bit-for-bit.
 func ResolveReviews(ctx context.Context, client QueryClient, orgID, repoID string, number int) ([]model.PullRequestReview, error) {
 	const query = `
         SELECT review_id, reviewer, state, submitted_at
-        FROM git_pull_request_reviews
+        FROM git_pull_request_reviews FINAL
         WHERE org_id = {org_id:String}
           AND toString(repo_id) = {repo_id:String}
           AND number = {number:UInt32}

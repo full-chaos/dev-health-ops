@@ -244,8 +244,13 @@ func (r *queryResolver) WorkGraphEdges(ctx context.Context, orgID string, filter
 // Python's _fetch_pr_row/_fetch_reviews/_fetch_commits -- are now wired
 // in below, so a PR that DOES exist gets the FULL PullRequestDetail. An
 // unknown PR/org/repo still returns nil, matching resolve_pr's own
-// nil-for-unknown behavior exactly (workgraph.PRCoreRowExists remains the
-// cheap existence check used first). `pr` is now also registered in
+// nil-for-unknown behavior exactly -- workgraph.FetchPRCoreRow's own
+// ok=false return IS that check now (CHAOS-4991 codex round 1, F-2: this
+// comment previously said workgraph.PRCoreRowExists "remains the cheap
+// existence check used first," but this resolver no longer calls
+// PRCoreRowExists at all -- FetchPRCoreRow subsumes that role, since it
+// has to read the row's existence either way to return its columns).
+// `pr` is now also registered in
 // query_route.go's digestByOperation (CHAOS-4991) -- see
 // registeredPrDetailDocument's own doc comment there for what
 // registration does and does not mean (registration only, NOT

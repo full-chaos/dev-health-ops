@@ -445,6 +445,108 @@ func TestResolveReviews_RealClickHouse(t *testing.T) {
 	}
 }
 
+// TestResolveReviews_FinalCollapsesDuplicateVersions is CHAOS-4991's
+// red-first proof for codex round chaos-4991-r1's F-1 (CHAOS-4516 class):
+// git_pull_request_reviews is a ReplacingMergeTree(last_synced) keyed on
+// (org_id, repo_id, number, review_id) (migration 027) -- an UNMERGED
+// duplicate physical row for the same logical review (two INSERTs with
+// the same review_id, different last_synced) is visible as TWO rows to a
+// query that omits FINAL, and collapses to exactly ONE (the highest
+// last_synced) with it. This seeds exactly that shape and asserts
+// ResolveReviews returns exactly one row, carrying the LATER version's
+// state -- proving the `FROM git_pull_request_reviews FINAL` in
+// ResolveReviews's query text is load-bearing, not cosmetic. (Confirmed
+// RED against the pre-fix, no-FINAL query by hand before landing the fix:
+// this test returned 2 rows -- both physical versions -- with FINAL
+// removed, and 1 with it restored.)
+func TestResolveReviews_FinalCollapsesDuplicateVersions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = ch.Close(context.Background()) }()
+
+	chschema.Apply(ctx, t, ch)
+
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open ClickHouse admin connection: %v", err)
+	}
+	defer func() { _ = admin.Close() }()
+
+	const (
+		orgID    = "org-4991-dedup"
+		repoID   = "00000000-4991-0000-0000-000000000004"
+		prNumber = 33
+		reviewID = "rev-dup-1"
+	)
+	older := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
+
+	// TWO physical versions of the SAME logical review (identical
+	// org_id/repo_id/number/review_id -- the full ReplacingMergeTree key),
+	// differing only in state and last_synced (the version column) --
+	// inserted as TWO SEPARATE batches/parts, deliberately, not one batch
+	// with two rows: ClickHouse's `optimize_on_insert` setting (default 1
+	// on this stack, confirmed live) collapses ReplacingMergeTree
+	// duplicates WITHIN a single insert block at insert time, REGARDLESS
+	// of FINAL -- a single two-row batch would silently produce only one
+	// physical row and this test would pass vacuously even against the
+	// pre-fix, no-FINAL query (caught exactly this way while red-proving
+	// this test: a one-batch version stayed green with FINAL removed).
+	// Two separate Send() calls create two separate parts, which only a
+	// real merge (or FINAL) -- not insert-time optimization -- collapses.
+	olderBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO git_pull_request_reviews (org_id, repo_id, number, review_id, reviewer, state, submitted_at, last_synced)
+    `)
+	if err != nil {
+		t.Fatalf("prepare git_pull_request_reviews batch (older version): %v", err)
+	}
+	if err := olderBatch.Append(orgID, repoID, uint32(prNumber), reviewID, "octocat", "pending", older, older); err != nil {
+		t.Fatalf("append older review version: %v", err)
+	}
+	if err := olderBatch.Send(); err != nil {
+		t.Fatalf("send older review version batch: %v", err)
+	}
+
+	newerBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO git_pull_request_reviews (org_id, repo_id, number, review_id, reviewer, state, submitted_at, last_synced)
+    `)
+	if err != nil {
+		t.Fatalf("prepare git_pull_request_reviews batch (newer version): %v", err)
+	}
+	if err := newerBatch.Append(orgID, repoID, uint32(prNumber), reviewID, "octocat", "approved", older, newer); err != nil {
+		t.Fatalf("append newer review version: %v", err)
+	}
+	if err := newerBatch.Send(); err != nil {
+		t.Fatalf("send newer review version batch: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	got, err := ResolveReviews(ctx, client, orgID, repoID, prNumber)
+	if err != nil {
+		t.Fatalf("ResolveReviews: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d reviews, want exactly 1 (FINAL must collapse the two physical versions of review_id=%q): %+v", len(got), reviewID, got)
+	}
+	if got[0].State != "approved" {
+		t.Fatalf("got state %q, want %q (the version with the higher last_synced must win)", got[0].State, "approved")
+	}
+}
+
 // TestResolveCommits_RealClickHouse is CHAOS-4991's proof that
 // ResolveCommits's toFloat64(argMax(link.confidence, ...)) cast actually
 // works against a REAL ClickHouse driver (work_graph_pr_commit.confidence

@@ -655,7 +655,17 @@ permanent and silent — the materializer selects the run every pass, writes
 nothing, and reports success. Run `115e6246` sat in that state for over a day.
 The fix is on the queue side, where River's own state IS readable, and its
 write is bounded by the coordinator's readiness verdict; it does not weaken the
-materializer's guard. Every pass emits
+materializer's guard. CHAOS-4359 originally proposed replacing that guard with
+an `EXISTS` re-check of the readiness predicate, mirroring the CHAOS-4357
+discovery fix; that half was dispositioned as superseded with an executed
+proof, because readiness is true for the whole life of a healthy finalize
+delivery, so a coordinator-side re-arm double-delivers — and, deleting the
+clause on a live fixture, re-arms `aedd0504`'s generation-4 row that the fence
+below exists to keep out. The guard is now pinned by
+`TestMaterializerRedispatchesStaleUnitsExactlyOnce`'s "a River-dispatched
+finalize row is never re-armed by the materializer" subtest so it cannot be
+removed as dead weight. CHAOS-4359's OTHER half — the `dispatch_sync_run`
+guard's missing `planned` disjunct — was a real gap and is fixed. Every pass emits
 `syncreconciler.ready_finalize_pass` with its counters spelled out **including
 the zeros**, which is what makes "this backstop ran and found nothing"
 distinguishable from "this backstop was never reached" — the exact

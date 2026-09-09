@@ -493,6 +493,41 @@ func readRunawayDispatchWakeups(
 // scheduled_sync_occurrences.sync_run_id is the readiness fence: the table's
 // completed-state constraint permits that link only in the same coordinator
 // transaction that links job_run_id and marks the occurrence completed.
+//
+// # The UPDATE guard re-states all THREE candidate disjuncts (CHAOS-4359)
+//
+// The candidate CTE admits a run on any of 'planned', stale 'dispatching' or
+// due 'retrying'. The WHERE-tail EXISTS that decides whether to touch a
+// 'dispatched'+'river' row used to re-confirm only the last two, so a run
+// whose units are simply 'planned' -- never claimed, because the dispatch
+// job's delivery completed (or River's cleaner reaped its row) before it got
+// past an earlier gate -- was selected as a candidate and then silently
+// refused. Nothing else resets a dispatch_sync_run delivery: the coordinator
+// has no other re-arm path, and TerminalDeliveryRepair's three River-terminal
+// branches all require a discarded or cancelled job, which a COMPLETED
+// delivery does not have. The run never dispatched again.
+//
+// Measured, local stack org 70d529e0, read-only, 2026-09-09: sync_run
+// 837d069b-09af-5661-bf10-97b09addbd40 held eight units at 'planned'
+// (attempts 0, updated_at 2026-08-29 02:00) beside 'success' and 'failed'
+// siblings, with its dispatch_sync_run outbox row 'dispatched' via 'river'
+// since 2026-08-29 02:16 and attempts frozen at 9 for eleven days of healthy
+// reconciler ticks. Four sibling runs held the same stranded shape without
+// the 'planned' units.
+//
+// The 'planned' disjunct carries a staleness gate the other two do not need,
+// and it is on the OUTBOX ROW rather than the unit. 'dispatching' and
+// 'retrying' each carry their own clock (unit.updated_at, unit.available_at);
+// 'planned' carries none -- a unit is 'planned' for the entire window between
+// publishing dispatch_sync_run and that job claiming its units, so a bare
+// 'planned' disjunct would reset a freshly published row on the very next
+// one-second tick and make the kernel publish a SECOND dispatch job for the
+// same run, every tick, until the first finally executed. That is CHAOS-4357
+// round 2's P1 amplification on a different kind, and the fix is the same
+// one: the row is eligible only once its OWN dispatched_at is at or before
+// staleDispatchCutoff ($2), the operator-tunable grace window
+// (SYNC_UNIT_DISPATCH_STALE_SECONDS) a delivery gets to actually be claimed
+// and start executing before the materializer will touch it again.
 const materializeDispatchSQL = `
 WITH candidates AS (
 	SELECT DISTINCT run.id, run.org_id
@@ -621,6 +656,11 @@ WHERE sync_dispatch_outbox.status <> 'pending'
 						AND unit.available_at IS NOT NULL
 						AND unit.available_at <= $1
 					)
+					OR (
+						unit.status = 'planned'
+						AND sync_dispatch_outbox.dispatched_at IS NOT NULL
+						AND sync_dispatch_outbox.dispatched_at <= $2
+					)
 				)
 		)
 	)
@@ -652,6 +692,43 @@ const finalizeReadyRunPredicate = nonterminalSyncRunStatusPredicate + `
 				AND discovery.status IN ('planned', 'retrying', 'running')
 		)`
 
+// materializeFinalizeSQL's UPDATE guard refuses EVERY 'dispatched'+'river'
+// row, and unlike materializeDispatchSQL's 'planned' omission above that
+// refusal is deliberate, not a gap (CHAOS-4359 item 2, dispositioned
+// 2026-09-09 with an executed proof rather than an argument).
+//
+// The two look like the same bug class and are not, because the two kinds
+// have different evidence available to this role. A dispatch wakeup's
+// staleness is a DOMAIN fact -- sync_run_units carries it, the coordinator
+// role reads it, and the CTE above proves it. A finalize wakeup's staleness
+// is not: finalizeReadyRunPredicate proves only that the run is READY to
+// finalize, which stays true from the instant the finalize job is published
+// until it completes. Re-arming on readiness alone would therefore reset the
+// row on every tick of that window and publish duplicate finalize deliveries
+// -- CHAOS-4357 round 2's P1 amplification, with no clock on this side to
+// gate it, because the outbox row's own dispatched_at cannot distinguish "the
+// delivery died" from "the delivery is still working".
+//
+// Deciding it needs two things the materializer cannot see. River job state
+// lives in the river schema, which the coordinator role has no grant on. The
+// route-generation fence lives in sync_dispatch_transport_routes, which this
+// statement deliberately never reads (the Materializer is transport-neutral).
+// So a coordinator-side re-arm would also resurrect stale-generation history:
+// MEASURED on the local stack 2026-09-09, deleting this clause re-arms
+// sync_run aedd0504-ad9f-5d71-8b25-b03f0ce4665f's finalize delivery, which
+// carries route generation 4 against a current river route at generation 2
+// and is the row CHAOS-5462 exists to keep fenced.
+//
+// CHAOS-5456 built the correct owner of this class instead:
+// TerminalDeliveryRepair.repairReadyFinalizers (ready_finalize_repair.go)
+// re-arms exactly these rows queue-side, licensed by route generation, route
+// transport and pause state, a dead claim, a dispatched_at past the stale
+// window, and River proving the job absent or completed -- then re-checks
+// THIS predicate through the coordinator pool before it writes. The guard
+// below is that design's other half, and
+// TestMaterializerRedispatchesStaleUnitsExactlyOnce's "a River-dispatched
+// finalize row is never re-armed by the materializer" subtest is what keeps
+// it from being deleted as dead weight.
 const materializeFinalizeSQL = `
 WITH candidates AS (
 	SELECT run.id, run.org_id

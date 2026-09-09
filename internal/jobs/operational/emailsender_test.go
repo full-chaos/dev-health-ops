@@ -441,6 +441,16 @@ func smtpEnv(t *testing.T, host string, port int, extra map[string]string) {
 	t.Setenv("EMAIL_PROVIDER", "smtp")
 	t.Setenv("SMTP_HOST", host)
 	t.Setenv("SMTP_PORT", fmt.Sprintf("%d", port))
+	// Explicitly unset every other SMTP_* var NewEmailSenderFromEnv reads --
+	// isolates each test from whatever the ambient process environment
+	// happens to hold, not just from earlier t.Setenv calls in this same
+	// test binary (those already self-revert via t.Cleanup).
+	for _, name := range []string{
+		"SMTP_USE_TLS", "SMTP_TLS_CA_FILE", "SMTP_TLS_SERVER_NAME", "SMTP_USERNAME", "SMTP_PASSWORD",
+	} {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
+	}
 	for k, v := range extra {
 		t.Setenv(k, v)
 	}
@@ -513,6 +523,36 @@ func TestSMTPSenderRefusesAnUnreadableCAFile(t *testing.T) {
 	}
 }
 
+// TestSMTPSenderRefusesSetButEmptyTLSConfig is CHAOS-5400 r1's P1 fix: a
+// SMTP_TLS_CA_FILE/SMTP_TLS_SERVER_NAME value that is SET but
+// whitespace-only trims to "" and was being silently treated as ABSENT
+// (falling back to the default, no error) -- inconsistent with this file's
+// own established "set but empty is refused" discipline for
+// EMAIL_PROVIDER/EMAIL_FROM_ADDRESS/SMTP_HOST above. A misconfigured
+// operator (a typo'd whitespace value) must see a startup refusal, not
+// silent fallback to unconfigured defaults.
+func TestSMTPSenderRefusesSetButEmptyTLSConfig(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		extra   map[string]string
+		wantErr string
+	}{
+		{"empty CA file", map[string]string{"SMTP_USE_TLS": "true", "SMTP_TLS_CA_FILE": "   "}, "SMTP_TLS_CA_FILE"},
+		{"empty server name", map[string]string{"SMTP_USE_TLS": "true", "SMTP_TLS_SERVER_NAME": "   "}, "SMTP_TLS_SERVER_NAME"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			smtpEnv(t, "127.0.0.1", 1025, test.extra)
+			_, err := NewEmailSenderFromEnv(nil)
+			if err == nil {
+				t.Fatalf("NewEmailSenderFromEnv() = nil error, want a refusal naming %s", test.wantErr)
+			}
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("NewEmailSenderFromEnv() error = %v, want it to name %s", err, test.wantErr)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CHAOS-5401: MIME transfer-encoding matches Python's charset-driven choice
 // -- base64 for a body that is not 7-bit-safe, unchanged (8bit) for one that
@@ -527,6 +567,8 @@ func TestSMTPComposeChoosesTransferEncodingBySevenBitSafety(t *testing.T) {
 	}{
 		{"pure ASCII body keeps 8bit", "<p>hello world</p>", "8bit"},
 		{"non-ASCII body uses base64", "<p>café costs €3 ☃</p>", "base64"},
+		{"single non-ASCII byte at the very start", "é" + strings.Repeat("x", 40), "base64"},
+		{"single non-ASCII byte at the very end", strings.Repeat("x", 40) + "é", "base64"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			sender := &smtpEmailSender{from: "billing@example.test"}
@@ -550,6 +592,43 @@ func TestSMTPComposeChoosesTransferEncodingBySevenBitSafety(t *testing.T) {
 				t.Fatalf("decoded body = %q, want %q", decoded, test.html)
 			}
 		})
+	}
+}
+
+// TestSMTPComposeBase64WrapsAt76CharsAndDecodesIdentically is CHAOS-5401's
+// large-body case: RFC 2045 §6.8 requires base64 lines no longer than 76
+// characters -- a body big enough to need multiple lines must wrap at
+// exactly 76, every line CRLF-terminated, and decode back byte-identical.
+func TestSMTPComposeBase64WrapsAt76CharsAndDecodesIdentically(t *testing.T) {
+	html := "<p>" + strings.Repeat("café ", 200) + "</p>" // well over 76 base64 chars per line
+	sender := &smtpEmailSender{from: "billing@example.test"}
+	raw, err := sender.compose(EmailMessage{To: "owner@example.test", Subject: "s", HTML: html})
+	if err != nil {
+		t.Fatalf("compose: %v", err)
+	}
+	partHeader, body := parseComposedSinglePart(t, raw)
+	if got := partHeader.Get("Content-Transfer-Encoding"); got != "base64" {
+		t.Fatalf("Content-Transfer-Encoding = %q, want base64", got)
+	}
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, "\r\n") {
+		t.Fatal("base64 body has no CRLF line breaks at all -- not actually wrapped")
+	}
+	lines := strings.Split(strings.TrimSuffix(bodyStr, "\r\n"), "\r\n")
+	for i, line := range lines {
+		if i < len(lines)-1 && len(line) != 76 {
+			t.Fatalf("line %d length = %d, want exactly 76 (only the last line may be shorter)", i, len(line))
+		}
+		if len(line) > 76 {
+			t.Fatalf("line %d length = %d, exceeds RFC 2045's 76-char limit", i, len(line))
+		}
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(bodyStr, "\r\n", ""))
+	if err != nil {
+		t.Fatalf("decode base64 body: %v", err)
+	}
+	if string(decoded) != html {
+		t.Fatal("decoded large body does not match the original byte-for-byte")
 	}
 }
 

@@ -191,14 +191,31 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 		// container/service name vs. the cert's real CN/SAN). A bad
 		// SMTP_TLS_CA_FILE is refused at startup, fail-closed, same
 		// discipline as SMTP_PORT/SMTP_HOST above.
+		// CHAOS-5400 r1 (codex P1): a whitespace-only value trims to "" via
+		// configuredValue and was being treated as ABSENT (silent fallback
+		// to the default, no error) -- inconsistent with this file's own
+		// "set but empty is refused" discipline applied to
+		// EMAIL_PROVIDER/EMAIL_FROM_ADDRESS/SMTP_HOST above. A misconfigured
+		// (whitespace-typo'd) operator value must refuse loudly, not fall
+		// back unconfigured.
 		tlsServerName := host
-		if override, set := configuredValue("SMTP_TLS_SERVER_NAME"); set && override != "" {
+		if override, set := configuredValue("SMTP_TLS_SERVER_NAME"); set {
+			if override == "" {
+				slog.Error("billing notification SMTP TLS server name is configured but empty",
+					"variable", "SMTP_TLS_SERVER_NAME")
+				return nil, errors.New("SMTP_TLS_SERVER_NAME is set but empty")
+			}
 			tlsServerName = override
 		}
 		var tlsConfig *tls.Config
 		if useTLS {
 			tlsConfig = &tls.Config{ServerName: tlsServerName, MinVersion: tls.VersionTLS12}
-			if caFile, set := configuredValue("SMTP_TLS_CA_FILE"); set && caFile != "" {
+			if caFile, set := configuredValue("SMTP_TLS_CA_FILE"); set {
+				if caFile == "" {
+					slog.Error("billing notification SMTP TLS CA file is configured but empty",
+						"variable", "SMTP_TLS_CA_FILE")
+					return nil, errors.New("SMTP_TLS_CA_FILE is set but empty")
+				}
 				pool, err := loadSMTPTLSCAPool(caFile)
 				if err != nil {
 					slog.Error("billing notification SMTP TLS CA file is invalid",

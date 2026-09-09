@@ -82,6 +82,54 @@ denominator. Repeated materialization writes a new allocation generation, and
 readers select only the latest generation for each unit. Categorization and
 work-unit identities do not change.
 
+### Precedence, in order
+
+The allocator checks these in this order and stops at the first that applies.
+The order is the contract; the tests assert each step by name.
+
+| Order | Condition | Result |
+| --- | --- | --- |
+| 1 | The unit already resolved a single repository of its own, by edges or by hierarchy inheritance | `own_repo` -- fallback does not run |
+| 2 | An existing effort row carries an allocation source other than empty or active-hours-unassigned | `stronger_allocation` -- churn allocation keeps precedence |
+| 3 | The unit's edges, PRs or commits name any real repository, even ambiguously or at zero churn | `direct_repo_evidence` -- ambiguity is not erased by a team convention |
+| 4 | No member issue has eligible ownership evidence | `no_eligible_owner` -- the unit keeps its unassigned allocation |
+| 5 | Otherwise | `allocated` -- equal `1/N` shares over the distinct union |
+
+The zero UUID is not a repository at any step: a PR or commit node carrying it
+is not direct evidence, and an ownership record resolving to it is not a share.
+
+### Provider coverage
+
+This fallback is provider-agnostic and is tested across the full
+`{jira, gitlab, github, linear}` x `{teams, projects, members, issues}` matrix
+required by the repository's
+[team attribution coverage contract](../../contribute/architecture/team-attribution.md).
+Never Linear-only: jira/github/gitlab work items carry no native team key, so
+their attribution rides entirely on the auto-imported team, project and member
+dimension.
+
+| Entity | How it participates |
+| --- | --- |
+| issues | The member issues' latest primary attribution is the donor. All four eligible sources (`native_team`, `issue_project`, `project_ownership`, `repo_ownership`) are exercised, one per provider. |
+| teams | Only an `is_active` team donates. Several teams owning the same repository produce one share, and the provenance names all of them. |
+| projects | Project ownership reaches this fallback as sync-derived `inferred` repository ownership. GitHub has no native project entity -- the repository is the scope -- so its cell is n/a. |
+| members | **Negative by contract.** `assignee_membership` and `author_membership` attributions and `team_memberships` rows never donate, even when the team owns live repositories. Team authorization is ownership-derived, never person to membership to team. |
+
+The work-tracking provider and the code-host provider are separate axes: a Jira
+team legitimately owns GitHub repositories, and the ownership-to-repository join
+matches on the CODE HOST's provider, never the tracker's.
+
+### Telemetry
+
+Each run emits one `investment team repository fallback` record whose
+`allocated`, `own_repo`, `stronger_allocation`, `direct_repo_evidence`,
+`no_eligible_owner` and `window_skipped` counts partition every component in the
+run, alongside `repo_shares`, `donor_rows`, `donor_issues` and the
+`ownership_as_of` timestamp the intervals were evaluated at. Every field is
+written on every run, including at zero, so that "nothing to allocate" can be
+told apart from "the counter was never computed". Field-by-field meaning:
+[CLI reference](../cli/index.md#investment).
+
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`
 
 `investment_metrics_daily` and its feeder rule set `src/dev_health_ops/config/investment_areas.yaml`

@@ -90,6 +90,66 @@ func TestLoadDailyFinalizeCompatFamiliesIgnoresPlainProseMentions(t *testing.T) 
 	}
 }
 
+// TestScanPinsTheDocumentedAliasGapAsMeasuredBehaviour is the team-lead
+// condition on accepting the regex text-scan in place of the deleted
+// script's full AST alias-resolver (CHAOS-5473 gate TELL): a direct call is
+// caught; a call reached only through an import alias or a local-variable
+// alias is NOT -- pinned here as measured behaviour, not prose, so a future
+// change to the scan's scope has a test to break.
+func TestScanPinsTheDocumentedAliasGapAsMeasuredBehaviour(t *testing.T) {
+	dailyNames := []string{"repo_user_commit"}
+	remainingNames := []string{"capacity"}
+	target := FinalizeTarget{Namespace: "remaining", Family: "capacity"}
+
+	t.Run("direct call is caught", func(t *testing.T) {
+		py := "def run_daily_metrics_finalize():\n" +
+			"    _write_capacity_extra_for_day(day, org_id)\n"
+		compat, err := LoadDailyFinalizeCompatFamilies(writeTempPy(t, py), dailyNames, remainingNames)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !compat[target] {
+			t.Fatalf("expected a direct call to be caught, got %v", compat)
+		}
+	})
+
+	t.Run("import-alias call is missed", func(t *testing.T) {
+		// `from finalize_writers import _write_capacity_extra_for_day as
+		// _aliased_write` then calling `_aliased_write(...)` -- the call
+		// TOKEN in the body is "_aliased_write(", which never matches the
+		// `_write_..._for_day` naming convention, so this scan (unlike the
+		// deleted script's AST walker, which read func.id/func.attr the
+		// same way but could not follow an IMPORT alias either -- only a
+		// LOCAL one) misses it exactly as prose above claims.
+		py := "from finalize_writers import _write_capacity_extra_for_day as _aliased_write\n\n" +
+			"def run_daily_metrics_finalize():\n" +
+			"    _aliased_write(day, org_id)\n"
+		compat, err := LoadDailyFinalizeCompatFamilies(writeTempPy(t, py), dailyNames, remainingNames)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if compat[target] {
+			t.Fatal("expected an import-alias call to be missed by this scan (documented gap) -- it was caught instead")
+		}
+	})
+
+	t.Run("local-variable-alias call is missed", func(t *testing.T) {
+		// `writer = _write_capacity_extra_for_day` then `writer(...)` --
+		// the deleted script's AST walker resolved exactly this shape
+		// (round-1/2 codex findings, CHAOS-5118); this text scan does not.
+		py := "def run_daily_metrics_finalize():\n" +
+			"    writer = _write_capacity_extra_for_day\n" +
+			"    writer(day, org_id)\n"
+		compat, err := LoadDailyFinalizeCompatFamilies(writeTempPy(t, py), dailyNames, remainingNames)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if compat[target] {
+			t.Fatal("expected a local-variable-alias call to be missed by this scan (documented gap) -- it was caught instead")
+		}
+	})
+}
+
 func TestFinalizeCallFamilyOutOfScopeForGenericInfrastructure(t *testing.T) {
 	target, ok, err := finalizeCallFamily("logger.info", map[string]bool{}, map[string]bool{})
 	if err != nil || ok {

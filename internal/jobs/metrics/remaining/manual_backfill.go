@@ -351,6 +351,7 @@ func (store *PostgresStore) startManualTriggerRun(
 		GenerationSeed: generationSeed,
 	})
 	if err != nil {
+		store.observeScopeRefused(family, scopeRefusalReason(err))
 		return ManualBackfillOutcome{}, err
 	}
 

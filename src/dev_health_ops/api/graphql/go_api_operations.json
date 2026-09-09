@@ -44,6 +44,10 @@
     "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e"
   },
   {
+    "operation": "pr",
+    "digest": "564852769ff2397df5c7c0364ee6d1cf7ef0172e62566d575c2b9d5c9e77d577"
+  },
+  {
     "operation": "reviewEdges",
     "digest": "4a759f9e3d3e903b03a3aae8039b3bdca2ed69b3af25a0b20f01c1da55d97123"
   },

@@ -103,3 +103,46 @@ enforces this on every run, independent of this README's own claim.
 
 Captured: 2026-09-09T19:34:39Z, ops tip at capture time: fe03a111bee2
 (this lane's worktree base).
+
+# pr wire-capture fixture (CHAOS-4991)
+
+`pr_captured.graphql` is the wire-form `query` text for the `pr`
+operation (`PR_DETAIL_QUERY`, `web/src/lib/graphql/queries.ts:94-138`,
+operation name `PrDetail`). Unlike `featureflags_captured.graphql`
+above, this fixture was NOT captured off a live HTTP listener -- it was
+produced by IMPORTING the web repo's own, live, pinned
+`scripts/graphql-wire-parity.ts` export `wireForm()` (the exact function
+that repo's own CI wire-parity gate calls) and invoking it directly
+against the real `PR_DETAIL_QUERY` export, via `tsx` so `@urql/core`
+resolved from the web repo's own pinned `node_modules`:
+
+```
+tsx <script importing wireForm from web/scripts/graphql-wire-parity.ts
+     and PR_DETAIL_QUERY from web/src/lib/graphql/queries.ts>
+```
+
+`wireForm()` itself calls the SAME three real, pinned functions in the
+SAME order `featureflags_captured.graphql`'s live-HTTP capture exercised
+(`createRequest` -> `formatDocument` -> `stringifyDocument`, see that
+function's own doc comment in `graphql-wire-parity.ts`) -- the only
+difference from a live-HTTP capture is that no HTTP request/listener was
+actually built around it. This was the AVAILABLE, verified path in this
+environment (Node + this repo's own `tsx`/`@urql/core` were present and
+used directly, not reconstructed or hand-reflowed) -- not the
+"hand-apply the two known transforms" fallback CHAOS-4991's brief
+describes as the last resort when no tool is available.
+
+## Digest
+
+| digest of | value |
+| --- | --- |
+| this captured fixture (wireForm(PR_DETAIL_QUERY)) | `564852769ff2397df5c7c0364ee6d1cf7ef0172e62566d575c2b9d5c9e77d577` |
+
+`cmd/query-api/query_route.go`'s `registeredPrDetailDocument` const must
+digest to `564852769ff2397df5c7c0364ee6d1cf7ef0172e62566d575c2b9d5c9e77d577`
+-- verified equal by
+`query_route_wire_capture_test.go`'s
+`TestRegisteredPrDetailDocument_MatchesCapturedWireFixture`.
+
+Captured: 2026-09-09T19:41Z, ops tip at capture time:
+fe03a111bee28542293b34ba8c72bb16e9579858 (this lane's worktree base).

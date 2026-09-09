@@ -603,6 +603,49 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 			})
 		}
 	}
+
+	// LAST, so nothing below can turn it back into a match: an edge
+	// measurement with no per-request build binding may never be
+	// enablement-eligible.
+	//
+	// r2 proved why with an executed test. A deployment that BEGINS during
+	// the run defeats every other defence at once: the routing row can
+	// legitimately name the running build, /buildinfo answers from the old
+	// replica before and after, and the measured request is served by the
+	// new one in between. Without a per-request header there is nothing
+	// left that can tell them apart, and the run produced a
+	// deployed_executed/match receipt naming the wrong build.
+	//
+	// So the verdict is downgraded rather than the run refused. The
+	// measurement HAPPENED and is worth recording -- terminal_state
+	// `unsupported`, which already means "the runner could not establish
+	// the claim" and is what this package uses for an errored response, an
+	// empty root and an unmeasurable shadow op. The enablement predicate
+	// admits only `match`, so the receipt is inert by construction rather
+	// than by anybody remembering to exclude it. The provenance object
+	// carries edge_build_binding=absent, which is the reason a reader
+	// needs.
+	//
+	// `binding_absent` would be more legible, and is deliberately not used:
+	// terminal_state's vocabulary is fixed by the signed plan and enforced
+	// by a CHECK constraint, and a hotfix does not widen it (team-lead
+	// ruling, 2026-09-09 -- the same trade #2395 made in choosing
+	// proof_failed over inventing `refused`).
+	//
+	// Scoped to `match` deliberately. A mismatch already authorizes
+	// nothing, and rewriting it as `unsupported` would DESTROY the
+	// divergence the run found -- turning "these planes disagree" into
+	// "we could not tell", which is a worse record and a false one. Only
+	// the enablement-eligible verdict is downgraded.
+	if outcome.TerminalState == TerminalStateMatch &&
+		outcome.Route == RouteEdge && outcome.EdgeBuildBinding == EdgeBuildAbsent {
+		outcome.TerminalState = TerminalStateUnsupported
+		outcome.Findings = append(outcome.Findings, Finding{
+			Kind:   FindingMismatch,
+			Path:   "$.http.header." + buildHeader,
+			Detail: "the measured response carried no serving-build header, so this measurement is not bound to a query-api process. A deployment beginning mid-run would be indistinguishable from a stable one, so this cannot authorize an enablement (CHAOS-5479 delivers the header; until every replica serves it, edge measurements stay unsupported)",
+		})
+	}
 	return outcome
 }
 
@@ -734,6 +777,33 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 		observation.BodyRef = ref
 	}
 	return observation, nil
+}
+
+// MaxOperatorEvidenceBytes bounds the operator's --review-evidence text.
+//
+// Same class as the 8 KiB bound on the minting helper's output, one column
+// over: an unbounded operator string flowing into a JSON document in a
+// Text column is an unbounded write nobody chose. r2 confirmed a 2 MiB note
+// stays valid JSON, which is the point -- it would be accepted, stored, and
+// read back by every future query against this table.
+//
+// Refused rather than truncated, for the reason truncation was wrong for
+// the helper: a silently shortened value looks like a whole one. 4 KiB is
+// far more than a ticket reference and a sentence, which is what this field
+// is for.
+const MaxOperatorEvidenceBytes = 4 << 10
+
+// ErrOperatorEvidenceTooLong is returned before anything is measured, so an
+// over-long note fails as a configuration error rather than after a run.
+var ErrOperatorEvidenceTooLong = errors.New("goapiproof: --review-evidence is too long")
+
+// ValidateOperatorEvidence refuses an over-long operator note.
+func ValidateOperatorEvidence(evidence string) error {
+	if len(evidence) > MaxOperatorEvidenceBytes {
+		return fmt.Errorf("%w: %d bytes, limit is %d. It is stored inside a JSON provenance object on every receipt this run writes; put the detail in the ticket and reference it here",
+			ErrOperatorEvidenceTooLong, len(evidence), MaxOperatorEvidenceBytes)
+	}
+	return nil
 }
 
 // ReceiptProvenance is what goes into go_api_proof_run.review_evidence.

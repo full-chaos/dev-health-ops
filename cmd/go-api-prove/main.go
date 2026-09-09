@@ -167,6 +167,13 @@ func run() error {
 		return err
 	}
 
+	// Refused before anything is measured: the note is stored inside a
+	// JSON provenance object on EVERY receipt the run writes, so an
+	// over-long one is a configuration error, not a late surprise.
+	if err := goapiproof.ValidateOperatorEvidence(f.reviewEvidence); err != nil {
+		return err
+	}
+
 	ctx := context.Background()
 	client := &http.Client{Timeout: f.timeout}
 
@@ -523,7 +530,12 @@ func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 const (
 	// mintStdoutLimit caps what is read. A helper that streams megabytes
 	// (a log, a core dump, /dev/urandom) must not be buffered whole just
-	// to be rejected as the wrong shape.
+	// to be rejected as the wrong shape. Exceeding it is a REFUSAL, never
+	// a truncation: r2 built a helper emitting exactly 8192 JWT-shaped
+	// bytes followed by noise, and the truncated prefix passed the shape
+	// check and was installed as an Authorization header. A silently
+	// truncated credential fails remotely as another 401 that reads like a
+	// rejected one.
 	mintStdoutLimit = 8 << 10
 	// mintTimeout bounds one invocation. It is separate from the run
 	// deadline so a hung helper fails as a hung helper, with its own
@@ -572,7 +584,8 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 	}
 
 	var stdout bytes.Buffer
-	cmd.Stdout = &limitedWriter{w: &stdout, remaining: mintStdoutLimit}
+	bounded := &limitedWriter{w: &stdout, remaining: mintStdoutLimit}
+	cmd.Stdout = bounded
 	// stderr is DISCARDED rather than captured. Captured, it would sit in
 	// memory waiting for somebody to decide it was safe to print, and r1
 	// showed how that decision goes.
@@ -590,6 +603,9 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 		return "", errors.New("the envelope minting helper could not be run (its output is deliberately not reported here -- check the helper's own logs)")
 	}
 
+	if bounded.overflowed {
+		return "", fmt.Errorf("the envelope minting helper printed more than %d bytes on stdout; refusing rather than using a truncated value, which would fail remotely as an ordinary 401 (its output is deliberately not reported here -- check the helper's own logs)", mintStdoutLimit)
+	}
 	minted := strings.TrimSpace(stdout.String())
 	if minted == "" {
 		return "", errors.New("the envelope minting helper printed nothing on stdout")
@@ -600,20 +616,26 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 	return "Bearer " + minted, nil
 }
 
-// limitedWriter drops everything past its limit instead of failing, so a
-// chatty helper is truncated rather than turned into a write error that
-// would then need reporting.
+// limitedWriter stops storing past its limit and RECORDS that it did.
+//
+// It keeps accepting writes rather than returning an error, so the helper
+// is not killed by a broken pipe mid-sentence and the caller decides what
+// an overflow means -- and the caller refuses. Recording the overflow is
+// the part r2 found missing: dropping the excess silently left a truncated
+// prefix looking like a whole credential.
 type limitedWriter struct {
-	w         io.Writer
-	remaining int
+	w          io.Writer
+	remaining  int
+	overflowed bool
 }
 
 func (l *limitedWriter) Write(p []byte) (int, error) {
-	if l.remaining <= 0 {
-		return len(p), nil
-	}
 	if len(p) > l.remaining {
-		p = p[:l.remaining]
+		l.overflowed = true
+		p = p[:max(l.remaining, 0)]
+	}
+	if len(p) == 0 {
+		return len(p), nil
 	}
 	n, err := l.w.Write(p)
 	l.remaining -= n

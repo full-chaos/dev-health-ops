@@ -21,7 +21,11 @@ type fakeEdge struct {
 	pythonBody string
 	goStatus   int
 	goPlane    string
-	seen       []string
+	// goBuild is the serving-build header the edge passes through
+	// (CHAOS-5479). Empty means the deployment predates the pass-through,
+	// which is what makes an edge measurement unbound.
+	goBuild string
+	seen    []string
 }
 
 func (e *fakeEdge) handler() http.HandlerFunc {
@@ -48,6 +52,9 @@ func (e *fakeEdge) handler() http.HandlerFunc {
 			status = http.StatusOK
 		}
 		w.Header().Set(planeHeader, plane)
+		if e.goBuild != "" {
+			w.Header().Set(buildHeader, e.goBuild)
+		}
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(e.goBody))
 	}
@@ -90,7 +97,11 @@ func newRunner(t *testing.T, edge *fakeEdge, mode string) *Runner {
 
 func TestRunRecordsAMatchWhenBothPlanesAgree(t *testing.T) {
 	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
-	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "canary")
+	// The serving-build header is present because an edge measurement
+	// WITHOUT one can no longer produce a match -- see
+	// TestAnEdgeMeasurementWithNoBuildBindingCannotBeEnablementEligible.
+	edge := &fakeEdge{goBody: body, pythonBody: body, goBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36"}
+	runner := newRunner(t, edge, "canary")
 
 	outcomes, summary, err := runner.Run(context.Background())
 	if err != nil {

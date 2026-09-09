@@ -2,6 +2,8 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -467,5 +469,114 @@ func admissionWithData(servedBuild, namedBuild string) AdmissionInput {
 		Baseline:      Observation{Plane: "python", StatusCode: 200},
 		CandidateSnap: snapshot,
 		BaselineSnap:  snapshot,
+	}
+}
+
+// r2 P1, the last hole: a deployment that BEGINS during the run defeats
+// every other defence at once. The routing row legitimately names the
+// running build, /buildinfo answers from the old replica before and after,
+// and the measured request is served by the new one in between.
+//
+// With no per-request build header there is nothing left that can tell
+// those apart -- so an edge measurement without one may never be
+// enablement-eligible, whatever the comparison said.
+func TestAnEdgeMeasurementWithNoBuildBindingCannotBeEnablementEligible(t *testing.T) {
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	// The fake edge stamps no build header -- today's normal, and the
+	// rolling-deploy window.
+	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "canary")
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outcome := outcomes[0]
+
+	if outcome.TerminalState == TerminalStateMatch {
+		t.Fatal("an unbound edge measurement produced a `match`: it would satisfy the enablement predicate for a build nothing showed served the request")
+	}
+	if outcome.TerminalState != TerminalStateUnsupported {
+		t.Fatalf("expected %q, got %q", TerminalStateUnsupported, outcome.TerminalState)
+	}
+	// The measurement still HAPPENED, and the run must stay visible.
+	if !outcome.Executed {
+		t.Fatal("the measurement happened and must be recorded, not discarded")
+	}
+	if outcome.EdgeBuildBinding != EdgeBuildAbsent {
+		t.Fatalf("the binding must be recorded as absent, got %q", outcome.EdgeBuildBinding)
+	}
+
+	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	var provenance ReceiptProvenance
+	if err := json.Unmarshal([]byte(receipts[0].ReviewEvidence), &provenance); err != nil {
+		t.Fatal(err)
+	}
+	if provenance.EdgeBuildBinding != EdgeBuildAbsent {
+		t.Fatalf("the receipt must SAY why it is unsupported: %+v", provenance)
+	}
+}
+
+// The mirror, and the control: with the header present and equal to the
+// running build, the same responses DO produce a match. Without this the
+// test above would pass against an instrument that never matches anything.
+func TestAnEdgeMeasurementBoundToTheRunningBuildStillMatches(t *testing.T) {
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	edge := &fakeEdge{goBody: body, pythonBody: body}
+	runner := newRunner(t, edge, "canary")
+	edge.goBuild = runner.Registry.BuildIdentity
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if outcomes[0].TerminalState != TerminalStateMatch {
+		t.Fatalf("a bound, agreeing measurement must match, got %q (%v)", outcomes[0].TerminalState, outcomes[0].Findings)
+	}
+	if outcomes[0].EdgeBuildBinding != EdgeBuildPresent {
+		t.Fatalf("expected %q, got %q", EdgeBuildPresent, outcomes[0].EdgeBuildBinding)
+	}
+}
+
+// The operator note is bounded, and refused rather than truncated -- a
+// silently shortened note reads like a whole one, the same reason the
+// helper's output bound refuses.
+func TestAnOverLongOperatorNoteIsRefused(t *testing.T) {
+	if err := ValidateOperatorEvidence(strings.Repeat("a", MaxOperatorEvidenceBytes)); err != nil {
+		t.Fatalf("a note exactly at the limit must be accepted: %v", err)
+	}
+	err := ValidateOperatorEvidence(strings.Repeat("a", MaxOperatorEvidenceBytes+1))
+	if err == nil {
+		t.Fatal("an over-long operator note must be refused")
+	}
+	if !errors.Is(err, ErrOperatorEvidenceTooLong) {
+		t.Fatalf("the refusal must be identifiable: %v", err)
+	}
+}
+
+// The downgrade is scoped to `match` on purpose, and this pins that.
+//
+// Rewriting an unbound MISMATCH as `unsupported` would destroy the
+// divergence the run found -- turning "these planes disagree" into "we
+// could not tell", which is both a worse record and a false one. A
+// mismatch already authorizes nothing, so there is nothing to protect
+// against.
+func TestAnUnboundMismatchStaysAMismatch(t *testing.T) {
+	runner := newRunner(t, &fakeEdge{
+		goBody:     `{"data":{"featureFlags":[{"key":"a"}]}}`,
+		pythonBody: `{"data":{"featureFlags":[{"key":"b"}]}}`,
+	}, "canary")
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if outcomes[0].TerminalState != TerminalStateMismatch {
+		t.Fatalf("an unbound measurement that DIVERGED must stay a mismatch, got %q -- the divergence is the finding and must not be erased", outcomes[0].TerminalState)
+	}
+	if outcomes[0].EdgeBuildBinding != EdgeBuildAbsent {
+		t.Fatalf("the absent binding must still be recorded: %q", outcomes[0].EdgeBuildBinding)
 	}
 }

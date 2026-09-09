@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -41,9 +42,13 @@ import (
 
 // Credential supplies one leg's authorization header.
 //
-// Values are NEVER logged, and no method on this type renders one: the
-// String method is deliberately absent so a %v of a Config or a Runner
-// cannot spill a token.
+// Values are NEVER logged. An earlier version of this comment claimed the
+// ABSENCE of a String method achieved that; r2 proved the opposite with an
+// executed repro -- with no String method, fmt falls back to printing the
+// struct, so `%v` of a Credential rendered the cached token in full. The
+// redaction has to be written, not assumed, which is why String, GoString
+// and Format are all implemented below: %v, %+v, %#v and Sprint each take
+// a different path through fmt and each one had to be closed.
 type Credential struct {
 	// header is the request header the value is set on, e.g.
 	// "Authorization".
@@ -70,8 +75,38 @@ type Credential struct {
 
 // StaticCredential is a value that does not expire within a run -- the
 // edge's access token.
+//
+// An EMPTY value is legal to construct and refused at Apply. Refusing here
+// would be tidier, but the constructor has no error return and the CLI is
+// not the only caller a future change might add; refusing at the moment of
+// use means no path can send a bare "Bearer ", whoever built it.
 func StaticCredential(header, kind, value string) *Credential {
 	return &Credential{header: header, kind: kind, cached: value}
+}
+
+// redacted is what every formatting verb renders instead of the value.
+const redacted = "goapiproof.Credential{kind:%q, header:%q, value:REDACTED}"
+
+// String, GoString and Format together close every fmt path to the cached
+// value. r2 found `%v` printing a token in full; %+v, %#v and Sprint reach
+// fmt differently, so all four are pinned by test.
+func (c *Credential) String() string {
+	if c == nil {
+		return "goapiproof.Credential(nil)"
+	}
+	return fmt.Sprintf(redacted, c.kind, c.header)
+}
+
+// GoString covers %#v, which ignores String and would otherwise render the
+// struct literally, cached token included.
+func (c *Credential) GoString() string { return c.String() }
+
+// Format covers the remaining verbs -- %+v, %s, %q and anything else a
+// future caller reaches for -- so no verb falls through to the default
+// struct printer. A credential must not depend on the caller choosing a
+// safe verb.
+func (c *Credential) Format(f fmt.State, verb rune) {
+	_, _ = io.WriteString(f, c.String())
 }
 
 // MintedCredential re-mints its value once it is older than freshFor.
@@ -153,6 +188,13 @@ func (c *Credential) value(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.mint == nil {
+		if c.cached == "" {
+			// A bare "Bearer " is answered 401, which is
+			// indistinguishable in a report from a rejected credential --
+			// the confusion this whole file exists to remove. Refuse at
+			// the source (r2 P2).
+			return "", fmt.Errorf("the %s credential is empty", c.kind)
+		}
 		return c.cached, nil
 	}
 	if c.cached != "" && c.freshFor > 0 && time.Since(c.mintedAt) < c.freshFor {

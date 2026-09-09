@@ -143,9 +143,15 @@ func TestAStaleRoutingRowRefusesTheRun(t *testing.T) {
 		t.Fatalf("an agreeing row must not be reported, got %v", err)
 	}
 	// The refusal has to tell the operator how to clear it, or it is a
-	// wall rather than a gate.
-	if !strings.Contains(err.Error(), "routing enable --candidate-build") {
-		t.Fatalf("the refusal must say how to re-point the rows, got %v", err)
+	// wall rather than a gate -- and it must name the MODE-PRESERVING
+	// verb. `routing enable --candidate-build` re-points a row, but its
+	// --mode is canary|primary only, so following that advice on a SHADOW
+	// row silently flips it to canary.
+	if !strings.Contains(err.Error(), "go-api-routing repoint") {
+		t.Fatalf("the refusal must name the mode-preserving re-point verb, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "would also change the mode") {
+		t.Fatalf("the refusal must warn why `routing enable` is the wrong remedy here, got %v", err)
 	}
 }
 

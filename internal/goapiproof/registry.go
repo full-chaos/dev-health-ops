@@ -212,8 +212,16 @@ func VerifyCandidateBuild(running string, expected string, routing map[string]Ro
 	for _, operation := range sortedOperations(stale) {
 		disagreeing = append(disagreeing, fmt.Sprintf("%s points at %s", operation, stale[operation]))
 	}
-	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point them with `dev-hops go-api routing enable --candidate-build %s` (modes unchanged) before proving. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
-		running, strings.Join(disagreeing, "; "), running)
+	// The remedy names the MODE-PRESERVING verb on purpose. `routing
+	// enable --candidate-build` re-points a row, but its --mode accepts
+	// canary|primary only, so pointing a SHADOW row at the running build
+	// with it also flips that row to canary -- a routing change nobody
+	// asked for, produced by following a message whose only job is to say
+	// how to clear this block safely. CHAOS-5486's `go-api-routing
+	// repoint` preserves the mode and reads the running build from
+	// /buildinfo rather than taking it on trust from an operator.
+	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point the row to the running build with `go-api-routing repoint` (mode preserved); `routing enable` would also change the mode. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
+		running, strings.Join(disagreeing, "; "))
 }
 
 // StaleRoutingRows reports which routing rows name a build the running

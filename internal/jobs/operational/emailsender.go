@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -177,13 +179,70 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 		case "true", "1", "yes":
 			useTLS = true
 		}
+		// CHAOS-5400: Go's STARTTLS verifies the server certificate by
+		// default (Python's smtplib.starttls() with no context did not --
+		// verify_mode=CERT_NONE). That is a deliberate, disclosed
+		// tightening, and it stays ON unconditionally: this constructor
+		// adds no insecure-skip-verify escape hatch. A relay on a
+		// private/self-signed CA is instead trusted EXPLICITLY via
+		// SMTP_TLS_CA_FILE (a PEM file of one or more CA certificates),
+		// and SMTP_TLS_SERVER_NAME overrides the hostname used for
+		// certificate verification when it differs from SMTP_HOST (e.g. a
+		// container/service name vs. the cert's real CN/SAN). A bad
+		// SMTP_TLS_CA_FILE is refused at startup, fail-closed, same
+		// discipline as SMTP_PORT/SMTP_HOST above.
+		// CHAOS-5400 r1 (codex P1): a whitespace-only value trims to "" via
+		// configuredValue and was being treated as ABSENT (silent fallback
+		// to the default, no error) -- inconsistent with this file's own
+		// "set but empty is refused" discipline applied to
+		// EMAIL_PROVIDER/EMAIL_FROM_ADDRESS/SMTP_HOST above. A misconfigured
+		// (whitespace-typo'd) operator value must refuse loudly, not fall
+		// back unconfigured.
+		//
+		// CHAOS-5400 r1 confirmation pass (codex P1, re-found of the same
+		// class): the set-but-empty check for SMTP_TLS_CA_FILE must run
+		// UNCONDITIONALLY too, same as SMTP_TLS_SERVER_NAME -- nesting it
+		// inside `if useTLS` meant SMTP_USE_TLS=false silently skipped
+		// validating a whitespace-typo'd SMTP_TLS_CA_FILE. The value is
+		// still only ever USED (loaded into a cert pool) when useTLS is
+		// true; only the VALIDATION is unconditional, matching every other
+		// set-but-empty guard in this constructor.
+		tlsServerName := host
+		if override, set := configuredValue("SMTP_TLS_SERVER_NAME"); set {
+			if override == "" {
+				slog.Error("billing notification SMTP TLS server name is configured but empty",
+					"variable", "SMTP_TLS_SERVER_NAME")
+				return nil, errors.New("SMTP_TLS_SERVER_NAME is set but empty")
+			}
+			tlsServerName = override
+		}
+		caFile, caFileSet := configuredValue("SMTP_TLS_CA_FILE")
+		if caFileSet && caFile == "" {
+			slog.Error("billing notification SMTP TLS CA file is configured but empty",
+				"variable", "SMTP_TLS_CA_FILE")
+			return nil, errors.New("SMTP_TLS_CA_FILE is set but empty")
+		}
+		var tlsConfig *tls.Config
+		if useTLS {
+			tlsConfig = &tls.Config{ServerName: tlsServerName, MinVersion: tls.VersionTLS12}
+			if caFileSet {
+				pool, err := loadSMTPTLSCAPool(caFile)
+				if err != nil {
+					slog.Error("billing notification SMTP TLS CA file is invalid",
+						"variable", "SMTP_TLS_CA_FILE", "value", caFile, "error", err)
+					return nil, fmt.Errorf("SMTP_TLS_CA_FILE is invalid: %w", err)
+				}
+				tlsConfig.RootCAs = pool
+			}
+		}
 		return &smtpEmailSender{
-			from:     from,
-			host:     host,
-			port:     port,
-			username: strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
-			password: strings.TrimSpace(os.Getenv("SMTP_PASSWORD")),
-			useTLS:   useTLS,
+			from:      from,
+			host:      host,
+			port:      port,
+			username:  strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
+			password:  strings.TrimSpace(os.Getenv("SMTP_PASSWORD")),
+			useTLS:    useTLS,
+			tlsConfig: tlsConfig,
 		}, nil
 	default:
 		slog.Error("billing notification email provider is unsupported",
@@ -367,13 +426,35 @@ func (sender *resendEmailSender) endpoint() string {
 	return "https://api.resend.com/emails"
 }
 
+// loadSMTPTLSCAPool reads a PEM file at path and returns a cert pool seeded
+// with the host's system roots PLUS that file's certificates, so
+// SMTP_TLS_CA_FILE ADDS trust for a private/self-signed relay CA rather than
+// replacing the system trust store wholesale. A missing file, an unreadable
+// file, or a file with no parseable PEM certificate is an error -- never a
+// silent empty pool, which would make verification vacuous.
+func loadSMTPTLSCAPool(path string) (*x509.CertPool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(raw) {
+		return nil, errors.New("no PEM certificates found")
+	}
+	return pool, nil
+}
+
 type smtpEmailSender struct {
-	from     string
-	host     string
-	port     int
-	username string
-	password string
-	useTLS   bool
+	from      string
+	host      string
+	port      int
+	username  string
+	password  string
+	useTLS    bool
+	tlsConfig *tls.Config // built at construction; nil is fine when useTLS is false
 }
 
 func (sender *smtpEmailSender) Name() string { return "smtp" }
@@ -406,9 +487,18 @@ func (sender *smtpEmailSender) Send(ctx context.Context, message EmailMessage) e
 		}
 	}()
 	if sender.useTLS {
-		// Default verification (matching Python's smtplib.starttls() with no
-		// custom context): the server certificate must chain and match.
-		if err := client.StartTLS(&tls.Config{ServerName: sender.host, MinVersion: tls.VersionTLS12}); err != nil {
+		// CHAOS-5400: verification stays ON (matching Python's
+		// smtplib.starttls() being upgraded, not weakened) -- sender.tlsConfig
+		// is built once at construction (NewEmailSenderFromEnv), honoring
+		// SMTP_TLS_CA_FILE/SMTP_TLS_SERVER_NAME when set. A direct struct
+		// literal with useTLS set but no tlsConfig still verifies against
+		// the system roots and sender.host, the same default this file
+		// always had -- never an unauthenticated fallback.
+		tlsConfig := sender.tlsConfig
+		if tlsConfig == nil {
+			tlsConfig = &tls.Config{ServerName: sender.host, MinVersion: tls.VersionTLS12}
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
 			return fmt.Errorf("smtp STARTTLS failed: %w", err)
 		}
 	}
@@ -493,14 +583,26 @@ func (sender *smtpEmailSender) compose(message EmailMessage) ([]byte, error) {
 	out.WriteString(strings.Join(headers, "\r\n"))
 	out.WriteString("\r\n\r\n")
 
+	// CHAOS-5401: Python's MIMEText(html, "html") picks its body encoding
+	// from an auto-detected charset -- us-ascii (7bit-safe, sent as-is) when
+	// every character fits, utf-8 (BASE64 body encoding, always, for that
+	// charset) the moment it doesn't. A body that is not 7-bit-safe must be
+	// base64-encoded here too, not sent raw under Content-Transfer-Encoding:
+	// 8bit -- a relay that never advertised 8BITMIME could reject it.
 	partHeaders := textproto.MIMEHeader{}
 	partHeaders.Set("Content-Type", `text/html; charset="utf-8"`)
-	partHeaders.Set("Content-Transfer-Encoding", "8bit")
+	htmlBytes := []byte(message.HTML)
+	if is7BitSafe(message.HTML) {
+		partHeaders.Set("Content-Transfer-Encoding", "8bit")
+	} else {
+		partHeaders.Set("Content-Transfer-Encoding", "base64")
+		htmlBytes = base64MIMEBody(htmlBytes)
+	}
 	part, err := writer.CreatePart(partHeaders)
 	if err != nil {
 		return nil, fmt.Errorf("smtp message construction failed: %w", err)
 	}
-	if _, err := part.Write([]byte(message.HTML)); err != nil {
+	if _, err := part.Write(htmlBytes); err != nil {
 		return nil, fmt.Errorf("smtp message construction failed: %w", err)
 	}
 	if err := writer.Close(); err != nil {
@@ -508,4 +610,37 @@ func (sender *smtpEmailSender) compose(message EmailMessage) ([]byte, error) {
 	}
 	out.Write(buffer.Bytes())
 	return out.Bytes(), nil
+}
+
+// is7BitSafe reports whether every byte of s is a 7-bit US-ASCII octet
+// (< 0x80), matching the check Python's email package effectively applies
+// when it picks between an ASCII-safe charset and utf-8 for MIMEText's body
+// encoding (CHAOS-5401).
+func is7BitSafe(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > 0x7F {
+			return false
+		}
+	}
+	return true
+}
+
+// base64MIMEBody base64-encodes data and hard-wraps it at 76 characters per
+// line, CRLF-terminated -- RFC 2045 §6.8's line-length limit for the base64
+// Content-Transfer-Encoding, matching Python email.base64mime's output
+// shape (a single unwrapped line is technically non-conformant and some
+// relays reject or mangle it).
+func base64MIMEBody(data []byte) []byte {
+	const lineLength = 76
+	encoded := base64.StdEncoding.EncodeToString(data)
+	var out bytes.Buffer
+	for i := 0; i < len(encoded); i += lineLength {
+		end := i + lineLength
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		out.WriteString(encoded[i:end])
+		out.WriteString("\r\n")
+	}
+	return out.Bytes()
 }

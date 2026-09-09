@@ -216,6 +216,15 @@ export SMTP_PORT="1025"
 export EMAIL_FROM_ADDRESS="noreply@yourdomain.com"
 ```
 
+> **STARTTLS certificate verification (CHAOS-5400):** the Go billing mail
+> path verifies the SMTP server's certificate on `SMTP_USE_TLS=true` (the
+> old Python path did not). A relay on a private or self-signed CA will
+> fail STARTTLS and retry instead of sending -- there is no
+> insecure-skip-verify setting, by design. Point `SMTP_TLS_CA_FILE` at a
+> PEM file containing that CA to trust it explicitly; `SMTP_TLS_SERVER_NAME`
+> overrides the hostname checked against the certificate when it differs
+> from `SMTP_HOST` (e.g. a container/service name).
+
 5. **Subscribe to the `customer.subscription.trial_will_end` webhook event** in Stripe (or via CLI):
 
 ```bash

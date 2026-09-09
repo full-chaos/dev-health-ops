@@ -231,7 +231,13 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 	// production path runs every time.
 	if !request.DryRun {
 		observed := map[string]string{}
-		modeRows, err := tx.Query(ctx, `SELECT selected_operation, mode FROM public.go_api_routing_state WHERE schema_digest = $1`, request.SchemaDigest)
+		// FOR UPDATE on the assertion read too. Every row at this digest is
+		// already locked by selectRepointCandidatesSQL in this same
+		// transaction, so this acquires nothing new -- but an assertion that
+		// silently relied on a lock taken by a DIFFERENT statement would stop
+		// holding the moment that statement's scope narrowed. Locking what you
+		// assert on makes the invariant local to the assertion.
+		modeRows, err := tx.Query(ctx, `SELECT selected_operation, mode FROM public.go_api_routing_state WHERE schema_digest = $1 FOR UPDATE`, request.SchemaDigest)
 		if err != nil {
 			return nil, fmt.Errorf("goapiproof: re-read modes: %w", err)
 		}

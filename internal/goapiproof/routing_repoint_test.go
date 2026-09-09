@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -91,6 +92,20 @@ func TestRegisterCandidateBuildIsIdempotentAndComesFirst(t *testing.T) {
 func TestSelectLocksTheRowsItIsAboutToMove(t *testing.T) {
 	if !strings.Contains(selectRepointCandidatesSQL, "FOR UPDATE") {
 		t.Fatal("candidates must be locked: a concurrent enable between the read and the write would be lost")
+	}
+}
+
+// The mode assertion must lock what it asserts on, not lean on a lock taken by
+// a different statement -- that lock stops covering it the moment the other
+// statement's scope narrows.
+func TestModeAssertionLocksTheRowsItReads(t *testing.T) {
+	marker := "SELECT selected_operation, mode FROM public.go_api_routing_state WHERE schema_digest = $1 FOR UPDATE"
+	source, err := os.ReadFile("routing_repoint.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), marker) {
+		t.Fatal("the mode re-read must carry FOR UPDATE")
 	}
 }
 

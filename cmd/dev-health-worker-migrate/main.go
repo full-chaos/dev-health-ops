@@ -145,12 +145,7 @@ func execute(
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	if *check {
 		current, err := riverstore.CheckSchema(ctx, pool, schema, logger)
-		if err != nil {
-			fmt.Fprintln(stderr, "migration check failed: River schema is not current")
-			return 1
-		}
-		fmt.Fprintf(stdout, "River schema current at pinned version %d\n", current)
-		return 0
+		return reportSchemaCheck(ctx, logger, stdout, stderr, current, err)
 	}
 
 	migrationOptions.Logger = logger
@@ -190,6 +185,35 @@ func execute(
 		result.CurrentVersion,
 		len(result.AppliedVersions),
 	)
+	return 0
+}
+
+// reportSchemaCheck is --check's reporting half, split out from execute so
+// the logging behavior below is unit-testable without a live pool (CheckSchema
+// itself needs one; this does not). Before CHAOS-5469, this call site
+// discarded CheckSchema's error entirely -- a pool/connection failure
+// (riverstore.ErrSchemaCheckUnavailable) and a genuine version mismatch
+// (riverstore.ErrSchemaNotCurrent) both surfaced only as the same generic
+// "River schema is not current" line, with the real cause nowhere in the
+// output at all. The generic stderr line stays unchanged (an operator script
+// parsing it must not break), but the underlying cause is now logged first,
+// the same logDependencyCheckFailure-style pattern the readiness paths use.
+func reportSchemaCheck(
+	ctx context.Context,
+	logger *slog.Logger,
+	stdout, stderr io.Writer,
+	current int,
+	err error,
+) int {
+	if err != nil {
+		logger.ErrorContext(ctx, "river schema check failed",
+			"check", "river_schema",
+			"error", err.Error(),
+		)
+		fmt.Fprintln(stderr, "migration check failed: River schema is not current")
+		return 1
+	}
+	fmt.Fprintf(stdout, "River schema current at pinned version %d\n", current)
 	return 0
 }
 

@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -86,6 +90,89 @@ func TestCoordinatorGrantsTranslateThePostureWithoutDroppingAnything(t *testing.
 		CoordinatorSequences:    sequences,
 	}); err != nil {
 		t.Fatalf("the derived coordinator grant set is rejected by the migration itself: %v", err)
+	}
+}
+
+// TestReportSchemaCheckLogsTheCauseButKeepsTheGenericExitMessage is
+// CHAOS-5469's regression test for this call site specifically (codex round
+// finding F1 on PR #2399): before this fix, reportSchemaCheck's predecessor
+// discarded CheckSchema's error entirely -- an ErrSchemaCheckUnavailable
+// (pool/connection failure) and an ErrSchemaNotCurrent (genuine version
+// mismatch) both produced the exact same stderr output, with the real cause
+// visible nowhere. The generic stderr line must stay byte-identical (an
+// operator script parsing it must not break); the underlying cause must now
+// appear in the structured log line.
+func TestReportSchemaCheckLogsTheCauseButKeepsTheGenericExitMessage(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		err       error
+		wantCause string
+	}{
+		{
+			name:      "connection_unavailable",
+			err:       fmt.Errorf("%w: %w", riverstore.ErrSchemaCheckUnavailable, errors.New("dial tcp 127.0.0.1:1: connect: connection refused")),
+			wantCause: "River schema check could not run: dial tcp 127.0.0.1:1: connect: connection refused",
+		},
+		{
+			name:      "version_mismatch",
+			err:       riverstore.ErrSchemaNotCurrent,
+			wantCause: "River schema is not at the pinned version",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var logs, stdout, stderr bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+			status := reportSchemaCheck(context.Background(), logger, &stdout, &stderr, 0, testCase.err)
+
+			if status != 1 {
+				t.Fatalf("reportSchemaCheck() = %d, want 1", status)
+			}
+			// The generic exit message is unchanged -- byte-identical to
+			// before this fix, so an operator script matching on it never
+			// breaks.
+			if stderr.String() != "migration check failed: River schema is not current\n" {
+				t.Fatalf("stderr = %q, want the unchanged generic exit message", stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty on failure", stdout.String())
+			}
+			var record map[string]any
+			if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
+				t.Fatalf("log line is not JSON (%v): %s", err, logs.String())
+			}
+			if record["check"] != "river_schema" {
+				t.Errorf("log check = %v, want \"river_schema\"", record["check"])
+			}
+			if record["error"] != testCase.wantCause {
+				t.Errorf("log error = %v, want %q -- the underlying cause must reach the log even though the stderr message stays generic", record["error"], testCase.wantCause)
+			}
+		})
+	}
+}
+
+// TestReportSchemaCheckSucceedsSilently is the mirror image: passing proves
+// the failure-path test above isn't vacuously true for every input.
+func TestReportSchemaCheckSucceedsSilently(t *testing.T) {
+	t.Parallel()
+
+	var logs, stdout, stderr bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+
+	status := reportSchemaCheck(context.Background(), logger, &stdout, &stderr, riverstore.PinnedSchemaVersion, nil)
+
+	if status != 0 {
+		t.Fatalf("reportSchemaCheck() = %d, want 0", status)
+	}
+	if stderr.Len() != 0 || logs.Len() != 0 {
+		t.Fatalf("stderr=%q logs=%q, want both empty on success", stderr.String(), logs.String())
+	}
+	want := fmt.Sprintf("River schema current at pinned version %d\n", riverstore.PinnedSchemaVersion)
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}
 }
 

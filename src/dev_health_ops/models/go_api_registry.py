@@ -247,8 +247,18 @@ class ProofRun(Base):
     #: converts one -- ``terminal_state`` stays ``mismatch`` and the
     #: operation is not promoted, so "we know why" never becomes "it
     #: passed".
+    #:
+    #: Typed as a PostgreSQL ``text[]`` with an explicit SQLite variant. The
+    #: API test suite builds this metadata against aiosqlite (see
+    #: ``tests/api/auth/test_invite_flow.py``'s pattern), and SQLite's type
+    #: compiler cannot render ARRAY at all -- a bare ``ARRAY(Text)`` here
+    #: made ``create_all`` raise for every one of those tests, ~875 errors
+    #: from one column. The variant keeps a real array in Postgres, where
+    #: the Go writer sends a ``[]string``, without breaking the in-memory
+    #: fixtures. ``eligible_orgs`` on RoutingState solves the same problem
+    #: by being plain JSON everywhere.
     baseline_defect: Mapped[list[str] | None] = mapped_column(
-        ARRAY(Text), nullable=True
+        ARRAY(Text).with_variant(JSON(), "sqlite"), nullable=True
     )
     #: How many differences NO declared baseline defect covers. NOT NULL,
     #: default 0, because the explicit zero IS the claim: "every difference

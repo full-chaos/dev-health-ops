@@ -113,11 +113,22 @@ def test_canonical_incident_feature_seed_is_in_application_schema_graph() -> Non
     assert migration.down_revision == "0041"
     assert migration.revision in revisions
     # Ordinary schema and the explicitly authorized River ownership cutover
-    # intentionally branch after 0065. Keep this seed on the ordinary schema
-    # lineage, and pin both named heads so an accidental third branch or an
-    # out-of-order down_revision still fails loudly.
+    # intentionally branch after 0065. The guard here is that there are
+    # EXACTLY TWO heads -- so an accidental third branch or an out-of-order
+    # down_revision still fails loudly.
+    #
+    # The application_schema head is DERIVED, not pinned. It used to be the
+    # literal "0127", which meant every migration that moved the head failed
+    # this test for a reason unrelated to what it asserts (CHAOS-5425's 0128
+    # was the instance; the same literal had already been bumped for 0127
+    # before that, and would need bumping again for 0129). The River branch
+    # head stays literal on purpose: "0066" is a fixed, authorized cutover
+    # point, not a moving tip, and pinning it is what makes an accidental
+    # third branch visible.
+    application_schema_heads = scripts.get_revisions("application_schema@head")
+    assert len(application_schema_heads) == 1, application_schema_heads
     heads = scripts.get_heads()
-    assert set(heads) == {"0066", "0127"}
+    assert set(heads) == {"0066", application_schema_heads[0].revision}
     application_head = scripts.get_revision("application_schema@head").revision
     assert application_head == max(revisions)
     application_revisions = {

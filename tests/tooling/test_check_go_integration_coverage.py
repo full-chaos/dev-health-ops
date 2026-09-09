@@ -156,13 +156,18 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # package's own machinery had no importer left anywhere in the repo
     # either, so the whole package was deleted, not just its integration
     # files.
-    # CURRENT TOTAL: 51. Adding one -tags=integration package bumps every
+    # CHAOS-5425 added internal/goapiproof's first //go:build integration
+    # file (receipt_integration_test.go: the `prove` verb's receipt writer
+    # and the enablement-proof predicate, against a real Postgres with the
+    # registry's actual FK and CHECK constraints). 51 -> 52.
+    # CURRENT TOTAL: 52. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "51 package(s) discovered, 0 denylisted, 51 will run" in result.stdout
+    assert "52 package(s) discovered, 0 denylisted, 52 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
     assert "  RUN  internal/jobs/investment" in result.stdout
+    assert "  RUN  internal/goapiproof" in result.stdout
     assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
     assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

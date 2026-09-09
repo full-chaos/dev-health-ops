@@ -126,22 +126,24 @@ var operationSpecs = map[string]OperationSpec{
 			"data.capacityForecast.computedAt": volatileForecastIdentity,
 		}},
 	},
-	// capacityForecasts (the LIST) deliberately declares NOTHING. Its
-	// resolver reads stored columns back rather than recomputing, so its
-	// forecastId/computedAt are not per-request values and its
-	// throughputMean/throughputStddev are not recomputed aggregates
+	// capacityForecasts (the LIST) declares no Tier-B and no volatile
+	// fields: its resolver reads stored columns back rather than
+	// recomputing, so forecastId/computedAt are not per-request values and
+	// throughputMean/throughputStddev are not engine aggregates
 	// (lane-goapi-parity, CHAOS-5451 read of the resolver). An earlier
-	// draft here copied the singular operation's volatile pair onto it;
-	// those entries would have matched nothing -- the list nests under
-	// edges.node -- and failed every run as stale. CHAOS-5450 (Python's
-	// naive timestamp on this path) is NOT pinned yet: lane-goapi-parity is
-	// still confirming the spec citation, and a baseline-defect entry
-	// added ahead of that would excuse a difference nobody has justified.
+	// draft copied the SINGULAR operation's volatile pair onto it; those
+	// entries would have matched nothing -- the list nests under
+	// edges.node -- and failed every run as stale.
 	"capacityForecasts": {
 		ResponseRoot: "capacityForecasts",
 		Variables: func(orgID string, _ Window) map[string]any {
 			return map[string]any{"orgId": orgID, "filters": map[string]any{}}
 		},
+		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket: "CHAOS-5450",
+			Reason: "Python's LIST path stringifies the driver's NAIVE datetime (resolvers/capacity.py:24) and emits a space-separated timestamp with no offset, while its own SINGULAR path (capacity.py:50) stringifies a tz-aware one and does emit an offset -- Python is internally inconsistent with itself and stays frozen. Note the state this describes: as of this entry NEITHER plane emits the RFC 3339 form the schema documents (schema.graphql:704-705 says isoformat; :430/:2239 type the field String!, so nothing enforced it), and Go's own capacity resolvers are being fixed to emit it under R55 -- so this covers a real divergence today and continues to after that fix, but it must not be read as a claim that Go is already RFC 3339. Evidence: /var/lib/oci-cache/lane-scratch/lane-goapi-parity/5450/analysis.txt",
+			Paths:  []string{"data.capacityForecasts.edges.node.computedAt"},
+		}}},
 	},
 	"cognitiveLoad": {
 		ResponseRoot: "cognitiveLoad",
@@ -223,11 +225,21 @@ var operationSpecs = map[string]OperationSpec{
 			"data.analytics.breakdowns.items.value":      "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Derived from CHAOS-5451's rule rather than an observed divergence, and this table's payload always sets useInvestment=true; on the non-investment path the same measure is an exact integer sum",
 		}},
 	},
+	// sankey.coverage.teamCoverage/.repoCoverage are deliberately NOT
+	// declared, and the reason is path-dependent rather than permanent: on
+	// the committed WORK_TYPE payload they are count()/countIf() integers
+	// (sankeycoverage.go:128-131) and Tier A is correct. If a future
+	// registered document adds a REPO dimension, useRepoAllocation flips on
+	// (investment.go:501) and those same two leaves become sum()/sumIf()
+	// float sums (sankeycoverage.go:192-195) -- Tier B at that point, not
+	// before (lane-goapi-parity, CHAOS-5451).
 	"investmentFull": {
 		ResponseRoot: "analytics",
 		Variables:    investmentVariables,
 		Parity: Options{FloatTierB: map[string]string{
-			"data.analytics.breakdowns.items.value": "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Same rule-derived entry as investmentBreakdown's. The sankey values on this document are NOT declared: they were not read or measured, so a divergence there stays a loud mismatch rather than a silent tolerance",
+			"data.analytics.breakdowns.items.value": "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Rule-derived, not observed (CHAOS-5451)",
+			"data.analytics.sankey.nodes.value":     "CompileSankey calls the same dbExpression as breakdowns, so on the investment path this is the same SUM(subcategory_kv.2) float sum; subcategory_kv ARRAY JOINs a Map(String, Float64) column (investment.go:514, migration 017:12). Rule-derived, not observed (CHAOS-5451)",
+			"data.analytics.sankey.edges.value":     "same float sum as sankey.nodes.value -- one dbExpression, one compiled measure (validate.go:245-246, investment.go:514). Rule-derived, not observed (CHAOS-5451)",
 		}},
 	},
 	"operatingReview": {

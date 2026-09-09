@@ -3,8 +3,11 @@ package syncreconciler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,17 +59,40 @@ type TerminalDeliveryRepairResult struct {
 	// execute that kind. That is a registry or routing fault, and it repeats
 	// deterministically until someone fixes it.
 	RescueOnlyCancelsRecovered int
+	// ReadyFinalizersRecovered is the CHAOS-5456 backstop's own subset: a
+	// finalize_sync_run outbox row left 'dispatched' forever because River's
+	// delivery ended COMPLETED (or its row was reaped) while the run itself
+	// never reached a terminal state. It is counted separately for exactly the
+	// reason the three above are: the four branches recover the same row into
+	// the same status, and folding this one into a shared count would make a
+	// domain-verified re-arm indistinguishable from a River-terminal rescue in
+	// the numbers an operator reads. It is ALSO included in Recovered, which
+	// stays the total across every branch.
+	ReadyFinalizersRecovered int
 }
 
 // TerminalDeliveryRepair restores a durable dispatch intent when River itself
 // proves it retired the delivery without the authoritative domain work having
-// been re-armed. Three proofs qualify, and only three: the global JobRescuer
-// discarded a still-retryable job as unhandled, the job spent its entire
-// attempt budget, or a rescue-only worker cancelled it. Completed and
-// still-live jobs stay excluded, as does a discard that happened with attempts
+// been re-armed. Three River-terminal proofs qualify, and only three: the
+// global JobRescuer discarded a still-retryable job as unhandled, the job
+// spent its entire attempt budget, or a rescue-only worker cancelled it.
+// Still-live jobs stay excluded, as does a discard that happened with attempts
 // still on the clock for any other reason -- that is a worker declaring the
 // work permanently failed, and reclaiming it would relitigate a decision the
 // domain already made.
+//
+// # The fourth branch: a COMPLETED delivery over an unfinished run
+//
+// A completed River job is not evidence on its own -- ordinarily it means the
+// domain effect ran, and re-arming would double-deliver. CHAOS-5456 is the one
+// shape where it is not: the finalize delivery completed (or River's cleaner
+// reaped its row) while the run stayed non-terminal with every unit finished,
+// so nothing will ever wake it again. That branch is therefore NOT decided
+// from River state at all -- it is licensed only by a coordinator-role read of
+// the same readiness contract the materializer uses, taken while this
+// transaction holds the outbox row. See repairReadyFinalizers in
+// ready_finalize_repair.go; the "completed jobs stay excluded" rule above is
+// about the three River-terminal branches, which this one does not join.
 //
 // # Why 'cancelled' is admitted, and why only this one class of it
 //
@@ -117,21 +143,30 @@ type TerminalDeliveryRepairResult struct {
 // a superseded delivery -- either of those breaks the linkage. So this can
 // never double-deliver work the domain has already moved past.
 type TerminalDeliveryRepair struct {
-	begin beginFunc
-	query string
+	begin              beginFunc
+	query              string
+	coordinator        *pgxpool.Pool
+	readyFinalizeQuery string
+	lockFinalizeJobSQL string
+	finalizeStaleAge   time.Duration
 }
 
 func NewTerminalDeliveryRepair(
 	queueControlPool *pgxpool.Pool,
+	coordinatorPool *pgxpool.Pool,
 	riverSchema string,
 ) (*TerminalDeliveryRepair, error) {
-	if queueControlPool == nil || !riverSchemaPattern.MatchString(riverSchema) {
+	if queueControlPool == nil || coordinatorPool == nil || !riverSchemaPattern.MatchString(riverSchema) {
 		return nil, ErrInvalidConfiguration
 	}
 	jobTable := pgx.Identifier{riverSchema, "river_job"}.Sanitize()
 	return &TerminalDeliveryRepair{
-		begin: queueControlPool.Begin,
-		query: fmt.Sprintf(repairTerminalRiverDeliverySQL, jobTable),
+		begin:              queueControlPool.Begin,
+		query:              fmt.Sprintf(repairTerminalRiverDeliverySQL, jobTable),
+		coordinator:        coordinatorPool,
+		readyFinalizeQuery: fmt.Sprintf(selectReadyFinalizeSQL, jobTable),
+		lockFinalizeJobSQL: fmt.Sprintf(lockReadyFinalizeJobSQL, jobTable),
+		finalizeStaleAge:   syncdispatchcontract.DispatchStaleAge(),
 	}, nil
 }
 
@@ -191,9 +226,27 @@ func (repair *TerminalDeliveryRepair) Step(
 	if err := rows.Err(); err != nil || result.Recovered > limit {
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
 	}
+	rows.Close()
+	readyOutcome, err := repair.repairReadyFinalizers(ctx, tx, now.UTC(), limit-result.Recovered)
+	if err != nil {
+		return TerminalDeliveryRepairResult{}, err
+	}
+	result.ReadyFinalizersRecovered = readyOutcome.Recovered
+	result.Recovered += readyOutcome.Recovered
 	if err := tx.Commit(ctx); err != nil {
+		// The ready-finalizer pass line is emitted ONLY on the committed
+		// path. A rollback gets its own distinct event carrying the counts
+		// that were ABANDONED, so a lost recovery is visible as a loss
+		// rather than silently indistinguishable from a pass that found
+		// nothing (CHAOS-5456 review R2).
+		slog.ErrorContext(ctx, "syncreconciler.ready_finalize_uncommitted",
+			"abandoned_recovered", readyOutcome.Recovered,
+			"abandoned_candidates", readyOutcome.Candidates,
+			"error", err.Error(),
+		)
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
 	}
+	repair.logReadyFinalizeOutcome(ctx, now.UTC(), readyOutcome)
 	return result, nil
 }
 

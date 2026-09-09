@@ -33,7 +33,7 @@ func TestProductionMutationPipelineConstructsTerminalDeliveryRepair(t *testing.T
 		t.Fatal(err)
 	}
 	text := string(source)
-	if strings.Count(text, "syncreconciler.NewTerminalDeliveryRepair(queuePool, riverSchema)") != 1 {
+	if strings.Count(text, "syncreconciler.NewTerminalDeliveryRepair(queuePool, coordinatorPool, riverSchema)") != 1 {
 		t.Fatal("production reconciler does not construct the queue-side terminal delivery repair")
 	}
 	if !strings.Contains(text, "repair,\n\t\tterminalRepair,\n\t\tmaterializer,") {

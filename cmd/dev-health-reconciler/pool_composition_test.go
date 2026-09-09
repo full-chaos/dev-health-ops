@@ -37,8 +37,16 @@ var checkedInPoolComposition = map[string][]string{
 	// CHAOS-4583: joins sync_run_reference_discoveries, which the queue role
 	// has no grant on at all -- same pool as Materializer, same reasoning.
 	"syncreconciler.NewTerminalOutboxClose": {"coordinatorPool"},
-	// River job tables live under the queue role.
-	"syncreconciler.NewTerminalDeliveryRepair": {"queuePool"},
+	// River job tables live under the queue role. CHAOS-5456 added a second
+	// pool: the ready-finalizer backstop's readiness read hits
+	// sync_run_reference_discoveries and scheduled_sync_occurrences, both
+	// coordinator-exclusive, so that ONE statement takes the coordinator pool
+	// and runs outside the queue transaction -- the same shape
+	// UnreclaimableSweep already uses, and the one
+	// docs/contribute/architecture/go-worker-runtime.md prescribes for a
+	// component whose statements span two jurisdictions. The alternative,
+	// widening the queue role's grants, is the thing that rule exists to stop.
+	"syncreconciler.NewTerminalDeliveryRepair": {"coordinatorPool", "queuePool"},
 	"riverpgxv5.New": {"queuePool"},
 	// Domain-granted tables only.
 	"syncreconciler.NewLeaseRepair": {"domainPool"},

@@ -626,11 +626,11 @@ WHERE sync_dispatch_outbox.status <> 'pending'
 	)
 `
 
-const materializeFinalizeSQL = `
-WITH candidates AS (
-	SELECT run.id, run.org_id
-	FROM public.sync_runs AS run
-	WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
+// finalizeReadyRunPredicate is shared by materialization and queue-delivery
+// recovery (ready_finalize_repair.go's readyFinalizeDomainSQL). Its
+// nonterminal-status clause is shared further still, with that file's
+// queue-side candidate filter -- see nonterminalSyncRunStatusPredicate.
+const finalizeReadyRunPredicate = nonterminalSyncRunStatusPredicate + `
 		AND (
 			run.triggered_by <> 'schedule'
 			OR EXISTS (
@@ -650,7 +650,13 @@ WITH candidates AS (
 			FROM public.sync_run_reference_discoveries AS discovery
 			WHERE discovery.sync_run_id = run.id
 				AND discovery.status IN ('planned', 'retrying', 'running')
-		)
+		)`
+
+const materializeFinalizeSQL = `
+WITH candidates AS (
+	SELECT run.id, run.org_id
+	FROM public.sync_runs AS run
+	WHERE ` + finalizeReadyRunPredicate + `
 	ORDER BY run.created_at, run.id
 	LIMIT $2
 )

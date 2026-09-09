@@ -713,7 +713,7 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+		repair, err := NewTerminalDeliveryRepair(queuePool, adminPool, "river")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -868,7 +868,7 @@ func TestKernelMutationPostgresTransactionFence(t *testing.T) {
 			WHERE id::text = $1`, jobID, now); err != nil {
 			t.Fatal(err)
 		}
-		repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+		repair, err := NewTerminalDeliveryRepair(queuePool, adminPool, "river")
 		if err != nil {
 			t.Fatal(err)
 		}

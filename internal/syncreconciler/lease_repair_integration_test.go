@@ -47,6 +47,32 @@ func (tx *gatedLeaseRepairTx) Exec(ctx context.Context, sql string, args ...any)
 	}
 }
 
+// observingLeaseRepairTx signals onLockAttempt immediately BEFORE its owner
+// issues the real `SELECT pg_advisory_xact_lock($1)` call (not after the
+// call blocks or returns), then delegates straight to the real driver -- it
+// never gates or delays the call itself, only reports that it is about to
+// happen. CHAOS-5433: acquireLeaseRepairBucketLocks runs AFTER
+// selectExpiredLeaseCandidates (lease_repair.go), so this signal alone is
+// proof the owning Step() already captured its candidate SELECT (and
+// therefore its final Selected count) before it ever reached the point
+// where a contended bucket lock can block it -- the test does not need to
+// observe Postgres actually blocking to know the SELECT already ran. That
+// turns "did the second replica's SELECT run before or after the first
+// replica committed" from a wall-clock guess into a fact this test can wait
+// on directly.
+type observingLeaseRepairTx struct {
+	pgx.Tx
+	onLockAttempt chan struct{}
+	once          sync.Once
+}
+
+func (tx *observingLeaseRepairTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if sql == "SELECT pg_advisory_xact_lock($1)" {
+		tx.once.Do(func() { close(tx.onLockAttempt) })
+	}
+	return tx.Tx.Exec(ctx, sql, args...)
+}
+
 type failingLeaseRepairTx struct {
 	pgx.Tx
 }
@@ -100,7 +126,14 @@ func TestLeaseRepairPostgresContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := NewLeaseRepair(pool)
+		secondLockAttempt := make(chan struct{})
+		second, err := newLeaseRepair(func(beginCtx context.Context) (pgx.Tx, error) {
+			tx, beginErr := pool.Begin(beginCtx)
+			if beginErr != nil {
+				return nil, beginErr
+			}
+			return &observingLeaseRepairTx{Tx: tx, onLockAttempt: secondLockAttempt}, nil
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -131,10 +164,25 @@ func TestLeaseRepairPostgresContract(t *testing.T) {
 				err    error
 			}{result, stepErr}
 		}()
+		// CHAOS-5433: wait for the explicit barrier, not a wall-clock guess.
+		// Once secondLockAttempt fires, the second replica's own candidate
+		// SELECT has already run (and fixed its Selected count), and it is
+		// about to issue the real advisory-lock call that the first replica's
+		// still-open transaction holds -- so it CANNOT have finished by the
+		// time this select returns, by Postgres's own xact-lock semantics
+		// (the lock call will block until the first replica commits), not by
+		// timing luck.
+		select {
+		case <-secondLockAttempt:
+		case secondResult := <-secondDone:
+			t.Fatalf("second replica finished before attempting the bucket lock: %#v, %v", secondResult.result, secondResult.err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
 		select {
 		case secondResult := <-secondDone:
 			t.Fatalf("second replica bypassed bucket lock: %#v, %v", secondResult.result, secondResult.err)
-		case <-time.After(100 * time.Millisecond):
+		default:
 		}
 		close(release)
 		firstResult := <-firstDone

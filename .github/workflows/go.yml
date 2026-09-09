@@ -928,11 +928,28 @@ jobs:
             exit 0
           fi
           encoded_branch=$(jq -rn --arg v "$BRANCH" '$v | @uri')
-          if gh api "repos/full-chaos/dev-health-web/branches/${encoded_branch}" >/dev/null 2>&1; then
+          api_error=$(mktemp)
+          trap 'rm -f "$api_error"' EXIT
+          if gh api "repos/full-chaos/dev-health-web/branches/${encoded_branch}" >/dev/null 2>"$api_error"; then
             echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
             echo "::notice::graphql-wire-parity: paired branch '$BRANCH' found on dev-health-web; checking it out instead of main"
-          else
+          elif grep -q 'HTTP 404' "$api_error"; then
+            # The expected, silent-by-design case: an unpaired PR. Genuinely
+            # no branch by this name on dev-health-web -- fall back to main.
             echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "::notice::graphql-wire-parity: no branch named '$BRANCH' on dev-health-web (unpaired change); using main"
+          else
+            # CHAOS-5406 review finding F1: any OTHER gh api failure (bad
+            # token, rate limit, network) must NOT be silently indistinguishable
+            # from "branch not found" -- that would fall back to main without
+            # anyone knowing the check never actually ran, quietly re-opening
+            # the exact pairing deadlock this job exists to prevent. Still
+            # fails open to main (a CI drift-detection job should not go red
+            # on a transient API hiccup), but now as a visible warning, not a
+            # silent default.
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "::warning::graphql-wire-parity: could not determine whether '$BRANCH' exists on dev-health-web (see error below); defaulting to main, which may re-open the pairing deadlock this job exists to prevent"
+            cat "$api_error" >&2
           fi
 
       - name: Checkout dev-health-web

@@ -174,6 +174,40 @@ func (m *Materializer) logOwnershipFallback(ctx context.Context, cfg Config, sta
 	)
 }
 
+// logRepoAttribution emits the run's closed repo-attribution partition -- own,
+// ancestor, children, team and unassigned (CHAOS-5458) -- as one structured
+// log line carrying BOTH halves that used to live on two separate lines
+// correlated only by run_id: the cascade fields the OLD "investment repo
+// attribution" line had (own_signal/hierarchy_ancestor/hierarchy_children/
+// cascade_hop*/unassigned), PLUS the team partition and its NxM fan-out
+// (team_fallback/team_repo_shares) that only ever appeared on "investment team
+// repository fallback". That second line is UNCHANGED and still emitted
+// (logOwnershipFallback, called right before this) -- it carries the fuller
+// ownership-outcome breakdown (own_repo/stronger_allocation/direct_repo_
+// evidence/no_eligible_owner/donor_rows/donor_issues) that has no place in a
+// five-way closed partition. RepoAttributionCountsFromStats' own doc comment
+// has the proof that team is always a subset of the pre-team-split unassigned
+// count, which is what makes folding it into this line's `unassigned` field
+// exact rather than approximate. Called on every run, including a
+// zero-component run, so a stalled fleet reads as explicit zeros rather than
+// a missing line.
+func (m *Materializer) logRepoAttribution(ctx context.Context, cfg Config, stats Stats) {
+	counts := RepoAttributionCountsFromStats(stats)
+	m.logger.InfoContext(ctx, "investment repo attribution",
+		"org_id", cfg.OrgID, "run_id", cfg.RunID,
+		"components", stats.Components,
+		"own_signal", counts.Own,
+		"hierarchy_ancestor", counts.Ancestor,
+		"hierarchy_children", counts.Children,
+		"cascade_hop1", stats.RepoCascadeHop1,
+		"cascade_hop2_plus", stats.RepoCascadeHop2Plus,
+		"cascade_max_hops", stats.RepoCascadeMaxHops,
+		"team_fallback", counts.Team,
+		"team_repo_shares", stats.RepoOwnershipRepoShares,
+		"unassigned", counts.Unassigned,
+	)
+}
+
 // Materializer holds the collaborators one org-scoped run needs. All three are
 // required; a nil one is a wiring bug, not a degraded mode.
 type Materializer struct {
@@ -256,6 +290,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		// never ran" are hardest to tell apart, so the all-zero record is more
 		// load-bearing here than on a busy run, not less.
 		m.logOwnershipFallback(ctx, cfg, stats, ownershipAsOf)
+		m.logRepoAttribution(ctx, cfg, stats)
 		return stats, nil
 	}
 
@@ -326,21 +361,6 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 	}
 	stats.RepoCascadeUnassigned = len(components) - stats.RepoCascadeOwn - stats.RepoCascadeAncestor - stats.RepoCascadeChildren
-
-	// CHAOS-5458: these counters were computed and DISCARDED before this
-	// change, so "is repo attribution degrading" could only be answered by an
-	// ad-hoc ClickHouse query after the fact.
-	m.logger.InfoContext(ctx, "investment repo attribution",
-		"org_id", cfg.OrgID, "run_id", cfg.RunID,
-		"components", stats.Components,
-		"own_signal", stats.RepoCascadeOwn,
-		"hierarchy_ancestor", stats.RepoCascadeAncestor,
-		"hierarchy_children", stats.RepoCascadeChildren,
-		"cascade_hop1", stats.RepoCascadeHop1,
-		"cascade_hop2_plus", stats.RepoCascadeHop2Plus,
-		"cascade_max_hops", stats.RepoCascadeMaxHops,
-		"unassigned", stats.RepoCascadeUnassigned,
-	)
 
 	// PREPROCESS. Every component is assembled deterministically first, then
 	// split into "needs an LLM call" and "already has its answer". The split
@@ -421,6 +441,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	modelVersion := categorize.EffectiveModelVersion(cfg.ProviderName, resolvedModelName(cfg))
 
 	m.logOwnershipFallback(ctx, cfg, stats, ownershipAsOf)
+	m.logRepoAttribution(ctx, cfg, stats)
 
 	// SKIP-EXISTING. Runs only when not forced, and only over the pending set.
 	skippedExisting := map[int]struct{}{}

@@ -256,6 +256,34 @@ func teamRepoOwnershipResolutionArms() []TeamRepoOwnershipResolutionArm {
 	}
 }
 
+// InvestmentRepoAttributionSource is the closed partition CHAOS-5458 reports
+// for every component investment.materialize's native executor processes in
+// one run: how (or whether) that component's repository was resolved. Own,
+// Ancestor and Children are the CHAOS-5359/5459 own-signal and hierarchy-
+// cascade tiers; Team is the CHAOS-5460 NxM team-ownership fallback;
+// Unassigned is whatever is left once all four are exhausted. Mirrors
+// investment.RepoAttributionSource's own string constants as a distinct type
+// here since jobruntime must not import the investment package.
+type InvestmentRepoAttributionSource string
+
+const (
+	InvestmentRepoAttributionSourceOwn        InvestmentRepoAttributionSource = "own"
+	InvestmentRepoAttributionSourceAncestor   InvestmentRepoAttributionSource = "ancestor"
+	InvestmentRepoAttributionSourceChildren   InvestmentRepoAttributionSource = "children"
+	InvestmentRepoAttributionSourceTeam       InvestmentRepoAttributionSource = "team"
+	InvestmentRepoAttributionSourceUnassigned InvestmentRepoAttributionSource = "unassigned"
+)
+
+func investmentRepoAttributionSources() []InvestmentRepoAttributionSource {
+	return []InvestmentRepoAttributionSource{
+		InvestmentRepoAttributionSourceOwn,
+		InvestmentRepoAttributionSourceAncestor,
+		InvestmentRepoAttributionSourceChildren,
+		InvestmentRepoAttributionSourceTeam,
+		InvestmentRepoAttributionSourceUnassigned,
+	}
+}
+
 // IncidentValidFromGuardReason labels one operational_service_repository_mappings
 // row matched by IncidentExecutor's loader (CHAOS-4269/CHAOS-4295): whether
 // it already had a non-NULL valid_from (would have matched the OLD Python
@@ -1125,6 +1153,11 @@ type MetricsCollector struct {
 	// of rows produced by each identity resolution -- see
 	// TeamRepoOwnershipResolutionArm's doc comment.
 	teamRepoOwnershipResolutionArm map[TeamRepoOwnershipResolutionArm]uint64
+	// investmentRepoAttribution (CHAOS-5458): per-source counter of the
+	// components investment.materialize's native executor resolved a
+	// repository for in one run -- see InvestmentRepoAttributionSource's doc
+	// comment.
+	investmentRepoAttribution map[InvestmentRepoAttributionSource]uint64
 	// incidentValidFromGuardRows (CHAOS-4269/CHAOS-4295): per-reason counter
 	// of operational_service_repository_mappings rows IncidentExecutor's
 	// loader matched, split by whether the NULL-OK valid_from guard was
@@ -1325,6 +1358,7 @@ var _ IncidentValidFromGuardObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
+var _ InvestmentRepoAttributionObserver = (*MetricsCollector)(nil)
 var _ TeamCatalogObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
@@ -1395,6 +1429,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
 		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
+		investmentRepoAttribution:            make(map[InvestmentRepoAttributionSource]uint64, len(investmentRepoAttributionSources())),
 		incidentValidFromGuardRows:           make(map[IncidentValidFromGuardReason]uint64, len(incidentValidFromGuardReasons())),
 		teamCatalogDispatch:                  make(map[teamCatalogDispatchLabels]uint64),
 		teamCatalogRowsWritten:               make(map[teamCatalogRowsLabels]uint64),
@@ -2147,6 +2182,26 @@ func (collector *MetricsCollector) ObserveTeamRepoOwnershipDerivationResolutionA
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.teamRepoOwnershipResolutionArm[arm] += uint64(count)
+	return nil
+}
+
+// ObserveInvestmentRepoAttribution records, per investment.materialize run,
+// how many components resolved a repository from each source in the closed
+// InvestmentRepoAttributionSource vocabulary (CHAOS-5458). count must be >= 0
+// and is called for every registered source on every run, even 0, so a
+// source that stops firing is visible as an explicit zero rather than a
+// series that silently disappears -- same discipline as
+// ObserveTeamRepoOwnershipDerivationResolutionArm.
+func (collector *MetricsCollector) ObserveInvestmentRepoAttribution(source InvestmentRepoAttributionSource, count int) error {
+	if !slices.Contains(investmentRepoAttributionSources(), source) {
+		return errors.New("investment repo attribution source is not registered")
+	}
+	if count < 0 {
+		return errors.New("investment repo attribution count cannot be negative")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.investmentRepoAttribution[source] += uint64(count)
 	return nil
 }
 
@@ -3180,6 +3235,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeWorkItemStateMissingAttribution(&output)
 	collector.writePostSyncFanout(&output)
 	collector.writeTeamRepoOwnershipDerivation(&output)
+	collector.writeInvestmentRepoAttribution(&output)
 	collector.writeIncidentValidFromGuard(&output)
 	collector.writeTeamCatalogDispatch(&output)
 	collector.writeTeamCatalogRowsWritten(&output)
@@ -3702,6 +3758,24 @@ func (collector *MetricsCollector) writeTeamRepoOwnershipDerivation(output *stri
 	for _, arm := range teamRepoOwnershipResolutionArms() {
 		writeUintSample(output, "dev_health_team_repo_ownership_derivation_resolution_arm_total",
 			[]metricLabel{{"arm", string(arm)}}, collector.teamRepoOwnershipResolutionArm[arm])
+	}
+}
+
+// writeInvestmentRepoAttribution renders CHAOS-5458's per-source counter: how
+// many components one investment.materialize run resolved a repository for
+// via own-signal edges/churn, the CHAOS-5359/5459 hierarchy cascade
+// (ancestor/children), the CHAOS-5460 NxM team-ownership fallback, or none of
+// the above (unassigned). Every source is emitted on every run, including
+// zero, so a source that stops firing reads as an explicit zero rather than a
+// missing series -- same discipline as writeTeamRepoOwnershipDerivation, and
+// the exact lesson that function's own doc comment names: a metric that is
+// only ever incremented and never rendered here is recorded and never
+// exported.
+func (collector *MetricsCollector) writeInvestmentRepoAttribution(output *strings.Builder) {
+	writeMetadata(output, "dev_health_investment_repo_attribution_total", "Components investment.materialize's native executor resolved a repository for in one run, by source: own (own-edges or PR/commit churn), ancestor/children (CHAOS-5359/5459 issue-hierarchy cascade), team (CHAOS-5460 NxM team-ownership fallback), or unassigned (CHAOS-5458).", "counter")
+	for _, source := range investmentRepoAttributionSources() {
+		writeUintSample(output, "dev_health_investment_repo_attribution_total",
+			[]metricLabel{{"source", string(source)}}, collector.investmentRepoAttribution[source])
 	}
 }
 

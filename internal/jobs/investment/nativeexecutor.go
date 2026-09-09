@@ -52,6 +52,16 @@ type NativeExecutor struct {
 	// model_ref must reach the PROVIDER, not merely the model-version string
 	// (codex r1 P1-b).
 	newProvider func(requested, model string) (categorize.Provider, categorize.ProviderKind, error)
+	// observer receives CHAOS-5458's per-run repo-attribution partition. Nil
+	// is tolerated everywhere it is read, same discipline as
+	// remaining.MembershipExecutor.SetObserver.
+	observer RepoAttributionObserver
+}
+
+// SetObserver wires optional CHAOS-5458 repo-attribution telemetry. Nil is
+// tolerated everywhere it is read.
+func (executor *NativeExecutor) SetObserver(observer RepoAttributionObserver) {
+	executor.observer = observer
 }
 
 // NewNativeExecutor builds the executor. Every collaborator is required.
@@ -265,6 +275,9 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	stats, err := materializer.Run(ctx, cfg)
 	if err != nil {
 		return nil, err
+	}
+	if executor.observer != nil {
+		executor.observer.ObserveRepoAttribution(RepoAttributionCountsFromStats(stats))
 	}
 	return executor.buildEvidence(claim, stats)
 }

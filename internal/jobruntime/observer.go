@@ -204,6 +204,18 @@ type TeamRepoOwnershipDerivationObserver interface {
 	ObserveTeamRepoOwnershipDerivationResolutionArm(TeamRepoOwnershipResolutionArm, int) error
 }
 
+// InvestmentRepoAttributionObserver is the narrow capability
+// investment.materialize's native executor (CHAOS-5458) depends on to report
+// how it resolved a repository for the components ONE run processed. Before
+// this observer existed, that partition was computed and written only to the
+// worker's own log line -- "is repo attribution degrading" could only be
+// answered by reading logs, not by a Prometheus alert. Called for every
+// registered InvestmentRepoAttributionSource on every run, including 0, so
+// each series stays present regardless of which sources actually fired.
+type InvestmentRepoAttributionObserver interface {
+	ObserveInvestmentRepoAttribution(InvestmentRepoAttributionSource, int) error
+}
+
 // DailyMetricsZeroRowsObserver is the narrow capability the daily-metrics
 // partition handler depends on when a family's upstream source data exists
 // for a partition's repositories and day, but that family's output table has

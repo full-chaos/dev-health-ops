@@ -112,8 +112,31 @@ func TestTheDeterminismPinDetectsMapOrdering(t *testing.T) {
 		sum := sha256.Sum256(encoded)
 		return hex.EncodeToString(sum[:])
 	}
-	if digest() == digest() {
-		t.Fatal("ranging a map twice produced the same order, so the pin above " +
-			"cannot distinguish ordered output from map order and proves nothing")
+	// CHAOS-5432: Go's map iteration order is randomised per range, but it
+	// randomises the STARTING BUCKET, not a full permutation -- so two
+	// consecutive ranges over the same map instance can legitimately land on
+	// the same starting bucket by chance (observed live on CI: run 34103319688
+	// flaked on exactly this assertion with only two draws). Comparing just
+	// two digests makes the pin's own precondition probabilistic. Comparing a
+	// bounded run of draws against the first keeps the same defect under
+	// test -- ranging the map directly, with no injected fairness -- while
+	// making a false pass (every draw agreeing purely by chance) vanishingly
+	// unlikely rather than merely unlikely. It still fires for the failure
+	// this test exists to catch: a derivation that became trivially
+	// deterministic for an unrelated reason (say, always producing zero or
+	// one edge) makes every draw agree regardless of attempt count.
+	const drawsAfterFirst = 24
+	first := digest()
+	agreedEveryTime := true
+	for i := 0; i < drawsAfterFirst; i++ {
+		if digest() != first {
+			agreedEveryTime = false
+			break
+		}
+	}
+	if agreedEveryTime {
+		t.Fatalf("ranging a map produced the same order on all %d draws in a row, "+
+			"so the pin above cannot distinguish ordered output from map order and "+
+			"proves nothing", drawsAfterFirst+1)
 	}
 }

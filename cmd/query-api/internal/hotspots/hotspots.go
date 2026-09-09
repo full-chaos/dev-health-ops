@@ -188,6 +188,30 @@ type hotspotRow struct {
 // each field with tupleElement makes the row selection atomic: whichever
 // row wins (day, computed_at) is the row every field comes from, NULLs
 // included, because there is only one argMax call, not six.
+//
+// MEASURED AGAINST PYTHON, CHAOS-5447. The 2026-09-07 enablement run
+// recorded this operation as a Go/Python parity divergence:
+// churnCommits30d 1 vs 5 and churnLoc30d 95560 vs 95967 on one file,
+// with 17 of the 48 files present on both sides disagreeing on churn in
+// BOTH directions -- the signature of the two sides selecting different
+// physical rows, not of one side miscomputing a value. In those pairs the
+// LEFT value is PYTHON and the RIGHT is GO.
+//
+// Python is the wrong side and stays frozen. Its key is `computed_at`
+// alone, so an older day recomputed by a backfill carries a later
+// computed_at and wins outright, reporting month-old churn as current;
+// and on a computed_at TIE it picks by ClickHouse's internal row order --
+// measured at 31,072 of 100,000 seeded files resolving to the OLDER day,
+// against 0 of 100,000 here. Python's own docstring claims to surface the
+// latest pass per (org_id, day, scope_key) (resolvers/complexity.py:8-10)
+// while its query groups by (repo_id, file_path) only, so `day` never
+// enters. Reproductions and numbers: CHAOS-5447.
+//
+// Two tests pin this, covering DIFFERENT conditions -- keep both:
+// hotspots_argmax_tiebreak_integration_test.go for the TIE (CHAOS-4684),
+// hotspots_backfill_inversion_integration_test.go for the INVERSION
+// (CHAOS-5447). Reducing the key to `computed_at` fails both; swapping it
+// to `(computed_at, day)` fails only the second.
 func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int) ([]hotspotRow, error) {
 	query := `
         SELECT

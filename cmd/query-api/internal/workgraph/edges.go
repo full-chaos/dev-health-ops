@@ -76,6 +76,28 @@ func (r edgeRow) identity() identityKey {
 // a match under a genuine duplicate-version condition means this fix did
 // not take effect.
 //
+// MEASURED, CHAOS-5449, on a 1000-row request in the 2026-09-07
+// enablement run: Python returned 1000 rows carrying only 738 DISTINCT
+// edgeIds (262 duplicates); this reader returned 1000 rows, 1000
+// distinct. set(python) - set(go) was EMPTY and set(go) - set(python) was
+// 262 -- so the deduped result is a strict SUPERSET, holding every edge
+// Python returned plus 262 further genuine edges Python could not reach
+// because duplicate versions had spent its LIMIT budget.
+//
+// That also retires the ticket's original diagnosis. CHAOS-5449 was filed
+// as a tie-ORDERING divergence to be closed with CHAOS-4381's ordering
+// rules; both sides in fact sort identically (`ORDER BY confidence DESC,
+// edge_id ASC`, resolvers/work_graph.py:1163 and below), and relaxing the
+// comparator's ordering here would have HIDDEN this. The reported
+// index-5 mismatch was simply Python repeating its own index 4.
+//
+// The property that makes the superset possible -- the collapse running
+// BEFORE ORDER BY/LIMIT, so LIMIT counts distinct EDGES and never
+// physical rows -- is pinned by
+// edges_dedup_before_limit_integration_test.go. That is separate from
+// CHAOS-4985's hybrid-row-on-a-tie guard in edges_integration_test.go;
+// neither test subsumes the other.
+//
 // The dedup GROUP BY plus the theme-membership EXISTS clause (when a theme
 // filter is active) are BOTH pushed into the same WHERE, applied
 // pre-aggregation -- source_type/source_id/target_type/target_id/edge_type

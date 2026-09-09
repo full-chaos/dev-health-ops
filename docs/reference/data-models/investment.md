@@ -130,6 +130,46 @@ written on every run, including at zero, so that "nothing to allocate" can be
 told apart from "the counter was never computed". Field-by-field meaning:
 [CLI reference](../cli/index.md#investment).
 
+## Repository coverage: two numbers, not one
+
+Repository coverage is the share of attributed effort that resolves to a
+repository. Since the team-ownership fallback above exists, that single share
+answers two different questions at once, and the API reports them separately.
+
+`repoCoverage` is unchanged: all effort that reached any repository, over all
+effort in the window. Beside it:
+
+| Field | Question it answers | Rows counted |
+| --- | --- | --- |
+| `directRepoCoverage` | Do we know which repository this work actually touched? | Everything whose `repo_source` is not `team:...` -- direct edges, `own_edges`, `ancestor:<issue_id>`, `children`, and rows with no recorded provenance |
+| `teamFallbackRepoCoverage` | Or do we only know a team that owns some repositories? | Rows whose `repo_source` starts with `team:` |
+| `repoFanoutReposPerUnit` | How wide is that fallback? | Distinct `(work unit, repository)` pairs allocated by the fallback, divided by the distinct units that produced them |
+
+The two shares use the same denominator as `repoCoverage` and add up to it
+exactly: they split the same rows on complementary conditions, so no effort is
+counted twice and none is lost. A row that reached a repository with no recorded
+`repo_source` counts as direct, because the question direct coverage answers is
+"is a specific repository known", and for that row one is.
+
+Both counts are of DISTINCT keys -- `(work unit, repository)` pairs on top, work units below -- never of query rows. Two things make a row count unusable here. A filtered view of the same window joins more rows per unit than an unfiltered one, so a row-based width would report a wider fallback for the same data simply because a filter was applied. And the underlying table is a ReplacingMergeTree, so a raw row count also moves with background merge state: 5310, then 10626, then 3612 rows were observed for unchanged logical content, the last two twenty minutes apart. Any census of that table should count units or distinct keys, never rows.
+
+**The two share columns are not filter-invariant, and neither is the headline they decompose.** A work-category filter re-weights work units relative to each other whenever they carry different numbers of matching subcategories, which moves `repoCoverage` and `teamCoverage` as well -- measured at 0.5 unfiltered against 0.333 filtered on identical data. That behaviour predates the split and is shared with the Python implementation; it is tracked separately as CHAOS-5498, because correcting it is a decision about what a filtered coverage figure should mean. What the split guarantees is narrower and holds regardless: direct plus team-fallback always equals the headline `repoCoverage` numerator exactly.
+
+The third field is the one to read first when the first two look good. The
+fallback allocates `1/N` across every repository a team owns, so one unit with a
+team that owns nine repositories produces nine rows. On the reference
+organization, repository coverage moved from 53.1/57.5/67.2 percent (7/30/90
+days) to 100.0/100.0/99.5 percent when the fallback shipped, at a fan-out of
+about nine rows per unit. Nothing became more precisely attributed. A high
+`teamFallbackRepoCoverage` beside a large `repoFanoutReposPerUnit` means the
+coverage is broad, not that it is specific -- read it as a prompt to improve
+direct evidence, never as a sign that attribution is solved.
+
+Both shares are null, not zero, when a query cannot measure them. Only the
+work-unit investment path carries repository provenance; the deprecated daily
+path below has no such column, so it reports null there. Null means "not
+measured here"; zero would mean "measured, and none of it is team fallback".
+
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`
 
 `investment_metrics_daily` and its feeder rule set `src/dev_health_ops/config/investment_areas.yaml`

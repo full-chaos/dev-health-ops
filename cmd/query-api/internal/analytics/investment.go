@@ -250,13 +250,34 @@ func LatestWorkUnitInvestmentsSource() string {
 // --- investment.py:90-127: LATEST_WORK_UNIT_REPO_EFFORT_CTE ------------
 
 // latestWorkUnitRepoEffortSource ports LATEST_WORK_UNIT_REPO_EFFORT_CTE
-// (investment.py:90-127, e9ea257ff), inlined. No CHAOS-4547 fix needed:
-// all three argMax'd columns (effort_metric, effort_value ->
-// repo_effort_value, allocation_source) are non-nullable
-// String/Float64/String per work_unit_repo_effort's DDL
-// (migrations/clickhouse/064_work_unit_repo_effort.sql) -- repo_id is a
+// (investment.py:90-127, e9ea257ff), inlined.
+//
+// CHAOS-4547 (AMENDED by CHAOS-5483 -- this comment previously claimed
+// "no CHAOS-4547 fix needed", which was true only while this source
+// selected three columns): the three ORIGINAL argMax'd columns
+// (effort_metric, effort_value -> repo_effort_value, allocation_source)
+// are non-nullable String/Float64/String per work_unit_repo_effort's DDL
+// (migrations/clickhouse/064_work_unit_repo_effort.sql), and repo_id is a
 // GROUP BY key in the inner subquery, never argMax'd, so its own
 // Nullable(UUID) declaration there carries no null-skip risk.
+//
+// GO-ONLY ADDITION (CHAOS-5483): repo_source. Python's CTE does not select
+// it, so this source now carries one column Python's does not -- stated
+// rather than hidden, in the same spirit as the CHAOS-4773 repos-FINAL
+// divergence in sankeycoverage.go. It is additive: every consumer
+// (repoAllocationInvestmentSource below, compileSankeyCoverage) names its
+// columns explicitly, so nothing that ignores repo_source changes shape.
+//
+// repo_source IS Nullable(String) (migrations/clickhouse/089_repo_source_
+// provenance.sql), which is exactly the CHAOS-4547 hazard: a bare
+// argMax(repo_source, computed_at) SKIPS rows whose value is NULL and
+// would return an OLDER non-null provenance for a repo whose newest
+// generation has none -- silently mislabelling an unattributed row as
+// team-fallback or hierarchy. The tuple wrapper
+// (argMax(tuple(x), computed_at)).1 is the repo's standing fix for that
+// (see LatestWorkUnitInvestmentsSource above, which wraps every nullable
+// column the same way) and is what makes the CHAOS-5483 coverage split an
+// exact partition rather than a best-effort one.
 func latestWorkUnitRepoEffortSource() string {
 	return `(
         SELECT
@@ -265,6 +286,7 @@ func latestWorkUnitRepoEffortSource() string {
             d.effort_metric AS effort_metric,
             d.repo_effort_value AS repo_effort_value,
             d.allocation_source AS allocation_source,
+            d.repo_source AS repo_source,
             d.org_id AS org_id,
             d.latest_repo_effort_computed_at AS latest_repo_effort_computed_at,
             1 AS has_allocation
@@ -276,6 +298,7 @@ func latestWorkUnitRepoEffortSource() string {
                 argMax(effort_metric, computed_at) AS effort_metric,
                 argMax(effort_value, computed_at) AS repo_effort_value,
                 argMax(allocation_source, computed_at) AS allocation_source,
+                (argMax(tuple(repo_source), computed_at)).1 AS repo_source,
                 max(computed_at) AS latest_repo_effort_computed_at
             FROM work_unit_repo_effort
             WHERE org_id = {org_id:String}

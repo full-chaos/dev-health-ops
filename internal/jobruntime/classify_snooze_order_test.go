@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 )
 
@@ -143,6 +144,32 @@ func TestClassifyHonoursASnoozeMarkerAheadOfTheLiveContext(t *testing.T) {
 			wantResult: ResultCancel, wantCategory: CategoryPermanent, wantCancel: true,
 			wantReason: ReasonInvalidState,
 		},
+		// The three remaining terminal markers, on a LIVE context, so the
+		// marked-cancel branch is pinned per CATEGORY and not just for
+		// Permanent. Without them the branch's `marked.cancel` can be narrowed
+		// to a single category and the suite stays green (r2 P3-2, proven by
+		// that exact mutation). Each asserts cancel=true, which the shared
+		// assertions below turn into "transportError wraps it in a real
+		// river.JobCancel" -- the durable, terminal wire outcome these three
+		// markers exist to produce, and the one a drain must never manufacture.
+		{
+			name: "an explicit domain cancellation is terminal on a live context",
+			ctx:  context.Background(), err: Cancel(errors.New("operator cancelled the run")),
+			attempt: 1, maxAttempts: 3,
+			wantResult: ResultCancel, wantCategory: CategoryCancelled, wantCancel: true,
+		},
+		{
+			name: "a terminal domain precondition is terminal on a live context",
+			ctx:  context.Background(), err: TerminalDomain(errors.New("the run was superseded")),
+			attempt: 1, maxAttempts: 3,
+			wantResult: ResultCancel, wantCategory: CategoryTerminalDomain, wantCancel: true,
+		},
+		{
+			name: "a domain mismatch is terminal on a live context",
+			ctx:  context.Background(), err: DomainMismatch(errors.New("tenant link mismatch")),
+			attempt: 1, maxAttempts: 3,
+			wantResult: ResultCancel, wantCategory: CategoryTenant, wantCancel: true,
+		},
 
 		// ------------------------------------------------------------------
 		// Ordering that must NOT change. Only a deliberate snooze overtakes
@@ -215,6 +242,12 @@ func TestClassifyHonoursASnoozeMarkerAheadOfTheLiveContext(t *testing.T) {
 			// A snoozed decision must reach River as a real JobSnoozeError,
 			// not as a safe error or a JobCancel wrapper.
 			transported := transportError(choice)
+			var cancelErr *river.JobCancelError
+			if errors.As(transported, &cancelErr) != test.wantCancel {
+				t.Fatalf("transportError(%+v) = %v, want a river.JobCancel = %v -- only a "+
+					"marked terminal decision may reach River as a durable cancellation",
+					choice, transported, test.wantCancel)
+			}
 			var snoozeErr *rivertype.JobSnoozeError
 			if errors.As(transported, &snoozeErr) != (test.wantSnooze > 0) {
 				t.Fatalf("transportError(%+v) = %v, want a River snooze = %v",

@@ -1903,3 +1903,116 @@ def test_readme_documents_the_kubernetes_cutover_has_no_shell_export() -> None:
     )
     assert "dev-health-go-worker-config" in readme
     assert 'from `"1"` to `"2"`' in readme
+
+
+# ---------------------------------------------------------------------------
+# CHAOS-5471: compose.yml must pass COMMIT and BUILD_TIME as build args.
+# ---------------------------------------------------------------------------
+
+_DOCKERFILE = _REPO_ROOT / "docker" / "Dockerfile"
+_PROVENANCE_BUILD_ARGS = ("COMMIT", "BUILD_TIME")
+_DOCKERFILE_ARG = re.compile(
+    r'^ARG\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"?(?P<default>[^"\n]*)"?\s*$',
+    re.MULTILINE,
+)
+
+
+def _compose_default(value: object) -> str:
+    """Resolve a compose scalar that may be ``${VAR:-default}`` to its default.
+
+    The string counterpart of ``_compose_int`` above, and for the same reason:
+    what an unconfigured checkout actually builds with is the interpolated
+    default, not the literal ``${...}`` text.
+    """
+    text = str(value)
+    match = _COMPOSE_DEFAULT.match(text)
+    if match is not None:
+        return match.group("default")
+    return text
+
+
+def _dockerfile_arg_defaults() -> dict[str, str]:
+    return {
+        match.group("name"): match.group("default")
+        for match in _DOCKERFILE_ARG.finditer(_DOCKERFILE.read_text(encoding="utf-8"))
+    }
+
+
+def _compose_build_services() -> dict[str, dict]:
+    """Every compose.yml service that builds an image.
+
+    Read from the raw YAML rather than `docker compose config` on purpose:
+    the resolved form drops services behind a profile (``metrics-api`` sits
+    behind ``go-workers``), and a provenance gap in a profiled service is
+    exactly as real as one in a default service. YAML merge keys are resolved
+    by the loader, so the four runner services that inherit ``<<: *worker-base``
+    are each checked on their own merits rather than trusted to the anchor.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    return {
+        name: service
+        for name, service in services.items()
+        if isinstance(service, dict) and "build" in service
+    }
+
+
+def test_every_compose_build_service_passes_commit_and_build_time() -> None:
+    """CHAOS-5471: docker/Dockerfile declares ARG COMMIT / ARG BUILD_TIME and
+    stamps them into org.opencontainers.image.revision / .created, but
+    compose.yml never passed either one -- so every locally built image
+    carried `revision=unknown`, and nothing could tell which commit a running
+    container came from.
+
+    A missing build arg is invisible at build time (the Dockerfile's own ARG
+    default silently wins) and only shows up much later, as an unusable label
+    on an image someone is trying to trace. That is precisely the shape a
+    contract test has to catch instead.
+    """
+    build_services = _compose_build_services()
+    assert build_services, "no build services found in compose.yml"
+
+    missing: dict[str, list[str]] = {}
+    for name, service in build_services.items():
+        args = (service["build"] or {}).get("args") or {}
+        absent = [key for key in _PROVENANCE_BUILD_ARGS if key not in args]
+        if absent:
+            missing[name] = absent
+
+    assert not missing, (
+        "compose.yml build services missing provenance build args "
+        f"(image labels would read revision=unknown): {missing}"
+    )
+
+
+def test_compose_provenance_defaults_match_the_dockerfile_arg_defaults() -> None:
+    """The two halves of this contract are written in different files, so they
+    can drift silently: compose supplies ``${COMMIT:-<default>}`` and the
+    Dockerfile declares ``ARG COMMIT=<default>``. If the compose default ever
+    stopped matching, an unconfigured build would still succeed while
+    labelling the image with a value the Dockerfile never sanctioned -- a
+    difference no build error would ever report. Pin them together.
+    """
+    dockerfile_defaults = _dockerfile_arg_defaults()
+    for key in _PROVENANCE_BUILD_ARGS:
+        assert key in dockerfile_defaults, (
+            f"docker/Dockerfile no longer declares ARG {key}; "
+            "compose.yml's build arg has nothing to match"
+        )
+
+    mismatched: dict[str, dict[str, str]] = {}
+    for name, service in _compose_build_services().items():
+        args = (service["build"] or {}).get("args") or {}
+        for key in _PROVENANCE_BUILD_ARGS:
+            if key not in args:
+                continue  # the test above owns the missing-arg failure
+            compose_default = _compose_default(args[key])
+            if compose_default != dockerfile_defaults[key]:
+                mismatched[f"{name}.{key}"] = {
+                    "compose": compose_default,
+                    "dockerfile": dockerfile_defaults[key],
+                }
+
+    assert not mismatched, (
+        "compose.yml build-arg defaults disagree with docker/Dockerfile's "
+        f"ARG defaults: {mismatched}"
+    )

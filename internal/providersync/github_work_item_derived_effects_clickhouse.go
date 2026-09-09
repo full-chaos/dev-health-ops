@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // ClickHouse effect adapters for the three derived destinations this lane
@@ -511,6 +512,24 @@ is_primary, confidence, evidence, computed_at)`)
 				layer = "admin_override"
 			}
 			sink.Metrics.RecordTeamAttributionMembershipLayer(layer)
+			// CHAOS-4320 (R74): a winning assignee_membership/author_membership
+			// row only exists because teamOwnsSubjectRepo let it through --
+			// either the resolved team genuinely owns the repo, or ownership
+			// data for the repo is entirely absent (R74: pass-through, still
+			// counted). This write boundary has no access back to the
+			// GithubWorkItemDerivationContext that made that distinction
+			// (only the already-decided row), so both outcomes collapse to
+			// "owned" here -- the operationally meaningful split this counter
+			// exists for is "owned" (attribution stood, whichever reason) vs
+			// the "ownership_unknown" branch below, where the gate's
+			// pass-through was NOT enough to produce ANY primary and the item
+			// still fell through to unassigned.
+			sink.Metrics.RecordTeamAttributionOwnershipChecked("owned")
+		} else if row.Source == "unassigned" {
+			if reason, ok := strings.CutPrefix(row.Evidence, "no_candidate:"); ok &&
+				reason == teamattribution.MembershipOwnershipReasonUnknown {
+				sink.Metrics.RecordTeamAttributionOwnershipChecked(reason)
+			}
 		}
 	}
 	return nil

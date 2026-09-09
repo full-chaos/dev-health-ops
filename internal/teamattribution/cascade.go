@@ -607,7 +607,20 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 	for _, assignee := range subject.Assignees {
 		assigneeCandidates, reason := derived.ResolveMembership(subject.Provider, assignee)
 		if len(assigneeCandidates) > 0 {
-			bySource["assignee_membership"] = append(bySource["assignee_membership"], assigneeCandidates...)
+			// CHAOS-4320: a resolved assignee still needs their team to
+			// OWN this repo, or the signal is laundering "any team this
+			// person belongs to" into an attribution the repo-ownership
+			// tier itself would never grant. A gated-out candidate falls
+			// through the cascade exactly like a non-member would --
+			// recorded as a skip reason, not appended to bySource.
+			ownershipReason, owns := derived.teamOwnsSubjectRepo(
+				subject, GithubWorkItemDerivationStringValue(assigneeCandidates[0].TeamID),
+			)
+			if owns {
+				bySource["assignee_membership"] = append(bySource["assignee_membership"], assigneeCandidates...)
+			} else {
+				membershipSkipReasons[ownershipReason] = struct{}{}
+			}
 		} else if reason != "" {
 			membershipSkipReasons[reason] = struct{}{}
 		}
@@ -630,19 +643,30 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 		} else {
 			reporterCandidates, reason := derived.ResolveMembership(subject.Provider, *subject.Reporter)
 			if len(reporterCandidates) > 0 {
-				// Source AND Evidence are rewritten (not passed through
-				// verbatim): reporterCandidates come from the SAME
-				// ResolveMembership the assignee loop above uses,
-				// pre-stamped Source "assignee_membership" at fact-load
-				// time, so the override must happen here, at the point of
-				// use.
-				relabeled := make([]GithubWorkItemDerivationCandidate, len(reporterCandidates))
-				for index, candidate := range reporterCandidates {
-					candidate.Source = "author_membership"
-					candidate.Evidence = "reporter=" + *subject.Reporter
-					relabeled[index] = candidate
+				// CHAOS-4320: the SAME repo-ownership gate the assignee
+				// loop applies above, on the author path -- an author's
+				// membership is no more trustworthy a repo signal than an
+				// assignee's, and the ticket explicitly covers both paths.
+				ownershipReason, owns := derived.teamOwnsSubjectRepo(
+					subject, GithubWorkItemDerivationStringValue(reporterCandidates[0].TeamID),
+				)
+				if !owns {
+					membershipSkipReasons[ownershipReason] = struct{}{}
+				} else {
+					// Source AND Evidence are rewritten (not passed through
+					// verbatim): reporterCandidates come from the SAME
+					// ResolveMembership the assignee loop above uses,
+					// pre-stamped Source "assignee_membership" at fact-load
+					// time, so the override must happen here, at the point of
+					// use.
+					relabeled := make([]GithubWorkItemDerivationCandidate, len(reporterCandidates))
+					for index, candidate := range reporterCandidates {
+						candidate.Source = "author_membership"
+						candidate.Evidence = "reporter=" + *subject.Reporter
+						relabeled[index] = candidate
+					}
+					bySource["author_membership"] = append(bySource["author_membership"], relabeled...)
 				}
-				bySource["author_membership"] = append(bySource["author_membership"], relabeled...)
 			} else if reason != "" {
 				membershipSkipReasons[reason] = struct{}{}
 			}
@@ -696,6 +720,27 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 		// composition or the live-python-oracle gate (ci/check_go.sh)
 		// fails -- see AGENTS.md "Anything cross-implementation needs a
 		// differential oracle."
+		//
+		// CHAOS-4320 (R74, chris via team-lead 2026-09-09): MembershipOwnershipReasonUnknown
+		// is DELIBERATELY NOT part of the byte-identical contract above --
+		// Python's compute_work_items.py has no repo-ownership gate at all
+		// (the CHAOS-4320 baseline_defect), so it can never produce this
+		// reason. Slotted at the same tier of actionability as
+		// no_membership (a data-completeness gap, not a fixable mapping) --
+		// it does not collide with a name Python's own composition ever
+		// emits, so this is additive to the existing contract, not a change
+		// to it.
+		//
+		// MembershipOwnershipReasonNotOwned has NO slot here, deliberately:
+		// teamOwnsSubjectRepo reads the EXACT SAME repoByID/repoByName
+		// lookups the repo_ownership tier above already reads, so whenever
+		// that reason is possible (the repo HAS an ownership row, just not
+		// for the resolved team), bySource["repo_ownership"] is ALSO
+		// non-empty and repo_ownership -- ranked ahead of
+		// assignee_membership/author_membership in `order` -- already set
+		// `primary` before this block is ever reached. Handling it here
+		// would be dead code; the case it names is real, it just never
+		// reaches "unassigned".
 		if reporterSkipReason != "" {
 			membershipSkipReasons[reporterSkipReason] = struct{}{}
 		}
@@ -706,6 +751,9 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 			} else {
 				membershipReason = GithubWorkItemDerivationReasonWithPrefix(membershipSkipReasons, "ambiguous_provider_membership")
 			}
+		}
+		if membershipReason == "" && GithubWorkItemDerivationHasReason(membershipSkipReasons, MembershipOwnershipReasonUnknown) {
+			membershipReason = MembershipOwnershipReasonUnknown
 		}
 		if membershipReason == "" && GithubWorkItemDerivationHasReason(membershipSkipReasons, "no_membership") {
 			membershipReason = "no_membership"
@@ -1711,6 +1759,83 @@ func (derived GithubWorkItemDerivationContext) ResolveMembership(
 		return nil, "ambiguous_provider_membership:" + GithubWorkItemDerivationSortedTeamIDs(providerTeams)
 	}
 	return nil, "no_membership"
+}
+
+// MembershipOwnershipReasonNotOwned and MembershipOwnershipReasonUnknown are
+// the two ways teamOwnsSubjectRepo can refuse an otherwise-resolved
+// assignee_membership/author_membership candidate (CHAOS-4320). Exported as
+// named constants (not inline strings) because both feed the SAME
+// membershipSkipReasons precedence composition ResolveMembership's own
+// reasons do, in Resolve() below.
+const (
+	// MembershipOwnershipReasonNotOwned: the repo HAS at least one
+	// team_repo_ownership row, and the resolved team is not among them --
+	// unambiguous, chris's ticket ruling (CHAOS-4320) already covers this
+	// case: fall through the cascade exactly as a non-member would.
+	MembershipOwnershipReasonNotOwned = "repo_not_owned"
+	// MembershipOwnershipReasonUnknown: the repo has NO team_repo_ownership
+	// row at all. Whether that gates or passes through is
+	// ownershipUnknownBlocksMembership's open question, not decided here.
+	MembershipOwnershipReasonUnknown = "ownership_unknown"
+)
+
+// ownershipUnknownBlocksMembership is CHAOS-4320's repo-ownership-gate
+// answer for a repo with NO team_repo_ownership row at ALL (as opposed to
+// one that names OTHER teams but not this one): DECIDED false by chris, R74
+// (team-lead 2026-09-09 19:5xZ, decision log 93c4f16842d8) -- "a repo with
+// no team_repo_ownership row is ownership_unknown, not a data miss" (two
+// orgs' repos with no row at all are a fixture-mix artifact plus the GitHub
+// Ops Team's deliberate non-attachment, not a gap to backfill or gate on).
+// The gate does NOT apply here: membership attribution passes through
+// unchanged (today's behavior), counted via
+// MembershipOwnershipReasonUnknown so the pass-through is still visible in
+// telemetry. Never re-litigate this -- see memory
+// project_ops_team_mapped_to_nothing.md.
+//
+// Measured 2026-09-09 (bigboy ClickHouse, read-only, 14-day window across 7
+// orgs' work_items) before the ruling landed: 3 of 18 distinct referenced
+// repos have no ownership row at all, 2 whole orgs affected
+// (5cd12607-b820-4e00-95c1-fa213092d4c5: 2/2 repos unowned;
+// db4de966-a440-4cb6-af07-0f953a682729: 1/2 unowned) -- exactly the shape
+// R74 explains.
+const ownershipUnknownBlocksMembership = false
+
+// teamOwnsSubjectRepo answers CHAOS-4320's repo-ownership gate for a
+// resolved assignee_membership/author_membership team: does teamID own
+// subject's repo per team_repo_ownership? Reuses the EXACT SAME two lookups
+// (repoByID keyed by subject.RepoID, repoByName keyed by subject.ProjectID)
+// that populate the repo_ownership cascade tier itself in Resolve() below --
+// team_repo_ownership is the single source for both; this is not a second
+// query or a new fact shape.
+//
+// Returns ("", true) when teamID owns the repo -- an empty reason matches
+// the "no problem" convention ResolveMembership's own reason string already
+// uses. Returns (MembershipOwnershipReasonNotOwned, false) when the repo has
+// at least one ownership row and teamID is not among them. Returns
+// (MembershipOwnershipReasonUnknown, owns) when the repo has NO ownership
+// row at all -- owns there is ownershipUnknownBlocksMembership's negation,
+// so a caller only ever needs to branch on the returned bool; the reason is
+// for telemetry/evidence, not a second decision point.
+func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
+	subject GithubWorkItemDerivationSubject, teamID string,
+) (string, bool) {
+	if teamID == "" {
+		return "", true
+	}
+	owners := append(
+		append([]GithubWorkItemDerivationCandidate(nil),
+			derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...),
+		derived.repoByName[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.ProjectID))]...,
+	)
+	if len(owners) == 0 {
+		return MembershipOwnershipReasonUnknown, !ownershipUnknownBlocksMembership
+	}
+	for _, candidate := range owners {
+		if candidate.TeamID != nil && *candidate.TeamID == teamID {
+			return "", true
+		}
+	}
+	return MembershipOwnershipReasonNotOwned, false
 }
 
 // GithubWorkItemDerivationSortedTeamIDs renders a team-id set as a

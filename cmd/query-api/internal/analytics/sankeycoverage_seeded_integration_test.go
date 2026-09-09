@@ -962,13 +962,21 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWit
 // pins WHICH units a work-category filter puts in scope: those carrying
 // POSITIVE weight in a matching category, not merely a key for one.
 //
-// The fix swapped a row-multiplying `ARRAY JOIN CAST(subcategory_distribution_json
-// AS Array(Tuple(String, Float32)))` for a row-selecting
-// `arrayExists(k -> ..., mapKeys(subcategory_distribution_json))`. Changing
-// the MULTIPLICITY was the point; changing the MEMBERSHIP would be a
-// different, silent defect -- units quietly entering or leaving the filtered
-// denominator. That is the risk this test exists for, and it is a real one:
-// the two expressions read the same column by different routes.
+// CHAOS-5498 landed in two steps and this comment describes the SECOND, which
+// supersedes the first. Step one swapped a row-multiplying
+// `ARRAY JOIN CAST(subcategory_distribution_json ...)` for a row-selecting
+// `arrayExists` over the map KEYS, on the stated goal of changing multiplicity
+// while preserving membership exactly. Step two changed membership on purpose,
+// because the live A/B showed the preserved membership was itself wrong: both
+// the ARRAY JOIN and a key test match every unit on dense data, so the filter
+// excluded nobody. The predicate now tests the PAIR -- a matching category AND
+// positive weight.
+//
+// So membership IS the thing under test here, not the thing held constant. The
+// risk this test guards is a shape quietly entering or leaving the filtered
+// denominator without anyone intending it -- which is what happened between
+// those two steps, and was invisible to every fixture that existed at the
+// time.
 //
 // One unit per shape a Map(String, Float64) can hold. Note the column is a
 // MAP despite its _json name, so a malformed-JSON case cannot exist -- the
@@ -1052,11 +1060,20 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveW
 
 		// OUT-OF-CONTRACT weights. The platform contract calls these
 		// probabilities -- "subcat probs sum to theme probs" (root AGENTS.md,
-		// Work Graph + Investment) -- so neither shape should exist. But the
+		// Work Graph + Investment) -- and the categorization path ENFORCES
+		// that: internal/jobs/investment/categorize/schema.go:136-143 rejects
+		// non-finite weights as `non_finite_weight` and negative ones as
+		// `negative_weight`, dropping the key rather than storing the value.
+		// So no known producer writes either shape today.
+		//
+		// They are pinned anyway, for two reasons that survive that. The
 		// column is a bare Map(String, Float64) with no constraint
-		// (migrations/clickhouse/017_investment_materialize_tables.sql:12) and
-		// no clamp on the write path, so both are reachable from a
-		// misbehaving producer.
+		// (migrations/clickhouse/017_investment_materialize_tables.sql:12), so
+		// the shapes stay REPRESENTABLE whatever the current writers do -- a
+		// backfill, a migration or a future producer is not bound by one
+		// validator on one path. And a reader should not depend on a
+		// guarantee enforced somewhere it cannot see; if that validator is
+		// ever relaxed, this test is what notices.
 		//
 		// These rows PIN what `kv.2 > 0` does with them; they do not rule on
 		// what it SHOULD do. Both are excluded, which is the contract-

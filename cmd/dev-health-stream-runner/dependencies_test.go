@@ -138,13 +138,40 @@ func contextWithTimeout(t *testing.T) context.Context {
 	return ctx
 }
 
-// newRefusedDomainPool dials 127.0.0.1:1 (refused instantly, no live
-// Postgres needed) with a 1ms connect timeout -- the exact construction
-// internal/storage/postgres/domain_authorization_test.go's own
-// TestDomainAuthorizationRejectsMissingOrUnavailablePool uses.
+// closedPortAddr opens a listener on 127.0.0.1:0, records its address, then
+// closes it -- dialing that address afterward is refused deterministically
+// everywhere. Dialing a permanently-unbound port like 127.0.0.1:1 instead
+// depends on how the OS/runner network stack answers an attempt to a port
+// nothing ever bound: it usually answers RST ("connection refused") but on
+// some hosted CI runners answers nothing at all, so the dial blocks until
+// its own timeout and reports "i/o timeout" -- CHAOS-5478, hit twice (PR
+// #2381 2026-09-07, PR #2389 2026-09-09), both pure flake fixed only by a
+// CI rerun with no code change. A port that JUST had a live listener closed
+// on it, by contrast, is guaranteed to be refused (RST) by the local
+// kernel's own connection-table entry -- no dependence on runner/network
+// behavior for an address nothing ever owned.
+func closedPortAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+// newRefusedDomainPool dials a just-closed local port (refused
+// deterministically, no live Postgres needed) with a 1ms connect timeout --
+// the same construction internal/storage/postgres/domain_authorization_test.go's
+// own TestDomainAuthorizationRejectsMissingOrUnavailablePool uses, updated
+// per CHAOS-5478 to dial a closed listener port instead of the unbound
+// 127.0.0.1:1.
 func newRefusedDomainPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	config := postgres.DefaultConfig("postgres://domain:unused@127.0.0.1:1/app")
+	config := postgres.DefaultConfig("postgres://domain:unused@" + closedPortAddr(t) + "/app")
 	config.ConnectTimeout = time.Millisecond
 	pool, err := postgres.New(context.Background(), config)
 	if err != nil {
@@ -154,7 +181,7 @@ func newRefusedDomainPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// newRefusedClickHouseConn builds a driver.Conn against a refused local
+// newRefusedClickHouseConn builds a driver.Conn against a just-closed local
 // port. clickhouse-go's Open dials lazily (proven live: Open succeeds, the
 // dial only happens on the first Ping) -- the same shape
 // internal/storage/clickhouse/factory_test.go's
@@ -163,7 +190,7 @@ func newRefusedDomainPool(t *testing.T) *pgxpool.Pool {
 // driver so ClickHouseReady's own Ping call is what fails.
 func newRefusedClickHouseConn(t *testing.T) driver.Conn {
 	t.Helper()
-	options, err := clickhousego.ParseDSN("clickhouse://127.0.0.1:1/default")
+	options, err := clickhousego.ParseDSN("clickhouse://" + closedPortAddr(t) + "/default")
 	if err != nil {
 		t.Fatal(err)
 	}

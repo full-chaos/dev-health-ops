@@ -432,14 +432,56 @@ func (r *queryResolver) FeatureFlagEvents(ctx context.Context, orgID string, fla
 	panic(fmt.Errorf("not implemented: FeatureFlagEvents - featureFlagEvents"))
 }
 
-// WorkItemTeamAttributions is the resolver for the workItemTeamAttributions field.
+// WorkItemTeamAttributions is the resolver for the workItemTeamAttributions
+// field. Deliberately left UNPORTED by CHAOS-3969: unlike its sibling
+// WorkUnitTeamAttributions below (which CHAOS-3969 does port), this field
+// is not issued by any web document today -- confirmed by searching
+// web/src for a caller (`rg --hidden workItemTeamAttributions
+// web/src` -- no hits) -- so there is nothing to port against yet: no
+// real request shape, no dual-run fixture, no registered-document text to
+// verify parity against. CHAOS-3969 ports resolve_work_unit_team_attributions
+// only (team_attribution.py); this sibling
+// (resolve_work_item_team_attributions, the per-work-ITEM reader CHAOS-2600
+// originally shipped) stays a panic stub until a future ticket has an
+// actual caller to port against.
 func (r *queryResolver) WorkItemTeamAttributions(ctx context.Context, orgID string, workItemIds []string, teamID *string) ([]model.WorkItemTeamAttribution, error) {
 	panic(fmt.Errorf("not implemented: WorkItemTeamAttributions - workItemTeamAttributions"))
 }
 
-// WorkUnitTeamAttributions is the resolver for the workUnitTeamAttributions field.
+// WorkUnitTeamAttributions is the resolver for the workUnitTeamAttributions
+// field (CHAOS-3969). Ports team_attribution.py's
+// resolve_work_unit_team_attributions via workgraph.ResolveWorkUnitTeamAttributions
+// -- see that function's doc comment for the shared run-scope protocol it
+// reuses. Same "authorized org always wins" authorization convention as
+// Pr/WorkGraphEdges above: orgID is the GraphQL argument, but the org
+// actually queried is claims.OrgID from the verified envelope, never the
+// caller-supplied value.
+//
+// Not registered as a routeswitch document in query_route.go by this PR
+// (deliberate, per this ticket's own Deliverables text, unlike sibling
+// CHAOS-4991) -- this only makes the resolver correct and stops the panic;
+// it does not make workUnitTeamAttributions reachable from a real request
+// yet (see query_route.go's own "registration is not enablement" doc
+// comments for what a later registration PR still has to do: a
+// byte-for-byte wire-form document capture, a digest, and a separate
+// enablement decision).
 func (r *queryResolver) WorkUnitTeamAttributions(ctx context.Context, orgID string, workUnitIds []string, teamID *string) ([]model.WorkUnitTeamAttribution, error) {
-	panic(fmt.Errorf("not implemented: WorkUnitTeamAttributions - workUnitTeamAttributions"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	results, err := workgraph.ResolveWorkUnitTeamAttributions(ctx, r.ClickHouse, claims.OrgID, workUnitIds, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("workUnitTeamAttributions: %w", err)
+	}
+	return results, nil
 }
 
 // SecurityAlerts is the resolver for the securityAlerts field.

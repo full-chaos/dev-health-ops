@@ -791,8 +791,11 @@ func seedFilterReweightOrg(t *testing.T, ctx context.Context, conn stdclickhouse
 //	  denominator: repo_total moves 2 -> 3.
 //	unassigned: the two-subcategory unit resolves NO repo, so repoCoverage
 //	  becomes sensitive and moves 0.5 -> 0.333 on identical data, with the
-//	  split columns constant. This is the scenario that proves the defect is
-//	  the headline's, not the split's.
+//	  split's raw NUMERATORS constant. (The resolver's exported shares divide
+//	  those numerators by repoTotal, and repoTotal is precisely what moves, so
+//	  the normalized fields do shift -- this test reads the raw columns for
+//	  that reason.) This is the scenario that proves the defect is the
+//	  headline's, not the split's.
 func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits_CHAOS5498(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -916,14 +919,40 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsU
 	unfilteredTotal, unfilteredAssigned, unfilteredDirect, unfilteredFallback := read(orgUnassigned, "unassigned/unfiltered", nil)
 	filteredTotal, filteredAssigned, filteredDirect, filteredFallback := read(orgUnassigned, "unassigned/filtered", categoryFilter)
 
+	// The RAW numerator and denominator are asserted, not only the ratio.
+	// A ratio alone is ambiguous: 1/2 can be reached by the re-weighting
+	// being FIXED (denominator back to 2, the CHAOS-5498 outcome) or by some
+	// unrelated path that happens to halve it -- and the failure message
+	// below tells the next reader to DELETE this test, which is the wrong
+	// advice if they arrived by the second route. Pinning 3 and 1 separately
+	// makes the two distinguishable at the point of failure.
+	for _, c := range []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"unassigned/unfiltered repo_total", unfilteredTotal, 2},
+		{"unassigned/unfiltered assigned_repo", unfilteredAssigned, 1},
+		{"unassigned/filtered repo_total", filteredTotal, 3},
+		{"unassigned/filtered assigned_repo", filteredAssigned, 1},
+	} {
+		if math.Abs(c.got-c.want) > tol {
+			t.Errorf("%s = %v, want %v", c.name, c.got, c.want)
+		}
+	}
+
 	if math.Abs(unfilteredAssigned/unfilteredTotal-0.5) > tol {
 		t.Errorf("unassigned/unfiltered repoCoverage = %v, want 0.5", unfilteredAssigned/unfilteredTotal)
 	}
 	if math.Abs(filteredAssigned/filteredTotal-1.0/3.0) > tol {
-		t.Errorf("unassigned/filtered repoCoverage = %v, want 0.333... -- if this now equals 0.5, the headline re-weighting has been FIXED and this characterization test should be replaced by a real assertion", filteredAssigned/filteredTotal)
+		t.Errorf("unassigned/filtered repoCoverage = %v, want 0.333... -- if this is now 0.5 AND the filtered repo_total assertion above went from 3 to 2, the CHAOS-5498 re-weighting has been FIXED and this characterization test should be REPLACED by a real assertion (filtered 0.5 stays 0.5). If the ratio moved but repo_total is still 3, something else changed and this test is telling you about a different defect",
+			filteredAssigned/filteredTotal)
 	}
+	// Raw NUMERATORS, not the resolver's shares: resolveSankeyCoverage divides
+	// both by repoTotal, and repoTotal is exactly what moves here, so the
+	// normalized fields would shift even though the underlying effort did not.
 	if math.Abs(unfilteredDirect-filteredDirect) > tol || math.Abs(unfilteredFallback-filteredFallback) > tol {
-		t.Errorf("split columns moved across the filter (direct %v->%v, fallback %v->%v) while the headline moved -- the split is supposed to be constant here",
+		t.Errorf("raw split numerators moved across the filter (direct %v->%v, fallback %v->%v) while the headline denominator moved -- the numerators are supposed to be constant here",
 			unfilteredDirect, filteredDirect, unfilteredFallback, filteredFallback)
 	}
 }

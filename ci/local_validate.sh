@@ -453,7 +453,8 @@ DEVHOPS="${DEVHOPS:-${ROOT}/.venv/bin/dev-hops}"
 #     35-test false-RED across the full gate — both traced to this exact pair,
 #     both cleared the moment it was unset. CHAOS-3986 and CHAOS-3987 were filed
 #     and cancelled from this same contamination before the cause was found.
-PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV)
+# TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX (CHAOS-5024): bigboy's login shell exports it, rewriting the image names test_go_integration_sharding.py::test_prepull_* observe pulled -- unset it here.
+PROXY_OFF=(env -u ALL_PROXY -u HTTPS_PROXY -u HTTP_PROXY -u all_proxy -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy -u LOG_LEVEL -u GITHUB_APP_PRIVATE_KEY_PATH -u GITHUB_APP_ID -u AUTH_AUTO_CREATE_ORG_ON_REGISTER -u LICENSE_PRIVATE_KEY -u REDIS_URL -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX)
 
 # --- Single-flight lock (CHAOS-3403). -----------------------------------------------
 # The ops-local-validate skill (.claude/skills/ops-local-validate/SKILL.md) documented

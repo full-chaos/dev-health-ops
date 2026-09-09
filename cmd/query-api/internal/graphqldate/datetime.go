@@ -5,6 +5,17 @@ import (
 	"time"
 )
 
+// WireFormatLabel names the format RFC3339UTC produces, for the `served`
+// telemetry on every resolver that uses it.
+//
+// Without it a silent revert of the formatter — the exact regression the
+// tests here pin — is invisible in production logs: the resolver keeps
+// serving, keeps logging `served`, and only the string shape changes. One
+// low-cardinality constant field makes the wire format greppable per
+// request. Change it in the same edit as the format itself, never
+// separately, or the label starts lying.
+const WireFormatLabel = "rfc3339_utc"
+
 // RFC3339UTC renders an instant as RFC 3339, "T"-separated, always carrying
 // an explicit "+00:00" offset.
 //
@@ -66,17 +77,6 @@ import (
 // point this helper becomes the scalar's marshaler rather than a per-resolver
 // call. That is a schema change with a web-side blast radius and is filed
 // separately.
-// WireFormatLabel names the format RFC3339UTC produces, for the `served`
-// telemetry on every resolver that uses it.
-//
-// Without it a silent revert of the formatter — the exact regression the
-// tests here pin — is invisible in production logs: the resolver keeps
-// serving, keeps logging `served`, and only the string shape changes. One
-// low-cardinality constant field makes the wire format greppable per
-// request. Change it in the same edit as the format itself, never
-// separately, or the label starts lying.
-const WireFormatLabel = "rfc3339_utc"
-
 func RFC3339UTC(moment time.Time) string {
 	utc := moment.UTC()
 	rendered := utc.Format("2006-01-02T15:04:05")

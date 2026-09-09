@@ -16,6 +16,8 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.engine.interfaces import ReflectedColumn
 
+from tests._alembic_heads import application_schema_head
+
 _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
 _TABLE = "fixed_schedule_occurrences"
@@ -188,4 +190,4 @@ def test_0100_downgrade_and_reupgrade_converge(
 
     command.upgrade(_migration_config(), "application_schema@head")
     assert _COLUMN in _columns(migrated_to_0099.engine)
-    assert _revisions(migrated_to_0099.engine) == {"0127"}
+    assert _revisions(migrated_to_0099.engine) == {application_schema_head()}

@@ -6,12 +6,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from celery import chain
-
 from dev_health_ops.models import SyncRun, SyncRunUnit, SyncRunUnitStatus
 from dev_health_ops.utils.datetime import utc_today
 from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import _GIT_TARGETS, _WORK_ITEM_TARGETS
+from dev_health_ops.workers.task_utils import _GIT_TARGETS
 
 # DORA (deployment frequency, lead time, change-failure-rate, MTTR) is computed
 # from synced deployments/CI/incidents in ClickHouse. These targets can be
@@ -160,7 +158,6 @@ def _dispatch_post_sync_tasks(
 ) -> None:
     target_set = set(sync_targets)
     has_git = bool(target_set & _GIT_TARGETS)
-    has_work_items = bool(target_set & _WORK_ITEM_TARGETS)
     has_dora = bool(target_set & _DORA_TARGETS)
     dispatched: list[str] = []
 
@@ -205,7 +202,6 @@ def _dispatch_post_sync_tasks(
     # historical complexity trend rather than reflecting real historical state
     # (CHAOS-2888). Complexity is safe to enqueue only for a current single-day
     # sync: backfill_days in (None, 1) and day absent or == utc_today().
-    complexity_sig = None
     if has_git:
         is_current_single_day = metrics_backfill_days in (None, 1) and (
             metrics_day is None or metrics_day == utc_today().isoformat()
@@ -215,11 +211,17 @@ def _dispatch_post_sync_tasks(
             if metrics_day is not None:
                 complexity_kwargs["day"] = metrics_day
                 complexity_kwargs["backfill_days"] = 1
-            complexity_sig = celery_app.signature(
+            # CHAOS-3093: previously the head of a chain with
+            # dispatch_investment_materialize_partitioned (workers.work_graph_tasks,
+            # deleted -- CHAOS-3093, Go-native since; investment.materialize's
+            # route is river-only, rollback_route=none). No consumer has existed
+            # for either since Celery stopped (CHAOS-4026), so this was already a
+            # dispatch into the void either way -- standalone here changes nothing
+            # observable, it only drops the now-nonexistent chain partner.
+            celery_app.send_task(
                 "dev_health_ops.workers.tasks.run_complexity_job",
                 kwargs=complexity_kwargs,
                 queue="metrics",
-                immutable=True,
             )
             dispatched.append("run_complexity_job")
         else:
@@ -234,37 +236,18 @@ def _dispatch_post_sync_tasks(
                 metrics_backfill_days,
             )
 
-    if has_git or has_work_items:
-        # `run_work_graph_build` (the Celery-dispatched Python build task) was
-        # deleted under CHAOS-4924: prod Celery has been stopped since
-        # 2026-08-19, so this chain fired nowhere in production, and the
-        # Python compute it ran was already a 0-stats no-op (every stage
-        # ported natively). The Go worker is the only live orchestrator now,
-        # and it already creates `workgraph.build` requests after a sync on
-        # its own, independent of this chain --
-        # `cmd/dev-health-worker/sync_dispatch.go:273-310`'s
-        # `workGraphPostSyncWriter.StartRequestTx`, registered live at
-        # `sync_dispatch.go:455`. Nothing replaces the deleted link; the Go
-        # writer already is the replacement.
-        materialize_kwargs: dict[str, Any] = {"org_id": org_id}
-        if from_date is not None:
-            materialize_kwargs["from_date"] = from_date
-        if to_date is not None:
-            materialize_kwargs["to_date"] = to_date
-
-        # Every link below the chain head must be immutable so a parent's return
-        # value is not injected as a positional arg into the next task.
-        materialize_sig = celery_app.signature(
-            "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
-            kwargs=materialize_kwargs,
-            queue="default",
-            immutable=True,
-        )
-        chain_sigs = [materialize_sig]
-        if complexity_sig is not None:
-            chain_sigs.insert(0, complexity_sig)
-        chain(*chain_sigs).apply_async()
-        dispatched.append("dispatch_investment_materialize_partitioned")
+    # `run_work_graph_build` (the Celery-dispatched Python build task) was
+    # deleted under CHAOS-4924, and `dispatch_investment_materialize_partitioned`
+    # (workers.work_graph_tasks) under CHAOS-3093 -- prod Celery has been
+    # stopped since 2026-08-19 (CHAOS-4026), so neither ever fired anywhere in
+    # production, and investment.materialize's route is river-only
+    # (rollback_route=none in migration-state.json): the Go plane is the only
+    # live orchestrator now. For work-graph builds specifically, the Go worker
+    # already creates `workgraph.build` requests after a sync on its own,
+    # independent of this dispatcher -- `cmd/dev-health-worker/sync_dispatch.go:
+    # 273-310`'s `workGraphPostSyncWriter.StartRequestTx`, registered live at
+    # `sync_dispatch.go:455`. Nothing replaces either deleted link; the Go
+    # writer already is the replacement.
 
     if has_git or has_dora:
         celery_app.send_task(

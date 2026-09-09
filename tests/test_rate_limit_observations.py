@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import importlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 import sqlalchemy as sa
@@ -744,50 +744,13 @@ def _make_observation(**overrides):
     return ProviderRateLimitObservation(**defaults)
 
 
-def test_prune_task_deletes_expired_rows_only(db_session, monkeypatch):
-    from dev_health_ops.workers.sync_reconciler import prune_rate_limit_observations
-
-    now = datetime.now(timezone.utc)
-    expired = _make_observation(observed_at=now - timedelta(days=20))
-    borderline_fresh = _make_observation(observed_at=now - timedelta(days=1))
-    fresh = _make_observation(observed_at=now - timedelta(hours=1))
-    db_session.add_all([expired, borderline_fresh, fresh])
-    db_session.commit()
-
-    _patch_db_session(monkeypatch, db_session)
-    monkeypatch.setenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", "14")
-
-    result = getattr(prune_rate_limit_observations, "run")()
-
-    assert result["status"] == "completed"
-    assert result["deleted"] == 1
-    assert result["retention_days"] == 14
-    remaining_ids = {
-        row.id for row in db_session.query(ProviderRateLimitObservation).all()
-    }
-    assert remaining_ids == {borderline_fresh.id, fresh.id}
-
-
-def test_prune_task_honors_explicit_retention_days_override(db_session, monkeypatch):
-    from dev_health_ops.workers.sync_reconciler import prune_rate_limit_observations
-
-    now = datetime.now(timezone.utc)
-    three_days_old = _make_observation(observed_at=now - timedelta(days=3))
-    one_hour_old = _make_observation(observed_at=now - timedelta(hours=1))
-    db_session.add_all([three_days_old, one_hour_old])
-    db_session.commit()
-
-    _patch_db_session(monkeypatch, db_session)
-    # Env default (14) would keep both; an explicit override prunes tighter.
-    monkeypatch.delenv("SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS", raising=False)
-
-    result = getattr(prune_rate_limit_observations, "run")(retention_days=1)
-
-    assert result["deleted"] == 1
-    remaining_ids = {
-        row.id for row in db_session.query(ProviderRateLimitObservation).all()
-    }
-    assert remaining_ids == {one_hour_old.id}
+# CHAOS-3093: the two Celery-task prune tests that lived here
+# (test_prune_task_deletes_expired_rows_only,
+# test_prune_task_honors_explicit_retention_days_override) exercised
+# workers.sync_reconciler.prune_rate_limit_observations, deleted with that
+# module -- internal/jobs/system.RateLimitObservationStore (a Go port with
+# its own test coverage) is the retention mechanism of record, dispatched by
+# internal/scheduler/fixed's RetentionProducer.
 
 
 # ---------------------------------------------------------------------------

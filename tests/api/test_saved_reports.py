@@ -164,17 +164,11 @@ async def test_resolve_report_runs(monkeypatch, session_maker, seeded_reports):
 async def test_trigger_report_creates_atomic_run_and_deferred_handoff(
     monkeypatch, session_maker, seeded_reports
 ):
-    from unittest.mock import MagicMock
-
     from dev_health_ops.api.graphql.resolvers import reports as reports_mod
 
     monkeypatch.setattr(
         "dev_health_ops.db.get_postgres_session",
         _make_mock_session(session_maker),
-    )
-    dispatch = MagicMock()
-    monkeypatch.setattr(
-        "dev_health_ops.workers.report_task.execute_saved_report.apply_async", dispatch
     )
 
     run = await reports_mod.resolve_trigger_report(
@@ -183,7 +177,6 @@ async def test_trigger_report_creates_atomic_run_and_deferred_handoff(
 
     assert run is not None
     assert run.status == ReportRunStatus.PENDING.value
-    dispatch.assert_called_once()
     async with session_maker() as session:
         outbox = await session.scalar(select(WorkerJobOutbox))
         assert outbox is not None

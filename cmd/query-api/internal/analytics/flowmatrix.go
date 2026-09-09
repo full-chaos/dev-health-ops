@@ -706,16 +706,34 @@ const flowMatrixRepoEnrichedSelect = `
 //
 // FIX (this port only -- chris ruled 06:52 PT 08-29 that no more work
 // goes into the Python GraphQL layer, CHAOS-4516 routing reversed): add
-// `FINAL` to `wct`. UNMEASURED as of this commit -- `argMax(...,
-// computed_at) GROUP BY` is the documented alternative per CHAOS-4516's
-// standing fix-shape ruling ("never add FINAL blindly... every fix
-// carries a measured cost number"); `FINAL` is chosen here on
-// consistency with the two sibling sites in this same file that already
-// use `wct FINAL` (team_nodes/edges above, repo CTE above) plus this
-// query's own GROUP BY + LIMIT shape (unlike Lane A's work_graph_edges,
-// which had neither), but the actual argument and the row-count/part-
-// count/max_threads/before-after-median number are NOT YET PRODUCED --
-// see the PR's RISK-NOTES. Do not treat this as decided.
+// `FINAL` to `wct`.
+//
+// MEASURED, CHAOS-5448 (supersedes this comment's former "UNMEASURED as
+// of this commit ... Do not treat this as decided"). The 2026-09-07
+// Go/Python enablement run flagged flowMatrix as a parity divergence --
+// edges[0].value 596 vs 594, edges[4].value 18 vs 16, nodes[0].value
+// 1804 vs 1803, where the LEFT number is PYTHON and the RIGHT is GO (the
+// probe called compare_responses(baseline=python, candidate=go) and
+// go_api_comparator.py renders "baseline != candidate"). Go is LOWER on
+// all three, which is what adding `FINAL` predicts, and `FINAL` is the
+// only token that differs between the two implementations.
+//
+// Reproduced against a real engine on a genuinely pre-merge table
+// (flowmatrix_worktype_final_seeded_integration_test.go): one work item
+// with a superseded version whose stale `day` still lands inside the
+// window is counted TWICE by the un-FINAL read and ONCE by this one.
+// Then `OPTIMIZE TABLE work_item_cycle_times FINAL` -- what a background
+// merge does on its own schedule -- moves the un-FINAL answer from 2 to
+// 1, CONVERGING onto this read. So Python's number is a transient that
+// depends on merge timing and changes with no code change on either
+// side; this read returns the converged steady state. That settles the
+// CORRECTNESS half of CHAOS-4516's fix-shape ruling in favour of
+// `FINAL` over `argMax(..., computed_at) GROUP BY` for this site.
+//
+// STILL NOT MEASURED, deliberately not claimed: the COST half. The
+// row-count/part-count/max_threads/before-after-median number that
+// ruling also asks for has not been produced, here or for the sibling
+// sites. Correctness is decided; the performance argument is not.
 // flowMatrixWorkTypeEnrichedSelect: the same missing-alias analyzer bug
 // found live in flowMatrixRepoEnrichedSelect above applies here too --
 // flowMatrixWorkTypeEdgesTemplate's self-join references a.repo_id/
@@ -740,10 +758,16 @@ const flowMatrixWorkTypeEnrichedSelect = `
 // (sql/templates.py:312-335).
 //
 // *** CHAOS-4516 FIX SITE 2 of 3 (sql/templates.py:325 on the Python
-// side). *** Same exposure/fix/UNMEASURED-cost shape as
+// side). *** Same exposure and same fix as
 // flowMatrixWorkTypeEnrichedSelect above -- see that doc comment. The
 // `INNER JOIN work_items AS wi FINAL` here is likewise real but binds to
 // `wi`, not `wct`.
+//
+// NOT COVERED BY CHAOS-5448's fixture: that test exercises the WORK_TYPE
+// dimension only (sites 1 and 3). The mechanism is identical here and
+// the reasoning carries over, but no seeded test reaches THIS template,
+// so treat its correctness as argued-by-analogy rather than measured
+// until a REPO-dimension fixture exists.
 const flowMatrixRepoNodesTemplate = `
 SELECT
     'REPO' AS dimension,
@@ -793,6 +817,15 @@ LIMIT {max_edges:UInt32}
 //
 // *** CHAOS-4516 FIX SITE 3 of 3 (sql/templates.py:397 on the Python
 // side). *** Same shape as flowMatrixRepoNodesTemplate above.
+//
+// MEASURED, CHAOS-5448: this template's `wct FINAL` is pinned by
+// flowmatrix_worktype_final_seeded_integration_test.go. Removing the
+// token turns the seeded Bug node from 1 into 2 (the superseded row
+// version is counted) and fails
+// TestFlowMatrixWorkType_FinalExcludesSupersededCycleTimeVersions --
+// verified by running that mutant, not by inspection. See
+// flowMatrixWorkTypeEnrichedSelect's doc comment for the full result and
+// for what is still NOT measured (the cost number).
 const flowMatrixWorkTypeNodesTemplate = `
 SELECT
     'WORK_TYPE' AS dimension,

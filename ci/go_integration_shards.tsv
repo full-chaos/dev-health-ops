@@ -229,7 +229,7 @@ cmd/query-api/internal/routeswitch	5
 cmd/query-api/internal/workgraph	60
 internal/cacheinvalidation	2
 internal/externalrecompute	30
-internal/goapiproof	235
+internal/goapiproof	245
 internal/joboperator	13
 internal/joboutbox	12
 internal/jobrescue	5
@@ -329,6 +329,16 @@ internal/migrationmatrix	5
 # 234.482s`. This is the first REAL measurement since the 175 ceiling was
 # set from noisy local runs; corrected 175 -> 235 (ceil + headroom, same
 # rounding convention as every raise above).
+# CHAOS-5507, stacked on the corrected 235: the lock-order guard adds
+# three 20-round concurrency tests plus a deterministic TOCTOU test that
+# holds a blocking transaction open until the re-point is provably
+# waiting. Pre-rebase, this package measured 140 -> 150 (+10s) cleanly on
+# bigboy for the same tests. Post-rebase local re-measurement landed at
+# 257.023s wall, but user+sys CPU time was only 16.5s of that (6%
+# utilisation) -- the same host-contention shape this file already
+# discounts twice above, not a usable number. Carrying the clean
+# pre-rebase +10s delta forward instead: 235 -> 245. Corrected again off
+# this PR's own first hosted CI run if it differs by more than headroom.
 # internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
 # measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run),
 # rounded up one further second to 35 for shard-balance headroom -- combined

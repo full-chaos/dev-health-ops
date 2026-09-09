@@ -591,6 +591,10 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # measured weight this landed at, then corrected 175 -> 235 once PR
     # #2448's isolated hosted CI run (not a host-contended local one) gave
     # a real measurement (234.482s, shard 2 job 103446098966).
+    # CHAOS-5507, stacked on that corrected 235, adds three 20-round
+    # concurrency tests plus a deterministic TOCTOU test: 235 -> 245 (see
+    # ci/go_integration_shards.tsv for the full measurement history and
+    # why the post-rebase local re-run was discounted).
     assert abs(estimated[2] - estimated[3]) <= 1
 
     expected_provider_tests = _providersync_top_level_tests()

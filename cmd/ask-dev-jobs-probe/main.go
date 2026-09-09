@@ -32,6 +32,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -113,8 +114,15 @@ func runQueueDepth(ctx context.Context, pool *pgxpool.Pool, lookup func(string) 
 	}
 	table := pgx.Identifier{schema, "river_job"}.Sanitize()
 
+	// Matches cmd/dev-health-worker/queue_health.go's own definition of
+	// "available now": internal/storage/river/telemetry.go's queueTelemetrySQL
+	// filters state='available' AND scheduled_at <= statement_timestamp() --
+	// a state='available' row scheduled in the future (a delayed retry) is
+	// not yet fetchable and must not inflate the depth this check reports.
 	rows, err := pool.Query(ctx, fmt.Sprintf(
-		"SELECT queue, count(*)::bigint AS available FROM %s WHERE state = 'available' GROUP BY queue ORDER BY queue",
+		"SELECT queue, count(*)::bigint AS available FROM %s "+
+			"WHERE state = 'available' AND scheduled_at <= statement_timestamp() "+
+			"GROUP BY queue ORDER BY queue",
 		table,
 	))
 	if err != nil {
@@ -151,8 +159,16 @@ func runQueueDepth(ctx context.Context, pool *pgxpool.Pool, lookup func(string) 
 // jobcontract.KindRetentionCleanup ("prune_rate_limit_observations",
 // "prune_external_ingest_batches").
 func runRetention(ctx context.Context, pool *pgxpool.Pool, lookup func(string) (string, bool), stdout, stderr io.Writer) int {
-	rateLimitDays := envInt(lookup, rateLimitRetentionDaysEnv, defaultRateLimitRetentionDays)
-	externalIngestDays := envInt(lookup, externalIngestRetentionDaysEnv, defaultExternalIngestRetentionDays)
+	rateLimitDays, err := envInt(lookup, rateLimitRetentionDaysEnv, defaultRateLimitRetentionDays)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	externalIngestDays, err := envInt(lookup, externalIngestRetentionDaysEnv, defaultExternalIngestRetentionDays)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
 	now := time.Now().UTC()
 
@@ -192,16 +208,29 @@ func runRetention(ctx context.Context, pool *pgxpool.Pool, lookup func(string) (
 	})
 }
 
-func envInt(lookup func(string) (string, bool), name string, fallback int) int {
+// envInt mirrors internal/scheduler/fixed/producers.go's retentionDays: an
+// absent/empty/unparseable value falls back to the default (no intent
+// expressed); zero is a legitimate configured horizon, not a fallback
+// trigger; a negative value is a hard configuration error -- silently
+// falling back on it would mask a horizon that (per that function's own
+// comment) "would delete every row older than the occurrence itself".
+func envInt(lookup func(string) (string, bool), name string, fallback int) (int, error) {
 	value, present := lookup(name)
-	if !present || value == "" {
-		return fallback
+	if !present {
+		return fallback, nil
 	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 {
-		return fallback
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback, nil
 	}
-	return parsed
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return fallback, nil
+	}
+	if parsed < 0 {
+		return 0, fmt.Errorf("%s=%q is negative; refusing a horizon that would delete every row older than now", name, trimmed)
+	}
+	return parsed, nil
 }
 
 func writeReceipt(stdout io.Writer, receipt map[string]any) int {

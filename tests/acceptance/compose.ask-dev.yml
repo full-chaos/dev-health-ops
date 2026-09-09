@@ -246,7 +246,10 @@ services:
       # internal/scheduler/fixed's RetentionProducer dispatches) against
       # this stack's real tables -- see cmd/ask-dev-jobs-probe's
       # `retention` check. Needs no River schema (these are plain Postgres
-      # tables `migrate` already creates), so it depends only on `migrate`.
+      # tables `migrate` already creates) -- `depends_on` above adds only
+      # `migrate` on top of the inherited `worker-base` set (valkey/
+      # clickhouse/pgbouncer, harmless and already up by boot_services
+      # ordering; see the note at `environment:` above).
       test:
         - "CMD"
         - "/usr/local/bin/ask-dev-jobs-probe"

@@ -55,23 +55,41 @@ func TestRunRejectsAnUnknownCheckBeforeTouchingPostgresURI(t *testing.T) {
 	}
 }
 
-func TestEnvIntFallsBackOnMissingOrInvalidValues(t *testing.T) {
+// TestEnvIntMatchesProductionRetentionDaysSemantics pins envInt against
+// internal/scheduler/fixed/producers.go's retentionDays: absent/empty/
+// unparseable/whitespace-only fall back to the default (no intent
+// expressed); zero is a legitimate configured horizon, NEVER a fallback
+// trigger; negative is a hard configuration error, never a silent
+// fallback -- a negative horizon would delete every row older than now.
+func TestEnvIntMatchesProductionRetentionDaysSemantics(t *testing.T) {
 	cases := []struct {
-		name     string
-		lookup   func(string) (string, bool)
-		fallback int
-		want     int
+		name      string
+		lookup    func(string) (string, bool)
+		fallback  int
+		want      int
+		wantError bool
 	}{
-		{"missing", func(string) (string, bool) { return "", false }, 14, 14},
-		{"empty", func(string) (string, bool) { return "", true }, 14, 14},
-		{"non-numeric", func(string) (string, bool) { return "nope", true }, 14, 14},
-		{"zero", func(string) (string, bool) { return "0", true }, 14, 14},
-		{"negative", func(string) (string, bool) { return "-3", true }, 14, 14},
-		{"valid", func(string) (string, bool) { return "30", true }, 14, 30},
+		{"missing", func(string) (string, bool) { return "", false }, 14, 14, false},
+		{"empty", func(string) (string, bool) { return "", true }, 14, 14, false},
+		{"whitespace-only", func(string) (string, bool) { return "   ", true }, 14, 14, false},
+		{"non-numeric", func(string) (string, bool) { return "nope", true }, 14, 14, false},
+		{"zero is a valid horizon, not a fallback trigger", func(string) (string, bool) { return "0", true }, 14, 0, false},
+		{"negative is a hard error, never a silent fallback", func(string) (string, bool) { return "-3", true }, 14, 0, true},
+		{"valid", func(string) (string, bool) { return "30", true }, 14, 30, false},
+		{"trims surrounding whitespace", func(string) (string, bool) { return " 30 ", true }, 14, 30, false},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := envInt(testCase.lookup, "X", testCase.fallback)
+			got, err := envInt(testCase.lookup, "X", testCase.fallback)
+			if testCase.wantError {
+				if err == nil {
+					t.Fatalf("envInt() error = nil, want an error for a negative value")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("envInt() error = %v, want nil", err)
+			}
 			if got != testCase.want {
 				t.Fatalf("envInt() = %d, want %d", got, testCase.want)
 			}

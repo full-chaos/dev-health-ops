@@ -2,6 +2,7 @@ package operational
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -639,6 +640,55 @@ func TestDecodeBillingAttributesPreservesCompositeStringFields(t *testing.T) {
 				t.Fatalf("rendered = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+// TestDecodeBillingAttributesCompositeNumbersMatchPythonRepr is CHAOS-5402's
+// codex-round P1 fix: pythonRepr was rendering a json.Number's ORIGINAL
+// JSON literal text verbatim (e.g. "1.50", "-0") instead of Python's actual
+// str()/repr() of the equivalent int/float value ("1.5", "0" -- Python's
+// int() has no signed zero). Verified against real `python3 -c` output
+// (see .codex-review-context.md) for every case below.
+func TestDecodeBillingAttributesCompositeNumbersMatchPythonRepr(t *testing.T) {
+	decoded, err := DecodeBillingAttributes([]byte(
+		`{"tier":[1.50,-0,2.0,900719925474099312345678901234567890,1e16,1e-5,100000000000000.0]}`))
+	if err != nil {
+		t.Fatalf("DecodeBillingAttributes: %v", err)
+	}
+	want := "[1.5, 0, 2.0, 900719925474099312345678901234567890, 1e+16, 1e-05, 100000000000000.0]"
+	if decoded.Tier != want {
+		t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
+	}
+}
+
+// TestDecodeBillingAttributesCompositeStringsEscapeNonPrintables is
+// CHAOS-5402's codex-round P1 fix: pythonStringRepr only escaped ASCII
+// control bytes (<0x20, 0x7f) -- Python's repr() escapes EVERY
+// non-printable Unicode character (NEL, NBSP, zero-width space, line/
+// paragraph separators, ...), not just the ASCII C0 range; an ordinary
+// printable non-ASCII character (an emoji, here) must still render
+// literally, unescaped. Verified against real `python3 -c` output (see
+// .codex-review-context.md). Built entirely from explicit rune values --
+// never paste an invisible/non-printable character literally into this
+// source file.
+func TestDecodeBillingAttributesCompositeStringsEscapeNonPrintables(t *testing.T) {
+	nel, nbsp, zwsp, ls, ps, emoji := rune(0x0085), rune(0x00a0), rune(0x200b), rune(0x2028), rune(0x2029), rune(0x1f600)
+	input := "a" + string(nel) + string(nbsp) + string(zwsp) + string(ls) + string(ps) + "b" + string(emoji)
+	// Wrapped in a one-element list -- a plain string field renders via
+	// stringField's ordinary (non-composite) path, which does not call
+	// pythonStringRepr at all; the composite `[` prefix is what routes
+	// through pythonRepr/pythonStringRepr, the code under test.
+	raw, err := json.Marshal(map[string][]string{"tier": {input}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeBillingAttributes(raw)
+	if err != nil {
+		t.Fatalf("DecodeBillingAttributes: %v", err)
+	}
+	want := "['a\\x85\\xa0\\u200b\\u2028\\u2029b" + string(emoji) + "']"
+	if decoded.Tier != want {
+		t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
 	}
 }
 

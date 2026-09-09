@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // ErrMalformedAttributes is a permanent, data-shaped condition: a stored
@@ -192,7 +195,7 @@ func pythonRepr(value any) string {
 	case string:
 		return pythonStringRepr(v)
 	case json.Number:
-		return string(v)
+		return pythonNumberRepr(v)
 	case []any:
 		parts := make([]string, len(v))
 		for i, elem := range v {
@@ -215,11 +218,92 @@ func pythonRepr(value any) string {
 	}
 }
 
+// pythonNumberRepr renders a json.Number the way Python's str()/repr()
+// renders the value `json.loads` would have produced for the same literal
+// (CHAOS-5402 codex-round P1): json.Number's ORIGINAL literal text (e.g.
+// "1.50", "-0") is NOT what Python prints -- Python parses a JSON integer
+// literal (no '.'/'e'/'E') into an arbitrary-precision int (str() is just
+// its canonical decimal digits, no leading zeros, "-0" collapses to "0"
+// since int has no signed zero) and a JSON float literal into a float64,
+// whose str() is the shortest round-tripping decimal (dropping trailing
+// zeros like "1.50" -> "1.5"). Verified against real `python3 -c` output
+// for every branch (see .codex-review-context.md / the test file).
+func pythonNumberRepr(n json.Number) string {
+	text := string(n)
+	if !strings.ContainsAny(text, ".eE") {
+		// Integer-shaped literal -> Python int (arbitrary precision).
+		bi, ok := new(big.Int).SetString(text, 10)
+		if !ok {
+			// json.Number is already validated by the decoder; this should
+			// be unreachable. Fall back to the raw text rather than panic.
+			return text
+		}
+		return bi.String()
+	}
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return text
+	}
+	return pythonFloatRepr(f)
+}
+
+// pythonFloatRepr formats f the way Python's repr(float) does: the
+// shortest round-tripping decimal digits (same algorithm Go's
+// strconv.FormatFloat(..., -1, ...) uses), in FIXED notation when the
+// base-10 exponent of the leading digit is in [-4, 16), else SCIENTIFIC
+// notation with an always-signed, zero-padded-to-2-digits exponent (e.g.
+// "1e+16", "1e-05") -- both thresholds and the exponent format measured
+// directly against `python3 -c 'print(repr(x))'` across the full range
+// (see the test file's TestDecodeBillingAttributesCompositeNumbersMatchPythonRepr).
+// A float, unlike an int, always shows a decimal point (Python: "2.0",
+// never "2").
+func pythonFloatRepr(f float64) string {
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		// Unreachable via encoding/json (JSON cannot encode these) --
+		// defensive only.
+		return strconv.FormatFloat(f, 'g', -1, 64)
+	}
+	neg := math.Signbit(f)
+	abs := math.Abs(f)
+	sci := strconv.FormatFloat(abs, 'e', -1, 64)
+	mantissa, expText, ok := strings.Cut(sci, "e")
+	if !ok {
+		return sci
+	}
+	exp, err := strconv.Atoi(expText)
+	if err != nil {
+		return sci
+	}
+	var out string
+	if exp >= -4 && exp < 16 {
+		out = strconv.FormatFloat(abs, 'f', -1, 64)
+		if !strings.Contains(out, ".") {
+			out += ".0"
+		}
+	} else {
+		sign := "+"
+		if exp < 0 {
+			sign = "-"
+			exp = -exp
+		}
+		out = fmt.Sprintf("%se%s%02d", mantissa, sign, exp)
+	}
+	if neg {
+		out = "-" + out
+	}
+	return out
+}
+
 // pythonStringRepr mirrors Python's str repr() quoting: single-quoted
 // unless the string contains a single quote and no double quote (then
-// double-quoted), with backslash/quote/control-character escaping. It does
-// not reproduce Python's full non-ASCII-printable-category handling --
-// disclosed gap, same discipline as pythonRepr's dict-order note above.
+// double-quoted), with backslash/quote escaping, and every NON-PRINTABLE
+// character escaped -- not just the ASCII C0 control range. Go's
+// unicode.IsPrint categorization (L/M/N/P/S plus the ASCII space) matches
+// Python's printable-string rule closely enough to reproduce it exactly on
+// every case measured against real `python3 -c` output (ASCII control
+// bytes, NEL U+0085, NBSP U+00A0, zero-width space U+200B, line/paragraph
+// separators U+2028/U+2029, an unassigned-range codepoint, and an emoji
+// staying literal) -- see the test file for the comparison.
 func pythonStringRepr(s string) string {
 	quote := byte('\'')
 	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {
@@ -241,13 +325,28 @@ func pythonStringRepr(s string) string {
 		case '\t':
 			b.WriteString(`\t`)
 		default:
-			if r < 0x20 || r == 0x7f {
-				fmt.Fprintf(&b, `\x%02x`, r)
-			} else {
+			if unicode.IsPrint(r) {
 				b.WriteRune(r)
+			} else {
+				writePythonEscapedRune(&b, r)
 			}
 		}
 	}
 	b.WriteByte(quote)
 	return b.String()
+}
+
+// writePythonEscapedRune writes r in Python repr()'s escape form: `\xNN`
+// (2 hex digits) for a codepoint <= 0xff, `\uNNNN` (4 hex digits) for
+// <= 0xffff, `\UNNNNNNNN` (8 hex digits) beyond that -- verified against
+// real `python3 -c` output for one representative of each width.
+func writePythonEscapedRune(b *strings.Builder, r rune) {
+	switch {
+	case r <= 0xff:
+		fmt.Fprintf(b, `\x%02x`, r)
+	case r <= 0xffff:
+		fmt.Fprintf(b, `\u%04x`, r)
+	default:
+		fmt.Fprintf(b, `\U%08x`, r)
+	}
 }

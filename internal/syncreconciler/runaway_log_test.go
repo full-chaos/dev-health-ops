@@ -353,6 +353,73 @@ func TestRunawayLogStateForgetsOnlyWhatItActuallyObserved(t *testing.T) {
 		}
 	})
 
+	t.Run("a persistent at-cap condition re-reports on its growing interval", func(t *testing.T) {
+		// The confirmation pass for r1 found this branch uncovered: the
+		// checked-in tests reached the at-cap FIRST report and its
+		// suppression, but never its interval-expiry RE-emission, so the one
+		// path that keeps a permanently-full map from going silent was pinned
+		// by nothing. An uncovered branch reads as covered in a 95% figure,
+		// which is where the next instance of a defect lives.
+		state := newRunawayLogState()
+		full := make([]RunawayDispatchWakeup, 0, runawayLogMaxTracked)
+		for index := 0; index < runawayLogMaxTracked; index++ {
+			full = append(full, RunawayDispatchWakeup{
+				SyncRunID: "run-" + strconv.Itoa(index), Attempts: 1344,
+			})
+		}
+		state.decide(now, full, true, true)
+		over := append(append([]RunawayDispatchWakeup(nil), full...),
+			RunawayDispatchWakeup{SyncRunID: "extra", Attempts: 5000})
+
+		// Count ONLY the at-cap line: advancing the clock far enough to expire
+		// the overflow interval also expires the eighty TRACKED rows' own
+		// intervals, and those re-emissions are correct behaviour, not noise
+		// this subtest is about. Asserting on the raw slice length instead
+		// conflates the two -- it failed on exactly that before being fixed.
+		untrackedLines := func(emissions []runawayLogEmission) []runawayLogEmission {
+			var found []runawayLogEmission
+			for _, emission := range emissions {
+				if emission.Reason == runawayLogReasonUntracked {
+					found = append(found, emission)
+				}
+			}
+			return found
+		}
+
+		at := now.Add(time.Second)
+		if emissions, _ := state.decide(at, over, true, true); len(untrackedLines(emissions)) != 1 {
+			t.Fatalf("first at-cap report emitted %d untracked lines, want 1",
+				len(untrackedLines(emissions)))
+		}
+		// Well inside the first interval: silent, but still counted.
+		at = at.Add(runawayLogFirstInterval / 2)
+		if emissions, outcome := state.decide(at, over, true, true); len(untrackedLines(emissions)) != 0 ||
+			outcome.Untracked != 1 {
+			t.Fatalf("mid-interval pass emitted %d untracked lines / untracked count %d, want 0 / 1",
+				len(untrackedLines(emissions)), outcome.Untracked)
+		}
+		// Past it: re-reported, and the interval has grown.
+		at = at.Add(runawayLogFirstInterval)
+		emissions, _ := state.decide(at, over, true, true)
+		found := untrackedLines(emissions)
+		if len(found) != 1 || found[0].UntrackedRows != 1 {
+			t.Fatalf("interval-expiry re-report = %#v, want one untracked line naming 1 row", found)
+		}
+		if got := state.overflow.interval; got != 2*runawayLogFirstInterval {
+			t.Fatalf("at-cap interval = %s after one re-emission, want %s",
+				got, 2*runawayLogFirstInterval)
+		}
+		// And it saturates like the per-row bar rather than growing forever.
+		for emission := 0; emission < 20; emission++ {
+			at = at.Add(2 * runawayLogMaxInterval)
+			state.decide(at, over, true, true)
+		}
+		if got := state.overflow.interval; got != runawayLogMaxInterval {
+			t.Fatalf("at-cap interval = %s after 20 re-emissions, want the ceiling %s",
+				got, runawayLogMaxInterval)
+		}
+	})
+
 	t.Run("a cleared at-cap condition is reported again when it returns", func(t *testing.T) {
 		state := newRunawayLogState()
 		full := make([]RunawayDispatchWakeup, 0, runawayLogMaxTracked)

@@ -24,3 +24,20 @@ ALTER TABLE testops_metric_baselines MODIFY COLUMN p90_value Nullable(Float64);
 -- case above flows straight through, so this column widens for the same
 -- reason.
 ALTER TABLE testops_maturity_bands MODIFY COLUMN value Nullable(Float64);
+
+-- CHAOS-4806, codex round chaos-4806-r1 confirmation-pass weakest point
+-- (team-lead, verbatim): argMax(<col>, computed_at) SKIPS NULL values
+-- (CHAOS-4547 trap family) -- any FUTURE reader that dedups one of these
+-- six columns with plain argMax(...) will silently pick an OLDER non-null
+-- row instead of the latest (correctly) NULL one, resurrecting a stale
+-- number instead of reporting "undefined." Swept the whole repo
+-- (`rg --hidden -n 'FROM testops_metric_baselines|FROM testops_maturity_bands'`)
+-- at the time of this migration: NO production reader exists for either
+-- table yet (write-only from internal/jobs/metrics/daily/benchmarking's
+-- Writer; only test SELECTs and a fixture manifest reference them). The
+-- FIRST reader built against these tables (Go or Python, GraphQL resolver
+-- or CLI) MUST dedup with argMaxIf/a FINAL-with-tuple-ordering pattern
+-- (never a bare argMax on one of these six columns) and should pin it with
+-- a fixture row shaped exactly like this: latest computed_at row has the
+-- column NULL, an OLDER row has a real value (e.g. 5.0) -- a correct
+-- reader returns NULL, a reader using plain argMax silently returns 5.0.

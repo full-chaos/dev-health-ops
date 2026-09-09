@@ -92,6 +92,12 @@ type PeriodComparisonRecord struct {
 // may fall back to 0.0 as a stand-in for "no value." PercentileRank stays a
 // required float64: it is a bounded ratio-of-counts that cannot itself
 // become non-finite (see PercentileRank's own doc comment).
+//
+// READER WARNING (see migration 090's own trailing comment for the full
+// sweep): any future reader of these columns that dedups with a bare
+// argMax(col, computed_at) will silently skip a NULL and resurrect an
+// older non-null value instead -- use argMaxIf/a FINAL-with-tuple-ordering
+// pattern instead.
 type BenchmarkBaselineRecord struct {
 	MetricName        string
 	ScopeType         string

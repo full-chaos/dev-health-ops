@@ -1,9 +1,11 @@
 package operational
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 )
@@ -137,9 +139,66 @@ func stringField(fields map[string]json.RawMessage, name string, fallback string
 		return text, nil
 	}
 	if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
-		// Python would str() a list/dict into its repr, which no template
-		// should ever want. Reject rather than invent a rendering.
-		return "", fmt.Errorf("%w: %s is a composite value", ErrMalformedAttributes, name)
+		// R60 (chris via team-lead, CHAOS-5402): Go is the functionality
+		// of record. Emulating Python's str()/repr() here (the original
+		// CHAOS-5402 approach) was an UNBOUNDED parity trap -- three P1s
+		// in three rounds (number formatting, Unicode escaping, float
+		// overflow), each one closing a gap that opened another. Rejecting
+		// a composite value outright (the pre-CHAOS-5402 behavior) turned
+		// a previously-sendable stored row into a permanent drop, which is
+		// the real defect; the FIX is to render it as canonical, compact
+		// JSON text -- Go's own native, well-defined, un-emulated
+		// rendering -- not to chase Python's exact string byte-for-byte.
+		// Verified before this change (see .codex-review-context.md): the
+		// rendered string is interpolated as literal text into a
+		// hand-rolled str.format-style HTML email template
+		// (billingemail.go's formatTemplate) -- nothing downstream parses
+		// it as Python syntax, as JSON, or at all; a human reads it in the
+		// email body, so a JSON-shaped rendering is exactly as legible as
+		// the repr-shaped one was. Python's repr output for this
+		// off-contract path is a recorded, accepted difference -- not
+		// chased here.
+		canonical, err := canonicalJSON(raw)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s is not decodable: %v", ErrMalformedAttributes, name, err)
+		}
+		// R60 confirmation-pass fix (codex P1, chaos-5402-r60-confirm):
+		// this composite path is a NEW way for org/Stripe-controlled text
+		// to reach an email body (a composite value used to be DROPPED
+		// entirely, never reaching the template) -- formatTemplate itself
+		// does no escaping (byte-for-byte port of Python's plain
+		// str.format), and all 7 templates (templates/*.html) are
+		// genuinely HTML documents. Escape here, on the NEW path only;
+		// the pre-existing scalar-field path above is intentionally left
+		// unchanged (a separate, pre-existing gap, ticketed separately).
+		return html.EscapeString(canonical), nil
 	}
 	return trimmed, nil
+}
+
+// canonicalJSON re-renders raw (a JSON array or object) as compact JSON
+// text: map keys sorted (encoding/json's Marshal does this natively for a
+// map[string]any -- no custom sort needed), number literals preserved
+// byte-for-byte via json.Number (json.Marshal re-emits a Number's original
+// text verbatim, so "1.50" stays "1.50" and a huge integer never round-trips
+// through float64), and HTML-escaping of `<`/`>`/`&` disabled (this text
+// goes into a plain-text template substitution, not an HTML-escaping
+// context -- see stringField's call site for why). This is the canonical,
+// deterministic Go-native rendering R60 calls for.
+func canonicalJSON(raw json.RawMessage) (string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	// json.Encoder.Encode always appends a trailing newline; this is a
+	// single-line rendered value, not a stream.
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }

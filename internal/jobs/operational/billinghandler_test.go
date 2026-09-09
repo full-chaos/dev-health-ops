@@ -2,8 +2,10 @@ package operational
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -598,6 +600,137 @@ func TestDecodeBillingAttributesMatchesPythonDefaultsAndCoercion(t *testing.T) {
 		if _, err := DecodeBillingAttributes([]byte(malformed)); !errors.Is(err, ErrMalformedAttributes) {
 			t.Errorf("DecodeBillingAttributes(%s) = %v, want ErrMalformedAttributes", malformed, err)
 		}
+	}
+}
+
+// TestDecodeBillingAttributesPreservesCompositeStringFields is CHAOS-5402's
+// proof, using the ticket's own repro fixture. Python's
+// `str(attributes.get("tier", ""))` on `{"tier": ["Team"]}` rendered
+// `"['Team']"` and STILL SENT -- this was, and stays, off-contract (today's
+// Stripe producers only ever write scalars), but a stored row that used to
+// render now permanently drops instead, which is a real parity regression,
+// not a stricter-and-fine tightening like the SMTP_PORT/EMAIL_PROVIDER ones
+// this file documents elsewhere. A composite value must be preserved, not
+// rejected as malformed.
+//
+// R60 (chris via team-lead, after three codex-round P1s trying to emulate
+// Python's exact str()/repr() -- number formatting, Unicode escaping, float
+// overflow, each fix opening the next gap): Go is the functionality of
+// record. The rendering is canonical, compact JSON text, not a Python-repr
+// simulation -- verified (see .codex-review-context.md) that nothing
+// downstream parses this string as Python syntax or as JSON; it is
+// interpolated as literal text into a hand-rolled str.format-style HTML
+// email template, read by a human.
+func TestDecodeBillingAttributesPreservesCompositeStringFields(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		raw           string
+		wantCanonical string // the canonical JSON shape, BEFORE HTML-escaping (see below)
+	}{
+		{"ticket's exact repro: a list of one string", `{"tier":["Team"]}`, `["Team"]`},
+		{"a list of strings", `{"old_tier":["Team","Enterprise"]}`, `["Team","Enterprise"]`},
+		{"a nested dict, keys sorted", `{"new_tier":{"seats":5,"name":"Team"}}`, `{"name":"Team","seats":5}`},
+		{"an empty list", `{"tier":[]}`, `[]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoded, err := DecodeBillingAttributes([]byte(test.raw))
+			if err != nil {
+				t.Fatalf("DecodeBillingAttributes(%s) = %v, want nil error -- a composite value must be preserved, not dropped", test.raw, err)
+			}
+			var got string
+			switch {
+			case strings.Contains(test.raw, `"tier"`):
+				got = decoded.Tier
+			case strings.Contains(test.raw, `"old_tier"`):
+				got = decoded.OldTier
+			case strings.Contains(test.raw, `"new_tier"`):
+				got = decoded.NewTier
+			}
+			// html.EscapeString: the composite path HTML-escapes its
+			// output (TestDecodeBillingAttributesCompositeValuesAreHTMLEscaped
+			// below is the dedicated proof of THAT behavior) -- this test
+			// is about canonical-JSON SHAPE (key sort order, value
+			// preservation), so it escapes its own expectation rather
+			// than hand-writing every `"` as `&#34;`.
+			want := html.EscapeString(test.wantCanonical)
+			if got != want {
+				t.Fatalf("rendered = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestDecodeBillingAttributesCompositeValuesAreHTMLEscaped is the R60
+// confirmation-pass fix (chaos-5402-r60-confirm-20260909T123757, NOT CLEAN):
+// canonicalJSON's output is interpolated into an HTML email template
+// (billingemail.go's formatTemplate, which does ZERO escaping of its own,
+// by design -- it's a byte-for-byte port of Python's plain str.format).
+// Before this fix, a composite value used to be DROPPED entirely (never
+// reached the template); R60 makes it REACH the template, which means it
+// now needs the escaping the template itself never provides. All 7 email
+// templates (`templates/*.html`) are genuinely HTML documents (verified:
+// `<!doctype html>`), so every composite value is escaped unconditionally.
+// Scalar string fields are UNCHANGED -- this is scoped to the NEW path only.
+func TestDecodeBillingAttributesCompositeValuesAreHTMLEscaped(t *testing.T) {
+	decoded, err := DecodeBillingAttributes([]byte(`{"tier":["<script>alert(1)</script>"]}`))
+	if err != nil {
+		t.Fatalf("DecodeBillingAttributes: %v", err)
+	}
+	if strings.Contains(decoded.Tier, "<script>") {
+		t.Fatalf("rendered = %q, contains an unescaped <script> tag", decoded.Tier)
+	}
+	want := `[&#34;&lt;script&gt;alert(1)&lt;/script&gt;&#34;]`
+	if decoded.Tier != want {
+		t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
+	}
+}
+
+// TestDecodeBillingAttributesCanonicalJSONHandlesEveryValueShape is R60's
+// table test (superseding the deleted Python-repr-parity tests): numbers
+// (int, float, huge integer, scientific notation), Unicode (including
+// non-printable characters that used to need special escaping under the
+// old Python-repr scheme -- canonical JSON's own \uXXXX escaping handles
+// them with zero custom code), and nesting. No Python cross-check needed
+// here -- Go's encoding/json output IS the canonical answer (R60), not an
+// approximation of something else. json.Number preserves the ORIGINAL
+// literal text byte-for-byte (never reformatted), which is exactly what
+// makes this simpler and more predictable than trying to match Python:
+// what was stored is what renders, with no numeric-format opinion at all.
+func TestDecodeBillingAttributesCanonicalJSONHandlesEveryValueShape(t *testing.T) {
+	nel, zwsp, emoji := rune(0x0085), rune(0x200b), rune(0x1f600)
+	unicodeInput := "a" + string(nel) + string(zwsp) + "b" + string(emoji)
+	unicodeJSON, err := json.Marshal(unicodeInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"literal numbers preserved verbatim, not reformatted",
+			`{"tier":[1.50,-0,2.0,900719925474099312345678901234567890,1e16,1e400]}`,
+			`[1.50,-0,2.0,900719925474099312345678901234567890,1e16,1e400]`},
+		{"non-printable + printable-non-ASCII characters via canonical JSON escaping",
+			`{"tier":[` + string(unicodeJSON) + `]}`,
+			`[` + string(unicodeJSON) + `]`},
+		{"nested composite, deterministic key order",
+			`{"tier":{"z":1,"a":[true,false,null]}}`,
+			`{"a":[true,false,null],"z":1}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoded, err := DecodeBillingAttributes([]byte(test.raw))
+			if err != nil {
+				t.Fatalf("DecodeBillingAttributes(%s) = %v, want nil error", test.raw, err)
+			}
+			// html.EscapeString: see the comment on the same call in
+			// TestDecodeBillingAttributesPreservesCompositeStringFields.
+			want := html.EscapeString(test.want)
+			if decoded.Tier != want {
+				t.Fatalf("rendered = %q, want %q", decoded.Tier, want)
+			}
+		})
 	}
 }
 

@@ -1963,6 +1963,9 @@ type ReworkThemeAllocation {
 type SankeyCoverage {
   teamCoverage: Float!
   repoCoverage: Float!
+  directRepoCoverage: Float
+  teamFallbackRepoCoverage: Float
+  repoFanoutReposPerUnit: Float
 }
 
 type SankeyEdge {

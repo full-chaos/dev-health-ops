@@ -125,10 +125,36 @@ class SankeyEdge:
 
 @strawberry.type
 class SankeyCoverage:
-    """Coverage metrics for the Sankey flow."""
+    """Coverage metrics for the Sankey flow.
+
+    CHAOS-5483 adds three fields, and they are declaration-only on this
+    side: Python never populates them, so this plane always answers null.
+    That is the ruling (chris R60 -- the Go plane is the source of truth
+    for these fields), not an omission, and it is why they are nullable
+    while ``team_coverage``/``repo_coverage`` are not.
+
+    Why the split exists at all: after the NxM team-ownership fallback
+    (CHAOS-5460) a work unit with no direct repo evidence but some owning
+    team is allocated 1/N of its effort against EVERY repo that team owns.
+    Repo coverage on the local org went 53.1/57.5/67.2 -> 100.0/100.0/99.5
+    (7d/30d/90d) in one release without becoming any more precise: the
+    headline stopped distinguishing "we know which repo this work touched"
+    from "this belongs to a team that owns nine repos". These fields split
+    that number back into its two claims, and ``repo_fanout_repos_per_unit``
+    reports the fan-out WIDTH so a saturating fallback reads as saturation
+    rather than as precision.
+
+    ``None`` is not zero here. The Go plane also answers null on the
+    non-investment path, which reads a table carrying no repo provenance
+    at all -- "not measurable" and "no team-fallback effort" are different
+    answers (North Star check 12).
+    """
 
     team_coverage: float
     repo_coverage: float
+    direct_repo_coverage: float | None = None
+    team_fallback_repo_coverage: float | None = None
+    repo_fanout_repos_per_unit: float | None = None
 
 
 @strawberry.enum

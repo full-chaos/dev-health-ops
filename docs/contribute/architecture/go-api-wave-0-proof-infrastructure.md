@@ -300,7 +300,8 @@ appear here.
 | Digest | In force from | Moved by | Notes |
 |---|---|---|---|
 | `sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706` | before 2026-09-01 | superseded by `33b3f3f21d` | The twelve 2026-09-01 rows were seeded here and died the same day |
-| `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88` | 2026-09-01 | `33b3f3f21d` (#2065, widen `TimeseriesBucket.value` nullability) | Current |
+| `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88` | 2026-09-01 | `33b3f3f21d` (#2065, widen `TimeseriesBucket.value` nullability) | Superseded 2026-09-09. The 11 canary + 4 shadow rows live at this digest when CHAOS-5483 merges — they must be re-enabled at the new one |
+| `sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0` | 2026-09-09 | CHAOS-5483 (add `directRepoCoverage`, `teamFallbackRepoCoverage`, `repoFanoutReposPerUnit` to `SankeyCoverage`) | Current. Purely ADDITIVE — three nullable `Float` fields, no rename, no removal, no type change — but additive is irrelevant to the digest, which is a byte hash. Every routing row still dies. Re-enable AFTER the query-api image is rebuilt from this SDL, per the recovery procedure above; enablement is chris's rollout call |
 
 ## Float comparison: engine nondeterminism and the Tier-B rule
 

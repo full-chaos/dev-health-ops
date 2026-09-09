@@ -53,10 +53,17 @@ func TestCheckFailsWhenTheDocIsEditedByHand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read copied doc: %v", err)
 	}
-	// The most tempting hand edit there is: soften the honest cell.
-	tampered := replaceFirst(string(raw), "**unknown** (read", "`dc4194f58404` (read")
+	// The most tempting hand edit there is: soften the honest cell. Tampering
+	// with the PARITY column rather than the deployed one on purpose -- the
+	// deployed cell's text legitimately changes when the fleet is rebuilt
+	// (it read "**unknown**" until the Compose COMMIT build-arg landed on
+	// 2026-09-09, and a real sha after), so a test anchored on it would fail
+	// for a reason that has nothing to do with tampering. "UNVERIFIED" is
+	// present for as long as any family is unverified, which is the state
+	// this whole section exists to keep visible.
+	tampered := replaceFirst(string(raw), "| UNVERIFIED |", "| VERIFIED |")
 	if tampered == string(raw) {
-		t.Fatal("expected the rendered doc to contain an **unknown** deployed-revision cell to tamper with")
+		t.Fatal("expected the rendered doc to contain an UNVERIFIED parity cell to tamper with")
 	}
 	if err := os.WriteFile(docPath, []byte(tampered), 0o644); err != nil {
 		t.Fatalf("write tampered doc: %v", err)

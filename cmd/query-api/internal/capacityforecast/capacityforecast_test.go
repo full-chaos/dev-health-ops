@@ -409,6 +409,20 @@ func TestForecastToModelRendersComputedAtAsRFC3339(t *testing.T) {
 			moment: time.Date(2026, 9, 7, 3, 23, 45, 0, time.FixedZone("CEST", 2*3600)),
 			want:   "2026-09-07T01:23:45+00:00",
 		},
+		{
+			// Sub-microsecond precision is truncated, never rounded up into
+			// a different microsecond.
+			name:   "nanoseconds below a microsecond are truncated",
+			moment: time.Date(2026, 9, 7, 1, 23, 45, 678901999, time.UTC),
+			want:   "2026-09-07T01:23:45.678901+00:00",
+		},
+		{
+			// A zone BEHIND UTC, so normalisation is exercised in both
+			// directions and a sign error cannot pass.
+			name:   "a negative offset is normalised too",
+			moment: time.Date(2026, 9, 6, 21, 23, 45, 0, time.FixedZone("EDT", -4*3600)),
+			want:   "2026-09-07T01:23:45+00:00",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

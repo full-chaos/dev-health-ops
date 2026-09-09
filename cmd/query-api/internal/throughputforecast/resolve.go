@@ -177,6 +177,11 @@ func Resolve(
 
 	slog.InfoContext(ctx, "query_api.throughput_forecast.served",
 		"org_id", orgID,
+		// CHAOS-5450: this resolver's rendering did not change, but it now
+		// shares one formatter with the capacity resolvers -- so the label
+		// is what proves all three still agree in production, not just in
+		// tests.
+		"computed_at_format", graphqldate.WireFormatLabel,
 		"scope", scopeLabel(input),
 		"history_weeks", input.HistoryWeeks,
 		"history_days", len(history),

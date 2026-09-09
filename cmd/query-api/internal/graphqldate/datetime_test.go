@@ -11,11 +11,18 @@ import (
 // string with the same rule the implementation uses cannot fail when the
 // rule is wrong.
 //
-// Every case here also appears verbatim in the capacity and throughput
+// All six cases here also appear verbatim in the capacity and throughput
 // resolvers' own tests, which assert their OUTPUT rather than this
 // function. That overlap is the point: it is what makes "singular, list
 // and throughputForecast render one instant identically" checkable
 // without a test that has to reach into three packages at once.
+//
+// The overlap is exact, and it has to stay exact. An earlier version of
+// this comment claimed it while two cases -- sub-microsecond truncation
+// and the negative offset -- lived only here, so the agreement claim was
+// pinned for four of six inputs and asserted for six. A review caught it.
+// Adding a case here without adding it to both resolver tests silently
+// re-opens that gap.
 func TestRFC3339UTC(t *testing.T) {
 	cases := []struct {
 		name   string

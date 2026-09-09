@@ -288,6 +288,10 @@ func ResolveForecast(
 
 	slog.InfoContext(ctx, "query_api.capacity_forecast.served",
 		"org_id", orgID,
+		// CHAOS-5450: makes the computedAt wire format greppable per
+		// request. A silent revert of the formatter is otherwise invisible
+		// here -- the resolver keeps serving and keeps logging.
+		"computed_at_format", graphqldate.WireFormatLabel,
 		"team_id", stringOrOrgWide(teamID),
 		"work_scope_id", stringOrOrgWide(workScopeID),
 		"history_days", historyDays,
@@ -505,6 +509,9 @@ func ResolveForecasts(
 
 	slog.InfoContext(ctx, "query_api.capacity_forecasts.served",
 		"org_id", orgID,
+		// CHAOS-5450, same reason as the singular resolver above. This is
+		// the path the parity run actually caught emitting a naive form.
+		"computed_at_format", graphqldate.WireFormatLabel,
 		"filters", filterLabel(filters),
 		"limit", limit,
 		"rows", len(edges),

@@ -5,9 +5,26 @@ import (
 	"time"
 )
 
-// RFC3339UTC renders an instant as the canonical wire form for query-api's
-// String-typed timestamp fields: RFC 3339, "T"-separated, always carrying an
-// explicit "+00:00" offset.
+// RFC3339UTC renders an instant as RFC 3339, "T"-separated, always carrying
+// an explicit "+00:00" offset.
+//
+// SCOPE, stated precisely because an earlier draft of this comment
+// overclaimed and a review caught it: this is the canonical wire form for
+// the FORECAST timestamp fields R55 ruled on — CapacityForecast.computedAt
+// (singular and list) and ThroughputForecast.computedAt. It is NOT a
+// universal rule for every String-typed timestamp field in the schema.
+//
+// The known, DELIBERATE exception is featureflags.isoformatUTC
+// (cmd/query-api/internal/featureflags/featureflags.go:99-126), which
+// renders FeatureFlagItem.createdAt/archivedAt WITHOUT any offset. That is
+// correct there and must not be "unified" into this helper: the Python
+// producer receives a NAIVE datetime from clickhouse_connect for those
+// columns, so its isoformat() genuinely emits no suffix, and a live
+// ClickHouse precedent test asserts exactly that. Routing those fields
+// through RFC3339UTC would ADD an offset Python never emits and break a
+// proven parity contract. R55 ruled on the forecast fields only; changing
+// the feature-flag wire format is a separate public-API decision that
+// nobody has made.
 //
 // WHY THIS EXISTS (CHAOS-5450, team-lead ruling R55). Three sibling fields
 // used to render the same kind of value three different ways, and the
@@ -49,6 +66,17 @@ import (
 // point this helper becomes the scalar's marshaler rather than a per-resolver
 // call. That is a schema change with a web-side blast radius and is filed
 // separately.
+// WireFormatLabel names the format RFC3339UTC produces, for the `served`
+// telemetry on every resolver that uses it.
+//
+// Without it a silent revert of the formatter — the exact regression the
+// tests here pin — is invisible in production logs: the resolver keeps
+// serving, keeps logging `served`, and only the string shape changes. One
+// low-cardinality constant field makes the wire format greppable per
+// request. Change it in the same edit as the format itself, never
+// separately, or the label starts lying.
+const WireFormatLabel = "rfc3339_utc"
+
 func RFC3339UTC(moment time.Time) string {
 	utc := moment.UTC()
 	rendered := utc.Format("2006-01-02T15:04:05")

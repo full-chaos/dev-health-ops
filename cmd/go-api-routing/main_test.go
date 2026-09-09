@@ -1,23 +1,47 @@
 package main
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
 
 func TestRequestedOperationsTreatsAllRegisteredAsEveryRow(t *testing.T) {
-	for _, raw := range []string{"all-registered", "", "   "} {
-		if got := requestedOperations(raw); got != nil {
+	for _, raw := range []string{"all-registered", "  all-registered  ", "", "   "} {
+		got, err := requestedOperations(raw)
+		if err != nil {
+			t.Fatalf("requestedOperations(%q) = %v, want no error", raw, err)
+		}
+		if got != nil {
 			t.Fatalf("requestedOperations(%q) = %v, want nil (every row)", raw, got)
 		}
 	}
 }
 
 func TestRequestedOperationsTrimsAndDropsEmptyNames(t *testing.T) {
-	got := requestedOperations(" flowMatrix , hotspots ,, ")
+	got, err := requestedOperations(" flowMatrix , hotspots ,, ")
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{"flowMatrix", "hotspots"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("requestedOperations = %v, want %v", got, want)
+	}
+}
+
+// CHAOS-5486 round 1, F1 (reproduced by the lane before fixing): a
+// separators-only --operations produced an EMPTY filter, which Repoint reads
+// as "every row at the digest" -- an operator who named something got a
+// silent re-point of everything. Asking for all rows must be explicit.
+func TestRequestedOperationsRefusesAFilterThatNamesNothing(t *testing.T) {
+	for _, raw := range []string{",", " , ", ",,,", " ,, , "} {
+		got, err := requestedOperations(raw)
+		if !errors.Is(err, errEmptyOperationFilter) {
+			t.Fatalf("requestedOperations(%q) = (%v, %v), want errEmptyOperationFilter -- a write verb must never widen silently", raw, got, err)
+		}
+		if got != nil {
+			t.Fatalf("requestedOperations(%q) returned %v alongside its error", raw, got)
+		}
 	}
 }
 

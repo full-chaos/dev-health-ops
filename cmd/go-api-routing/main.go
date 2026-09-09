@@ -103,9 +103,19 @@ func parseFlags() (flags, error) {
 	return f, nil
 }
 
-func requestedOperations(raw string) []string {
-	if strings.TrimSpace(raw) == "" || raw == "all-registered" {
-		return nil
+// errEmptyOperationFilter refuses an --operations value that names nothing.
+//
+// A nil return from requestedOperations means "every row at the digest", and
+// this is a WRITE verb: silently widening `--operations ","` (or any
+// separators-only string) from "the operator named something" to "re-point
+// everything" is the failure this refuses. `all-registered` and an OMITTED
+// flag are the only ways to ask for every row, and both say so out loud.
+var errEmptyOperationFilter = errors.New("--operations names no operation: pass 'all-registered' to re-point every row")
+
+func requestedOperations(raw string) ([]string, error) {
+	trimmedRaw := strings.TrimSpace(raw)
+	if trimmedRaw == "" || trimmedRaw == "all-registered" {
+		return nil, nil
 	}
 	var operations []string
 	for _, name := range strings.Split(raw, ",") {
@@ -113,7 +123,10 @@ func requestedOperations(raw string) []string {
 			operations = append(operations, trimmed)
 		}
 	}
-	return operations
+	if len(operations) == 0 {
+		return nil, fmt.Errorf("%w (got %q)", errEmptyOperationFilter, raw)
+	}
+	return operations, nil
 }
 
 func run() error {
@@ -148,11 +161,16 @@ func run() error {
 	}
 	defer pool.Close()
 
+	operations, err := requestedOperations(f.operations)
+	if err != nil {
+		return err
+	}
+
 	outcomes, err := goapiproof.Repoint(ctx, pool, goapiproof.RepointRequest{
 		SchemaDigest:   registry.SchemaDigest,
 		RunningBuild:   running,
 		ExpectBuild:    f.expectBuild,
-		Operations:     requestedOperations(f.operations),
+		Operations:     operations,
 		RecordedBy:     f.recordedBy,
 		ReviewEvidence: f.reviewEvidence,
 		DryRun:         f.dryRun,

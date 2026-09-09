@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,4 +218,94 @@ func TestOverflowIsReportedAsOverflowNotAsAFailedRun(t *testing.T) {
 	if strings.Contains(err.Error(), "could not be run") {
 		t.Fatalf("an overflow was reported as a failed run: %v", err)
 	}
+}
+
+// r4 P1-2. The process-group kill fires, but cmd.Run() waits on the
+// STDOUT PIPE, and a child that inherited it keeps that pipe open after
+// the parent exits. Measured 2.0s against a 100ms deadline.
+//
+// A hung helper must not be able to outlive the caller's deadline by
+// leaving a grandchild holding the write end.
+func TestAnExitedParentWithALivingChildStillHonoursTheDeadline(t *testing.T) {
+	// The parent exits immediately; the child inherits stdout and sleeps.
+	helper := writeHelper(t, "#!/bin/sh\nsleep 5 &\nexit 0\n")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	_, _ = mintBearer(ctx, []string{helper})
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("the caller deadline did not bound a helper whose parent exited with a child holding stdout: blocked for %s", elapsed)
+	}
+}
+
+// r4 found the report was missing two counters it claimed to compute: an
+// earlier edit reverted the computed build-binding line to a hardcoded
+// sentence and dropped the mint count entirely. Nothing failed, because no
+// test read this output at all.
+//
+// So this reads it. An instrument nobody asserts on is an instrument that
+// silently stops working -- which is the same class as a guard with no
+// killer test, one layer out.
+func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
+	credential := goapiproof.MintedCredential("Authorization", "envelope", 0,
+		func(context.Context) (string, error) {
+			return "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln", nil
+		}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
+	request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/x", nil)
+	for i := 0; i < 3; i++ {
+		if err := credential.Apply(context.Background(), request); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+	}
+
+	outcomes := []goapiproof.Outcome{{
+		Operation:        "featureFlags",
+		Route:            goapiproof.RouteEdge,
+		Executed:         true,
+		Admitted:         true,
+		EdgeBuildBinding: goapiproof.EdgeBuildAbsent,
+		TerminalState:    "unsupported",
+	}}
+	summary := goapiproof.Summary{Attempted: 1, Admitted: 1, Executed: 1}
+
+	printed := captureStdout(t, func() {
+		if err := emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
+			goapiproof.RegistryView{SchemaDigest: "sha256:x", BuildIdentity: "b"},
+			outcomes, summary, credential); err != nil {
+			t.Fatalf("emitReport: %v", err)
+		}
+	})
+
+	if !strings.Contains(printed, "envelope mints = 3") {
+		t.Fatalf("the mint COUNT must reach the report -- a run that minted once will fail at the closing build check, and this line is the only warning:\n%s", printed)
+	}
+	if !strings.Contains(printed, "build binding "+goapiproof.EdgeBuildAbsent+" = 1") {
+		t.Fatalf("the build-binding counter must be COUNTED from the outcomes, not asserted as a sentence:\n%s", printed)
+	}
+	// And it must never print the credential itself.
+	if strings.Contains(printed, "eyJhbGciOiJFZERTQSJ9") {
+		t.Fatalf("the report printed the credential:\n%s", printed)
+	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, reader)
+		done <- buf.String()
+	}()
+	fn()
+	_ = writer.Close()
+	os.Stdout = original
+	return <-done
 }

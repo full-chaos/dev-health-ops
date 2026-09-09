@@ -1033,6 +1033,10 @@ async def test_the_go_build_and_plane_headers_survive_reconstruction(
     monkeypatch.setattr(
         go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
     )
+    # The plane header is gated by its own flag (see
+    # test_the_plane_header_passthrough_respects_its_flag); this test is
+    # about the copy itself, so the flag is on.
+    monkeypatch.setenv("GO_API_PLANE_HEADER_ENABLED", "true")
     context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
     result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
 
@@ -1078,3 +1082,81 @@ async def test_an_absent_build_header_is_never_invented(
         "an absent upstream build header must stay absent -- a defaulted "
         "value would let a receipt claim a binding that was never made"
     )
+
+
+# r4 P1-4, a regression introduced by the pass-through above.
+#
+# `x-dev-health-plane` is gated by GO_API_PLANE_HEADER_ENABLED -- default
+# OFF, set on the local stack only, by a 2026-09-01 ruling. Copying it
+# unconditionally from the Go response turned that documented opt-out into
+# always-on: the flag governs the header the ROUTER stamps, and the
+# pass-through was a second, ungated way for the same header to reach a
+# client.
+#
+# The build header is deliberately NOT gated. It is new, nothing depends on
+# its absence, and a proof receipt cannot be bound to a process without it.
+async def test_the_plane_header_passthrough_respects_its_flag(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("canary")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"data": {"thing": {"id": "1"}}},
+            headers={
+                "x-dev-health-build": "build-A",
+                "x-dev-health-plane": "go",
+            },
+        )
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    monkeypatch.delenv("GO_API_PLANE_HEADER_ENABLED", raising=False)
+
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is not None
+    assert result.headers.get("x-dev-health-plane") is None, (
+        "the plane header reached a client with GO_API_PLANE_HEADER_ENABLED "
+        "unset -- the pass-through must not become a second, ungated route "
+        "for a header whose default-off is a standing ruling"
+    )
+    # The build header is not gated, and must still arrive.
+    assert result.headers.get("x-dev-health-build") == "build-A", (
+        "the serving build must pass through regardless: a proof receipt "
+        "cannot be bound to a process without it"
+    )
+
+
+async def test_the_plane_header_passes_through_when_the_flag_is_on(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("canary")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"data": {"thing": {"id": "1"}}},
+            headers={"x-dev-health-plane": "go", "x-dev-health-build": "build-A"},
+        )
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    monkeypatch.setenv("GO_API_PLANE_HEADER_ENABLED", "true")
+
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is not None
+    assert result.headers.get("x-dev-health-plane") == "go"
+    assert result.headers.get("x-dev-health-build") == "build-A"

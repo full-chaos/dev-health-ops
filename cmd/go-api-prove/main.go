@@ -440,12 +440,28 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	// outlives the terminal it was typed in. r3 found this one, and it is
 	// printed on every successful run rather than only on failure.
 	fmt.Printf("go-api-prove: edge=%s proof_route=%s\n", goapiproof.EndpointLabel(f.edgeURL), labelledProofURL(proofURL))
-	// State the build-binding strength per route rather than leaving a
-	// reader to assume it is uniform: the proof route binds the build per
-	// request from the serving process's own response header; the edge
-	// route cannot (the Python dispatcher drops it) and rests on the
-	// before/after stability check instead.
-	fmt.Println("go-api-prove:   build binding: route=proof per-request (response header); route=edge run-level (buildinfo before+after, plus routing-row agreement)")
+	// Report what this run ESTABLISHED, counted from the outcomes, rather
+	// than restating what each route usually provides. r4 found both of
+	// these lines missing: an earlier edit of mine reverted the computed
+	// version back to a hardcoded sentence and dropped the mint count
+	// entirely, and nothing failed, because no test read this output. Both
+	// are now pinned by TestTheReportCarriesTheCountersItComputes.
+	byBinding := map[string]int{}
+	for _, outcome := range outcomes {
+		if outcome.Admitted {
+			byBinding[outcome.EdgeBuildBinding]++
+		}
+	}
+	if len(byBinding) == 0 {
+		fmt.Println("go-api-prove:   build binding: none (no operation passed admission)")
+	}
+	for _, binding := range sortedKeys(byBinding) {
+		fmt.Printf("go-api-prove:   build binding %s = %d\n", binding, byBinding[binding])
+	}
+	// A COUNT, never a value. A fifteen-operation run that minted once is
+	// a run that will fail at the closing /buildinfo, and without this
+	// line that is invisible until it does.
+	fmt.Printf("go-api-prove:   envelope mints = %d\n", proofCredential.Mints())
 	for _, state := range sortedKeys(summary.ByTerminalState) {
 		fmt.Printf("go-api-prove:   terminal_state %s = %d\n", state, summary.ByTerminalState[state])
 	}
@@ -604,6 +620,14 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 		// Negative pid = the process GROUP.
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
+	// WaitDelay bounds the wait on the OUTPUT PIPE, which Cancel does not
+	// reach. r4: a helper whose parent exits while a CHILD inherited
+	// stdout leaves the write end open, and cmd.Run() blocks reading it
+	// long after the group has been signalled -- measured 2.0s against a
+	// 100ms deadline. Killing the group is necessary and not sufficient,
+	// because the thing being waited on is the descriptor, not the
+	// process.
+	cmd.WaitDelay = time.Second
 
 	var stdout bytes.Buffer
 	bounded := &limitedWriter{w: &stdout, remaining: mintStdoutLimit}

@@ -731,10 +731,19 @@ func TestEndpointLabelNeverEmitsACredential(t *testing.T) {
 		})
 	}
 
-	// It still SAYS something useful, or an operator cannot tell which
-	// endpoint failed.
-	if got := EndpointLabel("http://alice:s3cret@query-api.test:8090/registry"); got != "http://query-api.test" {
+	// It still SAYS something useful for a URL it can fully account for,
+	// or an operator cannot tell which endpoint failed.
+	if got := EndpointLabel("http://query-api.test:8090/registry"); got != "http://query-api.test" {
 		t.Fatalf("got %q, want a rebuilt scheme://host label", got)
+	}
+	// A URL carrying userinfo is NOT named, even though its scheme and
+	// host are safe to rebuild. One predicate decides both "may this be
+	// accepted" and "may this be described", because r4 showed what
+	// happens when those two checks are separate and only one gets fixed:
+	// they agree right up until they do not. The flag guard refuses this
+	// shape long before an error could need to name it.
+	if got := EndpointLabel("http://alice:s3cret@query-api.test:8090/registry"); got != "(unparseable endpoint)" {
+		t.Fatalf("got %q, want the placeholder -- one predicate, not two", got)
 	}
 }
 
@@ -759,5 +768,61 @@ func TestRefuseCredentialsInURL(t *testing.T) {
 	}
 	if err := RefuseCredentialsInURL("-registry-url", "http://query-api.test:8090/registry"); err != nil {
 		t.Fatalf("an ordinary URL was refused: %v", err)
+	}
+}
+
+// r4 P1-3. Sealing `admitted` stopped a HAND-BUILT outcome. It did not
+// stop mutating a REAL one: after a genuine run, flipping only the
+// exported TerminalState from `unsupported` to `match` produced a
+// deployed_executed/match receipt whose own provenance still said
+// edge_build_binding=absent.
+//
+// The seal covered "this passed the gate" and left "what the gate
+// concluded" exported and writable, which is the same lesson as r3 one
+// field over. Receipts now derive the terminal state from the sealed run.
+func TestTheTerminalStateCannotBeReplacedAfterTheRun(t *testing.T) {
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	// No build header: this run legitimately terminates `unsupported`.
+	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "canary")
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if outcomes[0].TerminalState != TerminalStateUnsupported {
+		t.Fatalf("precondition: expected unsupported, got %q", outcomes[0].TerminalState)
+	}
+
+	// The attack: change nothing about the measurement, only the verdict.
+	outcomes[0].TerminalState = TerminalStateMatch
+
+	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	for _, receipt := range receipts {
+		if receipt.TerminalState == TerminalStateMatch {
+			t.Fatalf("an unbound measurement was rewritten into a match receipt by assigning a field: %+v", receipt)
+		}
+	}
+}
+
+// The control: a run that genuinely matched still writes `match`.
+func TestASealedMatchStillReachesTheReceipt(t *testing.T) {
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	edge := &fakeEdge{goBody: body, pythonBody: body}
+	runner := newRunner(t, edge, "canary")
+	edge.goBuild = runner.Registry.BuildIdentity
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 1 || receipts[0].TerminalState != TerminalStateMatch {
+		t.Fatalf("a genuine match must reach the receipt, got %+v", receipts)
 	}
 }

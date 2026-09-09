@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -143,7 +142,18 @@ type Outcome struct {
 	// it, and it is written in exactly one place -- proveOne, from Admit's
 	// own verdict. The exported bool stays for the report, where it is
 	// what a human reads; this is what the code trusts.
-	admitted      bool
+	admitted bool
+	// terminalState is the SEALED verdict, and the one every receipt
+	// carries. r4 showed that sealing `admitted` alone was half the job:
+	// after a real run, assigning the exported TerminalState turned an
+	// unbound `unsupported` result into a `match` receipt whose own
+	// provenance still said edge_build_binding=absent. The seal covered
+	// "this passed the gate" and left "what the gate concluded" writable.
+	//
+	// Written in exactly one place -- proveOne -- alongside `admitted`.
+	// The exported field stays for the report; this is what a receipt
+	// derives from.
+	terminalState string
 	RefusalReason string `json:"refusal_reason,omitempty"`
 	RefusalDetail string `json:"refusal_detail,omitempty"`
 	Route         string `json:"route"`
@@ -358,7 +368,7 @@ func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receip
 			CandidateBuild:                   r.Registry.BuildIdentity,
 			RequestIdentity:                  identity,
 			Stage:                            Stage,
-			TerminalState:                    outcome.TerminalState,
+			TerminalState:                    outcome.terminalState,
 			OrgID:                            r.Config.OrgID,
 			ReviewEvidence:                   r.reviewEvidence(outcome, "", 0, 0),
 			RecordedBy:                       r.Config.RecordedBy,
@@ -476,6 +486,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		outcome.RefusalReason = reason
 		outcome.RefusalDetail = detail
 		outcome.TerminalState = terminalStateForRefusal(reason)
+		outcome.terminalState = outcome.TerminalState
 		return outcome
 	}
 
@@ -662,6 +673,10 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 			Detail: "the measured response carried no serving-build header, so this measurement is not bound to a query-api process. A deployment beginning mid-run would be indistinguishable from a stable one, so this cannot authorize an enablement (CHAOS-5479 delivers the header; until every replica serves it, edge measurements stay unsupported)",
 		})
 	}
+	// Sealed LAST, from whatever the run concluded after every adjustment
+	// above. Assigning outcome.TerminalState afterwards changes the report
+	// and cannot change a receipt.
+	outcome.terminalState = outcome.TerminalState
 	return outcome
 }
 
@@ -766,7 +781,7 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 		// The error is returned verbatim from net/http, which includes the
 		// URL but never a header value -- no credential can reach a log
 		// through this path.
-		return Observation{}, fmt.Errorf("request to %s failed (the error is not quoted: an HTTP client routinely embeds the URL it was given, credentials and all): %w", EndpointLabel(url), redactTransportError(err))
+		return Observation{}, fmt.Errorf("request to %s failed (the error is not quoted: an HTTP client routinely embeds the URL it was given, credentials and all): %w", EndpointLabel(url), StripEndpointFromError(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 
@@ -882,24 +897,4 @@ func (r *Runner) reviewEvidence(outcome Outcome, refusal string, measured, attem
 		return r.Config.ReviewEvidence
 	}
 	return string(encoded)
-}
-
-// redactTransportError strips the URL an HTTP client embeds in its own
-// error text.
-//
-// net/url's *url.Error redacts userinfo when IT formats the URL, which is
-// exactly what made this class hard to see: the sanitised nested copy sits
-// next to whatever the outer wrap prints. But the redaction depends on the
-// URL having parsed WITH userinfo -- on the no-"//" form it has not, and
-// the credential rides through in the opaque part.
-//
-// So the URL is removed rather than trusted: the operation and the
-// underlying error are kept, the URL is replaced by a rebuilt label. The
-// caller has already named the endpoint safely.
-func redactTransportError(err error) error {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
-		return fmt.Errorf("%s: %w", urlErr.Op, urlErr.Err)
-	}
-	return err
 }

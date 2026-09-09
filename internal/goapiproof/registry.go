@@ -76,17 +76,72 @@ type buildInfoBody struct {
 // The port is deliberately omitted: it is one more thing that can be
 // malformed in the code whose whole job is not to fail interestingly.
 func EndpointLabel(raw string) string {
-	parsed, err := url.Parse(raw)
+	parsed, err := safeEndpoint(raw)
 	if err != nil {
 		return "(unparseable endpoint)"
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "(unparseable endpoint)"
-	}
-	if parsed.Hostname() == "" {
-		return "(unparseable endpoint)"
-	}
 	return parsed.Scheme + "://" + parsed.Hostname()
+}
+
+// safeEndpoint is the ONE predicate that decides whether a URL can be
+// described, and every caller in this package goes through it -- the
+// refusal at the flag boundary, the label in an error, and the transport
+// stripper below. r4 found the previous shape's failure: the label had
+// been taught about the no-"//" form and the REFUSAL had not, because they
+// were separate checks that happened to agree until one was fixed.
+//
+// The predicate is that the URL is fully ACCOUNTED FOR, not that a
+// credential was found in the place we know to look:
+//
+//   - scheme allowlisted to http/https, because on the no-"//" form the
+//     scheme is the username;
+//   - Opaque empty. `http:SECRET@host/registry` has scheme "http", which
+//     passes an allowlist, and no User at all, which passes a userinfo
+//     check -- the credential is in the opaque part. That exact string
+//     defeated the r3 guard;
+//   - User nil, the ordinary embedded-credential form;
+//   - Host non-empty, so there is something safe left to name.
+//
+// Anything else is refused rather than described. A string this function
+// cannot fully account for is one whose safe parts cannot be identified,
+// and a guard that guesses at that is the guard we have now replaced
+// twice.
+func safeEndpoint(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, errors.New("not a valid URL")
+	}
+	switch {
+	case parsed.Scheme != "http" && parsed.Scheme != "https":
+		return nil, errors.New("scheme is not http or https")
+	case parsed.Opaque != "":
+		return nil, errors.New("URL has an opaque body, so it was written without //")
+	case parsed.User != nil:
+		return nil, ErrCredentialInURL
+	case parsed.Hostname() == "":
+		return nil, errors.New("URL has no host")
+	}
+	return parsed, nil
+}
+
+// StripEndpointFromError removes any URL an HTTP client embedded in its
+// own error text.
+//
+// net/url's *url.Error redacts USERINFO when it formats the URL, which is
+// what made this class survive three rounds: the sanitised copy sits next
+// to whatever the outer wrap prints, and a reader sees the asterisks and
+// moves on. On the opaque form there is no userinfo, so the redaction is a
+// no-op and the credential rides through in full -- measured by r4.
+//
+// So the URL is REMOVED rather than trusted to redact itself. The
+// operation and the underlying cause are kept, which is what a reader
+// needs; the caller has already named the endpoint safely.
+func StripEndpointFromError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return fmt.Errorf("%s: %w", urlErr.Op, urlErr.Err)
+	}
+	return err
 }
 
 // ErrCredentialInURL is returned for a URL carrying embedded credentials.
@@ -106,16 +161,13 @@ var ErrCredentialInURL = errors.New("goapiproof: URL carries embedded credential
 // userinfo, because that is exactly the form where User is nil while a
 // credential is present -- checking User there would wave it through.
 func RefuseCredentialsInURL(flagName, raw string) error {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("goapiproof: %s is not a valid URL (its value is not printed here)", flagName)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("goapiproof: %s must be an http:// or https:// URL (its value is not printed here). A URL written without a // parses with its USERNAME as the scheme, which is why this is refused rather than inspected", flagName)
-	}
-	if parsed.User != nil {
-		return fmt.Errorf("%w: %s carries userinfo (its value is not printed here). An embedded credential reaches the process table and every log that records a command line -- pass it through %s or %s instead",
-			ErrCredentialInURL, flagName, edgeBearerEnvVarName, proofBearerEnvVarName)
+	if _, err := safeEndpoint(raw); err != nil {
+		if errors.Is(err, ErrCredentialInURL) {
+			return fmt.Errorf("%w: %s carries userinfo (its value is not printed here). An embedded credential reaches the process table and every log that records a command line -- pass it through %s or %s instead",
+				ErrCredentialInURL, flagName, edgeBearerEnvVarName, proofBearerEnvVarName)
+		}
+		return fmt.Errorf("goapiproof: %s is refused (%s). Its value is not printed here. This guard requires a URL it can fully account for -- an http/https scheme, no opaque body, no userinfo, and a host -- because a string it cannot parse into safe parts is one whose credential it cannot locate either",
+			flagName, err)
 	}
 	return nil
 }
@@ -143,7 +195,7 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return RegistryView{}, fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(registryURL), err)
+		return RegistryView{}, fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(registryURL), StripEndpointFromError(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
@@ -204,7 +256,7 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(buildInfoURL), err)
+		return "", fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(buildInfoURL), StripEndpointFromError(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 

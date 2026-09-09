@@ -75,6 +75,14 @@ type githubWorkItemTeamAttributionRow struct {
 	// no new field there) without threading a *providerfoundation.Metrics
 	// through the pure build*/resolve chain in between.
 	Priority int `json:"-"`
+	// OwnershipReason mirrors Priority's carry-not-persist pattern above,
+	// for CHAOS-4320's ownership_checked telemetry (codex round 1, P1): set
+	// from candidate.OwnershipReason ONLY for a winning assignee_membership/
+	// author_membership row, so WriteGitHubWorkItemEffect can tell a
+	// genuinely-confirmed owner apart from an R74 ownership-unknown
+	// pass-through, which used to collapse into one "owned" label with no
+	// way to distinguish them.
+	OwnershipReason string `json:"-"`
 }
 
 // githubWorkItemStateDurationDailyRow mirrors
@@ -320,13 +328,14 @@ func buildGitHubWorkItemTeamAttributions(
 			// estimate coverage. D16: mirrored, pinned by the
 			// unassigned_candidate oracle case.
 			result = append(result, githubWorkItemTeamAttributionRow{
-				WorkItemID: item.WorkItemID,
-				Provider:   item.Provider,
-				Source:     candidate.Source,
-				IsPrimary:  candidate.IsPrimary,
-				Confidence: candidate.Confidence,
-				Evidence:   candidate.Evidence,
-				Priority:   candidate.Priority,
+				WorkItemID:      item.WorkItemID,
+				Provider:        item.Provider,
+				Source:          candidate.Source,
+				IsPrimary:       candidate.IsPrimary,
+				Confidence:      candidate.Confidence,
+				Evidence:        candidate.Evidence,
+				Priority:        candidate.Priority,
+				OwnershipReason: candidate.OwnershipReason,
 				ComputedAt: githubWorkItemDerivedStamp(
 					computedAt, githubTeamAttributionStampPrecision,
 				),

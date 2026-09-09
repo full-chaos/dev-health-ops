@@ -302,15 +302,22 @@ flowchart TD
     AU -->|"no"| MF{"7 · manual_fallback candidate?<br/>repo / project / member / issue_key_prefix"}
     MF -->|"yes"| Win
     MF -->|"no"| UN["is_primary = unassigned (8)"]
-    Win --> P["Persist work_item_team_attributions:<br/>ALL candidate rows; is_primary on the winner"]
+    Win --> P["Persist work_item_team_attributions:<br/>candidate rows that passed every gate; is_primary on the winner"]
     UN --> P
     P --> API["Expose source / confidence / evidence via GraphQL"]
     API --> UI["Frontend renders only — no recompute"]
 ```
 
-**Invariants:** the **winner is the highest-precedence matching source** (all matching sources are
-still persisted as candidates — precedence decides `is_primary`, not which sources are computed);
-`linked_issue` (5) requires a real `work_item_dependencies` donor row resolving to a `work_items`
+**Invariants:** the **winner is the highest-precedence matching source** (every matching source that
+passes its own gate is still persisted as a candidate — precedence decides `is_primary`, not which
+sources are computed); `assignee_membership` (4) and `author_membership` (6) additionally require
+the resolved team to **own the item's repo per `team_repo_ownership`** (CHAOS-4320) — a repo with an
+explicit owner other than the resolved team drops the candidate entirely (falls through the cascade
+exactly like a non-member would, not merely loses precedence); a repo with **no** ownership row at
+all is `ownership_unknown` and the gate does not apply (R74, 2026-09-09: an absent ownership row is
+treated as missing data, not as "not owned" — two orgs with old fixture data and no ownership rows
+at all pass membership through unchanged); `linked_issue` (5) requires a real `work_item_dependencies`
+donor row resolving to a `work_items`
 row whose **own team came from a first-class fact (sources 0–4)** — a donor resolved only by
 `author_membership` or `manual_fallback` is NOT a valid donor, so neither a person-shaped author
 signal nor a bare prefix can ever be laundered into rank-5 inheritance (both fall through to 6/7);

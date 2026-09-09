@@ -235,11 +235,27 @@ func TestCascadeGateAllowsAuthorWhenOneOfMultipleOwningTeamsMatches(t *testing.T
 		WorkItemID: "ghpr:acme/api#10", Provider: "github", Type: "pr",
 		RepoID: &repoID, Reporter: &reporter, OrgID: "org-acme",
 	}
-	teamID, teamName, _ := derived.Resolve(subject)
+	teamID, _, candidates := derived.Resolve(subject)
 	if got := GithubWorkItemDerivationStringValue(teamID); got != "team-a" && got != "team-b" {
 		t.Fatalf("primary team id = %q, want team-a or team-b (repo_ownership itself outranks author_membership either way)", got)
 	}
-	_ = teamName
+	// codex round 1, F3: the primary-team-id assertion above would ALSO
+	// pass if the gate incorrectly dropped author_membership entirely
+	// (repo_ownership wins primary regardless of what author_membership
+	// does) -- assert the candidate itself actually passed the gate, which
+	// is the property this test exists to check.
+	var author *GithubWorkItemDerivationCandidate
+	for index := range candidates {
+		if candidates[index].Source == "author_membership" {
+			author = &candidates[index]
+		}
+	}
+	if author == nil {
+		t.Fatalf("candidates = %+v, want an author_membership candidate present (team-b owns the repo, the gate must not have dropped it)", candidates)
+	}
+	if got := GithubWorkItemDerivationStringValue(author.TeamID); got != "team-b" {
+		t.Fatalf("author_membership candidate team id = %q, want team-b", got)
+	}
 }
 
 // TestCascadeGateOwnershipUnknownMatchesConfiguredDefault pins CHAOS-4320's
@@ -288,5 +304,118 @@ func TestCascadeGateOwnershipUnknownMatchesConfiguredDefault(t *testing.T) {
 				t.Fatalf("candidates = %+v, want NO assignee_membership row (ownershipUnknownBlocksMembership=true)", candidates)
 			}
 		}
+	}
+}
+
+// TestCascadeGateDropsBlankTeamIDMembershipWhenRepoHasAnOwner is CHAOS-4320's
+// red-first pin for codex round 1's F1 (P1, BLOCK): team_memberships.team_id
+// is a plain String column with no non-empty constraint, so
+// ResolveMembership's exactly-one-team gate can legitimately resolve to a
+// single "" team the same way it resolves to any real one (an admin/provider
+// fact with a blank TeamID still produces exactly one distinct team-id key:
+// ""). teamOwnsSubjectRepo used to short-circuit `teamID == ""` straight to
+// owns=true, laundering that degenerate membership row past the gate
+// regardless of what team_repo_ownership actually said -- exactly the
+// bypass this ticket exists to close, just with an empty team_id standing
+// in for a real non-owning one. Fixed: "" is now compared against the
+// repo's real owners like any other team_id and loses unless some
+// ownership row itself names team_id "".
+func TestCascadeGateDropsBlankTeamIDMembershipWhenRepoHasAnOwner(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
+
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Repos: []GithubWorkItemDerivationRepoFact{{
+			Provider: "github", TeamID: "team-repo", TeamName: "Repository Team",
+			RepoID: &repoID, RepoFullName: "acme/api", IsPrimary: 1,
+			Specificity: 70, UpdatedAt: now,
+		}},
+		// A real, reachable shape: an identities/teams admin fact whose
+		// TeamID is blank (no non-empty constraint on the column) --
+		// ResolveMembership still resolves this to exactly one team ("").
+		Members: []GithubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "", TeamName: "",
+			MemberID: "dev@example.com", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	subject := GithubWorkItemDerivationSubject{
+		WorkItemID: "gh:acme/api#12", Provider: "github", RepoID: &repoID,
+		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
+	}
+	teamID, _, candidates := derived.Resolve(subject)
+	if got := GithubWorkItemDerivationStringValue(teamID); got != "team-repo" {
+		t.Fatalf("primary team id = %q, want team-repo (repo_ownership, unaffected by the membership gate)", got)
+	}
+	for _, candidate := range candidates {
+		if candidate.Source == "assignee_membership" {
+			t.Fatalf("candidates = %+v, want NO assignee_membership row (blank team_id must not bypass the ownership gate)", candidates)
+		}
+	}
+}
+
+// TestCandidateOwnershipReasonDistinguishesOwnedFromUnknownPassthrough is
+// CHAOS-4320's red-first pin for codex round 1's F1 (P1, BLOCK): before this
+// fix, a winning assignee_membership/author_membership candidate carried no
+// signal distinguishing "the resolved team genuinely owns the repo" from
+// "the repo has no ownership data at all, R74 passed it through anyway" --
+// both cases reached WriteGitHubWorkItemEffect looking identical, so the
+// ownership_checked counter collapsed both to "owned" and lost exactly the
+// distinction it exists to make visible. candidate.OwnershipReason now
+// carries that distinction from Resolve() through to the write boundary
+// (mirrors candidate.Priority's carry-not-persist pattern).
+func TestCandidateOwnershipReasonDistinguishesOwnedFromUnknownPassthrough(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
+
+	// Case 1: team-repo genuinely owns repoID.
+	owned := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Repos: []GithubWorkItemDerivationRepoFact{{
+			Provider: "github", TeamID: "team-repo", TeamName: "Repository Team",
+			RepoID: &repoID, RepoFullName: "acme/api", IsPrimary: 1,
+			Specificity: 70, UpdatedAt: now,
+		}},
+		Members: []GithubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-repo", TeamName: "Repository Team",
+			MemberID: "dev@example.com", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	ownedSubject := GithubWorkItemDerivationSubject{
+		WorkItemID: "gh:acme/api#13", Provider: "github", RepoID: &repoID,
+		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
+	}
+	_, _, ownedCandidates := owned.Resolve(ownedSubject)
+	ownedReason := ""
+	for _, candidate := range ownedCandidates {
+		if candidate.Source == "assignee_membership" {
+			ownedReason = candidate.OwnershipReason
+		}
+	}
+	if ownedReason != "owned" {
+		t.Fatalf("genuinely-owned assignee_membership candidate.OwnershipReason = %q, want owned", ownedReason)
+	}
+
+	// Case 2: no ownership row at all for repoID -- R74 pass-through.
+	unknown := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+		Members: []GithubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-x", TeamName: "Team X",
+			MemberID: "dev@example.com", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
+		}},
+	})
+	unknownSubject := GithubWorkItemDerivationSubject{
+		WorkItemID: "gh:acme/api#14", Provider: "github", RepoID: &repoID,
+		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
+	}
+	_, _, unknownCandidates := unknown.Resolve(unknownSubject)
+	unknownReason := ""
+	for _, candidate := range unknownCandidates {
+		if candidate.Source == "assignee_membership" {
+			unknownReason = candidate.OwnershipReason
+		}
+	}
+	if !ownershipUnknownBlocksMembership && unknownReason != MembershipOwnershipReasonUnknown {
+		t.Fatalf("R74 pass-through assignee_membership candidate.OwnershipReason = %q, want %s", unknownReason, MembershipOwnershipReasonUnknown)
+	}
+	if ownedReason == unknownReason {
+		t.Fatalf("owned and ownership_unknown candidates must carry DIFFERENT OwnershipReason values, both got %q", ownedReason)
 	}
 }

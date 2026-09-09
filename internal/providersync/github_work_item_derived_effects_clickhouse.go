@@ -512,19 +512,32 @@ is_primary, confidence, evidence, computed_at)`)
 				layer = "admin_override"
 			}
 			sink.Metrics.RecordTeamAttributionMembershipLayer(layer)
-			// CHAOS-4320 (R74): a winning assignee_membership/author_membership
-			// row only exists because teamOwnsSubjectRepo let it through --
-			// either the resolved team genuinely owns the repo, or ownership
-			// data for the repo is entirely absent (R74: pass-through, still
-			// counted). This write boundary has no access back to the
-			// GithubWorkItemDerivationContext that made that distinction
-			// (only the already-decided row), so both outcomes collapse to
-			// "owned" here -- the operationally meaningful split this counter
-			// exists for is "owned" (attribution stood, whichever reason) vs
-			// the "ownership_unknown" branch below, where the gate's
-			// pass-through was NOT enough to produce ANY primary and the item
-			// still fell through to unassigned.
-			sink.Metrics.RecordTeamAttributionOwnershipChecked("owned")
+			// CHAOS-4320 (R74; codex round 1, P1, fixed): a winning
+			// assignee_membership/author_membership row only exists because
+			// teamOwnsSubjectRepo let it through -- either the resolved team
+			// genuinely owns the repo, or ownership data for the repo is
+			// entirely absent (R74: pass-through, still counted).
+			// row.OwnershipReason is carried (not persisted) exactly so this
+			// write boundary CAN tell the two apart -- "owned" (a real
+			// team_repo_ownership match) vs "ownership_unknown" (the R74
+			// pass-through) -- rather than collapsing both to "owned" the
+			// way an earlier version of this code did (that version had no
+			// access back to the GithubWorkItemDerivationContext that made
+			// the distinction, only the already-decided row; the fix is
+			// threading the reason through the row instead, same pattern as
+			// row.Priority above).
+			reason := row.OwnershipReason
+			if reason == "" {
+				// Defensive only: every winning assignee_membership/
+				// author_membership row is stamped by Resolve() before it
+				// can reach bySource, so this should be unreachable in
+				// practice -- but an empty label would silently violate
+				// RecordTeamAttributionOwnershipChecked's bounded
+				// vocabulary (collapsing to "other"), which is worse than
+				// falling back to the historically-accurate default.
+				reason = "owned"
+			}
+			sink.Metrics.RecordTeamAttributionOwnershipChecked(reason)
 		} else if row.Source == "unassigned" {
 			if reason, ok := strings.CutPrefix(row.Evidence, "no_candidate:"); ok &&
 				reason == teamattribution.MembershipOwnershipReasonUnknown {

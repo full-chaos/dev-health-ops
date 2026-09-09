@@ -50,6 +50,21 @@ type GithubWorkItemDerivationCandidate struct {
 	Specificity int       `json:"specificity"`
 	Priority    int       `json:"priority"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// OwnershipReason is CHAOS-4320's ownership_checked telemetry payload
+	// for an assignee_membership/author_membership candidate: "owned" when
+	// teamOwnsSubjectRepo found an explicit team_repo_ownership row for this
+	// team, or MembershipOwnershipReasonUnknown when it passed through
+	// because the repo has no ownership row at all (R74). Set ONLY on
+	// candidates that passed the gate (a gated-out candidate never becomes
+	// a row at all, so there is nothing to carry for it). `json:"-"`: not
+	// part of the byte-identical Python-oracle contract (Python has no
+	// equivalent gate, codex round 1 finding F1) and not persisted --
+	// carried the SAME way candidate.Priority already is (see
+	// githubWorkItemTeamAttributionRow.Priority's doc comment) so
+	// WriteGitHubWorkItemEffect, the actual metrics-capable write boundary,
+	// can derive the telemetry label without threading a
+	// *providerfoundation.Metrics through the pure build*/resolve chain.
+	OwnershipReason string `json:"-"`
 }
 
 type GithubWorkItemDerivationSubject struct {
@@ -617,6 +632,9 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 				subject, GithubWorkItemDerivationStringValue(assigneeCandidates[0].TeamID),
 			)
 			if owns {
+				for index := range assigneeCandidates {
+					assigneeCandidates[index].OwnershipReason = GithubWorkItemDerivationOwnershipCheckedLabel(ownershipReason)
+				}
 				bySource["assignee_membership"] = append(bySource["assignee_membership"], assigneeCandidates...)
 			} else {
 				membershipSkipReasons[ownershipReason] = struct{}{}
@@ -663,6 +681,7 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 					for index, candidate := range reporterCandidates {
 						candidate.Source = "author_membership"
 						candidate.Evidence = "reporter=" + *subject.Reporter
+						candidate.OwnershipReason = GithubWorkItemDerivationOwnershipCheckedLabel(ownershipReason)
 						relabeled[index] = candidate
 					}
 					bySource["author_membership"] = append(bySource["author_membership"], relabeled...)
@@ -1774,8 +1793,8 @@ const (
 	// case: fall through the cascade exactly as a non-member would.
 	MembershipOwnershipReasonNotOwned = "repo_not_owned"
 	// MembershipOwnershipReasonUnknown: the repo has NO team_repo_ownership
-	// row at all. Whether that gates or passes through is
-	// ownershipUnknownBlocksMembership's open question, not decided here.
+	// row at all. R74 (chris via team-lead, 2026-09-09, DECIDED): this
+	// passes through, does not gate -- see ownershipUnknownBlocksMembership.
 	MembershipOwnershipReasonUnknown = "ownership_unknown"
 )
 
@@ -1816,12 +1835,24 @@ const ownershipUnknownBlocksMembership = false
 // row at all -- owns there is ownershipUnknownBlocksMembership's negation,
 // so a caller only ever needs to branch on the returned bool; the reason is
 // for telemetry/evidence, not a second decision point.
+//
+// Deliberately NO short-circuit for teamID == "" (codex round 1, P1,
+// CHAOS-4320): team_memberships.team_id is a plain String column with no
+// non-empty constraint, so ResolveMembership's exactly-one-team gate can
+// legitimately resolve to a single "" team the same way it resolves to any
+// other team_id (adminTeams/providerTeams key on the raw string, and ""
+// collapses to len==1 like any other singleton). An early "" -> owns=true
+// return would launder that degenerate membership row straight past the
+// gate regardless of what team_repo_ownership actually says -- exactly the
+// bypass CHAOS-4320 exists to close. "" is instead compared against
+// `owners` like any real team_id: it wins ONLY if some ownership row
+// itself names team_id "" (matches the raw-passthrough, blank-is-not-NULL
+// convention this file's empty_string_team_id_is_not_null oracle case
+// already pins), otherwise it falls through exactly like any other
+// non-owning/unresolved team.
 func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 	subject GithubWorkItemDerivationSubject, teamID string,
 ) (string, bool) {
-	if teamID == "" {
-		return "", true
-	}
 	owners := append(
 		append([]GithubWorkItemDerivationCandidate(nil),
 			derived.repoByID[AttributionMapKey(subject.Provider, GithubWorkItemDerivationStringValue(subject.RepoID))]...),
@@ -1836,6 +1867,21 @@ func (derived GithubWorkItemDerivationContext) teamOwnsSubjectRepo(
 		}
 	}
 	return MembershipOwnershipReasonNotOwned, false
+}
+
+// GithubWorkItemDerivationOwnershipCheckedLabel maps a teamOwnsSubjectRepo
+// reason onto CHAOS-4320's ownership_checked telemetry label, for a
+// candidate that PASSED the gate (owns==true) -- "" (teamOwnsSubjectRepo's
+// "no problem" convention) becomes "owned"; MembershipOwnershipReasonUnknown
+// passes through unchanged, since it is already the label a caller wants
+// (the R74 pass-through case, distinct from a genuinely confirmed owner --
+// codex round 1, P1, CHAOS-4320: before this, both cases collapsed to
+// "owned" at the write boundary because it had no way to tell them apart).
+func GithubWorkItemDerivationOwnershipCheckedLabel(reason string) string {
+	if reason == "" {
+		return "owned"
+	}
+	return reason
 }
 
 // GithubWorkItemDerivationSortedTeamIDs renders a team-id set as a

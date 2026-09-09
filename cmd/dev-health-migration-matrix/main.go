@@ -41,6 +41,16 @@ const (
 	renderRelative    = "contracts/migration-status/v1/last-render.json"
 	nativeRelative    = "contracts/native-families/v1/native-families.json"
 	digestPinRelative = "contracts/graphql/v1/schema-digest.json"
+
+	// CHAOS-5473: the four sources scripts/gen_go_migration_matrix_docs.py
+	// (deleted) used to read for the provider-sync/daily/remaining/workgraph
+	// blocks. Trap #98: dev-health-migration-matrix now reads non-Go files --
+	// go.yml/go-quality.yml's path filters must include all four plus
+	// nativeRelative/docRelative above.
+	providerMatrixRelative = "contracts/provider-matrix/v1/matrix.json"
+	dailyFamiliesRelative  = "internal/jobs/metrics/daily/families.json"
+	remainingFamiliesRel   = "internal/jobs/metrics/remaining/families.json"
+	jobDailyPyRelative     = "src/dev_health_ops/metrics/job_daily.py"
 )
 
 // defaultFleetContainers is the compose fleet whose image labels answer
@@ -82,6 +92,51 @@ func main() {
 		fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// legacyBlocks renders the four blocks CHAOS-5473 absorbed from the deleted
+// scripts/gen_go_migration_matrix_docs.py, from committed sources only.
+func legacyBlocks(root string, families *migrationmatrix.NativeFamilies) (map[string]string, error) {
+	pairs, err := migrationmatrix.LoadProviderMatrixPairs(filepath.Join(root, providerMatrixRelative))
+	if err != nil {
+		return nil, err
+	}
+	dailyNames, err := migrationmatrix.LoadFamilyNames(filepath.Join(root, dailyFamiliesRelative))
+	if err != nil {
+		return nil, err
+	}
+	remainingNames, err := migrationmatrix.LoadFamilyNames(filepath.Join(root, remainingFamiliesRel))
+	if err != nil {
+		return nil, err
+	}
+	finalizeCompat, err := migrationmatrix.LoadDailyFinalizeCompatFamilies(
+		filepath.Join(root, jobDailyPyRelative), dailyNames, remainingNames)
+	if err != nil {
+		return nil, err
+	}
+
+	providerBlock, err := migrationmatrix.RenderProviderSyncBlock(pairs)
+	if err != nil {
+		return nil, fmt.Errorf("provider sync block: %w", err)
+	}
+	dailyBlock, err := migrationmatrix.RenderDailyMetricsBlock(dailyNames, families, finalizeCompat)
+	if err != nil {
+		return nil, fmt.Errorf("daily metrics block: %w", err)
+	}
+	remainingBlock, err := migrationmatrix.RenderRemainingMetricsBlock(remainingNames, families.Remaining, finalizeCompat)
+	if err != nil {
+		return nil, fmt.Errorf("remaining metrics block: %w", err)
+	}
+	workgraphBlock, err := migrationmatrix.RenderWorkgraphInvestmentBlock(families.Workgraph)
+	if err != nil {
+		return nil, fmt.Errorf("workgraph investment block: %w", err)
+	}
+	return map[string]string{
+		"provider":  providerBlock,
+		"daily":     dailyBlock,
+		"remaining": remainingBlock,
+		"workgraph": workgraphBlock,
+	}, nil
 }
 
 func runCheck(root string) error {
@@ -127,6 +182,11 @@ func runCheck(root string) error {
 	}
 	doc := string(raw)
 
+	legacy, err := legacyBlocks(root, families)
+	if err != nil {
+		return err
+	}
+
 	blocks := []struct {
 		name         string
 		begin, end   string
@@ -136,6 +196,10 @@ func runCheck(root string) error {
 			migrationmatrix.RenderFamilyBlock(ledger, families)},
 		{"go-api operations", migrationmatrix.OpsBlockBegin, migrationmatrix.OpsBlockEnd,
 			migrationmatrix.RenderOpsBlock(snapshot)},
+		{"provider sync", migrationmatrix.ProviderSyncBegin, migrationmatrix.ProviderSyncEnd, legacy["provider"]},
+		{"daily metrics", migrationmatrix.DailyMetricsBegin, migrationmatrix.DailyMetricsEnd, legacy["daily"]},
+		{"remaining metrics", migrationmatrix.RemainingMetricsBegin, migrationmatrix.RemainingMetricsEnd, legacy["remaining"]},
+		{"workgraph investment", migrationmatrix.WorkgraphInvestmentBegin, migrationmatrix.WorkgraphInvestmentEnd, legacy["workgraph"]},
 	}
 	for _, block := range blocks {
 		got, err := migrationmatrix.ExtractBlock(doc, block.begin, block.end)
@@ -296,6 +360,24 @@ func runRender(root, dsn, routingFile, fleetMode string, containers []string) er
 	if err != nil {
 		return fmt.Errorf("go-api operations block: %w", err)
 	}
+
+	legacy, err := legacyBlocks(root, families)
+	if err != nil {
+		return err
+	}
+	legacyReplacements := []struct{ begin, end, name, body string }{
+		{migrationmatrix.ProviderSyncBegin, migrationmatrix.ProviderSyncEnd, "provider sync", legacy["provider"]},
+		{migrationmatrix.DailyMetricsBegin, migrationmatrix.DailyMetricsEnd, "daily metrics", legacy["daily"]},
+		{migrationmatrix.RemainingMetricsBegin, migrationmatrix.RemainingMetricsEnd, "remaining metrics", legacy["remaining"]},
+		{migrationmatrix.WorkgraphInvestmentBegin, migrationmatrix.WorkgraphInvestmentEnd, "workgraph investment", legacy["workgraph"]},
+	}
+	for _, r := range legacyReplacements {
+		doc, err = migrationmatrix.ReplaceBlock(doc, r.begin, r.end, r.body)
+		if err != nil {
+			return fmt.Errorf("%s block: %w", r.name, err)
+		}
+	}
+
 	if err := os.WriteFile(docPath, []byte(doc), 0o644); err != nil { //nolint:gosec // documentation file
 		return fmt.Errorf("write %s: %w", docRelative, err)
 	}

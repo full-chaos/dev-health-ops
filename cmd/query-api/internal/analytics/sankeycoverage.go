@@ -333,8 +333,8 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// parity number, and the correction is a SEMANTICS choice (aggregate at
 		// unit grain, or weight by subcategory_kv.2 so a filtered view means
 		// "coverage among work in this category") that belongs to the product,
-		// not to a split PR. Filed as its own ticket; pinned meanwhile by
-		// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits,
+		// not to a split PR. Filed as CHAOS-5498; pinned meanwhile by
+		// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits_CHAOS5498,
 		// which fails loudly if the behaviour changes in either direction.
 		//
 		// CHAOS-5483's split is an exact partition of the headline in every

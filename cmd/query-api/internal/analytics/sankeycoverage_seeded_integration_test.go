@@ -758,8 +758,8 @@ func seedFilterReweightOrg(t *testing.T, ctx context.Context, conn stdclickhouse
 	}
 }
 
-// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits
-// is a CHARACTERIZATION test. It pins behaviour that is WRONG and that this
+// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits_CHAOS5498
+// is a CHARACTERIZATION test for the defect tracked as CHAOS-5498. It pins behaviour that is WRONG and that this
 // change does not fix, so that the defect is visible in the suite instead of
 // latent, and so whoever fixes it has a red-first anchor. Do not read a green
 // here as an endorsement of these numbers.
@@ -772,7 +772,7 @@ func seedFilterReweightOrg(t *testing.T, ctx context.Context, conn stdclickhouse
 // inherits it, including the pre-existing teamCoverage and repoCoverage. The
 // same ARRAY JOIN is in the Python original at
 // src/dev_health_ops/api/graphql/resolvers/analytics.py:833, so both planes
-// share the behaviour. Filed as its own ticket; the fix is a semantics decision
+// share the behaviour. Filed as CHAOS-5498; the fix is a semantics decision
 // (aggregate at unit grain, or weight by subcategory_kv.2 so a filtered view
 // means "coverage among work in this category"), which is chris's call, not a
 // silent correction inside a split PR.
@@ -793,7 +793,7 @@ func seedFilterReweightOrg(t *testing.T, ctx context.Context, conn stdclickhouse
 //	  becomes sensitive and moves 0.5 -> 0.333 on identical data, with the
 //	  split columns constant. This is the scenario that proves the defect is
 //	  the headline's, not the split's.
-func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits(t *testing.T) {
+func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits_CHAOS5498(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 

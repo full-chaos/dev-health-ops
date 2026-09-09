@@ -38,6 +38,10 @@ func TestCheckFailsWhenTheDocIsEditedByHand(t *testing.T) {
 		renderRelative,
 		nativeRelative,
 		digestPinRelative,
+		providerMatrixRelative,
+		dailyFamiliesRelative,
+		remainingFamiliesRel,
+		jobDailyPyRelative,
 	} {
 		copyInto(t, filepath.Join(realRoot, relative), filepath.Join(root, relative))
 	}

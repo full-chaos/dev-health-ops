@@ -8,7 +8,7 @@ source_of_truth:
   - internal/jobs/metrics/daily/families.json (METRICS' daily-family table)
   - internal/jobs/metrics/remaining/families.json (METRICS' remaining-family table; `port` field mirrors daily's convention as of CHAOS-5030, but contracts/native-families/v1/native-families.json is the actual executor authority -- see below)
   - contracts/native-families/v1/native-families.json (Go-emitted, AST-derived from cmd/dev-health-worker/daily.go by cmd/dev-health-worker/native_families_artifact_test.go -- the executor source of truth for METRICS)
-  - scripts/gen_go_migration_matrix_docs.py (curated citation/ticket text + generator; regenerate, do not hand-edit the generated blocks)
+  - cmd/dev-health-migration-matrix (curated citation/ticket text lives in internal/migrationmatrix/curated.go; regenerate with `-render`, do not hand-edit the generated blocks -- CHAOS-5473 absorbed the former scripts/gen_go_migration_matrix_docs.py)
 applicability: current
 lifecycle: active
 ---
@@ -56,15 +56,15 @@ at the pinned sha below), because no JSON registry maps a CLI verb to a River ki
 Regenerate the generated tables after any change to a source-of-truth file:
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/gen_go_migration_matrix_docs.py
+go run ./cmd/dev-health-migration-matrix -render -root . -fleet none
 UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run TestNativeFamiliesArtifactUpToDate
 ```
 
-`scripts/check_go_migration_matrix_docs_drift.py` (wrapped by `tests/docs/test_go_migration_matrix_drift.py`)
-fails CI the moment a generated block disagrees with its producer, or a family/dataset gains or loses a row
-without the doc being regenerated in the same PR. `cmd/dev-health-worker/native_families_artifact_test.go`
-separately fails CI if `contracts/native-families/v1/native-families.json` disagrees with `daily.go`'s actual
-wiring.
+`ci/check_migration_matrix.sh contract` (`go run ./cmd/dev-health-migration-matrix -check`, CHAOS-5473 absorbed
+the former `scripts/check_go_migration_matrix_docs_drift.py`) fails CI the moment a generated block disagrees
+with its producer, or a family/dataset gains or loses a row without the doc being regenerated in the same PR.
+`cmd/dev-health-worker/native_families_artifact_test.go` separately fails CI if
+`contracts/native-families/v1/native-families.json` disagrees with `daily.go`'s actual wiring.
 
 **Last verified:** `e3e2e77c48a9e4902e48d962b8292f1b408bf47b` (ops main, 2026-09-04) -- the commit every
 hand-curated citation/CLI-verb row on this page was read against. The generated tables always reflect
@@ -209,7 +209,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-09T06:26:46Z against main merge-base `de879327b0fabf7b7bd8b573995457516caa49e9`; SDL digest pin `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88`; fleet read 2026-09-09T06:26:46Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
+_Rendered 2026-09-09T06:26:46Z against main merge-base `720f64bffc7529f1413c84e46542ef7c8eb46241`; SDL digest pin `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88`; fleet read 2026-09-09T06:26:46Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
 
 _Rows in `go_api_proof_run` at read time: **0**. Operations reachable to real clients with no deployed-executed proof: **11**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **12**._
 
@@ -462,8 +462,8 @@ CHAOS-4924 -- `WorkGraphBuilder.build()` had shrunk to a 0-stats no-op by then; 
 No COMPAT-Python CLI verbs remain in this section (CHAOS-3092 close condition).
 
 No `families.json` equivalent exists for these 5 River kinds (`internal/jobs/families.json` does not exist)
--- the table below is entirely hand-tracked in `WORKGRAPH_INVESTMENT_LEDGER` in
-`scripts/gen_go_migration_matrix_docs.py`; there is no live producer to drift-guard against mechanically.
+-- the table below is entirely hand-tracked in `WorkgraphInvestmentLedger` in
+`internal/migrationmatrix/curated.go`; there is no live producer to drift-guard against mechanically.
 Recommendations/DORA/cognitive-load rows cross-reference METRICS above rather than re-deriving there.
 
 <!-- BEGIN GENERATED WORKGRAPH INVESTMENT MATRIX -->

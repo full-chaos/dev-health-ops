@@ -18,7 +18,8 @@ package main
 // never silently diverge from what actually executes, because it reads the
 // exact statements that execute.
 //
-// docs/go-migration-matrix.md's generator (scripts/gen_go_migration_matrix_docs.py)
+// docs/go-migration-matrix.md's generator (cmd/dev-health-migration-matrix,
+// internal/migrationmatrix -- CHAOS-5473 absorbed the former Python script)
 // reads this artifact for §2's native/post_bridge family set and §3's
 // native-vs-compat split -- team-lead's explicit ruling, 2026-09-04: no
 // curated Python dict may be the source of truth for those two sections

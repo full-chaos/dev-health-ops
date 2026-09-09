@@ -16,6 +16,10 @@
     "digest": "c74c904d99fe75a770cdacd5371112b46d9c2dcc0d8aef3dd2da108415c4aaf7"
   },
   {
+    "operation": "featureFlagEvents",
+    "digest": "e5e5fd3aba6d00c5413407046dfa68acadeb72c6ff1bb5f40b983bd0ddc3b632"
+  },
+  {
     "operation": "featureFlags",
     "digest": "06ca28a0517a34c0f5a6cc25b193da7b5682bea5192ae93e5a79edc7e7742208"
   },

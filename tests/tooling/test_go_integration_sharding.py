@@ -34,6 +34,11 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-workerctl",
     "cmd/query-api",
     "cmd/query-api/internal/analytics",
+    # CHAOS-5523: the featureFlagEvents port's own Testcontainers-backed
+    # tests (events_integration_test.go) -- the org-scoping/flagKey-filter/
+    # ORDER BY/count-not-limit-bound happy path and the real UNKNOWN_TABLE
+    # degraded path, both against a real ClickHouse engine.
+    "cmd/query-api/internal/featureflags",
     "cmd/query-api/internal/hotspots",
     # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
     # real Map(String, Float64) theme/subcategory columns -- a fake
@@ -432,10 +437,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # file (receipt_integration_test.go: the `prove` verb's receipt writer
     # and the enablement-proof predicate, against a real Postgres with the
     # registry's actual FK and CHECK constraints). 51 -> 52.
-    # CURRENT TOTAL: 52 -- the one number to bump when a new
+    # CHAOS-5523 added cmd/query-api/internal/featureflags's first
+    # //go:build integration file (events_integration_test.go: the
+    # featureFlagEvents port's org-scoping/flagKey-filter/ORDER BY/
+    # count-not-limit-bound happy path and the real UNKNOWN_TABLE degraded
+    # path, both against a real ClickHouse container). 52 -> 53.
+    # CURRENT TOTAL: 53 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "52 package(s) discovered, 0 denylisted, 52 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 52 package(s)" in result.stdout
+    assert "53 package(s) discovered, 0 denylisted, 53 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 53 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -493,8 +503,10 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # package, not just its two integration files, was deleted). FLATTENED
     # includes the providersync shard-1 package, same as every other count
     # in this comment block.
-    # CURRENT TOTAL: 51 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 52
+    # CHAOS-5523 added cmd/query-api/internal/featureflags: 52 -> 53 (see
+    # the "package(s) discovered" comment above).
+    # CURRENT TOTAL: 53 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 53
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1949,9 +1961,11 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # for the providersync shard-1 package).
     # CHAOS-5336 removed internal/testsupport/computeparity entirely: 51 ->
     # 50 (51 discovered - 1 for the providersync shard-1 package).
-    # CURRENT TOTAL: 50 (== discovered-total-minus-one -- keep this in
+    # CHAOS-5523 added cmd/query-api/internal/featureflags: 51 -> 52 (53
+    # discovered - 1 for the providersync shard-1 package).
+    # CURRENT TOTAL: 52 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 51
+    assert len(selected_packages) == len(set(selected_packages)) == 52
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

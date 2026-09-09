@@ -461,9 +461,60 @@ func (r *queryResolver) FeatureFlags(ctx context.Context, orgID string, provider
 	return result, nil
 }
 
-// FeatureFlagEvents is the resolver for the featureFlagEvents field.
+// FeatureFlagEvents is the resolver for the featureFlagEvents field
+// (CHAOS-5523, closing the gap featureFlags's own Wave 1 canary
+// deliberately left open -- README.md's former "featureFlagEvents --
+// explicitly out of scope for the Wave 1 canary" bullet, removed by this
+// change). Ports
+// dev_health_ops.api.graphql.resolvers.feature_flags.resolve_feature_flag_events
+// via featureflags.ResolveEvents -- see that function's doc comment for
+// the exact parity contract (WHERE clauses, ORDER BY event_ts ASC, LIMIT
+// clamp, missing-table degraded path, and the count query's deliberate
+// no-limit divergence from the row query).
+//
+// Same org-scoping authorization contract as FeatureFlags above
+// (schema.resolvers.go:381-428): query-api trusts the effective-principal
+// envelope, not an independent Postgres/Valkey lookup, so the check here
+// is "does the envelope's org match the orgId argument the client is
+// asking about". Same org-scoping span sweep discipline too -- the span
+// starts BEFORE the authorization guard so a rejected request is counted
+// rather than producing no span at all.
 func (r *queryResolver) FeatureFlagEvents(ctx context.Context, orgID string, flagKey *string, environment *string, limit int) (*model.FeatureFlagEventsResult, error) {
-	panic(fmt.Errorf("not implemented: FeatureFlagEvents - featureFlagEvents"))
+	spanCtx, finish := startFeatureFlagEventsSpan(ctx)
+
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if claims.OrgID != orgID {
+		finish("denied", attribute.String("denial_reason", "org_mismatch"), attribute.String("org_id", claims.OrgID))
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	result, err := featureflags.ResolveEvents(spanCtx, r.ClickHouse, orgID, flagKey, environment, limit)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("featureFlagEvents: %w", err)
+	}
+	if result.DegradedReason != nil {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
 // WorkItemTeamAttributions is the resolver for the workItemTeamAttributions

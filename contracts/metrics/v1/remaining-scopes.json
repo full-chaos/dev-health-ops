@@ -32,7 +32,7 @@
     {
       "family": "dora",
       "input": {
-        "metrics": "deployment_frequency,lead_time",
+        "metrics": "deployment_frequency,lead_time_for_changes",
         "interval": "weekly",
         "sink": "clickhouse",
         "repo_name": "acme/widgets",
@@ -41,7 +41,7 @@
         "day": "2026-07-23",
         "version": 1
       },
-      "canonical": "{\"backfill_days\":7,\"day\":\"2026-07-23\",\"interval\":\"weekly\",\"metrics\":\"deployment_frequency,lead_time\",\"repo_id\":\"33333333-3333-4333-8333-333333333333\",\"repo_name\":\"acme/widgets\",\"sink\":\"clickhouse\",\"version\":1}"
+      "canonical": "{\"backfill_days\":7,\"day\":\"2026-07-23\",\"interval\":\"weekly\",\"metrics\":\"deployment_frequency,lead_time_for_changes\",\"repo_id\":\"33333333-3333-4333-8333-333333333333\",\"repo_name\":\"acme/widgets\",\"sink\":\"clickhouse\",\"version\":1}"
     },
     {
       "family": "release_impact",

@@ -760,6 +760,28 @@ var remainingMetricsOpenDayZeroRowFamilies = []string{"dora"}
 // coverage observers, and a reverse import would cycle.
 var remainingMetricsManualBackfillFamilies = []string{"complexity", "dora", "release_impact"}
 
+// remainingMetricsScopeRefusalFamilies is the closed set of remaining-
+// metrics families CHAOS-5395's scope-refusal counter covers -- every family
+// normalizeStartRunRequest validates a scope for, kept independently here
+// (rather than imported) for the SAME reason
+// remainingMetricsManualBackfillFamilies is: avoiding a jobruntime <->
+// remaining import cycle. Mirrors internal/jobs/metrics/remaining's own
+// expectedFamilies (families.go).
+var remainingMetricsScopeRefusalFamilies = []string{
+	"capacity", "complexity", "dora", "membership_backfill",
+	"recommendations", "release_impact", "work_item_attribution",
+}
+
+// remainingMetricsScopeRefusalReasons is the closed set of reasons
+// scopeRefusalReason (internal/jobs/metrics/remaining/postgres.go) can
+// return -- kept in lockstep with that function's own bounded vocabulary.
+var remainingMetricsScopeRefusalReasons = []string{"unknown_dora_metric", "invalid_scope"}
+
+type remainingMetricsScopeRefusalLabels struct {
+	Family string
+	Reason string
+}
+
 // RemainingMetricsManualBackfillOutcome is the bounded durable outcome of one
 // CHAOS-4254 operator-triggered manual backfill request for a historical
 // (organization, family, day) no automatic trigger ever dispatched.
@@ -1179,7 +1201,10 @@ type MetricsCollector struct {
 	// remainingManualBackfill (CHAOS-4254), keyed by family and outcome. See
 	// RemainingMetricsManualBackfillOutcome for the outcome vocabulary.
 	remainingManualBackfill map[remainingMetricsManualBackfillLabels]uint64
-	zeroUnitFinalizations   map[zeroUnitFinalizationLabels]uint64
+	// remainingScopeRefusal (CHAOS-5395), keyed by family and reason. See
+	// remainingMetricsScopeRefusalReasons for the reason vocabulary.
+	remainingScopeRefusal map[remainingMetricsScopeRefusalLabels]uint64
+	zeroUnitFinalizations map[zeroUnitFinalizationLabels]uint64
 
 	// Coverage-cache invalidation pair (CHAOS-4226), keyed by clamped
 	// provider. Both maps gain the key on the first emit so the consumed
@@ -1419,6 +1444,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsFamilyZeroRowsWithSource: make(map[string]uint64, len(dailyMetricsZeroRowsWithSourceFamilies)),
 		remainingOpenDayZeroRow:              make(map[string]uint64, len(remainingMetricsOpenDayZeroRowFamilies)),
 		remainingManualBackfill:              make(map[remainingMetricsManualBackfillLabels]uint64, len(remainingMetricsManualBackfillFamilies)*len(remainingMetricsManualBackfillOutcomes())),
+		remainingScopeRefusal:                make(map[remainingMetricsScopeRefusalLabels]uint64, len(remainingMetricsScopeRefusalFamilies)*len(remainingMetricsScopeRefusalReasons)),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
 		dailyMetricsBlockedRun:               make(map[string]uint64, len(dailyMetricsBlockedRunOutcomes)),
@@ -1515,6 +1541,11 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	for _, family := range remainingMetricsManualBackfillFamilies {
 		for _, outcome := range remainingMetricsManualBackfillOutcomes() {
 			collector.remainingManualBackfill[remainingMetricsManualBackfillLabels{Family: family, Outcome: outcome}] = 0
+		}
+	}
+	for _, family := range remainingMetricsScopeRefusalFamilies {
+		for _, reason := range remainingMetricsScopeRefusalReasons {
+			collector.remainingScopeRefusal[remainingMetricsScopeRefusalLabels{Family: family, Reason: reason}] = 0
 		}
 	}
 	for _, reason := range dailyMetricsRedriveReasons {
@@ -2536,6 +2567,23 @@ func (collector *MetricsCollector) ObserveRemainingMetricsManualBackfill(family,
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.remainingManualBackfill[remainingMetricsManualBackfillLabels{Family: family, Outcome: typedOutcome}]++
+	return nil
+}
+
+// ObserveRemainingMetricsScopeRefused records one CHAOS-5395
+// normalizeStartRunRequest scope refusal, by family and bounded reason.
+// family/reason are plain strings for the same decoupling reason
+// ObserveRemainingMetricsManualBackfill documents.
+func (collector *MetricsCollector) ObserveRemainingMetricsScopeRefused(family, reason string) error {
+	if !slices.Contains(remainingMetricsScopeRefusalFamilies, family) {
+		return errors.New("remaining metrics scope refusal family is not registered")
+	}
+	if !slices.Contains(remainingMetricsScopeRefusalReasons, reason) {
+		return errors.New("remaining metrics scope refusal reason is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.remainingScopeRefusal[remainingMetricsScopeRefusalLabels{Family: family, Reason: reason}]++
 	return nil
 }
 
@@ -3821,6 +3869,18 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 			labels := remainingMetricsManualBackfillLabels{Family: family, Outcome: outcome}
 			writeUintSample(output, "dev_health_remaining_metrics_manual_backfill_total",
 				[]metricLabel{{"family", family}, {"outcome", string(outcome)}}, collector.remainingManualBackfill[labels])
+		}
+	}
+
+	// Emitted for every (family, reason) pair, including zeros -- same
+	// dashboard-ahead-of-first-use reasoning as the manual-backfill counter
+	// just above.
+	writeMetadata(output, "dev_health_remaining_metrics_scope_refused_total", "StartRunRequest scopes normalizeStartRunRequest refused, by family and bounded reason (CHAOS-5395).", "counter")
+	for _, family := range remainingMetricsScopeRefusalFamilies {
+		for _, reason := range remainingMetricsScopeRefusalReasons {
+			labels := remainingMetricsScopeRefusalLabels{Family: family, Reason: reason}
+			writeUintSample(output, "dev_health_remaining_metrics_scope_refused_total",
+				[]metricLabel{{"family", family}, {"reason", reason}}, collector.remainingScopeRefusal[labels])
 		}
 	}
 

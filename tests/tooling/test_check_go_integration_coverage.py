@@ -160,14 +160,20 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # file (receipt_integration_test.go: the `prove` verb's receipt writer
     # and the enablement-proof predicate, against a real Postgres with the
     # registry's actual FK and CHECK constraints). 51 -> 52.
-    # CURRENT TOTAL: 52. Adding one -tags=integration package bumps every
+    # CHAOS-5523 added cmd/query-api/internal/featureflags's first
+    # //go:build integration file (events_integration_test.go: the
+    # featureFlagEvents port's org-scoping/flagKey-filter/ORDER BY/
+    # count-not-limit-bound happy path and the real UNKNOWN_TABLE degraded
+    # path, both against a real ClickHouse container). 52 -> 53.
+    # CURRENT TOTAL: 53. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "52 package(s) discovered, 0 denylisted, 52 will run" in result.stdout
+    assert "53 package(s) discovered, 0 denylisted, 53 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
     assert "  RUN  internal/jobs/investment" in result.stdout
     assert "  RUN  internal/goapiproof" in result.stdout
     assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
+    assert "  RUN  cmd/query-api/internal/featureflags" in result.stdout
     assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

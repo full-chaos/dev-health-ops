@@ -601,6 +601,47 @@ func TestDecodeBillingAttributesMatchesPythonDefaultsAndCoercion(t *testing.T) {
 	}
 }
 
+// TestDecodeBillingAttributesPreservesCompositeStringFields is CHAOS-5402's
+// proof, using the ticket's own repro fixture. Python's
+// `str(attributes.get("tier", ""))` on `{"tier": ["Team"]}` renders
+// `"['Team']"` and STILL SENDS -- this was, and stays, off-contract (today's
+// Stripe producers only ever write scalars), but a stored row that used to
+// render now permanently drops instead, which is a real parity regression,
+// not a stricter-and-fine tightening like the SMTP_PORT/EMAIL_PROVIDER ones
+// this file documents elsewhere. A composite value must render the way
+// Python's str() rendered it, not be rejected as malformed.
+func TestDecodeBillingAttributesPreservesCompositeStringFields(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"ticket's exact repro: a list of one string", `{"tier":["Team"]}`, "['Team']"},
+		{"a list of strings", `{"old_tier":["Team","Enterprise"]}`, "['Team', 'Enterprise']"},
+		{"a nested dict", `{"new_tier":{"name":"Team","seats":5}}`, "{'name': 'Team', 'seats': 5}"},
+		{"an empty list", `{"tier":[]}`, "[]"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			decoded, err := DecodeBillingAttributes([]byte(test.raw))
+			if err != nil {
+				t.Fatalf("DecodeBillingAttributes(%s) = %v, want nil error -- a composite value must be preserved, not dropped", test.raw, err)
+			}
+			var got string
+			switch {
+			case strings.Contains(test.raw, `"tier"`):
+				got = decoded.Tier
+			case strings.Contains(test.raw, `"old_tier"`):
+				got = decoded.OldTier
+			case strings.Contains(test.raw, `"new_tier"`):
+				got = decoded.NewTier
+			}
+			if got != test.want {
+				t.Fatalf("rendered = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // CHAOS-5353 r1 regression pins. Each of these FAILS at the fix parent.
 // ---------------------------------------------------------------------------

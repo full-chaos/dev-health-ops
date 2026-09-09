@@ -1,9 +1,11 @@
 package operational
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -137,9 +139,115 @@ func stringField(fields map[string]json.RawMessage, name string, fallback string
 		return text, nil
 	}
 	if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
-		// Python would str() a list/dict into its repr, which no template
-		// should ever want. Reject rather than invent a rendering.
-		return "", fmt.Errorf("%w: %s is a composite value", ErrMalformedAttributes, name)
+		// CHAOS-5402: `str(attributes.get(name, default))` on a list/dict
+		// rendered Python's repr of it (e.g. `{"tier":["Team"]}` ->
+		// "['Team']") and Python still sent that. Rejecting here turned a
+		// previously-sendable stored row into a permanent drop -- a real
+		// parity regression, not one of this file's deliberate
+		// stricter-and-fine tightenings. Render it the same way instead.
+		value, err := decodeAnyPreservingNumberLiterals(raw)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s is not decodable: %v", ErrMalformedAttributes, name, err)
+		}
+		return pythonRepr(value), nil
 	}
 	return trimmed, nil
+}
+
+// decodeAnyPreservingNumberLiterals decodes raw into Go's standard
+// any-tree (map[string]any / []any / string / bool / nil), except JSON
+// numbers decode to json.Number (their original literal text) rather than
+// float64 -- so pythonRepr can render "5" as "5", not "5.0", the same
+// distinction Python's own int/float types keep.
+func decodeAnyPreservingNumberLiterals(raw json.RawMessage) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// pythonRepr renders a decoded JSON value the way Python's str()/repr()
+// would render the equivalent value (CHAOS-5402) -- str(list)/str(dict) is
+// list.__repr__/dict.__repr__, which repr()s every element/key/value, so
+// this recurses with repr semantics throughout, not just at the top level.
+//
+// Known, deliberate gap: map[string]any key order is Go map order (random),
+// sorted here for determinism -- it does NOT reproduce Python's
+// insertion-preserving dict order. Acceptable: today's Stripe producers
+// only ever write scalars (this whole composite path is off-contract), so
+// this is a best-effort rendering of a hand-edited or future-producer row,
+// not a byte-exact parity contract the way the scalar fields above are.
+func pythonRepr(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return "None"
+	case bool:
+		if v {
+			return "True"
+		}
+		return "False"
+	case string:
+		return pythonStringRepr(v)
+	case json.Number:
+		return string(v)
+	case []any:
+		parts := make([]string, len(v))
+		for i, elem := range v {
+			parts[i] = pythonRepr(elem)
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case map[string]any:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, len(keys))
+		for i, k := range keys {
+			parts[i] = pythonStringRepr(k) + ": " + pythonRepr(v[k])
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// pythonStringRepr mirrors Python's str repr() quoting: single-quoted
+// unless the string contains a single quote and no double quote (then
+// double-quoted), with backslash/quote/control-character escaping. It does
+// not reproduce Python's full non-ASCII-printable-category handling --
+// disclosed gap, same discipline as pythonRepr's dict-order note above.
+func pythonStringRepr(s string) string {
+	quote := byte('\'')
+	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {
+		quote = '"'
+	}
+	var b strings.Builder
+	b.WriteByte(quote)
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case rune(quote):
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte(quote)
+	return b.String()
 }

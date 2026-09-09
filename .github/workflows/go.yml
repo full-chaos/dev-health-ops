@@ -80,6 +80,16 @@ on:
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-live-python-oracles.txt'
       - 'ci/check_go_containers.sh'
+      # The migration matrix's evidence columns are validated by a Go
+      # binary (cmd/dev-health-migration-matrix) against two committed
+      # contracts, so editing the page or either contract must run the gate
+      # that reads them. Its FRESHNESS half deliberately does NOT rely on
+      # this list -- see go-quality.yml, where it runs unconditionally,
+      # because a document rots when nothing touches it and no path filter
+      # can fire on an absence.
+      - 'docs/go-migration-matrix.md'
+      - 'ci/check_migration_matrix.sh'
+      - 'ci/check_migration_matrix_test.sh'
       - 'ci/check_river_compat_static.sh'
       # CHAOS-4915: the pinned linter, its self-test and its negative-control
       # fixture must trigger the job that validates them. A file that cannot
@@ -176,6 +186,16 @@ on:
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-live-python-oracles.txt'
       - 'ci/check_go_containers.sh'
+      # The migration matrix's evidence columns are validated by a Go
+      # binary (cmd/dev-health-migration-matrix) against two committed
+      # contracts, so editing the page or either contract must run the gate
+      # that reads them. Its FRESHNESS half deliberately does NOT rely on
+      # this list -- see go-quality.yml, where it runs unconditionally,
+      # because a document rots when nothing touches it and no path filter
+      # can fire on an absence.
+      - 'docs/go-migration-matrix.md'
+      - 'ci/check_migration_matrix.sh'
+      - 'ci/check_migration_matrix_test.sh'
       - 'ci/check_river_compat_static.sh'
       # CHAOS-4915: the pinned linter, its self-test and its negative-control
       # fixture must trigger the job that validates them. A file that cannot

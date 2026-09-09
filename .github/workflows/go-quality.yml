@@ -71,6 +71,21 @@ jobs:
           # cannot see it. This is a git fetch, not a Docker Hub pull.
           fetch-depth: 0
 
+      - name: Check the migration matrix has not gone stale
+        # UNCONDITIONAL, and deliberately placed before the relevance
+        # decision below. Every other gate in this repo fires because a PR
+        # TOUCHED something; this one has to fire because nobody did. The
+        # "Last verified" stamp on docs/go-migration-matrix.md sat five days
+        # and roughly forty merges behind main while the page read as
+        # current, and no test, script or workflow read it at all -- a
+        # path-filtered check could not have caught that, because the
+        # failure is an absence of commits, not a commit.
+        #
+        # bash + git only: no Go toolchain, no venv, no network, so it runs
+        # on either leg before anything is installed. The heavier contract
+        # half runs under `go test ./...` on the Go-relevant leg.
+        run: bash ci/check_migration_matrix.sh freshness
+
       - name: Set up Python 3.14 for the relevance decision
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -130,6 +145,22 @@ jobs:
           # a corruption risk against other jobs reading/writing it at the
           # same time (same reasoning as go.yml's self-hosted legs).
           cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
+
+      - name: Prove the migration matrix contract, and prove its freshness gate
+        if: steps.relevance.outputs.relevant == 'true'
+        # The contract half: re-renders the page from the COMMITTED sources
+        # only -- no database, no docker, no network -- and fails when a row
+        # claims a status its evidence column cannot support, or when a
+        # generated cell was improved by hand.
+        #
+        # The test suite beside it is the executed proof for the freshness
+        # half that ran unconditionally above: seven throwaway repositories,
+        # each with one specific lie planted in the stamp, plus one with no
+        # lie so a script that failed unconditionally could not pass either.
+        run: |
+          set -euo pipefail
+          bash ci/check_migration_matrix.sh contract
+          bash ci/check_migration_matrix_test.sh
 
       - name: Install locked live provider oracle dependencies
         if: steps.relevance.outputs.relevant == 'true'

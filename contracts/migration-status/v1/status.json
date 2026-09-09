@@ -1,0 +1,501 @@
+{
+  "schema_version": 1,
+  "note": "The curated half of docs/go-migration-matrix.md's v2 status table. The executing-language column is NOT in this file: it is read at render time from contracts/native-families/v1/native-families.json, the Go-emitted AST-derived authority, so no hand-typed value can disagree with what the worker actually wires. Everything here is a claim a human made, and internal/migrationmatrix's validators refuse any claim whose evidence cell is empty -- parity.status \"verified\" without a ticket, a 40-hex sha AND an evidence path fails CI. Keys are \"\u003cscope\u003e/\u003cfamily\u003e\" because family names are not unique across scopes (work_item_attribution exists in both daily and remaining and means two different executors). parity.status starts at \"unverified\" for every family: that is the true state, and it is the state the old one-column matrix had no way to express.",
+  "families": {
+    "daily/ai_governance": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/ai_impact": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/ai_workflow": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/cicd": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/compounding_risk": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/deploy": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/file_hotspots": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/file_risk_hotspots": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/incident": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/repo_user_commit": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/review_edges": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/team_wellbeing": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/testops_coverage": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/testops_pipeline": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/testops_risk": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/testops_test": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/work_graph_edges": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/work_item": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/work_item_attribution": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/work_item_estimate": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/work_item_state": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "finalize/benchmarking": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "finalize/compounding_risk_team": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "finalize/ic_finalize": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "finalize/team_cognitive_load": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "finalize/team_complexity": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "remaining/capacity": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "remaining/complexity": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "remaining/dora": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "remaining/membership_backfill": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "remaining/recommendations": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "remaining/release_impact": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "remaining/work_item_attribution": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "workgraph/investment.materialize": {
+      "parity": {
+        "status": "diverged",
+        "ticket": "CHAOS-5459",
+        "evidence": ".remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes (internal/jobs/investment/hierarchycascade.go, materialize.go) are unmerged in PR #2382 with CHAOS-5460 stacked behind it"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": [
+        "CHAOS-5459",
+        "CHAOS-5460"
+      ]
+    },
+    "workgraph/workgraph.build": {
+      "parity": {
+        "status": "unverified"
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-09-09T03:00:32.644093804Z",
+        "source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    }
+  }
+}

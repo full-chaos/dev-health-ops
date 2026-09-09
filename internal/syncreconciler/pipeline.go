@@ -28,11 +28,11 @@ const (
 // stage already recorded itself loudly (syncreconciler.stage_failed,
 // sync_reconciler_stage_failures_total) before this ever reaches Loop.
 //
-// Only the observer stage's own failure is ever wrapped this way. The other
-// five stages absorb their own errors internally (see the stage
-// classification comment on MutationPipeline.Step) precisely so that a
-// repair/sweep/terminal-repair/materializer/kernel hiccup never needs Loop's
-// cooperation to survive; the observer is different because Loop trusts a
+// Only the observer stage's own failure is ever wrapped this way. Every other
+// stage absorbs its own errors internally (see the stage classification comment
+// on MutationPipeline.Step) precisely so that a repair, sweep, terminal-repair,
+// terminal-outbox-close, orphaned-unit-repair, materializer or kernel hiccup
+// never needs Loop's cooperation to survive; the observer is different because Loop trusts a
 // nil Step error to mean "the returned Observation is fresh," and a failed
 // observer call cannot honor that promise (see carryUnmeasuredGaugesLocked).
 var ErrDegradedStage = errors.New("syncreconciler: pipeline stage degraded")
@@ -64,6 +64,22 @@ type LeaseRepairStepper interface {
 // maintenance discard that occurred before the authoritative domain work ran.
 type TerminalDeliveryRepairStepper interface {
 	Step(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error)
+}
+
+// OrphanedUnitRepairStepper is CHAOS-5453's provider-unit backstop seam: a
+// 'dispatching' unit whose worker_job_outbox delivery is terminal and whose
+// River job completed or was reaped, which no other repair path can reach
+// because every one of them INNER JOINs river_job.
+//
+// It is a POSITIONAL constructor parameter and it is REQUIRED, unlike
+// UnreclaimableSweepStepper. The sweep is optional because passing nil means
+// "this deployment has not declared a worker topology and will not DESTROY
+// work". This one only ever adds a delivery for a unit that already proved it
+// cannot get one, so there is no equivalent staged-rollout risk to opt out of,
+// and an optional recovery path is how CHAOS-5428 spent thirteen hours shipped
+// but disabled.
+type OrphanedUnitRepairStepper interface {
+	Step(context.Context, time.Time, int) (OrphanedUnitRepairResult, error)
 }
 
 // MaterializerStepper is the bounded wakeup materialization seam used by the
@@ -142,6 +158,7 @@ type MutationPipeline struct {
 	postSync     PostSyncHandoff
 	sweep        UnreclaimableSweepStepper
 	outboxClose  TerminalOutboxCloseStepper
+	orphanedUnit OrphanedUnitRepairStepper
 	config       MutationPipelineConfig
 
 	stages stageTelemetry
@@ -218,13 +235,14 @@ func NewMutationPipeline(
 	postSync PostSyncHandoff,
 	sweep UnreclaimableSweepStepper,
 	outboxClose TerminalOutboxCloseStepper,
+	orphanedUnit OrphanedUnitRepairStepper,
 	config MutationPipelineConfig,
 ) (*MutationPipeline, error) {
 	// outboxClose is REQUIRED, unlike sweep -- see TerminalOutboxCloseStepper's
 	// doc comment for why CHAOS-4583's closer carries no staged-rollout risk
 	// the way the sweep's terminalization did.
 	if repair == nil || terminal == nil || materializer == nil || kernel == nil ||
-		observer == nil || outboxClose == nil || !config.valid() {
+		observer == nil || outboxClose == nil || orphanedUnit == nil || !config.valid() {
 		return nil, ErrInvalidConfiguration
 	}
 	pipeline := &MutationPipeline{
@@ -237,6 +255,7 @@ func NewMutationPipeline(
 		postSync:     postSync,
 		sweep:        sweep,
 		outboxClose:  outboxClose,
+		orphanedUnit: orphanedUnit,
 		config:       config,
 		stages:       newStageTelemetry(),
 		rollupBumps:  newRollupBumpCounts(),
@@ -433,14 +452,16 @@ func (pipeline *MutationPipeline) Step(
 	//     code already had (a repair failure already skipped sweep, terminal
 	//     repair, materializer and kernel every time) -- the only change is
 	//     that the tick no longer ends there, and the process no longer dies.
-	//   - UnreclaimableSweep, TerminalDeliveryRepair and Materializer are
-	//     read-adjacent safety nets and repair passes over largely disjoint
-	//     tables (see the pool-composition comment on buildSyncMutationPipeline
-	//     in cmd/dev-health-reconciler/dependencies.go); a stall in one buys
+	//   - UnreclaimableSweep, TerminalDeliveryRepair, TerminalOutboxClose,
+	//     OrphanedUnitRepair and Materializer are read-adjacent safety nets and
+	//     repair passes over largely disjoint tables (see the pool-composition
+	//     comment on buildSyncMutationPipeline in
+	//     cmd/dev-health-reconciler/dependencies.go); a stall in one buys
 	//     nothing by blocking the others, so each failure is absorbed and the
 	//     pipeline continues. Sweep already worked this way before this
 	//     ticket; TerminalDeliveryRepair and Materializer are upgraded from
-	//     "abort the tick" to "continue" here, matching sweep's precedent.
+	//     "abort the tick" to "continue" here, matching sweep's precedent, and
+	//     CHAOS-5453's OrphanedUnitRepair joins them on the same terms.
 	//   - Observer always runs last, REGARDLESS of what happened above -- it
 	//     is read-only and independent, and it is also the stage whose output
 	//     Loop trusts wholesale on a nil Step error. Because Loop cannot tell
@@ -648,6 +669,55 @@ func (pipeline *MutationPipeline) Step(
 		}
 		if closeErr == nil {
 			pipeline.stages.recordOutboxClosed(closed.ClosedByOutcome)
+		}
+	}
+
+	// CHAOS-5453: the provider-unit strand behind a SETTLED delivery. Lease
+	// repair reaches only a RUNNING unit whose lease expired; the sweep and
+	// joboutbox.StrandRepair reach only a unit that never held a lease AND
+	// whose River row still exists. A unit whose handler ran, asked for a
+	// continuation, and whose delivery then completed or was reaped is none of
+	// those, and nothing else in this pass can put a delivery back in front of
+	// it.
+	//
+	// Runs BEFORE the materializer, for the same reason the sweep does: a unit
+	// re-armed here can be delivered and finish within this same tick's kernel
+	// stage rather than waiting a full cycle.
+	//
+	// Its failure is absorbed, not fatal, matching every other read-adjacent
+	// safety net here -- but never SILENTLY. A repair that has stopped working
+	// entirely reads exactly like a healthy idle system from its counters
+	// alone, which is how CHAOS-4035 answered 42501 once a second from its
+	// first deploy without anyone noticing.
+	if !aborted {
+		var orphaned OrphanedUnitRepairResult
+		orphanedErr := pipeline.runStage(ctx, StageOrphanedUnitRepair, func(stageCtx context.Context) error {
+			var stepErr error
+			orphaned, stepErr = pipeline.orphanedUnit.Step(stageCtx, now, limit)
+			return stepErr
+		})
+		if orphanedErr != nil && ctx.Err() != nil {
+			return recovered, orphanedErr
+		}
+		if orphanedErr == nil && orphaned.ReArmed > 0 {
+			// WARN, not INFO: a replacement delivery means a unit was stranded
+			// behind a settled one, which is a defect somewhere upstream even
+			// though this pass just recovered from it. The repair's own
+			// per-pass line (syncreconciler.orphaned_unit_pass) carries the
+			// zeros; this one carries the events.
+			slog.Warn(
+				"syncreconciler.orphaned_units_rearmed",
+				"re_armed", orphaned.ReArmed,
+				"delivery_missing", orphaned.DeliveryMissing,
+				"delivery_completed", orphaned.DeliveryCompleted,
+				"found", orphaned.Found,
+			)
+		}
+		if orphanedErr != nil {
+			slog.Warn(
+				"syncreconciler.orphaned_unit_repair_stage_failed",
+				"error", orphanedErr.Error(),
+			)
 		}
 	}
 

@@ -101,6 +101,7 @@ func TestMutationPipelineStageBudgetReachability(t *testing.T) {
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		pipelineConfigWithBudget(StageMaterializer, 200*time.Millisecond),
 	)
 	if err != nil {

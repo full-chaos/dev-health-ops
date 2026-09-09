@@ -353,6 +353,7 @@ func pipelineWithSweep(t *testing.T, sweep UnreclaimableSweepStepper) *MutationP
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		sweep,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -711,6 +712,7 @@ func TestPipelineStepReportsAnUnavailableRunawayReport(t *testing.T) {
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -783,6 +785,7 @@ func TestPipelineStepCarriesTheSweepAndRunawayFiguresOntoTheObservation(t *testi
 			Mode: SweepModeActive, Candidates: 6, Terminalized: 4,
 		}},
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -833,6 +836,7 @@ func TestPipelineStepCountsAnUnavailableRunawayReportOnTheObservation(t *testing
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -888,6 +892,7 @@ func TestPipelineStepCarriesSweepFiguresPastATerminalRepairFailure(t *testing.T)
 			Mode: SweepModeActive, Candidates: 3, Terminalized: 3,
 		}},
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -948,6 +953,7 @@ func TestPipelineStepCountsAMaterializerFailureAsAReportThatDidNotRun(t *testing
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -1059,6 +1065,7 @@ func TestPipelineStepCountsEveryExitThatPreventsTheReport(t *testing.T) {
 		PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -1116,6 +1123,7 @@ func TestTerminalRepairFailureStillDeliversTheReport(t *testing.T) {
 				PostSyncHandoff(func(contextT, TransportClaim) error { return nil }),
 				nil,
 				noopTerminalOutboxClose(),
+				noopOrphanedUnitRepair(),
 				DefaultMutationPipelineConfig(),
 			)
 			if err != nil {

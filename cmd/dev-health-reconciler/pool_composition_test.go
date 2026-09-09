@@ -47,7 +47,12 @@ var checkedInPoolComposition = map[string][]string{
 	// component whose statements span two jurisdictions. The alternative,
 	// widening the queue role's grants, is the thing that rule exists to stop.
 	"syncreconciler.NewTerminalDeliveryRepair": {"coordinatorPool", "queuePool"},
-	"riverpgxv5.New": {"queuePool"},
+	// CHAOS-5453: the split is a GRANT, not a taste. worker_job_outbox is
+	// SELECT/UPDATE/DELETE for the queue role and SELECT/INSERT for the domain
+	// role, and only the queue role has the river schema -- so the INSERT is
+	// domain-only and the river_job liveness read is queue-only.
+	"syncreconciler.NewOrphanedUnitRepair": {"domainPool", "queuePool"},
+	"riverpgxv5.New":                       {"queuePool"},
 	// Domain-granted tables only.
 	"syncreconciler.NewLeaseRepair": {"domainPool"},
 	"syncreconciler.NewObserver":    {"domainPool"},
@@ -68,6 +73,7 @@ var componentsTheCommentMustName = map[string]string{
 	"syncreconciler.NewLeaseRepair":            "LeaseRepair",
 	"syncreconciler.NewObserver":               "Observer",
 	"syncreconciler.NewKernel":                 "Kernel",
+	"syncreconciler.NewOrphanedUnitRepair":     "OrphanedUnitRepair",
 	"riverpgxv5.New":                           "River client",
 	"syncDispatchReference":                    "publish closure",
 }

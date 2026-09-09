@@ -266,6 +266,15 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 //     table at all. No role can run the whole sweep. See
 //     internal/syncreconciler/unreclaimable_sweep.go for the same-snapshot
 //     trade-off this costs and for why the liveness read needs no fence.
+//   - OrphanedUnitRepair (CHAOS-5453): DOMAIN pool for the write, QUEUE pool
+//     for the evidence, and the split is decided by grant rather than by
+//     preference. The queue role holds SELECT/UPDATE/DELETE on
+//     worker_job_outbox but no INSERT; the domain role holds SELECT/INSERT but
+//     no access to the river schema at all. So the replacement outbox row can
+//     ONLY be inserted through the domain pool, and the river_job liveness read
+//     that licenses it can ONLY run through the queue pool. Same two-pool shape
+//     as TerminalDeliveryRepair below and UnreclaimableSweep above; the
+//     alternative -- widening either role -- is what CHAOS-4035 exists to stop.
 //   - TerminalDeliveryRepair: QUEUE pool for everything it writes -- it works
 //     the River job tables -- plus the COORDINATOR pool for exactly one read.
 //     CHAOS-5456's ready-finalizer backstop has to know whether a run whose
@@ -305,6 +314,10 @@ func buildSyncMutationPipeline(
 		return nil, err
 	}
 	terminalRepair, err := syncreconciler.NewTerminalDeliveryRepair(queuePool, coordinatorPool, riverSchema)
+	if err != nil {
+		return nil, err
+	}
+	orphanedUnitRepair, err := syncreconciler.NewOrphanedUnitRepair(domainPool, queuePool, riverSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -372,6 +385,7 @@ func buildSyncMutationPipeline(
 		nil,
 		sweep,
 		outboxClose,
+		orphanedUnitRepair,
 		pipelineConfig,
 	)
 }

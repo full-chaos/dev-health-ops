@@ -61,6 +61,7 @@ func TestRunStageBudgetIsIndependentOfItsSiblings(t *testing.T) {
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		pipelineConfigWithBudget(StageMaterializer, 5*time.Millisecond),
 	)
 	if err != nil {
@@ -118,6 +119,7 @@ func TestObserverExceedingItsBudgetDegradesRatherThanFails(t *testing.T) {
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		pipelineConfigWithBudget(StageObserver, 5*time.Millisecond),
 	)
 	if err != nil {
@@ -163,6 +165,7 @@ func TestStageFailureIsTelemetered(t *testing.T) {
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -238,6 +241,7 @@ func TestRollupBumpsAreTelemetered(t *testing.T) {
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		staticSweep{result: UnreclaimableSweepResult{Mode: SweepModeActive, Candidates: 3, Terminalized: 3}},
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -298,6 +302,7 @@ func TestRollupBumpsRecordsLeaseRepairFailures(t *testing.T) {
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		staticSweep{result: UnreclaimableSweepResult{Mode: SweepModeActive, Candidates: 0, Terminalized: 0}},
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -356,6 +361,7 @@ func TestStageCancellationSQLStateIsTelemetered(t *testing.T) {
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -437,6 +443,7 @@ func TestRunStageDoesNotTelemeterParentCancellation(t *testing.T) {
 		nil,
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -491,6 +498,7 @@ func TestStageDegradesReadinessAfterThreeConsecutiveFailuresAndClearsOnSuccess(t
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		config,
 	)
 	if err != nil {
@@ -590,6 +598,7 @@ func TestExplicitOuterEnvelopeBelowStageSumDegradesRatherThanKillsTheProcess(t *
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		DefaultMutationPipelineConfig(),
 	)
 	if err != nil {
@@ -680,6 +689,7 @@ func TestStageIgnoringContextFlipsReadinessAndClearsOnReturn(t *testing.T) {
 		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
 		nil,
 		noopTerminalOutboxClose(),
+		noopOrphanedUnitRepair(),
 		config,
 	)
 	if err != nil {

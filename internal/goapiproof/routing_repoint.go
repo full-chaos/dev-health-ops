@@ -101,6 +101,12 @@ type RepointRequest struct {
 	RecordedBy string
 	// ReviewEvidence is why, recorded durably on every row touched.
 	ReviewEvidence string
+	// PrincipalID is the effective-principal envelope's `sub` -- WHO THE
+	// CREDENTIAL SAYS is acting, recorded on the CHAOS-5505 audit row.
+	// The build this verb writes is READ from the authenticated
+	// /buildinfo, which VERIFIES that envelope, so the row can and must
+	// name the subject the verified credential carried.
+	PrincipalID string
 	// DryRun evaluates and reports without writing.
 	DryRun bool
 }
@@ -116,7 +122,12 @@ func (r RepointRequest) validate() error {
 	case r.ReviewEvidence == "":
 		return errors.New("goapiproof: review-evidence is required: a provenance write is still a decision")
 	case r.ExpectBuild != "" && r.ExpectBuild != r.RunningBuild:
+		// Checked BEFORE the principal id: a cross-check mismatch is the
+		// more specific fact, and an operator who typed the wrong sha
+		// should hear that rather than a message about an audit column.
 		return fmt.Errorf("%w: cross-check %q, running %q", ErrRepointBuildMismatch, r.ExpectBuild, r.RunningBuild)
+	case r.PrincipalID == "" && !r.DryRun:
+		return errors.New("goapiproof: principal id is required: this verb reads the authenticated /buildinfo, so the envelope it presented was verified and the audit row must name the subject that credential carried")
 	}
 	return nil
 }
@@ -214,6 +225,14 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 	}
 
 	now := time.Now().UTC()
+	audit := RoutingAudit{
+		Action:          AuditActionRepoint,
+		CredentialClass: CredentialClassEnvelope,
+		PrincipalID:     request.PrincipalID,
+		RecordedBy:      request.RecordedBy,
+		ReviewEvidence:  request.ReviewEvidence,
+		SchemaDigest:    request.SchemaDigest,
+	}
 	outcomes := make([]RepointOutcome, 0, len(candidates))
 	for _, c := range candidates {
 		if len(wanted) > 0 && !wanted[c.operation] {
@@ -248,6 +267,19 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 		if tag.RowsAffected() != 1 {
 			return nil, fmt.Errorf("goapiproof: re-point %s affected %d rows, want exactly 1", c.operation, tag.RowsAffected())
 		}
+		buildBefore, modeBefore := c.build, c.mode
+		audit.Entries = append(audit.Entries, RoutingAuditEntry{
+			DocumentDigest:       c.documentDigest,
+			Operation:            c.operation,
+			CandidateBuildBefore: &buildBefore,
+			CandidateBuildAfter:  request.RunningBuild,
+			// A re-point NEVER touches reachability, so before and after
+			// are the same mode by contract -- and recording both is what
+			// turns that contract into something a reader can check
+			// rather than take on trust.
+			ModeBefore: &modeBefore,
+			ModeAfter:  c.mode,
+		})
 		outcomes = append(outcomes, outcome)
 	}
 	if len(outcomes) == 0 {
@@ -298,6 +330,16 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 					outcomes[index].Operation, outcomes[index].ModeBefore, mode)
 			}
 			outcomes[index].ModeAfter = mode
+		}
+		// CHAOS-5505: only rows that actually MOVED are audited. A row
+		// already naming the running build was not written, and an audit
+		// entry for it would record a change that did not happen in a
+		// table nothing can later correct. A re-run that moves nothing
+		// therefore writes no audit rows, which is the truth.
+		if len(audit.Entries) > 0 {
+			if _, err := writeRoutingAudit(ctx, tx, audit, now); err != nil {
+				return nil, err
+			}
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return nil, fmt.Errorf("goapiproof: commit: %w", err)

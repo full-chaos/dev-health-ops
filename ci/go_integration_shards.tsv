@@ -309,6 +309,17 @@ internal/migrationmatrix	5
 # regression, but two consecutive over-ceiling reads on a host this busy
 # means the number is being chased instead of given real headroom.
 # Rounded up to 175 to stop re-measuring this weight every round.
+# CHAOS-5505, rebased onto the 175 tip above (not the 120 this branch
+# started from): the audit-row writes add ten more container-per-test
+# tests, and every routing verb's existing test now also builds
+# go_api_routing_audits so its write meets the real CHECK constraints.
+# First measured pre-rebase on bigboy 2026-09-09, -count=1: 126.50s on a
+# quiet host, 190.29s under load1~25 with four codex rounds live -- the
+# loaded figure recorded and deliberately not used, same reasoning as
+# every entry above: this is a static balancing hint summed by
+# ci/check_go.sh, not a measurement of any particular run. Re-measured
+# against the merged tree; see the weight line for the number that
+# landed.
 # internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
 # measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run),
 # rounded up one further second to 35 for shard-balance headroom -- combined

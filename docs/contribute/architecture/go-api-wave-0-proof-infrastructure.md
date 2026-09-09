@@ -490,6 +490,64 @@ itself broke, 2 means fix your input" now reads a genuine deadlock
 correctly; one written to "1 means crashed" still needs to know a panic is
 the one exception.
 
+Every Go routing write also appends to `go_api_routing_audits`
+(CHAOS-5505, alembic 0129), in the SAME transaction as the routing write:
+one row per operation, sharing a `correlation_id` per invocation. The
+routing row's own `recorded_by` / `review_evidence` is overwritten by the
+next write; this table is append-only, so it is where "who moved this, and
+when" survives.
+
+It is a dedicated table rather than a widening of `worker_operator_audits`.
+chris ruled that one belongs to the sync → worker operator plane
+("this column is definitely for syncs to pass to workers"), and its
+`principal_type` is pinned to a credential class issued and validated
+there. Borrowing a table because its column names happen to fit is how two
+unrelated things become impossible to aggregate separately later.
+
+| verb | `action` | `credential_class` | `principal_id` |
+|---|---|---|---|
+| `enable` | `enable` | `effective_principal_envelope` | the envelope's `sub` |
+| `repoint` | `repoint` | `effective_principal_envelope` | the envelope's `sub` |
+| `disable` | `disable` | `operator_direct` | NULL |
+| `status` | — writes no row — | | |
+
+`credential_class` uses the **Auth Control Plane's** vocabulary
+(`contracts/auth/v1/credential-classes.schema.json` is the closed
+registry). `effective_principal_envelope` is the class_id that project's
+Wave 0 threat model proposes for the envelope; registering it in that
+contract is tracked separately, against the paused Auth Control Plane
+project. `disable` is `operator_direct` because it verifies no credential —
+it contacts nothing by design — and recording a weaker claim accurately
+beats recording a stronger one nothing checked.
+
+`principal_id` and `recorded_by` answer **different questions** and both
+are recorded. `principal_id` is who the *credential* says is acting: the
+envelope's `sub`, a user id, read only after `/buildinfo` has answered 200
+— which is the deployed verifier accepting that exact token. This command
+never verifies the envelope itself; one validator per credential class is
+the Auth Control Plane's rule, and `cmd/query-api/internal/principal` is
+that validator. `recorded_by` is what the operator typed about themselves,
+verified by nothing, and required on every row. The pairing CHECK makes the
+distinction structural: an envelope-class row MUST name a subject, an
+`operator_direct` row MUST NOT.
+
+Each row also carries the routing key (`schema_digest`, `document_digest`,
+`selected_operation`) and the **before and after** of both
+`candidate_build` and `mode`. That last pair is what turns two contracts
+into something a reader can check rather than take on trust: a `repoint`
+row shows the same mode on both sides (it never touches reachability), and
+a `disable` row shows the same candidate build on both sides (it changes
+mode only).
+
+Only rows that ACTUALLY moved are audited: a `repoint` that finds every row
+already naming the running build writes no audit rows, and a `disable`
+naming an operation with no row audits nothing for it. An entry for an
+unchanged row would record a change that did not happen, in a table nothing
+can later correct.
+
+There is deliberately **no foreign key** to `go_api_routing_state`: the
+audit table must outlive the row it describes.
+
 ### How this is now detected
 
 | Signal | Where | Fires when |

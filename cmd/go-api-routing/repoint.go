@@ -118,6 +118,13 @@ func runRepoint(argv []string) error {
 		return refuse("%v", err)
 	}
 
+	// Read only AFTER /buildinfo answered 200 -- the deployed verifier
+	// accepting this exact token. See goapiproof.EnvelopeSubject.
+	principalID, err := credential.EnvelopeSubject(ctx)
+	if err != nil {
+		return refuse("%v", err)
+	}
+
 	outcomes, err := goapiproof.Repoint(ctx, pool, goapiproof.RepointRequest{
 		SchemaDigest:   registry.SchemaDigest,
 		RunningBuild:   running,
@@ -125,7 +132,10 @@ func runRepoint(argv []string) error {
 		Operations:     operations,
 		RecordedBy:     common.recordedBy,
 		ReviewEvidence: common.reviewEvidence,
-		DryRun:         dryRun,
+		// CHAOS-5505: WHO THE CREDENTIAL SAYS is acting, distinct from
+		// -recorded-by. Same envelope and same reasoning as `enable`.
+		PrincipalID: principalID,
+		DryRun:      dryRun,
 	})
 	if err != nil {
 		return classifyWriteError(err)

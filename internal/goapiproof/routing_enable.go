@@ -122,6 +122,14 @@ type EnableRequest struct {
 	RecordedBy     string
 	ReviewEvidence string
 
+	// PrincipalID is the effective-principal envelope's `sub` -- WHO THE
+	// CREDENTIAL SAYS is acting, recorded on the CHAOS-5505 audit row.
+	// Required: `enable` presents an envelope to /buildinfo, which
+	// VERIFIES it, so a row here can and must name the subject that
+	// verified credential carried. It is NOT RecordedBy, which is what
+	// the operator typed about themselves and is verified by nothing.
+	PrincipalID string
+
 	// AcknowledgeUnproven enables operations with no proof run, marking
 	// each one UNPROVEN durably.
 	AcknowledgeUnproven bool
@@ -219,6 +227,8 @@ func (r EnableRequest) validateFields() error {
 		return errors.New("goapiproof: recorded-by is required")
 	case r.ReviewEvidence == "":
 		return errors.New("goapiproof: review-evidence is required: an enablement is a decision, and a decision with no durable reason is unreadable weeks later")
+	case r.PrincipalID == "":
+		return errors.New("goapiproof: principal id is required: `enable` reads the authenticated /buildinfo, so the envelope it presented was verified and the audit row must name the subject that credential carried")
 	case len(r.Operations) == 0:
 		return errors.New("goapiproof: no operations selected -- 'all-registered' must be resolved to a concrete list before it reaches Enable")
 	case r.RolloutPercentage < 0 || r.RolloutPercentage > 100:
@@ -348,6 +358,15 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	now := time.Now().UTC()
+	audit := RoutingAudit{
+		Action:          AuditActionEnable,
+		CredentialClass: CredentialClassEnvelope,
+		PrincipalID:     request.PrincipalID,
+		RecordedBy:      request.RecordedBy,
+		ReviewEvidence:  request.ReviewEvidence,
+		SchemaDigest:    request.SchemaDigest,
+	}
+
 	for i := range outcomes {
 		outcome := &outcomes[i]
 		// Candidate build FIRST. The routing row's 4-column foreign key
@@ -403,6 +422,32 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		if tag.RowsAffected() != 1 {
 			return nil, fmt.Errorf("goapiproof: enable %s affected %d rows, want exactly 1", outcome.Operation, tag.RowsAffected())
 		}
+		entry := RoutingAuditEntry{
+			DocumentDigest:      outcome.DocumentDigest,
+			Operation:           outcome.Operation,
+			CandidateBuildAfter: request.RunningBuild,
+			ModeAfter:           request.Mode,
+		}
+		// A pointer, not "": an operation that had NO row and one that
+		// had a row saying `python` are different facts, and an audit
+		// row that rendered them alike would answer "was this already
+		// on?" wrongly. Sourced from the SAME locked read above
+		// (outcome.ModeBefore/CandidateBuildBefore/HadRowBefore), not a
+		// separate pre-read: see EnableOutcome.ModeBefore's doc comment
+		// for why an unlocked pre-read taken before this call starts can
+		// log a value a concurrent write had already moved past.
+		if outcome.HadRowBefore {
+			buildBefore, modeBefore := outcome.CandidateBuildBefore, outcome.ModeBefore
+			entry.CandidateBuildBefore = &buildBefore
+			entry.ModeBefore = &modeBefore
+		}
+		audit.Entries = append(audit.Entries, entry)
+	}
+	// CHAOS-5505: the append-only record of the decision, committing with
+	// the write it describes. `enable` upserts every named row -- even a
+	// no-change one refreshes updated_at -- so every outcome is audited.
+	if _, err := writeRoutingAudit(ctx, tx, audit, now); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("goapiproof: commit: %w", err)

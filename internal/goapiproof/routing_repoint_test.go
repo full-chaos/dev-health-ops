@@ -13,12 +13,17 @@ func validRequest() RepointRequest {
 		RunningBuild:   "ffd9e5d5dc8ee21de5befa1bae47ba9195be135e",
 		RecordedBy:     "lane-stack-owner",
 		ReviewEvidence: "CHAOS-5486 re-point to the running build",
+		// CHAOS-5505: the envelope's `sub`. Distinct from RecordedBy --
+		// one is what a verified credential said, the other is what the
+		// operator typed about themselves.
+		PrincipalID: "b0a1c2d3-0000-4000-8000-000000000001",
 	}
 }
 
 func TestRepointRequestRequiresEveryProvenanceField(t *testing.T) {
 	for name, mutate := range map[string]func(*RepointRequest){
 		"schema digest":   func(r *RepointRequest) { r.SchemaDigest = "" },
+		"principal id":    func(r *RepointRequest) { r.PrincipalID = "" },
 		"running build":   func(r *RepointRequest) { r.RunningBuild = "" },
 		"recorded by":     func(r *RepointRequest) { r.RecordedBy = "" },
 		"review evidence": func(r *RepointRequest) { r.ReviewEvidence = "" },

@@ -215,6 +215,16 @@ func runEnable(argv []string) error {
 		return refuse("-expect-build %q does not match the running build %q -- the flag is a cross-check, never the source", expectBuild, running)
 	}
 
+	// The envelope's subject, read only AFTER /buildinfo answered 200 --
+	// which is the deployed verifier accepting this exact token. This
+	// process never verifies it itself (one validator per credential
+	// class), so the order is what makes naming the subject honest rather
+	// than an assertion of its own. See goapiproof.EnvelopeSubject.
+	principalID, err := credential.EnvelopeSubject(ctx)
+	if err != nil {
+		return refuse("%v", err)
+	}
+
 	pool, err := connectPostgres(ctx, common.postgresURI, common.timeout)
 	if err != nil {
 		return err
@@ -233,14 +243,17 @@ func runEnable(argv []string) error {
 
 	// --- Preflight 4 (inside Enable) + the write, one transaction ------
 	outcomes, err := goapiproof.Enable(ctx, pool, goapiproof.EnableRequest{
-		SchemaDigest:        registry.SchemaDigest,
-		RunningBuild:        running,
-		Operations:          operations,
-		DocumentDigest:      registry.DocumentDigest,
-		Mode:                mode,
-		RolloutPercentage:   rollout,
-		RecordedBy:          common.recordedBy,
-		ReviewEvidence:      common.reviewEvidence,
+		SchemaDigest:      registry.SchemaDigest,
+		RunningBuild:      running,
+		Operations:        operations,
+		DocumentDigest:    registry.DocumentDigest,
+		Mode:              mode,
+		RolloutPercentage: rollout,
+		RecordedBy:        common.recordedBy,
+		ReviewEvidence:    common.reviewEvidence,
+		// CHAOS-5505: WHO THE CREDENTIAL SAYS is acting. Distinct from
+		// -recorded-by, which is what the operator typed about themselves.
+		PrincipalID:         principalID,
 		AcknowledgeUnproven: acknowledgeUnproven,
 		DryRun:              dryRun,
 	})

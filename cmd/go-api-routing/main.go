@@ -594,6 +594,13 @@ func (c *commonFlags) requirePostgres() error {
 // value captured here cannot go stale mid-run. If a second /buildinfo
 // read is ever added to `enable` or `repoint`, this must become a minted
 // credential with a refresh, and a static one becomes a defect.
+//
+// CHAOS-5505 does NOT widen this to also return the raw bearer: the
+// credential's whole design (internal/goapiproof/credential.go) is that
+// its value is asked for per request and never handed back to a caller.
+// A verb that needs the envelope's `sub` for its audit row calls
+// Credential.EnvelopeSubject, which stays inside package goapiproof --
+// the raw token still never reaches cmd/go-api-routing.
 func envelopeCredential() (*goapiproof.Credential, error) {
 	bearer := os.Getenv(bearerEnvVar)
 	if bearer == "" {

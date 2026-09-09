@@ -27,6 +27,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST = REPO_ROOT / "contracts" / "gqlgen" / "v1" / "expected-drift.allowlist"
 GUARD = REPO_ROOT / "ci" / "check_gqlgen_drift.sh"
+DIGEST = REPO_ROOT / "contracts" / "gqlgen" / "v1" / "expected-drift.sha256"
 WRAPPER = REPO_ROOT / "ci" / "gqlgen_generate.sh"
 GO_QUALITY = REPO_ROOT / ".github" / "workflows" / "go-quality.yml"
 GO_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "go.yml"
@@ -91,7 +92,7 @@ def test_the_guard_and_wrapper_exist_and_are_executable() -> None:
         )
 
 
-def _drift_guard_steps() -> list[dict]:
+def _drift_guard_steps() -> list[tuple[dict, dict]]:
     """Every go-quality step that actually invokes the guard.
 
     Parsed, not grepped. A substring match cannot tell a live step from one
@@ -176,6 +177,19 @@ def test_go_quality_still_runs_the_drift_guard() -> None:
                 f"failure passes silently:\n{line}"
             )
 
+        # A custom shell, or `set +e` inside the run, discards the guard's
+        # status just as effectively as `|| true`. Round r4 executed all
+        # three and confirmed exit 0 with the guard failing underneath.
+        assert "shell" not in step, (
+            "the guard step overrides `shell:`. A custom shell can drop the "
+            "errexit behaviour the guard's failure depends on -- run it under the "
+            "default shell, or the failure is silently discarded."
+        )
+        assert not re.search(r"set\s+\+e|set\s+\+o\s+errexit", run), (
+            "the guard step disables errexit inside its `run`, so a drift failure "
+            "no longer fails the step."
+        )
+
         # The job itself must be able to run. A job-level `if: false`, or a
         # matrix with no entries, disables every step inside it while leaving
         # this step visibly present in the file.
@@ -222,6 +236,41 @@ def test_the_guards_own_files_trigger_the_workflow_that_runs_it() -> None:
         "so a PR touching only them is classified non-Go and never runs the guard "
         f"against its own change: {unreachable}. Add each to go.yml's "
         "on.pull_request.paths with a comment saying why."
+    )
+
+
+def test_the_positional_digest_is_present_and_well_formed() -> None:
+    """The exact half of the contract.
+
+    The readable allowlist is position-free on purpose, and position-free keys
+    cannot be unique: generated.go repeats itself so heavily that even twenty
+    lines of surrounding context still leave colliding keys, which is how two
+    successive fixes to the key were still defeated. The digest covers the raw
+    unified diff, positions included, so a hand-edit MOVED to an
+    identical-looking position fails even though every readable entry matches.
+    """
+    assert DIGEST.exists(), (
+        f"{DIGEST.relative_to(REPO_ROOT)} is missing. Without it the guard is back "
+        "to a position-free comparison, which cannot detect a moved hand-edit. "
+        "Create it with ci/check_gqlgen_drift.sh --update."
+    )
+    text = DIGEST.read_text().strip()
+    assert re.fullmatch(r"[0-9a-f]{64}", text), (
+        f"the drift digest is not a sha256: {text!r}. An unreadable digest must not "
+        "be treated as 'no drift'."
+    )
+
+
+def test_the_guard_compares_the_digest_not_only_the_allowlist() -> None:
+    """A digest that is written but never compared protects nothing."""
+    body = GUARD.read_text()
+    assert "actual_digest" in body and "expected_digest" in body, (
+        "ci/check_gqlgen_drift.sh no longer computes and compares a digest of the "
+        "raw diff. The allowlist alone cannot detect a moved hand-edit."
+    )
+    assert '"${expected_digest}" = "${actual_digest}"' in body, (
+        "the guard's success path no longer requires the digest to match, so a "
+        "moved hand-edit passes silently again."
     )
 
 

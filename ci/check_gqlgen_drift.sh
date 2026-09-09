@@ -27,6 +27,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 ALLOWLIST="${ROOT}/contracts/gqlgen/v1/expected-drift.allowlist"
+# The exact half of the contract: sha256 of the raw unified diff, positions
+# included. See the note beside the awk below for why the allowlist alone
+# cannot be exact.
+DIGEST="${ROOT}/contracts/gqlgen/v1/expected-drift.sha256"
 
 GENERATED_FILES=(
   "cmd/query-api/internal/graph/generated.go"
@@ -114,7 +118,9 @@ for rel in "${GENERATED_FILES[@]}"; do
   # round flagged, and it bit again while fixing it -- the guard aborted at
   # the first differing file and reported nothing.
   set +e
-  diff -u -F '^\(type\|func\|var\|const\) ' "${ROOT}/${rel}" "${WORK}/${rel}" >"${WORK}/.raw" 2>"${WORK}/.differr"
+  diff -u -F '^\(type\|func\|var\|const\) ' \
+    --label "checked-in/${rel}" --label "regenerated/${rel}" \
+    "${ROOT}/${rel}" "${WORK}/${rel}" >"${WORK}/.raw" 2>"${WORK}/.differr"
   dstatus=$?
   set -e
   if [ "${dstatus}" -ge 2 ]; then
@@ -145,8 +151,21 @@ for rel in "${GENERATED_FILES[@]}"; do
     /^ / { ctx = substr($0, 2); gsub(/^[ \t]+|[ \t]+$/, "", ctx); next }
     /^[+-]/ { printf "%s\t%s @ after:%s\t%s\n", rel, decl, ctx, $0 }
   ' "${WORK}/.raw" >>"${actual}"
+  # The readable allowlist above is deliberately position-free, and position-free
+  # keys CANNOT be unique: generated.go repeats itself heavily, and measuring the
+  # real files shows even twenty lines of context still leaves colliding keys.
+  # Two review rounds got past a context-only key. So the raw unified diff -- line
+  # numbers and all -- is digested as well, and the digest is what makes the check
+  # exact. A hand-edit MOVED to an identical-looking position changes the diff and
+  # therefore the digest, even when every readable entry is unchanged.
+  cat "${WORK}/.raw" >>"${WORK}/.rawall"
 done
 sort -o "${actual}" "${actual}"
+: >>"${WORK}/.rawall"
+if ! actual_digest="$(sha256sum <"${WORK}/.rawall" | cut -d" " -f1)"; then
+  echo "check_gqlgen_drift: could not digest the raw diff; the comparison is broken, not empty." >&2
+  exit 1
+fi
 
 if [ "${UPDATE}" -eq 1 ]; then
   mkdir -p "$(dirname "${ALLOWLIST}")"
@@ -175,7 +194,9 @@ if [ "${UPDATE}" -eq 1 ]; then
     echo "check_gqlgen_drift: rewrote the allowlist but could not count it; treat the count as unknown, not zero." >&2
     exit 1
   fi
-  echo "check_gqlgen_drift: allowlist rewritten with ${written} entries. REVIEW THE DIFF -- it is a contract."
+  printf '%s\n' "${actual_digest}" >"${DIGEST}"
+  echo "check_gqlgen_drift: allowlist rewritten with ${written} entries; digest ${actual_digest}."
+  echo "check_gqlgen_drift: REVIEW THE DIFF -- it is a contract."
   exit 0
 fi
 
@@ -187,7 +208,24 @@ fi
 expected="${WORK}/.expected"
 grep -v '^#' "${ALLOWLIST}" | grep -v '^[[:space:]]*$' | sort >"${expected}"
 
-if diff -q "${expected}" "${actual}" >/dev/null; then
+if [ ! -f "${DIGEST}" ]; then
+  echo "check_gqlgen_drift: ${DIGEST} is missing. Create it with --update." >&2
+  exit 1
+fi
+expected_digest="$(tr -d "[:space:]" <"${DIGEST}")"
+if [ "${expected_digest}" != "${actual_digest}" ] && diff -q "${expected}" "${actual}" >/dev/null; then
+  echo "check_gqlgen_drift: the documented drift LINES are unchanged, but the raw diff is not." >&2
+  echo "  expected digest ${expected_digest}" >&2
+  echo "  actual   digest ${actual_digest}" >&2
+  echo >&2
+  echo "A hand-edit has MOVED: same content, same context, different position. The" >&2
+  echo "readable allowlist cannot see that -- generated.go repeats itself, so a" >&2
+  echo "position-free key is not unique -- which is why the digest exists." >&2
+  echo "If the move is deliberate: ci/check_gqlgen_drift.sh --update." >&2
+  exit 1
+fi
+
+if [ "${expected_digest}" = "${actual_digest}" ] && diff -q "${expected}" "${actual}" >/dev/null; then
   # Counted only to report it, but an unreadable count still means the file
   # this guard just blessed could not be read -- never print a blank one.
   if ! documented="$(wc -l <"${actual}")"; then

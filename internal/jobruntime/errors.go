@@ -345,6 +345,30 @@ func classify(ctx context.Context, err error, attempt, maxAttempts int) decision
 	if err == nil {
 		return decision{result: ResultSuccess, category: CategoryNone}
 	}
+	var marked *markedError
+	isMarked := errors.As(err, &marked)
+	// A deliberate snooze request is answered BEFORE the two context branches
+	// below (CHAOS-5455). Those branches consult the LIVE context, which no
+	// handler owns or can influence, so while the worker was draining they
+	// silently replaced every RetryableAfter/BudgetContention/RateLimited
+	// snooze with a cancellation -- for every job kind, not just the billing
+	// notification where it was found (CHAOS-5399 r3). The same ordering also
+	// applied to the DeadlineExceeded sibling, which forced that handler to
+	// sever its own error's cause chain to get a snooze honoured at all.
+	//
+	// Answering the snooze first is safe in exactly the way the cancellation
+	// branch is: a River snooze also leaves the row retryable and never
+	// terminal. It additionally honours the delay the handler asked for and
+	// does not consume the job's bounded attempt budget -- which is the whole
+	// point of a snooze, and precisely what a drain used to discard.
+	//
+	// Only a snooze overtakes these branches. A marker without one still
+	// classifies after them, so a drain continues to produce a non-terminal
+	// CategoryCancelled for a Permanent/Cancel/TerminalDomain-marked error
+	// rather than a durable river.JobCancel.
+	if isMarked && marked.snooze > 0 {
+		return decision{result: ResultRetry, category: marked.category, snooze: marked.snooze, reason: marked.reason}
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return retryDecision(CategoryTimeout, Reason{}, attempt, maxAttempts)
 	}
@@ -353,11 +377,7 @@ func classify(ctx context.Context, err error, attempt, maxAttempts int) decision
 		// marks the row, while a process drain must leave it retryable.
 		return decision{result: ResultCancel, category: CategoryCancelled}
 	}
-	var marked *markedError
-	if errors.As(err, &marked) {
-		if marked.snooze > 0 {
-			return decision{result: ResultRetry, category: marked.category, snooze: marked.snooze, reason: marked.reason}
-		}
+	if isMarked {
 		if marked.cancel {
 			return decision{result: ResultCancel, category: marked.category, cancel: true, reason: marked.reason}
 		}

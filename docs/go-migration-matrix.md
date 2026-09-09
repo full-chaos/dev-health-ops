@@ -70,6 +70,172 @@ wiring.
 hand-curated citation/CLI-verb row on this page was read against. The generated tables always reflect
 whatever their producer files say at build time, independent of this date.
 
+**This stamp is now enforced.** `ci/check_migration_matrix.sh freshness` runs on EVERY pull request --
+unconditionally, before any relevance decision, because a page rots when nobody touches it and no path
+filter can fire on an absence. Until 2026-09-09 nothing read this line at all: it had been sitting at a
+2026-09-04 commit through roughly forty merges while the page read as current.
+
+The gate checks **two** shas, for the two halves of the page:
+
+| Sha | Whose claim | Checked for |
+|---|---|---|
+| **Last verified** (this line) | a human's, about the hand-curated citation and CLI-verb rows | 40-hex, ancestor of `HEAD`, age <= `MATRIX_MAX_AGE_DAYS` (default 7) |
+| `ops_sha` in [`last-render.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/migration-status/v1/last-render.json) | the tool's, about the generated cells | same three, and it is written by `git rev-parse HEAD` inside `-render`, so it cannot be typed by hand |
+
+Re-verifying the generated half is one command plus a commit, and every staleness failure prints it verbatim
+along with the age in days:
+
+```bash
+go run ./cmd/dev-health-migration-matrix -render -root .
+```
+
+**Not bumped on 2026-09-09.** The `ic_finalize` citation below was re-read and corrected that day (it named
+`compute_ic.py`, deleted weeks earlier by CHAOS-4290 PR3), but the OTHER hand-curated rows on this page were
+not re-read, so moving the stamp would have made a claim about them that nobody checked -- which is the
+exact move this gate exists to stop. The stamp stays at the commit those rows were genuinely last read
+against, and the freshness gate will start failing on 2026-09-11 until someone does the re-read.
+
+## STATUS (v2): correctness, deployment and proof
+
+**Why this section exists.** Every other table on this page answers exactly one question -- *which language
+executes this today* -- and it has answered `NATIVE` for months. Over 2026-07-22 → 2026-09-07, CHAOS-3033 was
+set Done six times and CHAOS-3092 fourteen; nineteen of those twenty transitions were reversed, and each one
+was read off the executing-language column or off ticket state. The column was never wrong. It just was not
+the claim anyone meant. A family can execute in Go and still emit the wrong numbers, run nowhere, or have
+never been observed running at the commit that is merged.
+
+So this section adds the other three claims, each with the evidence that backs it, and
+[`ci/check_migration_matrix.sh`](https://github.com/full-chaos/dev-health-ops/blob/main/ci/check_migration_matrix.sh)
+fails CI when a cell claims more than its evidence column can show. Three cells to read first, because they
+are all currently uncomfortable and all currently true:
+
+- **Deployed revision** is the running image's `org.opencontainers.image.revision` label, verbatim, with the
+  timestamp it was read -- never a promise, and never a guess. Until 2026-09-09 the Compose fleet labelled
+  itself literally `unknown`, because `compose.yml` passed no `COMMIT` build-arg for the Dockerfiles' `LABEL`
+  to interpolate; the column rendered `unknown` and said so, rather than substituting the commit somebody
+  hoped was running. The build-arg now reaches the images, so the cell reads a real sha. Both are accepted
+  and nothing else is: the checker rejects any value that is neither 40-hex nor that one literal, so `main`,
+  `latest` and `HEAD` all fail.
+- **Deployed-executed proof** is a recorded run against the deployed build. A direct call, an HTTP 200, or a
+  registry digest is not one. `none` is the honest value and today it is the only value.
+- **Output parity** starts at `UNVERIFIED` for every family. That is not a to-do marker -- it is the state.
+  A family reads `VERIFIED` only once a ticket, a 40-hex sha and an openable evidence path all exist.
+
+Curated cells live in
+[`contracts/migration-status/v1/status.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/migration-status/v1/status.json),
+never in the markdown below. The `Executes` column is re-read from `native-families.json` at render time, so
+it cannot drift from §2/§3. Rows are keyed `<scope>/<family>`: `work_item_attribution` appears in both `daily`
+and `remaining` and means two different executors with two different correctness claims.
+
+Regenerate (both blocks in this section, plus the snapshot):
+
+```bash
+go run ./cmd/dev-health-migration-matrix -render -root . \
+  -routing <(psql "$POSTGRES_URI" -tAc "$(sed -n '/routingStateQuery/,/^`/p' internal/migrationmatrix/live.go)")
+# or, where the operator has no DSN, produce the same JSON via `docker exec … psql` -- see
+# cmd/dev-health-migration-matrix/main.go's routingFilePayload for the exact shape.
+go run ./cmd/dev-health-migration-matrix -check -root .   # what CI runs: committed sources only, no DB, no docker
+```
+
+### Per family
+
+<!-- BEGIN GENERATED MIGRATION STATUS V2 -->
+_Deployed revisions read from: docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
+
+| Family | Scope | Executes | Output parity | Deployed revision (read at) | Deployed-executed proof | Open regressions |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ai_governance` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `ai_impact` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `ai_workflow` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `cicd` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `compounding_risk` | daily | POST_BRIDGE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `deploy` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `file_hotspots` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `file_risk_hotspots` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `incident` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `repo_user_commit` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `review_edges` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `team_wellbeing` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `testops_coverage` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `testops_pipeline` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `testops_risk` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `testops_test` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `work_graph_edges` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `work_item` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `work_item_attribution` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `work_item_estimate` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `work_item_state` | daily | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `benchmarking` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `compounding_risk_team` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `ic_finalize` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `team_cognitive_load` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `team_complexity` | finalize | FINALIZE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `capacity` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `complexity` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `dora` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `membership_backfill` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `recommendations` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `release_impact` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `work_item_attribution` | remaining | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+| `investment.materialize` | workgraph | NATIVE | **DIVERGED** (CHAOS-5459, .remember/lanes/team-lead/matrix-tracker-audit-2026-09-09.md section 4 -- repo attribution coverage fell 41% to 34% AFTER this family was recorded NATIVE; the fixes (internal/jobs/investment/hierarchycascade.go, materialize.go) are unmerged in PR #2382 with CHAOS-5460 stacked behind it) | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | **CHAOS-5459, CHAOS-5460** |
+| `workgraph.build` | workgraph | NATIVE | UNVERIFIED | `eadfd3955327` (read 2026-09-09T04:27:20Z) | **none** | -- |
+<!-- END GENERATED MIGRATION STATUS V2 -->
+
+### Per Go-API operation
+
+Rendered from `go_api_routing_state` and `go_api_proof_run`. `Proven` is **derived**, never a stored column:
+it is the id of a `stage='deployed_executed'`, `terminal_state='match'` proof run keyed by the full immutable
+4-tuple `(schema_digest, document_digest, selected_operation, candidate_build)` -- the same predicate
+`go_api_routing_admin.build_enablement_proof_select` uses to authorize an enablement. A proof is evidence for
+exactly one such tuple and is never carried forward across any of the four changing.
+
+`Live at current pin` compares each row's `schema_digest` against
+`contracts/graphql/v1/schema-digest.json`. A row at any other digest is **DEAD**: the router's lookup misses,
+`PostgresSwitch.Enabled` returns false, and every request silently falls back to Python. That is not
+hypothetical -- PR #2065 moved the digest on 2026-09-01 hours after twelve `canary` rows were seeded at the
+old value, and the twelve dead rows below are those rows, still sitting in the table six days later. They are
+rendered rather than filtered out precisely because filtering them is how they went unnoticed.
+
+A row that is live, reachable to real clients (`canary`/`primary`) and carries no proof is marked
+**UNPROVEN** in its mode cell. Per the Go-API epic plan's five-stage gate, stage 3 (deployed-executed proof)
+is required before stage 4/5, and "a bare 200 does not qualify".
+
+<!-- BEGIN GENERATED GO API OPERATIONS -->
+_Rendered 2026-09-09T04:27:20Z from ops `53afb0285de4e492821142d640c15baebac4ba95`; SDL digest pin `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88`; fleet read 2026-09-09T04:27:20Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
+
+_Rows in `go_api_proof_run` at read time: **0**. Operations reachable to real clients with no deployed-executed proof: **11**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **12**._
+
+| Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |
+| --- | --- | --- | --- | --- | --- | --- |
+| `capacityForecast` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `capacityForecasts` | shadow | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `cognitiveLoad` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `complexityTimeseries` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `featureFlags` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `flowMatrix` | shadow | `sha256:29d509cd414cd9…` | `458daedfd499` | yes | **none** | -- |
+| `hotspots` | shadow | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `investmentBreakdown` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `investmentFull` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `operatingReview` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `reviewEdges` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `throughputForecast` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `workGraphArtifacts` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `workGraphEdges` | shadow | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `workGraphFlow` | canary / **UNPROVEN** | `sha256:29d509cd414cd9…` | `b18e56fa79cf` | yes | **none** | -- |
+| `cognitiveLoad` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `complexityTimeseries` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `featureFlags` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `flowMatrix` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `hotspots` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `investmentBreakdown` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `investmentFull` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `operatingReview` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `reviewEdges` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `workGraphArtifacts` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `workGraphEdges` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+| `workGraphFlow` | canary | `sha256:67b87d38e46f76…` | `78fc68815e82` | **DEAD** (digest moved) | **none** | -- |
+<!-- END GENERATED GO API OPERATIONS -->
+
 ## SYNC
 
 Provider sync's raw ingestion is entirely NATIVE (below); its **CLI-verb layer** is a mix of Go operator
@@ -211,7 +377,7 @@ which had been unreachable dead code (never wired into `cli.py`'s argparse tree)
 | deploy | NATIVE | Go: `internal/jobs/metrics/daily/deploy_native_executor.go` | CHAOS-4293 (Done) |
 | file_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/file_hotspots_native_executor.go` | CHAOS-4277 (Done) |
 | file_risk_hotspots | NATIVE | Go: `internal/jobs/metrics/daily/` (`FileRiskHotspotsExecutor`, `daily.go`) | CHAOS-4277 (Done) |
-| ic_finalize | NATIVE | Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope) | CHAOS-4290 |
+| ic_finalize | NATIVE | Go: `internal/jobs/metrics/daily/ic_finalize_native_executor.go` (`ICFinalizeExecutor`, finalize scope, co-registered with `team_cognitive_load`). CHAOS-4290 PR3 deleted the Python compute (`compute_ic.py`'s `compute_ic_metrics_daily` / `compute_ic_landscape_rolling`) entirely -- no fallback left. | CHAOS-4290 (Done) |
 | incident | NATIVE | Go: `internal/jobs/metrics/daily/incident_native_executor.go` (Python bridge was permanently zero-yield for this family, CHAOS-4269) | CHAOS-4295 (Done), CHAOS-5313 (Done) |
 | repo_user_commit | NATIVE | Go: `internal/jobs/metrics/daily/repouser/` (`RepoUserCommitExecutor`) | CHAOS-4275 (Done) |
 | review_edges | NATIVE | Go: `internal/jobs/metrics/daily/review_edges_native_executor.go` (pre_bridge). CHAOS-4279 deleted the Python compute (`reviews.py compute_review_edges_daily`) entirely -- no fallback left. | CHAOS-4279 (Done) |

@@ -366,8 +366,17 @@ DAILY_CITATION_LEDGER: dict[str, dict[str, str]] = {
         "ticket": "CHAOS-4288 (Done)",
     },
     "ic_finalize": {
-        "citation": "Python: `compute_ic.py` (`compute_ic_metrics_daily`, `compute_ic_landscape_rolling`; finalize scope)",
-        "ticket": "CHAOS-4290",
+        # Was "Python: `compute_ic.py` ..." until 2026-09-09. That citation
+        # outlived the file it named by weeks: CHAOS-4290 PR3 deleted
+        # compute_ic.py's compute (see job_daily.py:845's own comment), the
+        # Executor column correctly read NATIVE the whole time, and nothing
+        # checked the citation beside it -- curated citation text is
+        # ungated by design (see Known gaps). A row can therefore be
+        # simultaneously right in its gated column and wrong in its prose,
+        # which is the failure mode the STATUS (v2) section exists to make
+        # visible for the columns that matter more than this one.
+        "citation": "Go: `internal/jobs/metrics/daily/ic_finalize_native_executor.go` (`ICFinalizeExecutor`, finalize scope, co-registered with `team_cognitive_load`). CHAOS-4290 PR3 deleted the Python compute (`compute_ic.py`'s `compute_ic_metrics_daily` / `compute_ic_landscape_rolling`) entirely -- no fallback left.",
+        "ticket": "CHAOS-4290 (Done)",
     },
 }
 

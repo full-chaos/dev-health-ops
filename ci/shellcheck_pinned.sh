@@ -118,6 +118,8 @@ FILES=(
   # which is the guard-file-is-not-guarded shape one level up.
   "${ROOT}/ci/shellcheck_pinned.sh"
   "${ROOT}/ci/check_shellcheck_pin.sh"
+  "${ROOT}/ci/check_migration_matrix.sh"
+  "${ROOT}/ci/check_migration_matrix_test.sh"
   # CHAOS-4922: the single source of truth for PYTHON_BASE_IMAGE.
   "${ROOT}/ci/python_base_ref.sh"
   # CHAOS-4928 codex round 1, P1 fix: mirror-test-images.yml's `precheck`

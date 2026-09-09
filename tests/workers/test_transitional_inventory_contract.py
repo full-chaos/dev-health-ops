@@ -243,7 +243,28 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # the merge hazard tests/test_endpoint_profiles_contract.py's note
     # describes: each branch's arithmetic is correct against its own base and
     # wrong against the union.
-    assert inventory["row_count"] == 77
+    # = 57. CHAOS-3093 (PR2a) deleted external_ingest_recompute.py,
+    # external_ingest_reconciler.py, metrics_daily.py, queue_monitor.py, and
+    # report_task.py outright (5 celery_task rows), plus work_graph_tasks.py
+    # (4 more celery_task rows + 3 call_site_literal + 1 celery_canvas_import)
+    # -- report_task.py's one user-facing trigger (reports.py:617/619) now
+    # routes through the durable outbox instead of a Celery dispatch, so its
+    # api_trigger_endpoint + call_site_literal rows are removed too, not
+    # re-anchored. post_sync_dispatch.py's celery(chain(...)) fold into a
+    # plain send_task collapsed 5 call_site_literal rows into 3 re-anchored
+    # ones and dropped its celery_canvas_import row. external_ingest/
+    # recompute.py's debounced flush dispatch was retargeted from a direct
+    # module import to a named celery_app.send_task (1 call_site_literal
+    # re-anchored, same surface). Two config.py beat_entry rows (monitor-
+    # queue-depths, prune-external-ingest-batches) were retired outright --
+    # see retired_beat_entries -- while the other three (dispatch-scheduled-
+    # syncs, reconcile-sync-dispatch, prune-rate-limit-observations) and
+    # every sync_reconciler.py/sync_scheduler.py celery_task/getattr-
+    # indirection row were only re-anchored: those two modules are NOT
+    # deleted by this PR (CHAOS-3093's own reviewed pass, PR2a', is
+    # deferred -- their large invariant-test surface needs a one-row Go-
+    # parity mapping first, not a drive-by delete). Net: 77 - 20 = 57.
+    assert inventory["row_count"] == 57
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():
@@ -270,6 +291,18 @@ def test_retired_beat_entries_are_evidenced_and_absent_from_source():
             "cadence": "10s",
             "reason": "Replaced by a native Go consumer, not merely stopped. The entry existed only to drain the Go stream runner's external-ingest recompute rows into the Python planner; CHAOS-5296 ships that consumer in Go (internal/externalrecompute/drain.go) and repoints the writer at it (NativeDrainTaskName) in the SAME change, so the Celery task has no writer and the Beat entry has no task.",
             "evidence": "CHAOS-5296. The 30-day zero-legacy-enqueue window this row's predecessor asked for is satisfied by construction rather than by observation: the only code that could enqueue the legacy task -- PostgresCompatibilityDispatcher's INSERT of celery_task_name = 'dev_health_ops.workers.tasks.dispatch_external_ingest_recompute_bridge' -- was deleted in the same commit as the task and the Beat entry, so a legacy enqueue is not possible from any deployed version going forward. Rows written under the old name BEFORE the cutover are drained once, by hand, via `dev-health-workerctl external-recompute replay`; the live consumer cannot see them.",
+        },
+        {
+            "name": "monitor-queue-depths",
+            "cadence": "60s",
+            "reason": "CHAOS-4065 replaced the ask-dev-acceptance release-blocking gate's real Celery worker+beat fleet (this entry's last reason to survive) with a Go-native probe (cmd/ask-dev-jobs-probe) that re-executes queueHealthMonitor (cmd/dev-health-worker/queue_health.go) directly against Postgres.",
+            "evidence": "CHAOS-3093 (PR2a). workers/queue_monitor.py deleted outright; tests/workers/test_celery_dead_code_contract.py pins monitor_queue_depths/monitor-queue-depths absent.",
+        },
+        {
+            "name": "prune-external-ingest-batches",
+            "cadence": "crontab(5,15) UTC",
+            "reason": "CHAOS-4065 replaced the ask-dev-acceptance release-blocking gate's real Celery worker+beat fleet (this entry's last reason to survive) with a Go-native probe that re-executes internal/scheduler/fixed's RetentionProducer/internal/jobs/system's ExternalIngestBatchStore directly.",
+            "evidence": "CHAOS-3093 (PR2a). workers/external_ingest_reconciler.py deleted outright; tests/workers/test_celery_dead_code_contract.py pins prune_external_ingest_batches/prune-external-ingest-batches absent.",
         },
     ]
     assert (

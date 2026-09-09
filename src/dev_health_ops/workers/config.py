@@ -147,15 +147,35 @@ task_queues: dict[str, dict[str, Any]] = {
 #     large test surface (canonical-incident-feature gating, outbox relay,
 #     backfill-orphan cleanup, unreclaimable-dispatching sweep) beyond what
 #     CHAOS-4056's inventory sweep verified 1:1 Go parity for. Removing
-#     either needs its own reviewed pass, not a drive-by deletion here.
+#     either needs its own reviewed pass, not a drive-by deletion here --
+#     that pass is CHAOS-3093's PR2a' (tracked separately from this PR,
+#     which retired the other three): its TEST-EVIDENCE must carry a
+#     one-row-per-deleted-test mapping from each Python invariant test onto
+#     the Go test (internal/syncreconciler / internal/scheduler/sync) that
+#     pins the same invariant, or a filed gap ticket -- no third option.
 #     (CHAOS-4054 step 4 has since deleted the Celery-transport fallback
 #     these two used to reach -- provider_unit_transport.py is gone -- so
 #     that particular reason for keeping them no longer applies; the test
 #     surface one still does.)
-#   * monitor-queue-depths, prune-rate-limit-observations, prune-external-
-#     ingest-batches -- still exercised by a REAL Celery worker+beat fleet in
-#     tests/acceptance/compose.ask-dev.yml's release-blocking gate (see the
-#     comment above its `worker`/`beat` services), independent of prod.
+#   * prune-rate-limit-observations -- lives in the same sync_reconciler.py
+#     module as reconcile-sync-dispatch above, so it is kept for the same
+#     reviewed-pass reason, not because it still needs a real Celery fleet
+#     (CHAOS-4065 already replaced the ask-dev-acceptance fleet's coverage of
+#     this cadence with a Go-native probe -- that replacement *did* let
+#     CHAOS-3093 retire monitor-queue-depths and prune-external-ingest-
+#     batches outright, just not this one, see below).
+#
+# CHAOS-3093 (2026-09-09) retired monitor-queue-depths and prune-external-
+# ingest-batches outright: CHAOS-4065 replaced the ask-dev-acceptance
+# release-blocking gate's real Celery worker+beat fleet (these two entries'
+# last reason to survive) with a Go-native probe (cmd/ask-dev-jobs-probe)
+# that re-executes the same production Go code directly (queueHealthMonitor,
+# RetentionProducer's prune_external_ingest_batches schedule). Their Python
+# implementations (workers/queue_monitor.py, external_ingest_reconciler.py)
+# are deleted. Both retired entries are pinned absent by
+# tests/workers/test_celery_dead_code_contract.py; the three still-flagged
+# entries above are pinned present by the same file's
+# test_flagged_entries_were_not_silently_dropped.
 beat_schedule = {
     "dispatch-scheduled-syncs": {
         "task": "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
@@ -167,13 +187,6 @@ beat_schedule = {
         "schedule": 60.0,
         "options": {"queue": "sync"},
     },
-    "monitor-queue-depths": {
-        "task": "dev_health_ops.workers.tasks.monitor_queue_depths",
-        "schedule": 60.0,
-        # Dedicated `monitoring` queue: telemetry must keep flowing even when
-        # `default` floods (that is precisely when it is needed).
-        "options": {"queue": "monitoring"},
-    },
     # Retention for the durable rate-limit observation store (CHAOS-2758).
     # Env-tunable via SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS (default 14,
     # see workers/sync_reconciler.py). Scheduled off-peak, clear of the other
@@ -182,15 +195,6 @@ beat_schedule = {
     "prune-rate-limit-observations": {
         "task": "dev_health_ops.workers.tasks.prune_rate_limit_observations",
         "schedule": crontab(hour=5, minute=0),
-        "options": {"queue": "sync"},
-    },
-    # Retention for the external-ingest status store (CHAOS-2694). Env-tunable
-    # via EXTERNAL_INGEST_STATUS_RETENTION_DAYS (default 90, see
-    # workers/external_ingest_reconciler.py). Scheduled immediately after
-    # prune-rate-limit-observations (5:00), clear of the other nightly jobs.
-    "prune-external-ingest-batches": {
-        "task": "dev_health_ops.workers.tasks.prune_external_ingest_batches",
-        "schedule": crontab(hour=5, minute=15),
         "options": {"queue": "sync"},
     },
 }

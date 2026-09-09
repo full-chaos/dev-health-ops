@@ -1,4 +1,9 @@
 from dev_health_ops.workers.reference_discovery import run_sync_reference_discovery
+from dev_health_ops.workers.sync_reconciler import (
+    prune_rate_limit_observations,
+    reconcile_sync_dispatch,
+)
+from dev_health_ops.workers.sync_scheduler import dispatch_scheduled_syncs
 from dev_health_ops.workers.sync_units import (
     dispatch_sync_run,
     finalize_sync_run,
@@ -21,9 +26,12 @@ __all__ = [
     "_inject_provider_token",
     "_invalidate_metrics_cache",
     "_resolve_env_credentials",
+    "dispatch_scheduled_syncs",
     "dispatch_sync_run",
     "health_check",
     "phone_home_heartbeat",
+    "prune_rate_limit_observations",
+    "reconcile_sync_dispatch",
     "finalize_sync_run",
     "run_sync_reference_discovery",
     "run_sync_unit",

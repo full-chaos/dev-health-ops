@@ -239,12 +239,28 @@ is enabled." What exists in this Wave:
 regenerate after a schema change:
 
 ```bash
-cd cmd/query-api
-go run github.com/99designs/gqlgen generate --config gqlgen.yml
+ci/gqlgen_generate.sh
 ```
 
+**Use the wrapper, not `go run github.com/99designs/gqlgen generate` directly.**
+gqlgen deletes its output files before regenerating them and does not put them
+back when the run fails — observed removing `generated.go` (95,609 lines) and
+`models_gen.go`, then exiting 1 with an *empty* error message, leaving no cause
+to read and `git checkout --` as the only recovery (CHAOS-5489). Its CLI offers
+no dry-run, output-directory or restore option, so the wrapper snapshots the
+files by content and restores them on any failure, including a "success" that
+left one missing.
+
 Review the diff; it is the same drift-review contract as web's codegen
-against the same SDL pin.
+against the same SDL pin. Note that this layer carries **deliberate hand-edits
+that regeneration reverts** — nullability rulings (CHAOS-4650, 4657, 4658,
+4701, 4703) and, until the SDL half of CHAOS-5483 lands, three
+`SankeyCoverage` fields present in the model but not the schema. They are
+documented in `contracts/gqlgen/v1/expected-drift.allowlist`, and
+`ci/check_gqlgen_drift.sh` (run by `go-quality`) fails if that set changes in
+either direction. If your regeneration is meant to change it, update the
+allowlist with `ci/check_gqlgen_drift.sh --update` and name the ticket in the
+commit.
 
 ## Build / test
 

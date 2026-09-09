@@ -73,6 +73,13 @@ on:
       # reach it.
       - 'cmd/query-api/internal/investmentexplain/prompts/**'
       - 'docker/go-worker.Dockerfile'
+      # CHAOS-5489: gqlgen.yml is the generator's config -- the schema it
+      # reads, the packages it writes, the model bindings. Editing it changes
+      # the generated Go layer as surely as editing the SDL does, and
+      # go-quality now runs a drift check that regenerates from it. Without
+      # this line a gqlgen.yml-only PR is classified non-Go and that check
+      # passes vacuously, which is the shape CHAOS-5406 named.
+      - 'cmd/query-api/gqlgen.yml'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
@@ -179,6 +186,13 @@ on:
       # reach it.
       - 'cmd/query-api/internal/investmentexplain/prompts/**'
       - 'docker/go-worker.Dockerfile'
+      # CHAOS-5489: gqlgen.yml is the generator's config -- the schema it
+      # reads, the packages it writes, the model bindings. Editing it changes
+      # the generated Go layer as surely as editing the SDL does, and
+      # go-quality now runs a drift check that regenerates from it. Without
+      # this line a gqlgen.yml-only PR is classified non-Go and that check
+      # passes vacuously, which is the shape CHAOS-5406 named.
+      - 'cmd/query-api/gqlgen.yml'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'

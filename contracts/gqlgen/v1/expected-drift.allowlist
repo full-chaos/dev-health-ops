@@ -1,0 +1,176 @@
+# gqlgen expected-drift allowlist (CHAOS-5489). GENERATED -- rewrite with:
+#     ci/check_gqlgen_drift.sh --update
+#
+# Every line below is a difference between the CHECKED-IN generated files
+# and a fresh 'gqlgen generate'. Each one is a deliberate hand-edit that
+# regeneration would revert. The guard asserts this set EXACTLY: a new
+# entry means unreviewed drift, and a MISSING entry means a hand-edit was
+# silently lost -- which is how a chris nullability ruling would quietly
+# revert. Neither direction is allowed to pass.
+#
+# Tickets represented here: CHAOS-4650, CHAOS-4657, CHAOS-4658,
+# CHAOS-4701, CHAOS-4703 (nullable value fields and their marshalers),
+# and CHAOS-5483 (three SankeyCoverage fields that exist in the model but
+# not yet in the SDL -- those entries DISAPPEAR when the SDL half lands,
+# and this file must shrink accordingly rather than be re-blessed).
+#
+# Format: <file><TAB><+|-><line content>. '-' is in the checked-in file and
+# not in a fresh generation; '+' is the reverse.
+cmd/query-api/internal/graph/generated.go	-			// and CHAOS-4701's SankeyNode/SankeyEdge fix): hand-edited to
+cmd/query-api/internal/graph/generated.go	-			// a nil value is a VALID response, not an error, so it must
+cmd/query-api/internal/graph/generated.go	-			// breakdown.go's breakdownRow.Value doc comment. Read that, not this.
+cmd/query-api/internal/graph/generated.go	-			// BreakdownItem.value was Float! (non-null). model.BreakdownItem.Value
+cmd/query-api/internal/graph/generated.go	-	// breakdownRow.Value doc comment. Read that, not this.
+cmd/query-api/internal/graph/generated.go	-	// CHAOS-4650 (chris 2026-08-31 04:18, Option B): hand-edited to a
+cmd/query-api/internal/graph/generated.go	-	// CHAOS-4650's BreakdownItem.Value): hand-edited to a nullable
+cmd/query-api/internal/graph/generated.go	-	// CHAOS-4657 (chris 2026-08-31 04:18, Option B; same shape as
+cmd/query-api/internal/graph/generated.go	-			// CHAOS-4658 (chris 2026-08-31 17:52 PT, "Yes, exempt" ruling):
+cmd/query-api/internal/graph/generated.go	-			// CHAOS-4701 (chris via team-lead, 2026-08-31, "Extend to
+cmd/query-api/internal/graph/generated.go	-			// CHAOS-4701 (chris via team-lead, 2026-08-31, "Extend to
+cmd/query-api/internal/graph/generated.go	-	// CHAOS-4701 (chris via team-lead, 2026-08-31, "Extend to class"
+cmd/query-api/internal/graph/generated.go	-	// CHAOS-4701 (chris via team-lead, 2026-08-31, "Extend to class"
+cmd/query-api/internal/graph/generated.go	-			// CHAOS-4703 (chris via team-lead, 2026-08-31, "Extend to
+cmd/query-api/internal/graph/generated.go	-	// CHAOS-4703 (chris via team-lead, 2026-08-31, "Extend to class"
+cmd/query-api/internal/graph/generated.go	-			// class" ruling; same shape as CHAOS-4658's BreakdownItem
+cmd/query-api/internal/graph/generated.go	-			// class" ruling; same shape as CHAOS-4658's BreakdownItem
+cmd/query-api/internal/graph/generated.go	-			// class" ruling; same shape as CHAOS-4658's BreakdownItem fix
+cmd/query-api/internal/graph/generated.go	-			// comment. Read that, not this.
+cmd/query-api/internal/graph/generated.go	-	// comment. Read that, not this.
+cmd/query-api/internal/graph/generated.go	-	// comment. Read that, not this.
+cmd/query-api/internal/graph/generated.go	-	// doc comment. Read that, not this.
+cmd/query-api/internal/graph/generated.go	-			// drop the Invalids++ this case carried when
+cmd/query-api/internal/graph/generated.go	-	// durable copy of why lives in flowmatrix.go's queryNodes doc
+cmd/query-api/internal/graph/generated.go	-	// durable copy of why lives in flowmatrix.go's queryNodes doc
+cmd/query-api/internal/graph/generated.go	-	// durable copy of why lives in timeseries.go's ExecuteTimeseries
+cmd/query-api/internal/graph/generated.go	-			// error, so it must NOT collapse the whole BreakdownItem to
+cmd/query-api/internal/graph/generated.go	-			// error, so it must NOT collapse the whole SankeyEdge to
+cmd/query-api/internal/graph/generated.go	-			// error, so it must NOT collapse the whole SankeyNode to
+cmd/query-api/internal/graph/generated.go	-			// fix): hand-edited to drop the Invalids++ this case carried
+cmd/query-api/internal/graph/generated.go	-			// fix): hand-edited to drop the Invalids++ this case carried
+cmd/query-api/internal/graph/generated.go	-			// flowmatrix.go's queryNodes doc comment. Read that, not this.
+cmd/query-api/internal/graph/generated.go	-			// flowmatrix.go's queryNodes doc comment. Read that, not this.
+cmd/query-api/internal/graph/generated.go	-	// gets overwritten wholesale by the next `gqlgen generate`; the
+cmd/query-api/internal/graph/generated.go	-	// gets overwritten wholesale by the next `gqlgen generate`; the
+cmd/query-api/internal/graph/generated.go	-	// gets overwritten wholesale by the next `gqlgen generate`; the
+cmd/query-api/internal/graph/generated.go	-	// gqlgen-generated and gets overwritten wholesale by the next
+cmd/query-api/internal/graph/generated.go	-	// `gqlgen generate`; the durable copy of why lives in breakdown.go's
+cmd/query-api/internal/graph/generated.go	-			// graphql.Null the way a genuinely-invalid non-null field would.
+cmd/query-api/internal/graph/generated.go	-			// graphql.Null the way a genuinely-invalid non-null field would.
+cmd/query-api/internal/graph/generated.go	-			// graphql.Null the way a genuinely-invalid non-null field would.
+cmd/query-api/internal/graph/generated.go	-			// hand-edited to drop the Invalids++ this case carried when
+cmd/query-api/internal/graph/generated.go	-			// incremented Invalids because String (no !) was always nullable.
+cmd/query-api/internal/graph/generated.go	-			// is *float64 (CHAOS-4650) and the SDL now says `value: Float`
+cmd/query-api/internal/graph/generated.go	-			// is *float64 (CHAOS-4701) and the SDL now says `value: Float`
+cmd/query-api/internal/graph/generated.go	-			// is *float64 (CHAOS-4701) and the SDL now says `value: Float`
+cmd/query-api/internal/graph/generated.go	-	// marshal, matching model.TimeseriesBucket.Value's *float64 type.
+cmd/query-api/internal/graph/generated.go	-			// Matches the "label" case immediately below, which has never
+cmd/query-api/internal/graph/generated.go	-			// model.TimeseriesBucket.Value is *float64 (CHAOS-4657) and
+cmd/query-api/internal/graph/generated.go	-			// NOT collapse the whole TimeseriesBucket to graphql.Null the
+cmd/query-api/internal/graph/generated.go	-	// nullable marshal, matching model.BreakdownItem.Value's *float64
+cmd/query-api/internal/graph/generated.go	-			// (nullable, this commit) -- a nil value is a VALID response, not an
+cmd/query-api/internal/graph/generated.go	-			// (nullable, this commit) -- a nil value is a VALID response, not an
+cmd/query-api/internal/graph/generated.go	-			// (nullable, this commit) -- a nil value is a VALID response, not an
+cmd/query-api/internal/graph/generated.go	-			// of why lives in timeseries.go's ExecuteTimeseries doc
+cmd/query-api/internal/graph/generated.go	-	// only the parent _TimeseriesBucket object marshaler below (its
+cmd/query-api/internal/graph/generated.go	-			// on the next `gqlgen generate`; the durable copy of why lives in
+cmd/query-api/internal/graph/generated.go	-			// on the next `gqlgen generate`; the durable copy of why lives in
+cmd/query-api/internal/graph/generated.go	-			// on the next `gqlgen generate`; the durable copy of why lives in
+cmd/query-api/internal/graph/generated.go	-	// per-field marshal did not need to change, it was already correct;
+cmd/query-api/internal/graph/generated.go	-			// POINTER, NOT THE EXPLANATION: gqlgen overwrites this file
+cmd/query-api/internal/graph/generated.go	-			// POINTER, NOT THE EXPLANATION: gqlgen overwrites this file wholesale
+cmd/query-api/internal/graph/generated.go	-			// POINTER, NOT THE EXPLANATION: gqlgen overwrites this file wholesale
+cmd/query-api/internal/graph/generated.go	-			// POINTER, NOT THE EXPLANATION: gqlgen overwrites this file wholesale
+cmd/query-api/internal/graph/generated.go	-	// POINTER, NOT THE EXPLANATION -- this file is gqlgen-generated and
+cmd/query-api/internal/graph/generated.go	-	// POINTER, NOT THE EXPLANATION -- this file is gqlgen-generated and
+cmd/query-api/internal/graph/generated.go	-	// POINTER, NOT THE EXPLANATION -- this file is gqlgen-generated and
+cmd/query-api/internal/graph/generated.go	-	// ruling; same shape as CHAOS-4657's TimeseriesBucket.value): hand-edited
+cmd/query-api/internal/graph/generated.go	-	// ruling; same shape as CHAOS-4657's TimeseriesBucket.value): hand-edited
+cmd/query-api/internal/graph/generated.go	-	// ruling) widened the SDL to `value: Float` to match -- this
+cmd/query-api/internal/graph/generated.go	-	// stale Invalids++) and the SDL needed correcting.
+cmd/query-api/internal/graph/generated.go	-			// then also collapse the enclosing non-null `buckets` list).
+cmd/query-api/internal/graph/generated.go	-			// the SDL now says `value: Float` (nullable, this commit) --
+cmd/query-api/internal/graph/generated.go	-			// TimeseriesBucket.value was Float! (non-null).
+cmd/query-api/internal/graph/generated.go	-	// to a nullable marshal, matching model.SankeyEdge.Value's *float64 type.
+cmd/query-api/internal/graph/generated.go	-	// to a nullable marshal, matching model.SankeyNode.Value's *float64 type.
+cmd/query-api/internal/graph/generated.go	-	// type. POINTER, NOT THE EXPLANATION -- this file is
+cmd/query-api/internal/graph/generated.go	-			// way a genuinely-invalid non-null field would (which would
+cmd/query-api/internal/graph/generated.go	-			// when SankeyEdge.value was Float! (non-null). model.SankeyEdge.Value
+cmd/query-api/internal/graph/generated.go	-			// when SankeyNode.value was Float! (non-null). model.SankeyNode.Value
+cmd/query-api/internal/graph/generated.go	-			// wholesale on the next `gqlgen generate`; the durable copy
+cmd/query-api/internal/graph/model/models_gen.go	+}
+cmd/query-api/internal/graph/model/models_gen.go	-//
+cmd/query-api/internal/graph/model/models_gen.go	-}
+cmd/query-api/internal/graph/model/models_gen.go	-// 2026-08-31 04:18, Option B). Hand-edited, NOT regenerated from
+cmd/query-api/internal/graph/model/models_gen.go	-// AGENTS.md GO-ONLY rule bars the matching Python/SDL change for now).
+cmd/query-api/internal/graph/model/models_gen.go	-// already *float64. CHAOS-4703 (chris via team-lead, 2026-08-31, "Extend
+cmd/query-api/internal/graph/model/models_gen.go	-// (and, for the sibling field, breakdown.go's breakdownRow.Value doc
+cmd/query-api/internal/graph/model/models_gen.go	-// breakdown.go's breakdownRow.Value doc comment. Read that, not this.
+cmd/query-api/internal/graph/model/models_gen.go	-// BreakdownItem.Value is *float64, not float64 -- CHAOS-4650 (chris
+cmd/query-api/internal/graph/model/models_gen.go	-// byte-for-byte what gqlgen emits for three nullable `Float` fields --
+cmd/query-api/internal/graph/model/models_gen.go	-// CHAOS-4650's BreakdownItem.Value / CHAOS-4657's TimeseriesBucket.Value
+cmd/query-api/internal/graph/model/models_gen.go	-// (chris via team-lead, 2026-08-31, "Extend to class" ruling). Hand-edited
+cmd/query-api/internal/graph/model/models_gen.go	-// closed.
+cmd/query-api/internal/graph/model/models_gen.go	-// command cmd/query-api/README.md:243 documents) fails outright; running
+cmd/query-api/internal/graph/model/models_gen.go	-// comment immediately above (CHAOS-4701, same ruling, same commit).
+cmd/query-api/internal/graph/model/models_gen.go	-// comment). Read those, not this.
+cmd/query-api/internal/graph/model/models_gen.go	-// compare SankeyEdge.Value below, generated from the same SDL type.
+cmd/query-api/internal/graph/model/models_gen.go	-// contracts/graphql/v1/schema.graphql (still `value: Float!`; root
+cmd/query-api/internal/graph/model/models_gen.go	-// copy of why lives in timeseries.go's ExecuteTimeseries doc comment
+cmd/query-api/internal/graph/model/models_gen.go	-	DirectRepoCoverage       *float64 `json:"directRepoCoverage,omitempty"`
+cmd/query-api/internal/graph/model/models_gen.go	-// durable copy of why lives in sankeycoverage.go's resolveSankeyCoverage.
+cmd/query-api/internal/graph/model/models_gen.go	-// durable copy of why this diverges from the schema, the reachability
+cmd/query-api/internal/graph/model/models_gen.go	-// export -- the SDL/Go divergence this comment used to document is
+cmd/query-api/internal/graph/model/models_gen.go	-// generated.go and then exits 1 with an empty error, reproduced on an
+cmd/query-api/internal/graph/model/models_gen.go	-// gets overwritten wholesale by the next `gqlgen generate` -- the
+cmd/query-api/internal/graph/model/models_gen.go	-// HAND-EDITED, and it had to be: `gqlgen generate` cannot run on this
+cmd/query-api/internal/graph/model/models_gen.go	-// has no go.sum entry, so `go run github.com/99designs/gqlgen` (the
+cmd/query-api/internal/graph/model/models_gen.go	-// in the same commit, atomically with Python's Strawberry export --
+cmd/query-api/internal/graph/model/models_gen.go	-// investment_metrics_daily with no repo_source column in sight. A
+cmd/query-api/internal/graph/model/models_gen.go	-// is an honest absent one.
+cmd/query-api/internal/graph/model/models_gen.go	-// itself cannot measure them on the non-investment path, which reads raw
+cmd/query-api/internal/graph/model/models_gen.go	-// mechanism, and the CHAOS-4658 hazard this creates lives in
+cmd/query-api/internal/graph/model/models_gen.go	-// non-nullable Float would force a 0 into both cases, and "0% of this
+cmd/query-api/internal/graph/model/models_gen.go	-// not deferred).
+cmd/query-api/internal/graph/model/models_gen.go	-// nullable) while the two original fields are float64 (SDL `Float!`).
+cmd/query-api/internal/graph/model/models_gen.go	-// of why lives in flowmatrix.go's queryNodes doc comment. Read that, not
+cmd/query-api/internal/graph/model/models_gen.go	-// Option B). The Go type did not need to change for CHAOS-4703: it was
+cmd/query-api/internal/graph/model/models_gen.go	-// org's coverage is team-fallback" is a confident false claim where null
+cmd/query-api/internal/graph/model/models_gen.go	-// overwritten wholesale by the next `gqlgen generate` -- the durable
+cmd/query-api/internal/graph/model/models_gen.go	-// overwritten wholesale by the next `gqlgen generate` -- the durable copy
+cmd/query-api/internal/graph/model/models_gen.go	-// overwritten wholesale by the next successful `gqlgen generate` -- the
+cmd/query-api/internal/graph/model/models_gen.go	-// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and
+cmd/query-api/internal/graph/model/models_gen.go	-// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and gets
+cmd/query-api/internal/graph/model/models_gen.go	-// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and gets
+cmd/query-api/internal/graph/model/models_gen.go	-// POINTER, NOT THE EXPLANATION: this file is gqlgen-generated and gets
+cmd/query-api/internal/graph/model/models_gen.go	+	RepoCoverage float64 `json:"repoCoverage"`
+cmd/query-api/internal/graph/model/models_gen.go	-	RepoCoverage             float64  `json:"repoCoverage"`
+cmd/query-api/internal/graph/model/models_gen.go	-	RepoFanoutReposPerUnit   *float64 `json:"repoFanoutReposPerUnit,omitempty"`
+cmd/query-api/internal/graph/model/models_gen.go	-// repo. gqlgen v0.17.66 is a direct require but `github.com/urfave/cli/v2`
+cmd/query-api/internal/graph/model/models_gen.go	-// SankeyCoverage's three CHAOS-5483 fields are *float64 (SDL `Float`,
+cmd/query-api/internal/graph/model/models_gen.go	-// SankeyEdge.Value is *float64, not float64 -- CHAOS-4701, same shape as
+cmd/query-api/internal/graph/model/models_gen.go	-// SankeyNode.Value is *float64, not float64 -- see SankeyEdge's doc
+cmd/query-api/internal/graph/model/models_gen.go	-// serves this operation today and returns null for all three (chris R60 --
+cmd/query-api/internal/graph/model/models_gen.go	-// shape as CHAOS-4650's BreakdownItem.Value (chris 2026-08-31 04:18,
+cmd/query-api/internal/graph/model/models_gen.go	+	TeamCoverage float64 `json:"teamCoverage"`
+cmd/query-api/internal/graph/model/models_gen.go	-	TeamCoverage             float64  `json:"teamCoverage"`
+cmd/query-api/internal/graph/model/models_gen.go	-	TeamFallbackRepoCoverage *float64 `json:"teamFallbackRepoCoverage,omitempty"`
+cmd/query-api/internal/graph/model/models_gen.go	-// That asymmetry is the contract, not an oversight: the Python plane
+cmd/query-api/internal/graph/model/models_gen.go	-// the Go plane is the source of truth for these fields), and the Go plane
+cmd/query-api/internal/graph/model/models_gen.go	-// the same pinned version from a scratch module DELETES this file and
+cmd/query-api/internal/graph/model/models_gen.go	-// this.
+cmd/query-api/internal/graph/model/models_gen.go	-// TimeseriesBucket.Value is *float64, not float64 -- CHAOS-4657, same
+cmd/query-api/internal/graph/model/models_gen.go	-// to class" ruling) widened contracts/graphql/v1/schema.graphql to match
+cmd/query-api/internal/graph/model/models_gen.go	-// to match contracts/graphql/v1/schema.graphql's `value: Float` (widened
+cmd/query-api/internal/graph/model/models_gen.go	-// unlike CHAOS-4657's TimeseriesBucket, this field's SDL IS widened here,
+cmd/query-api/internal/graph/model/models_gen.go	-// unmodified HEAD. Filed to team-lead 2026-09-09. These three fields are
+cmd/query-api/internal/graph/model/models_gen.go	-	Value     *float64 `json:"value"`
+cmd/query-api/internal/graph/model/models_gen.go	-	Value  *float64 `json:"value"`
+cmd/query-api/internal/graph/model/models_gen.go	-	Value *float64         `json:"value"`
+cmd/query-api/internal/graph/model/models_gen.go	-	Value *float64 `json:"value"`
+cmd/query-api/internal/graph/model/models_gen.go	+	Value     *float64 `json:"value,omitempty"`
+cmd/query-api/internal/graph/model/models_gen.go	+	Value  *float64 `json:"value,omitempty"`
+cmd/query-api/internal/graph/model/models_gen.go	+	Value *float64         `json:"value,omitempty"`
+cmd/query-api/internal/graph/model/models_gen.go	+	Value *float64 `json:"value,omitempty"`
+cmd/query-api/internal/graph/model/models_gen.go	-// (`value: Float`, was `Float!`), atomically with Python's Strawberry
+cmd/query-api/internal/graph/schema.resolvers.go	+	"go.opentelemetry.io/otel/attribute"
+cmd/query-api/internal/graph/schema.resolvers.go	-	"go.opentelemetry.io/otel/attribute"

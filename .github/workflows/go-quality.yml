@@ -162,6 +162,28 @@ jobs:
           bash ci/check_migration_matrix.sh contract
           bash ci/check_migration_matrix_test.sh
 
+      - name: Check the gqlgen output has not drifted from its hand-edits
+        if: steps.relevance.outputs.relevant == 'true'
+        # CHAOS-5489. cmd/query-api's generated GraphQL layer carries
+        # deliberate hand-edits -- nullability rulings (CHAOS-4650, 4657,
+        # 4658, 4701, 4703) and, until the SDL half of CHAOS-5483 lands,
+        # three SankeyCoverage fields present in the model but not the
+        # schema. Regeneration reverts every one of them.
+        #
+        # Until now the only thing preventing that revert was that
+        # `gqlgen generate` COULD NOT RUN: its CLI dependencies were absent
+        # from go.sum, so the command in cmd/query-api/README.md failed
+        # before doing anything. An accident was holding a contract, and
+        # CHAOS-5489 removes the accident. This step is what replaces it.
+        #
+        # The check regenerates in a COPY of the tree and asserts the diff
+        # against the checked-in files EQUALS the documented allowlist. The
+        # equality matters in both directions: new drift means something was
+        # regenerated over a hand-edit, and a MISSING entry means a hand-edit
+        # has silently vanished -- the second is how a chris ruling would
+        # quietly revert, and a subset check would not see it.
+        run: bash ci/check_gqlgen_drift.sh
+
       - name: Install locked live provider oracle dependencies
         if: steps.relevance.outputs.relevant == 'true'
         run: python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt

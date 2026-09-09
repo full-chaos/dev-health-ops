@@ -2,7 +2,11 @@ package providersync
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 // TestGitHubWorkItemTeamAttributionRowSurvivesTheEffectsJSONRoundTrip is
@@ -60,5 +64,82 @@ func TestGitHubWorkItemTeamAttributionRowSurvivesTheEffectsJSONRoundTrip(t *test
 	}
 	if rows[0].OwnershipReason != "ownership_unknown" {
 		t.Fatalf("rows[0].OwnershipReason = %q after the effects round trip, want ownership_unknown", rows[0].OwnershipReason)
+	}
+}
+
+// TestGitHubWorkItemTeamAttributionRowNoExportedFieldReadsBackZero is a
+// RECURRENCE GUARD (codex round 2 follow-up, team-lead): a test scoped to
+// Priority/OwnershipReason only proves those two fields, not the STRUCT --
+// the next field added to githubWorkItemTeamAttributionRow with an
+// accidental `json:"-"` would reproduce the exact same defect class and
+// this test would say nothing about it. This test instead populates EVERY
+// exported field to a deliberately non-zero value via reflection, round-
+// trips the row through the real effects path (identical mechanism to the
+// test above), and fails if ANY exported field reads back as its Go zero
+// value -- so a future silently-dropped field is caught structurally,
+// without needing its own dedicated test.
+func TestGitHubWorkItemTeamAttributionRowNoExportedFieldReadsBackZero(t *testing.T) {
+	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
+	teamID := "team-repo"
+	teamName := "Repository Team"
+	original := githubWorkItemTeamAttributionRow{
+		WorkItemID: "gh:acme/api#1", Provider: "github", Source: "assignee_membership",
+		IsPrimary: 1, Confidence: "high", Evidence: "assignee=dev@example.com",
+		ComputedAt: time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+		RepoID:     &repoID, TeamID: &teamID, TeamName: &teamName,
+		OrgID: "org-acme", Priority: 10, OwnershipReason: "ownership_unknown",
+	}
+
+	// Sanity control: EVERY exported field on the original must itself be
+	// non-zero, or this test would vacuously pass on a field it forgot to
+	// populate -- the same "positive control" discipline every other
+	// mutation/round-trip proof in this codebase requires.
+	assertNoExportedFieldIsZero(t, "original", original)
+
+	raw, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect, err := BuildEffectBatch(
+		githubTeamAttributionsDestination, EffectReadbackRequired,
+		[]json.RawMessage{raw},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: "org-acme", Provider: "github", Destination: githubTeamAttributionsDestination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+	rows, err := validateGitHubWorkItemDerivedEffect[githubWorkItemTeamAttributionRow](
+		identity, effect, githubTeamAttributionsDestination,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want exactly 1", rows)
+	}
+	assertNoExportedFieldIsZero(t, "round-tripped", rows[0])
+}
+
+// assertNoExportedFieldIsZero fails the test naming every exported field of
+// value that reflect.Value.IsZero reports as unset.
+func assertNoExportedFieldIsZero(t *testing.T, label string, value any) {
+	t.Helper()
+	reflected := reflect.ValueOf(value)
+	reflectedType := reflected.Type()
+	var zeroFields []string
+	for index := 0; index < reflected.NumField(); index++ {
+		field := reflectedType.Field(index)
+		if !field.IsExported() {
+			continue
+		}
+		if reflected.Field(index).IsZero() {
+			zeroFields = append(zeroFields, field.Name)
+		}
+	}
+	if len(zeroFields) > 0 {
+		t.Fatalf("%s githubWorkItemTeamAttributionRow has zero-valued exported field(s): %v -- either the fixture forgot to populate them (fix the fixture) or the effects JSON round trip silently dropped them (check for a json:\"-\" tag)", label, zeroFields)
 	}
 }

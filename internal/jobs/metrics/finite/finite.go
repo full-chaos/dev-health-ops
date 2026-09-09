@@ -20,7 +20,7 @@
 // This package is deliberately free of ClickHouse/GraphQL/otel dependencies
 // so every writer and serializer across both the worker and query-api
 // binaries can import it without pulling in the other's stack; each binary
-// registers FiniteMetricsSource() with its own health.MetricsSource registry
+// registers MetricsSource() with its own health.MetricsSource registry
 // (see cmd/dev-health-worker/dependencies.go) to expose the counter.
 package finite
 

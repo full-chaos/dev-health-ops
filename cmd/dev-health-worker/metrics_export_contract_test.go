@@ -109,6 +109,13 @@ func TestMetricsEndpointExposesAppCounterContract(t *testing.T) {
 		// THIS is the test built specifically to catch "registered but never
 		// wired to the real HTTP surface"; it must cover every such family.
 		"dev_health_sync_run_rollup_bumped_total",
+		// CHAOS-4806 (ruling R73, codex round chaos-4806-r1 P3): the finite
+		// boundary counter (finite.MetricsSource(), registered unconditionally
+		// as "metrics_finite_boundary" in configureWorkerDependenciesWithSources
+		// -- see dependencies.go). Same class as the two families above: a
+		// process-wide singleton that must actually reach the real /metrics
+		// HTTP surface, not just satisfy its own package's unit tests.
+		"dev_health_metrics_finite_boundary_nonfinite_total",
 	}
 	for _, family := range wantFamilies {
 		if !strings.Contains(body, family) {

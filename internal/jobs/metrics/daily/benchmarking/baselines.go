@@ -12,6 +12,23 @@ import (
 // baseline-percentile drop apart from any other family's.
 const finiteBaselineFamily = "benchmarking_baseline"
 
+// nullableRound4 is this file's R73 write boundary for a single scalar
+// aggregate result (a Percentile/Mean output, or a scope's own latest
+// value): finite -> a pointer to its round4'd value; non-finite (NaN, or an
+// overflow to +-Inf on an extreme-but-finite input -- Codex round chaos-
+// 4806-r1 P1: a percentile/mean over finite inputs can still overflow) ->
+// the trip is recorded (family/field, the REAL reason) and nil is returned,
+// for a Nullable(Float64) column (see migration 090_testops_baselines_
+// nullable_fields.sql) to write ClickHouse NULL.
+func nullableRound4(family, field string, value float64) *float64 {
+	safe := finite.NullIfNonFinite(family, field, value)
+	if safe == nil {
+		return nil
+	}
+	rounded := round4(*safe)
+	return &rounded
+}
+
 // DefaultBaselineWindows mirrors compute_internal_baselines' `windows` default
 // (baselines.py:39).
 var DefaultBaselineWindows = []int{30, 60, 90}
@@ -113,10 +130,16 @@ func ComputeInternalBaselines(
 	// for why its raw NaN-ordering behavior is deliberately left untouched).
 	crossSection = finite.DropNonFinite(finiteBaselineFamily, metricName, crossSection)
 
-	p25 := Percentile(crossSection, 25.0)
-	p50 := Percentile(crossSection, 50.0)
-	p75 := Percentile(crossSection, 75.0)
-	p90 := Percentile(crossSection, 90.0)
+	// CHAOS-4806 / ruling R73, codex round chaos-4806-r1 P1 (executed repro:
+	// a cross-section of finite MaxFloat64-magnitude values produces a +Inf
+	// Percentile result -- an overflow, not a bad INPUT, so DropNonFinite
+	// above cannot catch it). Percentile's own RESULT is validated here too,
+	// same as every other scalar this file writes -- nullableRound4 records
+	// the trip and nils the field rather than writing +-Inf.
+	p25 := nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 25.0))
+	p50 := nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 50.0))
+	p75 := nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 75.0))
+	p90 := nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 90.0))
 
 	var results []BenchmarkBaselineRecord
 	for _, scopeKey := range scopeKeys {
@@ -124,19 +147,20 @@ func ComputeInternalBaselines(
 		if !ok {
 			continue
 		}
-		if _, isFinite := finite.Check(latestValue); !isFinite {
-			// CHAOS-4806 / ruling R73: CurrentValue is a plain (non-
-			// Nullable) Float64 column, so there is no NULL to write for
-			// this ONE field -- and writing the NaN/+-Inf itself is exactly
-			// what R73 bans. Skipping only THIS scope's rows (every window)
-			// is the schema-constrained equivalent of nulling the field:
-			// every OTHER scope's rows, and this metric's org-wide
-			// percentile cross-section (already filtered above), keep
-			// computing and writing untouched -- the window is not
-			// wrecked, only this one un-computable scope is absent from it.
-			finite.Undefined(finiteBaselineFamily, metricName)
-			continue
-		}
+		// CHAOS-4806 / ruling R73, codex round chaos-4806-r1 P1 (executed
+		// repro: skipping this scope's rows entirely dropped a row R73 says
+		// must still write, and mis-tagged the boundary trip as
+		// ReasonUndefinedInput instead of the real NaN/+-Inf reason).
+		// CurrentValue is now Nullable(Float64) (migration
+		// 090_testops_baselines_nullable_fields.sql) -- keep the row, null
+		// ONLY this one field via nullableRound4, which records the actual
+		// reason through finite.Check. Every window for this scope still
+		// gets its own row; PercentileRank(crossSection, latestValue) stays
+		// safe even when latestValue is non-finite (every comparison
+		// against NaN/+-Inf is false by construction, so the ratio-of-
+		// counts result is always a bounded, finite 0-100 -- see
+		// PercentileRank's own doc comment).
+		currentValue := nullableRound4(finiteBaselineFamily, metricName, latestValue)
 		points := seriesByScope[scopeKey]
 		for _, windowDays := range windows {
 			values := windowValues(points, asOfDay, windowDays)
@@ -148,17 +172,24 @@ func ComputeInternalBaselines(
 			}
 			// CHAOS-4806 / ruling R73: same boundary as crossSection above,
 			// applied to this scope's own window before Mean() --
-			// BaselineValue is a plain Float64 column too. Deliberately
-			// checked for emptiness BEFORE this filter (above) but not
-			// after: a window that had real points, all of which happened
-			// to be non-finite, still keeps this row (CurrentValue/
-			// PercentileRank/P25-90Value come from crossSection and this
-			// scope's own latestValue, none of which depend on `values`) --
-			// Mean(nil) already returns its own documented 0.0 for an empty
-			// input, so BaselineValue degrades the same way Percentile's
-			// empty-input case already does elsewhere in this file, rather
-			// than silently dropping an otherwise-good row.
+			// BaselineValue is now Nullable(Float64) too. This window had
+			// real points, so the row still gets written regardless of
+			// what's left after filtering.
 			values = finite.DropNonFinite(finiteBaselineFamily, metricName, values)
+			// CHAOS-4806 / ruling R73, codex round chaos-4806-r1 P1
+			// (executed repro: an all-non-finite window fell through to
+			// Mean(nil)'s own documented 0.0-for-empty-input default --
+			// 0.0 silently standing in for undefined, exactly what R73
+			// bans). An empty `values` here means every point in this
+			// window was non-finite (DropNonFinite already recorded each
+			// drop) -- record the mean itself as undefined rather than
+			// asking Mean to answer a question it has no data for.
+			var baselineValue *float64
+			if len(values) == 0 {
+				finite.Undefined(finiteBaselineFamily, metricName)
+			} else {
+				baselineValue = nullableRound4(finiteBaselineFamily, metricName, Mean(values))
+			}
 			periodStart := asOfDay.AddDate(0, 0, -(windowDays - 1))
 			results = append(results, BenchmarkBaselineRecord{
 				MetricName:        metricName,
@@ -167,13 +198,13 @@ func ComputeInternalBaselines(
 				PeriodStart:       periodStart,
 				PeriodEnd:         asOfDay,
 				RollingWindowDays: windowDays,
-				CurrentValue:      round4(latestValue),
-				BaselineValue:     round4(Mean(values)),
+				CurrentValue:      currentValue,
+				BaselineValue:     baselineValue,
 				PercentileRank:    round4(PercentileRank(crossSection, latestValue)),
-				P25Value:          round4(p25),
-				P50Value:          round4(p50),
-				P75Value:          round4(p75),
-				P90Value:          round4(p90),
+				P25Value:          p25,
+				P50Value:          p50,
+				P75Value:          p75,
+				P90Value:          p90,
 				SampleSize:        len(crossSection),
 				ComputedAt:        computedAt,
 				OrgID:             orgID,

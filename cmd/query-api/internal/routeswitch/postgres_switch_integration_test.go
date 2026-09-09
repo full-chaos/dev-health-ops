@@ -3,14 +3,22 @@
 package routeswitch
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 const testSchemaDigest = "sha256:test-schema-digest"
@@ -176,4 +184,112 @@ func TestPostgresSwitch_RollbackRevokesReachabilityImmediately(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 immediately after rollback to mode=disabled, got %d", rec.Code)
 	}
+}
+
+// TestPostgresSwitch_DigestMissEmitsCounterAndWarnLog is CHAOS-5415's
+// proof: before this fix, a (schema_digest, document_digest, operation)
+// key with no go_api_routing_state row -- the exact live state found on
+// the bigboy compose stack, every row keyed on a schema_digest one SDL
+// move stale (CHAOS-4703) -- returned false with NO log line and NO
+// counter, indistinguishable from "not canaried yet". Delegation had
+// been silently reverting to Python for every operation, undetected.
+// This drives a real digest-miss lookup through the real Enabled() path
+// and proves both deliverables: a WARN log record naming
+// operation/schema_digest/document_digest (via a real slog.JSONHandler),
+// and a real devhealth_query_api_routeswitch_digest_miss_total{operation}
+// data point read back through a real sdkmetric.ManualReader -- same
+// standard as principal/rejection_telemetry_test.go's
+// TestVerify_RejectionsAreLoggedAndCountedByReason.
+func TestPostgresSwitch_DigestMissEmitsCounterAndWarnLog(t *testing.T) {
+	pool := startRoutingStatePostgres(t)
+	// No insertRoutingState call: the row for "missingOp"/"doc-missing"
+	// never exists -- this IS the digest-miss case.
+
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	prevProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	defer otel.SetMeterProvider(prevProvider)
+
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(prevLogger)
+
+	sw := NewPostgresSwitch(pool, testSchemaDigest, map[string]string{"missingOp": "doc-missing"})
+	if sw.Enabled("missingOp") {
+		t.Fatal("operation with no routing-state row must resolve to unreachable")
+	}
+
+	rec := findDigestMissLogRecord(t, logBuf.Bytes())
+	if got, _ := rec["level"].(string); got != "WARN" {
+		t.Errorf("log level = %q, want WARN", got)
+	}
+	if got, _ := rec["operation"].(string); got != "missingOp" {
+		t.Errorf("log operation = %q, want %q", got, "missingOp")
+	}
+	if got, _ := rec["schema_digest"].(string); got != testSchemaDigest {
+		t.Errorf("log schema_digest = %q, want %q", got, testSchemaDigest)
+	}
+	if got, _ := rec["document_digest"].(string); got != "doc-missing" {
+		t.Errorf("log document_digest = %q, want %q", got, "doc-missing")
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("reader.Collect: %v", err)
+	}
+	dp := findDigestMissCounterDataPoint(t, rm, "missingOp")
+	if dp.Value != 1 {
+		t.Errorf("digest-miss counter value = %d, want exactly 1", dp.Value)
+	}
+}
+
+// findDigestMissLogRecord parses logOutput as newline-delimited JSON
+// (slog.JSONHandler's wire format) and returns the first record whose
+// msg names the digest-miss fallback, failing the test if none is found.
+func findDigestMissLogRecord(t *testing.T, logOutput []byte) map[string]any {
+	t.Helper()
+	for _, line := range bytes.Split(logOutput, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if msg, _ := rec["msg"].(string); strings.Contains(msg, "routeswitch") {
+			return rec
+		}
+	}
+	t.Fatalf("no digest-miss WARN log record found in:\n%s", logOutput)
+	return nil
+}
+
+// findDigestMissCounterDataPoint returns the collected data point for
+// devhealth_query_api_routeswitch_digest_miss_total with operation=op,
+// failing the test if the metric was not exported at all -- the same
+// "prove it reaches a real consumer" standard
+// rejection_telemetry_test.go's findCounterDataPoint applies.
+func findDigestMissCounterDataPoint(t *testing.T, rm metricdata.ResourceMetrics, op string) metricdata.DataPoint[int64] {
+	t.Helper()
+	const metricName = "devhealth_query_api_routeswitch_digest_miss_total"
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != metricName {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				if v, ok := dp.Attributes.Value(attribute.Key("operation")); ok && v.AsString() == op {
+					return dp
+				}
+			}
+		}
+	}
+	t.Fatalf("%s not found in collected metrics with operation=%q -- the reader consumed nothing", metricName, op)
+	return metricdata.DataPoint[int64]{}
 }

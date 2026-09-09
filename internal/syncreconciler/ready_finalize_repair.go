@@ -86,10 +86,10 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 ) (readyFinalizeOutcome, error) {
 	outcome := readyFinalizeOutcome{RemainingBudget: limit}
 	if limit == 0 {
-		// Still reported: a budget fully consumed by the three River-terminal
-		// branches is a real reason this backstop did nothing, and it is
-		// invisible unless the zero pass says so.
-		repair.logReadyFinalizeOutcome(ctx, now, outcome)
+		// A budget fully consumed by the three River-terminal branches is a
+		// real reason this backstop did nothing, and it is invisible unless
+		// the zero pass says so -- but the telemetry is emitted by Step AFTER
+		// the transaction commits, never here. See logReadyFinalizeOutcome.
 		return outcome, nil
 	}
 	staleBefore := now.Add(-repair.finalizeStaleAge)
@@ -117,6 +117,14 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 		return outcome, repair.readyFinalizeError(ctx, "candidate_rows", err)
 	}
 	if len(candidates) > limit {
+		// An invariant break, not a driver error: LIMIT $3 cannot return more
+		// rows than the limit. Log the numbers -- a bare sentinel here told an
+		// operator nothing about which bound was violated.
+		slog.ErrorContext(ctx, "syncreconciler.ready_finalize_invariant",
+			"invariant", "candidate_count_over_limit",
+			"candidates", len(candidates),
+			"limit", limit,
+		)
 		return outcome, fmt.Errorf("ready-finalizer candidate count: %w", ErrUnavailable)
 	}
 	outcome.Candidates = len(candidates)
@@ -156,6 +164,16 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 			return outcome, repair.readyFinalizeError(ctx, "rearm", err)
 		}
 		if tag.RowsAffected() != 1 {
+			// Also an invariant break: the UPDATE is keyed on a primary key
+			// this transaction already holds under FOR UPDATE. Name the row,
+			// so the next reader knows WHICH re-arm went wrong.
+			slog.ErrorContext(ctx, "syncreconciler.ready_finalize_invariant",
+				"invariant", "rearm_rows_affected",
+				"rows_affected", tag.RowsAffected(),
+				"outbox_id", c.id,
+				"sync_run_id", c.runID,
+				"evidence", evidence,
+			)
 			return outcome, fmt.Errorf("ready-finalizer rearm count: %w", ErrUnavailable)
 		}
 		outcome.Recovered++
@@ -166,7 +184,6 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 		}
 	}
 	outcome.RemainingBudget = limit - outcome.Recovered
-	repair.logReadyFinalizeOutcome(ctx, now, outcome)
 	return outcome, nil
 }
 
@@ -191,6 +208,13 @@ func (repair *TerminalDeliveryRepair) readyFinalizeError(ctx context.Context, st
 	return fmt.Errorf("ready-finalizer %s: %w", step, ErrUnavailable)
 }
 
+// logReadyFinalizeOutcome is called by Step ONLY after the transaction has
+// durably committed. It used to run at the end of repairReadyFinalizers, which
+// is inside the transaction: a commit failure after that point published
+// `recovered=N` for work that was then rolled back, so the log asserted a
+// recovery that never happened. A telemetry line that can describe an
+// uncommitted write is worse than none -- it is the record an operator trusts
+// when the run is still stranded the next morning.
 func (repair *TerminalDeliveryRepair) logReadyFinalizeOutcome(
 	ctx context.Context, now time.Time, outcome readyFinalizeOutcome,
 ) {

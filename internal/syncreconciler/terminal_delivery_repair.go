@@ -3,6 +3,7 @@ package syncreconciler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"time"
 
@@ -233,8 +234,19 @@ func (repair *TerminalDeliveryRepair) Step(
 	result.ReadyFinalizersRecovered = readyOutcome.Recovered
 	result.Recovered += readyOutcome.Recovered
 	if err := tx.Commit(ctx); err != nil {
+		// The ready-finalizer pass line is emitted ONLY on the committed
+		// path. A rollback gets its own distinct event carrying the counts
+		// that were ABANDONED, so a lost recovery is visible as a loss
+		// rather than silently indistinguishable from a pass that found
+		// nothing (CHAOS-5456 review R2).
+		slog.ErrorContext(ctx, "syncreconciler.ready_finalize_uncommitted",
+			"abandoned_recovered", readyOutcome.Recovered,
+			"abandoned_candidates", readyOutcome.Candidates,
+			"error", err.Error(),
+		)
 		return TerminalDeliveryRepairResult{}, ErrUnavailable
 	}
+	repair.logReadyFinalizeOutcome(ctx, now.UTC(), readyOutcome)
 	return result, nil
 }
 

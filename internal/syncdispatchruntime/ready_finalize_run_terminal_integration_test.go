@@ -257,4 +257,75 @@ SELECT dispatched_route_generation, transport_job_id FROM sync_dispatch_outbox W
 	if err != nil || second.ReadyFinalizersRecovered != 0 {
 		t.Fatalf("repair re-armed a terminal run: %+v err=%v", second, err)
 	}
+
+	// CHAOS-5456 review R1, executed refutation of the harm.
+	//
+	// The finding: the coordinator readiness read is NOT atomic with the
+	// queue-side re-arm, so a run that terminalizes inside that window can be
+	// re-armed on a readiness verdict that has already gone stale, and the
+	// native finalizer's own currentTransportReference check does not re-test
+	// run status. The MECHANISM is real -- the two are separate connections by
+	// design, because the queue role has no grant on the coordinator ledgers.
+	//
+	// What is asserted here is the CONSEQUENCE, which is the part that decides
+	// severity: a finalize delivered over an already-terminal run is a no-op,
+	// not corruption. This drives the worst case directly rather than trying to
+	// win a race: terminalize first, THEN force the re-arm the stale verdict
+	// would have produced, re-deliver, and finalize again. The run's terminal
+	// state, its completed_at, and the once-only post_sync dispatch must all be
+	// byte-identical afterwards.
+	var beforeStatus, beforeCompleted, beforeResult string
+	var beforeDispatches int
+	if err := pool.QueryRow(ctx, `
+SELECT status, completed_at::text, coalesce(result::text,''),
+       (SELECT count(*) FROM sync_run_post_dispatches WHERE sync_run_id=$1)
+FROM sync_runs WHERE id=$1`, finalizeTestRun).
+		Scan(&beforeStatus, &beforeCompleted, &beforeResult, &beforeDispatches); err != nil {
+		t.Fatal(err)
+	}
+	if beforeDispatches != 1 {
+		t.Fatalf("expected exactly one post_sync dispatch before the replay, got %d", beforeDispatches)
+	}
+
+	if _, err := pool.Exec(ctx, `
+UPDATE sync_dispatch_outbox SET status='pending', available_at=$2, dispatched_at=NULL,
+    dispatched_transport=NULL, dispatched_route_generation=NULL, transport_job_id=NULL,
+    claim_token=NULL, claim_expires_at=NULL, claim_transport=NULL, claim_route_generation=NULL,
+    updated_at=$2
+WHERE id=$1`, finalizeTestOutbox, now); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := kernel.Step(ctx, now, 20, time.Minute, publish, nil)
+	if err != nil || replay.Dispatched != 1 {
+		t.Fatalf("stale-verdict replay was not re-delivered: %+v err=%v", replay, err)
+	}
+	var replayGeneration int64
+	if err := pool.QueryRow(ctx,
+		`SELECT dispatched_route_generation FROM sync_dispatch_outbox WHERE id=$1`,
+		finalizeTestOutbox).Scan(&replayGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Finalize(ctx, FinalizeSyncRunArgs{TransportArgs: TransportArgs{
+		Version: ContractVersionV1, OrgID: finalizeTestOrg, RunID: finalizeTestRun,
+		DispatchOutbox: finalizeTestOutbox, DeliveryAttempt: 1,
+		RouteGeneration: replayGeneration,
+	}}); err != nil {
+		t.Fatalf("finalize over an already-terminal run must be a no-op, not an error: %v", err)
+	}
+
+	var afterStatus, afterCompleted, afterResult string
+	var afterDispatches int
+	if err := pool.QueryRow(ctx, `
+SELECT status, completed_at::text, coalesce(result::text,''),
+       (SELECT count(*) FROM sync_run_post_dispatches WHERE sync_run_id=$1)
+FROM sync_runs WHERE id=$1`, finalizeTestRun).
+		Scan(&afterStatus, &afterCompleted, &afterResult, &afterDispatches); err != nil {
+		t.Fatal(err)
+	}
+	if afterStatus != beforeStatus || afterCompleted != beforeCompleted ||
+		afterResult != beforeResult || afterDispatches != beforeDispatches {
+		t.Fatalf("a stale-verdict re-arm changed terminal state:\n before status=%q completed=%q dispatches=%d result=%s\n after  status=%q completed=%q dispatches=%d result=%s",
+			beforeStatus, beforeCompleted, beforeDispatches, beforeResult,
+			afterStatus, afterCompleted, afterDispatches, afterResult)
+	}
 }

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +15,46 @@ import (
 // ScopeVersion is deliberately embedded in every durable partition scope so
 // the Python bridge and Go producer never infer a changing default.
 const ScopeVersion = 1
+
+// ErrUnknownDORAMetricName is returned by validateFamilyScope when a "dora"
+// scope names a metric outside defaultDORAMetrics (CHAOS-5395). Before this
+// check, boundedOptional(value.Metrics, 256) only bounded the STRING length
+// -- a typo'd name (e.g. "lead_time_for_change" instead of
+// "lead_time_for_changes") parsed as a syntactically valid scope and reached
+// metricFilter (dora_native.go) unchanged: metricFilter builds `wanted` from
+// exactly the names given, ComputeDORA's rows never match a name nobody
+// asked to compute for, and the partition silently writes 0 rows with no
+// error and no log line (logPartitionDay is itself gated on written>0). A
+// scope this permissive turns an operator's typo into a quiet, permanent 0
+// for that metric -- refusing it here, at scope-validation time, is the
+// loud failure that never existed before.
+var ErrUnknownDORAMetricName = errors.New("unknown dora metric name")
+
+// unknownDORAMetricNames returns every comma-separated name in value that is
+// not in defaultDORAMetrics, in the order they appear. A nil or blank value
+// names nothing unknown -- mirrors metricFilter's own "empty means the full
+// default set" reading, so an empty/absent Metrics field is never refused
+// here.
+func unknownDORAMetricNames(value *string) []string {
+	if value == nil {
+		return nil
+	}
+	known := make(map[string]struct{}, len(defaultDORAMetrics))
+	for _, name := range defaultDORAMetrics {
+		known[name] = struct{}{}
+	}
+	var unknown []string
+	for _, name := range strings.Split(*value, ",") {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := known[trimmed]; !ok {
+			unknown = append(unknown, trimmed)
+		}
+	}
+	return unknown
+}
 
 type capacityScope struct {
 	Version     int     `json:"version"`
@@ -101,6 +143,9 @@ func validateFamilyScope(family string, raw json.RawMessage) (json.RawMessage, e
 		}
 		if value.Version != ScopeVersion || !validDate(value.Day) || value.BackfillDays < 1 || value.BackfillDays > 90 || !optionalUUID(value.RepoID) || !boundedOptional(value.RepoName, 256) || (value.Sink != "auto" && value.Sink != "clickhouse") || (value.Interval != "daily" && value.Interval != "weekly" && value.Interval != "monthly") || !boundedOptional(value.Metrics, 256) {
 			return nil, errors.New("invalid dora scope")
+		}
+		if unknown := unknownDORAMetricNames(value.Metrics); len(unknown) > 0 {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownDORAMetricName, strings.Join(unknown, ","))
 		}
 		return json.Marshal(value)
 	case "release_impact":

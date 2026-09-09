@@ -61,16 +61,34 @@ if [ "${rc}" -ne 0 ]; then
   exit 1
 fi
 
-# Each entry is <file> <enclosing declaration> <+|-><content>.
+# Each entry is <file> <declaration @ after:context> <+|-><content>.
 #
 # Line numbers are dropped so an unrelated insertion elsewhere in a generated
-# file does not churn every entry. The ENCLOSING DECLARATION is kept because
-# content alone is ambiguous: 81 of these entries are comment lines, and two
+# file does not churn every entry. Something must take their place, because
+# content alone is ambiguous: 58 of these entries are comment lines, and two
 # genuinely different changes -- the same comment text removed from two
 # different types -- normalise to one identical entry, so the guard would see
-# one where there are two and a swap between them as no change at all. `diff
-# -F` supplies it from the hunk header, which is stable under edits elsewhere
-# in the file in a way a line number is not.
+# one where there are two and a swap between them as no change at all.
+#
+# The DECLARATION comes from `diff -F`'s hunk header, which is stable under
+# edits elsewhere in the file in a way a line number is not. Note it is the
+# PRECEDING declaration, not the enclosing one: `diff -F` names the last
+# matching line STRICTLY BEFORE the hunk start, so a hunk that opens on a
+# struct header is labelled with the struct before it -- deleting the three
+# parked SankeyCoverage fields yields `type ReworkThemeAllocation struct {`
+# even though the hunk opens on `type SankeyCoverage struct {`. That is
+# correct output, not a stale entry, and must not be "fixed": expected and
+# actual are computed the same way and compared for equality, so the anchor
+# only has to be reproducible, not semantic.
+#
+# The declaration ALONE is still not enough, which the review round proved by
+# execution. Every change inside one hunk shares its declaration, so where a
+# duplicated line appears twice in the same hunk -- schema.resolvers.go's
+# repeated `attribute` import, under `(file scope)` -- documenting occurrence
+# 1 while the generator removes occurrence 2 leaves the multiset unchanged
+# and the guard reports OK. The `after:` context is the nearest unchanged
+# line above the change within its hunk, and it separates exactly that case
+# while still surviving unrelated edits elsewhere.
 #
 # `diff` is used directly rather than `git diff`: the copy is not a
 # repository, and a git-based comparison silently treats an untracked file as
@@ -83,10 +101,12 @@ for rel in "${GENERATED_FILES[@]}"; do
     exit 1
   fi
   # diff exits 0 (same), 1 (differs) or >=2 (ERROR). Only the first two are
-  # results; >=2 is a broken comparison and must not read as "no drift". The
-  # status is taken from PIPESTATUS[0] because a pipeline reports its LAST
-  # command's status, and a `|| true` on the end would swallow the error
-  # entirely -- an empty diff and a failed diff are indistinguishable
+  # results; >=2 is a broken comparison and must not read as "no drift".
+  # `diff` is run UNPIPED and its status read directly from `$?` on the very
+  # next line, so nothing between the command and the read can overwrite it.
+  # It deliberately does not end in `| ...` or `|| true`: a pipeline reports
+  # its LAST command's status, and a `|| true` swallows the error entirely --
+  # either way an empty diff and a failed diff become indistinguishable
   # downstream, which is how a guard like this passes vacuously.
   # `set +e` is REQUIRED, not defensive: diff exits 1 whenever the files
   # differ, which is the NORMAL case here, and under `set -e` that terminates
@@ -102,10 +122,28 @@ for rel in "${GENERATED_FILES[@]}"; do
     cat "${WORK}/.differr" >&2
     exit 1
   fi
+  # The middle field is the hunk's declaration PLUS the nearest unchanged
+  # line above the change inside that hunk. The declaration alone is not
+  # enough: two changes that share a declaration and have identical content
+  # normalise to the same entry, so removing occurrence 2 of a duplicated
+  # line while the allowlist documents occurrence 1 leaves the multiset
+  # unchanged and the guard reports OK. That is a SILENT FALSE PASS, and it
+  # is reachable on the real tree -- schema.resolvers.go's duplicated
+  # `attribute` import sits under `(file scope)`, where every change in the
+  # hunk shares one literal declaration. Reproduced before this line existed.
+  # The context line restores just enough position to separate them while
+  # still surviving unrelated edits elsewhere in the file, which is why a
+  # line number is still not used.
   awk -v rel="${rel}" '
-    /^@@/ { decl = $0; sub(/^@@[^@]*@@[[:space:]]*/, "", decl); if (decl == "") decl = "(file scope)"; next }
+    /^@@/ {
+      decl = $0; sub(/^@@[^@]*@@[[:space:]]*/, "", decl)
+      if (decl == "") decl = "(file scope)"
+      ctx = "(hunk start)"
+      next
+    }
     /^(---|\+\+\+)/ { next }
-    /^[+-]/ { printf "%s\t%s\t%s\n", rel, decl, $0 }
+    /^ / { ctx = substr($0, 2); gsub(/^[ \t]+|[ \t]+$/, "", ctx); next }
+    /^[+-]/ { printf "%s\t%s @ after:%s\t%s\n", rel, decl, ctx, $0 }
   ' "${WORK}/.raw" >>"${actual}"
 done
 sort -o "${actual}" "${actual}"
@@ -129,11 +167,15 @@ if [ "${UPDATE}" -eq 1 ]; then
     echo "# not yet in the SDL -- those entries DISAPPEAR when the SDL half lands,"
     echo "# and this file must shrink accordingly rather than be re-blessed)."
     echo "#"
-    printf '# Format: <file><TAB><enclosing decl><TAB><+|-><line content>. %s\n' "'-' is in the checked-in file and"
+    printf '# Format: <file><TAB><preceding decl @ after:context><TAB><+|-><line content>. %s\n' "'-' is in the checked-in file and"
     echo "# not in a fresh generation; '+' is the reverse."
     cat "${actual}"
   } >"${ALLOWLIST}"
-  echo "check_gqlgen_drift: allowlist rewritten with $(wc -l <"${actual}") entries. REVIEW THE DIFF -- it is a contract."
+  if ! written="$(wc -l <"${actual}")"; then
+    echo "check_gqlgen_drift: rewrote the allowlist but could not count it; treat the count as unknown, not zero." >&2
+    exit 1
+  fi
+  echo "check_gqlgen_drift: allowlist rewritten with ${written} entries. REVIEW THE DIFF -- it is a contract."
   exit 0
 fi
 
@@ -146,7 +188,13 @@ expected="${WORK}/.expected"
 grep -v '^#' "${ALLOWLIST}" | grep -v '^[[:space:]]*$' | sort >"${expected}"
 
 if diff -q "${expected}" "${actual}" >/dev/null; then
-  echo "check_gqlgen_drift: OK. $(wc -l <"${actual}") drift lines, all documented."
+  # Counted only to report it, but an unreadable count still means the file
+  # this guard just blessed could not be read -- never print a blank one.
+  if ! documented="$(wc -l <"${actual}")"; then
+    echo "check_gqlgen_drift: the drift matched but the count could not be read; not reporting a blank total." >&2
+    exit 1
+  fi
+  echo "check_gqlgen_drift: OK. ${documented} drift lines, all documented."
   exit 0
 fi
 

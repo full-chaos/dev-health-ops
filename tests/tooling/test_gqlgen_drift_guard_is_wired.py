@@ -90,17 +90,31 @@ def _drift_guard_steps() -> list[dict]:
     string assertion passes against a disabled step.
     """
     document = yaml.safe_load(GO_QUALITY.read_text())
-    steps: list[dict] = []
+    steps: list[tuple[dict, dict]] = []
     for job in document.get("jobs", {}).values():
         for step in job.get("steps", []) or []:
             run = step.get("run")
             if isinstance(run, str) and "ci/check_gqlgen_drift.sh" in run:
-                steps.append(step)
+                steps.append((job, step))
     return steps
 
 
+def _is_disabled(condition: object) -> bool:
+    """A condition that can never be true, in the forms GitHub accepts."""
+    text = str(condition).strip().lower()
+    text = text.removeprefix("${{").removesuffix("}}").strip()
+    return text in {"false", "0", "'false'", '"false"'}
+
+
 def test_go_quality_still_runs_the_drift_guard() -> None:
-    """The step can be renamed; it cannot be removed or disabled."""
+    """The step can be renamed; it cannot be removed or disabled.
+
+    Round r2 executed the disabling forms against this test and found three
+    that it accepted: `continue-on-error: true`, a `run` ending in `|| true`,
+    and a job switched off at the job level or given an empty matrix. Each
+    leaves a green report with the guard doing nothing, which is the exact
+    state this test exists to make impossible. All are rejected below.
+    """
     steps = _drift_guard_steps()
     assert steps, (
         "no go-quality step runs ci/check_gqlgen_drift.sh. The gqlgen output "
@@ -108,7 +122,7 @@ def test_go_quality_still_runs_the_drift_guard() -> None:
         "nullability hand-edits (CHAOS-4650/4657/4658/4701/4703) and nothing "
         "fails. Restore the step, or delete this test with a ticket saying why."
     )
-    for step in steps:
+    for job, step in steps:
         run = step["run"]
         # The command must be reachable, not merely mentioned -- a `run` that
         # only echoes the path, or comments it out, satisfies a grep.
@@ -123,17 +137,51 @@ def test_go_quality_still_runs_the_drift_guard() -> None:
             for line in run.splitlines()
         ), f"the guard step mentions the script but does not invoke it:\n{run}"
 
-        condition = str(step.get("if", "")).strip().lower()
-        assert condition not in {
-            "false",
-            "${{ false }}",
-            "$\u007b\u007b false \u007d\u007d",
-        }, (
+        assert not _is_disabled(step.get("if", "")), (
             "the guard step is present but disabled by its `if:` condition. That is "
             "indistinguishable from a working guard in every report, and leaves the "
             "hand-edits unprotected. Remove the step honestly, with a ticket, rather "
             "than switching it off."
         )
+
+        # A step that cannot fail cannot guard. `continue-on-error` turns a
+        # real drift failure into a green check with a warning nobody reads.
+        assert str(step.get("continue-on-error", "")).strip().lower() not in {
+            "true",
+            "${{ true }}",
+        }, (
+            "the guard step sets continue-on-error, so drift can no longer fail the "
+            "build. The step still appears and still passes -- which is worse than "
+            "deleting it, because the report claims the hand-edits are protected."
+        )
+
+        # ... and neither can a command whose failure is swallowed in the shell.
+        for line in run.splitlines():
+            stripped = line.strip()
+            if "ci/check_gqlgen_drift.sh" not in stripped:
+                continue
+            assert not stripped.endswith(("|| true", "|| :", "; true")), (
+                "the guard's exit status is discarded by the shell, so a drift "
+                f"failure passes silently:\n{line}"
+            )
+
+        # The job itself must be able to run. A job-level `if: false`, or a
+        # matrix with no entries, disables every step inside it while leaving
+        # this step visibly present in the file.
+        assert not _is_disabled(job.get("if", "")), (
+            "the guard's step is live but its JOB is disabled by a job-level `if:`, "
+            "so the guard never runs."
+        )
+        matrix = (job.get("strategy", {}) or {}).get("matrix")
+        if isinstance(matrix, dict):
+            for axis, values in matrix.items():
+                if axis in {"include", "exclude"}:
+                    continue
+                assert not (isinstance(values, list) and not values), (
+                    f"the guard's job has an EMPTY matrix axis {axis!r}, so it expands "
+                    "to zero jobs and the guard never runs, while the step remains "
+                    "visible in the workflow file."
+                )
 
 
 def test_every_generator_input_triggers_the_workflow_that_runs_the_guard() -> None:
@@ -158,10 +206,15 @@ def test_the_allowlist_is_present_and_well_formed() -> None:
         "hand-edits are gone and that is the bug."
     )
     for entry in entries:
-        # <file><TAB><enclosing declaration><TAB><+|-><content>. The middle
-        # field exists because content alone collides: the same comment line
-        # removed from two different types normalises to one entry, so the
+        # <file><TAB><preceding decl @ after:context><TAB><+|-><content>. The
+        # middle field exists because content alone collides: the same comment
+        # line removed from two different types normalises to one entry, so the
         # guard would see one change where there are two (CHAOS-5489 round r1).
+        # It is the PRECEDING declaration, not the enclosing one -- `diff -F`
+        # names the last declaration strictly before the hunk start, so an
+        # entry may legitimately name its neighbour. The `after:` context was
+        # added in round r2, which proved by execution that the declaration
+        # alone still collides for a line duplicated inside ONE hunk.
         parts = entry.split("\t", 2)
         assert len(parts) == 3, (
             f"entry is not <file><TAB><decl><TAB><+|->content: {entry!r}"

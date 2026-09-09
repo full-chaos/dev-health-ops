@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -400,8 +401,27 @@ func CheckQueueAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRo
 		return ErrUnavailable
 	}
 	var authorized bool
-	if err := pool.QueryRow(ctx, queueAuthorizationQuery, expectedRole, riverSchema).Scan(&authorized); err != nil || !authorized {
-		return ErrUnavailable
+	err := pool.QueryRow(ctx, queueAuthorizationQuery, expectedRole, riverSchema).Scan(&authorized)
+	switch {
+	case err != nil:
+		// CHAOS-5435 applied the same split to CheckRolePosture but left this
+		// query -- the queue role's own, separate posture check -- collapsing
+		// "the database never answered" and "the database answered no" into
+		// one indistinguishable ErrUnavailable. They are different operator
+		// actions (fix connectivity vs. fix a grant), and a caller that wants
+		// to tell them apart had no way to. Both ErrUnavailable and the
+		// concrete driver error are %w-wrapped, exactly as CheckRolePosture
+		// does, so every existing errors.Is(err, ErrUnavailable) readiness
+		// caller keeps working unchanged; the DSN this pool was built from is
+		// deliberately excluded from every error path in this package.
+		return fmt.Errorf("%w: querying queue role posture: %w", ErrUnavailable, err)
+	case !authorized:
+		// The query ran and answered "no": the queue role's live grants do
+		// not match queueAuthorizationQuery's requirements. A role name is a
+		// checked-in runtime identifier (config, not connection material),
+		// so it is always safe to name here.
+		return fmt.Errorf("%w: %w for role %q", ErrUnavailable, ErrPostureRefused, expectedRole)
+	default:
+		return nil
 	}
-	return nil
 }

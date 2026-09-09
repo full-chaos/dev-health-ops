@@ -112,8 +112,16 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 			if _, err := admin.Exec(ctx, statement); err != nil {
 				t.Fatal(err)
 			}
-			if err := postgresstore.CheckQueueAuthorization(ctx, queue, queueAuthorizationFenceRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+			err := postgresstore.CheckQueueAuthorization(ctx, queue, queueAuthorizationFenceRole, "river")
+			if !errors.Is(err, postgresstore.ErrUnavailable) {
 				t.Fatalf("queue authorization with %s error = %v, want ErrUnavailable", test.name, err)
+			}
+			// The query RAN and answered "no" -- a grant problem, not a
+			// connectivity problem. Before this assertion the two were
+			// indistinguishable to every caller, which is what left
+			// workerctl's runtime_role_unauthorized unable to say which.
+			if !errors.Is(err, postgresstore.ErrPostureRefused) {
+				t.Fatalf("queue authorization with %s error = %v, want ErrPostureRefused", test.name, err)
 			}
 			statement = test.revoke
 			if test.missing {
@@ -155,8 +163,12 @@ func TestQueueAuthorizationRequiresExactCompletionFenceGrants(t *testing.T) {
 			if _, err := admin.Exec(ctx, statement); err != nil {
 				t.Fatal(err)
 			}
-			if err := postgresstore.CheckQueueAuthorization(ctx, queue, queueAuthorizationFenceRole, "river"); !errors.Is(err, postgresstore.ErrUnavailable) {
+			err := postgresstore.CheckQueueAuthorization(ctx, queue, queueAuthorizationFenceRole, "river")
+			if !errors.Is(err, postgresstore.ErrUnavailable) {
 				t.Fatalf("queue authorization with %s fence grant error = %v, want ErrUnavailable", test.name, err)
+			}
+			if !errors.Is(err, postgresstore.ErrPostureRefused) {
+				t.Fatalf("queue authorization with %s fence grant error = %v, want ErrPostureRefused", test.name, err)
 			}
 			statement = test.revoke
 			if test.missing {

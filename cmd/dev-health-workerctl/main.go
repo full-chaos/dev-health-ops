@@ -361,10 +361,46 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeError(stderr, "database_unavailable")
 	}
-	if postgresstore.CheckDomainAuthorization(ctx, pools.Domain, domainRole, schema) != nil ||
-		postgresstore.CheckQueueAuthorization(ctx, pools.QueueControl, queueRole, schema) != nil ||
-		postgresstore.CheckCoordinatorAuthorization(ctx, coordinatorPool, coordinatorRole, schema) != nil {
-		return nil, writeError(stderr, "runtime_role_unauthorized")
+	// Evaluated one at a time, in the same order and with the same
+	// short-circuit as the `||` chain this replaces, so the success path does
+	// no extra database work. What changed is the FAILURE path: a refusal now
+	// names which check refused, which role, whether the database answered at
+	// all, and -- via DiagnoseRolePosture -- the expected-vs-actual grant that
+	// caused it. See runtime_role_diagnostics.go's header for the incident
+	// this exists to make un-repeatable.
+	if refusal := firstRuntimeRoleRefusal(ctx, []runtimeRolePostureCheck{
+		{
+			label: "domain",
+			role:  domainRole,
+			check: func(ctx context.Context) error {
+				return postgresstore.CheckDomainAuthorization(ctx, pools.Domain, domainRole, schema)
+			},
+			diagnose: func(ctx context.Context) ([]postgresstore.PostureGap, error) {
+				return postgresstore.DiagnoseRolePosture(ctx, pools.Domain, domainRole, postgresstore.DomainPosture())
+			},
+		},
+		{
+			label: "queue",
+			role:  queueRole,
+			check: func(ctx context.Context) error {
+				return postgresstore.CheckQueueAuthorization(ctx, pools.QueueControl, queueRole, schema)
+			},
+			diagnose: func(ctx context.Context) ([]postgresstore.PostureGap, error) {
+				return postgresstore.DiagnoseRolePosture(ctx, pools.QueueControl, queueRole, postgresstore.QueuePosture())
+			},
+		},
+		{
+			label: "coordinator",
+			role:  coordinatorRole,
+			check: func(ctx context.Context) error {
+				return postgresstore.CheckCoordinatorAuthorization(ctx, coordinatorPool, coordinatorRole, schema)
+			},
+			diagnose: func(ctx context.Context) ([]postgresstore.PostureGap, error) {
+				return postgresstore.DiagnoseRolePosture(ctx, coordinatorPool, coordinatorRole, postgresstore.CoordinatorPosture())
+			},
+		},
+	}); refusal != nil {
+		return nil, writeRuntimeRoleUnauthorized(stderr, refusal)
 	}
 
 	// Coordinator pool: reads and updates internal_service_credentials, which

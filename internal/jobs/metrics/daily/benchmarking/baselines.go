@@ -3,7 +3,14 @@ package benchmarking
 import (
 	"sort"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
 )
+
+// finiteBaselineFamily tags every internal/jobs/metrics/finite boundary trip
+// this file records, so the counter (CHAOS-4806, ruling R73) can tell a
+// baseline-percentile drop apart from any other family's.
+const finiteBaselineFamily = "benchmarking_baseline"
 
 // DefaultBaselineWindows mirrors compute_internal_baselines' `windows` default
 // (baselines.py:39).
@@ -87,6 +94,25 @@ func ComputeInternalBaselines(
 		}
 	}
 
+	// CHAOS-4806 / ruling R73: a NaN or +-Inf metric value (e.g. a
+	// zero-denominator ratio upstream) must never propagate through a
+	// percentile or a mean into P25-P90Value/PercentileRank/BaselineValue --
+	// these columns are plain (non-Nullable) Float64 in ClickHouse today, so
+	// a NaN reaching them would be written to the wire as a real, silent
+	// non-finite value, not caught by any Nullable-aware guard. Dropping the
+	// bad entries here, before Percentile/PercentileRank/Mean ever see them,
+	// keeps every OTHER scope's percentile/mean computing over real data
+	// (the row, the family, the window all still write) instead of letting
+	// one poisoned scope corrupt the whole cross-section. Each drop is
+	// counted (family=benchmarking_baseline, field=metricName) so a
+	// non-zero rate is a visible data-quality signal, not a silent skip --
+	// same shape as this package's existing observeNonFinitePercentileInput
+	// counter, but this one actually removes the bad input rather than only
+	// observing it, per R73's explicit "correctness over parity" ruling
+	// (Python parity is not required here; see Percentile's own doc comment
+	// for why its raw NaN-ordering behavior is deliberately left untouched).
+	crossSection = finite.DropNonFinite(finiteBaselineFamily, metricName, crossSection)
+
 	p25 := Percentile(crossSection, 25.0)
 	p50 := Percentile(crossSection, 50.0)
 	p75 := Percentile(crossSection, 75.0)
@@ -98,12 +124,41 @@ func ComputeInternalBaselines(
 		if !ok {
 			continue
 		}
+		if _, isFinite := finite.Check(latestValue); !isFinite {
+			// CHAOS-4806 / ruling R73: CurrentValue is a plain (non-
+			// Nullable) Float64 column, so there is no NULL to write for
+			// this ONE field -- and writing the NaN/+-Inf itself is exactly
+			// what R73 bans. Skipping only THIS scope's rows (every window)
+			// is the schema-constrained equivalent of nulling the field:
+			// every OTHER scope's rows, and this metric's org-wide
+			// percentile cross-section (already filtered above), keep
+			// computing and writing untouched -- the window is not
+			// wrecked, only this one un-computable scope is absent from it.
+			finite.Undefined(finiteBaselineFamily, metricName)
+			continue
+		}
 		points := seriesByScope[scopeKey]
 		for _, windowDays := range windows {
 			values := windowValues(points, asOfDay, windowDays)
+			// windowValues.py parity: a window with literally no points in
+			// range still skips the row entirely (nothing to compute at
+			// all, same as before this fix).
 			if len(values) == 0 {
 				continue
 			}
+			// CHAOS-4806 / ruling R73: same boundary as crossSection above,
+			// applied to this scope's own window before Mean() --
+			// BaselineValue is a plain Float64 column too. Deliberately
+			// checked for emptiness BEFORE this filter (above) but not
+			// after: a window that had real points, all of which happened
+			// to be non-finite, still keeps this row (CurrentValue/
+			// PercentileRank/P25-90Value come from crossSection and this
+			// scope's own latestValue, none of which depend on `values`) --
+			// Mean(nil) already returns its own documented 0.0 for an empty
+			// input, so BaselineValue degrades the same way Percentile's
+			// empty-input case already does elsewhere in this file, rather
+			// than silently dropping an otherwise-good row.
+			values = finite.DropNonFinite(finiteBaselineFamily, metricName, values)
 			periodStart := asOfDay.AddDate(0, 0, -(windowDays - 1))
 			results = append(results, BenchmarkBaselineRecord{
 				MetricName:        metricName,

@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -469,7 +470,19 @@ func fi(key string, value int) factorsJSONField {
 // factorsJSON ports json.dumps(factors) as compute_testops_risk.py's two
 // factors dicts build it: default separators (", " and ": "), no
 // sort_keys, insertion order preserved.
-func factorsJSON(fields []factorsJSONField) string {
+//
+// CHAOS-4806 / ruling R73: this is the write/serialization boundary for
+// every float field in the payload -- each one routes through
+// finite.JSONLiteral before pythonFloatJSON ever sees it, so a NaN or +-Inf
+// factor becomes the JSON literal `null` (tagged with family/field.key and
+// counted) instead of Python's own non-spec "NaN"/"Infinity"/"-Infinity"
+// json.dumps tokens (a baseline_defect, R60, deliberately not mirrored).
+// The rest of the factors object, and the row it belongs to, keep writing
+// regardless of which single key trips the guard. family identifies which
+// of this file's two factors_json producers is calling (see the two call
+// sites), so the counter can tell a release-confidence trip from a
+// quality-drag trip.
+func factorsJSON(family string, fields []factorsJSONField) string {
 	var b strings.Builder
 	b.WriteByte('{')
 	for index, field := range fields {
@@ -480,7 +493,7 @@ func factorsJSON(fields []factorsJSONField) string {
 		b.WriteString(field.key)
 		b.WriteString("\": ")
 		if field.isFloat {
-			b.WriteString(pythonFloatJSON(field.floatVal))
+			b.WriteString(finite.JSONLiteral(family, field.key, field.floatVal, pythonFloatJSON))
 		} else {
 			b.WriteString(strconv.Itoa(field.intVal))
 		}
@@ -521,16 +534,16 @@ func pythonFloatJSON(value float64) string {
 	// side, so a NaN (e.g. a 0/0 division upstream) is real, representable
 	// input, not a hypothetical one. Python's own json.dumps (default
 	// allow_nan=True) emits the literal tokens "NaN"/"Infinity"/"-Infinity"
-	// for these -- not valid JSON per the spec, but exactly what the Python
-	// authority this port must match byte-for-byte actually writes.
-	if math.IsNaN(value) {
-		return "NaN"
-	}
-	if math.IsInf(value, 1) {
-		return "Infinity"
-	}
-	if math.IsInf(value, -1) {
-		return "-Infinity"
+	// for these -- not valid JSON per the spec. Byte-for-byte parity with
+	// that is a baseline_defect (R60), not a target: CHAOS-4806 / ruling R73
+	// closes it. This function's one caller, factorsJSON, now routes every
+	// float through finite.JSONLiteral first, so a NaN/+-Inf value never
+	// reaches here in production -- the branch below is a defensive
+	// fallback only, so a direct call (present or future) still returns
+	// valid JSON (`null`) instead of one of Python's non-spec tokens or
+	// panicking on the un-guarded scientific-notation split further down.
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "null"
 	}
 	if value == 0 {
 		if math.Signbit(value) {
@@ -707,7 +720,7 @@ func computeReleaseConfidence(
 	}
 	score := clampUnit(baseScore - flakePenalty - regressionPenalty)
 
-	factors := factorsJSON([]factorsJSONField{
+	factors := factorsJSON("testops_release_confidence", []factorsJSONField{
 		ff("pipeline_success_rate", pyRound(successRate, 4)),
 		ff("test_pass_rate", pyRound(passRate, 4)),
 		ff("coverage_pct", pyRound(coveragePct, 2)),
@@ -774,7 +787,7 @@ func computeQualityDrag(
 	retryOverheadHours := rerunRate * float64(pipelinesCount) * medianDur / 3600.0
 	dragHours := failureReworkHours + flakeInvestigationHours + queueWaitHours + retryOverheadHours
 
-	factors := factorsJSON([]factorsJSONField{
+	factors := factorsJSON("testops_quality_drag", []factorsJSONField{
 		fi("failure_count", failureCount),
 		ff("median_duration_seconds", pyRound(medianDur, 2)),
 		fi("pipelines_count", pipelinesCount),

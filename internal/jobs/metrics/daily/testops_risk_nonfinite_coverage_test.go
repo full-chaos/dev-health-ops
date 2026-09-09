@@ -32,6 +32,19 @@ import (
 // Python evaluates (see pyOrZero's own doc comment for the corrected
 // verification). Fixed here alongside pyOrZero itself.
 //
+// CHAOS-4806 / ruling R73 (Trap #116 note): the coveragePct/coverageDelta
+// NaN/+Inf/-Inf JSON expectations below used to be the literal Python
+// json.dumps tokens "NaN"/"Infinity"/"-Infinity" -- byte-for-byte parity
+// with the Python authority's own (spec-violating) allow_nan=True output.
+// That parity is now a baseline_defect (R60), not a target: this test
+// itself was pinning the wire-level defect CHAOS-4806 exists to close, so
+// the expectations changed to "null" (valid JSON) rather than adding a
+// second test alongside the old one. Every finite expectation, and every
+// non-JSON-string assertion (CoverageFactor/ConfidenceScore/
+// RegressionPenalty), is unchanged -- the row, the family, the partition
+// and the window still compute exactly as before; only the ONE non-finite
+// field's JSON literal changed.
+//
 // coveragePct/coverageDelta/medianDur/avgQueue are the ONLY testops_risk
 // inputs that can carry a non-finite value in production (pipeline/test
 // COUNT-based rates are ratios of finite integers, never NaN/Inf; see
@@ -68,12 +81,15 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 		// but for a different reason (this table exists to pin the reason,
 		// not just the number).
 		wantCovFactor float64
-		// wantCoveragePctJSON is Python's round(pct or 0.0, 2) then json.dumps.
+		// wantCoveragePctJSON is round(pct or 0.0, 2) then this file's own
+		// finite-boundary JSON rendering (R73): "null" for a non-finite
+		// value (never Python's own json.dumps "NaN"/"Infinity"/
+		// "-Infinity" tokens), the ordinary rendered literal otherwise.
 		wantCoveragePctJSON string
 	}{
-		{"NaN", math.NaN(), 0.2, "NaN"},
-		{"+Inf", math.Inf(1), 0.2, "Infinity"},
-		{"-Inf", math.Inf(-1), 0.0, "-Infinity"},
+		{"NaN", math.NaN(), 0.2, "null"},
+		{"+Inf", math.Inf(1), 0.2, "null"},
+		{"-Inf", math.Inf(-1), 0.0, "null"},
 		{"-0.0", math.Copysign(0, -1), 0.0, "0.0"}, // `-0.0 or 0.0` == 0.0 in Python (bool(-0.0) is False)
 	}
 
@@ -114,9 +130,9 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 		wantRegressionAdds bool // Python: `if (coverage_delta or 0.0) < -2.0: regression_penalty += 0.05`
 		wantDeltaJSON      string
 	}{
-		{"NaN", math.NaN(), false, "NaN"},            // nan < -2.0 is False in both Go and Python
-		{"+Inf", math.Inf(1), false, "Infinity"},     // +inf < -2.0 is False
-		{"-Inf", math.Inf(-1), true, "-Infinity"},    // -inf < -2.0 is True
+		{"NaN", math.NaN(), false, "null"},           // nan < -2.0 is False in both Go and Python
+		{"+Inf", math.Inf(1), false, "null"},         // +inf < -2.0 is False
+		{"-Inf", math.Inf(-1), true, "null"},         // -inf < -2.0 is True
 		{"-0.0", math.Copysign(0, -1), false, "0.0"}, // normalized to +0.0 before the comparison; 0.0 < -2.0 is False either way
 	}
 

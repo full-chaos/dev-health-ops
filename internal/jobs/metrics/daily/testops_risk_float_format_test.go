@@ -2,7 +2,10 @@ package daily
 
 import (
 	"math"
+	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
 )
 
 // TestPythonFloatJSONMatchesLivePythonJSONDumps pins pythonFloatJSON against
@@ -56,32 +59,76 @@ func TestPythonFloatJSONNegativeZero(t *testing.T) {
 	}
 }
 
-// TestPythonFloatJSONNonFiniteValuesDoNotPanic is the red-on-baseline proof
-// for codex round 3 (P2, ARGUED then confirmed by source read): before this
-// guard existed, strconv.FormatFloat(value, 'e', -1, 64) on NaN/+-Inf
-// returns "NaN"/"+Inf"/"-Inf" -- none contain the byte 'e' -- so
-// strings.IndexByte(scientific, 'e') returned -1 and `scientific[:eIndex]`
-// PANICKED (slice bounds out of range [:-1]). This is a real input, not a
-// hypothetical one: coverage_snapshots.line_coverage_pct is an
-// unconstrained Nullable(Float64) with no finite-value guard on the Python
-// writer side. Pinned against real `python3 -c "import json;
-// json.dumps(float('nan'))"` output -- Python's json module (default
-// allow_nan=True) emits the literal tokens "NaN"/"Infinity"/"-Infinity",
-// not valid JSON per spec but exactly what the Python authority writes.
-func TestPythonFloatJSONNonFiniteValuesDoNotPanic(t *testing.T) {
-	cases := []struct {
-		value float64
-		want  string
-	}{
-		{math.NaN(), "NaN"},
-		{math.Inf(1), "Infinity"},
-		{math.Inf(-1), "-Infinity"},
-	}
-	for _, tc := range cases {
-		got := pythonFloatJSON(tc.value) // must not panic
-		if got != tc.want {
-			t.Errorf("pythonFloatJSON(%v) = %q, want %q", tc.value, got, tc.want)
+// TestPythonFloatJSONNonFiniteValuesReturnValidJSONNull is the R73 (CHAOS-4806)
+// replacement for this test's old expectation. Before this fix, the assertion
+// HERE was `want: "NaN"/"Infinity"/"-Infinity"` -- i.e. this exact test used to
+// PIN the defect it now guards against (Trap #116: a test asserting the
+// defective behaviour looks like coverage while holding the bug in place).
+// factorsJSON's caller now routes every float through finite.JSONLiteral
+// before pythonFloatJSON ever sees it, so in production a non-finite value
+// never reaches this function at all; the case below exercises
+// pythonFloatJSON's own defensive fallback directly, proving it still
+// returns valid JSON (never panics, never Python's non-spec allow_nan=True
+// tokens) even on direct misuse. See TestFactorsJSONNeverEmitsNonFiniteTokens
+// below for the actual write-boundary proof (through finite.JSONLiteral).
+func TestPythonFloatJSONNonFiniteValuesReturnValidJSONNull(t *testing.T) {
+	cases := []float64{math.NaN(), math.Inf(1), math.Inf(-1)}
+	for _, value := range cases {
+		got := pythonFloatJSON(value) // must not panic
+		if got != "null" {
+			t.Errorf("pythonFloatJSON(%v) = %q, want \"null\" (valid JSON, never a NaN/Infinity token)", value, got)
 		}
+	}
+}
+
+// TestFactorsJSONNeverEmitsNonFiniteTokens is the wire-level red-first proof
+// for CHAOS-4806 / ruling R73 at the actual write boundary (factorsJSON,
+// this file's real JSON serializer for metric factors): scans the RENDERED
+// payload for the forbidden tokens rather than hand-listing call sites, so a
+// future field added to either factors_json producer is covered
+// automatically. Before finite.JSONLiteral was wired into factorsJSON, a
+// NaN input here rendered the literal 3-byte token "NaN" (and Infinity/
+// -Infinity) directly into the row's factors_json column -- not valid JSON,
+// and exactly the "NaN/Inf on the wire" defect CHAOS-4806 exists to close.
+func TestFactorsJSONNeverEmitsNonFiniteTokens(t *testing.T) {
+	forbidden := []string{"NaN", "Infinity"}
+	got := factorsJSON("test_family", []factorsJSONField{
+		ff("finite_value", 1.5),
+		ff("nan_value", math.NaN()),
+		ff("positive_inf_value", math.Inf(1)),
+		ff("negative_inf_value", math.Inf(-1)),
+		fi("int_value", 7),
+	})
+	for _, bad := range forbidden {
+		if strings.Contains(got, bad) {
+			t.Fatalf("factorsJSON output contains forbidden wire token %q: %s", bad, got)
+		}
+	}
+	want := `{"finite_value": 1.5, "nan_value": null, "positive_inf_value": null, "negative_inf_value": null, "int_value": 7}`
+	if got != want {
+		t.Fatalf("factorsJSON(...) = %s, want %s", got, want)
+	}
+}
+
+// TestFactorsJSONNonFiniteFieldsCountedByFamilyAndField proves the R73
+// telemetry requirement: a boundary trip records a bounded reason code
+// against the calling family and the specific field key, not just a log
+// line -- so CHAOS-4806 defects are visible at the counter, per field.
+func TestFactorsJSONNonFiniteFieldsCountedByFamilyAndField(t *testing.T) {
+	family := "test_family_counted"
+	beforeNaN := finite.Count(family, "nan_field", finite.ReasonNaN)
+	beforeInf := finite.Count(family, "inf_field", finite.ReasonPositiveInf)
+
+	factorsJSON(family, []factorsJSONField{
+		ff("nan_field", math.NaN()),
+		ff("inf_field", math.Inf(1)),
+	})
+
+	if after := finite.Count(family, "nan_field", finite.ReasonNaN); after != beforeNaN+1 {
+		t.Errorf("finite.Count(nan_field, nan) = %d, want %d", after, beforeNaN+1)
+	}
+	if after := finite.Count(family, "inf_field", finite.ReasonPositiveInf); after != beforeInf+1 {
+		t.Errorf("finite.Count(inf_field, +inf) = %d, want %d", after, beforeInf+1)
 	}
 }
 

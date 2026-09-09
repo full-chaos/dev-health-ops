@@ -45,17 +45,15 @@ def test_production_scheduled_job_writers_cannot_reintroduce_metrics_sweeps():
     assert {job_type for _, _, job_type in writers} == {"report", "sync"}
 
 
-def test_retired_dispatcher_has_no_runtime_exports_or_beat_entry():
-    # CHAOS-4026 (2026-08-21): workers.metrics_tasks was itself deleted (a
-    # pure re-export shim over the now-deleted metrics_partitioned.py
-    # dispatch chain), so it is no longer scanned here -- there is nothing
-    # left to import.
-    # CHAOS-4439: metrics_daily.py stays (peer read caught a live producer
-    # in external_ingest/recompute.py -- see PR #2237) so it is still
-    # imported and scanned here like before.
-    from dev_health_ops.workers import metrics_daily, tasks
-    from dev_health_ops.workers.config import beat_schedule
-
-    assert not hasattr(metrics_daily, "dispatch_scheduled_metrics")
-    assert "dispatch_scheduled_metrics" not in tasks.__all__
-    assert "dispatch-scheduled-metrics" not in beat_schedule
+# CHAOS-3093 (2026-09-09): test_retired_dispatcher_has_no_runtime_exports_or_
+# beat_entry tested workers/metrics_daily.py, deleted outright with this
+# cleanup (its own run_daily_metrics task had zero Celery consumers since
+# 2026-08-19; external_ingest/recompute.py's fan-out already dispatches it by
+# task-name string via celery_app.send_task, no import needed). The module's
+# absence is now pinned by tests/workers/test_celery_dead_code_contract.py's
+# _DELETED_MODULES. dispatch_scheduled_metrics/dispatch-scheduled-metrics
+# (the CHAOS-3128 retirement this file's docstring is about -- a separate,
+# earlier ticket than CHAOS-4026/CHAOS-3093) was never in metrics_daily.py
+# to begin with; its own absence stays pinned by
+# contracts/jobs/v1/transitional-inventory.json's retired_beat_entries +
+# ci/check_transitional_inventory.py, unaffected by this change.

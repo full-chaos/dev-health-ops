@@ -34,7 +34,7 @@ ALTER TABLE testops_maturity_bands MODIFY COLUMN value Nullable(Float64);
 -- (`rg --hidden -n 'FROM testops_metric_baselines|FROM testops_maturity_bands'`)
 -- at the time of this migration: NO production reader exists for either
 -- table yet (write-only from internal/jobs/metrics/daily/benchmarking's
--- Writer; only test SELECTs and a fixture manifest reference them). The
+-- Writer -- only test SELECTs and a fixture manifest reference them). The
 -- FIRST reader built against these tables (Go or Python, GraphQL resolver
 -- or CLI) MUST dedup with argMaxIf/a FINAL-with-tuple-ordering pattern
 -- (never a bare argMax on one of these six columns) and should pin it with

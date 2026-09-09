@@ -53,6 +53,9 @@ measure the split; zero means it measured it and found none.
 Filtering by work category narrows which work is counted and nothing else, so
 a filtered view and an unfiltered one can be read against each other directly.
 A work item that matches the category in more than one way still counts once.
+Work is counted as belonging to a category when some of its effort actually
+falls in that category, not merely when the category is one the item was
+assessed against.
 Filtered views produced before this was corrected are not comparable with
 current ones; unfiltered views are unaffected and read the same as they always
 have.

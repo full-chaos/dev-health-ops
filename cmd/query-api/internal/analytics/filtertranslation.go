@@ -64,24 +64,35 @@ func translateWorkCategoryFilter(categories []string, useInvestment bool, column
 		return emptyFilterClause()
 	}
 	if useInvestment {
-		// CHAOS-5498: the unit-selecting form. mapKeys, not the
-		// CAST-to-Array(Tuple(...)) the ARRAY JOIN uses -- the column is
-		// Map(String, Float64) despite its _json name, so this reads the keys
-		// directly with no cast and no Float64 -> Float32 narrowing, and the
-		// value half is never needed to answer "is this unit in scope".
+		// CHAOS-5498: the unit-selecting form. A work unit is in scope when it
+		// carries POSITIVE WEIGHT in a matching category -- not merely a key
+		// for one.
 		//
-		// Selection is IDENTICAL to the ARRAY JOIN form; only the multiplicity
-		// differs. Measured on a real engine over one row of every shape a Map
-		// can hold -- the ARRAY JOIN returned
-		// [a-match d-key-no-dot f-two-matching f-two-matching g-mixed] and
-		// this form returned the same set with f-two-matching ONCE. Empty maps
-		// and empty keys are excluded by both (no category means out of scope
-		// under a category filter), and a key with no dot is included by both.
-		// A malformed-JSON case cannot exist: the column is a Map, so the type
-		// system forbids it.
+		// The weight test is the whole point, and it is not defensive coding.
+		// `subcategory_distribution_json` is DENSE in production: every unit
+		// carries a key for every subcategory, weight 0 where it does not
+		// apply. Measured on the reference org, 4977 of 4977 units have a
+		// `feature_delivery.*` KEY while only 3514 (70.6%) have positive
+		// `feature_delivery` weight. A presence test therefore matches
+		// everything, and a work-category filter that matches everything is
+		// not a filter.
+		//
+		// That was true of the ARRAY JOIN form this replaces, too -- it keyed
+		// on presence exactly the same way, so it selected every unit and
+		// merely multiplied each by its matching-key count. Verified on a
+		// dense fixture: over three units, one with zero feature_delivery
+		// weight, the ARRAY JOIN returned all three (each twice), a presence
+		// test returned all three once, and this form returns the two with
+		// positive weight. The live filtered A/B is what surfaced it: filtered
+		// output equalled unfiltered output on every column, in every window.
+		//
+		// The column is Map(String, Float64) despite its _json name, so the
+		// pairs come from a CAST at the column's own precision -- no
+		// Float64 -> Float32 narrowing, and no malformed-JSON case, which the
+		// type system forbids.
 		if columns.WorkCategorySelectsUnits {
 			return filterClause{
-				sql:      " AND arrayExists(k -> splitByChar('.', k)[1] IN {work_categories:Array(String)}, mapKeys(subcategory_distribution_json))",
+				sql:      " AND arrayExists(kv -> splitByChar('.', kv.1)[1] IN {work_categories:Array(String)} AND kv.2 > 0, CAST(subcategory_distribution_json AS Array(Tuple(String, Float64))))",
 				bindings: []clickhouse.Binding{{Name: "work_categories", Value: categories}},
 			}
 		}

@@ -124,7 +124,7 @@ func TestCompileSankeyCoverage_UnfilteredSQLUnchangedByUnitSelection(t *testing.
 	if err != nil {
 		t.Fatalf("compileSankeyCoverage(workCategory): %v", err)
 	}
-	if !strings.Contains(withCategory.sql, "arrayExists(k -> splitByChar('.', k)[1] IN {work_categories:Array(String)}, mapKeys(subcategory_distribution_json))") {
+	if !strings.Contains(withCategory.sql, "arrayExists(kv -> splitByChar('.', kv.1)[1] IN {work_categories:Array(String)} AND kv.2 > 0, CAST(subcategory_distribution_json AS Array(Tuple(String, Float64))))") {
 		t.Errorf("work-category filtered SQL is missing the unit-selecting predicate; without it the two negative assertions above pass vacuously:\n%s", withCategory.sql)
 	}
 	if hasSubcategoryArrayJoin(withCategory.sql) {

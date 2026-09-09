@@ -958,9 +958,9 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWit
 	}
 }
 
-// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectionUnchanged
-// pins the half of CHAOS-5498 that must NOT change: WHICH units a
-// work-category filter puts in scope.
+// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveWeightUnits
+// pins WHICH units a work-category filter puts in scope: those carrying
+// POSITIVE weight in a matching category, not merely a key for one.
 //
 // The fix swapped a row-multiplying `ARRAY JOIN CAST(subcategory_distribution_json
 // AS Array(Tuple(String, Float32)))` for a row-selecting
@@ -975,11 +975,17 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWit
 // type system forbids it; the degenerate shapes are an empty map and an empty
 // key, not unparseable text.
 //
-// Expected membership under `work_category = feature_delivery`, measured
-// against BOTH expressions on a real engine before the swap:
+// Expected membership under `work_category = feature_delivery`:
 //
-//	in scope:     one-match, key-without-dot, two-matching, mixed
-//	out of scope: non-matching, empty-map, empty-key
+//	in scope:     one-match, key-without-dot, two-matching, mixed,
+//	              dense-positive
+//	out of scope: non-matching, empty-map, empty-key, dense-zero
+//
+// dense-zero is the case that matters and the reason this test was rewritten.
+// It carries `feature_delivery.build` and `feature_delivery.ship` KEYS at
+// weight 0, exactly as production rows do, and it must be OUT of scope. Every
+// sparse row above passes under a presence test as well as a weight test, so
+// none of them can tell the two apart.
 //
 // "No category at all" (empty map, empty key) means OUT of scope under a
 // category filter, which is what the ARRAY JOIN did by producing no rows for
@@ -991,7 +997,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterSelectsWit
 // 4 filtered. Under the old ARRAY JOIN the filtered figure was 5, because the
 // two-matching unit was counted twice -- so this test also pins the
 // multiplicity fix from the selection side.
-func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectionUnchanged(t *testing.T) {
+func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveWeightUnits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
@@ -1023,6 +1029,7 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectionUnchang
 		subcats string
 		inScope bool
 	}{
+		// SPARSE shapes -- only the keys that apply are present.
 		{"wu-one-match", "map('feature_delivery.build', 1.0)", true},
 		{"wu-key-without-dot", "map('feature_delivery', 1.0)", true},
 		{"wu-two-matching", "map('feature_delivery.build', 0.5, 'feature_delivery.ship', 0.5)", true},
@@ -1030,6 +1037,16 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectionUnchang
 		{"wu-non-matching", "map('quality.test', 1.0)", false},
 		{"wu-empty-map", "map()", false},
 		{"wu-empty-key", "map('', 1.0)", false},
+
+		// DENSE shapes -- every key present, weight 0 where it does not
+		// apply. THIS IS WHAT PRODUCTION ACTUALLY LOOKS LIKE, and no sparse
+		// case can substitute for it: a predicate that tests key PRESENCE
+		// passes every sparse case above and still matches all 4977 units on
+		// the live org, where only 3514 carry positive feature_delivery
+		// weight. The filter was a no-op and nothing in this file could see
+		// it until these two rows existed.
+		{"wu-dense-positive", "map('feature_delivery.build', 1.0, 'feature_delivery.ship', 0, 'quality.test', 0, 'maintenance.debt', 0)", true},
+		{"wu-dense-zero", "map('feature_delivery.build', 0, 'feature_delivery.ship', 0, 'quality.test', 1.0, 'maintenance.debt', 0)", false},
 	}
 	wantFiltered := 0.0
 	for _, sh := range shapes {
@@ -1104,8 +1121,8 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectionUnchang
 		Why: &model.WhyFilterInput{WorkCategory: []string{"feature_delivery"}},
 	})
 	if math.Abs(got-wantFiltered) > tol {
-		t.Errorf("filtered repo_total = %v, want %v -- one per IN-SCOPE unit. %v would mean the two-matching unit is counted twice (the ARRAY JOIN multiplicity is back); a value below %v means a shape that used to be in scope is being excluded, which is a SELECTION change and a different defect entirely",
-			got, wantFiltered, wantFiltered+1, wantFiltered)
+		t.Errorf("filtered repo_total = %v, want %v -- one per IN-SCOPE unit. %v means wu-dense-zero is being selected, i.e. the predicate is testing key PRESENCE rather than positive weight and the filter has stopped filtering; %v means the two-matching unit is counted twice, i.e. the ARRAY JOIN multiplicity is back; below %v means a shape that should be in scope is being dropped, which is a selection regression",
+			got, wantFiltered, wantFiltered+1, wantFiltered+2, wantFiltered)
 	}
 }
 

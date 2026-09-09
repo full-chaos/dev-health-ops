@@ -155,7 +155,7 @@ Both counts are of DISTINCT keys -- `(work unit, repository)` pairs on top, work
 
 **A work-category filter selects work units; it does not weight them.** Filtering to a category changes which units are counted and nothing else, so a unit that matches the filter in two ways counts exactly as much as one that matches in a single way. This was not always true: until CHAOS-5498 the filter re-weighted units by their number of matching subcategories, which moved `repoCoverage` and `teamCoverage` as well as the split -- measured at 0.5 unfiltered against 0.333 filtered on identical data. Coverage figures taken from a filtered view before that fix are not comparable with ones taken after it.
 
-"No category at all" means out of scope under a category filter: a work unit whose subcategory distribution is empty is excluded, as it always was.
+A work unit is in scope for a category when it carries POSITIVE weight in that category, not merely a subcategory entry for it. Distributions are dense -- every unit carries an entry for every subcategory, weight zero where it does not apply -- so selecting on the presence of an entry would put every unit in scope and the filter would never remove anything. On the reference organization, all units carry a `feature_delivery` entry while about 71 percent carry positive `feature_delivery` weight.
 
 Note that the Python implementation still carries the old behaviour, so the two API planes can disagree on filtered coverage. The Go plane is the source of truth for these figures.
 

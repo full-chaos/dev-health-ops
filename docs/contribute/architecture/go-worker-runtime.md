@@ -895,6 +895,21 @@ The fix is structural, not a bigger number:
   counted (`sync_reconciler_stage_failures_total{stage}`,
   `sync_reconciler_stage_duration_seconds{stage}`) — visible on its own,
   whether or not it changes the tick's overall outcome.
+* The materializer emits `syncreconciler.materializer_pass` on **every** pass
+  (CHAOS-4359), carrying `dispatch` / `finalize` / `discovery` /
+  `discovery_rearmed` / `post_sync` with the zeros included, plus `ran`,
+  `failed_step` and `sqlstate`. Same contract, and the same reason, as
+  `ready_finalize_pass` and `orphaned_unit_pass`: a stage that ran and found
+  nothing has to be distinguishable in the log from one that never ran. It had
+  none of this before — the four affected-row counts were computed, returned on
+  `MaterializerResult`, and dropped by the pipeline, so a dispatch wakeup being
+  re-armed (or silently not being re-armed) was invisible at every level, which
+  is how CHAOS-4359's `planned` gap stranded five runs unobserved for eleven
+  days. The counts are published after `Materializer.Step` commits its own
+  transaction, so none of them can describe rolled-back work. `dispatch` is an
+  affected-row total including fresh inserts, **not** a re-arm count;
+  `discovery_rearmed` is the only narrow recovery count today (CHAOS-4357
+  round 2) and the dispatch equivalent is a CHAOS-4359 follow-up.
 * Critically, **the process no longer dies for this**. `Loop.run` only tears
   the process down for an error class it cannot self-heal from; a stage
   degrading (wrapped in `syncreconciler.ErrDegradedStage`, produced only when

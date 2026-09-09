@@ -392,6 +392,63 @@ func (pipeline *MutationPipeline) runStage(
 	return err
 }
 
+// logMaterializerPass is the materializer's per-pass telemetry, and it is
+// emitted on EVERY pass -- every field, zeros included -- for the same reason
+// syncreconciler.ready_finalize_pass and syncreconciler.orphaned_unit_pass
+// are (CHAOS-5456, CHAOS-5453): a stage that ran and found nothing must be
+// distinguishable, in the log, from a stage that never ran at all. A counter
+// that only appears when it is non-zero cannot answer "did this run", which
+// is the first question an operator asks about a stranded run.
+//
+// CHAOS-4359 is why it exists. The materializer had NO telemetry of its own:
+// its four statements' affected-row counts were computed, returned on
+// MaterializerResult, and then dropped -- only Runaway* and DiscoveryRearmed
+// were ever read by this pipeline. So a dispatch wakeup being re-armed, or
+// silently NOT being re-armed, was invisible at every log level, which is the
+// condition that let CHAOS-4359's own 'planned' gap sit unobserved for eleven
+// days on sync_run 837d069b while five runs stayed stranded.
+//
+// The counts are safe to publish here because Materializer.Step owns and
+// COMMITS its own transaction before returning -- unlike CHAOS-5456's
+// backstop, whose telemetry had to move out of the transaction after a commit
+// failure published a recovery that was then rolled back. Nothing this line
+// reports can describe uncommitted work.
+//
+// ran, failed_step and sqlstate carry the "which zero is this" distinction
+// explicitly rather than leaving a reader to infer it from five zeros: a pass
+// the repair stage aborted, a pass whose statement faulted, and a genuinely
+// idle pass all report the same counts and want different first questions.
+// failed_step/sqlstate are "" on every healthy pass (MaterializerStepIdentity
+// and MaterializerStepSQLState both answer "" for a nil error), so the
+// healthy line stays readable.
+//
+// dispatch/finalize/discovery/post_sync are AFFECTED-ROW totals, which
+// include fresh inserts, not just re-arms of a stranded row. discovery_rearmed
+// is the one narrow recovery count that exists today (CHAOS-4357 round 2);
+// dispatch has no equivalent yet -- tracked as a follow-up under CHAOS-4359.
+// Do not read `dispatch` as a re-arm count.
+func logMaterializerPass(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+	result MaterializerResult,
+	stepErr error,
+	ran bool,
+) {
+	slog.InfoContext(ctx, "syncreconciler.materializer_pass",
+		"ran", ran,
+		"dispatch", result.Dispatch,
+		"finalize", result.Finalize,
+		"discovery", result.Discovery,
+		"discovery_rearmed", result.DiscoveryRearmed,
+		"post_sync", result.PostSync,
+		"failed_step", MaterializerStepIdentity(stepErr),
+		"sqlstate", MaterializerStepSQLState(stepErr),
+		"limit", limit,
+		"now", now.UTC().Format(time.RFC3339Nano),
+	)
+}
+
 func (pipeline *MutationPipeline) Step(
 	ctx context.Context,
 	now time.Time,
@@ -731,9 +788,14 @@ func (pipeline *MutationPipeline) Step(
 			)
 			return stepErr
 		})
+		// Emitted BEFORE the ctx-cancellation early return below, so a pass
+		// that died on a cancelled context still says what it had done.
+		logMaterializerPass(ctx, now, limit, materialized, materializerErr, true)
 		if materializerErr != nil && ctx.Err() != nil {
 			return recovered, materializerErr
 		}
+	} else {
+		logMaterializerPass(ctx, now, limit, MaterializerResult{}, nil, false)
 	}
 	// CHAOS-4097: one sync_dispatch_outbox row reached attempts = 72601 in
 	// production, generating roughly 1500 no-op River jobs a minute for

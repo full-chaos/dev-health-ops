@@ -21,7 +21,10 @@ func wellFormedReceipt() Receipt {
 		OrgID:             "70d529e0",
 		RecordedBy:        "go-api-prove",
 		MeasurementRoute:  RouteEdge,
-		ObservedAt:        time.Unix(1757000000, 0).UTC(),
+		// Required since CHAOS-5484: Write refuses a receipt that does
+		// not say whether the build was bound per response.
+		BuildBinding: EdgeBuildPresent,
+		ObservedAt:   time.Unix(1757000000, 0).UTC(),
 	}
 }
 
@@ -72,6 +75,51 @@ func TestWriteRefusesAReceiptWithNoMeasurementRoute(t *testing.T) {
 			_, err := Write(context.Background(), nil, receipt)
 			if err != nil && strings.Contains(err.Error(), "measurement route") {
 				t.Fatalf("route %q is legal but the guard refused it: %v", route, err)
+			}
+		}()
+	}
+}
+
+// CHAOS-5484 added a third pre-database guard beside the two above, and it
+// arrived without a unit killer -- only the integration suite touched it.
+// Same argument as the measurement-route guard one line down from it: a
+// receipt that does not say how well it knew which build served it cannot
+// be told apart later from one that knew exactly, and `proven` is keyed on
+// candidate_build.
+func TestWriteRefusesAReceiptWithNoBuildBinding(t *testing.T) {
+	for _, binding := range []string{"", "run_level", "per-request", "strong"} {
+		receipt := wellFormedReceipt()
+		receipt.BuildBinding = binding
+
+		// db is nil on purpose: the guard must fire BEFORE any statement
+		// is sent, so a nil Querier proves nothing was executed.
+		_, err := Write(context.Background(), nil, receipt)
+		if err == nil {
+			t.Fatalf("build binding %q was accepted", binding)
+		}
+		if !strings.Contains(err.Error(), "build binding") {
+			t.Fatalf("binding %q: the refusal must name the binding, got: %v", binding, err)
+		}
+	}
+
+	// "run_level" is first in that list on purpose: it is what an earlier
+	// draft of CHAOS-5484 called the weak case, so it is the value a
+	// future writer is most likely to reinvent. It was dropped because
+	// every row that exists already carries run-level evidence -- R70
+	// makes VerifyCandidateBuild a hard refusal -- so the value would
+	// distinguish nothing. The DB CHECK says the same thing; this says it
+	// before the round trip.
+
+	// Control: both legal bindings pass the guard and reach the database
+	// (nil here, so getting past shows in the error, not a refusal).
+	for _, binding := range []string{EdgeBuildPresent, EdgeBuildAbsent} {
+		receipt := wellFormedReceipt()
+		receipt.BuildBinding = binding
+		func() {
+			defer func() { _ = recover() }()
+			_, err := Write(context.Background(), nil, receipt)
+			if err != nil && strings.Contains(err.Error(), "build binding") {
+				t.Fatalf("binding %q is legal but the guard refused it: %v", binding, err)
 			}
 		}()
 	}

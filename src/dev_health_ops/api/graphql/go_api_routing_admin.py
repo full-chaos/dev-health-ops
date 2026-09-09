@@ -41,6 +41,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
+from sqlalchemy.sql.elements import ColumnElement
 
 from dev_health_ops.models.go_api_registry import ProofRun, RoutingState
 
@@ -48,9 +49,16 @@ from .go_api_registry import register_candidate_build
 
 __all__ = [
     "DISABLE_MODES",
+    "ENABLEMENT_PROOF_CITED_MISMATCH_STATE",
     "ENABLEMENT_PROOF_STAGE",
-    "build_enablement_proof_select",
     "ENABLEMENT_PROOF_TERMINAL_STATE",
+    "ENABLEMENT_PROOF_TERMINAL_STATES",
+    "ENABLEMENT_TARGET_MODES",
+    "ENABLEMENT_TARGET_MODE_ANY_ROUTE",
+    "ENABLEMENT_TARGET_MODE_EDGE_ONLY",
+    "MEASUREMENT_ROUTE_EDGE",
+    "MEASUREMENT_ROUTE_PROOF",
+    "build_enablement_proof_select",
     "OperationStatus",
     "count_rows_by_schema_digest",
     "enable_operation",
@@ -71,11 +79,64 @@ __all__ = [
 #: be unsatisfiable, since reaching them is what enabling the row does.
 ENABLEMENT_PROOF_STAGE = "deployed_executed"
 
-#: Only a ``match`` counts. A ``deployed_executed`` proof run that
-#: terminated in ``mismatch``/``timeout``/``fallback`` is evidence the
-#: operation is NOT ready -- treating any terminal state as "proof exists"
-#: would make the gate worse than absent, because it would look enforced.
+#: A ``match`` always counts. Nothing else counts on its own: a
+#: ``deployed_executed`` run that terminated in ``timeout``/``fallback``/
+#: ``unsupported``/``proof_failed`` is evidence the operation is NOT
+#: ready, and treating any terminal state as "proof exists" would make the
+#: gate worse than absent, because it would look enforced.
 ENABLEMENT_PROOF_TERMINAL_STATE = "match"
+
+#: The ONE exception, added by CHAOS-5484 (team-lead ruling R60): a
+#: ``mismatch`` in which every difference is a named defect in the PYTHON
+#: baseline. Those are the divergences where Python is wrong and Go is
+#: right (CHAOS-5447/5448/5449/5450), so refusing them would mean an
+#: operation could never be enabled until Python was fixed -- which is
+#: backwards, since enabling Go is how the Python defect stops being
+#: served.
+#:
+#: The receipt is NOT rewritten. ``terminal_state`` stays ``mismatch``
+#: forever; this changes only how a receipt is READ.
+ENABLEMENT_PROOF_CITED_MISMATCH_STATE = "mismatch"
+
+#: Every terminal state the preflight can be satisfied by, for operator
+#: messages that have to name them. ``mismatch`` appears here only under
+#: the citation conditions in :func:`build_enablement_proof_select`;
+#: listing it unqualified would misdescribe the rule.
+ENABLEMENT_PROOF_TERMINAL_STATES = (
+    ENABLEMENT_PROOF_TERMINAL_STATE,
+    ENABLEMENT_PROOF_CITED_MISMATCH_STATE,
+)
+
+#: Measurement routes, mirroring go_api_proof_run's CHECK constraint and
+#: internal/goapiproof's RouteEdge/RouteProof.
+MEASUREMENT_ROUTE_EDGE = "edge"
+MEASUREMENT_ROUTE_PROOF = "proof"
+
+#: Target modes `enable` can be asked for, and the route rule each one
+#: carries (team-lead ruling, 2026-09-09).
+#:
+#: * ``canary``  -- any recorded route. A shadow operation can ONLY be
+#:                  measured through ``/query/proof``, because
+#:                  PostgresSwitch.Enabled admits canary|primary only and
+#:                  the deployed build will not execute a shadow operation
+#:                  on ``/query`` at all. Requiring edge evidence here
+#:                  would mean an operation could only be proven after it
+#:                  had already been enabled.
+#: * ``primary`` -- ``edge`` only. Promotion to primary is promotion to
+#:                  served traffic, and ``/query/proof`` is a
+#:                  measurement-only handler unreachable from the product
+#:                  edge: a proof-route receipt says the build CAN serve
+#:                  the operation, not that the edge DOES.
+#:
+#: A NULL route satisfies neither. "Any route" is not "no route", and
+#: admitting unknown provenance is the same failure shape as reading a
+#: DEFAULT 0 as an assertion.
+ENABLEMENT_TARGET_MODE_ANY_ROUTE = "canary"
+ENABLEMENT_TARGET_MODE_EDGE_ONLY = "primary"
+ENABLEMENT_TARGET_MODES = (
+    ENABLEMENT_TARGET_MODE_ANY_ROUTE,
+    ENABLEMENT_TARGET_MODE_EDGE_ONLY,
+)
 
 #: Modes `disable` may set. All three make an operation UNREACHABLE to a
 #: real client, which is the whole point of the verb:
@@ -414,6 +475,7 @@ async def operations_with_enablement_proof(
     schema_digest: str,
     candidate_build: str,
     operations: Mapping[str, str],
+    target_mode: str,
 ) -> frozenset[str]:
     """Which of ``operations`` have a ``deployed_executed``/``match``
     proof run for EXACTLY this ``(schema_digest, candidate_build)``.
@@ -434,9 +496,53 @@ async def operations_with_enablement_proof(
             schema_digest=schema_digest,
             candidate_build=candidate_build,
             operations=operations,
+            target_mode=target_mode,
         )
     )
     return frozenset(result.scalars().all())
+
+
+def _admissible_terminal_state() -> ColumnElement[bool]:
+    """Which terminal states authorize an enablement.
+
+    A ``match``, or a ``mismatch`` in which every difference was cited
+    against a named Python defect. The three conditions on the mismatch
+    arm are all load-bearing and none is belt-and-braces:
+
+    * ``differences_outside_baseline_defect == 0`` -- nothing diverged
+      that no declared defect covers.
+    * ``baseline_defect IS NOT NULL`` -- and this is the subtle one. That
+      counter is ``NOT NULL DEFAULT 0``, so a bare ``== 0`` cannot tell
+      "computed, and every difference was cited" apart from "this row
+      predates the column and nothing ever computed it". Requiring a
+      citation is what disambiguates: only a row that actually named a
+      ticket can promote.
+    * ``cardinality(...) > 0`` -- because an empty array is a writer that
+      had the column and cited nothing, and without this the IS NOT NULL
+      test could be satisfied by writing ``'{}'``.
+    """
+    return or_(
+        ProofRun.terminal_state == ENABLEMENT_PROOF_TERMINAL_STATE,
+        and_(
+            ProofRun.terminal_state == ENABLEMENT_PROOF_CITED_MISMATCH_STATE,
+            ProofRun.differences_outside_baseline_defect == 0,
+            ProofRun.baseline_defect.is_not(None),
+            func.cardinality(ProofRun.baseline_defect) > 0,
+        ),
+    )
+
+
+def _admissible_route(target_mode: str) -> ColumnElement[bool]:
+    """Which measurement routes authorize enabling into ``target_mode``.
+
+    See :data:`ENABLEMENT_TARGET_MODES` for why the two modes differ. Both
+    branches require the route to be RECORDED: a NULL is a pre-0128 row
+    that says nothing about how it was measured, and "any route" is not
+    "no route".
+    """
+    if target_mode == ENABLEMENT_TARGET_MODE_EDGE_ONLY:
+        return ProofRun.measurement_route == MEASUREMENT_ROUTE_EDGE
+    return ProofRun.measurement_route.is_not(None)
 
 
 def build_enablement_proof_select(
@@ -444,6 +550,7 @@ def build_enablement_proof_select(
     schema_digest: str,
     candidate_build: str,
     operations: Mapping[str, str],
+    target_mode: str,
 ) -> Select[tuple[str]]:
     """The SELECT :func:`operations_with_enablement_proof` executes.
 
@@ -454,6 +561,17 @@ def build_enablement_proof_select(
     failed it. The behaviour needs no database to verify, so the seam is
     worth having.
     """
+    # Fail CLOSED on a mode this function has no rule for. An unknown
+    # target mode must never fall through to the more permissive branch:
+    # that is how a promotion to served traffic would quietly accept
+    # measurement-only evidence.
+    if target_mode not in ENABLEMENT_TARGET_MODES:
+        raise ValueError(
+            f"build_enablement_proof_select: unknown target mode {target_mode!r} "
+            f"-- expected one of {', '.join(ENABLEMENT_TARGET_MODES)}. Refusing "
+            "to compile a predicate whose route rule is undefined."
+        )
+
     # The key is FOUR columns, and `document_digest` is not optional
     # (codex r1, P2 -- it was missing, so a proof recorded against a
     # DIFFERENT registered document could authorize an enablement).
@@ -466,7 +584,8 @@ def build_enablement_proof_select(
             ProofRun.schema_digest == schema_digest,
             ProofRun.candidate_build == candidate_build,
             ProofRun.stage == ENABLEMENT_PROOF_STAGE,
-            ProofRun.terminal_state == ENABLEMENT_PROOF_TERMINAL_STATE,
+            _admissible_terminal_state(),
+            _admissible_route(target_mode),
             or_(
                 *(
                     and_(
@@ -532,22 +651,37 @@ async def routing_status_rows(
                 row.schema_digest
             )
 
-    live_builds = {row.current_candidate_build for row in live_by_operation.values()}
+    # Grouped by (candidate build, the mode's own route rule), because
+    # CHAOS-5484 made admissibility depend on where the row IS. A row at
+    # `primary` is serving real traffic and needs EDGE evidence; a row
+    # anywhere else is admissible on any recorded route. Reporting every
+    # row against the laxer rule would mark a primary row PROVEN on
+    # measurement-only evidence -- the exact claim the split exists to
+    # stop -- and reporting every row against the stricter one would mark
+    # a legitimately-proven shadow row UNPROVEN, since a shadow operation
+    # cannot be measured on the edge at all.
     proven: frozenset[str] = frozenset()
-    for build in sorted(live_builds):
+    grouped: dict[tuple[str, str], dict[str, str]] = {}
+    for operation, row in live_by_operation.items():
+        target_mode = (
+            ENABLEMENT_TARGET_MODE_EDGE_ONLY
+            if row.mode == ENABLEMENT_TARGET_MODE_EDGE_ONLY
+            else ENABLEMENT_TARGET_MODE_ANY_ROUTE
+        )
+        # The row's OWN document_digest, not the catalog's: this reports
+        # what is actually in the table, and a row whose document digest
+        # has drifted from the catalog must not borrow the catalog's
+        # proof.
+        grouped.setdefault((row.current_candidate_build, target_mode), {})[
+            operation
+        ] = row.document_digest
+    for (build, target_mode), operations in sorted(grouped.items()):
         proven |= await operations_with_enablement_proof(
             session,
             schema_digest=live_schema_digest,
             candidate_build=build,
-            # The row's OWN document_digest, not the catalog's: this reports
-            # what is actually in the table, and a row whose document digest
-            # has drifted from the catalog must not borrow the catalog's
-            # proof.
-            operations={
-                operation: row.document_digest
-                for operation, row in live_by_operation.items()
-                if row.current_candidate_build == build
-            },
+            operations=operations,
+            target_mode=target_mode,
         )
 
     statuses: list[OperationStatus] = []

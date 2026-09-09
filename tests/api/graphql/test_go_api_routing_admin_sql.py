@@ -16,7 +16,9 @@ from __future__ import annotations
 from sqlalchemy.dialects import postgresql
 
 
-def _compiled_proof_query(operations: dict[str, str]) -> str:
+def _compiled_proof_query(
+    operations: dict[str, str], target_mode: str = "canary"
+) -> str:
     """Compile THE PRODUCTION statement.
 
     codex r3 (P3): this used to rebuild the same clauses by hand and compile
@@ -33,6 +35,7 @@ def _compiled_proof_query(operations: dict[str, str]) -> str:
         schema_digest="sha256:live",
         candidate_build="build-1",
         operations=operations,
+        target_mode=target_mode,
     )
     return str(
         stmt.compile(
@@ -110,6 +113,7 @@ def test_zero_operations_never_reaches_the_database() -> None:
                 schema_digest="sha256:live",
                 candidate_build="b",
                 operations={},
+                target_mode="canary",
             )
         )
         == frozenset()

@@ -19,15 +19,10 @@ equivalent.
 from __future__ import annotations
 
 import os
-import uuid
-from collections.abc import AsyncIterator
-from typing import cast
 
 import pytest
-import pytest_asyncio
 import sqlalchemy as sa
-from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.graphql.go_api_registry import (
     record_proof_run,
@@ -41,7 +36,6 @@ from dev_health_ops.api.graphql.go_api_routing_admin import (
     operations_with_enablement_proof,
     routing_status_rows,
 )
-from dev_health_ops.models.git import Base
 from dev_health_ops.models.go_api_registry import (
     CandidateBuild,
     ProofRun,
@@ -68,59 +62,6 @@ CATALOG: tuple[tuple[str, str], ...] = (
     ("featureFlags", "doc-feature-flags"),
     ("reviewEdges", "doc-review-edges"),
 )
-
-
-@pytest_asyncio.fixture
-async def session() -> AsyncIterator[AsyncSession]:
-    """A scratch database with only the three go_api registry tables."""
-    assert POSTGRES_TEST_URI is not None
-    db_name = f"lane_go_api_routing_admin_{uuid.uuid4().hex}"
-    admin = sa.create_engine(
-        make_url(POSTGRES_TEST_URI).set(drivername="postgresql+psycopg2"),
-        isolation_level="AUTOCOMMIT",
-    )
-    try:
-        with admin.connect() as connection:
-            connection.exec_driver_sql(f'CREATE DATABASE "{db_name}"')
-    finally:
-        admin.dispose()
-
-    scratch_url = make_url(POSTGRES_TEST_URI).set(database=db_name)
-    sync_engine = sa.create_engine(scratch_url.set(drivername="postgresql+psycopg2"))
-    try:
-        # cast: SQLAlchemy types ``__table__`` as FromClause, but
-        # create_all wants Table. Same cast test_go_api_livelocal.py's
-        # scratch-DB fixture already uses for these exact three tables.
-        registry_tables = cast(
-            list[sa.Table],
-            [CandidateBuild.__table__, RoutingState.__table__, ProofRun.__table__],
-        )
-        Base.metadata.create_all(sync_engine, tables=registry_tables)
-    finally:
-        sync_engine.dispose()
-
-    engine = create_async_engine(
-        scratch_url.set(drivername="postgresql+asyncpg").render_as_string(
-            hide_password=False
-        )
-    )
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    try:
-        async with factory() as async_session:
-            yield async_session
-    finally:
-        await engine.dispose()
-        admin = sa.create_engine(
-            make_url(POSTGRES_TEST_URI).set(drivername="postgresql+psycopg2"),
-            isolation_level="AUTOCOMMIT",
-        )
-        try:
-            with admin.connect() as connection:
-                connection.exec_driver_sql(
-                    f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)'
-                )
-        finally:
-            admin.dispose()
 
 
 async def _enable_all(
@@ -279,6 +220,24 @@ async def test_status_reports_missing_for_operations_never_enabled(
         assert by_operation[other].reachable is False
 
 
+async def _record_measurement_provenance(
+    session: AsyncSession, *, route: str = "edge", binding: str = "absent"
+) -> None:
+    """Stamp measurement provenance on every proof run seeded so far.
+
+    CHAOS-5484 made a RECORDED measurement route part of admissibility --
+    "any route" is not "no route", because a NULL is a pre-0128 row that
+    says nothing about how it was measured. ``record_proof_run`` does not
+    write that column (its only callers are tests; the real writer is
+    ``cmd/go-api-prove``), so these tests stamp it explicitly. Without
+    this the rows below would be refused for a reason unrelated to what
+    each test is actually about.
+    """
+    await session.execute(
+        sa.update(ProofRun).values(measurement_route=route, build_binding=binding)
+    )
+
+
 @pytest.mark.asyncio
 async def test_status_reports_proven_only_with_a_matching_proof_run(
     session: AsyncSession,
@@ -296,6 +255,7 @@ async def test_status_reports_proven_only_with_a_matching_proof_run(
         stage=ENABLEMENT_PROOF_STAGE,
         terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
     )
+    await _record_measurement_provenance(session)
     await session.commit()
 
     statuses = await routing_status_rows(
@@ -353,6 +313,10 @@ async def test_proof_is_scoped_to_the_exact_build_and_digest(
             stage=stage,
             terminal_state=terminal_state,
         )
+    # Every row above is a near-miss on some OTHER key column; leaving the
+    # route NULL would let them be refused for a reason unrelated to the
+    # scoping under test.
+    await _record_measurement_provenance(session)
     await session.commit()
 
     assert (
@@ -361,6 +325,7 @@ async def test_proof_is_scoped_to_the_exact_build_and_digest(
             schema_digest=LIVE,
             candidate_build=BUILD,
             operations={operation: document_digest},
+            target_mode="canary",
         )
         == frozenset()
     )
@@ -376,6 +341,7 @@ async def test_proof_is_scoped_to_the_exact_build_and_digest(
         stage=ENABLEMENT_PROOF_STAGE,
         terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
     )
+    await _record_measurement_provenance(session)
     await session.commit()
 
     assert await operations_with_enablement_proof(
@@ -383,6 +349,7 @@ async def test_proof_is_scoped_to_the_exact_build_and_digest(
         schema_digest=LIVE,
         candidate_build=BUILD,
         operations={operation: document_digest},
+        target_mode="canary",
     ) == frozenset({operation})
 
 

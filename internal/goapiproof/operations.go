@@ -288,6 +288,21 @@ var operationSpecs = map[string]OperationSpec{
 	// field -- teamCoverage shares the same sum()/sumIf() expressions and
 	// is declared alongside it rather than left to fail only on a future
 	// run where the summation order happens to differ.
+	//
+	// Coverage under a WORK-CATEGORY FILTER is a separate question from
+	// the declaration above, and is knowingly left undeclared. CHAOS-5498
+	// found that `ARRAY JOIN subcategory_kv` re-weights each unit by its
+	// surviving subcategory count, in BOTH the numerator and the
+	// denominator, so a filter moves the headline on identical data
+	// (measured 0.5 -> 0.333). Today it is not a parity finding at all:
+	// the defect is pre-existing in Go (sankeycoverage.go) AND in the
+	// Python original (resolvers/analytics.py:833), both wrong the same
+	// way, so the planes AGREE and a baseline-defect declaration here
+	// would match nothing and fail every run as stale. After 5498's Go-side
+	// fix lands they will diverge -- but only under that filter, and no
+	// registered document sends one (investmentVariables below sets no
+	// filters at all), so the path stays unmeasured either way. Declare it
+	// only if a registered document starts sending a work-category filter.
 	"investmentFull": {
 		ResponseRoot: "analytics",
 		Variables:    investmentFullVariables,

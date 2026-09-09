@@ -62,6 +62,14 @@ type Receipt struct {
 	// "every difference here is a known Python defect" is a claim a
 	// reader can check rather than take on trust.
 	DifferencesOutsideBaselineDefect int
+
+	// BuildBinding is EdgeBuildPresent or EdgeBuildAbsent -- how strongly
+	// the measurement tied the serving build to the request it compared
+	// (alembic 0129, CHAOS-5484). Required for the same reason
+	// MeasurementRoute is: a receipt that did not say how well it knew
+	// which build served it cannot be told apart later from one that knew
+	// exactly.
+	BuildBinding string
 }
 
 // Querier is the subset of pgx this package needs, so a test can pass a
@@ -135,6 +143,9 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 	if receipt.CandidateBuild == "" {
 		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt with an empty candidate build")
 	}
+	if !buildBindings[receipt.BuildBinding] {
+		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt with build binding %q -- expected %q or %q", receipt.BuildBinding, EdgeBuildPresent, EdgeBuildAbsent)
+	}
 	if !measurementRoutes[receipt.MeasurementRoute] {
 		// A receipt with no route cannot be told apart from served
 		// traffic later, which is the entire reason the column exists.
@@ -159,8 +170,9 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 		    request_identity, stage, terminal_state,
 		    baseline_response_ref, candidate_response_ref,
 		    data_watermark, org_id, review_evidence, recorded_by, observed_at,
-		    measurement_route, baseline_defect, differences_outside_baseline_defect)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+		    measurement_route, baseline_defect, differences_outside_baseline_defect,
+		    build_binding)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		id, receipt.SchemaDigest, receipt.DocumentDigest, receipt.SelectedOperation, receipt.CandidateBuild,
 		receipt.RequestIdentity, receipt.Stage, receipt.TerminalState,
 		nullIfEmpty(receipt.BaselineResponseRef), nullIfEmpty(receipt.CandidateResponseRef),
@@ -168,6 +180,7 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 		nullIfEmpty(receipt.ReviewEvidence), nullIfEmpty(receipt.RecordedBy), receipt.ObservedAt,
 		nullIfEmpty(receipt.MeasurementRoute), receipt.BaselineDefects,
 		receipt.DifferencesOutsideBaselineDefect,
+		nullIfEmpty(receipt.BuildBinding),
 	); err != nil {
 		return uuid.Nil, fmt.Errorf("goapiproof: record proof run for %s: %w", receipt.SelectedOperation, err)
 	}
@@ -183,6 +196,8 @@ var stages = map[string]bool{
 }
 
 var measurementRoutes = map[string]bool{RouteEdge: true, RouteProof: true}
+
+var buildBindings = map[string]bool{EdgeBuildPresent: true, EdgeBuildAbsent: true}
 
 var terminalStates = map[string]bool{
 	"match": true, "mismatch": true, "auth_rejected": true, "validation_rejected": true,
@@ -213,6 +228,61 @@ func nullIfEmpty(value string) any {
 	return value
 }
 
+// Target modes `dev-hops go-api routing enable` can be asked for, and the
+// route rule each carries (team-lead ruling, 2026-09-09; CHAOS-5484).
+//
+// TargetModeCanary admits a receipt measured on ANY recorded route,
+// because a shadow operation can only ever be measured on /query/proof:
+// PostgresSwitch.Enabled admits canary|primary only, so the deployed
+// build will not execute a shadow operation on /query at all. Requiring
+// edge evidence there would mean an operation could only be proven after
+// it had already been enabled.
+//
+// TargetModePrimary admits ONLY RouteEdge. Promotion to primary is
+// promotion to served traffic, and /query/proof is a measurement-only
+// handler unreachable from the product edge -- a proof-route receipt says
+// the build CAN serve the operation, not that the edge DOES.
+const (
+	TargetModeCanary  = "canary"
+	TargetModePrimary = "primary"
+)
+
+// EnablementCitedMismatchState is the one terminal state other than
+// `match` that can authorize an enablement, and only under the citation
+// conditions below. The receipt is never rewritten: a mismatch stays a
+// mismatch in the row and is merely READ as sufficient when every
+// difference it found was a named defect in the PYTHON baseline.
+const EnablementCitedMismatchState = "mismatch"
+
+// enablementProofPredicate is the admission rule, as SQL over one
+// go_api_proof_run row.
+//
+// The three conditions on the mismatch arm are each load-bearing:
+//
+//   - differences_outside_baseline_defect = 0 -- nothing diverged that no
+//     declared defect covers.
+//   - baseline_defect IS NOT NULL -- because that counter is NOT NULL
+//     DEFAULT 0, so a bare `= 0` cannot tell "computed, and every
+//     difference was cited" apart from "this row predates the column and
+//     nothing ever computed it". A citation is what disambiguates.
+//   - cardinality(...) > 0 -- an empty array is a writer that had the
+//     column and cited nothing; without this, IS NOT NULL could be
+//     satisfied by writing '{}'.
+//
+// The Python preflight (go_api_routing_admin.build_enablement_proof_select)
+// implements the same rule in SQLAlchemy expressions with a tuple-OR join
+// shape, so the two statements can never be compared as text. They are
+// pinned by BEHAVIOUR instead: both sides' tests drive their own
+// production predicate over tests/fixtures/enablement_proof_admission_cases.json.
+const enablementProofPredicate = `p.stage = $3
+		    AND (
+		          p.terminal_state = $6
+		       OR (p.terminal_state = $7
+		           AND p.differences_outside_baseline_defect = 0
+		           AND p.baseline_defect IS NOT NULL
+		           AND cardinality(p.baseline_defect) > 0)
+		    )`
+
 // OperationsWithEnablementProof is the Go reader for the exact predicate
 // `enable`'s preflight uses (go_api_routing_admin.build_enablement_proof_select).
 //
@@ -223,13 +293,33 @@ func nullIfEmpty(value string) any {
 // document digest as a tuple-OR rather than two independent IN lists: the
 // cross-product form would accept a proof recorded against a DIFFERENT
 // registered document.
+//
+// targetMode selects the route rule -- see TargetModeCanary/TargetModePrimary.
+// An unrecognised mode is an ERROR, never a fallthrough to the more
+// permissive branch: that is exactly how a promotion to served traffic
+// would quietly come to rest on measurement-only evidence.
 func OperationsWithEnablementProof(
 	ctx context.Context,
 	db Querier,
 	schemaDigest string,
 	candidateBuild string,
+	targetMode string,
 	documentDigestByOperation map[string]string,
 ) (map[string]bool, error) {
+	var routeClause string
+	switch targetMode {
+	case TargetModePrimary:
+		routeClause = "p.measurement_route = '" + RouteEdge + "'"
+	case TargetModeCanary:
+		// Recorded, not merely anything. A NULL is a pre-0128 row that
+		// says nothing about how it was measured, and "any route" is not
+		// "no route" -- admitting unknown provenance is the same failure
+		// shape as reading a DEFAULT 0 as an assertion.
+		routeClause = "p.measurement_route IS NOT NULL"
+	default:
+		return nil, fmt.Errorf("goapiproof: unknown enablement target mode %q -- expected %q or %q; refusing to read a predicate whose route rule is undefined", targetMode, TargetModeCanary, TargetModePrimary)
+	}
+
 	found := map[string]bool{}
 	if len(documentDigestByOperation) == 0 {
 		return found, nil
@@ -250,10 +340,11 @@ func OperationsWithEnablementProof(
 		    AND want.document_digest = p.document_digest
 		  WHERE p.schema_digest = $1
 		    AND p.candidate_build = $2
-		    AND p.stage = $3
-		    AND p.terminal_state = $6`,
+		    AND `+enablementProofPredicate+`
+		    AND `+routeClause,
 		schemaDigest, candidateBuild, EnablementProofStage,
 		operations, digests, EnablementProofTerminalState,
+		EnablementCitedMismatchState,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("goapiproof: read enablement proof: %w", err)

@@ -68,6 +68,32 @@ const (
 	RouteProof = "proof"
 )
 
+// The build binding is recorded on every receipt (alembic 0129,
+// CHAOS-5484) because "which build served this" and "how do we KNOW which
+// build served this" are different claims, and only the second one tells
+// an enablement rule how much the first is worth.
+//
+// The column answers exactly ONE question -- was the build bound PER
+// RESPONSE? -- and the vocabulary is EdgeBuildPresent / EdgeBuildAbsent
+// accordingly (team-lead ruling, 2026-09-10). An earlier draft of 5484
+// named the weak case "run_level", for the run-level evidence behind it:
+// an authenticated /buildinfo read before and after, agreeing with every
+// routing row's current_candidate_build. That value was dropped, because
+// under R70 VerifyCandidateBuild is a HARD refusal -- so no proof row is
+// ever written WITHOUT that run-level evidence. "run_level" would be true
+// of every weak row and a third value would name a state no writer can
+// produce. The run-level evidence is implied by the row existing at all,
+// and by candidate_build matching; this column adds the one fact that is
+// not implied.
+//
+// Today the value is a function of the route: proof stamps the header,
+// the edge cannot because the Python edge rebuilds the response with only
+// content, status and media_type (CHAOS-5479). Stored anyway, and the
+// redundancy is the point: when #2365 deletes that edge and edge
+// responses start carrying the header, the derivation silently becomes
+// wrong and every earlier edge row would read as strongly bound. A claim
+// is worth writing down while the writer can still vouch for it.
+
 // planeHeader is the response header the Python edge stamps with the
 // plane that actually served a request (go_api_dispatcher's
 // _with_plane_header, gated by GO_API_PLANE_HEADER_ENABLED). Without it,
@@ -443,6 +469,7 @@ func (r *Runner) ReceiptsFor(observedAt time.Time) ([]Receipt, error) {
 			BaselineResponseRef:              sealed.baselineRef,
 			CandidateResponseRef:             sealed.candidateRef,
 			MeasurementRoute:                 sealed.route,
+			BuildBinding:                     sealed.edgeBinding,
 			BaselineDefects:                  sealed.baselineDefects,
 			DifferencesOutsideBaselineDefect: sealed.differencesOutsideBaselineDefect,
 		})
@@ -500,6 +527,7 @@ func (r *Runner) RefusalReceipts(observedAt time.Time, cause string) ([]Receipt,
 			RecordedBy:        r.Config.RecordedBy,
 			ObservedAt:        observedAt,
 			MeasurementRoute:  sealed.route,
+			BuildBinding:      sealed.edgeBinding,
 		})
 	}
 	return receipts, nil

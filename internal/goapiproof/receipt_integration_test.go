@@ -15,8 +15,9 @@ import (
 )
 
 // registryDDL mirrors alembic 0114 (the three tables), 0127 (the
-// review_evidence/recorded_by provenance columns) and 0128 (the
-// measurement-route / baseline-defect provenance columns).
+// review_evidence/recorded_by provenance columns), 0128 (the
+// measurement-route / baseline-defect provenance columns) and 0129
+// (build_binding).
 //
 // The constraints are not decoration and are NOT trimmed to "what the
 // test needs": the 4-column composite FK from go_api_proof_run to
@@ -88,6 +89,7 @@ CREATE TABLE go_api_proof_run (
 	measurement_route TEXT,
 	baseline_defect TEXT[],
 	differences_outside_baseline_defect INTEGER NOT NULL DEFAULT 0,
+	build_binding TEXT,
 	observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	CONSTRAINT fk_go_api_proof_run_candidate_build
 		FOREIGN KEY (schema_digest, document_digest, selected_operation, candidate_build)
@@ -98,6 +100,8 @@ CREATE TABLE go_api_proof_run (
 		CHECK (terminal_state IN ('match', 'mismatch', 'auth_rejected', 'validation_rejected',
 			'dependency_failed', 'timeout', 'cancelled', 'resource_exhausted',
 			'fallback', 'unsupported', 'proof_failed')),
+	CONSTRAINT ck_go_api_proof_run_build_binding
+		CHECK (build_binding IS NULL OR build_binding IN ('per_request', 'absent')),
 	CONSTRAINT ck_go_api_proof_run_shadow_requires_watermark
 		CHECK (stage <> 'shadow' OR data_watermark IS NOT NULL),
 	CONSTRAINT ck_go_api_proof_run_measurement_route
@@ -156,6 +160,7 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		OrgID:             "70d529e0",
 		RecordedBy:        "lane-5425-prove",
 		ReviewEvidence:    "CHAOS-5425 integration test",
@@ -166,7 +171,7 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 	}
 
 	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-		map[string]string{"featureFlags": testDocumentDigest})
+		TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("OperationsWithEnablementProof: %v", err)
 	}
@@ -192,6 +197,7 @@ func TestEnablementPredicateRejectsEveryWrongKeyColumn(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}
 
@@ -206,7 +212,7 @@ func TestEnablementPredicateRejectsEveryWrongKeyColumn(t *testing.T) {
 				t.Fatalf("Write: %v", err)
 			}
 			found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-				map[string]string{"featureFlags": testDocumentDigest})
+				TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 			if err != nil {
 				t.Fatalf("OperationsWithEnablementProof: %v", err)
 			}
@@ -233,6 +239,7 @@ func TestMismatchReceiptIsRecordedButAuthorizesNothing(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     TerminalStateMismatch,
 		MeasurementRoute:  RouteProof,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}
 	if _, err := Write(ctx, pool, receipt); err != nil {
@@ -250,7 +257,7 @@ func TestMismatchReceiptIsRecordedButAuthorizesNothing(t *testing.T) {
 	}
 
 	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-		map[string]string{"featureFlags": testDocumentDigest})
+		TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("OperationsWithEnablementProof: %v", err)
 	}
@@ -275,6 +282,7 @@ func TestReceiptsAreAppendOnly(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}
 	if _, err := Write(ctx, pool, base); err != nil {
@@ -310,6 +318,7 @@ func TestCandidateBuildRegistrationIsIdempotent(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}
 	for i := 0; i < 3; i++ {
@@ -389,6 +398,14 @@ func TestWriteParticipatesInTheCallersTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
+	// Rollback is deferred as well as asserted below, because a t.Fatalf
+	// between here and the explicit Rollback calls runtime.Goexit and
+	// skips it -- and then t.Cleanup's pool.Close blocks forever waiting
+	// for the connection this transaction still holds. That turned a
+	// two-second Write failure into a 25-minute test-binary timeout whose
+	// panic named this test and not the three that had actually failed.
+	// The second Rollback is a no-op on an already-finished transaction.
+	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := Write(ctx, tx, Receipt{
 		SchemaDigest:      testSchemaDigest,
 		DocumentDigest:    testDocumentDigest,
@@ -398,6 +415,7 @@ func TestWriteParticipatesInTheCallersTransaction(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -431,6 +449,7 @@ func TestWriteAtomicCommitsBothRows(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("WriteAtomic: %v", err)
@@ -486,7 +505,7 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 
 	// ZERO rows may satisfy the enablement predicate.
 	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-		map[string]string{"featureFlags": testDocumentDigest})
+		TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("OperationsWithEnablementProof: %v", err)
 	}
@@ -537,7 +556,7 @@ func TestAStableBuildStillProducesAnEnablingReceipt(t *testing.T) {
 	}
 
 	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-		map[string]string{"featureFlags": testDocumentDigest})
+		TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("OperationsWithEnablementProof: %v", err)
 	}

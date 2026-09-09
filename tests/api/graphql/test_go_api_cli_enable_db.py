@@ -227,6 +227,16 @@ async def test_a_recorded_proof_run_lets_enable_proceed_without_acknowledgement(
             stage=ENABLEMENT_PROOF_STAGE,
             terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
         )
+        # CHAOS-5484: admissibility now requires a RECORDED measurement
+        # route. record_proof_run does not write one -- its only callers
+        # are tests, the real writer is cmd/go-api-prove -- so stamp it
+        # here, or this receipt would be refused for a reason that has
+        # nothing to do with what the test asserts. `edge` because the
+        # enable below targets canary, which is served through the
+        # product edge.
+        await session.execute(
+            sa.update(ProofRun).values(measurement_route="edge", build_binding="absent")
+        )
         await session.commit()
 
     with FakeQueryAPI(registry_payload()) as url:

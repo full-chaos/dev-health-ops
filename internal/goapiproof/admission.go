@@ -59,6 +59,12 @@ type Admission struct {
 	// query-api sets), and a receipt that did not say whether it had that
 	// binding cannot be told apart later from one that did. Empty on a
 	// refusal.
+	//
+	// Reported by the gate rather than derived by the caller on purpose
+	// (CHAOS-5484): the receipt must record the binding that was actually
+	// CHECKED, and a caller re-deriving it from the route would be free to
+	// disagree with admitBuild about what happened. It is persisted as
+	// go_api_proof_run.build_binding by alembic 0129.
 	EdgeBuildBinding string
 }
 
@@ -218,6 +224,15 @@ func admitBuild(in AdmissionInput) Admission {
 				return refused(RefusalBuildMismatch,
 					fmt.Sprintf("the process that served this request reports build %q, but the receipt would name %q", in.Candidate.Build, in.NamedBuild))
 			}
+			return Admission{Admitted: true, EdgeBuildBinding: EdgeBuildPresent}
+		}
+		// A build header that ARRIVED and agreed binds this response as
+		// tightly as the proof route does, whatever the route is called
+		// (CHAOS-5484). Deriving the binding from the ROUTE instead would
+		// understate a real per-request binding the day #2365 makes one
+		// available here -- and, worse, would keep reading as unbound
+		// forever.
+		if in.Candidate.Build != "" {
 			return Admission{Admitted: true, EdgeBuildBinding: EdgeBuildPresent}
 		}
 		// Absent. Admitted, because requiring it would refuse every

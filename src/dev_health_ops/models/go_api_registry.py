@@ -260,6 +260,26 @@ class ProofRun(Base):
     baseline_defect: Mapped[list[str] | None] = mapped_column(
         ARRAY(Text).with_variant(JSON(), "sqlite"), nullable=True
     )
+    #: How strongly the receipt's measurement bound the SERVING BUILD to
+    #: the request that was compared (alembic 0129, CHAOS-5484):
+    #: ``per_request`` when the compared response carried the build on
+    #: itself (only ``/query/proof`` stamps that header today), or
+    #: ``absent`` when nothing tied the build to THIS response (the edge
+    #: route, because the Python edge drops every header query-api sets
+    #: -- CHAOS-5479).
+    #:
+    #: The column asks exactly one question -- was the build bound PER
+    #: RESPONSE? -- so there is no third value for "bound at run level".
+    #: Under R70 ``VerifyCandidateBuild`` is a hard refusal, so every row
+    #: that exists already has that run-level evidence and naming it
+    #: would distinguish nothing (team-lead ruling, 2026-09-10).
+    #:
+    #: Derivable from ``measurement_route`` TODAY and deliberately stored
+    #: anyway: the derivation stops holding the moment #2365 deletes the
+    #: Python edge and edge responses start carrying the header, and on
+    #: that day every earlier edge row would silently read as strongly
+    #: bound. Nullable because pre-0129 rows make no such claim.
+    build_binding: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: How many differences NO declared baseline defect covers. NOT NULL,
     #: default 0, because the explicit zero IS the claim: "every difference
     #: here is a known Python defect" and "there were no differences" are
@@ -309,5 +329,12 @@ class ProofRun(Base):
         CheckConstraint(
             "measurement_route IS NULL OR measurement_route IN ('edge', 'proof')",
             name="ck_go_api_proof_run_measurement_route",
+        ),
+        # Same closed-vocabulary reasoning as measurement_route: an
+        # unrecognised binding strength cannot be compared against the rule
+        # that reads it (alembic 0129, CHAOS-5484).
+        CheckConstraint(
+            "build_binding IS NULL OR build_binding IN ('per_request', 'absent')",
+            name="ck_go_api_proof_run_build_binding",
         ),
     )

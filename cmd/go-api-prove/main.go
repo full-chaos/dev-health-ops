@@ -484,6 +484,14 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	// version back to a hardcoded sentence and dropped the mint count
 	// entirely, and nothing failed, because no test read this output. Both
 	// are now pinned by TestTheReportCarriesTheCountersItComputes.
+	//
+	// The counted form matters beyond the missing-line bug: today every
+	// edge outcome is unbound and every proof outcome is per-request, so a
+	// hardcoded sentence would be RIGHT -- until #2365 deletes the Python
+	// edge and edge responses start carrying the header. Printing the
+	// assumption would then be printing a falsehood. Each receipt records
+	// the real value in build_binding (alembic 0129, CHAOS-5484); this
+	// line is the same fact for whoever is reading a terminal.
 	byBinding := map[string]int{}
 	for _, outcome := range outcomes {
 		if outcome.Admitted {

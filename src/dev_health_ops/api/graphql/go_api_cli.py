@@ -305,7 +305,8 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
 
     from .go_api_routing_admin import (
         ENABLEMENT_PROOF_STAGE,
-        ENABLEMENT_PROOF_TERMINAL_STATE,
+        ENABLEMENT_TARGET_MODE_EDGE_ONLY,
+        MEASUREMENT_ROUTE_EDGE,
         enable_operation,
         operations_with_enablement_proof,
     )
@@ -388,22 +389,44 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
             schema_digest=local_digest,
             candidate_build=ns.candidate_build,
             operations={op: catalog[op] for op in operations},
+            target_mode=ns.mode,
         )
         unproven = [op for op in operations if op not in proven]
         if unproven and not ns.acknowledge_unproven:
+            route_rule = (
+                f"measured on the {MEASUREMENT_ROUTE_EDGE} route"
+                if ns.mode == ENABLEMENT_TARGET_MODE_EDGE_ONLY
+                else "measured on a recorded route"
+            )
             return _refuse(
-                f"no {ENABLEMENT_PROOF_STAGE}/"
-                f"{ENABLEMENT_PROOF_TERMINAL_STATE} proof run recorded for "
-                f"candidate build {ns.candidate_build} for: "
-                f"{', '.join(sorted(unproven))}.\n"
-                "Plan section 5 stage 3 requires the exact candidate build to "
-                "have served the operation through real ingress, auth, "
+                f"no {ENABLEMENT_PROOF_STAGE} proof run admissible for "
+                f"--mode {ns.mode} recorded for candidate build "
+                f"{ns.candidate_build} for: {', '.join(sorted(unproven))}.\n"
+                "An admissible receipt is a deployed_executed run at this "
+                "exact (schema digest, document digest, operation, candidate "
+                f"build) that is {route_rule} and either terminated in "
+                "'match', or terminated in 'mismatch' with every difference "
+                "cited against a named Python baseline defect "
+                "(baseline_defect non-empty AND "
+                "differences_outside_baseline_defect = 0). A mismatch is "
+                "never rewritten -- it stays a mismatch in the row and is "
+                "only READ as sufficient when fully cited.\n"
+                + (
+                    "Note: --mode primary requires EDGE evidence "
+                    "specifically. A /query/proof receipt shows the build "
+                    "CAN serve the operation, not that the product edge "
+                    "DOES, and primary is served traffic.\n"
+                    if ns.mode == ENABLEMENT_TARGET_MODE_EDGE_ONLY
+                    else ""
+                )
+                + "Plan section 5 stage 3 requires the exact candidate build "
+                "to have served the operation through real ingress, auth, "
                 "parse/validate, dispatch and a real database -- a "
                 "constructor, health check or bare 200 does not qualify. "
-                "Record it with go_api_registry.record_proof_run, or pass "
-                "--acknowledge-unproven to enable anyway (the row is then "
-                "reported as UNPROVEN by `dev-hops go-api routing status` "
-                "for as long as it is in force)."
+                "Record it by running cmd/go-api-prove against the deployed "
+                "stack, or pass --acknowledge-unproven to enable anyway (the "
+                "row is then reported as UNPROVEN by `dev-hops go-api routing "
+                "status` for as long as it is in force)."
             )
 
         for operation in operations:

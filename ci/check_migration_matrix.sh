@@ -59,21 +59,25 @@ REVERIFY_COMMAND="go run ./cmd/dev-health-migration-matrix -render -root ."
 # still read as current.
 MAX_AGE_DAYS="${MATRIX_MAX_AGE_DAYS:-7}"
 
+# printf BUILTIN, not `cat <<EOF`. Bash writes a here-document into a pipe it
+# also holds the read end of, so a payload at or above the measured ~400-byte
+# budget hangs the script forever on a host with a small pipe buffer
+# (CHAOS-3362) -- and `cat >file <<EOF` is the same pipe, so it is not a fix.
+# tests/tooling/test_local_validate_heredocs.py enforces this over all of ci/.
 usage() {
-  cat <<'EOF'
-usage: ci/check_migration_matrix.sh [freshness|contract|all]
-
-  freshness  bash+git only; asserts the "Last verified" sha is a real 40-hex
-             commit, is an ancestor of HEAD, and is no older than
-             MATRIX_MAX_AGE_DAYS (default 7) -- plus the same age rule on
-             contracts/migration-status/v1/last-render.json's rendered_at.
-  contract   go run ./cmd/dev-health-migration-matrix -check
-  all        both (default)
-
-env:
-  MATRIX_MAX_AGE_DAYS  staleness budget in days (default 7)
-  MATRIX_ROOT          repository root (default: this script's parent)
-EOF
+  printf '%s\n' \
+    'usage: ci/check_migration_matrix.sh [freshness|contract|all]' \
+    '' \
+    '  freshness  bash+git only; asserts the "Last verified" sha AND the' \
+    '             tool-written ops_sha in last-render.json are each 40-hex,' \
+    '             ancestors of HEAD, and no older than MATRIX_MAX_AGE_DAYS' \
+    '             (default 7).' \
+    '  contract   go run ./cmd/dev-health-migration-matrix -check' \
+    '  all        both (default)' \
+    '' \
+    'env:' \
+    '  MATRIX_MAX_AGE_DAYS  staleness budget in days (default 7)' \
+    '  MATRIX_ROOT          repository root (default: this script'"'"'s parent)'
 }
 
 die() {

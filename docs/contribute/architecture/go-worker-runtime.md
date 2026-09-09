@@ -239,7 +239,7 @@ why cross-role attribution makes this non-optional).
 | Component | Coordinator | Domain | Queue-control |
 | --- | --- | --- | --- |
 | Route controller (`workerctl/main.go:496-506`) | drives the controller: reads and updates the route rows | Celery quiescer: reads `sync_run_units` | River quiescer: River schema only |
-| Reconciler mutation pipeline (`dependencies.go:217-223`) | Materializer | lease repair, kernel observe, observer | terminal delivery repair, River client |
+| Reconciler mutation pipeline (`dependencies.go:217-223`) | Materializer; the finalize-backstop readiness read inside terminal delivery repair | lease repair, kernel observe, observer | terminal delivery repair, River client |
 
 **The rule this table enforces: a component's first statement determines the
 pool it must be constructed on. Check this table before wiring any new
@@ -581,7 +581,7 @@ repair row under [Rescue and repair seams](#rescue-and-repair-seams).
 
 ## Rescue and repair seams
 
-Five independent mechanisms recover work, and each covers a different failure.
+Six independent mechanisms recover work, and each covers a different failure.
 None covers another's ground.
 
 | Seam | Where | Recovers |
@@ -591,6 +591,7 @@ None covers another's ground.
 | Terminal delivery repair | `internal/joboutbox/terminal_delivery_repair.go` | A `sync.provider_unit` delivery that ended terminal with work unfinished |
 | Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease, no heartbeat and no attempts, whose pair the capability matrix declines (no outbox row) **or** whose River delivery is provably dead *and* whose outbox delivery budget is spent (CHAOS-4097) |
 | Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished (CHAOS-3997), **or** a `sync.provider_unit` row whose delivery died in transport while the unit never held a lease |
+| Ready-finalizer backstop | `internal/syncreconciler/ready_finalize_repair.go` | A `finalize_sync_run` outbox row stuck `dispatched` because River's delivery ended **completed** (or its row was reaped) while the run itself never reached a terminal status and every unit is finished (CHAOS-5456) |
 
 Three of those five can select the same provider unit, so their predicates are
 disjoint **by construction** rather than by ordering — they run in different
@@ -627,9 +628,42 @@ republishes are silent no-ops, and before this shape existed the sweep's
 terminalization was the only outcome available — turning a transport blip into
 lost coverage. A restore blip must cost a retry, not an hour.
 
-The general rule when adding a sixth seam: state its population as a predicate
-that is provably disjoint from the other five, not as a claim about which loop
+The general rule when adding a seventh seam: state its population as a predicate
+that is provably disjoint from the other six, not as a claim about which loop
 runs first.
+
+The sixth seam, the ready-finalizer backstop, is disjoint by River state in the
+opposite direction from all of the above: every other seam selects a delivery
+River *failed* (discarded, cancelled, or out of attempts), while this one
+selects a delivery River **completed** — or whose row its cleaner already
+removed. A completed delivery is normally proof the domain effect ran, so the
+completed state alone can never license a re-arm. What licenses it is a second,
+independent fact read on the coordinator pool while the queue transaction holds
+the outbox row: `sync_runs` is still non-terminal, every unit is `success` or
+`failed`, no reference discovery is active, and a scheduled run has its
+occurrence linked. That is the same readiness predicate the materializer uses
+to mint a finalize row in the first place — shared as one constant
+(`finalizeReadyRunPredicate`), not restated — so the backstop can never re-arm
+a run the materializer would not have armed.
+
+Why it is needed at all: `materializeFinalizeSQL`'s final `ON CONFLICT` guard
+deliberately refuses to replace a row that is already `dispatched` on River,
+because from the coordinator's side it cannot tell a live delivery from a dead
+one. When the delivery completed without the run terminalizing, that refusal is
+permanent and silent — the materializer selects the run every pass, writes
+nothing, and reports success. Run `115e6246` sat in that state for over a day.
+The fix is on the queue side, where River's own state IS readable, and its
+write is bounded by the coordinator's readiness verdict; it does not weaken the
+materializer's guard. Every pass emits
+`syncreconciler.ready_finalize_pass` with its counters spelled out **including
+the zeros**, which is what makes "this backstop ran and found nothing"
+distinguishable from "this backstop was never reached" — the exact
+indistinguishability that made CHAOS-5456 expensive to find.
+
+Two runs stay deliberately outside this seam. `aedd0504`'s outbox row carries
+dispatched generation 4 against a current generation of 2, so the route fence
+excludes it and its audited recovery belongs to CHAOS-5462. `1410329c` is a
+provider-unit strand with an absent River row, which is CHAOS-5453's ground.
 
 The strand repair performs the pair-matched CAS described above, reads
 `worker_job_runs` on the domain pool rather than inferring the claim from a

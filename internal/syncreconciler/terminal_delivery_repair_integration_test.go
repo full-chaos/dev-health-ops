@@ -106,7 +106,7 @@ func TestTerminalDeliveryRepairReclaimsExhaustedCoordinatorDelivery(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+	repair, err := NewTerminalDeliveryRepair(queuePool, adminPool, "river")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +514,7 @@ func TestTerminalDeliveryRepairJoinUsesJobPrimaryKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repair, err := NewTerminalDeliveryRepair(queuePool, "river")
+	repair, err := NewTerminalDeliveryRepair(queuePool, adminPool, "river")
 	if err != nil {
 		t.Fatal(err)
 	}

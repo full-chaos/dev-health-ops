@@ -266,7 +266,17 @@ var productionReconcilerDependencySources = reconcilerDependencySources{
 //     table at all. No role can run the whole sweep. See
 //     internal/syncreconciler/unreclaimable_sweep.go for the same-snapshot
 //     trade-off this costs and for why the liveness read needs no fence.
-//   - TerminalDeliveryRepair: QUEUE pool -- it works the River job tables.
+//   - TerminalDeliveryRepair: QUEUE pool for everything it writes -- it works
+//     the River job tables -- plus the COORDINATOR pool for exactly one read.
+//     CHAOS-5456's ready-finalizer backstop has to know whether a run whose
+//     finalize delivery completed is still non-terminal with all units
+//     finished, and that verdict rests on sync_run_reference_discoveries and
+//     scheduled_sync_occurrences, which the queue role has no grant on. That
+//     read takes the coordinator pool and stays OUTSIDE the queue
+//     transaction; the queue transaction keeps the outbox row locked across
+//     it, so the readiness cannot be overtaken by a new delivery. Same
+//     two-jurisdiction shape as UnreclaimableSweep, and the reason neither
+//     role is widened. See internal/syncreconciler/ready_finalize_repair.go.
 //   - Kernel: DOMAIN pool for the observe/claim side, QUEUE pool for the River
 //     delivery side. The second of the two components here that spans pools.
 //   - The River client backing the publisher: QUEUE pool.
@@ -294,7 +304,7 @@ func buildSyncMutationPipeline(
 	if err != nil {
 		return nil, err
 	}
-	terminalRepair, err := syncreconciler.NewTerminalDeliveryRepair(queuePool, riverSchema)
+	terminalRepair, err := syncreconciler.NewTerminalDeliveryRepair(queuePool, coordinatorPool, riverSchema)
 	if err != nil {
 		return nil, err
 	}

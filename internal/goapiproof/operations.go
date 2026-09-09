@@ -81,6 +81,24 @@ const volatileForecastIdentity = "freshly generated per request: an identical re
 // here is a REFUSAL (see SpecFor), never a request built from a guessed
 // shape. A guessed shape fails validation, falls back to Python, and
 // produces a receipt that looks like a routing defect.
+//
+// Three declaration kinds live in each entry's Parity, and all three obey
+// the same rule -- a declaration that matches nothing FAILS the run:
+//
+//   - VolatileFields: values regenerated per request (forecastId,
+//     computedAt). Populated below from the 2026-09-07 live measurement.
+//   - FloatTierB: merged floating-point aggregates, per CHAOS-5451's
+//     measured ClickHouse thread-order nondeterminism. EMPTY today ON
+//     PURPOSE: lane-goapi-parity owns the field list with source lines and
+//     an evidence path, and inventing entries ahead of that evidence would
+//     relax fields nobody measured -- while an invented entry that matched
+//     nothing would fail every run. Add them here, each with its written
+//     reason, when that list arrives.
+//   - BaselineDefects: differences where PYTHON is wrong and Go is right
+//     (CHAOS-5448, CHAOS-5450). EMPTY today for the same reason: the exact
+//     field paths come from lane-goapi-parity. Until they land, those
+//     differences are recorded as ordinary mismatches -- which is the
+//     honest state, not a gap being papered over.
 var operationSpecs = map[string]OperationSpec{
 	"capacityForecast": {
 		Variables: func(orgID string, _ Window) map[string]any {

@@ -33,6 +33,19 @@ const (
 	RefusalUndecodableResponse = "undecodable_response"
 	RefusalWrongPlane          = "served_by_the_wrong_plane"
 	RefusalStaleExclusion      = "declared_exclusion_matched_nothing"
+	RefusalStaleTierB          = "declared_tier_b_field_matched_nothing"
+	RefusalStaleBaselineDefect = "declared_baseline_defect_matched_nothing"
+)
+
+// Measurement routes. Recorded on every receipt so a proof-route
+// observation can never be read as served traffic: /query/proof exists
+// only to measure, is registered only under an explicit env flag, and is
+// unreachable from the Python edge -- but a receipt that did not SAY which
+// route produced it would leave that distinction in a chat message
+// instead of in the row (team-lead ruling R50, 2026-09-09).
+const (
+	RouteEdge  = "edge"
+	RouteProof = "proof"
 )
 
 // planeHeader is the response header the Python edge stamps with the
@@ -76,17 +89,23 @@ type Observation struct {
 // Outcome is one operation's complete result: what was attempted, what
 // actually executed, and -- when nothing executed -- why, by name.
 type Outcome struct {
-	Operation      string       `json:"operation"`
-	DocumentDigest string       `json:"document_digest"`
-	Mode           string       `json:"mode"`
-	Executed       bool         `json:"executed"`
-	RefusalReason  string       `json:"refusal_reason,omitempty"`
-	RefusalDetail  string       `json:"refusal_detail,omitempty"`
-	TerminalState  string       `json:"terminal_state"`
-	Findings       []Finding    `json:"findings,omitempty"`
-	Candidate      *Observation `json:"candidate,omitempty"`
-	Baseline       *Observation `json:"baseline,omitempty"`
-	ReceiptWritten bool         `json:"receipt_written"`
+	Operation       string    `json:"operation"`
+	DocumentDigest  string    `json:"document_digest"`
+	Mode            string    `json:"mode"`
+	Executed        bool      `json:"executed"`
+	RefusalReason   string    `json:"refusal_reason,omitempty"`
+	RefusalDetail   string    `json:"refusal_detail,omitempty"`
+	Route           string    `json:"route"`
+	TerminalState   string    `json:"terminal_state"`
+	Findings        []Finding `json:"findings,omitempty"`
+	BaselineDefects []string  `json:"baseline_defect,omitempty"`
+	// DifferencesOutsideBaselineDefect is serialised even when zero: "every
+	// difference is a known Python defect" and "there were no differences"
+	// are different facts.
+	DifferencesOutsideBaselineDefect int          `json:"differences_outside_baseline_defect"`
+	Candidate                        *Observation `json:"candidate,omitempty"`
+	Baseline                         *Observation `json:"baseline,omitempty"`
+	ReceiptWritten                   bool         `json:"receipt_written"`
 }
 
 // Summary is the explicit-zero telemetry block. Every field is printed on
@@ -195,18 +214,21 @@ func (r *Runner) Run(ctx context.Context, db Querier) ([]Outcome, Summary, error
 
 		if outcome.Executed && db != nil {
 			receipt := Receipt{
-				SchemaDigest:         r.Registry.SchemaDigest,
-				DocumentDigest:       outcome.DocumentDigest,
-				SelectedOperation:    operation,
-				CandidateBuild:       r.Registry.BuildIdentity,
-				Stage:                Stage,
-				TerminalState:        outcome.TerminalState,
-				OrgID:                r.Config.OrgID,
-				ReviewEvidence:       r.Config.ReviewEvidence,
-				RecordedBy:           r.Config.RecordedBy,
-				ObservedAt:           now(),
-				BaselineResponseRef:  observationRef(outcome.Baseline),
-				CandidateResponseRef: observationRef(outcome.Candidate),
+				SchemaDigest:                     r.Registry.SchemaDigest,
+				DocumentDigest:                   outcome.DocumentDigest,
+				SelectedOperation:                operation,
+				CandidateBuild:                   r.Registry.BuildIdentity,
+				Stage:                            Stage,
+				TerminalState:                    outcome.TerminalState,
+				OrgID:                            r.Config.OrgID,
+				ReviewEvidence:                   r.Config.ReviewEvidence,
+				RecordedBy:                       r.Config.RecordedBy,
+				ObservedAt:                       now(),
+				BaselineResponseRef:              observationRef(outcome.Baseline),
+				CandidateResponseRef:             observationRef(outcome.Candidate),
+				MeasurementRoute:                 outcome.Route,
+				BaselineDefects:                  outcome.BaselineDefects,
+				DifferencesOutsideBaselineDefect: outcome.DifferencesOutsideBaselineDefect,
 			}
 			identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(operation))
 			if err != nil {
@@ -274,7 +296,9 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	switch row.Mode {
 	case "canary", "primary":
 		candidateURL = r.Config.PythonEdgeURL
+		outcome.Route = RouteEdge
 	case "shadow":
+		outcome.Route = RouteProof
 		if r.Config.GoProofURL == "" {
 			return refuse(RefusalShadowUnmeasurable,
 				"mode=shadow: PostgresSwitch.Enabled admits canary|primary only, and this deployment exposes no measurement-only route, so the deployed Go build cannot execute this operation at all")
@@ -333,6 +357,17 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	}
 
 	result := Compare(baselineSnapshot, candidateSnapshot, spec.Parity)
+	if len(result.UnusedTierB) > 0 {
+		// Same rule as a stale exclusion, one tier over: a Tier-B
+		// declaration that relaxed nothing means the comparison that ran
+		// is not the comparison anybody declared.
+		return refuse(RefusalStaleTierB, fmt.Sprintf("declared Tier-B float fields matched nothing: %v", result.UnusedTierB))
+	}
+	if len(result.StaleBaselineDefects) > 0 {
+		// The Python defect was fixed, or the cited paths are wrong.
+		// Either way the entry must go before this run can stand.
+		return refuse(RefusalStaleBaselineDefect, fmt.Sprintf("declared baseline defects covered no difference: %v", result.StaleBaselineDefects))
+	}
 	if len(result.UnusedExclusions) > 0 {
 		// A declared exclusion that matched nothing is either stale or
 		// misspelled; either way the comparison it produced is not the
@@ -343,6 +378,8 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	outcome.Executed = true
 	outcome.TerminalState = result.TerminalState
 	outcome.Findings = result.Findings
+	outcome.BaselineDefects = result.BaselineDefectsMatched
+	outcome.DifferencesOutsideBaselineDefect = result.DifferencesOutsideBaselineDefect
 
 	// The outer HTTP observation is part of the verdict, not decoration: a
 	// body that compares equal under a different status code is not parity.

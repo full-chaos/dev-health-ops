@@ -46,6 +46,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     Text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from dev_health_ops.models.git import GUID, Base
@@ -231,6 +232,31 @@ class ProofRun(Base):
     #: nowhere to live but a chat message.
     review_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
     recorded_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Which route executed the candidate leg (alembic 0128, CHAOS-5425):
+    #: ``edge`` (the real product edge, for a canary/primary operation) or
+    #: ``proof`` (``/query/proof``, the measurement-only handler that can
+    #: execute a shadow-mode operation at all). Both are legitimate
+    #: evidence and they are not the same claim -- a proof-route
+    #: observation must never be read as served traffic. Nullable because
+    #: every row written before 0128 has no route, and guessing one would
+    #: be worse than a NULL.
+    measurement_route: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Tickets whose declared field paths cover this comparison's
+    #: differences, for divergences where PYTHON is wrong and Go is right
+    #: (CHAOS-5448, CHAOS-5450). This ANNOTATES a mismatch; it never
+    #: converts one -- ``terminal_state`` stays ``mismatch`` and the
+    #: operation is not promoted, so "we know why" never becomes "it
+    #: passed".
+    baseline_defect: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+    #: How many differences NO declared baseline defect covers. NOT NULL,
+    #: default 0, because the explicit zero IS the claim: "every difference
+    #: here is a known Python defect" and "there were no differences" are
+    #: different facts.
+    differences_outside_baseline_defect: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -266,5 +292,12 @@ class ProofRun(Base):
         CheckConstraint(
             "stage <> 'shadow' OR data_watermark IS NOT NULL",
             name="ck_go_api_proof_run_shadow_requires_watermark",
+        ),
+        # Closed, small vocabulary: a receipt whose route is neither of
+        # these cannot be interpreted at all. NULL stays legal for the
+        # pre-0128 rows (alembic 0128, CHAOS-5425).
+        CheckConstraint(
+            "measurement_route IS NULL OR measurement_route IN ('edge', 'proof')",
+            name="ck_go_api_proof_run_measurement_route",
         ),
     )

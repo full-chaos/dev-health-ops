@@ -389,7 +389,7 @@ func TestFeatureFlagsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _ := newQueryHandler(&fakeCHClient{}, pool, verifier, itTestSchemaDigest)
+	handler, _, _ := newQueryHandler(&fakeCHClient{}, pool, verifier, itTestSchemaDigest)
 	documentDigest := digestHex(registeredFeatureFlagsDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
@@ -486,7 +486,7 @@ func TestReviewEdgesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _ := newQueryHandler(&fakeReviewEdgesCHClient{}, pool, verifier, itTestSchemaDigest)
+	handler, _, _ := newQueryHandler(&fakeReviewEdgesCHClient{}, pool, verifier, itTestSchemaDigest)
 	documentDigest := digestHex(registeredReviewEdgesDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
@@ -583,7 +583,7 @@ func TestCognitiveLoadRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _ := newQueryHandler(&fakeCognitiveLoadCHClient{}, pool, verifier, itTestSchemaDigest)
+	handler, _, _ := newQueryHandler(&fakeCognitiveLoadCHClient{}, pool, verifier, itTestSchemaDigest)
 	documentDigest := digestHex(registeredCognitiveLoadDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
@@ -681,7 +681,7 @@ func TestComplexityTimeseriesRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	handler, _ := newQueryHandler(&fakeComplexityTimeseriesCHClient{}, pool, verifier, itTestSchemaDigest)
+	handler, _, _ := newQueryHandler(&fakeComplexityTimeseriesCHClient{}, pool, verifier, itTestSchemaDigest)
 	documentDigest := digestHex(registeredComplexityTimeseriesDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
@@ -783,7 +783,7 @@ func TestHotspotsRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest)
+	handler, _, _ := newQueryHandler(&fakeHotspotsCHClient{}, pool, verifier, itTestSchemaDigest)
 	documentDigest := digestHex(registeredHotspotsDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
@@ -879,7 +879,7 @@ func TestOperatingReviewRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest)
+	handler, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest)
 	documentDigest := digestHex(registeredOperatingReviewDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 
@@ -969,7 +969,7 @@ func TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol(t *testing.T) {
 		EnvelopeAudience:    "audience",
 	}
 
-	_, _, _, _, err := buildQueryRoute(cfg)
+	_, _, _, err := buildQueryRoute(cfg)
 	if err == nil {
 		t.Fatal("buildQueryRoute succeeded against a non-ClickHouse endpoint, want a readiness-check error")
 	}
@@ -1054,7 +1054,7 @@ func TestFlowMatrixRoute_ReachableOnlyWhenSwitchEnabled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler, _ := newQueryHandler(&fakeFlowMatrixCHClient{}, pool, verifier, itTestSchemaDigest)
+	handler, _, _ := newQueryHandler(&fakeFlowMatrixCHClient{}, pool, verifier, itTestSchemaDigest)
 	documentDigest := digestHex(registeredFlowMatrixDocument)
 	token := signTestEnvelope(t, priv, "org-1")
 

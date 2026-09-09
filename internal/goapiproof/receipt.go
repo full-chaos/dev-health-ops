@@ -45,6 +45,23 @@ type Receipt struct {
 	ReviewEvidence       string
 	RecordedBy           string
 	ObservedAt           time.Time
+
+	// MeasurementRoute is "edge" or "proof" -- which route executed the
+	// candidate leg. A proof-route receipt must never read as served
+	// traffic (team-lead ruling R50, 2026-09-09), and a receipt that did
+	// not SAY which route produced it would leave that distinction in a
+	// chat message instead of in the row.
+	MeasurementRoute string
+
+	// BaselineDefects names the tickets whose declared field paths cover
+	// this comparison's differences. It NEVER softens TerminalState --
+	// see BaselineDefect for why that separation is the whole point.
+	BaselineDefects []string
+
+	// DifferencesOutsideBaselineDefect is written even when zero, so
+	// "every difference here is a known Python defect" is a claim a
+	// reader can check rather than take on trust.
+	DifferencesOutsideBaselineDefect int
 }
 
 // Querier is the subset of pgx this package needs, so a test can pass a
@@ -80,6 +97,11 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 	if receipt.CandidateBuild == "" {
 		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt with an empty candidate build")
 	}
+	if !measurementRoutes[receipt.MeasurementRoute] {
+		// A receipt with no route cannot be told apart from served
+		// traffic later, which is the entire reason the column exists.
+		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt with measurement route %q -- expected %q or %q", receipt.MeasurementRoute, RouteEdge, RouteProof)
+	}
 
 	if _, err := db.Exec(ctx,
 		`INSERT INTO go_api_candidate_build
@@ -98,13 +120,16 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 		   (id, schema_digest, document_digest, selected_operation, candidate_build,
 		    request_identity, stage, terminal_state,
 		    baseline_response_ref, candidate_response_ref,
-		    data_watermark, org_id, review_evidence, recorded_by, observed_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		    data_watermark, org_id, review_evidence, recorded_by, observed_at,
+		    measurement_route, baseline_defect, differences_outside_baseline_defect)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		id, receipt.SchemaDigest, receipt.DocumentDigest, receipt.SelectedOperation, receipt.CandidateBuild,
 		receipt.RequestIdentity, receipt.Stage, receipt.TerminalState,
 		nullIfEmpty(receipt.BaselineResponseRef), nullIfEmpty(receipt.CandidateResponseRef),
 		nullIfEmpty(receipt.DataWatermark), nullIfEmpty(receipt.OrgID),
 		nullIfEmpty(receipt.ReviewEvidence), nullIfEmpty(receipt.RecordedBy), receipt.ObservedAt,
+		nullIfEmpty(receipt.MeasurementRoute), receipt.BaselineDefects,
+		receipt.DifferencesOutsideBaselineDefect,
 	); err != nil {
 		return uuid.Nil, fmt.Errorf("goapiproof: record proof run for %s: %w", receipt.SelectedOperation, err)
 	}
@@ -118,6 +143,8 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 var stages = map[string]bool{
 	"dual_run": true, "deployed_executed": true, "shadow": true, "canary": true,
 }
+
+var measurementRoutes = map[string]bool{RouteEdge: true, RouteProof: true}
 
 var terminalStates = map[string]bool{
 	"match": true, "mismatch": true, "auth_rejected": true, "validation_rejected": true,

@@ -16,8 +16,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// registryDDL mirrors alembic 0114 (the three tables) plus 0127 (the
-// review_evidence/recorded_by provenance columns).
+// registryDDL mirrors alembic 0114 (the three tables), 0127 (the
+// review_evidence/recorded_by provenance columns) and 0128 (the
+// measurement-route / baseline-defect provenance columns).
 //
 // The constraints are not decoration and are NOT trimmed to "what the
 // test needs": the 4-column composite FK from go_api_proof_run to
@@ -78,6 +79,9 @@ CREATE TABLE go_api_proof_run (
 	org_id TEXT,
 	review_evidence TEXT,
 	recorded_by TEXT,
+	measurement_route TEXT,
+	baseline_defect TEXT[],
+	differences_outside_baseline_defect INTEGER NOT NULL DEFAULT 0,
 	observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	CONSTRAINT fk_go_api_proof_run_candidate_build
 		FOREIGN KEY (schema_digest, document_digest, selected_operation, candidate_build)
@@ -89,7 +93,9 @@ CREATE TABLE go_api_proof_run (
 			'dependency_failed', 'timeout', 'cancelled', 'resource_exhausted',
 			'fallback', 'unsupported', 'proof_failed')),
 	CONSTRAINT ck_go_api_proof_run_shadow_requires_watermark
-		CHECK (stage <> 'shadow' OR data_watermark IS NOT NULL)
+		CHECK (stage <> 'shadow' OR data_watermark IS NOT NULL),
+	CONSTRAINT ck_go_api_proof_run_measurement_route
+		CHECK (measurement_route IS NULL OR measurement_route IN ('edge', 'proof'))
 );
 `
 
@@ -143,6 +149,7 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 		RequestIdentity:   "identity-1",
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
+		MeasurementRoute:  RouteEdge,
 		OrgID:             "70d529e0",
 		RecordedBy:        "lane-5425-prove",
 		ReviewEvidence:    "CHAOS-5425 integration test",
@@ -178,6 +185,7 @@ func TestEnablementPredicateRejectsEveryWrongKeyColumn(t *testing.T) {
 		RequestIdentity:   "identity-1",
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
+		MeasurementRoute:  RouteEdge,
 		ObservedAt:        time.Now().UTC(),
 	}
 
@@ -218,6 +226,7 @@ func TestMismatchReceiptIsRecordedButAuthorizesNothing(t *testing.T) {
 		RequestIdentity:   "identity-1",
 		Stage:             EnablementProofStage,
 		TerminalState:     TerminalStateMismatch,
+		MeasurementRoute:  RouteProof,
 		ObservedAt:        time.Now().UTC(),
 	}
 	if _, err := Write(ctx, pool, receipt); err != nil {
@@ -259,6 +268,7 @@ func TestReceiptsAreAppendOnly(t *testing.T) {
 		RequestIdentity:   "identity-1",
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
+		MeasurementRoute:  RouteEdge,
 		ObservedAt:        time.Now().UTC(),
 	}
 	if _, err := Write(ctx, pool, base); err != nil {
@@ -293,6 +303,7 @@ func TestCandidateBuildRegistrationIsIdempotent(t *testing.T) {
 		RequestIdentity:   "identity-1",
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
+		MeasurementRoute:  RouteEdge,
 		ObservedAt:        time.Now().UTC(),
 	}
 	for i := 0; i < 3; i++ {
@@ -377,6 +388,7 @@ func TestRegistryDDLCoversEveryMigratedColumn(t *testing.T) {
 	for _, migration := range []string{
 		"0114_add_go_api_operation_registry.py",
 		"0127_add_go_api_routing_provenance.py",
+		"0128_add_go_api_proof_run_measurement_provenance.py",
 	} {
 		path := filepath.Join(root, "src", "dev_health_ops", "alembic", "versions", migration)
 		source, err := os.ReadFile(path)
@@ -416,5 +428,110 @@ func repoRoot(t *testing.T) string {
 			t.Fatal("could not find the repository root from the test working directory")
 		}
 		dir = parent
+	}
+}
+
+// The measurement route must round-trip: a proof-route receipt has to be
+// distinguishable from a served-traffic one by reading the row, not by
+// remembering how the run was invoked.
+func TestMeasurementRouteRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	receipt := Receipt{
+		SchemaDigest:      testSchemaDigest,
+		DocumentDigest:    testDocumentDigest,
+		SelectedOperation: "flowMatrix",
+		CandidateBuild:    testCandidateBuild,
+		RequestIdentity:   "identity-1",
+		Stage:             EnablementProofStage,
+		TerminalState:     TerminalStateMismatch,
+		MeasurementRoute:  RouteProof,
+		BaselineDefects:   []string{"CHAOS-5448", "CHAOS-5450"},
+		ObservedAt:        time.Now().UTC(),
+	}
+	if _, err := Write(ctx, pool, receipt); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	var route string
+	var defects []string
+	var outside int
+	if err := pool.QueryRow(ctx,
+		`SELECT measurement_route, baseline_defect, differences_outside_baseline_defect
+		   FROM go_api_proof_run WHERE selected_operation = 'flowMatrix'`,
+	).Scan(&route, &defects, &outside); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if route != RouteProof {
+		t.Fatalf("route must round-trip, got %q", route)
+	}
+	if len(defects) != 2 {
+		t.Fatalf("the covering tickets must round-trip, got %v", defects)
+	}
+	// The explicit zero IS the claim: every difference was a known Python
+	// defect. A NULL here would leave a reader guessing.
+	if outside != 0 {
+		t.Fatalf("differences_outside_baseline_defect must be an explicit 0, got %d", outside)
+	}
+}
+
+// The database is the backstop for the route vocabulary too, exactly as
+// it is for stage and terminal_state.
+func TestDatabaseRejectsAnUnknownMeasurementRoute(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_candidate_build
+		   (schema_digest, document_digest, selected_operation, candidate_build)
+		 VALUES ($1,$2,$3,$4)`,
+		testSchemaDigest, testDocumentDigest, "featureFlags", testCandidateBuild,
+	); err != nil {
+		t.Fatalf("register build: %v", err)
+	}
+
+	_, err := pool.Exec(ctx,
+		`INSERT INTO go_api_proof_run
+		   (id, schema_digest, document_digest, selected_operation, candidate_build,
+		    request_identity, stage, terminal_state, measurement_route)
+		 VALUES (gen_random_uuid(),$1,$2,$3,$4,'id','deployed_executed','match','sideways')`,
+		testSchemaDigest, testDocumentDigest, "featureFlags", testCandidateBuild)
+	if err == nil {
+		t.Fatal("the measurement-route CHECK must reject an unknown route")
+	}
+	if !strings.Contains(err.Error(), "ck_go_api_proof_run_measurement_route") {
+		t.Fatalf("expected the route CHECK to fire, got %v", err)
+	}
+}
+
+// A baseline-defect annotation must never make a mismatch enablable --
+// the whole separation this column exists to preserve.
+func TestBaselineDefectAnnotationStillAuthorizesNothing(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	if _, err := Write(ctx, pool, Receipt{
+		SchemaDigest:      testSchemaDigest,
+		DocumentDigest:    testDocumentDigest,
+		SelectedOperation: "featureFlags",
+		CandidateBuild:    testCandidateBuild,
+		RequestIdentity:   "identity-1",
+		Stage:             EnablementProofStage,
+		TerminalState:     TerminalStateMismatch,
+		MeasurementRoute:  RouteEdge,
+		BaselineDefects:   []string{"CHAOS-5448"},
+		ObservedAt:        time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
+		map[string]string{"featureFlags": testDocumentDigest})
+	if err != nil {
+		t.Fatalf("OperationsWithEnablementProof: %v", err)
+	}
+	if found["featureFlags"] {
+		t.Fatal("a mismatch annotated with a known Python defect must still authorize nothing")
 	}
 }

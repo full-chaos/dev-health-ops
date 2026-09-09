@@ -1,17 +1,24 @@
-// Command routingprove is CHAOS-5425's `prove` verb: it executes every
+// Command go-api-prove is CHAOS-5425's `prove` verb: it executes every
 // registered Go-API operation against the DEPLOYED query-api through the
 // real edge, compares both planes' complete observable responses under
 // CHAOS-4381's parity rules, and records an immutable
 // `deployed_executed` receipt per operation in `go_api_proof_run`.
 //
-// Why this is a Go binary and not a `dev-hops go-api routing prove`
-// subcommand beside enable/disable/status: the Go cutover's standing rule
-// is that no new Python compute is written (chris: "move to go, do not
-// straddle"). It lives under cmd/query-api/tools/ beside registrydump for
-// one concrete reason -- both need cmd/query-api/internal/digest, which
-// Go's internal-package rule puts out of reach of a top-level command, and
-// re-implementing the document digest here is exactly the two-copies
-// drift registrydump's own doc comment warns about.
+// Why this is a standalone Go binary and not a `dev-hops go-api routing
+// prove` subcommand beside enable/disable/status (team-lead ruling R49,
+// 2026-09-09): the Go cutover's standing rule is that no new Python
+// compute is written (chris: "move to go, do not straddle"), and a Python
+// shim that shells out to this binary would be new Python on the critical
+// path of a proof. The existing Python verbs stay exactly as they are.
+//
+// It ships as a binary run by hand (`go run ./cmd/go-api-prove`, or a
+// built binary) against a deployment; this change adds no image and no
+// compose service.
+//
+// The document digest comes from internal/goapidigest -- the same
+// function query_route.go and registrydump reach through
+// cmd/query-api/internal/digest, which forwards there. Re-implementing it
+// here would be exactly the two-copies drift CHAOS-4696 closed.
 //
 // What this command will NOT do:
 //
@@ -19,9 +26,13 @@
 //     a rollout decision; this only records evidence a rollout decision can
 //     later read.
 //   - It never names a candidate build from a flag. The build identity
-//     comes from the RUNNING process (GET /registry) or the run refuses --
+//     comes from the RUNNING process (GET /buildinfo) or the run refuses --
 //     a receipt built from a hand-typed sha proves that somebody typed a
-//     sha (see ErrNoBuildIdentity).
+//     sha (see ErrNoBuildIdentity). --candidate-build is a cross-check
+//     only: it can FAIL a run, never supply the value written.
+//   - It never executes a shadow-mode operation through the product edge.
+//     Those go to /query/proof, the measurement-only route, and their
+//     receipts record measurement_route='proof'.
 //   - It never prints a credential. The bearer token is read from the
 //     environment by NAME and is never echoed, logged, or folded into a
 //     request identity.
@@ -40,7 +51,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
+	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
@@ -50,14 +61,16 @@ const bearerEnvVar = "GO_API_PROVE_BEARER"
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "routingprove: %v\n", err)
+		fmt.Fprintf(os.Stderr, "go-api-prove: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 type flags struct {
 	registryURL    string
+	buildInfoURL   string
 	edgeURL        string
+	candidateBuild string
 	proofURL       string
 	documentsPath  string
 	postgresURI    string
@@ -77,7 +90,9 @@ type flags struct {
 func parseFlags() (flags, error) {
 	defaults := goapiproof.DefaultWindow()
 	var f flags
-	flag.StringVar(&f.registryURL, "registry-url", "http://localhost:8090/registry", "GET /registry on the DEPLOYED query-api -- the only authority on what it registers and which build it is")
+	flag.StringVar(&f.registryURL, "registry-url", "http://localhost:8090/registry", "GET /registry on the DEPLOYED query-api -- the only authority on which operations and document digests it serves")
+	flag.StringVar(&f.buildInfoURL, "buildinfo-url", "http://localhost:8090/buildinfo", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the build identity every receipt names")
+	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written (team-lead ruling R51)")
 	flag.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	flag.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
 	flag.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file cmd/query-api/query_route.go` JSON output (required)")
@@ -133,16 +148,23 @@ func run() error {
 	ctx := context.Background()
 	client := &http.Client{Timeout: f.timeout}
 
+	authHeaders := map[string]string{"Authorization": "Bearer " + bearer}
+
 	registry, err := goapiproof.FetchRegistry(ctx, client, f.registryURL)
 	if err != nil {
+		return err
+	}
+
+	// The build identity is fetched BEFORE anything is measured, and a
+	// failure here stops the run rather than degrading into an
+	// operator-supplied name: the receipt is the whole deliverable, and
+	// one naming an unverifiable build is worse than none (CHAOS-5425
+	// acceptance, 2026-09-08: "Do not construct a receipt from a digest or
+	// an arbitrary build name").
+	registry.BuildIdentity, err = goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, authHeaders)
+	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
-			// Named loudly rather than degraded into an operator-supplied
-			// build name: the receipt this run would write is the whole
-			// deliverable, and one with an unverifiable build is worse
-			// than none (CHAOS-5425 acceptance, 2026-09-08: "Do not
-			// construct a receipt from a digest or an arbitrary build
-			// name").
-			return fmt.Errorf("%w\n  the deployed query-api must expose its build identity at %s before any receipt can be written", err, f.registryURL)
+			return fmt.Errorf("%w\n  the deployed query-api must identify its build at %s before any receipt can be written", err, f.buildInfoURL)
 		}
 		return err
 	}
@@ -151,7 +173,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := goapiproof.VerifyDocuments(documents, registry, digest.Document); err != nil {
+	if err := goapiproof.VerifyDocuments(documents, registry, goapidigest.Document); err != nil {
 		return err
 	}
 
@@ -181,6 +203,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, f.candidateBuild, routing); err != nil {
+		return err
+	}
 
 	runner := &goapiproof.Runner{
 		Client:    client,
@@ -193,7 +218,7 @@ func run() error {
 			Window:        f.window,
 			PythonEdgeURL: f.edgeURL,
 			GoProofURL:    f.proofURL,
-			Headers:       map[string]string{"Authorization": "Bearer " + bearer},
+			Headers:       authHeaders,
 			Auth: goapiproof.AuthContext{
 				PrincipalKind: f.principalKind,
 				Audience:      f.audience,
@@ -280,23 +305,29 @@ type report struct {
 // wrong" are different facts, and the shape of the output must never let
 // them look alike.
 func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof.Outcome, summary goapiproof.Summary) error {
-	fmt.Printf("routingprove: schema_digest=%s candidate_build=%s stage=%s org=%s\n",
+	fmt.Printf("go-api-prove: schema_digest=%s candidate_build=%s stage=%s org=%s\n",
 		registry.SchemaDigest, registry.BuildIdentity, goapiproof.Stage, f.orgID)
-	fmt.Printf("routingprove: attempted=%d executed=%d refused=%d receipts_written=%d\n",
+	fmt.Printf("go-api-prove: attempted=%d executed=%d refused=%d receipts_written=%d\n",
 		summary.Attempted, summary.Executed, summary.Refused, summary.ReceiptsWritten)
+	proofURL := f.proofURL
+	if proofURL == "" {
+		proofURL = "(none: shadow-mode operations cannot be measured in this deployment)"
+	}
+	fmt.Printf("go-api-prove: edge=%s proof_route=%s\n", f.edgeURL, proofURL)
 	for _, state := range sortedKeys(summary.ByTerminalState) {
-		fmt.Printf("routingprove:   terminal_state %s = %d\n", state, summary.ByTerminalState[state])
+		fmt.Printf("go-api-prove:   terminal_state %s = %d\n", state, summary.ByTerminalState[state])
 	}
 	for _, reason := range sortedKeys(summary.ByRefusalReason) {
-		fmt.Printf("routingprove:   refused %s = %d\n", reason, summary.ByRefusalReason[reason])
+		fmt.Printf("go-api-prove:   refused %s = %d\n", reason, summary.ByRefusalReason[reason])
 	}
 	for _, outcome := range outcomes {
 		if outcome.Executed {
-			fmt.Printf("routingprove:   %-22s mode=%-8s %s (%d findings)\n",
-				outcome.Operation, outcome.Mode, outcome.TerminalState, len(outcome.Findings))
+			fmt.Printf("go-api-prove:   %-22s mode=%-8s route=%-5s %s (%d findings, %d outside a declared baseline defect %v)\n",
+				outcome.Operation, outcome.Mode, outcome.Route, outcome.TerminalState,
+				len(outcome.Findings), outcome.DifferencesOutsideBaselineDefect, outcome.BaselineDefects)
 			continue
 		}
-		fmt.Printf("routingprove:   %-22s mode=%-8s REFUSED %s: %s\n",
+		fmt.Printf("go-api-prove:   %-22s mode=%-8s REFUSED %s: %s\n",
 			outcome.Operation, outcome.Mode, outcome.RefusalReason, outcome.RefusalDetail)
 	}
 
@@ -318,7 +349,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	if err := os.WriteFile(f.reportPath, encoded, 0o640); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
-	fmt.Printf("routingprove: report written to %s\n", f.reportPath)
+	fmt.Printf("go-api-prove: report written to %s\n", f.reportPath)
 	return nil
 }
 

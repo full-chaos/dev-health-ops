@@ -153,3 +153,52 @@ func TestWindowValidateRejectsAnIncompleteWindow(t *testing.T) {
 		t.Fatal("an empty window field must be refused, not sent as an empty string")
 	}
 }
+
+// Every declared Tier-B entry must carry a written reason, and be rooted
+// at its own operation's subtree. The table is empty today (the field
+// list is lane-goapi-parity's, with source lines and evidence), so this
+// guards the entries that are about to be added rather than the ones that
+// are there -- the check has to exist BEFORE the first entry, or the
+// first entry is the one nobody checked.
+func TestTierBDeclarationsAreReasonedAndRooted(t *testing.T) {
+	for _, operation := range KnownOperations() {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatalf("SpecFor(%q): %v", operation, err)
+		}
+		for path, reason := range spec.Parity.FloatTierB {
+			prefix := "data." + operation + "."
+			if !strings.HasPrefix(path, prefix) {
+				t.Errorf("%s declares Tier-B path %q outside its own subtree (want prefix %q)", operation, path, prefix)
+			}
+			if len(strings.TrimSpace(reason)) < 20 {
+				t.Errorf("%s Tier-B path %q has no written reason (got %q)", operation, path, reason)
+			}
+		}
+	}
+}
+
+// Same, for baseline defects: every entry must name a ticket and at least
+// one path, or it declares nothing and can only ever read as coverage.
+func TestBaselineDefectDeclarationsNameATicketAndPaths(t *testing.T) {
+	for _, operation := range KnownOperations() {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatalf("SpecFor(%q): %v", operation, err)
+		}
+		for _, defect := range spec.Parity.BaselineDefects {
+			if !strings.HasPrefix(defect.Ticket, "CHAOS-") {
+				t.Errorf("%s declares a baseline defect with ticket %q -- a defect with no ticket is an opinion", operation, defect.Ticket)
+			}
+			if len(defect.Paths) == 0 {
+				t.Errorf("%s baseline defect %s cites no field paths, so it excuses nothing", operation, defect.Ticket)
+			}
+			for _, path := range defect.Paths {
+				prefix := "data." + operation
+				if path != prefix && !strings.HasPrefix(path, prefix+".") {
+					t.Errorf("%s baseline defect %s cites %q outside its own subtree", operation, defect.Ticket, path)
+				}
+			}
+		}
+	}
+}

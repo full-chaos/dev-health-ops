@@ -100,6 +100,28 @@ type Result struct {
 	// as internal/testsupport/oraclecompare: "exclusions that need a
 	// written reason and must actually match something".
 	UnusedExclusions []string `json:"unused_exclusions,omitempty"`
+
+	// UnusedTierB names every FloatTierB entry that matched no compared
+	// numeric field. Same rule, same reason as UnusedExclusions: a Tier-B
+	// declaration that relaxes nothing reads as a relaxation that is
+	// there, and the first person to trust it is trusting nothing.
+	UnusedTierB []string `json:"unused_tier_b,omitempty"`
+
+	// BaselineDefectsMatched names the tickets whose declared paths cover
+	// at least one of this comparison's differences.
+	BaselineDefectsMatched []string `json:"baseline_defect,omitempty"`
+
+	// StaleBaselineDefects names declared baseline-defect entries that
+	// cover NO difference here -- the defect was fixed, or the paths are
+	// wrong. Either way the entry must go, so the caller fails the run.
+	StaleBaselineDefects []string `json:"stale_baseline_defects,omitempty"`
+
+	// DifferencesOutsideBaselineDefect counts the mismatch findings NOT
+	// covered by any declared baseline defect. It is serialised even when
+	// zero: "every difference is a known Python defect" and "there were no
+	// differences" are different facts, and an omitted zero hides which
+	// one happened.
+	DifferencesOutsideBaselineDefect int `json:"differences_outside_baseline_defect"`
 }
 
 // IsMatch reports whether the verdict is a clean match.
@@ -109,9 +131,25 @@ func (r Result) IsMatch() bool { return r.TerminalState == TerminalStateMatch }
 // requires to be declared, never inferred.
 type Options struct {
 	// FloatTierB names Tier-B float fields by dotted, index-free path
-	// (e.g. "data.hotspots.edges.score"). Every field not named here is
+	// (e.g. "data.hotspots.edges.score") mapped to the WRITTEN REASON
+	// that field tolerates a difference. Every field not named here is
 	// Tier A (exact) by default -- parity rule 3.
-	FloatTierB map[string]bool
+	//
+	// The reason this table exists at all, measured under CHAOS-5451:
+	// ClickHouse merges partial aggregate states in thread-completion
+	// order, so avg/sum/stddevPop over Float64 differ by 1-2 ULP run to
+	// run on BOTH planes -- 20 runs of stddevPop over 5M rows produced 9
+	// distinct values, and max_threads=1 produced 1. That is engine
+	// nondeterminism, not a Go-vs-Python defect, and comparing such a
+	// field Tier A (as the enablement harness did) manufactures a
+	// mismatch. It is equally not a licence to relax any field that
+	// happens to differ: an entry here names a field whose value is a
+	// merged floating-point aggregate, and nothing else.
+	FloatTierB map[string]string
+
+	// BaselineDefects declares differences that are known PYTHON defects
+	// with Go correct. See BaselineDefect.
+	BaselineDefects []BaselineDefect
 
 	// VolatileFields names fields excluded from comparison entirely, by
 	// the same dotted, index-free path form. Reserved for values that are
@@ -134,6 +172,47 @@ type Options struct {
 	// MISSING watermark on either side is then `unsupported`, not a
 	// silent comparison without one -- parity rule 4.
 	RequireWatermark bool
+}
+
+// BaselineDefect declares that a named set of field paths differs
+// because the BASELINE (Python) is wrong and the candidate (Go) is right.
+//
+// It changes what a receipt SAYS, never what it is. Measured instances:
+// CHAOS-5448 (Python omits FINAL on work_item_cycle_times and so counts
+// superseded row versions) and CHAOS-5450 (Python's list path emits a
+// naive timestamp). Both are real divergences, and a proof run must keep
+// recording them as such.
+//
+// So the rules are deliberately narrow:
+//
+//   - the terminal state stays `mismatch`, unchanged. A declared baseline
+//     defect NEVER converts a mismatch into a match and never promotes an
+//     operation. Anything else would let "we know why" become "it passed".
+//   - the receipt additionally records which tickets covered the
+//     differences, and an explicit count of the differences covered by
+//     NONE of them -- so "every difference is a known Python defect" is a
+//     readable, checkable claim rather than a footnote in a chat message.
+//   - an entry covering no difference in this comparison FAILS the run.
+//     The defect was fixed, or the paths are wrong; a stale exemption that
+//     silently exempts nothing is the failure mode this whole file is
+//     built against.
+type BaselineDefect struct {
+	// Ticket is the issue that owns the defect, e.g. "CHAOS-5448".
+	Ticket string
+	// Reason states, in words, what the baseline gets wrong.
+	Reason string
+	// Paths are dotted, index-free field paths (the same form
+	// FloatTierB and VolatileFields use). A path also covers everything
+	// beneath it, so naming a subtree root covers its fields.
+	Paths []string
+}
+
+// tracker records which declared entries actually matched something, so
+// a declaration that matched nothing can be reported rather than sitting
+// in the table reading as coverage.
+type tracker struct {
+	volatile map[string]bool
+	tierB    map[string]bool
 }
 
 // Compare compares a baseline (Python) and candidate (Go) response under
@@ -166,7 +245,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		}
 	}
 
-	used := map[string]bool{}
+	track := &tracker{volatile: map[string]bool{}, tierB: map[string]bool{}}
 	findings := compareErrors(baseline.Errors, candidate.Errors, "$.errors")
 
 	switch {
@@ -177,7 +256,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		}
 		findings = append(findings, Finding{Kind: FindingMismatch, Path: "$.data", Detail: detail})
 	case baseline.DataPresent && candidate.DataPresent:
-		findings = append(findings, compareJSON(baseline.Data, candidate.Data, "$.data", opts, opts.EnvelopeKeys, used)...)
+		findings = append(findings, compareJSON(baseline.Data, candidate.Data, "$.data", opts, opts.EnvelopeKeys, track)...)
 	}
 	// Neither side present: two responses that never reached execution.
 	// Absence on both sides is not itself a finding.
@@ -190,15 +269,80 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		}
 	}
 
-	var unused []string
-	for path := range opts.VolatileFields {
+	result := Result{TerminalState: terminal, Findings: findings}
+	result.UnusedExclusions = unmatched(opts.VolatileFields, track.volatile)
+	result.UnusedTierB = unmatched(opts.FloatTierB, track.tierB)
+	classifyBaselineDefects(&result, opts.BaselineDefects)
+	return result
+}
+
+// unmatched lists declared table keys that nothing marked as used.
+func unmatched(declared map[string]string, used map[string]bool) []string {
+	var out []string
+	for path := range declared {
 		if !used[path] {
-			unused = append(unused, path)
+			out = append(out, path)
 		}
 	}
-	sort.Strings(unused)
+	sort.Strings(out)
+	return out
+}
 
-	return Result{TerminalState: terminal, Findings: findings, UnusedExclusions: unused}
+// classifyBaselineDefects attributes each mismatch finding to a declared
+// baseline defect, if any, and counts the ones nothing covers.
+//
+// It never touches result.TerminalState. That is the whole contract: a
+// declared, understood, ticketed Python defect is still a divergence, and
+// the receipt still says mismatch.
+func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
+	var mismatches []string
+	for _, finding := range result.Findings {
+		if finding.Kind == FindingMismatch {
+			mismatches = append(mismatches, tieredPath(finding.Path))
+		}
+	}
+
+	covered := make([]bool, len(mismatches))
+	var matched, stale []string
+	for _, defect := range defects {
+		hit := false
+		for i, path := range mismatches {
+			if defectCovers(defect, path) {
+				covered[i] = true
+				hit = true
+			}
+		}
+		if hit {
+			matched = append(matched, defect.Ticket)
+		} else {
+			stale = append(stale, defect.Ticket)
+		}
+	}
+	sort.Strings(matched)
+	sort.Strings(stale)
+
+	outside := 0
+	for _, isCovered := range covered {
+		if !isCovered {
+			outside++
+		}
+	}
+
+	result.BaselineDefectsMatched = matched
+	result.StaleBaselineDefects = stale
+	result.DifferencesOutsideBaselineDefect = outside
+}
+
+// defectCovers reports whether a declared path covers a difference path.
+// A cited path covers itself and everything beneath it, so a subtree root
+// can be named once instead of every leaf under it.
+func defectCovers(defect BaselineDefect, path string) bool {
+	for _, cited := range defect.Paths {
+		if path == cited || strings.HasPrefix(path, cited+".") {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Error comparison (parity rule 1) ---------------------------------
@@ -317,26 +461,26 @@ func tieredPath(path string) string {
 
 // excluded reports whether path is a declared volatile field, recording
 // the hit so an exclusion that never matches can be reported as unused.
-func excluded(path string, opts Options, used map[string]bool) bool {
+func excluded(path string, opts Options, track *tracker) bool {
 	key := tieredPath(path)
 	if _, ok := opts.VolatileFields[key]; !ok {
 		return false
 	}
-	used[key] = true
+	track.volatile[key] = true
 	return true
 }
 
-func compareJSON(baseline, candidate any, path string, opts Options, envelopeKeys map[string]bool, used map[string]bool) []Finding {
+func compareJSON(baseline, candidate any, path string, opts Options, envelopeKeys map[string]bool, track *tracker) []Finding {
 	baselineMap, baselineIsMap := baseline.(map[string]any)
 	candidateMap, candidateIsMap := candidate.(map[string]any)
 	if baselineIsMap && candidateIsMap {
-		return compareDict(baselineMap, candidateMap, path, opts, envelopeKeys, used)
+		return compareDict(baselineMap, candidateMap, path, opts, envelopeKeys, track)
 	}
 
 	baselineList, baselineIsList := baseline.([]any)
 	candidateList, candidateIsList := candidate.([]any)
 	if baselineIsList && candidateIsList {
-		return compareList(baselineList, candidateList, path, opts, used)
+		return compareList(baselineList, candidateList, path, opts, track)
 	}
 
 	baselineBool, baselineIsBool := baseline.(bool)
@@ -368,7 +512,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 		// tolerance-compared must stay tolerance-compared even when both
 		// sides happen to be whole numbers, or the declaration would mean
 		// different things depending on the data.
-		if !opts.FloatTierB[tieredPath(path)] {
+		if _, isTierB := opts.FloatTierB[tieredPath(path)]; !isTierB {
 			if baselineInt, ok := asInt64(baseline); ok {
 				if candidateInt, ok := asInt64(candidate); ok {
 					if baselineInt != candidateInt {
@@ -382,7 +526,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 				}
 			}
 		}
-		return compareNumber(baselineNumber, candidateNumber, path, opts)
+		return compareNumber(baselineNumber, candidateNumber, path, opts, track)
 	}
 
 	if !sameScalar(baseline, candidate) {
@@ -465,7 +609,7 @@ func sameScalar(baseline, candidate any) bool {
 	return fmt.Sprintf("%T:%v", baseline, baseline) == fmt.Sprintf("%T:%v", candidate, candidate)
 }
 
-func compareNumber(baseline, candidate float64, path string, opts Options) []Finding {
+func compareNumber(baseline, candidate float64, path string, opts Options, track *tracker) []Finding {
 	if math.IsNaN(baseline) || math.IsNaN(candidate) || math.IsInf(baseline, 0) || math.IsInf(candidate, 0) {
 		// Parity rule 3: NaN/Infinity ALWAYS mismatches, never
 		// tolerance-compared -- including when both sides agree. inf==inf
@@ -478,7 +622,8 @@ func compareNumber(baseline, candidate float64, path string, opts Options) []Fin
 		}}
 	}
 
-	if !opts.FloatTierB[tieredPath(path)] {
+	key := tieredPath(path)
+	if _, isTierB := opts.FloatTierB[key]; !isTierB {
 		if baseline != candidate {
 			return []Finding{{
 				Kind:   FindingMismatch,
@@ -488,6 +633,13 @@ func compareNumber(baseline, candidate float64, path string, opts Options) []Fin
 		}
 		return nil
 	}
+	// Marked as soon as a Tier-B field is actually COMPARED, not only
+	// when its tolerance is exercised: the declaration's claim is "this
+	// field exists and is a merged aggregate", and a field that compares
+	// equal every run still satisfies it. Marking only on a tolerated
+	// difference would report every correctly-declared, currently-stable
+	// field as stale.
+	track.tierB[key] = true
 
 	tolerance := math.Max(floatTolerance, floatTolerance*math.Max(math.Abs(baseline), math.Abs(candidate)))
 	if math.Abs(baseline-candidate) > tolerance {
@@ -504,7 +656,7 @@ func compareNumber(baseline, candidate float64, path string, opts Options) []Fin
 // only, then drops it: every nested dict, at any depth, compares with no
 // envelope exclusions. A field named "extensions" nested inside `data` is
 // ordinary business data, not a transport-envelope key.
-func compareDict(baseline, candidate map[string]any, path string, opts Options, envelopeKeys map[string]bool, used map[string]bool) []Finding {
+func compareDict(baseline, candidate map[string]any, path string, opts Options, envelopeKeys map[string]bool, track *tracker) []Finding {
 	keys := make([]string, 0, len(baseline)+len(candidate))
 	seen := make(map[string]bool, len(baseline)+len(candidate))
 	for key := range baseline {
@@ -524,7 +676,7 @@ func compareDict(baseline, candidate map[string]any, path string, opts Options, 
 	var findings []Finding
 	for _, key := range keys {
 		childPath := path + "." + key
-		if excluded(childPath, opts, used) {
+		if excluded(childPath, opts, track) {
 			continue
 		}
 		_, inBaseline := baseline[key]
@@ -540,7 +692,7 @@ func compareDict(baseline, candidate map[string]any, path string, opts Options, 
 			findings = append(findings, Finding{Kind: FindingMismatch, Path: childPath, Detail: detail})
 			continue
 		}
-		findings = append(findings, compareJSON(baseline[key], candidate[key], childPath, opts, nil, used)...)
+		findings = append(findings, compareJSON(baseline[key], candidate[key], childPath, opts, nil, track)...)
 	}
 	return findings
 }
@@ -548,7 +700,7 @@ func compareDict(baseline, candidate map[string]any, path string, opts Options, 
 // compareList compares positionally -- parity rule 5's default. A length
 // difference is reported alone: element-wise findings past that point
 // would be a cascade of noise about an offset, not independent defects.
-func compareList(baseline, candidate []any, path string, opts Options, used map[string]bool) []Finding {
+func compareList(baseline, candidate []any, path string, opts Options, track *tracker) []Finding {
 	if len(baseline) != len(candidate) {
 		return []Finding{{
 			Kind:   FindingMismatch,
@@ -559,10 +711,10 @@ func compareList(baseline, candidate []any, path string, opts Options, used map[
 	var findings []Finding
 	for i := range baseline {
 		childPath := fmt.Sprintf("%s[%d]", path, i)
-		if excluded(childPath, opts, used) {
+		if excluded(childPath, opts, track) {
 			continue
 		}
-		findings = append(findings, compareJSON(baseline[i], candidate[i], childPath, opts, nil, used)...)
+		findings = append(findings, compareJSON(baseline[i], candidate[i], childPath, opts, nil, track)...)
 	}
 	return findings
 }

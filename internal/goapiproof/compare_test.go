@@ -105,7 +105,7 @@ func TestCompareFloatTiers(t *testing.T) {
 		t.Fatalf("Tier A is exact: a 1e-10 difference must mismatch, got %s", tierA.TerminalState)
 	}
 
-	tierB := Compare(baseline, candidate, Options{FloatTierB: map[string]bool{"data.hotspots.score": true}})
+	tierB := Compare(baseline, candidate, Options{FloatTierB: map[string]string{"data.hotspots.score": "CHAOS-5451 merged Float64 aggregate"}})
 	if !tierB.IsMatch() {
 		t.Fatalf("Tier B must tolerate 1e-10, got %v", findingPaths(tierB))
 	}
@@ -113,7 +113,7 @@ func TestCompareFloatTiers(t *testing.T) {
 	tooFar := Compare(
 		snapshotFromJSON(t, `{"data":{"hotspots":{"score":1.0}}}`),
 		snapshotFromJSON(t, `{"data":{"hotspots":{"score":1.00001}}}`),
-		Options{FloatTierB: map[string]bool{"data.hotspots.score": true}},
+		Options{FloatTierB: map[string]string{"data.hotspots.score": "CHAOS-5451 merged Float64 aggregate"}},
 	)
 	if tooFar.TerminalState != TerminalStateMismatch {
 		t.Fatalf("Tier B must still catch a 1e-5 difference, got %s", tooFar.TerminalState)
@@ -125,7 +125,7 @@ func TestCompareFloatTiers(t *testing.T) {
 func TestCompareTierBPathIgnoresListIndices(t *testing.T) {
 	baseline := snapshotFromJSON(t, `{"data":{"edges":[{"score":1.0},{"score":2.0}]}}`)
 	candidate := snapshotFromJSON(t, `{"data":{"edges":[{"score":1.0000000004},{"score":2.0000000006}]}}`)
-	result := Compare(baseline, candidate, Options{FloatTierB: map[string]bool{"data.edges.score": true}})
+	result := Compare(baseline, candidate, Options{FloatTierB: map[string]string{"data.edges.score": "CHAOS-5451 merged Float64 aggregate"}})
 	if !result.IsMatch() {
 		t.Fatalf("index-free Tier B path must cover every element, got %v", findingPaths(result))
 	}
@@ -150,7 +150,7 @@ func TestCompareNonFiniteAlwaysMismatches(t *testing.T) {
 	// And a value that parses to a non-finite float still mismatches, even
 	// when both sides carry the identical literal.
 	overflow := snapshotFromJSON(t, `{"data":{"x":1e400}}`)
-	result := Compare(overflow, overflow, Options{FloatTierB: map[string]bool{"data.x": true}})
+	result := Compare(overflow, overflow, Options{FloatTierB: map[string]string{"data.x": "CHAOS-5451 merged Float64 aggregate"}})
 	if result.TerminalState != TerminalStateMismatch {
 		t.Fatalf("identical non-finite values must still mismatch, got %s", result.TerminalState)
 	}
@@ -315,5 +315,111 @@ func TestDecodeSnapshotRejectsUnparseableBody(t *testing.T) {
 		t.Fatal("a truncated body must fail to decode")
 	} else if errors.Is(err, ErrNonFiniteNumber) {
 		t.Fatalf("a truncated body is not a non-finite value: %v", err)
+	}
+}
+
+// A Tier-B declaration that relaxes nothing must be reported, exactly
+// like a stale volatile-field exclusion: it reads as a relaxation that is
+// there, and the first person to trust it is trusting nothing.
+func TestCompareUnusedTierBIsReported(t *testing.T) {
+	body := `{"data":{"hotspots":{"name":"a"}}}`
+	result := Compare(
+		snapshotFromJSON(t, body),
+		snapshotFromJSON(t, body),
+		Options{FloatTierB: map[string]string{"data.hotspots.scor": "typo"}},
+	)
+	if len(result.UnusedTierB) != 1 || result.UnusedTierB[0] != "data.hotspots.scor" {
+		t.Fatalf("a Tier-B entry matching no compared field must be reported, got %v", result.UnusedTierB)
+	}
+}
+
+// A Tier-B field that is COMPARED counts as used even when both sides
+// agree -- the declaration's claim is that the field is a merged
+// aggregate, not that it currently differs.
+func TestCompareTierBCountsAsUsedWhenValuesAgree(t *testing.T) {
+	body := `{"data":{"hotspots":{"score":1.5}}}`
+	result := Compare(
+		snapshotFromJSON(t, body),
+		snapshotFromJSON(t, body),
+		Options{FloatTierB: map[string]string{"data.hotspots.score": "CHAOS-5451 merged Float64 aggregate"}},
+	)
+	if len(result.UnusedTierB) != 0 {
+		t.Fatalf("a stable Tier-B field must not read as stale, got %v", result.UnusedTierB)
+	}
+}
+
+// A declared baseline defect changes what the receipt SAYS, never what it
+// is: the terminal state stays `mismatch`, and the covered differences
+// are attributed to their ticket.
+func TestCompareBaselineDefectDoesNotConvertAMismatch(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":{"workItems":{"cycleTimeDays":9,"title":"a"}}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"workItems":{"cycleTimeDays":4,"title":"a"}}}`)
+	result := Compare(baseline, candidate, Options{BaselineDefects: []BaselineDefect{{
+		Ticket: "CHAOS-5448",
+		Reason: "Python omits FINAL on work_item_cycle_times and counts superseded row versions",
+		Paths:  []string{"data.workItems.cycleTimeDays"},
+	}}})
+
+	if result.TerminalState != TerminalStateMismatch {
+		t.Fatalf("a declared baseline defect must NEVER convert a mismatch, got %s", result.TerminalState)
+	}
+	if len(result.BaselineDefectsMatched) != 1 || result.BaselineDefectsMatched[0] != "CHAOS-5448" {
+		t.Fatalf("the covering ticket must be recorded, got %v", result.BaselineDefectsMatched)
+	}
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("every difference was covered; want an explicit zero, got %d", result.DifferencesOutsideBaselineDefect)
+	}
+	if len(result.StaleBaselineDefects) != 0 {
+		t.Fatalf("the entry matched, so it is not stale: %v", result.StaleBaselineDefects)
+	}
+}
+
+// A difference OUTSIDE every declared path must be counted, so "all of
+// this is a known Python defect" cannot quietly cover a new one.
+func TestCompareCountsDifferencesOutsideABaselineDefect(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":{"workItems":{"cycleTimeDays":9,"title":"a"}}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"workItems":{"cycleTimeDays":4,"title":"b"}}}`)
+	result := Compare(baseline, candidate, Options{BaselineDefects: []BaselineDefect{{
+		Ticket: "CHAOS-5448",
+		Paths:  []string{"data.workItems.cycleTimeDays"},
+	}}})
+
+	if result.DifferencesOutsideBaselineDefect != 1 {
+		t.Fatalf("the uncovered title difference must be counted, got %d", result.DifferencesOutsideBaselineDefect)
+	}
+	if len(result.BaselineDefectsMatched) != 1 {
+		t.Fatalf("the covering ticket still applies to its own path, got %v", result.BaselineDefectsMatched)
+	}
+}
+
+// A cited path covers everything beneath it, so a subtree root can be
+// named once rather than every leaf under it.
+func TestCompareBaselineDefectCoversASubtree(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":{"cycles":{"nested":{"a":1,"b":2}}}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"cycles":{"nested":{"a":9,"b":8}}}}`)
+	result := Compare(baseline, candidate, Options{BaselineDefects: []BaselineDefect{{
+		Ticket: "CHAOS-5448",
+		Paths:  []string{"data.cycles"},
+	}}})
+	if result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("a subtree root must cover its leaves, got %d uncovered", result.DifferencesOutsideBaselineDefect)
+	}
+}
+
+// An entry covering nothing is stale -- the defect was fixed, or the
+// paths are wrong. Either way it must be reported so the caller fails the
+// run, rather than sitting in the table reading as coverage.
+func TestCompareStaleBaselineDefectIsReported(t *testing.T) {
+	body := `{"data":{"workItems":{"cycleTimeDays":4}}}`
+	result := Compare(
+		snapshotFromJSON(t, body),
+		snapshotFromJSON(t, body),
+		Options{BaselineDefects: []BaselineDefect{{Ticket: "CHAOS-5448", Paths: []string{"data.workItems.cycleTimeDays"}}}},
+	)
+	if result.TerminalState != TerminalStateMatch {
+		t.Fatalf("no differences means match, got %s", result.TerminalState)
+	}
+	if len(result.StaleBaselineDefects) != 1 || result.StaleBaselineDefects[0] != "CHAOS-5448" {
+		t.Fatalf("an entry covering nothing must be reported stale, got %v", result.StaleBaselineDefects)
 	}
 }

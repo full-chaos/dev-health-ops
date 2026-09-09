@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -25,24 +26,23 @@ import (
 // it. That is the gap this refusal closes.
 var ErrNoBuildIdentity = errors.New("goapiproof: the running query-api reports no build identity, so no receipt can name the build that served these requests")
 
-// registryBody is GET /registry's response.
-//
-// Build is OPTIONAL in the wire shape and REQUIRED by this command: the
-// route as merged carries only schema_digest and operations, so an older
-// deployment answers without it and gets a named refusal rather than a
-// confusing decode error.
+// registryBody is GET /registry's response. Deliberately just the schema
+// digest and the operation map -- the build identity lives at
+// /buildinfo, see FetchBuildIdentity.
 type registryBody struct {
 	SchemaDigest string `json:"schema_digest"`
 	Operations   []struct {
 		Operation      string `json:"operation"`
 		DocumentDigest string `json:"document_digest"`
 	} `json:"operations"`
-	Build *struct {
-		Commit    string `json:"commit"`
-		Version   string `json:"version"`
-		BuildTime string `json:"build_time"`
-		Modified  bool   `json:"modified"`
-	} `json:"build"`
+}
+
+// buildInfoBody is GET /buildinfo's response.
+type buildInfoBody struct {
+	Commit    string `json:"commit"`
+	Version   string `json:"version"`
+	BuildTime string `json:"build_time"`
+	Modified  bool   `json:"modified"`
 }
 
 // FetchRegistry asks the RUNNING process what it serves.
@@ -91,16 +91,100 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 		view.DocumentDigest[operation.Operation] = operation.DocumentDigest
 	}
 
-	switch {
-	case parsed.Build == nil || strings.TrimSpace(parsed.Build.Commit) == "":
-		return view, ErrNoBuildIdentity
-	case parsed.Build.Commit == "unknown":
-		return view, fmt.Errorf("%w: it reports commit=\"unknown\", which is internal/platform/version's default for a build with no -ldflags and no VCS stamp", ErrNoBuildIdentity)
-	case parsed.Build.Modified:
-		return view, fmt.Errorf("%w: it reports a MODIFIED working tree, so its commit does not identify the source it was built from", ErrNoBuildIdentity)
-	}
-	view.BuildIdentity = parsed.Build.Commit
 	return view, nil
+}
+
+// FetchBuildIdentity asks the RUNNING process which build it is, via the
+// authenticated GET /buildinfo route.
+//
+// Every failure mode is a REFUSAL, never a fallback to an
+// operator-supplied name:
+//
+//   - an empty commit, or "unknown" (internal/platform/version's default
+//     for a build with no -ldflags and no VCS stamp): the process cannot
+//     say what it is, so no receipt can say it either.
+//   - a MODIFIED tree: the commit does not describe what was compiled, so
+//     naming it on a receipt would be a false claim, not an approximate
+//     one.
+//   - a 404: the deployment predates /buildinfo. Also a refusal -- an old
+//     build that cannot identify itself is exactly the case this check
+//     exists for.
+func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL string, headers map[string]string) (string, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildInfoURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("goapiproof: build buildinfo request: %w", err)
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("goapiproof: read %s: %w", buildInfoURL, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	switch response.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return "", fmt.Errorf("%w: %s answered 404, so this deployment predates the /buildinfo route", ErrNoBuildIdentity, buildInfoURL)
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "", fmt.Errorf("goapiproof: %s rejected the envelope (HTTP %d)", buildInfoURL, response.StatusCode)
+	default:
+		return "", fmt.Errorf("goapiproof: %s answered HTTP %d", buildInfoURL, response.StatusCode)
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", fmt.Errorf("goapiproof: read buildinfo body: %w", err)
+	}
+	var parsed buildInfoBody
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("goapiproof: decode buildinfo body: %w", err)
+	}
+
+	commit := strings.TrimSpace(parsed.Commit)
+	switch {
+	case commit == "":
+		return "", ErrNoBuildIdentity
+	case commit == "unknown":
+		return "", fmt.Errorf("%w: it reports commit=%q, internal/platform/version's default for a build with no -ldflags and no VCS stamp", ErrNoBuildIdentity, commit)
+	case parsed.Modified:
+		return "", fmt.Errorf("%w: it reports a MODIFIED working tree, so its commit does not identify the source it was built from", ErrNoBuildIdentity)
+	}
+	return commit, nil
+}
+
+// VerifyCandidateBuild cross-checks the build the process reports against
+// what the routing rows point at.
+//
+// The direction matters. The RUNNING process is the authority on which
+// build served the request; the row's current_candidate_build is a
+// claim an operator typed. When they disagree, the rows are describing a
+// build that is not the one answering requests -- the same class of
+// silent mismatch as the stale schema digest in CHAOS-5416, and a receipt
+// written across it would attribute evidence to the wrong build.
+//
+// An operator-supplied --candidate-build is checked here too, as a
+// cross-check ONLY. It never becomes the value written (team-lead ruling
+// R51, 2026-09-09).
+func VerifyCandidateBuild(running string, expected string, routing map[string]RoutingRow) error {
+	if expected != "" && expected != running {
+		return fmt.Errorf("goapiproof: --candidate-build %q does not match the running build %q -- the flag is a cross-check, never the source", expected, running)
+	}
+	var disagreeing []string
+	for operation, row := range routing {
+		if row.CandidateBuild != "" && row.CandidateBuild != running {
+			disagreeing = append(disagreeing, fmt.Sprintf("%s points at %s", operation, row.CandidateBuild))
+		}
+	}
+	if len(disagreeing) > 0 {
+		sort.Strings(disagreeing)
+		return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s", running, strings.Join(disagreeing, "; "))
+	}
+	return nil
 }
 
 // registrydumpDocument is one element of `registrydump -file

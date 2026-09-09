@@ -1624,7 +1624,7 @@ type SankeyCoverage struct {
 	RepoCoverage             float64  `json:"repoCoverage"`
 	DirectRepoCoverage       *float64 `json:"directRepoCoverage,omitempty"`
 	TeamFallbackRepoCoverage *float64 `json:"teamFallbackRepoCoverage,omitempty"`
-	RepoFanoutReposPerUnit    *float64 `json:"repoFanoutReposPerUnit,omitempty"`
+	RepoFanoutReposPerUnit   *float64 `json:"repoFanoutReposPerUnit,omitempty"`
 }
 
 // SankeyEdge.Value is *float64, not float64 -- CHAOS-4701, same shape as

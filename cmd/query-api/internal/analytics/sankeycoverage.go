@@ -289,6 +289,18 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// identical requests. Zero fallback rows yields 0, not a division by
 		// zero -- and 0 here is honest, because "no team-fallback rows" is a
 		// measurement, unlike the non-investment path's NULL above.
+		//
+		// A SECOND reason to count distinct keys rather than rows, found after
+		// the first: work_unit_repo_effort is a ReplacingMergeTree, so a raw
+		// count() over it is BOTH generation-dependent and merge-state-
+		// dependent. Measured on the live org for unchanged logical content:
+		// 5310 -> 10626 -> 3612 rows, the last two twenty minutes apart, with
+		// a background merge collapsing superseded rows in between (after it,
+		// count() == count() FINAL == uniqExact((work_unit_id, repo_id)) ==
+		// 3612). No census of that table is reproducible over time without
+		// FINAL, an explicit latest-generation filter, or distinct-key
+		// counting. The ARRAY JOIN above only bites under a filter; merge
+		// state moves under every reader, always, with no query change at all.
 		fanoutUnits := fmt.Sprintf("uniqExactIf(work_unit_investments.work_unit_id, %s)", isTeamFallback)
 		fanoutPairs := fmt.Sprintf("uniqExactIf((work_unit_investments.work_unit_id, wure.repo_id), %s)", isTeamFallback)
 		fanoutExpr = fmt.Sprintf("toNullable(if(%[1]s > 0, %[2]s / %[1]s, 0))", fanoutUnits, fanoutPairs)
@@ -304,6 +316,31 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 			joins = append(joins, fmt.Sprintf("LEFT JOIN %s AS au ON au.work_unit_id = work_unit_investments.work_unit_id", workUnitAuthorsSource()))
 		}
 		// analytics.py:829-834 -- appended after the LEFT JOINs, as Python does.
+		//
+		// 🛑 KNOWN DEFECT, PRE-EXISTING, NOT FIXED HERE. This ARRAY JOIN
+		// multiplies each unit's joined rows by ITS OWN surviving subcategory
+		// count, so a work-category filter re-weights units RELATIVE TO EACH
+		// OTHER and every effort-weighted column below inherits it -- including
+		// the pre-existing teamCoverage and repoCoverage, not just CHAOS-5483's
+		// split. Measured on a real engine, two equal-effort units (one
+		// subcategory vs two, the two-subcategory one repo-unassigned):
+		// repoCoverage 0.5 unfiltered -> 0.333 filtered, identical data. The
+		// same ARRAY JOIN is in the Python original
+		// (resolvers/analytics.py:829-834), so both planes agree on the wrong
+		// answer, which is why a parity port could not have caught it.
+		//
+		// Deliberately left alone: correcting it changes a shipped, Python-
+		// parity number, and the correction is a SEMANTICS choice (aggregate at
+		// unit grain, or weight by subcategory_kv.2 so a filtered view means
+		// "coverage among work in this category") that belongs to the product,
+		// not to a split PR. Filed as its own ticket; pinned meanwhile by
+		// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits,
+		// which fails loudly if the behaviour changes in either direction.
+		//
+		// CHAOS-5483's split is an exact partition of the headline in every
+		// case measured, filtered and not, so it inherits this distortion
+		// rather than adding one. Fixing the split alone would break the
+		// partition and make it disagree with the coverage card beside it.
 		if hasWorkCategoryFilter(filters) {
 			joins = append(joins, "ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv")
 		}

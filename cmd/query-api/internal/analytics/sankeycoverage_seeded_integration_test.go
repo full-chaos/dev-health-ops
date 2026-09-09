@@ -716,6 +716,218 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_FanoutIsArrayJoinInvariant(t
 	}
 }
 
+// seedFilterReweightOrg seeds one org for the work-category re-weighting
+// characterization below: two units of equal effort, one carrying ONE
+// subcategory and one carrying TWO, both under feature_delivery so a
+// feature_delivery filter keeps every ARRAY JOIN row. assigned decides whether
+// the second unit gets a repo-effort row at all.
+func seedFilterReweightOrg(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, orgID string, secondUnitAssigned bool) {
+	t.Helper()
+	type unit struct {
+		id      string
+		subcats string
+		repoSrc string // "" => seed no work_unit_repo_effort row at all
+	}
+	units := []unit{
+		{"wu-one-subcat", "map('feature_delivery.build', 1.0)", "own_edges"},
+		{"wu-two-subcat", "map('feature_delivery.build', 0.5, 'feature_delivery.ship', 0.5)", ""},
+	}
+	if secondUnitAssigned {
+		units[1].repoSrc = "team:ALPHA"
+	}
+	for _, u := range units {
+		if err := conn.Exec(ctx, fmt.Sprintf(
+			"INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, provider, effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status, categorization_errors_json, categorization_model_version, categorization_input_hash, categorization_run_id, computed_at, work_unit_type, work_unit_name, org_id) VALUES "+
+				"('%[1]s', toDateTime64('%[2]s', 3, 'UTC'), toDateTime64('2026-01-03 00:00:00.000', 3, 'UTC'), NULL, 'github', 'churn_loc', 100, map('feature_delivery', 1.0), %[3]s, '{\"issues\":[\"linear:ALPHA-1\"],\"prs\":[]}', 0.5, 'moderate', 'ok', '', 'v1', 'h', 'run-1', toDateTime64('%[2]s', 3, 'UTC'), 'pr', 'seeded', '%[4]s')",
+			u.id, seededCoverageTS, u.subcats, orgID)); err != nil {
+			t.Fatalf("seed work_unit_investments %s: %v", u.id, err)
+		}
+		if u.repoSrc == "" {
+			continue
+		}
+		if err := conn.Exec(ctx, fmt.Sprintf(
+			"INSERT INTO work_unit_repo_effort (work_unit_id, repo_id, effort_metric, effort_value, allocation_weight, allocation_source, repo_source, categorization_run_id, computed_at, org_id) SETTINGS optimize_on_insert = 0 VALUES ('%[1]s', toUUID('%[2]s'), 'churn_loc', 100, 1.0, 'seeded', '%[3]s', 'run-1', toDateTime64('%[4]s', 3, 'UTC'), '%[5]s')",
+			u.id, seededCoverageRepo1, u.repoSrc, seededCoverageTS, orgID)); err != nil {
+			t.Fatalf("seed work_unit_repo_effort %s: %v", u.id, err)
+		}
+	}
+	if err := conn.Exec(ctx, fmt.Sprintf(
+		"INSERT INTO repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider, source_id) VALUES (toUUID('%[1]s'), 'acme/one', NULL, toDateTime64('%[2]s', 3, 'UTC'), NULL, NULL, toDateTime64('%[2]s', 3, 'UTC'), '%[3]s', 'github', NULL)",
+		seededCoverageRepo1, seededCoverageTS, orgID)); err != nil {
+		t.Fatalf("seed repos: %v", err)
+	}
+}
+
+// TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits
+// is a CHARACTERIZATION test. It pins behaviour that is WRONG and that this
+// change does not fix, so that the defect is visible in the suite instead of
+// latent, and so whoever fixes it has a red-first anchor. Do not read a green
+// here as an endorsement of these numbers.
+//
+// THE DEFECT, and it is NOT introduced by CHAOS-5483: a work-category filter
+// appends `ARRAY JOIN CAST(subcategory_distribution_json ...)` (see
+// hasWorkCategoryFilter in sankeycoverage.go). That multiplies each unit's
+// joined rows by ITS OWN surviving subcategory count -- so units are re-weighted
+// RELATIVE TO EACH OTHER, and every effort-weighted column in this query
+// inherits it, including the pre-existing teamCoverage and repoCoverage. The
+// same ARRAY JOIN is in the Python original at
+// src/dev_health_ops/api/graphql/resolvers/analytics.py:833, so both planes
+// share the behaviour. Filed as its own ticket; the fix is a semantics decision
+// (aggregate at unit grain, or weight by subcategory_kv.2 so a filtered view
+// means "coverage among work in this category"), which is chris's call, not a
+// silent correction inside a split PR.
+//
+// The reviewer that found this (round chaos-5483-pr1-r1, F1 P1) reported it
+// against the SPLIT columns. Reproducing it showed the opposite: the split is
+// an exact partition of the headline in every case measured, filtered and not
+// -- it inherits the distortion faithfully rather than adding one. Fixing the
+// split alone would BREAK the partition and make it disagree with the coverage
+// card beside it, which is strictly worse than a documented shared distortion.
+//
+// Two scenarios, because the first one alone is misleading:
+//
+//	assigned: both units resolve a repo. repoCoverage stays 1.0 across the
+//	  filter and looks immune -- it is merely SATURATED. The tell is the
+//	  denominator: repo_total moves 2 -> 3.
+//	unassigned: the two-subcategory unit resolves NO repo, so repoCoverage
+//	  becomes sensitive and moves 0.5 -> 0.333 on identical data, with the
+//	  split columns constant. This is the scenario that proves the defect is
+//	  the headline's, not the split's.
+func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategoryFilterReweightsUnits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	inst, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = inst.Close(context.Background()) }()
+
+	opts, err := stdclickhouse.ParseDSN(inst.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	conn, err := stdclickhouse.Open(opts)
+	if err != nil {
+		t.Fatalf("open raw ClickHouse connection: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL + seededCoverageExtraDDL) {
+		if err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("exec DDL %q: %v", stmt, err)
+		}
+	}
+
+	const (
+		orgAssigned   = "seeded-coverage-reweight-assigned"
+		orgUnassigned = "seeded-coverage-reweight-unassigned"
+	)
+	seedFilterReweightOrg(t, ctx, conn, orgAssigned, true)
+	seedFilterReweightOrg(t, ctx, conn, orgUnassigned, false)
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	if err != nil {
+		t.Fatalf("construct ClickHouse query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	req, err := SankeyRequestFromInput(model.SankeyRequestInput{
+		Path:    []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputTheme},
+		Measure: model.MeasureInputCount,
+		DateRange: &model.DateRangeInput{
+			StartDate: mustGraphQLDate("2026-01-01"),
+			EndDate:   mustGraphQLDate("2026-01-08"),
+		},
+		MaxNodes: 16,
+		MaxEdges: 100,
+	})
+	if err != nil {
+		t.Fatalf("SankeyRequestFromInput: %v", err)
+	}
+
+	// The RAW compiled columns, so the headline is measured in the same call
+	// as the split rather than inferred from the resolver's ratios.
+	read := func(orgID, label string, filters *model.FilterInput) (repoTotal, assignedRepo, direct, fallback float64) {
+		t.Helper()
+		compiled, err := compileSankeyCoverage(req, orgID, 60, true, filters)
+		if err != nil {
+			t.Fatalf("%s: compileSankeyCoverage: %v", label, err)
+		}
+		rows, err := client.Query(ctx, compiled.sql, compiled.bindings)
+		if err != nil {
+			t.Fatalf("%s: execute compiled SQL: %v", label, err)
+		}
+		defer func() { _ = rows.Close() }()
+		if !rows.Next() {
+			t.Fatalf("%s: compiled SQL returned no rows", label)
+		}
+		var total, assignedTeam float64
+		var dir, fb, fan *float64
+		if err := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &dir, &fb, &fan); err != nil {
+			t.Fatalf("%s: scan: %v", label, err)
+		}
+		if dir == nil || fb == nil {
+			t.Fatalf("%s: split columns nil on the investment path", label)
+		}
+		return repoTotal, assignedRepo, *dir, *fb
+	}
+
+	categoryFilter := &model.FilterInput{
+		Why: &model.WhyFilterInput{WorkCategory: []string{"feature_delivery"}},
+	}
+	const tol = 1e-9
+
+	// Scenario 1 -- both units assigned. The shares look stable; the
+	// DENOMINATOR is what gives the re-weighting away.
+	for _, c := range []struct {
+		label                                                 string
+		filters                                               *model.FilterInput
+		wantRepoTotal, wantAssigned, wantDirect, wantFallback float64
+	}{
+		{"assigned/unfiltered", nil, 2, 2, 1, 1},
+		{"assigned/filtered", categoryFilter, 3, 3, 1, 2},
+	} {
+		repoTotal, assigned, direct, fallback := read(orgAssigned, c.label, c.filters)
+		for _, got := range []struct {
+			name string
+			v    float64
+			want float64
+		}{
+			{"repo_total", repoTotal, c.wantRepoTotal},
+			{"assigned_repo", assigned, c.wantAssigned},
+			{"direct_repo", direct, c.wantDirect},
+			{"team_fallback_repo", fallback, c.wantFallback},
+		} {
+			if math.Abs(got.v-got.want) > tol {
+				t.Errorf("%s: %s = %v, want %v", c.label, got.name, got.v, got.want)
+			}
+		}
+		// The property this change actually owns: whatever the filter does to
+		// the weights, the split still decomposes the headline exactly.
+		if math.Abs((direct+fallback)-assigned) > tol {
+			t.Errorf("%s: direct + fallback = %v, want assigned_repo = %v -- the partition must hold regardless of the filter re-weighting", c.label, direct+fallback, assigned)
+		}
+	}
+
+	// Scenario 2 -- the two-subcategory unit is UNASSIGNED, so repoCoverage is
+	// sensitive. This is the proof the defect belongs to the headline: the
+	// split columns are identical across the filter while repoCoverage is not.
+	unfilteredTotal, unfilteredAssigned, unfilteredDirect, unfilteredFallback := read(orgUnassigned, "unassigned/unfiltered", nil)
+	filteredTotal, filteredAssigned, filteredDirect, filteredFallback := read(orgUnassigned, "unassigned/filtered", categoryFilter)
+
+	if math.Abs(unfilteredAssigned/unfilteredTotal-0.5) > tol {
+		t.Errorf("unassigned/unfiltered repoCoverage = %v, want 0.5", unfilteredAssigned/unfilteredTotal)
+	}
+	if math.Abs(filteredAssigned/filteredTotal-1.0/3.0) > tol {
+		t.Errorf("unassigned/filtered repoCoverage = %v, want 0.333... -- if this now equals 0.5, the headline re-weighting has been FIXED and this characterization test should be replaced by a real assertion", filteredAssigned/filteredTotal)
+	}
+	if math.Abs(unfilteredDirect-filteredDirect) > tol || math.Abs(unfilteredFallback-filteredFallback) > tol {
+		t.Errorf("split columns moved across the filter (direct %v->%v, fallback %v->%v) while the headline moved -- the split is supposed to be constant here",
+			unfilteredDirect, filteredDirect, unfilteredFallback, filteredFallback)
+	}
+}
+
 // TestResolveSankeyCoverage_SeededRealClickHouse_EmptyWindowIsNilNotZero
 // pins the degradation boundary: a window with no rows returns zero rows,
 // which Python leaves as coverage=None (`if c_rows:`) rather than 0/0.

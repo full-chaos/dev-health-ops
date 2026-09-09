@@ -32,7 +32,7 @@ added together, so the product shows them apart as well.
 - **Team-fallback coverage** is work whose repository is not known. Only the
   owning team is known, so its effort is spread evenly across every repository
   that team owns.
-- **Fan-out width** is how many distinct repositories each of those units was spread across. It counts repositories, not rows, so it reports the same width whether or not you have filters applied.
+- **Fan-out width** is how many distinct repositories each of those units was spread across. It counts repositories rather than rows, so a filtered view does not report a wider fallback than an unfiltered one for the same work.
 
 Read the fan-out width before you trust a high coverage number. A team that
 owns nine repositories turns one unresolved work item into nine repository
@@ -49,3 +49,9 @@ repositories against each other.
 
 Either figure can be blank rather than zero. Blank means the view could not
 measure the split; zero means it measured it and found none.
+
+One caution when comparing views. Filtering by work category can shift all
+three coverage figures -- including the combined one -- because work items
+that match the filter in more than one way are weighted more heavily than
+those that match in only one. Compare a filtered view against another filtered
+view with the same filter, not against an unfiltered one.

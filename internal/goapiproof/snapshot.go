@@ -50,6 +50,12 @@ func DecodeSnapshot(body []byte) (Snapshot, error) {
 	}
 
 	snapshot := Snapshot{}
+	// A JSON decoder stops at the end of the first value and ignores
+	// everything after it, so two materially different bodies can decode to
+	// the same envelope and compare equal (confirmation pass C3: a 67-byte
+	// candidate and a 39-byte baseline compared as match). More() reports
+	// whether anything remains; the admission gate refuses when it does.
+	snapshot.TrailingBytes = decoder.More()
 	if raw, ok := envelope["data"]; ok {
 		snapshot.DataPresent = true
 		if err := decodeWithNumbers(raw, &snapshot.Data); err != nil {

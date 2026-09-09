@@ -79,6 +79,11 @@ type Snapshot struct {
 	DataPresent bool
 	Errors      []map[string]any
 	Watermark   string
+	// TrailingBytes reports that the body carried more bytes after its
+	// first JSON value. The decoder silently drops them, so a comparison
+	// over the decoded value is not a comparison over what was served --
+	// the admission gate refuses rather than compare.
+	TrailingBytes bool
 }
 
 // Finding is one comparator observation.

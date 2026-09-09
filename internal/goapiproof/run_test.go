@@ -269,16 +269,25 @@ func TestRunRefusesAnOperationWithNoLocalDocument(t *testing.T) {
 	runner.Routing["hotspots"] = RoutingRow{Mode: "canary"}
 
 	outcomes, summary, err := runner.Run(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	if !errors.Is(err, ErrNothingMeasured) {
+		t.Fatalf("expected ErrNothingMeasured, got %v", err)
 	}
-	if summary.Attempted != 2 || summary.Refused != 1 {
+	// BOTH refuse, for DIFFERENT named reasons, and the test pins each to
+	// its own operation: hotspots has no local document, and featureFlags'
+	// body here is `{"data":{}}`, which carries no resolved root field.
+	// Asserting only a count would pass if both refused for the same reason.
+	if summary.Attempted != 2 || summary.Refused != 2 {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
+	byOperation := map[string]string{}
 	for _, outcome := range outcomes {
-		if outcome.Operation == "hotspots" && outcome.RefusalReason != RefusalDocumentDigestDrift {
-			t.Fatalf("expected %s, got %s", RefusalDocumentDigestDrift, outcome.RefusalReason)
-		}
+		byOperation[outcome.Operation] = outcome.RefusalReason
+	}
+	if byOperation["hotspots"] != RefusalDocumentDigestDrift {
+		t.Fatalf("hotspots: expected %s, got %s", RefusalDocumentDigestDrift, byOperation["hotspots"])
+	}
+	if byOperation["featureFlags"] != RefusalEmptyResponseRoot {
+		t.Fatalf("featureFlags: expected %s, got %s", RefusalEmptyResponseRoot, byOperation["featureFlags"])
 	}
 }
 
@@ -410,51 +419,50 @@ func TestBaselineWithNoPlaneEvidenceIsRefused(t *testing.T) {
 	}
 }
 
-// Two identical GraphQL error envelopes compare with zero findings. That
-// must NOT be a match: agreement on a failure is not proof the operation
-// works on the candidate plane.
-func TestIdenticalErrorsAreUnsupportedNotMatch(t *testing.T) {
+// Two identical GraphQL error envelopes must not back a proof at all.
+//
+// This test used to assert an EXECUTED outcome with terminal_state
+// `unsupported` -- the blacklist-era shape, where a disqualifying response
+// still counted as a measurement. Under the admission gate an errored
+// response never reaches comparison, so the assertion is now stricter: a
+// named refusal AND executed=false AND admitted=false.
+func TestIdenticalErrorsAreRefusedNotExecuted(t *testing.T) {
 	errBody := `{"errors":[{"message":"boom","path":["featureFlags"],"extensions":{"code":"INTERNAL"}}]}`
 	runner := runnerAgainst(t, &planeStampingEdge{
 		body: errBody, candidatePlane: "go", baselinePlane: "python",
 	}, "canary")
 
 	outcomes, summary, err := runner.Run(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	if !errors.Is(err, ErrNothingMeasured) {
+		t.Fatalf("an errored pair measured nothing, got %v", err)
 	}
-	if outcomes[0].TerminalState != TerminalStateUnsupported {
-		t.Fatalf("two identical errors must be unsupported, got %s", outcomes[0].TerminalState)
+	if outcomes[0].RefusalReason != RefusalErroredResponse {
+		t.Fatalf("expected %s, got %s (%s)", RefusalErroredResponse, outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
 	}
-	if summary.ByTerminalState[TerminalStateMatch] != 0 {
-		t.Fatalf("no match may be recorded: %+v", summary.ByTerminalState)
+	if outcomes[0].Executed || outcomes[0].Admitted {
+		t.Fatalf("an errored pair must be neither admitted nor executed: admitted=%v executed=%v", outcomes[0].Admitted, outcomes[0].Executed)
 	}
-	var named bool
-	for _, finding := range outcomes[0].Findings {
-		if finding.Kind == "errored_response" {
-			named = true
-		}
-	}
-	if !named {
-		t.Fatalf("the downgrade must carry its reason: %v", outcomes[0].Findings)
+	if summary.Admitted != 0 || summary.ByTerminalState[TerminalStateMatch] != 0 {
+		t.Fatalf("nothing may be admitted or matched: %+v", summary)
 	}
 }
 
-// A candidate that returns no data at all cannot back a proof either.
-func TestCandidateWithNoDataIsUnsupported(t *testing.T) {
+// A candidate that returns no data at all cannot back a proof either --
+// again a refusal now, not a softened executed outcome.
+func TestCandidateWithNoDataIsRefused(t *testing.T) {
 	runner := runnerAgainst(t, &planeStampingEdge{
 		body: `{"data":null}`, candidatePlane: "go", baselinePlane: "python",
 	}, "canary")
 
-	outcomes, err := func() ([]Outcome, error) {
-		o, _, e := runner.Run(context.Background(), nil)
-		return o, e
-	}()
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	outcomes, _, err := runner.Run(context.Background(), nil)
+	if !errors.Is(err, ErrNothingMeasured) {
+		t.Fatalf("a data-less candidate measured nothing, got %v", err)
 	}
-	if outcomes[0].TerminalState != TerminalStateUnsupported {
-		t.Fatalf("a data-less candidate must be unsupported, got %s", outcomes[0].TerminalState)
+	if outcomes[0].RefusalReason != RefusalEmptyResponseRoot {
+		t.Fatalf("expected %s, got %s (%s)", RefusalEmptyResponseRoot, outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
+	}
+	if outcomes[0].Admitted {
+		t.Fatalf("a data-less candidate must not be admitted")
 	}
 }
 

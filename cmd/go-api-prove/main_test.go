@@ -21,6 +21,7 @@ func TestEmitReportCarriesExplicitZeros(t *testing.T) {
 	registry := goapiproof.RegistryView{SchemaDigest: "sha256:29d509cd", BuildIdentity: "b18e56fa7"}
 	summary := goapiproof.Summary{
 		Attempted:       15,
+		Admitted:        0,
 		Executed:        0,
 		Refused:         15,
 		ByTerminalState: map[string]int{},
@@ -51,6 +52,12 @@ func TestEmitReportCarriesExplicitZeros(t *testing.T) {
 	// zero is exactly the silence this contract forbids.
 	if !strings.Contains(body, `"executed": 0`) {
 		t.Fatalf("the report must carry an explicit executed=0:\n%s", body)
+	}
+	// admitted is the count that says whether ANYTHING satisfied the
+	// preconditions. An omitted zero here would hide the difference between
+	// "nothing was admissible" and "everything matched".
+	if !strings.Contains(body, `"admitted": 0`) {
+		t.Fatalf("the report must carry an explicit admitted=0:\n%s", body)
 	}
 	if !strings.Contains(body, goapiproof.RefusalNotRouted) {
 		t.Fatalf("the report must name every refusal reason:\n%s", body)

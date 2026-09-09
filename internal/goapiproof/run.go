@@ -35,6 +35,7 @@ const (
 	RefusalStaleExclusion      = "declared_exclusion_matched_nothing"
 	RefusalStaleTierB          = "declared_tier_b_field_matched_nothing"
 	RefusalStaleBaselineDefect = "declared_baseline_defect_matched_nothing"
+	RefusalNonFinite           = "response_carried_a_non_finite_json_number"
 	RefusalPlaneUnidentified   = "response_carried_no_plane_evidence"
 	RefusalBuildMismatch       = "serving_build_is_not_the_named_build"
 )
@@ -119,10 +120,15 @@ type Observation struct {
 // Outcome is one operation's complete result: what was attempted, what
 // actually executed, and -- when nothing executed -- why, by name.
 type Outcome struct {
-	Operation       string    `json:"operation"`
-	DocumentDigest  string    `json:"document_digest"`
-	Mode            string    `json:"mode"`
-	Executed        bool      `json:"executed"`
+	Operation      string `json:"operation"`
+	DocumentDigest string `json:"document_digest"`
+	Mode           string `json:"mode"`
+	Executed       bool   `json:"executed"`
+	// Admitted records that this pair passed Admit. Executed is never true
+	// without it; they are separate fields so a regression that sets
+	// Executed some other way shows up in the report rather than reading
+	// as a legitimate measurement.
+	Admitted        bool      `json:"admitted"`
 	RefusalReason   string    `json:"refusal_reason,omitempty"`
 	RefusalDetail   string    `json:"refusal_detail,omitempty"`
 	Route           string    `json:"route"`
@@ -142,7 +148,11 @@ type Outcome struct {
 // every run, including the zeros: a run that measured nothing must be
 // impossible to mistake for a run that found nothing wrong.
 type Summary struct {
-	Attempted       int            `json:"attempted"`
+	Attempted int `json:"attempted"`
+	// Admitted is serialised even when zero. "nothing passed admission"
+	// and "everything passed and nothing differed" are different facts,
+	// and a run whose admitted count is 0 measured nothing at all.
+	Admitted        int            `json:"admitted"`
 	Executed        int            `json:"executed"`
 	Refused         int            `json:"refused"`
 	ReceiptsWritten int            `json:"receipts_written"`
@@ -231,6 +241,9 @@ func (r *Runner) Run(ctx context.Context, db Querier) ([]Outcome, Summary, error
 	for _, operation := range operations {
 		summary.Attempted++
 		outcome := r.proveOne(ctx, operation)
+		if outcome.Admitted {
+			summary.Admitted++
+		}
 		if outcome.Executed {
 			summary.Executed++
 			summary.ByTerminalState[outcome.TerminalState]++
@@ -303,7 +316,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	refuse := func(reason, detail string) Outcome {
 		outcome.RefusalReason = reason
 		outcome.RefusalDetail = detail
-		outcome.TerminalState = "proof_failed"
+		outcome.TerminalState = terminalStateForRefusal(reason)
 		return outcome
 	}
 
@@ -346,77 +359,43 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	}
 	outcome.Candidate = &candidate
 
-	// The candidate MUST have been served by Go, on EVERY route.
-	//
-	// The shadow route used to be exempt, because /query/proof carried no
-	// plane header to check. That exemption meant a mis-pointed
-	// --proof-url at anything returning a plausible 200 produced a MATCH
-	// receipt (codex r1 F1, reproduced: a bare httptest server with no
-	// headers, terminal_state=match). The proof route now stamps the
-	// header itself, so there is nothing left to exempt -- and an ABSENT
-	// header is its own refusal rather than a skipped check, because
-	// "no evidence" and "evidence of Go" must never read the same.
-	switch {
-	case candidate.Plane == "":
-		return refuse(RefusalPlaneUnidentified,
-			fmt.Sprintf("candidate leg carried no %s header (status %d): with no plane evidence this response cannot back a proof. On the edge route, GO_API_PLANE_HEADER_ENABLED must be true; on the proof route, the deployment predates the header the proof handler stamps", planeHeader, candidate.StatusCode))
-	case candidate.Plane != "go":
-		outcome.RefusalReason = RefusalWrongPlane
-		outcome.RefusalDetail = fmt.Sprintf("candidate leg was served by plane %q (status %d): the edge fell back to Python", candidate.Plane, candidate.StatusCode)
-		outcome.TerminalState = "fallback"
-		return outcome
-	}
-
-	// Per-request build binding, where the route can provide it. The proof
-	// route stamps the build that served this exact request; the edge route
-	// cannot (the Python dispatcher rebuilds the response and drops the
-	// header), so its receipts rest on the run-level stability check the
-	// command performs instead -- see VerifyBuildStable.
-	if candidate.Build != "" && candidate.Build != r.Registry.BuildIdentity {
-		return refuse(RefusalBuildMismatch,
-			fmt.Sprintf("the process that served this request reports build %q, but /buildinfo reported %q -- a receipt naming the second would attribute this evidence to a build that did not produce it", candidate.Build, r.Registry.BuildIdentity))
-	}
-
 	baseline, err := r.post(ctx, r.Config.PythonEdgeURL, document+baselineComment, variables)
 	if err != nil {
 		return refuse(RefusalTransport, "baseline leg: "+err.Error())
 	}
 	outcome.Baseline = &baseline
-	// The baseline must be POSITIVELY identified as Python. Accepting an
-	// absent header here (the previous behaviour) meant the "control" could
-	// be Go, or anything else, whenever GO_API_PLANE_HEADER_ENABLED was off
-	// -- every receipt would then be comparing Go against Go with no
-	// symptom at all (codex r1 F2, reproduced: baseline_plane="",
-	// terminal_state=match). This is the single assumption the whole proof
-	// rests on, so it is asserted, never inferred from silence.
-	switch {
-	case baseline.Plane == "":
-		return refuse(RefusalPlaneUnidentified,
-			fmt.Sprintf("baseline leg carried no %s header (status %d): the control cannot be shown to be Python, so the comparison cannot back a proof. Set GO_API_PLANE_HEADER_ENABLED=true on the edge", planeHeader, baseline.StatusCode))
-	case baseline.Plane != "python":
-		return refuse(RefusalWrongPlane, fmt.Sprintf("baseline leg was served by plane %q -- the control must be Python", baseline.Plane))
+
+	candidateSnapshot, refusal := decodeLeg("candidate", candidate)
+	if refusal.Reason != "" {
+		return refuse(refusal.Reason, refusal.Detail)
+	}
+	baselineSnapshot, refusal := decodeLeg("baseline", baseline)
+	if refusal.Reason != "" {
+		return refuse(refusal.Reason, refusal.Detail)
 	}
 
-	candidateSnapshot, err := DecodeSnapshot(candidate.Body)
-	if err != nil {
-		if errors.Is(err, ErrNonFiniteNumber) {
-			outcome.Executed = true
-			outcome.TerminalState = TerminalStateMismatch
-			outcome.Findings = []Finding{{Kind: FindingMismatch, Path: "$", Detail: "candidate response carries a non-finite JSON number (parity rule 3)"}}
-			return outcome
-		}
-		return refuse(RefusalUndecodableResponse, "candidate leg: "+err.Error())
+	// THE ONLY DOOR TO executed=true.
+	//
+	// Every precondition a receipt depends on is checked here, by name, and
+	// anything not satisfying all of them is refused. Nothing below this
+	// point may set Executed on a pair Admit did not admit -- that is the
+	// property TestMatchIsReachableOnlyThroughAdmission pins, and the
+	// reason this is one call instead of a sequence of guards scattered
+	// through the function (see admission.go's opening comment for the ten
+	// instances that shape cost).
+	admission := Admit(AdmissionInput{
+		Route:         outcome.Route,
+		NamedBuild:    r.Registry.BuildIdentity,
+		ResponseRoot:  spec.ResponseRoot,
+		Candidate:     candidate,
+		Baseline:      baseline,
+		CandidateSnap: candidateSnapshot,
+		BaselineSnap:  baselineSnapshot,
+	})
+	if !admission.Admitted {
+		return refuse(admission.Reason, admission.Detail)
 	}
-	baselineSnapshot, err := DecodeSnapshot(baseline.Body)
-	if err != nil {
-		if errors.Is(err, ErrNonFiniteNumber) {
-			outcome.Executed = true
-			outcome.TerminalState = TerminalStateMismatch
-			outcome.Findings = []Finding{{Kind: FindingMismatch, Path: "$", Detail: "baseline response carries a non-finite JSON number (parity rule 3)"}}
-			return outcome
-		}
-		return refuse(RefusalUndecodableResponse, "baseline leg: "+err.Error())
-	}
+	outcome.Admitted = true
 
 	result := Compare(baselineSnapshot, candidateSnapshot, spec.Parity)
 	if len(result.UnusedTierB) > 0 {
@@ -443,9 +422,11 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	outcome.BaselineDefects = result.BaselineDefectsMatched
 	outcome.DifferencesOutsideBaselineDefect = result.DifferencesOutsideBaselineDefect
 
-	// The outer HTTP observation is part of the verdict, not decoration: a
-	// body that compares equal under a different status code, or under a
-	// different content type, is not parity.
+	// Admission guarantees both legs are 2xx; it does NOT make them equal.
+	// 200 against 202 passes admission and is still a real divergence, so
+	// the status comparison stays a parity finding. Same for content type:
+	// identical bodies served under different types are not parity, because
+	// the client is told to interpret the same bytes differently.
 	if candidate.StatusCode != baseline.StatusCode {
 		outcome.TerminalState = TerminalStateMismatch
 		outcome.Findings = append(outcome.Findings, Finding{
@@ -465,29 +446,47 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 			})
 		}
 	}
-
-	// AGREEMENT ON A FAILURE IS NOT PROOF OF PARITY.
-	//
-	// Two identical GraphQL error envelopes compare with zero findings --
-	// same errors, `data` absent on both sides, which the comparator
-	// correctly does not treat as a difference. That produced a
-	// `deployed_executed`/`match` receipt for a request that FAILED on
-	// both planes (codex r1 F3, reproduced), and such a receipt is exactly
-	// what `enable`'s preflight reads as authorization. A proof run has to
-	// show the operation WORKING on the candidate, not merely failing the
-	// same way twice, so an errored response downgrades a match to
-	// `unsupported` -- recorded, legible, and unable to authorize anything.
-	if outcome.TerminalState == TerminalStateMatch {
-		if reason := erroredResponse(baselineSnapshot, candidateSnapshot); reason != "" {
-			outcome.TerminalState = TerminalStateUnsupported
-			outcome.Findings = append(outcome.Findings, Finding{
-				Kind:   "errored_response",
-				Path:   "$.errors",
-				Detail: reason + "; agreement on a failure is not proof that the operation works on the candidate plane",
-			})
-		}
-	}
 	return outcome
+}
+
+// decodeLeg turns one leg's body into a Snapshot, or names why it cannot.
+//
+// A non-finite literal is NOT a decode failure: Python's json emits NaN and
+// Infinity, Go's rejects them, and parity rule 3 makes a non-finite value a
+// mismatch rather than an unreadable response. It is surfaced as an
+// admission-shaped refusal here only because a Snapshot cannot represent
+// it; the runner records the mismatch instead. See ErrNonFiniteNumber.
+func decodeLeg(leg string, observation Observation) (Snapshot, Admission) {
+	snapshot, err := DecodeSnapshot(observation.Body)
+	if err == nil {
+		return snapshot, Admission{Admitted: true}
+	}
+	if errors.Is(err, ErrNonFiniteNumber) {
+		return Snapshot{}, refused(RefusalNonFinite,
+			fmt.Sprintf("%s response carries a non-finite JSON number (parity rule 3)", leg))
+	}
+	return Snapshot{}, refused(RefusalUndecodableResponse, leg+" leg: "+err.Error())
+}
+
+// terminalStateForRefusal keeps the recorded terminal state meaningful on a
+// refusal instead of flattening every one to proof_failed.
+//
+// The vocabulary already distinguishes these outcomes and an operator
+// reading a row should not have to open the detail text to learn that the
+// edge fell back to Python rather than that the instrument broke.
+func terminalStateForRefusal(reason string) string {
+	switch reason {
+	case RefusalWrongPlane:
+		return "fallback"
+	case RefusalNonSuccessStatus:
+		return "dependency_failed"
+	case RefusalErroredResponse, RefusalEmptyResponseRoot, RefusalShadowUnmeasurable:
+		return TerminalStateUnsupported
+	case RefusalTransport:
+		return "timeout"
+	default:
+		return "proof_failed"
+	}
 }
 
 // comparedHeaders is the bounded set of response headers treated as part

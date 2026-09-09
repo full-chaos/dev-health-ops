@@ -319,8 +319,12 @@ type report struct {
 func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof.Outcome, summary goapiproof.Summary) error {
 	fmt.Printf("go-api-prove: schema_digest=%s candidate_build=%s stage=%s org=%s\n",
 		registry.SchemaDigest, registry.BuildIdentity, goapiproof.Stage, f.orgID)
-	fmt.Printf("go-api-prove: attempted=%d executed=%d refused=%d receipts_written=%d\n",
-		summary.Attempted, summary.Executed, summary.Refused, summary.ReceiptsWritten)
+	// admitted is printed alongside the others, including when it is zero:
+	// it is the count that says whether anything got past the preconditions
+	// at all, and "nothing was admissible" reads nothing like "everything
+	// matched" once it is on the line.
+	fmt.Printf("go-api-prove: attempted=%d admitted=%d executed=%d refused=%d receipts_written=%d\n",
+		summary.Attempted, summary.Admitted, summary.Executed, summary.Refused, summary.ReceiptsWritten)
 	proofURL := f.proofURL
 	if proofURL == "" {
 		proofURL = "(none: shadow-mode operations cannot be measured in this deployment)"

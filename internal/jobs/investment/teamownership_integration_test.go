@@ -253,6 +253,22 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 			seedMatrixWorkItem(t, ctx, conn, issue, provider, at.AddDate(0, 0, -60))
 			seedAttribution(t, ctx, conn, issue, provider, teamA, attrSource, 1, at)
 		}
+		// F3 (codex r1): two more components that DO have direct repository
+		// evidence, so `own_repo` and `direct_repo_evidence` are measured
+		// end-to-end through Run's switch rather than pinned at zero. Both
+		// carry a full eligible attribution AND live ownership, so what they
+		// prove is PRECEDENCE -- direct evidence wins while a donor was
+		// available -- not merely the absence of donors.
+		ownEdge := []string{provider + ":e1", provider + ":e2"}
+		ambiguous := []string{provider + ":g1", provider + ":g2"}
+		for _, issue := range append(append([]string{}, ownEdge...), ambiguous...) {
+			seedMatrixWorkItem(t, ctx, conn, issue, provider, at)
+			seedAttribution(t, ctx, conn, issue, provider, teamA, attrSource, 1, at)
+		}
+		seedIssueEdge(t, ctx, conn, ownEdge[0], ownEdge[1], r1, at)
+		seedIssueEdge(t, ctx, conn, ambiguous[0], ambiguous[1], r1, at)
+		seedIssueEdge(t, ctx, conn, ambiguous[1], ambiguous[0], r2, at)
+
 		seedIssueEdge(t, ctx, conn, provider+":a", provider+":b", "", at)
 		seedIssueEdge(t, ctx, conn, memberOnly[0], memberOnly[1], "", at)
 		seedIssueEdge(t, ctx, conn, inactiveOnly[0], inactiveOnly[1], "", at)
@@ -328,8 +344,8 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 	// Telemetry. The outcome buckets must partition every component, and every
 	// field must be present even at zero -- a counter that disappears at zero
 	// cannot be told apart from one that was never computed.
-	if stats.Components != 16 {
-		t.Fatalf("components=%d, want 16 (4 providers x 4 components)", stats.Components)
+	if stats.Components != 24 {
+		t.Fatalf("components=%d, want 24 (4 providers x 6 components)", stats.Components)
 	}
 	if stats.RepoOwnershipFallback != 4 {
 		t.Errorf("allocated=%d, want 4", stats.RepoOwnershipFallback)
@@ -337,14 +353,21 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 	if stats.RepoOwnershipNoEligible != 8 {
 		t.Errorf("no_eligible_owner=%d, want 8", stats.RepoOwnershipNoEligible)
 	}
+	// Measured, not pinned at zero: direct evidence outranks an AVAILABLE donor.
+	if stats.RepoOwnershipOwnRepo != 4 {
+		t.Errorf("own_repo=%d, want 4", stats.RepoOwnershipOwnRepo)
+	}
+	if stats.RepoOwnershipDirectRepo != 4 {
+		t.Errorf("direct_repo_evidence=%d, want 4", stats.RepoOwnershipDirectRepo)
+	}
 	if stats.RepoOwnershipRepoShares != 16 {
 		t.Errorf("repo_shares=%d, want 16", stats.RepoOwnershipRepoShares)
 	}
 	if stats.RepoOwnershipWindowSkipped != 4 {
 		t.Errorf("window_skipped=%d, want 4", stats.RepoOwnershipWindowSkipped)
 	}
-	if stats.RepoOwnershipDonorIssues != 16 {
-		t.Errorf("donor_issues=%d, want the 16 issues with an eligible primary attribution", stats.RepoOwnershipDonorIssues)
+	if stats.RepoOwnershipDonorIssues != 32 {
+		t.Errorf("donor_issues=%d, want the 32 issues with an eligible primary attribution", stats.RepoOwnershipDonorIssues)
 	}
 	if stats.RepoOwnershipDonorRows == 0 {
 		t.Error("donor_rows=0 while 4 components allocated")
@@ -356,11 +379,41 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 	}
 	line := lastLogLine(t, logs.String(), "investment team repository fallback")
 	for _, field := range []string{
-		"components=16", "allocated=4", "repo_shares=16", "own_repo=0", "stronger_allocation=0",
-		"direct_repo_evidence=0", "no_eligible_owner=8", "window_skipped=4", "donor_issues=16",
+		"components=24", "allocated=4", "repo_shares=16", "own_repo=4",
+		"direct_repo_evidence=4", "no_eligible_owner=8", "window_skipped=4", "donor_issues=32",
 	} {
 		if !strings.Contains(line, field) {
 			t.Errorf("telemetry line is missing %q (explicit zeros are required): %s", field, line)
+		}
+	}
+
+	// F2 (codex r1): a run with ZERO components returns early. The documented
+	// contract says the fallback record is emitted on EVERY run, with every
+	// field present at zero -- that is the whole point of the explicit-zeros
+	// design, and an empty org is exactly the case where "did the fallback do
+	// nothing, or did it never run" matters most.
+	emptyLogs := &bytes.Buffer{}
+	emptyMaterializer, err := NewMaterializer(reader, writer, categorize.MockProvider{}, slog.New(slog.NewTextHandler(emptyLogs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyStats, err := emptyMaterializer.Run(ctx, Config{
+		OrgID: "00000000-0000-4000-8000-000000000009", FromTS: at.Add(-time.Hour), ToTS: at.Add(2 * time.Hour),
+		RunID: "empty-org", ComputedAt: at.Add(2 * time.Hour), ProviderName: "mock",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyStats.Components != 0 {
+		t.Fatalf("fixture is not an empty org: components=%d", emptyStats.Components)
+	}
+	emptyLine := lastLogLine(t, emptyLogs.String(), "investment team repository fallback")
+	for _, field := range []string{
+		"components=0", "allocated=0", "repo_shares=0", "own_repo=0", "stronger_allocation=0",
+		"direct_repo_evidence=0", "no_eligible_owner=0", "window_skipped=0", "donor_rows=0", "donor_issues=0",
+	} {
+		if !strings.Contains(emptyLine, field) {
+			t.Errorf("empty-org telemetry is missing %q: %s", field, emptyLine)
 		}
 	}
 

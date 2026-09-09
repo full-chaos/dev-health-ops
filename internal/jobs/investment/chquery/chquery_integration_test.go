@@ -627,4 +627,43 @@ func TestInvalidUTF8StringsAreHexedLikeThePythonDriver(t *testing.T) {
 		t.Fatal("the seeded edge was not returned; the row may have been filtered " +
 			"before the decode could be observed")
 	}
+
+	// CHAOS-5460: the team-ownership donor reader is on the SAME plane. Its
+	// work_item_id is matched against component node ids that arrive from the
+	// edge fetcher above -- already hexed -- so a donor row that spells the
+	// same bytes differently silently matches nothing and the unit gets no
+	// allocation, with no error anywhere. Every other fetcher in this package
+	// decodes; this arm is what stops the donor reader drifting off that
+	// contract.
+	badWorkItem := "\x61\x00\xff\x62"
+	badTeam := "\xed\xa0\x80"
+	mustExec(t, ctx, conn, `INSERT INTO teams (id,team_uuid,name,provider,is_active,updated_at,org_id) VALUES (?,generateUUIDv4(),'Bad','linear',1,now(),?)`, badTeam, orgAlpha)
+	mustExec(t, ctx, conn, `INSERT INTO repos (id,repo,provider,org_id) VALUES (?,'acme/utf8','github',?)`, "66666666-6666-4666-8666-666666666666", orgAlpha)
+	mustExec(t, ctx, conn, `INSERT INTO team_repo_ownership (org_id,provider,team_id,repo_full_name,match_type,source,valid_from,valid_to,updated_at) VALUES (?,'github',?,'acme/utf8','exact','provider_access',?,NULL,?)`,
+		orgAlpha, badTeam, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	mustExec(t, ctx, conn, `INSERT INTO work_item_team_attributions (org_id,repo_id,work_item_id,provider,team_id,source,is_primary,confidence,evidence,computed_at) VALUES (?,toUUID('00000000-0000-0000-0000-000000000000'),?,'linear',?,'native_team',1,'high','invalid utf-8 donor',?)`,
+		orgAlpha, badWorkItem, badTeam, time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC))
+
+	donors, err := reader.FetchTeamRepoDonors(ctx, []string{badWorkItem}, orgAlpha, time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("fetch donors: %v", err)
+	}
+	if len(donors) != 1 {
+		t.Fatalf("seeded donor was not returned (%d rows); it may have been filtered before the decode could be observed", len(donors))
+	}
+	if want := "6100ff62"; donors[0].WorkItemID != want {
+		t.Errorf("donor work_item_id = %q, the rest of the pipeline spells it %q -- "+
+			"a donor keyed differently from its own component's node id matches nothing",
+			donors[0].WorkItemID, want)
+	}
+	if want := "eda080"; donors[0].TeamID != want {
+		t.Errorf("donor team_id = %q, want %q", donors[0].TeamID, want)
+	}
+	for _, value := range []string{donors[0].WorkItemID, donors[0].TeamID} {
+		for index := 0; index < len(value); index++ {
+			if value[index] >= 0x80 {
+				t.Errorf("substituted donor value %q has a non-ASCII byte at %d", value, index)
+			}
+		}
+	}
 }

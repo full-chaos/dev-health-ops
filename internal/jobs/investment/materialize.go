@@ -149,6 +149,31 @@ type Stats struct {
 	RepoOwnershipRepoShares     int `json:"repo_ownership_repo_shares"`
 }
 
+// logOwnershipFallback emits the team-ownership fallback record. CHAOS-5460:
+// every field is emitted on EVERY run, zero included, and this is the only
+// place that record is written, so no return path can quietly skip it. A zero
+// `allocated` is ambiguous on its own -- it can mean stronger evidence already
+// resolved every unit, or that ownership sync produced nothing -- and only the
+// sibling counters separate those two. `donor_rows` and `donor_issues` are the
+// read side: zero there with a nonzero `no_eligible_owner` names the ownership
+// pipeline, not this allocator.
+func (m *Materializer) logOwnershipFallback(ctx context.Context, cfg Config, stats Stats, ownershipAsOf time.Time) {
+	m.logger.InfoContext(ctx, "investment team repository fallback",
+		"org_id", cfg.OrgID, "run_id", cfg.RunID,
+		"components", stats.Components,
+		"allocated", stats.RepoOwnershipFallback,
+		"repo_shares", stats.RepoOwnershipRepoShares,
+		"own_repo", stats.RepoOwnershipOwnRepo,
+		"stronger_allocation", stats.RepoOwnershipStrongerEffort,
+		"direct_repo_evidence", stats.RepoOwnershipDirectRepo,
+		"no_eligible_owner", stats.RepoOwnershipNoEligible,
+		"window_skipped", stats.RepoOwnershipWindowSkipped,
+		"donor_rows", stats.RepoOwnershipDonorRows,
+		"donor_issues", stats.RepoOwnershipDonorIssues,
+		"ownership_as_of", ownershipAsOf.Format(time.RFC3339Nano),
+	)
+}
+
 // Materializer holds the collaborators one org-scoped run needs. All three are
 // required; a nil one is a wiring bug, not a degraded mode.
 type Materializer struct {
@@ -213,12 +238,24 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	stats.TotalComponents = len(components)
 	stats.Components = len(components)
 
+	// The as-of basis is resolved BEFORE the zero-component return so the
+	// fallback record below can be emitted on that path too.
+	ownershipAsOf := cfg.ComputedAt
+	if ownershipAsOf.IsZero() {
+		ownershipAsOf = time.Now().UTC()
+	}
+
 	if len(components) == 0 {
 		// materialize.py:1217-1226 returns the component stats and nothing
 		// else. Note it reports components=0 and OMITS total_components, so the
 		// two disagree on this path in the reference; Stats carries both and
 		// they are both zero here, which is the same information.
 		m.logger.InfoContext(ctx, "no work graph components found for investment materialization")
+		// EVERY run emits the fallback record, this path included. An empty org
+		// is exactly where "the fallback allocated nothing" and "the fallback
+		// never ran" are hardest to tell apart, so the all-zero record is more
+		// load-bearing here than on a busy run, not less.
+		m.logOwnershipFallback(ctx, cfg, stats, ownershipAsOf)
 		return stats, nil
 	}
 
@@ -313,10 +350,6 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	outcomes := make(map[int]categorize.CategorizationOutcome, len(components))
 	all := make([]preprocessed, 0, len(components))
 	issueIDs, _, _ := collectNodeIDs(components)
-	ownershipAsOf := cfg.ComputedAt
-	if ownershipAsOf.IsZero() {
-		ownershipAsOf = time.Now().UTC()
-	}
 	teamRepoDonors, err := m.reader.FetchTeamRepoDonors(ctx, issueIDs, cfg.OrgID, ownershipAsOf)
 	if err != nil {
 		return Stats{}, fmt.Errorf("fetch team repository donors: %w", err)
@@ -387,26 +420,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	modelVersion := categorize.EffectiveModelVersion(cfg.ProviderName, resolvedModelName(cfg))
 
-	// CHAOS-5460: every field below is emitted on every run, zero included. A
-	// zero `allocated` is ambiguous on its own -- it can mean stronger evidence
-	// already resolved every unit, or that ownership sync produced nothing --
-	// and only the sibling counters separate those two. `donor_rows` and
-	// `donor_issues` are the read side: zero there with a nonzero
-	// `no_eligible_owner` names the ownership pipeline, not this allocator.
-	m.logger.InfoContext(ctx, "investment team repository fallback",
-		"org_id", cfg.OrgID, "run_id", cfg.RunID,
-		"components", stats.Components,
-		"allocated", stats.RepoOwnershipFallback,
-		"repo_shares", stats.RepoOwnershipRepoShares,
-		"own_repo", stats.RepoOwnershipOwnRepo,
-		"stronger_allocation", stats.RepoOwnershipStrongerEffort,
-		"direct_repo_evidence", stats.RepoOwnershipDirectRepo,
-		"no_eligible_owner", stats.RepoOwnershipNoEligible,
-		"window_skipped", stats.RepoOwnershipWindowSkipped,
-		"donor_rows", stats.RepoOwnershipDonorRows,
-		"donor_issues", stats.RepoOwnershipDonorIssues,
-		"ownership_as_of", ownershipAsOf.Format(time.RFC3339Nano),
-	)
+	m.logOwnershipFallback(ctx, cfg, stats, ownershipAsOf)
 
 	// SKIP-EXISTING. Runs only when not forced, and only over the pending set.
 	skippedExisting := map[int]struct{}{}

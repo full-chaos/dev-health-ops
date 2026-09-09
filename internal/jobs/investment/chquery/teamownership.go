@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/google/uuid"
 )
 
@@ -73,6 +74,13 @@ ORDER BY a.work_item_id, r.id, a.team_id`,
 		if err := rows.Scan(&donor.WorkItemID, &donor.TeamID, &donor.RepoID); err != nil {
 			return nil, fmt.Errorf("scan team repository donor: %w", err)
 		}
+		// Same decode every other fetcher in this package applies. The donor's
+		// work_item_id is matched against component node ids that arrive from
+		// the edge fetcher already hexed, so an undecoded donor spells the same
+		// bytes differently, matches nothing, and the unit loses its allocation
+		// with no error raised anywhere.
+		donor.WorkItemID = pythonparity.DecodeClickHouseStringValue(donor.WorkItemID)
+		donor.TeamID = pythonparity.DecodeClickHouseStringValue(donor.TeamID)
 		donors = append(donors, donor)
 	}
 	if err := rows.Err(); err != nil {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -1215,6 +1216,82 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 		if record["error"] != testCase.wantErr {
 			t.Errorf("%s: log error = %v, want %q", testCase.name, record["error"], testCase.wantErr)
 		}
+	}
+}
+
+// TestRiverSchemaCauseReachesTheLogNotTheReadyzPayload is CHAOS-5469's
+// direct proof of the platform boundary the fix must respect: the /readyz
+// HTTP payload (internal/platform/health's Registry.CheckRequired, which
+// server.go's handleReady renders as {"failed_checks":[...]}) carries the
+// check NAME ONLY -- health.CheckFunc's own contract says "Error text is
+// deliberately never returned by the HTTP surface" (registry.go:19), and
+// TestPreclaimReadinessNamesTheChecksThatRefused already asserts a
+// dependency error's raw text (there, a DSN) must never leak past a check
+// name. CheckSchema's two distinct causes (ErrSchemaCheckUnavailable: the
+// query itself failed, e.g. pool exhaustion; ErrSchemaNotCurrent: the
+// query ran and the version is genuinely wrong) therefore reach the /readyz
+// payload identically -- "river_schema" in failed_checks either way, same
+// as TestPoolReadinessErrorsAreCollapsedToStableFailure already shows for
+// riverSchemaReady's returned error. What differs is the OPERATOR LOG line:
+// logDependencyCheckFailure (CHAOS-5435's mechanism, exercised above by
+// TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError) logs the
+// real wrapped error text, which is where this fix's distinction is
+// actually observable.
+func TestRiverSchemaCauseReachesTheLogNotTheReadyzPayload(t *testing.T) {
+	cases := []struct {
+		name    string
+		err     error
+		wantLog string
+	}{
+		{
+			name:    "connection_unavailable",
+			err:     fmt.Errorf("%w: %w", riverstore.ErrSchemaCheckUnavailable, errors.New("dial tcp 127.0.0.1:1: connect: connection refused")),
+			wantLog: "River schema check could not run: dial tcp 127.0.0.1:1: connect: connection refused",
+		},
+		{
+			name:    "version_mismatch",
+			err:     riverstore.ErrSchemaNotCurrent,
+			wantLog: "River schema is not at the pinned version",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			database := &fakeWorkerDatabase{schemaErr: testCase.err}
+			var logs bytes.Buffer
+			dependencies := &workerDependencies{
+				database: database,
+				logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+			}
+
+			// The /readyz payload's half: register exactly as
+			// configureWorkerDependenciesWithSources does, and read back
+			// the same Readiness struct server.go's handleReady renders to
+			// JSON. Both causes must fail the SAME named check.
+			registry := health.NewRegistry(time.Second)
+			if err := registry.RegisterRequired("river_schema", dependencies.riverSchemaReady("river")); err != nil {
+				t.Fatal(err)
+			}
+			readiness := registry.CheckRequired(context.Background())
+			if readiness.Ready || len(readiness.Failed) != 1 || readiness.Failed[0] != "river_schema" {
+				t.Fatalf("%s: Failed = %v, want exactly [\"river_schema\"]", testCase.name, readiness.Failed)
+			}
+
+			// The log's half: the underlying cause, distinctly.
+			logs.Reset()
+			if err := dependencies.riverSchemaReady("river")(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+				t.Fatalf("%s: riverSchemaReady() error = %v", testCase.name, err)
+			}
+			var record map[string]any
+			if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
+				t.Fatalf("%s: log line is not JSON (%v): %s", testCase.name, err, logs.String())
+			}
+			if record["check"] != "river_schema" {
+				t.Errorf("%s: log check = %v, want \"river_schema\"", testCase.name, record["check"])
+			}
+			if record["error"] != testCase.wantLog {
+				t.Errorf("%s: log error = %v, want %q", testCase.name, record["error"], testCase.wantLog)
+			}
+		})
 	}
 }
 

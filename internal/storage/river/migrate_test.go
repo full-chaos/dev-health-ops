@@ -3,13 +3,17 @@ package riverstore
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
@@ -89,6 +93,107 @@ func TestLongRunningCommandsCannotAutoMigrate(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// closedPortAddr opens a listener on 127.0.0.1:0, records its address, then
+// closes it -- dialing that address afterward is refused deterministically
+// everywhere, unlike a permanently-unbound port such as 127.0.0.1:1 (which
+// some hosted CI runners answer with a hanging "i/o timeout" instead of a
+// refusal -- CHAOS-5478). CheckSchema's own query genuinely needs a real,
+// live-but-failing connection here, not a mock: rivermigrate's driver is
+// constructed straight from *pgxpool.Pool, with no interface seam to fake a
+// "failing querier" through.
+func closedPortAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+// TestCheckSchemaDistinguishesConnectionFailureFromVersionMismatch proves
+// CheckSchema reports a pool/connection error (ExistingVersions failing to
+// even run its query) as its own distinct sentinel, never collapsed into
+// ErrSchemaNotCurrent -- CHAOS-5469. Before this fix, CheckSchema returned
+// ErrSchemaNotCurrent for BOTH causes, which is exactly what made a
+// pgbouncer pool-exhaustion timeout on the live fleet unreadable as
+// "queue_postgres pool exhausted" and readable only as the wrong "River
+// schema is not at the pinned version" -- the schema was never actually
+// wrong.
+func TestCheckSchemaDistinguishesConnectionFailureFromVersionMismatch(t *testing.T) {
+	t.Parallel()
+
+	poolConfig, err := pgxpool.ParseConfig("postgres://queue@" + closedPortAddr(t) + "/app?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolConfig.ConnConfig.ConnectTimeout = 200 * time.Millisecond
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err = CheckSchema(ctx, pool, "river", nil)
+	if err == nil {
+		t.Fatal("CheckSchema() error = nil, want a connection-failure error")
+	}
+	if errors.Is(err, ErrSchemaNotCurrent) {
+		t.Fatalf("CheckSchema() error = %v, want it NOT to be ErrSchemaNotCurrent -- the schema was never actually checked, the connection failed", err)
+	}
+	if !errors.Is(err, ErrSchemaCheckUnavailable) {
+		t.Fatalf("CheckSchema() error = %v, want errors.Is(err, ErrSchemaCheckUnavailable)", err)
+	}
+}
+
+// TestIsSchemaCheckConnectivityErrorClassifiesTheBoundaryPositively is
+// CHAOS-5469 round 2's regression test: round 1 classified EVERY
+// ExistingVersions error as ErrSchemaCheckUnavailable, which silently broke
+// TestRiverMigrationRolesRetentionGrowthAndRestore's
+// assertSuffixMismatchFailsClosed (an unrecognized migration version in the
+// database -- a genuine schema FACT, not an outage -- reported by
+// rivermigrate as a bare fmt.Errorf with no underlying driver error at all).
+// The classifier must therefore be a POSITIVE test for connection/pool/
+// context failures, defaulting every other error -- including one with no
+// wrapped cause whatsoever -- to "not connectivity" (i.e. ErrSchemaNotCurrent
+// at the CheckSchema call site).
+func TestIsSchemaCheckConnectivityErrorClassifiesTheBoundaryPositively(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "context deadline exceeded", err: context.DeadlineExceeded, want: true},
+		{name: "context canceled", err: context.Canceled, want: true},
+		{name: "wrapped context deadline exceeded", err: fmt.Errorf("query: %w", context.DeadlineExceeded), want: true},
+		{name: "net error", err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}, want: true},
+		{name: "pgconn PgError", err: &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"}, want: true},
+		{name: "pgconn ConnectError", err: &pgconn.ConnectError{}, want: true},
+		{
+			name: "rivermigrate's own bundle-mismatch error, no underlying cause at all",
+			err:  fmt.Errorf("migration %d not found in migrator bundle", 8),
+			want: false,
+		},
+		{name: "plain unrelated error", err: errors.New("boom"), want: false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isSchemaCheckConnectivityError(testCase.err); got != testCase.want {
+				t.Errorf("isSchemaCheckConnectivityError(%v) = %v, want %v", testCase.err, got, testCase.want)
+			}
+		})
 	}
 }
 

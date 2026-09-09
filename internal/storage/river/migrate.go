@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
@@ -24,6 +26,16 @@ var (
 	ErrMigrationConfiguration  = errors.New("invalid River migration role configuration")
 	ErrMigrationFailed         = errors.New("River migration failed")
 	ErrSchemaNotCurrent        = errors.New("River schema is not at the pinned version")
+	// ErrSchemaCheckUnavailable reports that CheckSchema's own query against
+	// the queue-control pool failed -- a connection/pool error (e.g.
+	// CHAOS-5469's pgbouncer pool exhaustion), never a real schema mismatch.
+	// Before this existed, CheckSchema collapsed both causes into
+	// ErrSchemaNotCurrent, which read as "the schema is genuinely wrong" on
+	// a fleet whose schema had never actually been checked -- the readiness
+	// log line and the CHAOS-5435 logDependencyCheckFailure caller both
+	// name the check by its wrapped error text, so this sentinel is what
+	// lets an operator tell "pool exhausted" apart from "run migrate".
+	ErrSchemaCheckUnavailable = errors.New("River schema check could not run")
 )
 
 // TableGrant declares one relation's table-level DML posture for a runtime
@@ -278,6 +290,36 @@ func ApplyPinnedMigrations(
 	return MigrationResult{AppliedVersions: applied, CurrentVersion: status}, nil
 }
 
+// isSchemaCheckConnectivityError positively identifies a connection/pool/
+// context failure -- the ONLY class CheckSchema treats as
+// ErrSchemaCheckUnavailable. Deliberately positive, not negative-by-default:
+// a negative test ("assume Unavailable unless proven otherwise") is exactly
+// what round 1's regression did, and rivermigrate's own
+// "migration N not found in migrator bundle" error (a genuine schema fact)
+// carries no underlying driver error at all, so there is nothing for a
+// negative test to find -- it would (and did) misclassify by default.
+func isSchemaCheckConnectivityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return true
+	}
+	var connectErr *pgconn.ConnectError
+	if errors.As(err, &connectErr) {
+		return true
+	}
+	return false
+}
+
 func migrationStageError(stage string) error {
 	return fmt.Errorf("%w during %s", ErrMigrationFailed, stage)
 }
@@ -302,6 +344,17 @@ func logMigrationStageFailure(ctx context.Context, logger *slog.Logger, stage st
 }
 
 // CheckSchema is read-only and requires the exact pinned migration prefix.
+// It returns ErrSchemaCheckUnavailable (wrapping the real driver/pool error)
+// only when ExistingVersions' failure is POSITIVELY identified as a
+// connection/pool/context problem (see isSchemaCheckConnectivityError) --
+// never a schema fact -- and ErrSchemaNotCurrent for every other cause,
+// including a query that ran and returned a version set that is genuinely
+// wrong, incomplete, or (round 2 of CHAOS-5469, a real regression in round
+// 1's fix) unrecognized by this binary's own migration bundle. Classifying
+// unrecognized-as-unavailable was the round-1 bug: a database AHEAD of the
+// binary (an unknown migration version already applied) is a schema FACT,
+// not an outage, and rivermigrate's own versionsFromDriver reports it as a
+// bare fmt.Errorf with no underlying driver error to classify at all.
 func CheckSchema(ctx context.Context, pool *pgxpool.Pool, schema string, logger *slog.Logger) (int, error) {
 	if pool == nil || !validIdentifier(schema) {
 		return 0, ErrMigrationConfiguration
@@ -311,7 +364,23 @@ func CheckSchema(ctx context.Context, pool *pgxpool.Pool, schema string, logger 
 		return 0, ErrPinnedMigrationMismatch
 	}
 	versions, err := migrator.ExistingVersions(ctx)
-	if err != nil || len(versions) != PinnedSchemaVersion {
+	if err != nil {
+		if isSchemaCheckConnectivityError(err) {
+			return 0, fmt.Errorf("%w: %w", ErrSchemaCheckUnavailable, err)
+		}
+		// Not a connection/pool/context failure: ExistingVersions can also
+		// fail on a genuine schema FACT with no underlying driver error at
+		// all -- rivermigrate.versionsFromDriver returns a bare
+		// fmt.Errorf("migration %d not found in migrator bundle", ...) when
+		// the database holds a migration row this binary's bundle does not
+		// recognize (the database is AHEAD of the binary). That is exactly
+		// what ErrSchemaNotCurrent means: found live-migrate-integration-test
+		// regression, CHAOS-5469 round 2 -- classifying every ExistingVersions
+		// error as unavailable made this genuine mismatch unreadable as a
+		// mismatch.
+		return 0, fmt.Errorf("%w: %w", ErrSchemaNotCurrent, err)
+	}
+	if len(versions) != PinnedSchemaVersion {
 		return 0, ErrSchemaNotCurrent
 	}
 	for index, version := range versions {

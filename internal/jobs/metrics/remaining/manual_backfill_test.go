@@ -2,7 +2,7 @@ package remaining
 
 import (
 	"encoding/json"
-	"errors"
+	"strings"
 	"testing"
 )
 
@@ -168,10 +168,11 @@ func TestManualBackfillDayScopeRejectsNonDayScopedFamilies(t *testing.T) {
 	// flags have no way to supply, and the other two scope by window/repo
 	// set. A silent fallthrough here would let the command build a scope
 	// validateFamilyScope then rejects with an opaque ErrInvalidState,
-	// instead of the actionable ErrUnsupportedManualBackfillFamily.
+	// instead of the actionable unsupportedManualBackfillFamilyError.
+	expectedErr := unsupportedManualBackfillFamilyError()
 	for _, family := range []string{"capacity", "recommendations", "membership_backfill", "not-a-real-family"} {
-		if _, err := manualBackfillDayScope(family, "2026-08-26"); !errors.Is(err, ErrUnsupportedManualBackfillFamily) {
-			t.Fatalf("family %q: got err=%v, want ErrUnsupportedManualBackfillFamily", family, err)
+		if _, err := manualBackfillDayScope(family, "2026-08-26"); err == nil || err.Error() != expectedErr.Error() {
+			t.Fatalf("family %q: got err=%v, want %v", family, err, expectedErr)
 		}
 	}
 }
@@ -199,5 +200,16 @@ func TestManualBackfillDayScopedFamiliesListStaysInSyncWithTheSwitch(t *testing.
 		if !found {
 			t.Fatalf("manualBackfillDayScope supports %q but it is missing from ManualBackfillDayScopedFamilies", family)
 		}
+	}
+}
+
+// TestManualBackfillErrorMessageExhaustsList asserts the error message
+// for unsupported families names exactly the members of ManualBackfillDayScopedFamilies
+// to prevent drift (CHAOS-5397, manual_backfill.go unsupportedManualBackfillFamilyError).
+func TestManualBackfillErrorMessageExhaustsList(t *testing.T) {
+	errMsg := unsupportedManualBackfillFamilyError().Error()
+	expected := strings.Join(ManualBackfillDayScopedFamilies, ", ")
+	if !strings.Contains(errMsg, expected) {
+		t.Fatalf("unsupportedManualBackfillFamilyError message %q does not contain %q (ManualBackfillDayScopedFamilies: %v)", errMsg, expected, ManualBackfillDayScopedFamilies)
 	}
 }

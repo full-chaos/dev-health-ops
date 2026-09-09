@@ -823,7 +823,7 @@
         "line": 257
       },
       "queue_or_cadence": "n/a",
-      "dispatches": "run_investment_materialize",
+      "dispatches": "dispatch_investment_materialize_partitioned",
       "dispatch_mechanism": "literal_dispatch_call",
       "owner_role": "contributor",
       "target_owner": {

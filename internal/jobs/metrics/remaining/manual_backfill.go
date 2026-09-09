@@ -52,9 +52,11 @@ var ErrManualBackfillGenerationExhausted = errors.New(
 
 // ErrUnsupportedManualBackfillFamily is returned for a family this command
 // has no day-scoped default partition scope for.
-var ErrUnsupportedManualBackfillFamily = errors.New(
-	"remaining metrics family is not day-scoped for manual backfill (supported: dora, complexity, release_impact, work_item_attribution)",
-)
+// The message is dynamically constructed from ManualBackfillDayScopedFamilies
+// to prevent drift (see TestManualBackfillErrorMessageExhaustsList).
+func unsupportedManualBackfillFamilyError() error {
+	return fmt.Errorf("remaining metrics family is not day-scoped for manual backfill (supported: %s)", strings.Join(ManualBackfillDayScopedFamilies, ", "))
+}
 
 // ManualBackfillDayScopedFamilies lists the families the `metrics remaining
 // start` CLI verb accepts, in the stable order it prints them in help text.
@@ -149,7 +151,7 @@ func manualBackfillDayScope(family, day string) (json.RawMessage, error) {
 	case "work_item_attribution":
 		return json.Marshal(map[string]any{"version": 1, "org_wide": true})
 	default:
-		return nil, ErrUnsupportedManualBackfillFamily
+		return nil, unsupportedManualBackfillFamilyError()
 	}
 }
 

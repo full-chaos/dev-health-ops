@@ -139,30 +139,6 @@ func (handler *BillingHandler) Work(
 	sent, outcome, deliverErr := handler.deliver(ctx, logger, notification)
 	if deliverErr != nil {
 		if outcome == FenceOutcomeAmbiguous {
-			if ctx.Err() != nil {
-				// CHAOS-5399 r3 residual, made OBSERVABLE rather than only
-				// commented (chris's telemetry rule): the worker's context is
-				// already done (a shutdown/deploy drain) at the exact moment
-				// this ambiguous outcome is being classified.
-				// jobruntime.classify checks errors.Is(ctx.Err(),
-				// context.Canceled) directly against this LIVE context,
-				// independent of what this function returns below -- so the
-				// RetryableAfter snooze this branch is about to request can be
-				// bypassed regardless. The claim still stays held either way
-				// (duplicate-send safety is unaffected); what can be lost is
-				// only the guaranteed, timely path to the staleness alert.
-				// Filed as CHAOS-5455 against jobruntime -- classify's
-				// ctx.Err() check running before the snooze-marker check is a
-				// pre-existing ordering defect, not something this handler can
-				// fix locally.
-				logger.WarnContext(ctx,
-					"billing.ambiguous_outcome_during_shutdown",
-					"error", deliverErr, "ctx_err", ctx.Err(),
-					"claim_outcome", string(FenceOutcomeAmbiguous),
-					"note", "the RetryableAfter snooze past StaleClaimThreshold may be "+
-						"bypassed by jobruntime.classify's ctx.Err()-cancellation check; "+
-						"the claim stays held regardless")
-			}
 			// CHAOS-5399: do NOT release. The provider result is genuinely
 			// unknown -- the message may already be out -- so releasing
 			// would let a retry send a duplicate exactly the way an
@@ -190,34 +166,32 @@ func (handler *BillingHandler) Work(
 			// CHAOS-5399 r2 (codex P1): deliverErr is passed by TEXT, not by
 			// %w-wrapping (errors.New(deliverErr.Error()), not deliverErr
 			// itself) -- deliberately severing its cause chain here.
-			// jobruntime.classify checks errors.Is(err, context.DeadlineExceeded)
-			// BEFORE it ever inspects the RetryableAfter snooze marker; the
-			// most common ambiguous shape (an http.Client response timeout)
-			// wraps exactly that, so passing the chain through would have
-			// classify silently take the CategoryTimeout branch instead --
-			// an ordinary retry that DOES consume the attempt budget,
-			// defeating this whole fix. All the descriptive detail already
-			// reached the log line above; only the jobruntime-facing error
-			// needs flattening.
+			// jobruntime.classify used to check
+			// errors.Is(err, context.DeadlineExceeded) BEFORE it ever
+			// inspected the RetryableAfter snooze marker; the most common
+			// ambiguous shape (an http.Client response timeout) wraps exactly
+			// that, so passing the chain through had classify silently take
+			// the CategoryTimeout branch instead -- an ordinary retry that
+			// DOES consume the attempt budget, defeating this whole fix.
 			//
-			// KNOWN RESIDUAL (CHAOS-5399 r3, codex NOT CLEAN, accepted as-is,
-			// tracked as CHAOS-5455 -- see the PR body): classify also checks
-			// errors.Is(ctx.Err(), context.Canceled) directly against the
-			// LIVE context, independent of whatever error this function
-			// returns. If the worker process is draining (a deploy) at the
-			// exact moment an ambiguous Send() result is being handled, that
-			// check wins regardless of the flattening above, and the
-			// snooze is bypassed the same way the DeadlineExceeded one was
-			// -- but only for that compound, narrow race. It does NOT
-			// reopen the duplicate-send bug this ticket fixes: the claim is
-			// still never released for FenceOutcomeAmbiguous, unconditionally,
-			// above and regardless of this branch's outcome; the only
-			// degraded property in this one compound case is the
-			// GUARANTEED, timely path to the staleness alert, not
-			// duplicate-send safety. A local fix is not possible here --
-			// jobruntime.classify's ctx.Err() check cannot be influenced by
-			// this function's return value -- and jobruntime/errors.go is
-			// shared framework code well outside this ticket's blast radius.
+			// CHAOS-5455 fixed that ordering at its source: classify now
+			// answers a snooze marker ahead of both context branches, for
+			// every job kind, so the flattening is no longer load-bearing.
+			// It is kept because it is still the right thing to hand a
+			// framework-facing error: all the descriptive detail already
+			// reached the log line above, and a flattened error cannot
+			// accidentally re-acquire a meaning classify keys on later.
+			//
+			// The r3 residual is CLOSED by the same change. classify also
+			// checked errors.Is(ctx.Err(), context.Canceled) against the LIVE
+			// context, independent of whatever this function returned, so a
+			// worker draining at the exact moment an ambiguous Send() result
+			// was handled bypassed the snooze regardless -- costing the
+			// guaranteed, timely path to the staleness alert (never
+			// duplicate-send safety: the claim is never released for
+			// FenceOutcomeAmbiguous, unconditionally, above). Pinned by
+			// internal/jobruntime/classify_snooze_order_test.go and by
+			// TestAmbiguousOutcomeDuringADrainStillSnoozesAndHoldsTheClaim.
 			return jobruntime.RetryableAfter(errors.New(deliverErr.Error()), AmbiguousReconciliationDelay)
 		}
 		handler.releaseClaim(ctx, logger, notification.ID, outcome)

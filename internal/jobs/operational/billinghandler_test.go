@@ -1,11 +1,9 @@
 package operational
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1093,20 +1091,22 @@ func TestAmbiguousTimeoutCauseDoesNotLeakPastTheSnoozeMarker(t *testing.T) {
 	}
 }
 
-// TestAmbiguousOutcomeDuringShutdownLogsAWarning is the r3 residual pin
-// (team-lead ruling: the residual itself -- jobruntime.classify's
-// ctx.Err()-cancellation check running before the RetryableAfter snooze
-// marker check, which this handler cannot fix locally -- is accepted, but
-// it must be OBSERVABLE, not only commented. When an ambiguous outcome is
-// classified while the caller's context is already done (a shutdown/deploy
-// drain), the handler must emit a WARN log record naming the outcome class
-// and the possible snooze bypass, so an operator can see it happened.
-func TestAmbiguousOutcomeDuringShutdownLogsAWarning(t *testing.T) {
-	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
-
+// TestAmbiguousOutcomeDuringADrainStillSnoozesAndHoldsTheClaim replaces the
+// r3 residual's WARN pin. That WARN existed only to make an accepted
+// jobruntime defect observable: classify() consulted the LIVE context for
+// context.Canceled before it ever looked for the RetryableAfter snooze
+// marker, so a worker draining at the exact moment an ambiguous outcome was
+// classified bypassed this branch's snooze no matter what it returned.
+// CHAOS-5455 fixed that ordering in jobruntime for every job kind
+// (internal/jobruntime/classify_snooze_order_test.go pins the classification
+// itself, including this handler's exact error shape), so a log line
+// announcing a bypass that can no longer happen would now be false.
+//
+// What stays this handler's own to prove is that a drain changes NOTHING
+// about the two properties this branch is responsible for: the ambiguous
+// result is still returned as a snooze past StaleClaimThreshold, and the
+// claim is still never released.
+func TestAmbiguousOutcomeDuringADrainStillSnoozesAndHoldsTheClaim(t *testing.T) {
 	store := &fakeStore{billing: billingRow(`{}`)}
 	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
 	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
@@ -1119,41 +1119,19 @@ func TestAmbiguousOutcomeDuringShutdownLogsAWarning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the worker context is already done, as during a shutdown/drain
 
-	if err := handler.Work(ctx, billingExecution()); err == nil {
+	err := handler.Work(ctx, billingExecution())
+	if err == nil {
 		t.Fatal("Work() = nil, want the ambiguous send's error")
 	}
-	if !strings.Contains(logs.String(), "billing.ambiguous_outcome_during_shutdown") {
-		t.Fatalf("no billing.ambiguous_outcome_during_shutdown WARN record found in log output: %s",
-			logs.String())
+	delay, snoozed := jobruntime.SnoozeDelay(err)
+	if !snoozed || delay <= StaleClaimThreshold {
+		t.Fatalf("SnoozeDelay() = (%v, %v) under a drained context, want a delay > %v",
+			delay, snoozed, StaleClaimThreshold)
 	}
-	if !strings.Contains(logs.String(), `"claim_outcome":"ambiguous"`) {
-		t.Fatalf("WARN record is missing the outcome class: %s", logs.String())
-	}
-}
-
-// TestAmbiguousOutcomeWithALiveContextDoesNotLogTheShutdownWarning guards the
-// test above from over-reaching: the WARN is specifically about a DONE
-// context, not every ambiguous outcome.
-func TestAmbiguousOutcomeWithALiveContextDoesNotLogTheShutdownWarning(t *testing.T) {
-	var logs bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
-
-	store := &fakeStore{billing: billingRow(`{}`)}
-	fence := &fakeFence{claim: ClaimResult{Claimed: true}}
-	owners := &fakeOwners{owner: OwnerContact{Email: "o@example.test", FullName: "D", OrgName: "N"}}
-	sender := &fakeSender{
-		err:                      &AmbiguousSendError{Err: errors.New("resend API response uncertain: timeout")},
-		recordAsSentDespiteError: true,
-	}
-	handler := newTestBillingHandler(t, store, fence, owners, sender)
-
-	if err := handler.Work(context.Background(), billingExecution()); err == nil {
-		t.Fatal("Work() = nil, want the ambiguous send's error")
-	}
-	if strings.Contains(logs.String(), "billing.ambiguous_outcome_during_shutdown") {
-		t.Fatalf("the shutdown WARN fired with a live, undone context: %s", logs.String())
+	if fence.releases != 0 {
+		t.Fatalf("claim released %d times during a drain, want 0 -- an ambiguous "+
+			"result is exactly the case where releasing lets a retry duplicate a "+
+			"message that may already have gone out", fence.releases)
 	}
 }
 

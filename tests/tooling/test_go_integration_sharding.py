@@ -1838,7 +1838,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsNotFoundOnlyUnitStillLogsTheSkipSummary (a not-found-
     # only unit must still emit the skip-summary log line) are both
     # in-memory, non-integration tests.
-    assert len(expected_provider_tests) == 1336
+    # CHAOS-5413 (derive the classifier reachability test's expected component
+    # from the reflected premise): +1 ordinary top-level (1336 -> 1337),
+    # integration-tagged UNCHANGED at 153.
+    # TestInvestmentGoCallSiteReflectorResolvesConstantFieldValues pins the
+    # reflector that the reachability test now derives its expectation from.
+    assert len(expected_provider_tests) == 1337
 
     assert len(expected_integration_tests) == 153
     assert expected_integration_tests < expected_provider_tests
@@ -1856,7 +1861,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1336
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1337
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1958,7 +1963,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1336
+    assert len(selected_tests) == len(set(selected_tests)) == 1337
     assert set(selected_tests) == expected_tests
 
 

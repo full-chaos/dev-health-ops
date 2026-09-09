@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -199,48 +200,48 @@ func VerifyBuildStable(ctx context.Context, client *http.Client, buildInfoURL st
 // An operator-supplied --candidate-build is checked here too, as a
 // cross-check ONLY. It never becomes the value written (team-lead ruling
 // R51, 2026-09-09).
-func VerifyCandidateBuild(running string, expected string) error {
+func VerifyCandidateBuild(running string, expected string, routing map[string]RoutingRow) error {
 	if expected != "" && expected != running {
 		return fmt.Errorf("goapiproof: --candidate-build %q does not match the running build %q -- the flag is a cross-check, never the source", expected, running)
 	}
-	return nil
+	stale := StaleRoutingRows(running, routing)
+	if len(stale) == 0 {
+		return nil
+	}
+	disagreeing := make([]string, 0, len(stale))
+	for _, operation := range sortedOperations(stale) {
+		disagreeing = append(disagreeing, fmt.Sprintf("%s points at %s", operation, stale[operation]))
+	}
+	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point them with `dev-hops go-api routing enable --candidate-build %s` (modes unchanged) before proving. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
+		running, strings.Join(disagreeing, "; "), running)
 }
 
 // StaleRoutingRows reports which routing rows name a build the running
 // process is not, as operation -> the build the row names.
 //
-// This USED to refuse the whole run, and CHAOS-5484's JOB 4 showed that
-// was both wrong and blocking. Wrong, because the comparison does not
-// protect what its refusal claimed to protect:
+// This was briefly DEMOTED to a recorded fact, on the argument that the
+// comparison could not affect a receipt: reachability is decided by mode
+// rather than by current_candidate_build (postgres_switch.go:71-78), the
+// Python edge never reads the column, and every receipt names the identity
+// read from /buildinfo, so a stale row could not make a receipt say the
+// wrong thing.
 //
-//   - Reachability does not depend on this column. PostgresSwitch's own
-//     doc comment says so in terms: "current_candidate_build is NOT bound
-//     to reachability. Enabled answers 'is this operation's mode
-//     canary/primary', not 'is THIS candidate build the one currently
-//     live'". The Python edge never reads the column at all. So a stale
-//     row does not change which build answers the request that gets
-//     measured.
-//   - The receipt cannot name the row's build even if it wanted to.
-//     CandidateBuild on every receipt is RegistryView.BuildIdentity, read
-//     from the running process's own /buildinfo. It names what served the
-//     request, by construction.
+// That argument was WRONG, and r1 broke it with an executed test. It
+// assumed /buildinfo identifies the process that served the MEASURED
+// request. It does not. query-api runs multiple replicas; a /buildinfo
+// read can be answered by replica A while the measured /graphql request is
+// served by replica B, and the Python edge's _forward_to_go rebuilds the
+// response with only content, status and media_type -- dropping the
+// per-request build header that would have told them apart. So during a
+// rolling deploy a receipt can name build A while the measurement came
+// from build B, and that receipt satisfies the four-column enablement
+// lookup exactly.
 //
-// What actually protects a receipt from authorizing the wrong build is
-// the four-column key: a proof recorded at the running build satisfies
-// `enable --candidate-build <that build>` and nothing else. A stale row
-// was never able to defeat that.
-//
-// Blocking, because after a redeploy EVERY row is stale until an operator
-// re-points it, and `enable` -- the only verb that writes
-// current_candidate_build -- accepts canary|primary only. A SHADOW row
-// therefore cannot be re-pointed by any supported command, and shadow
-// operations are precisely what /query/proof exists to prove. One
-// un-re-pointable row failed the entire run.
-//
-// So it is recorded rather than enforced: counted in the summary, named
-// per operation in the report, and written into the receipt's review
-// evidence, so a reader of go_api_proof_run months later can see that the
-// routing row named an older build when the measurement was taken.
+// The routing row's build is the one remaining cross-check that the fleet
+// is on ONE build, so it is a refusal again. Re-pointing the rows after a
+// deploy is an operator step (R67), not something the prover may assume
+// away. This function stays as the helper that finds them, so both the
+// refusal message and the receipt provenance name the same rows.
 func StaleRoutingRows(running string, routing map[string]RoutingRow) map[string]string {
 	stale := map[string]string{}
 	for operation, row := range routing {
@@ -249,6 +250,15 @@ func StaleRoutingRows(running string, routing map[string]RoutingRow) map[string]
 		}
 	}
 	return stale
+}
+
+func sortedOperations(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // registrydumpDocument is one element of `registrydump -file

@@ -4,6 +4,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -507,8 +508,19 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 	if state != "proof_failed" {
 		t.Fatalf("the recorded state must say the PROOF failed, got %q", state)
 	}
-	if !strings.Contains(evidence, "moved DURING the run") || !strings.Contains(evidence, "1 of 1") {
-		t.Fatalf("the row must name the cause and the counts, got %q", evidence)
+	// review_evidence is a JSON provenance object, not prose (r1 P2), so
+	// this reads the fields rather than grepping a sentence -- which is
+	// the whole point of the change: a machine-written fact should be
+	// readable by a machine.
+	var provenance ReceiptProvenance
+	if err := json.Unmarshal([]byte(evidence), &provenance); err != nil {
+		t.Fatalf("review_evidence is not a JSON object: %q (%v)", evidence, err)
+	}
+	if !strings.Contains(provenance.Refusal, "moved DURING the run") {
+		t.Fatalf("the row must name the cause, got %q", provenance.Refusal)
+	}
+	if provenance.Measured != 1 || provenance.Attempted != 1 {
+		t.Fatalf("the row must carry the counts, got measured=%d attempted=%d", provenance.Measured, provenance.Attempted)
 	}
 }
 

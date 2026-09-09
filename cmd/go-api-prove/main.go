@@ -45,11 +45,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -90,25 +92,25 @@ func main() {
 }
 
 type flags struct {
-	registryURL    string
-	buildInfoURL   string
-	edgeURL        string
-	candidateBuild string
-	proofURL       string
-	documentsPath  string
-	postgresURI    string
-	orgID          string
-	artifactDir    string
-	recordedBy     string
-	reviewEvidence string
-	principalKind  string
-	audience       string
-	keyID          string
-	proofBearerCmd string
-	dryRun         bool
-	timeout        time.Duration
-	window         goapiproof.Window
-	reportPath     string
+	registryURL     string
+	buildInfoURL    string
+	edgeURL         string
+	candidateBuild  string
+	proofURL        string
+	documentsPath   string
+	postgresURI     string
+	orgID           string
+	artifactDir     string
+	recordedBy      string
+	reviewEvidence  string
+	principalKind   string
+	audience        string
+	keyID           string
+	proofBearerExec string
+	dryRun          bool
+	timeout         time.Duration
+	window          goapiproof.Window
+	reportPath      string
 }
 
 func parseFlags() (flags, error) {
@@ -119,7 +121,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written (team-lead ruling R51)")
 	flag.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	flag.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
-	flag.StringVar(&f.proofBearerCmd, "proof-bearer-command", "", "shell command printing a FRESH effective-principal envelope on stdout, re-run as the previous one ages out; required when the envelope's TTL is shorter than the run (it is: 60s). The command line is echoed on failure, so put no secret in it -- point it at a credential the command itself reads")
+	flag.StringVar(&f.proofBearerExec, "proof-bearer-exec", "", "JSON argv of a helper printing a FRESH effective-principal envelope on stdout, e.g. '[\"/opt/job5/mint-envelope.sh\",\"--org\",\"70d529e0\"]'. Re-run as the previous envelope ages out; required when the envelope's TTL is shorter than the run (it is: 60s). argv, not a shell string, so no credential can reach the process table and nothing is interpolated into a shell. The helper's stdout and stderr are NEVER reported by this command")
 	flag.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file cmd/query-api/query_route.go` JSON output (required)")
 	flag.StringVar(&f.postgresURI, "postgres-uri", os.Getenv("POSTGRES_URI"), "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
 	flag.StringVar(&f.orgID, "org", "", "org id every request is made for (required)")
@@ -168,6 +170,19 @@ func run() error {
 	ctx := context.Background()
 	client := &http.Client{Timeout: f.timeout}
 
+	// The opening and closing /buildinfo reads get the SAME per-request
+	// deadline the measured legs get (r1 P2). They used to take
+	// context.Background(), so `-timeout` bounded every request except the
+	// two that bracket the run -- including the minting helper invoked
+	// before the first measurement, where a hang blocks the whole proof
+	// with nothing to show for it.
+	boundedCtx := func() (context.Context, context.CancelFunc) {
+		if f.timeout <= 0 {
+			return context.WithCancel(ctx)
+		}
+		return context.WithTimeout(ctx, f.timeout)
+	}
+
 	edgeCredential, proofCredential, err := credentials(f)
 	if err != nil {
 		return err
@@ -184,7 +199,9 @@ func run() error {
 	// one naming an unverifiable build is worse than none (CHAOS-5425
 	// acceptance, 2026-09-08: "Do not construct a receipt from a digest or
 	// an arbitrary build name").
-	registry.BuildIdentity, err = goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, proofCredential)
+	buildCtx, cancelBuild := boundedCtx()
+	registry.BuildIdentity, err = goapiproof.FetchBuildIdentity(buildCtx, client, f.buildInfoURL, proofCredential)
+	cancelBuild()
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
 			return fmt.Errorf("%w\n  the deployed query-api must identify its build at %s before any receipt can be written", err, f.buildInfoURL)
@@ -226,23 +243,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// The operator cross-check stays a HARD refusal: a typed sha that is
-	// not the running build is an operator error, and continuing past it
-	// would produce receipts nobody asked for.
-	if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, f.candidateBuild); err != nil {
+	// A routing row naming a build the running process is not is a
+	// REFUSAL again (r1 P1). The demotion assumed /buildinfo identifies
+	// the replica that served the MEASURED request; with multiple
+	// query-api replicas and an edge that drops the per-request build
+	// header, it does not. Re-pointing the rows after a deploy is an
+	// operator step, and the refusal below says so.
+	if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, f.candidateBuild, routing); err != nil {
 		return err
-	}
-	// Rows naming an older build are REPORTED, not refused -- see
-	// StaleRoutingRows for why the comparison never protected what its
-	// refusal claimed to. Printed before the run so an operator reading a
-	// surprising report knows the enablement record was out of date when
-	// it was taken.
-	if stale := goapiproof.StaleRoutingRows(registry.BuildIdentity, routing); len(stale) > 0 {
-		fmt.Printf("go-api-prove: NOTE %d routing row(s) name a build the running process is not (running=%s).\n", len(stale), registry.BuildIdentity)
-		fmt.Println("go-api-prove:   this does not affect what is measured -- reachability is decided by mode, not by current_candidate_build, and every receipt names the build read from /buildinfo. It means the enablement record is stale.")
-		for _, operation := range sortedKeys(stale) {
-			fmt.Printf("go-api-prove:   %s -> row names %s\n", operation, stale[operation])
-		}
 	}
 
 	runner := &goapiproof.Runner{
@@ -277,7 +285,9 @@ func run() error {
 	// already-committed match receipts behind, enablement-eligible,
 	// describing a build that was not serving for all of it.
 	observedAt := time.Now().UTC()
-	stabilityErr := goapiproof.VerifyBuildStable(ctx, client, f.buildInfoURL, proofCredential, registry.BuildIdentity)
+	stableCtx, cancelStable := boundedCtx()
+	stabilityErr := goapiproof.VerifyBuildStable(stableCtx, client, f.buildInfoURL, proofCredential, registry.BuildIdentity)
+	cancelStable()
 
 	var receipts []goapiproof.Receipt
 	var receiptErr error
@@ -477,42 +487,136 @@ func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 	edge = goapiproof.StaticCredential("Authorization", "edge access token", "Bearer "+edgeBearer)
 
 	switch {
-	case f.proofBearerCmd != "":
+	case f.proofBearerExec != "":
+		var argv []string
+		if err := json.Unmarshal([]byte(f.proofBearerExec), &argv); err != nil {
+			return nil, nil, fmt.Errorf("-proof-bearer-exec must be a JSON array of strings, e.g. [\"/path/to/helper\",\"--org\",\"ORG\"]: %w", err)
+		}
+		if len(argv) == 0 {
+			return nil, nil, errors.New("-proof-bearer-exec is an empty argv")
+		}
 		proof = goapiproof.MintedCredential("Authorization", "effective-principal envelope", proofCredentialFreshness,
 			func(ctx context.Context) (string, error) {
-				return mintBearer(ctx, f.proofBearerCmd)
+				return mintBearer(ctx, argv)
 			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 	case os.Getenv(proofBearerEnvVar) != "":
-		proof = goapiproof.StaticCredential("Authorization", "effective-principal envelope", "Bearer "+os.Getenv(proofBearerEnvVar))
+		// Validated HERE, at construction, so a malformed static envelope
+		// fails as a configuration error before anything is measured
+		// rather than as a 401 fifteen operations later (r1 P2). The
+		// message never echoes the value.
+		static := "Bearer " + os.Getenv(proofBearerEnvVar)
+		if err := goapiproof.ValidateEnvelopeShape(static); err != nil {
+			return nil, nil, fmt.Errorf("%s is not a well-formed effective-principal envelope (%w). Its VALUE is not printed; check that you exported the envelope and not the edge access token", proofBearerEnvVar, err)
+		}
+		proof = goapiproof.StaticCredential("Authorization", "effective-principal envelope", static)
 	default:
 		return nil, nil, fmt.Errorf(
 			"no proof-plane credential: /buildinfo and %s check the effective-principal ENVELOPE, which the edge access token cannot satisfy (measured: access token -> 401 on /buildinfo, envelope -> 401 on the edge).\n"+
-				"  Set -proof-bearer-command to a command printing a fresh envelope -- preferred, because ENVELOPE_DEFAULT_TTL_SECONDS is 60 and a full run outlives that --\n"+
+				"  Set -proof-bearer-exec to a JSON argv printing a fresh envelope -- preferred, because ENVELOPE_DEFAULT_TTL_SECONDS is 60 and a full run outlives that --\n"+
 				"  or %s for a short run.", "/query/proof", proofBearerEnvVar)
 	}
 	return edge, proof, nil
 }
 
-// mintBearer runs the operator's command and returns its stdout.
+// Bounds on the minting helper. All three exist because the helper is
+// operator-supplied and its output becomes an Authorization header.
+const (
+	// mintStdoutLimit caps what is read. A helper that streams megabytes
+	// (a log, a core dump, /dev/urandom) must not be buffered whole just
+	// to be rejected as the wrong shape.
+	mintStdoutLimit = 8 << 10
+	// mintTimeout bounds one invocation. It is separate from the run
+	// deadline so a hung helper fails as a hung helper, with its own
+	// message, rather than as an unexplained slow run.
+	mintTimeout = 20 * time.Second
+)
+
+// mintBearer runs the operator's helper and returns its stdout.
 //
-// stderr is captured and included in the ERROR only, never on success:
-// a minting command that writes a warning must not have that warning
-// mistaken for part of the credential.
-func mintBearer(ctx context.Context, command string) (string, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("proof-bearer-command %q failed: %w (stderr: %s)", command, err, strings.TrimSpace(stderr.String()))
+// Three properties, each from an executed r1 finding or its root cause:
+//
+//  1. NOTHING from the helper reaches the error. Not its stderr, not its
+//     argv, not its output. r1 proved the previous version printed a
+//     secret written to stderr straight into the operator-facing error --
+//     the helper's own diagnostics are not separable from its credential,
+//     so the only safe amount to quote is none. The error carries a fixed
+//     message and the exit code, which is what an operator needs to go
+//     look at their own helper's logs.
+//
+//  2. argv, never `sh -c`. A shell string puts the whole command line in
+//     the process table, so a credential written inline in that string is
+//     readable by every user on the box, and it invites shell injection
+//     through anything interpolated into it. The helper is now a path plus
+//     arguments, executed directly.
+//
+//  3. Bounded and killable. Output is capped, the invocation has its own
+//     timeout, and the helper runs in its own process group so a timeout
+//     kills the children it spawned rather than orphaning them -- a
+//     `docker compose exec` helper is a process tree, not a process.
+func mintBearer(ctx context.Context, argv []string) (string, error) {
+	if len(argv) == 0 {
+		return "", errors.New("no minting helper configured")
 	}
-	// A trailing newline from `echo` is normal and would otherwise be sent
-	// inside the header value.
+	ctx, cancel := context.WithTimeout(ctx, mintTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	// Own process group, so Cancel below reaches the whole tree.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		// Negative pid = the process GROUP.
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &limitedWriter{w: &stdout, remaining: mintStdoutLimit}
+	// stderr is DISCARDED rather than captured. Captured, it would sit in
+	// memory waiting for somebody to decide it was safe to print, and r1
+	// showed how that decision goes.
+	cmd.Stderr = io.Discard
+
+	err := cmd.Run()
+	if ctxErr := ctx.Err(); errors.Is(ctxErr, context.DeadlineExceeded) {
+		return "", fmt.Errorf("the envelope minting helper did not finish within %s and was killed (its output is deliberately not reported here -- check the helper's own logs)", mintTimeout)
+	}
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return "", fmt.Errorf("the envelope minting helper exited %d (its output is deliberately not reported here -- check the helper's own logs)", exit.ExitCode())
+		}
+		return "", errors.New("the envelope minting helper could not be run (its output is deliberately not reported here -- check the helper's own logs)")
+	}
+
 	minted := strings.TrimSpace(stdout.String())
 	if minted == "" {
-		return "", fmt.Errorf("proof-bearer-command %q printed nothing on stdout", command)
+		return "", errors.New("the envelope minting helper printed nothing on stdout")
 	}
 	if strings.HasPrefix(minted, "Bearer ") {
 		return minted, nil
 	}
 	return "Bearer " + minted, nil
+}
+
+// limitedWriter drops everything past its limit instead of failing, so a
+// chatty helper is truncated rather than turned into a write error that
+// would then need reporting.
+type limitedWriter struct {
+	w         io.Writer
+	remaining int
+}
+
+func (l *limitedWriter) Write(p []byte) (int, error) {
+	if l.remaining <= 0 {
+		return len(p), nil
+	}
+	if len(p) > l.remaining {
+		p = p[:l.remaining]
+	}
+	n, err := l.w.Write(p)
+	l.remaining -= n
+	// Report the full length: the caller wrote it, we chose to drop it.
+	return len(p), err
 }

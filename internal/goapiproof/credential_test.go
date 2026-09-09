@@ -392,3 +392,80 @@ func TestMintsCountsRefreshesAndNeverExposesAValue(t *testing.T) {
 		t.Fatal("Kind must name the credential, never carry its value")
 	}
 }
+
+// r1 P1, adapted to the restored contract. The reviewer proved a run could
+// produce a receipt naming build A while the measured request was served
+// by build B: /buildinfo answers from one replica, the measured /graphql
+// request is served by another, and the Python edge drops the per-request
+// build header that would tell them apart.
+//
+// Two defences now exist and this asserts both.
+func TestMixedReplicasCannotProduceAReceiptForTheWrongBuild(t *testing.T) {
+	// Defence 1: the routing row's build is a cross-check on the fleet
+	// being on ONE build, and a disagreement refuses before any request
+	// is sent.
+	t.Run("a stale routing row refuses the run outright", func(t *testing.T) {
+		err := VerifyCandidateBuild("build-A", "", map[string]RoutingRow{
+			"featureFlags": {Mode: "canary", CandidateBuild: "build-B"},
+		})
+		if err == nil {
+			t.Fatal("with replicas possibly on different builds, a row naming another build must refuse")
+		}
+	})
+
+	// Defence 2: when the edge DOES carry a per-request build header and
+	// it names a different build, that is a measured disagreement and
+	// admission refuses it -- the mixed-replica case caught in the act.
+	t.Run("a measured response naming another build is refused", func(t *testing.T) {
+		admission := Admit(admissionWithData("build-B", "build-A"))
+		if admission.Admitted {
+			t.Fatal("a response served by build-B must not back a receipt naming build-A")
+		}
+		if admission.Reason != RefusalBuildMismatch {
+			t.Fatalf("expected %s, got %s", RefusalBuildMismatch, admission.Reason)
+		}
+	})
+}
+
+// The absence of an edge build header is RECORDED rather than assumed
+// away. It is CHAOS-5479's known gap, and a receipt that did not say
+// whether it had a per-request binding cannot be told apart later from one
+// that did.
+func TestTheEdgeBuildBindingIsRecordedWhetherPresentOrAbsent(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		build string
+		want  string
+	}{
+		"edge dropped the header (CHAOS-5479, today's normal)": {"", EdgeBuildAbsent},
+		"edge carried it and it agreed":                        {"build-A", EdgeBuildPresent},
+	} {
+		t.Run(name, func(t *testing.T) {
+			admission := Admit(admissionWithData(testCase.build, "build-A"))
+			if !admission.Admitted {
+				t.Fatalf("unexpected refusal: %s %s", admission.Reason, admission.Detail)
+			}
+			if admission.EdgeBuildBinding != testCase.want {
+				t.Fatalf("got binding %q, want %q", admission.EdgeBuildBinding, testCase.want)
+			}
+		})
+	}
+}
+
+// admissionWithData builds an input that passes every precondition except
+// the one under test, so a failure here is about the BUILD binding and not
+// about an empty response body.
+func admissionWithData(servedBuild, namedBuild string) AdmissionInput {
+	snapshot := Snapshot{
+		DataPresent: true,
+		Data:        map[string]any{"featureFlags": []any{map[string]any{"key": "a"}}},
+	}
+	return AdmissionInput{
+		Route:         RouteEdge,
+		NamedBuild:    namedBuild,
+		ResponseRoot:  "featureFlags",
+		Candidate:     Observation{Plane: "go", StatusCode: 200, Build: servedBuild},
+		Baseline:      Observation{Plane: "python", StatusCode: 200},
+		CandidateSnap: snapshot,
+		BaselineSnap:  snapshot,
+	}
+}

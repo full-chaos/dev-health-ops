@@ -132,6 +132,11 @@ type Outcome struct {
 	RefusalReason string `json:"refusal_reason,omitempty"`
 	RefusalDetail string `json:"refusal_detail,omitempty"`
 	Route         string `json:"route"`
+	// EdgeBuildBinding is EdgeBuildPresent or EdgeBuildAbsent -- whether
+	// the measured response carried the serving build on itself. Taken
+	// from the admission rather than re-derived from the route, so the
+	// receipt cannot claim a binding the gate did not check.
+	EdgeBuildBinding string `json:"edge_build_binding,omitempty"`
 	// RoutingRowBuild is the build the operation's ROUTING ROW named when
 	// this measurement was taken, recorded only when it differs from the
 	// build that actually served the request. It is an observation about
@@ -340,7 +345,7 @@ func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receip
 			Stage:                            Stage,
 			TerminalState:                    outcome.TerminalState,
 			OrgID:                            r.Config.OrgID,
-			ReviewEvidence:                   reviewEvidenceFor(r.Config.ReviewEvidence, outcome),
+			ReviewEvidence:                   r.reviewEvidence(outcome, "", 0, 0),
 			RecordedBy:                       r.Config.RecordedBy,
 			ObservedAt:                       observedAt,
 			BaselineResponseRef:              observationRef(outcome.Baseline),
@@ -375,10 +380,6 @@ func (r *Runner) RefusalReceipts(outcomes []Outcome, observedAt time.Time, cause
 			admitted++
 		}
 	}
-	evidence := fmt.Sprintf(
-		"run refused: %s. %d of %d operation(s) had been measured and none of their results were written; this row records that the run happened and certified nothing. Operator note: %s",
-		cause, admitted, len(outcomes), r.Config.ReviewEvidence)
-
 	receipts := make([]Receipt, 0, len(outcomes))
 	for _, outcome := range outcomes {
 		if !outcome.Executed || !outcome.Admitted {
@@ -397,7 +398,7 @@ func (r *Runner) RefusalReceipts(outcomes []Outcome, observedAt time.Time, cause
 			Stage:             Stage,
 			TerminalState:     "proof_failed",
 			OrgID:             r.Config.OrgID,
-			ReviewEvidence:    evidence,
+			ReviewEvidence:    r.reviewEvidence(outcome, cause, admitted, len(outcomes)),
 			RecordedBy:        r.Config.RecordedBy,
 			ObservedAt:        observedAt,
 			MeasurementRoute:  outcome.Route,
@@ -549,6 +550,9 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		return refuse(admission.Reason, admission.Detail)
 	}
 	outcome.Admitted = true
+	// Recorded from the admission, never re-derived from the route: the
+	// receipt must state the binding that was actually checked.
+	outcome.EdgeBuildBinding = admission.EdgeBuildBinding
 
 	result := Compare(baselineSnapshot, candidateSnapshot, spec.Parity)
 	if len(result.UnusedTierB) > 0 {
@@ -732,22 +736,64 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 	return observation, nil
 }
 
-// reviewEvidenceFor appends the stale-routing-row observation to the
-// operator's review evidence, so it lands in go_api_proof_run rather than
-// only in a report file somebody has to still have.
+// ReceiptProvenance is what goes into go_api_proof_run.review_evidence.
 //
-// Appended rather than substituted: the operator's own words are the
-// point of the column, and a note that replaced them would lose the
-// reason the run was made. When the row agrees with the running build,
-// nothing is added -- a receipt should not carry a sentence saying that
-// nothing was wrong.
-func reviewEvidenceFor(operatorEvidence string, outcome Outcome) string {
-	if outcome.RoutingRowBuild == "" {
-		return operatorEvidence
+// A JSON OBJECT rather than prose. r1 found the previous design appending
+// generated text to operator-authored text with a " | " separator, which
+// is ambiguous in both directions -- a reader cannot tell which half a
+// machine wrote, and an operator whose note contains the separator forges
+// the other half. The operator's words keep their own key and are never
+// modified.
+//
+// A JSON string in a Text column rather than new columns because alembic
+// 0128 has no field for any of this and a migration does not belong in a
+// hotfix. Every key here is a candidate for promotion to a real column
+// later; until then the object keeps them named, typed and parseable
+// rather than embedded in a sentence.
+type ReceiptProvenance struct {
+	// Operator is the operator's own --review-evidence text, verbatim.
+	Operator string `json:"operator,omitempty"`
+	// MeasurementRoute is RouteEdge or RouteProof.
+	MeasurementRoute string `json:"measurement_route,omitempty"`
+	// EdgeBuildBinding is EdgeBuildPresent or EdgeBuildAbsent: whether the
+	// measured response carried the serving build on itself. Absence is
+	// CHAOS-5479's known gap, recorded so a later reader does not have to
+	// assume which it was.
+	EdgeBuildBinding string `json:"edge_build_binding,omitempty"`
+	// RoutingRowBuild is the build the routing row named, when it differed
+	// from the running build. A run refuses on this today
+	// (VerifyCandidateBuild), so a receipt carrying it means the refusal
+	// was bypassed -- which is worth being able to see in the table.
+	RoutingRowBuild string `json:"routing_row_build,omitempty"`
+	// Refusal is the run-level cause, on a proof_failed receipt only.
+	Refusal string `json:"refusal,omitempty"`
+	// Measured and Attempted count the run this receipt came from, so a
+	// proof_failed row says how much work it is reporting on.
+	Measured  int `json:"measured_operations,omitempty"`
+	Attempted int `json:"attempted_operations,omitempty"`
+}
+
+// reviewEvidence renders the provenance for one receipt. ONE constructor
+// for both the success and the refusal path (r1 P2): the refusal path used
+// to build its own prose and dropped the routing-row fact entirely, so the
+// receipts that most needed provenance had the least.
+func (r *Runner) reviewEvidence(outcome Outcome, refusal string, measured, attempted int) string {
+	provenance := ReceiptProvenance{
+		Operator:         r.Config.ReviewEvidence,
+		MeasurementRoute: outcome.Route,
+		EdgeBuildBinding: outcome.EdgeBuildBinding,
+		RoutingRowBuild:  outcome.RoutingRowBuild,
+		Refusal:          refusal,
 	}
-	note := fmt.Sprintf("routing row named build %s at measurement time; this receipt names the build that actually served the request", outcome.RoutingRowBuild)
-	if operatorEvidence == "" {
-		return note
+	if refusal != "" {
+		provenance.Measured, provenance.Attempted = measured, attempted
 	}
-	return operatorEvidence + " | " + note
+	encoded, err := json.Marshal(provenance)
+	if err != nil {
+		// Every field is a string or an int, so this cannot fail. If it
+		// somehow does, the operator's own words are worth more than a
+		// dropped column: return them rather than writing nothing.
+		return r.Config.ReviewEvidence
+	}
+	return string(encoded)
 }

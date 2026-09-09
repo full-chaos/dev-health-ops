@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -75,10 +76,10 @@ func TestFetchBuildIdentitySendsTheEnvelope(t *testing.T) {
 
 // --candidate-build can FAIL a run; it can never supply the value.
 func TestVerifyCandidateBuildTreatsTheFlagAsACrossCheck(t *testing.T) {
-	if err := VerifyCandidateBuild("abc", "abc"); err != nil {
+	if err := VerifyCandidateBuild("abc", "abc", nil); err != nil {
 		t.Fatalf("a matching cross-check must pass: %v", err)
 	}
-	err := VerifyCandidateBuild("abc", "def")
+	err := VerifyCandidateBuild("abc", "def", nil)
 	if err == nil {
 		t.Fatal("a mismatched --candidate-build must fail the run")
 	}
@@ -119,10 +120,41 @@ func TestStaleRoutingRowsNamesDisagreeingRowsAndOnlyThose(t *testing.T) {
 	}
 }
 
-// The whole point of the demotion: a stale row must not stop the run.
-func TestAStaleRoutingRowDoesNotFailTheCrossCheck(t *testing.T) {
-	if err := VerifyCandidateBuild("abc", ""); err != nil {
-		t.Fatalf("no --candidate-build supplied and nothing to cross-check, yet the run was refused: %v", err)
+// A stale routing row REFUSES the run again (r1 P1).
+//
+// The demotion assumed /buildinfo identifies the process that served the
+// measured request. With more than one query-api replica and an edge that
+// drops the per-request build header, it does not: /buildinfo can be
+// answered by replica A while the measurement is served by replica B, and
+// the resulting receipt names A. The routing row's build is the remaining
+// cross-check that the fleet is on ONE build.
+func TestAStaleRoutingRowRefusesTheRun(t *testing.T) {
+	err := VerifyCandidateBuild("abc", "", map[string]RoutingRow{
+		"featureFlags": {Mode: "canary", CandidateBuild: "abc"},
+		"flowMatrix":   {Mode: "shadow", CandidateBuild: "older-sha"},
+	})
+	if err == nil {
+		t.Fatal("a routing row naming another build must refuse the run")
+	}
+	if !strings.Contains(err.Error(), "flowMatrix points at older-sha") {
+		t.Fatalf("the refusal must NAME the disagreeing row, got %v", err)
+	}
+	if strings.Contains(err.Error(), "featureFlags") {
+		t.Fatalf("an agreeing row must not be reported, got %v", err)
+	}
+	// The refusal has to tell the operator how to clear it, or it is a
+	// wall rather than a gate.
+	if !strings.Contains(err.Error(), "routing enable --candidate-build") {
+		t.Fatalf("the refusal must say how to re-point the rows, got %v", err)
+	}
+}
+
+func TestRowsAgreeingWithTheRunningBuildPassTheCheck(t *testing.T) {
+	if err := VerifyCandidateBuild("abc", "", map[string]RoutingRow{
+		"featureFlags": {Mode: "canary", CandidateBuild: "abc"},
+		"unregistered": {Mode: "shadow"},
+	}); err != nil {
+		t.Fatalf("every row agrees, yet the run was refused: %v", err)
 	}
 }
 
@@ -185,72 +217,98 @@ func TestVerifyBuildStableRefusesWhenTheRereadFails(t *testing.T) {
 	}
 }
 
-// The demotion, end to end at the runner: a stale routing row must not
-// stop the measurement, and the fact must survive into the receipt.
-//
-// Before CHAOS-5484 this run did not happen at all -- VerifyCandidateBuild
-// refused before a single request was sent, which is how JOB 4's attempt E
-// ended with zero rows written and fifteen operations unmeasured.
-func TestAStaleRoutingRowIsRecordedOnTheReceiptNotRefused(t *testing.T) {
+// r1 P2: the refusal path built its own prose and dropped the provenance
+// the success path carried, so the receipts that most needed context had
+// the least. Both paths now use ONE constructor, and the result is a JSON
+// object rather than generated text appended to operator text.
+func TestBothReceiptPathsCarryTheSameStructuredProvenance(t *testing.T) {
 	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
 	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "canary")
-	// The row names the build it was enabled at; the process is something
-	// else. This is the state of every row on the stack after a redeploy.
-	runner.Routing["featureFlags"] = RoutingRow{Mode: "canary", CandidateBuild: "0000000000000000000000000000000000000000"}
 	runner.Config.ReviewEvidence = "CHAOS-5425 first deployed-executed run"
 
-	outcomes, summary, err := runner.Run(context.Background())
+	outcomes, _, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !outcomes[0].Executed {
-		t.Fatalf("a stale routing row must not stop the measurement: %s %s", outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
-	}
-	if summary.StaleRoutingRows != 1 {
-		t.Fatalf("expected the stale row to be counted, got %d", summary.StaleRoutingRows)
-	}
-	if outcomes[0].RoutingRowBuild != "0000000000000000000000000000000000000000" {
-		t.Fatalf("the outcome must name the build the ROW claimed, got %q", outcomes[0].RoutingRowBuild)
-	}
 
-	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	success, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
-	if len(receipts) != 1 {
-		t.Fatalf("expected one receipt, got %d", len(receipts))
+	refusal, err := runner.RefusalReceipts(outcomes, time.Now().UTC(), "the serving build moved DURING the run")
+	if err != nil {
+		t.Fatalf("RefusalReceipts: %v", err)
 	}
-	// The receipt names what SERVED the request, never the row's build.
-	if receipts[0].CandidateBuild != runner.Registry.BuildIdentity {
-		t.Fatalf("the receipt named %q, not the running build", receipts[0].CandidateBuild)
+	if len(success) != 1 || len(refusal) != 1 {
+		t.Fatalf("expected one receipt on each path, got %d and %d", len(success), len(refusal))
 	}
-	if !strings.Contains(receipts[0].ReviewEvidence, "0000000000000000000000000000000000000000") {
-		t.Fatalf("the stale row must reach go_api_proof_run, not just a report file: %q", receipts[0].ReviewEvidence)
+
+	for name, receipt := range map[string]Receipt{"success": success[0], "refusal": refusal[0]} {
+		t.Run(name, func(t *testing.T) {
+			var provenance ReceiptProvenance
+			if err := json.Unmarshal([]byte(receipt.ReviewEvidence), &provenance); err != nil {
+				t.Fatalf("review_evidence is not a JSON object -- a reader cannot tell which half a machine wrote: %q (%v)", receipt.ReviewEvidence, err)
+			}
+			// The operator's words are kept VERBATIM and in their own key,
+			// never concatenated with generated text.
+			if provenance.Operator != "CHAOS-5425 first deployed-executed run" {
+				t.Fatalf("the operator's own evidence was altered: %q", provenance.Operator)
+			}
+			if provenance.MeasurementRoute != RouteEdge {
+				t.Fatalf("route not recorded: %q", provenance.MeasurementRoute)
+			}
+			// The fake edge stamps no build header, so this run has the
+			// binding CHAOS-5479 leaves us with -- and it must SAY so.
+			if provenance.EdgeBuildBinding != EdgeBuildAbsent {
+				t.Fatalf("edge build binding not recorded: %q", provenance.EdgeBuildBinding)
+			}
+		})
 	}
-	if !strings.Contains(receipts[0].ReviewEvidence, "CHAOS-5425 first deployed-executed run") {
-		t.Fatalf("the operator's own evidence must be kept, not replaced: %q", receipts[0].ReviewEvidence)
+
+	// Only the refusal receipt carries the run-level cause and counts.
+	var refusalProvenance ReceiptProvenance
+	if err := json.Unmarshal([]byte(refusal[0].ReviewEvidence), &refusalProvenance); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(refusalProvenance.Refusal, "build moved") {
+		t.Fatalf("the refusal cause is missing: %q", refusalProvenance.Refusal)
+	}
+	if refusalProvenance.Attempted != 1 || refusalProvenance.Measured != 1 {
+		t.Fatalf("the refusal receipt must say how much work it reports on: %+v", refusalProvenance)
+	}
+
+	var successProvenance ReceiptProvenance
+	if err := json.Unmarshal([]byte(success[0].ReviewEvidence), &successProvenance); err != nil {
+		t.Fatal(err)
+	}
+	if successProvenance.Refusal != "" {
+		t.Fatalf("a success receipt must carry no refusal: %q", successProvenance.Refusal)
 	}
 }
 
-// And nothing is added when the row agrees: a receipt should not carry a
-// sentence saying that nothing was wrong.
-func TestAnAgreeingRoutingRowAddsNothingToTheReceipt(t *testing.T) {
+// An operator note containing the separator the old design used must not
+// be able to forge machine-written provenance. This is why it is JSON.
+func TestAnOperatorNoteCannotForgeProvenance(t *testing.T) {
 	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
 	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "canary")
-	runner.Config.ReviewEvidence = "CHAOS-5425 first deployed-executed run"
+	runner.Config.ReviewEvidence = `nice try | routing row named build DEADBEEF at measurement time"}`
 
-	outcomes, summary, err := runner.Run(context.Background())
+	outcomes, _, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
-	}
-	if summary.StaleRoutingRows != 0 {
-		t.Fatalf("no row was stale, got %d", summary.StaleRoutingRows)
 	}
 	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
-	if receipts[0].ReviewEvidence != "CHAOS-5425 first deployed-executed run" {
-		t.Fatalf("review evidence was modified with nothing to report: %q", receipts[0].ReviewEvidence)
+	var provenance ReceiptProvenance
+	if err := json.Unmarshal([]byte(receipts[0].ReviewEvidence), &provenance); err != nil {
+		t.Fatalf("an operator note broke the encoding: %v", err)
+	}
+	if provenance.RoutingRowBuild != "" {
+		t.Fatalf("operator text was read as machine provenance: %q", provenance.RoutingRowBuild)
+	}
+	if provenance.Operator != runner.Config.ReviewEvidence {
+		t.Fatalf("the operator's text was not preserved verbatim: %q", provenance.Operator)
 	}
 }

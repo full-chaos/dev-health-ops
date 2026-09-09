@@ -3,12 +3,14 @@ package riverstore
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -89,6 +91,65 @@ func TestLongRunningCommandsCannotAutoMigrate(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// closedPortAddr opens a listener on 127.0.0.1:0, records its address, then
+// closes it -- dialing that address afterward is refused deterministically
+// everywhere, unlike a permanently-unbound port such as 127.0.0.1:1 (which
+// some hosted CI runners answer with a hanging "i/o timeout" instead of a
+// refusal -- CHAOS-5478). CheckSchema's own query genuinely needs a real,
+// live-but-failing connection here, not a mock: rivermigrate's driver is
+// constructed straight from *pgxpool.Pool, with no interface seam to fake a
+// "failing querier" through.
+func closedPortAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+// TestCheckSchemaDistinguishesConnectionFailureFromVersionMismatch proves
+// CheckSchema reports a pool/connection error (ExistingVersions failing to
+// even run its query) as its own distinct sentinel, never collapsed into
+// ErrSchemaNotCurrent -- CHAOS-5469. Before this fix, CheckSchema returned
+// ErrSchemaNotCurrent for BOTH causes, which is exactly what made a
+// pgbouncer pool-exhaustion timeout on the live fleet unreadable as
+// "queue_postgres pool exhausted" and readable only as the wrong "River
+// schema is not at the pinned version" -- the schema was never actually
+// wrong.
+func TestCheckSchemaDistinguishesConnectionFailureFromVersionMismatch(t *testing.T) {
+	t.Parallel()
+
+	poolConfig, err := pgxpool.ParseConfig("postgres://queue@" + closedPortAddr(t) + "/app?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolConfig.ConnConfig.ConnectTimeout = 200 * time.Millisecond
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err = CheckSchema(ctx, pool, "river", nil)
+	if err == nil {
+		t.Fatal("CheckSchema() error = nil, want a connection-failure error")
+	}
+	if errors.Is(err, ErrSchemaNotCurrent) {
+		t.Fatalf("CheckSchema() error = %v, want it NOT to be ErrSchemaNotCurrent -- the schema was never actually checked, the connection failed", err)
+	}
+	if !errors.Is(err, ErrSchemaCheckUnavailable) {
+		t.Fatalf("CheckSchema() error = %v, want errors.Is(err, ErrSchemaCheckUnavailable)", err)
 	}
 }
 

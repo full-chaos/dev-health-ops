@@ -24,6 +24,16 @@ var (
 	ErrMigrationConfiguration  = errors.New("invalid River migration role configuration")
 	ErrMigrationFailed         = errors.New("River migration failed")
 	ErrSchemaNotCurrent        = errors.New("River schema is not at the pinned version")
+	// ErrSchemaCheckUnavailable reports that CheckSchema's own query against
+	// the queue-control pool failed -- a connection/pool error (e.g.
+	// CHAOS-5469's pgbouncer pool exhaustion), never a real schema mismatch.
+	// Before this existed, CheckSchema collapsed both causes into
+	// ErrSchemaNotCurrent, which read as "the schema is genuinely wrong" on
+	// a fleet whose schema had never actually been checked -- the readiness
+	// log line and the CHAOS-5435 logDependencyCheckFailure caller both
+	// name the check by its wrapped error text, so this sentinel is what
+	// lets an operator tell "pool exhausted" apart from "run migrate".
+	ErrSchemaCheckUnavailable = errors.New("River schema check could not run")
 )
 
 // TableGrant declares one relation's table-level DML posture for a runtime
@@ -302,6 +312,13 @@ func logMigrationStageFailure(ctx context.Context, logger *slog.Logger, stage st
 }
 
 // CheckSchema is read-only and requires the exact pinned migration prefix.
+// It returns ErrSchemaCheckUnavailable (wrapping the real driver/pool error)
+// when ExistingVersions' own query fails to run at all -- a connection or
+// pool-exhaustion problem, not a schema fact -- and ErrSchemaNotCurrent only
+// when the query ran and the resulting version set is genuinely wrong or
+// incomplete (CHAOS-5469: these two causes used to collapse into the same
+// ErrSchemaNotCurrent, which read as a real schema mismatch on a fleet
+// whose queue-control pool was simply exhausted).
 func CheckSchema(ctx context.Context, pool *pgxpool.Pool, schema string, logger *slog.Logger) (int, error) {
 	if pool == nil || !validIdentifier(schema) {
 		return 0, ErrMigrationConfiguration
@@ -311,7 +328,10 @@ func CheckSchema(ctx context.Context, pool *pgxpool.Pool, schema string, logger 
 		return 0, ErrPinnedMigrationMismatch
 	}
 	versions, err := migrator.ExistingVersions(ctx)
-	if err != nil || len(versions) != PinnedSchemaVersion {
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrSchemaCheckUnavailable, err)
+	}
+	if len(versions) != PinnedSchemaVersion {
 		return 0, ErrSchemaNotCurrent
 	}
 	for index, version := range versions {

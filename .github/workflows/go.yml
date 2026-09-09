@@ -908,11 +908,38 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Checkout dev-health-web main
+      # CHAOS-5406: an operation ADDITION deadlocks the plain "always check
+      # out web's main" form -- it needs a registration in ops and a
+      # manifest entry in web, and neither PR can go green first. A paired
+      # change (same branch name on both repos) resolves that: if this PR's
+      # own branch also exists on dev-health-web, check that out instead of
+      # main, so a paired PR goes green on both sides before either merges.
+      # An unpaired PR still resolves to main, so drift detection between
+      # the two repos' own main branches is unaffected.
+      - name: Resolve dev-health-web ref
+        id: resolve-web-ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BRANCH" ]; then
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          encoded_branch=$(jq -rn --arg v "$BRANCH" '$v | @uri')
+          if gh api "repos/full-chaos/dev-health-web/branches/${encoded_branch}" >/dev/null 2>&1; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+            echo "::notice::graphql-wire-parity: paired branch '$BRANCH' found on dev-health-web; checking it out instead of main"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout dev-health-web
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: full-chaos/dev-health-web
-          ref: main
+          ref: ${{ steps.resolve-web-ref.outputs.ref }}
           path: dev-health-web-main
           persist-credentials: false
 

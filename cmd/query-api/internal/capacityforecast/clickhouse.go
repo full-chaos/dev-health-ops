@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
+	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
 )
 
 // The reads, ported from metrics/capacity_queries.py (the two compute-path
@@ -210,11 +211,16 @@ func scanForecastRow(rows clickhouse.RowScanner) (*model.CapacityForecast, error
 
 	return &model.CapacityForecast{
 		ForecastID: forecastID,
-		// str(datetime) again -- see strDatetimeUTC. clickhouse_connect hands
-		// Python a UTC-aware datetime for this DateTime64(3, 'UTC') column and
-		// the resolver renders it with str(), so the wire carries a space
-		// separator and six fractional digits.
-		ComputedAt:       strDatetimeUTC(computedAt),
+		// CHAOS-5450 / R55. This is the field the 2026-09-07 parity run
+		// caught: clickhouse_connect hands Python a NAIVE datetime for this
+		// DateTime64(3, 'UTC') column and resolvers/capacity.py:24 renders
+		// it with str(), so Python's wire value carries a space separator
+		// and NO offset at all -- while its own singular resolver
+		// (capacity.py:50) stringifies a tz-aware value and does emit one.
+		// Go renders RFC 3339 with an explicit offset on both paths through
+		// the shared helper. Python stays frozen; the difference is the
+		// recorded CHAOS-5450 baseline defect.
+		ComputedAt:       graphqldate.RFC3339UTC(computedAt),
 		TeamID:           teamID,
 		WorkScopeID:      workScopeID,
 		BacklogSize:      int(backlogSize),

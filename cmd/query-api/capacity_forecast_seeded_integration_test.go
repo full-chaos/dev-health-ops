@@ -138,10 +138,13 @@ func TestCapacityForecastsReadsRealColumnTypes(t *testing.T) {
 	}
 
 	// The fixed-scope row: every Nullable(UInt16)/Nullable(UInt32)/Nullable(Date)
-	// column populated, both UInt8 flags read, and computed_at rendered the way
-	// Python's str(datetime) renders it.
-	if oldest.ComputedAt != "2026-08-30 09:00:00+00:00" {
-		t.Errorf("computedAt: got %q, want Python's str(datetime) rendering", oldest.ComputedAt)
+	// column populated, both UInt8 flags read, and computed_at rendered as
+	// RFC 3339 with an explicit offset (CHAOS-5450 / R55) -- this is the
+	// END-TO-END pin for the list path, through a real ClickHouse row rather
+	// than a fake scanner, so the DateTime64(3, 'UTC') scan and the rendering
+	// are proved together.
+	if oldest.ComputedAt != "2026-08-30T09:00:00+00:00" {
+		t.Errorf("computedAt: got %q, want RFC 3339 with an explicit +00:00 offset", oldest.ComputedAt)
 	}
 	if oldest.BacklogSize != 200 {
 		t.Errorf("backlogSize: got %d, want 200", oldest.BacklogSize)

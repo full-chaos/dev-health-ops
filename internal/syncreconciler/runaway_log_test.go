@@ -303,7 +303,15 @@ func TestRunawayLogStateForgetsOnlyWhatItActuallyObserved(t *testing.T) {
 		}
 	})
 
-	t.Run("past the tracking cap a row is emitted, never swallowed", func(t *testing.T) {
+	t.Run("the at-cap condition is reported once, then rate-limited, never per tick", func(t *testing.T) {
+		// Round r1's F2, reproduced by this lane before it was fixed: once the
+		// map is full and the truncated sample ROTATES, every tick presents a
+		// different id the map has no room for. Emitting one line per
+		// untracked ROW gave ten ERROR lines in ten ticks -- the exact storm
+		// this file exists to end, rebuilt through the fail-loud door. The
+		// at-cap CONDITION is one thing however many rows rotate through it,
+		// so it gets one line and its own growing interval; the per-pass
+		// `untracked` count is what keeps those rows from going silent.
 		state := newRunawayLogState()
 		full := make([]RunawayDispatchWakeup, 0, runawayLogMaxTracked)
 		for index := 0; index < runawayLogMaxTracked; index++ {
@@ -312,23 +320,122 @@ func TestRunawayLogStateForgetsOnlyWhatItActuallyObserved(t *testing.T) {
 			})
 		}
 		if emissions, outcome := state.decide(now, full, true, true); len(emissions) != runawayLogMaxTracked ||
-			outcome.Tracked != runawayLogMaxTracked {
-			t.Fatalf("filling the map emitted %d / tracked %d, want %d / %d",
-				len(emissions), outcome.Tracked, runawayLogMaxTracked, runawayLogMaxTracked)
+			outcome.Tracked != runawayLogMaxTracked || outcome.Untracked != 0 {
+			t.Fatalf("filling the map emitted %d / tracked %d / untracked %d, want %d / %d / 0",
+				len(emissions), outcome.Tracked, outcome.Untracked,
+				runawayLogMaxTracked, runawayLogMaxTracked)
 		}
-		// The map is full. The next NEW row cannot be deduplicated, so it must
-		// be reported rather than dropped: a row this code cannot account for
-		// must never be one it silently swallows.
-		overflow := append(append([]RunawayDispatchWakeup(nil), full...),
-			RunawayDispatchWakeup{SyncRunID: "run-overflow", Attempts: 5000})
-		emissions, outcome := state.decide(now.Add(time.Second), overflow, true, true)
-		if len(emissions) != 1 || emissions[0].Reason != runawayLogReasonUntracked ||
-			emissions[0].Wakeup.SyncRunID != "run-overflow" {
-			t.Fatalf("overflow row was not emitted as untracked: %#v", emissions)
+
+		at := now
+		emitted := 0
+		for tick := 0; tick < 10; tick++ {
+			at = at.Add(time.Second)
+			rotating := append(append([]RunawayDispatchWakeup(nil), full...),
+				RunawayDispatchWakeup{SyncRunID: "rotating-" + strconv.Itoa(tick), Attempts: 5000})
+			emissions, outcome := state.decide(at, rotating, true, true)
+			emitted += len(emissions)
+			// Counted on EVERY pass, emitted or not -- this is what makes the
+			// rate limit safe.
+			if outcome.Untracked != 1 {
+				t.Fatalf("tick %d untracked = %d, want 1 (the count must not be rate-limited)",
+					tick, outcome.Untracked)
+			}
+			if tick == 0 {
+				if len(emissions) != 1 || emissions[0].Reason != runawayLogReasonUntracked ||
+					emissions[0].UntrackedRows != 1 {
+					t.Fatalf("first at-cap pass emitted %#v, want one untracked line naming 1 row",
+						emissions)
+				}
+			}
 		}
-		if outcome.Suppressed != runawayLogMaxTracked {
-			t.Fatalf("suppressed = %d, want %d (every already-tracked row)",
-				outcome.Suppressed, runawayLogMaxTracked)
+		if emitted != 1 {
+			t.Fatalf("at-cap condition emitted %d lines across 10 one-second ticks, want 1", emitted)
+		}
+	})
+
+	t.Run("a cleared at-cap condition is reported again when it returns", func(t *testing.T) {
+		state := newRunawayLogState()
+		full := make([]RunawayDispatchWakeup, 0, runawayLogMaxTracked)
+		for index := 0; index < runawayLogMaxTracked; index++ {
+			full = append(full, RunawayDispatchWakeup{
+				SyncRunID: "run-" + strconv.Itoa(index), Attempts: 1344,
+			})
+		}
+		state.decide(now, full, true, true)
+		over := append(append([]RunawayDispatchWakeup(nil), full...),
+			RunawayDispatchWakeup{SyncRunID: "extra", Attempts: 5000})
+		if emissions, _ := state.decide(now.Add(time.Second), over, true, true); len(emissions) != 1 {
+			t.Fatalf("at-cap not reported: %#v", emissions)
+		}
+		// Condition clears...
+		if _, outcome := state.decide(now.Add(2*time.Second), full, true, true); outcome.Untracked != 0 {
+			t.Fatalf("untracked = %d after the condition cleared, want 0", outcome.Untracked)
+		}
+		// ...and returns. It must be reported again rather than waiting out a
+		// stale interval from the previous occurrence.
+		emissions, _ := state.decide(now.Add(3*time.Second), over, true, true)
+		if len(emissions) != 1 || emissions[0].Reason != runawayLogReasonUntracked {
+			t.Fatalf("returning at-cap condition was not reported: %#v", emissions)
+		}
+	})
+
+	t.Run("neither bar can wrap, however long a row stays stuck", func(t *testing.T) {
+		// Round r1's F1, reproduced by this lane before it was fixed: `step`
+		// doubled on every emission with no ceiling, so a permanently stuck
+		// row emitting hourly wrapped int64 to ZERO after ~57 doublings --
+		// and a zero bar is cleared by every row on every tick, including one
+		// whose attempt count is not moving at all. Measured on the unfixed
+		// code: step=0 after 70 emissions, then ten lines in ten ticks with
+		// attempts STATIC. Both bars now saturate instead of wrapping.
+		state := newRunawayLogState()
+		id := "run-a"
+		at := now
+		stuckAt := int64(1344)
+		wake := func() []RunawayDispatchWakeup {
+			return []RunawayDispatchWakeup{{SyncRunID: id, Attempts: stuckAt}}
+		}
+		state.decide(at, wake(), false, true)
+		for emission := 0; emission < 200; emission++ {
+			at = at.Add(2 * time.Hour)
+			state.decide(at, wake(), false, true)
+			entry := state.entries[id]
+			if entry.step <= 0 || entry.interval <= 0 {
+				t.Fatalf("a bar wrapped after %d emissions: step=%d interval=%s",
+					emission+1, entry.step, entry.interval)
+			}
+			if entry.step > runawayLogMaxAttemptsStep || entry.interval > runawayLogMaxInterval {
+				t.Fatalf("a bar passed its ceiling after %d emissions: step=%d interval=%s",
+					emission+1, entry.step, entry.interval)
+			}
+		}
+		// A static row must now be silent whatever happened above.
+		emitted := 0
+		for tick := 0; tick < 10; tick++ {
+			at = at.Add(time.Second)
+			emissions, _ := state.decide(at, wake(), false, true)
+			emitted += len(emissions)
+		}
+		if emitted != 0 {
+			t.Fatalf("a STATIC row emitted %d lines in 10 ticks after 200 emissions", emitted)
+		}
+	})
+
+	t.Run("the interval saturates at its ceiling", func(t *testing.T) {
+		// Round r1's F3: the interval-cap branch had no test reaching it.
+		state := newRunawayLogState()
+		id := "run-a"
+		at := now
+		wake := []RunawayDispatchWakeup{{SyncRunID: id, Attempts: 1344}}
+		state.decide(at, wake, false, true)
+		for emission := 0; emission < 20; emission++ {
+			at = at.Add(2 * runawayLogMaxInterval)
+			state.decide(at, wake, false, true)
+		}
+		if got := state.entries[id].interval; got != runawayLogMaxInterval {
+			t.Fatalf("interval = %s after 20 emissions, want the ceiling %s", got, runawayLogMaxInterval)
+		}
+		if got := state.entries[id].step; got != runawayLogMaxAttemptsStep {
+			t.Fatalf("step = %d after 20 emissions, want the ceiling %d", got, runawayLogMaxAttemptsStep)
 		}
 	})
 

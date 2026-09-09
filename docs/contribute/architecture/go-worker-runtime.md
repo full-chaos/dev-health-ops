@@ -922,9 +922,16 @@ The fix is structural, not a bigger number:
   `syncreconciler.runaway_dispatch_pass` states `total` / `sampled` /
   `truncated` / `emitted` / `suppressed` / `tracked` on every pass, zeros
   included, so every withheld ERROR is accounted for. Both bars — the interval
-  and the attempts step — double on every re-emission; growing only the
-  interval leaves the storm intact through the attempts branch, which never
-  consults it. A row is forgotten only when a report actually **delivered** and
+  and the attempts step — double on every re-emission and **saturate at a
+  ceiling rather than wrapping**; growing only the interval leaves the storm
+  intact through the attempts branch, which never consults it, and an
+  UNCAPPED step wraps int64 to zero after ~57 doublings, which turns the
+  anti-storm bar into a guarantee of the storm (a zero bar is cleared by every
+  row on every tick, including a static one). The at-cap condition — the
+  tracking map full while a truncated sample rotates new ids through it — is
+  reported as ONE condition on its own growing interval, never once per row,
+  and its `untracked` count is on the per-pass line every pass so rate-limiting
+  the ERROR cannot make an untracked row silent. A row is forgotten only when a report actually **delivered** and
   was not truncated (an aborted tick, a faulted statement or a truncated sample
   are not evidence a row cleared), with a six-hour TTL as the backstop and a
   hard tracking cap past which a row is emitted rather than swallowed. No write

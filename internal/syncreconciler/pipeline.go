@@ -842,6 +842,7 @@ func (pipeline *MutationPipeline) Step(
 			"truncated", materialized.RunawayTruncated,
 			"reason", emission.Reason,
 			"state", emission.State,
+			"untracked_rows", emission.UntrackedRows,
 		)
 	}
 	// Every pass, zeros included -- the contract ready_finalize_pass and
@@ -856,6 +857,7 @@ func (pipeline *MutationPipeline) Step(
 		"emitted", runawayOutcome.Emitted,
 		"suppressed", runawayOutcome.Suppressed,
 		"tracked", runawayOutcome.Tracked,
+		"untracked", runawayOutcome.Untracked,
 		"threshold", runawayDispatchAttempts,
 		"report_step", materialized.RunawayReportStep,
 		"report_delivered", reportDelivered,

@@ -445,3 +445,126 @@ func TestWriteAtomicCommitsBothRows(t *testing.T) {
 		}
 	}
 }
+
+// Round 2's F3, both directions, against a real database.
+//
+// Receipts used to commit as each operation finished, before the run-level
+// build-stability check ran -- so a build that moved mid-run left
+// already-committed `match` receipts behind, eligible for enablement,
+// describing a build that was not serving for all of the run. Nothing rolled
+// them back.
+//
+// The run is now buffered and nothing is written until stability holds. When
+// it does not: ZERO match receipts, and one `proof_failed` row per measured
+// operation so the run is visible rather than silently empty.
+func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	// One operation was measured and matched before the build moved.
+	outcomes := []Outcome{{
+		Operation:      "featureFlags",
+		DocumentDigest: testDocumentDigest,
+		Route:          RouteEdge,
+		Executed:       true,
+		Admitted:       true,
+		TerminalState:  TerminalStateMatch,
+	}}
+	runner := &Runner{
+		Registry: RegistryView{SchemaDigest: testSchemaDigest, BuildIdentity: testCandidateBuild},
+		Config:   Config{OrgID: "70d529e0", Window: DefaultWindow(), RecordedBy: "test", ReviewEvidence: "why"},
+	}
+
+	receipts, err := runner.RefusalReceipts(outcomes, time.Now().UTC(),
+		"the serving build moved DURING the run (build-before -> build-after)")
+	if err != nil {
+		t.Fatalf("RefusalReceipts: %v", err)
+	}
+	written, err := WriteReceipts(ctx, pool, receipts)
+	if err != nil {
+		t.Fatalf("WriteReceipts: %v", err)
+	}
+	if written != 1 {
+		t.Fatalf("the run must stay visible: wrote %d rows, want 1", written)
+	}
+
+	// ZERO rows may satisfy the enablement predicate.
+	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
+		map[string]string{"featureFlags": testDocumentDigest})
+	if err != nil {
+		t.Fatalf("OperationsWithEnablementProof: %v", err)
+	}
+	if len(found) != 0 {
+		t.Fatalf("a run whose build moved must authorize nothing, got %v", found)
+	}
+
+	var state, evidence string
+	if err := pool.QueryRow(ctx,
+		`SELECT terminal_state, review_evidence FROM go_api_proof_run WHERE selected_operation = 'featureFlags'`,
+	).Scan(&state, &evidence); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if state != "proof_failed" {
+		t.Fatalf("the recorded state must say the PROOF failed, got %q", state)
+	}
+	if !strings.Contains(evidence, "moved DURING the run") || !strings.Contains(evidence, "1 of 1") {
+		t.Fatalf("the row must name the cause and the counts, got %q", evidence)
+	}
+}
+
+// The control: with a stable build the same outcome DOES produce a match
+// receipt that satisfies the predicate. Without this, the test above would
+// pass on an instrument that never writes anything at all.
+func TestAStableBuildStillProducesAnEnablingReceipt(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	outcomes := []Outcome{{
+		Operation:      "featureFlags",
+		DocumentDigest: testDocumentDigest,
+		Route:          RouteEdge,
+		Executed:       true,
+		Admitted:       true,
+		TerminalState:  TerminalStateMatch,
+	}}
+	runner := &Runner{
+		Registry: RegistryView{SchemaDigest: testSchemaDigest, BuildIdentity: testCandidateBuild},
+		Config:   Config{OrgID: "70d529e0", Window: DefaultWindow(), RecordedBy: "test", ReviewEvidence: "why"},
+	}
+
+	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if _, err := WriteReceipts(ctx, pool, receipts); err != nil {
+		t.Fatalf("WriteReceipts: %v", err)
+	}
+
+	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
+		map[string]string{"featureFlags": testDocumentDigest})
+	if err != nil {
+		t.Fatalf("OperationsWithEnablementProof: %v", err)
+	}
+	if !found["featureFlags"] {
+		t.Fatal("a stable run must still be able to authorize an enablement")
+	}
+}
+
+// A refusal receipt is written only for operations that were MEASURED. A
+// run that refused everything writes nothing, because there is no
+// measurement whose result is being withheld.
+func TestRefusalReceiptsCoverOnlyMeasuredOperations(t *testing.T) {
+	runner := &Runner{
+		Registry: RegistryView{SchemaDigest: testSchemaDigest, BuildIdentity: testCandidateBuild},
+		Config:   Config{OrgID: "70d529e0", Window: DefaultWindow()},
+	}
+	receipts, err := runner.RefusalReceipts([]Outcome{
+		{Operation: "featureFlags", DocumentDigest: testDocumentDigest, Route: RouteEdge, Executed: false, RefusalReason: RefusalPlaneUnidentified},
+	}, time.Now().UTC(), "build moved")
+	if err != nil {
+		t.Fatalf("RefusalReceipts: %v", err)
+	}
+	if len(receipts) != 0 {
+		t.Fatalf("an unmeasured operation has no result to withhold, got %d receipt(s)", len(receipts))
+	}
+}

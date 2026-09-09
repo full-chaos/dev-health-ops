@@ -61,7 +61,7 @@ func (e *cEdge) run(t *testing.T, mode string, viaProofRoute bool) []Outcome {
 	} else {
 		runner.Config.PythonEdgeURL = server.URL
 	}
-	outcomes, _, _ := runner.Run(context.Background(), nil)
+	outcomes, _, _ := runner.Run(context.Background())
 	return outcomes
 }
 

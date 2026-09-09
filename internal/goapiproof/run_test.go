@@ -86,7 +86,7 @@ func TestRunRecordsAMatchWhenBothPlanesAgree(t *testing.T) {
 	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
 	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "canary")
 
-	outcomes, summary, err := runner.Run(context.Background(), nil)
+	outcomes, summary, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestRunSendsTheRegisteredDocumentUnmodified(t *testing.T) {
 	body := `{"data":{"featureFlags":[]}}`
 	edge := &fakeEdge{goBody: body, pythonBody: body}
 	runner := newRunner(t, edge, "canary")
-	if _, _, err := runner.Run(context.Background(), nil); err != nil {
+	if _, _, err := runner.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	registered := runner.Documents["featureFlags"]
@@ -132,7 +132,7 @@ func TestRunRefusesWhenTheEdgeFellBackToPython(t *testing.T) {
 	body := `{"data":{"featureFlags":[]}}`
 	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body, goPlane: "python"}, "canary")
 
-	outcomes, summary, err := runner.Run(context.Background(), nil)
+	outcomes, summary, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("a run whose only operation fell back measured nothing: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestRunRefusesShadowWithoutAMeasurementRoute(t *testing.T) {
 	body := `{"data":{"featureFlags":[]}}`
 	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "shadow")
 
-	outcomes, _, err := runner.Run(context.Background(), nil)
+	outcomes, _, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("expected ErrNothingMeasured, got %v", err)
 	}
@@ -169,7 +169,7 @@ func TestRunRefusesAnOperationThatIsNotRoutedToGo(t *testing.T) {
 	for _, mode := range []string{"python", "disabled", ""} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, mode)
-			outcomes, _, err := runner.Run(context.Background(), nil)
+			outcomes, _, err := runner.Run(context.Background())
 			if !errors.Is(err, ErrNothingMeasured) {
 				t.Fatalf("expected ErrNothingMeasured, got %v", err)
 			}
@@ -186,7 +186,7 @@ func TestRunFailsWhenNothingWasMeasured(t *testing.T) {
 	body := `{"data":{"featureFlags":[]}}`
 	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "python")
 
-	_, summary, err := runner.Run(context.Background(), nil)
+	_, summary, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("expected ErrNothingMeasured, got %v", err)
 	}
@@ -205,7 +205,7 @@ func TestRunRecordsAMismatchWhenThePlanesDisagree(t *testing.T) {
 			pythonBody: `{"data":{"featureFlags":[{"key":"b"}]}}`,
 		}, "canary")
 
-	outcomes, summary, err := runner.Run(context.Background(), nil)
+	outcomes, summary, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("a recorded mismatch is a SUCCESSFUL measurement, not a run error: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestRunTreatsAStatusCodeDifferenceAsAMismatch(t *testing.T) {
 	body := `{"data":{"featureFlags":[]}}`
 	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body, goStatus: http.StatusAccepted}, "canary")
 
-	outcomes, _, err := runner.Run(context.Background(), nil)
+	outcomes, _, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestRunRefusesOnAStaleDeclaredExclusion(t *testing.T) {
 	runner.Registry.DocumentDigest = map[string]string{"capacityForecast": "b4fb8f07"}
 	runner.Routing = map[string]RoutingRow{"capacityForecast": {Mode: "canary"}}
 
-	outcomes, _, err := runner.Run(context.Background(), nil)
+	outcomes, _, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("expected the run to measure nothing, got %v", err)
 	}
@@ -268,7 +268,7 @@ func TestRunRefusesAnOperationWithNoLocalDocument(t *testing.T) {
 	runner.Registry.DocumentDigest["hotspots"] = "6ccfcc78"
 	runner.Routing["hotspots"] = RoutingRow{Mode: "canary"}
 
-	outcomes, summary, err := runner.Run(context.Background(), nil)
+	outcomes, summary, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("expected ErrNothingMeasured, got %v", err)
 	}
@@ -392,7 +392,7 @@ func TestShadowCandidateWithNoPlaneEvidenceIsRefused(t *testing.T) {
 	t.Cleanup(bogus.Close)
 	runner.Config.GoProofURL = bogus.URL
 
-	outcomes, _, err := runner.Run(context.Background(), nil)
+	outcomes, _, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("a candidate with no plane evidence measured nothing, got %v", err)
 	}
@@ -410,7 +410,7 @@ func TestBaselineWithNoPlaneEvidenceIsRefused(t *testing.T) {
 		baselinePlane:  "", // header suppressed
 	}, "canary")
 
-	outcomes, _, err := runner.Run(context.Background(), nil)
+	outcomes, _, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("an unidentified baseline measured nothing, got %v", err)
 	}
@@ -432,7 +432,7 @@ func TestIdenticalErrorsAreRefusedNotExecuted(t *testing.T) {
 		body: errBody, candidatePlane: "go", baselinePlane: "python",
 	}, "canary")
 
-	outcomes, summary, err := runner.Run(context.Background(), nil)
+	outcomes, summary, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("an errored pair measured nothing, got %v", err)
 	}
@@ -454,7 +454,7 @@ func TestCandidateWithNoDataIsRefused(t *testing.T) {
 		body: `{"data":null}`, candidatePlane: "go", baselinePlane: "python",
 	}, "canary")
 
-	outcomes, _, err := runner.Run(context.Background(), nil)
+	outcomes, _, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("a data-less candidate measured nothing, got %v", err)
 	}
@@ -475,7 +475,7 @@ func TestContentTypeDivergenceIsAMismatch(t *testing.T) {
 		candidateType: "application/problem+json", baselineType: "application/json",
 	}, "canary")
 
-	outcomes, _, err := runner.Run(context.Background(), nil)
+	outcomes, _, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -501,7 +501,7 @@ func TestServingBuildMustMatchTheNamedBuild(t *testing.T) {
 		candidateBuild: "some-other-build",
 	}, "canary")
 
-	outcomes, _, err := runner.Run(context.Background(), nil)
+	outcomes, _, err := runner.Run(context.Background())
 	if !errors.Is(err, ErrNothingMeasured) {
 		t.Fatalf("a build mismatch measured nothing, got %v", err)
 	}
@@ -519,7 +519,7 @@ func TestServingBuildAgreementStillMatches(t *testing.T) {
 		candidateBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36",
 	}, "canary")
 
-	outcomes, _, err := runner.Run(context.Background(), nil)
+	outcomes, _, err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

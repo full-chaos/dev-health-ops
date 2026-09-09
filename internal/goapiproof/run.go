@@ -214,13 +214,25 @@ type Runner struct {
 // drops the failure signal.
 var ErrNothingMeasured = errors.New("goapiproof: no operation was executed -- this run measured NOTHING")
 
-// Run executes every registered operation and returns one Outcome each
-// plus the summary. It writes receipts through db when db is non-nil.
+// Run executes every registered operation and returns one Outcome each plus
+// the summary. It WRITES NOTHING.
+//
+// Receipt writing is a separate, later phase on purpose (round 2's F3).
+// Receipts used to commit as each operation finished, before the run-level
+// build-stability check had a chance to run -- so a build that moved
+// mid-run left already-committed match receipts behind, eligible for
+// enablement, describing a build that was not serving for all of the run.
+// Nothing rolled them back and the run error did not reach them. That is
+// the same false-proof class as every finding before it: something
+// certified while a condition it depends on was never established.
+//
+// So the whole run is buffered, everything it depends on is verified, and
+// only then is anything written -- see WriteReceipts and RefusalReceipts.
 //
 // The returned error is non-nil when the RUN itself is not trustworthy
 // (nothing measured, or a refusal with no named reason). A recorded
 // MISMATCH is not an error: it is the measurement succeeding.
-func (r *Runner) Run(ctx context.Context, db Querier) ([]Outcome, Summary, error) {
+func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 	now := r.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -255,35 +267,6 @@ func (r *Runner) Run(ctx context.Context, db Querier) ([]Outcome, Summary, error
 			summary.ByRefusalReason[outcome.RefusalReason]++
 		}
 
-		if outcome.Executed && db != nil {
-			receipt := Receipt{
-				SchemaDigest:                     r.Registry.SchemaDigest,
-				DocumentDigest:                   outcome.DocumentDigest,
-				SelectedOperation:                operation,
-				CandidateBuild:                   r.Registry.BuildIdentity,
-				Stage:                            Stage,
-				TerminalState:                    outcome.TerminalState,
-				OrgID:                            r.Config.OrgID,
-				ReviewEvidence:                   r.Config.ReviewEvidence,
-				RecordedBy:                       r.Config.RecordedBy,
-				ObservedAt:                       now(),
-				BaselineResponseRef:              observationRef(outcome.Baseline),
-				CandidateResponseRef:             observationRef(outcome.Candidate),
-				MeasurementRoute:                 outcome.Route,
-				BaselineDefects:                  outcome.BaselineDefects,
-				DifferencesOutsideBaselineDefect: outcome.DifferencesOutsideBaselineDefect,
-			}
-			identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(operation))
-			if err != nil {
-				return outcomes, summary, err
-			}
-			receipt.RequestIdentity = identity
-			if _, err := WriteAtomic(ctx, db, receipt); err != nil {
-				return outcomes, summary, err
-			}
-			outcome.ReceiptWritten = true
-			summary.ReceiptsWritten++
-		}
 		outcomes = append(outcomes, outcome)
 	}
 
@@ -291,6 +274,107 @@ func (r *Runner) Run(ctx context.Context, db Querier) ([]Outcome, Summary, error
 		return outcomes, summary, ErrNothingMeasured
 	}
 	return outcomes, summary, nil
+}
+
+// ReceiptsFor turns the buffered outcomes into the receipts they justify.
+//
+// Only ADMITTED outcomes produce a receipt: a refusal is a measurement that
+// did not happen, and the run report is where those are visible.
+func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receipt, error) {
+	receipts := make([]Receipt, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		if !outcome.Executed {
+			continue
+		}
+		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
+		if err != nil {
+			return nil, err
+		}
+		receipts = append(receipts, Receipt{
+			SchemaDigest:                     r.Registry.SchemaDigest,
+			DocumentDigest:                   outcome.DocumentDigest,
+			SelectedOperation:                outcome.Operation,
+			CandidateBuild:                   r.Registry.BuildIdentity,
+			RequestIdentity:                  identity,
+			Stage:                            Stage,
+			TerminalState:                    outcome.TerminalState,
+			OrgID:                            r.Config.OrgID,
+			ReviewEvidence:                   r.Config.ReviewEvidence,
+			RecordedBy:                       r.Config.RecordedBy,
+			ObservedAt:                       observedAt,
+			BaselineResponseRef:              observationRef(outcome.Baseline),
+			CandidateResponseRef:             observationRef(outcome.Candidate),
+			MeasurementRoute:                 outcome.Route,
+			BaselineDefects:                  outcome.BaselineDefects,
+			DifferencesOutsideBaselineDefect: outcome.DifferencesOutsideBaselineDefect,
+		})
+	}
+	return receipts, nil
+}
+
+// RefusalReceipts is what a run writes when the build moved underneath it.
+//
+// NO match receipt is written -- every outcome the run produced described a
+// build that was not serving for all of it. But writing nothing at all
+// would leave the run invisible, indistinguishable from one that never
+// happened, so each operation the run reached gets a `proof_failed` receipt
+// naming the cause and the counts.
+//
+// `proof_failed` rather than a new `refused` state: the terminal-state
+// vocabulary is fixed by the signed plan and enforced by a CHECK
+// constraint, and `proof_failed` already means exactly this -- the proof,
+// not the operation, is what failed. A per-operation row rather than one
+// run-level row for a structural reason: go_api_proof_run carries a
+// 4-column composite FK to go_api_candidate_build, so a row that named no
+// operation could not be written without inventing one.
+func (r *Runner) RefusalReceipts(outcomes []Outcome, observedAt time.Time, cause string) ([]Receipt, error) {
+	admitted := 0
+	for _, outcome := range outcomes {
+		if outcome.Executed {
+			admitted++
+		}
+	}
+	evidence := fmt.Sprintf(
+		"run refused: %s. %d of %d operation(s) had been measured and none of their results were written; this row records that the run happened and certified nothing. Operator note: %s",
+		cause, admitted, len(outcomes), r.Config.ReviewEvidence)
+
+	receipts := make([]Receipt, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		if !outcome.Executed {
+			continue
+		}
+		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
+		if err != nil {
+			return nil, err
+		}
+		receipts = append(receipts, Receipt{
+			SchemaDigest:      r.Registry.SchemaDigest,
+			DocumentDigest:    outcome.DocumentDigest,
+			SelectedOperation: outcome.Operation,
+			CandidateBuild:    r.Registry.BuildIdentity,
+			RequestIdentity:   identity,
+			Stage:             Stage,
+			TerminalState:     "proof_failed",
+			OrgID:             r.Config.OrgID,
+			ReviewEvidence:    evidence,
+			RecordedBy:        r.Config.RecordedBy,
+			ObservedAt:        observedAt,
+			MeasurementRoute:  outcome.Route,
+		})
+	}
+	return receipts, nil
+}
+
+// WriteReceipts writes a whole run's receipts, each atomically.
+func WriteReceipts(ctx context.Context, db Querier, receipts []Receipt) (int, error) {
+	written := 0
+	for _, receipt := range receipts {
+		if _, err := WriteAtomic(ctx, db, receipt); err != nil {
+			return written, err
+		}
+		written++
+	}
+	return written, nil
 }
 
 func observationRef(observation *Observation) string {

@@ -230,17 +230,38 @@ func run() error {
 		},
 	}
 
-	var db goapiproof.Querier
-	if pool != nil {
-		db = pool
-	}
-	outcomes, summary, runErr := runner.Run(ctx, db)
+	outcomes, summary, runErr := runner.Run(ctx)
 
-	// Re-read the build AFTER the run: every receipt just written names
-	// registry.BuildIdentity, and this is what shows that build was still
-	// the one answering when the last one was written. See VerifyBuildStable
-	// for exactly what this does and does not close.
-	if stabilityErr := goapiproof.VerifyBuildStable(ctx, client, f.buildInfoURL, authHeaders, registry.BuildIdentity); stabilityErr != nil {
+	// NOTHING has been written yet, and nothing will be until the build is
+	// shown to have held for the whole run (round 2's F3). Receipts used to
+	// commit as each operation finished, so a build that moved mid-run left
+	// already-committed match receipts behind, enablement-eligible,
+	// describing a build that was not serving for all of it.
+	observedAt := time.Now().UTC()
+	stabilityErr := goapiproof.VerifyBuildStable(ctx, client, f.buildInfoURL, authHeaders, registry.BuildIdentity)
+
+	var receipts []goapiproof.Receipt
+	var receiptErr error
+	switch {
+	case stabilityErr != nil:
+		// No match receipt may be written -- but writing nothing would make
+		// the run invisible, indistinguishable from one that never ran.
+		receipts, receiptErr = runner.RefusalReceipts(outcomes, observedAt, stabilityErr.Error())
+	default:
+		receipts, receiptErr = runner.ReceiptsFor(outcomes, observedAt)
+	}
+	if receiptErr != nil {
+		return receiptErr
+	}
+
+	if !f.dryRun && pool != nil {
+		written, err := goapiproof.WriteReceipts(ctx, pool, receipts)
+		summary.ReceiptsWritten = written
+		if err != nil {
+			return fmt.Errorf("writing receipts after a completed run: %w", err)
+		}
+	}
+	if stabilityErr != nil {
 		if runErr == nil {
 			runErr = stabilityErr
 		} else {

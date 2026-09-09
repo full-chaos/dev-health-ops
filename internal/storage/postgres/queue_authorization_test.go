@@ -32,6 +32,15 @@ func TestQueueAuthorizationRejectsMissingOrUnavailablePool(t *testing.T) {
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("CheckQueueAuthorization() error = %v", err)
 	}
+	// The query never RAN here (unroutable host, millisecond timeout), so
+	// this must NOT read as a posture refusal: "the database is
+	// unreachable" and "the database says this role's grants are wrong"
+	// are different operator actions, and collapsing them is exactly what
+	// left workerctl's runtime_role_unauthorized unable to say which of
+	// its three checks had failed or why.
+	if errors.Is(err, ErrPostureRefused) {
+		t.Fatalf("an unanswered posture query reported ErrPostureRefused: %v", err)
+	}
 	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), config.URI) {
 		t.Fatalf("authorization readiness exposed connection material: %v", err)
 	}

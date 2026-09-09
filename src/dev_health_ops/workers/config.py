@@ -41,13 +41,12 @@ late_ack_excluded_tasks = (
     # and Celery Beat has not scheduled them since the 2026-08-19 stop.
     # dispatch_scheduled_syncs stays (see beat_schedule's header comment).
     "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
-    "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
     "dev_health_ops.workers.tasks.phone_home_heartbeat",
-    # CHAOS-2699's debounced recompute flush task. Valkey's SETNX debounce
-    # guard is the durability/dedup layer here, not Celery's acks-late
-    # redelivery -- reuses the existing `default` queue, no task_queues/compose
-    # change needed.
-    "dev_health_ops.workers.tasks.flush_external_ingest_recompute",
+    # CHAOS-3093: dispatch_investment_materialize_partitioned (workers/
+    # work_graph_tasks.py) and flush_external_ingest_recompute (workers/
+    # external_ingest_recompute.py) were both deleted outright -- dead-into-
+    # the-void, no Celery consumer since 2026-08-19 -- so neither registers
+    # with the Celery app any more and both were removed from this tuple.
 )
 task_annotations = {
     task_name: {"acks_late": False, "reject_on_worker_lost": False}

@@ -1332,12 +1332,12 @@
       "notes": "grep-evading form; reconciler repair redrive"
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:180",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:179",
       "surface": "dispatch-scheduled-syncs",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 180
+        "line": 179
       },
       "queue_or_cadence": "300s",
       "dispatches": "dispatch_scheduled_syncs",
@@ -1356,12 +1356,12 @@
       "notes": ""
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:185",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:184",
       "surface": "reconcile-sync-dispatch",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 185
+        "line": 184
       },
       "queue_or_cadence": "60s",
       "dispatches": "reconcile_sync_dispatch",
@@ -1380,12 +1380,12 @@
       "notes": "checkedInReconcilerActivation.syncMutation=true activates the continuous Go reconcile loop; Celery Beat is not required for native sync-dispatch progress"
     },
     {
-      "id": "beat_entry:src/dev_health_ops/workers/config.py:195",
+      "id": "beat_entry:src/dev_health_ops/workers/config.py:194",
       "surface": "prune-rate-limit-observations",
       "class": "beat_entry",
       "source": {
         "file": "src/dev_health_ops/workers/config.py",
-        "line": 195
+        "line": 194
       },
       "queue_or_cadence": "crontab(hour=5,minute=0) UTC",
       "dispatches": "prune_rate_limit_observations",

@@ -39,6 +39,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -46,7 +47,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -55,9 +58,29 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
-// bearerEnvVar names the environment variable carrying the edge bearer
-// token. The VALUE never appears in output; only this NAME does.
-const bearerEnvVar = "GO_API_PROVE_BEARER"
+// The two credential environment variables. VALUES never appear in
+// output; only these NAMES do.
+//
+// There are two because the two planes accept different credential KINDS,
+// measured on the deployed stack (JOB 4, 2026-09-09): an access token gets
+// HTTP 200 on the Python edge and 401 on /buildinfo; an effective-principal
+// envelope gets the reverse. GO_API_PROVE_BEARER keeps its old name and
+// its old meaning -- the EDGE token -- so an existing invocation does not
+// silently change which plane it authenticates.
+const (
+	edgeBearerEnvVar  = "GO_API_PROVE_BEARER"
+	proofBearerEnvVar = "GO_API_PROVE_PROOF_BEARER"
+)
+
+// proofCredentialFreshness is how long a minted envelope is reused before
+// a fresh one is requested.
+//
+// ENVELOPE_DEFAULT_TTL_SECONDS is 60 (principal_envelope.py:96). 25
+// seconds leaves 35 for the request to reach the server and be verified,
+// so no request is ever sent carrying a value already near expiry -- which
+// is how JOB 4's attempt B failed, at the CLOSING /buildinfo, after every
+// measurement had already been taken.
+const proofCredentialFreshness = 25 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -81,6 +104,7 @@ type flags struct {
 	principalKind  string
 	audience       string
 	keyID          string
+	proofBearerCmd string
 	dryRun         bool
 	timeout        time.Duration
 	window         goapiproof.Window
@@ -95,6 +119,7 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written (team-lead ruling R51)")
 	flag.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	flag.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
+	flag.StringVar(&f.proofBearerCmd, "proof-bearer-command", "", "shell command printing a FRESH effective-principal envelope on stdout, re-run as the previous one ages out; required when the envelope's TTL is shorter than the run (it is: 60s). The command line is echoed on failure, so put no secret in it -- point it at a credential the command itself reads")
 	flag.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file cmd/query-api/query_route.go` JSON output (required)")
 	flag.StringVar(&f.postgresURI, "postgres-uri", os.Getenv("POSTGRES_URI"), "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
 	flag.StringVar(&f.orgID, "org", "", "org id every request is made for (required)")
@@ -140,15 +165,13 @@ func run() error {
 		return err
 	}
 
-	bearer := os.Getenv(bearerEnvVar)
-	if bearer == "" {
-		return fmt.Errorf("no bearer token: set %s (the VALUE is never printed by this command)", bearerEnvVar)
-	}
-
 	ctx := context.Background()
 	client := &http.Client{Timeout: f.timeout}
 
-	authHeaders := map[string]string{"Authorization": "Bearer " + bearer}
+	edgeCredential, proofCredential, err := credentials(f)
+	if err != nil {
+		return err
+	}
 
 	registry, err := goapiproof.FetchRegistry(ctx, client, f.registryURL)
 	if err != nil {
@@ -161,7 +184,7 @@ func run() error {
 	// one naming an unverifiable build is worse than none (CHAOS-5425
 	// acceptance, 2026-09-08: "Do not construct a receipt from a digest or
 	// an arbitrary build name").
-	registry.BuildIdentity, err = goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, authHeaders)
+	registry.BuildIdentity, err = goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, proofCredential)
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
 			return fmt.Errorf("%w\n  the deployed query-api must identify its build at %s before any receipt can be written", err, f.buildInfoURL)
@@ -203,8 +226,23 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, f.candidateBuild, routing); err != nil {
+	// The operator cross-check stays a HARD refusal: a typed sha that is
+	// not the running build is an operator error, and continuing past it
+	// would produce receipts nobody asked for.
+	if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, f.candidateBuild); err != nil {
 		return err
+	}
+	// Rows naming an older build are REPORTED, not refused -- see
+	// StaleRoutingRows for why the comparison never protected what its
+	// refusal claimed to. Printed before the run so an operator reading a
+	// surprising report knows the enablement record was out of date when
+	// it was taken.
+	if stale := goapiproof.StaleRoutingRows(registry.BuildIdentity, routing); len(stale) > 0 {
+		fmt.Printf("go-api-prove: NOTE %d routing row(s) name a build the running process is not (running=%s).\n", len(stale), registry.BuildIdentity)
+		fmt.Println("go-api-prove:   this does not affect what is measured -- reachability is decided by mode, not by current_candidate_build, and every receipt names the build read from /buildinfo. It means the enablement record is stale.")
+		for _, operation := range sortedKeys(stale) {
+			fmt.Printf("go-api-prove:   %s -> row names %s\n", operation, stale[operation])
+		}
 	}
 
 	runner := &goapiproof.Runner{
@@ -214,11 +252,12 @@ func run() error {
 		Routing:   routing,
 		Artifacts: artifacts,
 		Config: goapiproof.Config{
-			OrgID:         f.orgID,
-			Window:        f.window,
-			PythonEdgeURL: f.edgeURL,
-			GoProofURL:    f.proofURL,
-			Headers:       authHeaders,
+			OrgID:           f.orgID,
+			Window:          f.window,
+			PythonEdgeURL:   f.edgeURL,
+			GoProofURL:      f.proofURL,
+			EdgeCredential:  edgeCredential,
+			ProofCredential: proofCredential,
 			Auth: goapiproof.AuthContext{
 				PrincipalKind: f.principalKind,
 				Audience:      f.audience,
@@ -238,7 +277,7 @@ func run() error {
 	// already-committed match receipts behind, enablement-eligible,
 	// describing a build that was not serving for all of it.
 	observedAt := time.Now().UTC()
-	stabilityErr := goapiproof.VerifyBuildStable(ctx, client, f.buildInfoURL, authHeaders, registry.BuildIdentity)
+	stabilityErr := goapiproof.VerifyBuildStable(ctx, client, f.buildInfoURL, proofCredential, registry.BuildIdentity)
 
 	var receipts []goapiproof.Receipt
 	var receiptErr error
@@ -282,7 +321,7 @@ func run() error {
 	// a failed run's evidence is exactly what an operator needs, and a
 	// command that swallows its own output on failure is the "report the
 	// problem and return" trap D15/R4 names.
-	if err := emitReport(f, registry, outcomes, summary); err != nil {
+	if err := emitReport(f, registry, outcomes, summary, proofCredential); err != nil {
 		return err
 	}
 	return runErr
@@ -346,15 +385,17 @@ type report struct {
 // measured nothing" and "prove measured everything and found nothing
 // wrong" are different facts, and the shape of the output must never let
 // them look alike.
-func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof.Outcome, summary goapiproof.Summary) error {
+func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof.Outcome, summary goapiproof.Summary, proofCredential *goapiproof.Credential) error {
 	fmt.Printf("go-api-prove: schema_digest=%s candidate_build=%s stage=%s org=%s\n",
 		registry.SchemaDigest, registry.BuildIdentity, goapiproof.Stage, f.orgID)
 	// admitted is printed alongside the others, including when it is zero:
 	// it is the count that says whether anything got past the preconditions
 	// at all, and "nothing was admissible" reads nothing like "everything
 	// matched" once it is on the line.
-	fmt.Printf("go-api-prove: attempted=%d admitted=%d executed=%d refused=%d receipts_written=%d\n",
-		summary.Attempted, summary.Admitted, summary.Executed, summary.Refused, summary.ReceiptsWritten)
+	// stale_routing_rows is printed even at zero, like every other counter
+	// here: "no row was stale" and "nobody looked" must not read alike.
+	fmt.Printf("go-api-prove: attempted=%d admitted=%d executed=%d refused=%d receipts_written=%d stale_routing_rows=%d\n",
+		summary.Attempted, summary.Admitted, summary.Executed, summary.Refused, summary.ReceiptsWritten, summary.StaleRoutingRows)
 	proofURL := f.proofURL
 	if proofURL == "" {
 		proofURL = "(none: shadow-mode operations cannot be measured in this deployment)"
@@ -405,11 +446,73 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	return nil
 }
 
-func sortedKeys(counts map[string]int) []string {
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// credentials builds the two credential sources, one per plane.
+//
+// The edge token is static: an access token outlives any run. The proof
+// credential is normally MINTED, because the effective-principal envelope
+// it needs lives 60 seconds and a fifteen-operation run does not fit in
+// that. Go cannot mint one itself -- issue_effective_principal_envelope
+// needs the envelope signing private key and a database-authenticated
+// user, and nothing exposes it to an external caller -- so the minting
+// stays outside this process behind an operator-supplied command.
+//
+// A static proof bearer is still accepted, because it is the right shape
+// for a one-operation run and for a test, but it is exactly what failed
+// on the real stack; the refusal below says so rather than letting a
+// second operator rediscover it at the closing /buildinfo.
+func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
+	edgeBearer := os.Getenv(edgeBearerEnvVar)
+	if edgeBearer == "" {
+		return nil, nil, fmt.Errorf("no edge credential: set %s to the ACCESS TOKEN the Python edge accepts (the VALUE is never printed by this command)", edgeBearerEnvVar)
+	}
+	edge = goapiproof.StaticCredential("Authorization", "edge access token", "Bearer "+edgeBearer)
+
+	switch {
+	case f.proofBearerCmd != "":
+		proof = goapiproof.MintedCredential("Authorization", "effective-principal envelope", proofCredentialFreshness,
+			func(ctx context.Context) (string, error) {
+				return mintBearer(ctx, f.proofBearerCmd)
+			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
+	case os.Getenv(proofBearerEnvVar) != "":
+		proof = goapiproof.StaticCredential("Authorization", "effective-principal envelope", "Bearer "+os.Getenv(proofBearerEnvVar))
+	default:
+		return nil, nil, fmt.Errorf(
+			"no proof-plane credential: /buildinfo and %s check the effective-principal ENVELOPE, which the edge access token cannot satisfy (measured: access token -> 401 on /buildinfo, envelope -> 401 on the edge).\n"+
+				"  Set -proof-bearer-command to a command printing a fresh envelope -- preferred, because ENVELOPE_DEFAULT_TTL_SECONDS is 60 and a full run outlives that --\n"+
+				"  or %s for a short run.", "/query/proof", proofBearerEnvVar)
+	}
+	return edge, proof, nil
+}
+
+// mintBearer runs the operator's command and returns its stdout.
+//
+// stderr is captured and included in the ERROR only, never on success:
+// a minting command that writes a warning must not have that warning
+// mistaken for part of the credential.
+func mintBearer(ctx context.Context, command string) (string, error) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("proof-bearer-command %q failed: %w (stderr: %s)", command, err, strings.TrimSpace(stderr.String()))
+	}
+	// A trailing newline from `echo` is normal and would otherwise be sent
+	// inside the header value.
+	minted := strings.TrimSpace(stdout.String())
+	if minted == "" {
+		return "", fmt.Errorf("proof-bearer-command %q printed nothing on stdout", command)
+	}
+	if strings.HasPrefix(minted, "Bearer ") {
+		return minted, nil
+	}
+	return "Bearer " + minted, nil
 }

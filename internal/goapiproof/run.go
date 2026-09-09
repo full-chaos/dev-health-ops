@@ -128,10 +128,17 @@ type Outcome struct {
 	// without it; they are separate fields so a regression that sets
 	// Executed some other way shows up in the report rather than reading
 	// as a legitimate measurement.
-	Admitted        bool      `json:"admitted"`
-	RefusalReason   string    `json:"refusal_reason,omitempty"`
-	RefusalDetail   string    `json:"refusal_detail,omitempty"`
-	Route           string    `json:"route"`
+	Admitted      bool   `json:"admitted"`
+	RefusalReason string `json:"refusal_reason,omitempty"`
+	RefusalDetail string `json:"refusal_detail,omitempty"`
+	Route         string `json:"route"`
+	// RoutingRowBuild is the build the operation's ROUTING ROW named when
+	// this measurement was taken, recorded only when it differs from the
+	// build that actually served the request. It is an observation about
+	// the enablement record, never about the receipt: the receipt names
+	// the running build by construction. See StaleRoutingRows for why
+	// this is recorded rather than refused.
+	RoutingRowBuild string    `json:"routing_row_build,omitempty"`
 	TerminalState   string    `json:"terminal_state"`
 	Findings        []Finding `json:"findings,omitempty"`
 	BaselineDefects []string  `json:"baseline_defect,omitempty"`
@@ -152,12 +159,16 @@ type Summary struct {
 	// Admitted is serialised even when zero. "nothing passed admission"
 	// and "everything passed and nothing differed" are different facts,
 	// and a run whose admitted count is 0 measured nothing at all.
-	Admitted        int            `json:"admitted"`
-	Executed        int            `json:"executed"`
-	Refused         int            `json:"refused"`
-	ReceiptsWritten int            `json:"receipts_written"`
-	ByTerminalState map[string]int `json:"by_terminal_state"`
-	ByRefusalReason map[string]int `json:"by_refusal_reason"`
+	Admitted int `json:"admitted"`
+	Executed int `json:"executed"`
+	Refused  int `json:"refused"`
+	// StaleRoutingRows is serialised even when zero. A run in which every
+	// routing row still named an older build is a run worth looking at,
+	// and "none were stale" is a different fact from "nobody checked".
+	StaleRoutingRows int            `json:"stale_routing_rows"`
+	ReceiptsWritten  int            `json:"receipts_written"`
+	ByTerminalState  map[string]int `json:"by_terminal_state"`
+	ByRefusalReason  map[string]int `json:"by_refusal_reason"`
 }
 
 // RegistryView is what the RUNNING query-api reports about itself.
@@ -176,10 +187,28 @@ type RoutingRow struct {
 
 // Config is one prove invocation.
 type Config struct {
-	OrgID   string
-	Auth    AuthContext
-	Window  Window
-	Headers map[string]string // e.g. Authorization; values are NEVER logged
+	OrgID  string
+	Auth   AuthContext
+	Window Window
+
+	// EdgeCredential authenticates the PYTHON EDGE (/graphql) -- both
+	// every baseline leg and the candidate leg of a canary/primary
+	// operation. On the deployed stack this is an access token.
+	//
+	// EdgeCredential and ProofCredential are separate fields, not one
+	// header map, because the two planes accept DIFFERENT credential
+	// kinds: measured on the stack, an access token gets 200 on the edge
+	// and 401 on /buildinfo, and an envelope gets the reverse. One map
+	// applied to both meant every run failed on one leg or the other
+	// (JOB 4, 2026-09-09). Two fields make that a compile-time
+	// distinction rather than a runtime discovery.
+	EdgeCredential *Credential
+
+	// ProofCredential authenticates the Go plane's own routes --
+	// /buildinfo and /query/proof. On the deployed stack this is an
+	// effective-principal envelope, which expires in 60 seconds, so it is
+	// normally a MintedCredential rather than a fixed string.
+	ProofCredential *Credential
 
 	// PythonEdgeURL is the real product edge (/graphql). Both the
 	// candidate leg (for canary/primary operations) and every baseline
@@ -256,6 +285,9 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		if outcome.Admitted {
 			summary.Admitted++
 		}
+		if outcome.RoutingRowBuild != "" {
+			summary.StaleRoutingRows++
+		}
 		if outcome.Executed {
 			summary.Executed++
 			summary.ByTerminalState[outcome.TerminalState]++
@@ -308,7 +340,7 @@ func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receip
 			Stage:                            Stage,
 			TerminalState:                    outcome.TerminalState,
 			OrgID:                            r.Config.OrgID,
-			ReviewEvidence:                   r.Config.ReviewEvidence,
+			ReviewEvidence:                   reviewEvidenceFor(r.Config.ReviewEvidence, outcome),
 			RecordedBy:                       r.Config.RecordedBy,
 			ObservedAt:                       observedAt,
 			BaselineResponseRef:              observationRef(outcome.Baseline),
@@ -417,6 +449,12 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	registryDigest := r.Registry.DocumentDigest[operation]
 	row := r.Routing[operation]
 	outcome := Outcome{Operation: operation, DocumentDigest: registryDigest, Mode: row.Mode}
+	// Recorded on EVERY outcome, refused or not: a refusal taken while the
+	// enablement record was stale is exactly as worth knowing as a match
+	// taken then. Empty when the row agrees with what is running.
+	if row.CandidateBuild != "" && row.CandidateBuild != r.Registry.BuildIdentity {
+		outcome.RoutingRowBuild = row.CandidateBuild
+	}
 
 	refuse := func(reason, detail string) Outcome {
 		outcome.RefusalReason = reason
@@ -441,12 +479,19 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	// to /graphql is served by Python and would produce a receipt claiming
 	// Go executed when it did not.
 	var candidateURL string
+	// The credential follows the URL, not the operation: /graphql checks
+	// an access token and /query/proof checks an envelope, so the leg that
+	// decides the URL decides the credential too. Keeping them in one
+	// switch is what stops the two drifting apart again.
+	var candidateCredential *Credential
 	switch row.Mode {
 	case "canary", "primary":
 		candidateURL = r.Config.PythonEdgeURL
+		candidateCredential = r.Config.EdgeCredential
 		outcome.Route = RouteEdge
 	case "shadow":
 		outcome.Route = RouteProof
+		candidateCredential = r.Config.ProofCredential
 		if r.Config.GoProofURL == "" {
 			return refuse(RefusalShadowUnmeasurable,
 				"mode=shadow: PostgresSwitch.Enabled admits canary|primary only, and this deployment exposes no measurement-only route, so the deployed Go build cannot execute this operation at all")
@@ -458,13 +503,15 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 
 	variables := spec.Variables(r.Config.OrgID, r.Config.Window)
 
-	candidate, err := r.post(ctx, candidateURL, document, variables)
+	candidate, err := r.post(ctx, candidateURL, document, candidateCredential, variables)
 	if err != nil {
 		return refuse(RefusalTransport, "candidate leg: "+err.Error())
 	}
 	outcome.Candidate = &candidate
 
-	baseline, err := r.post(ctx, r.Config.PythonEdgeURL, document+baselineComment, variables)
+	// The baseline ALWAYS goes through the Python edge, whatever route
+	// the candidate took, so it always uses the edge credential.
+	baseline, err := r.post(ctx, r.Config.PythonEdgeURL, document+baselineComment, r.Config.EdgeCredential, variables)
 	if err != nil {
 		return refuse(RefusalTransport, "baseline leg: "+err.Error())
 	}
@@ -625,7 +672,7 @@ func erroredResponse(baseline, candidate Snapshot) string {
 	return ""
 }
 
-func (r *Runner) post(ctx context.Context, url, document string, variables map[string]any) (Observation, error) {
+func (r *Runner) post(ctx context.Context, url, document string, credential *Credential, variables map[string]any) (Observation, error) {
 	body, err := json.Marshal(map[string]any{"query": document, "variables": variables})
 	if err != nil {
 		return Observation{}, fmt.Errorf("encode request: %w", err)
@@ -642,8 +689,8 @@ func (r *Runner) post(ctx context.Context, url, document string, variables map[s
 		return Observation{}, fmt.Errorf("build request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	for name, value := range r.Config.Headers {
-		request.Header.Set(name, value)
+	if err := credential.Apply(ctx, request); err != nil {
+		return Observation{}, err
 	}
 
 	client := r.Client
@@ -683,4 +730,24 @@ func (r *Runner) post(ctx context.Context, url, document string, variables map[s
 		observation.BodyRef = ref
 	}
 	return observation, nil
+}
+
+// reviewEvidenceFor appends the stale-routing-row observation to the
+// operator's review evidence, so it lands in go_api_proof_run rather than
+// only in a report file somebody has to still have.
+//
+// Appended rather than substituted: the operator's own words are the
+// point of the column, and a note that replaced them would lose the
+// reason the run was made. When the row agrees with the running build,
+// nothing is added -- a receipt should not carry a sentence saying that
+// nothing was wrong.
+func reviewEvidenceFor(operatorEvidence string, outcome Outcome) string {
+	if outcome.RoutingRowBuild == "" {
+		return operatorEvidence
+	}
+	note := fmt.Sprintf("routing row named build %s at measurement time; this receipt names the build that actually served the request", outcome.RoutingRowBuild)
+	if operatorEvidence == "" {
+		return note
+	}
+	return operatorEvidence + " | " + note
 }

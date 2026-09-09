@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 )
 
@@ -109,7 +108,7 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 //   - a 404: the deployment predates /buildinfo. Also a refusal -- an old
 //     build that cannot identify itself is exactly the case this check
 //     exists for.
-func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL string, headers map[string]string) (string, error) {
+func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL string, credential *Credential) (string, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -117,8 +116,8 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: build buildinfo request: %w", err)
 	}
-	for name, value := range headers {
-		request.Header.Set(name, value)
+	if err := credential.Apply(ctx, request); err != nil {
+		return "", err
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -131,7 +130,7 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	case http.StatusNotFound:
 		return "", fmt.Errorf("%w: %s answered 404, so this deployment predates the /buildinfo route", ErrNoBuildIdentity, buildInfoURL)
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return "", fmt.Errorf("goapiproof: %s rejected the envelope (HTTP %d)", buildInfoURL, response.StatusCode)
+		return "", fmt.Errorf("goapiproof: %s rejected the %s credential (HTTP %d) -- /buildinfo checks the effective-principal envelope, not the edge access token", buildInfoURL, credential.Kind(), response.StatusCode)
 	default:
 		return "", fmt.Errorf("goapiproof: %s answered HTTP %d", buildInfoURL, response.StatusCode)
 	}
@@ -176,8 +175,8 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 // lockstep rule already forbids -- migrate and every go-* image rebuild
 // together, never staggered -- so the residual is a deployment invariant,
 // not an unexamined hole. It is stated on the report rather than assumed.
-func VerifyBuildStable(ctx context.Context, client *http.Client, buildInfoURL string, headers map[string]string, before string) error {
-	after, err := FetchBuildIdentity(ctx, client, buildInfoURL, headers)
+func VerifyBuildStable(ctx context.Context, client *http.Client, buildInfoURL string, credential *Credential, before string) error {
+	after, err := FetchBuildIdentity(ctx, client, buildInfoURL, credential)
 	if err != nil {
 		return fmt.Errorf("goapiproof: re-reading the build identity after the run failed, so the receipts cannot be shown to name the build that served them: %w", err)
 	}
@@ -200,21 +199,56 @@ func VerifyBuildStable(ctx context.Context, client *http.Client, buildInfoURL st
 // An operator-supplied --candidate-build is checked here too, as a
 // cross-check ONLY. It never becomes the value written (team-lead ruling
 // R51, 2026-09-09).
-func VerifyCandidateBuild(running string, expected string, routing map[string]RoutingRow) error {
+func VerifyCandidateBuild(running string, expected string) error {
 	if expected != "" && expected != running {
 		return fmt.Errorf("goapiproof: --candidate-build %q does not match the running build %q -- the flag is a cross-check, never the source", expected, running)
 	}
-	var disagreeing []string
+	return nil
+}
+
+// StaleRoutingRows reports which routing rows name a build the running
+// process is not, as operation -> the build the row names.
+//
+// This USED to refuse the whole run, and CHAOS-5484's JOB 4 showed that
+// was both wrong and blocking. Wrong, because the comparison does not
+// protect what its refusal claimed to protect:
+//
+//   - Reachability does not depend on this column. PostgresSwitch's own
+//     doc comment says so in terms: "current_candidate_build is NOT bound
+//     to reachability. Enabled answers 'is this operation's mode
+//     canary/primary', not 'is THIS candidate build the one currently
+//     live'". The Python edge never reads the column at all. So a stale
+//     row does not change which build answers the request that gets
+//     measured.
+//   - The receipt cannot name the row's build even if it wanted to.
+//     CandidateBuild on every receipt is RegistryView.BuildIdentity, read
+//     from the running process's own /buildinfo. It names what served the
+//     request, by construction.
+//
+// What actually protects a receipt from authorizing the wrong build is
+// the four-column key: a proof recorded at the running build satisfies
+// `enable --candidate-build <that build>` and nothing else. A stale row
+// was never able to defeat that.
+//
+// Blocking, because after a redeploy EVERY row is stale until an operator
+// re-points it, and `enable` -- the only verb that writes
+// current_candidate_build -- accepts canary|primary only. A SHADOW row
+// therefore cannot be re-pointed by any supported command, and shadow
+// operations are precisely what /query/proof exists to prove. One
+// un-re-pointable row failed the entire run.
+//
+// So it is recorded rather than enforced: counted in the summary, named
+// per operation in the report, and written into the receipt's review
+// evidence, so a reader of go_api_proof_run months later can see that the
+// routing row named an older build when the measurement was taken.
+func StaleRoutingRows(running string, routing map[string]RoutingRow) map[string]string {
+	stale := map[string]string{}
 	for operation, row := range routing {
 		if row.CandidateBuild != "" && row.CandidateBuild != running {
-			disagreeing = append(disagreeing, fmt.Sprintf("%s points at %s", operation, row.CandidateBuild))
+			stale[operation] = row.CandidateBuild
 		}
 	}
-	if len(disagreeing) > 0 {
-		sort.Strings(disagreeing)
-		return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s", running, strings.Join(disagreeing, "; "))
-	}
-	return nil
+	return stale
 }
 
 // registrydumpDocument is one element of `registrydump -file

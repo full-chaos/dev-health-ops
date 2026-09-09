@@ -78,6 +78,12 @@ func newRunner(t *testing.T, edge *fakeEdge, mode string) *Runner {
 			Window:        DefaultWindow(),
 			PythonEdgeURL: server.URL,
 			Auth:          AuthContext{PrincipalKind: "stored_account", Audience: "query-api", KeyID: "local-dev-20260906"},
+			// The fake edge does not check credentials; these are set
+			// because Apply refuses a nil one, which is the point of
+			// CHAOS-5425's credential fix -- an unauthenticated request
+			// must never look like a rejected one.
+			EdgeCredential:  StaticCredential("Authorization", "edge access token", "Bearer edge"),
+			ProofCredential: StaticCredential("Authorization", "envelope", "Bearer envelope"),
 		},
 	}
 }

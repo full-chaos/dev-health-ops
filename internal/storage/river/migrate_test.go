@@ -3,6 +3,7 @@ package riverstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
@@ -150,6 +152,48 @@ func TestCheckSchemaDistinguishesConnectionFailureFromVersionMismatch(t *testing
 	}
 	if !errors.Is(err, ErrSchemaCheckUnavailable) {
 		t.Fatalf("CheckSchema() error = %v, want errors.Is(err, ErrSchemaCheckUnavailable)", err)
+	}
+}
+
+// TestIsSchemaCheckConnectivityErrorClassifiesTheBoundaryPositively is
+// CHAOS-5469 round 2's regression test: round 1 classified EVERY
+// ExistingVersions error as ErrSchemaCheckUnavailable, which silently broke
+// TestRiverMigrationRolesRetentionGrowthAndRestore's
+// assertSuffixMismatchFailsClosed (an unrecognized migration version in the
+// database -- a genuine schema FACT, not an outage -- reported by
+// rivermigrate as a bare fmt.Errorf with no underlying driver error at all).
+// The classifier must therefore be a POSITIVE test for connection/pool/
+// context failures, defaulting every other error -- including one with no
+// wrapped cause whatsoever -- to "not connectivity" (i.e. ErrSchemaNotCurrent
+// at the CheckSchema call site).
+func TestIsSchemaCheckConnectivityErrorClassifiesTheBoundaryPositively(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "context deadline exceeded", err: context.DeadlineExceeded, want: true},
+		{name: "context canceled", err: context.Canceled, want: true},
+		{name: "wrapped context deadline exceeded", err: fmt.Errorf("query: %w", context.DeadlineExceeded), want: true},
+		{name: "net error", err: &net.OpError{Op: "dial", Err: errors.New("connection refused")}, want: true},
+		{name: "pgconn PgError", err: &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"}, want: true},
+		{name: "pgconn ConnectError", err: &pgconn.ConnectError{}, want: true},
+		{
+			name: "rivermigrate's own bundle-mismatch error, no underlying cause at all",
+			err:  fmt.Errorf("migration %d not found in migrator bundle", 8),
+			want: false,
+		},
+		{name: "plain unrelated error", err: errors.New("boom"), want: false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isSchemaCheckConnectivityError(testCase.err); got != testCase.want {
+				t.Errorf("isSchemaCheckConnectivityError(%v) = %v, want %v", testCase.err, got, testCase.want)
+			}
+		})
 	}
 }
 

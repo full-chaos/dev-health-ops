@@ -72,6 +72,44 @@ type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// TxBeginner is implemented by a pgx pool. A caller that can begin a
+// transaction gets one; a test fake that cannot is written directly.
+type TxBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// WriteAtomic writes one receipt inside its own transaction when db can
+// begin one, and falls back to a direct Write when it cannot.
+//
+// Write is two statements -- a candidate-build upsert and a proof-run
+// insert -- and the runner previously handed it a bare pool, so a failure
+// between them left a registered build with no receipt (codex r1 F7). That
+// orphan is harmless on its own (the table is append-only and the upsert is
+// idempotent), but "harmless" was an argument, not a guarantee, and the
+// guarantee costs one BEGIN. The fallback exists so the in-memory tests can
+// still drive Write directly.
+func WriteAtomic(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) {
+	beginner, ok := db.(TxBeginner)
+	if !ok {
+		return Write(ctx, db, receipt)
+	}
+	tx, err := beginner.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("goapiproof: begin receipt transaction: %w", err)
+	}
+	id, err := Write(ctx, tx, receipt)
+	if err != nil {
+		// Rollback's own error is deliberately not returned: it would
+		// replace the error that actually explains the failure.
+		_ = tx.Rollback(ctx)
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("goapiproof: commit receipt: %w", err)
+	}
+	return id, nil
+}
+
 // Write records one receipt, registering its candidate build first.
 //
 // Two statements, in this order and inside the caller's transaction:

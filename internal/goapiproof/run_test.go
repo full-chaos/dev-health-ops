@@ -312,3 +312,213 @@ func TestNewArtifactStoreRefusesAnEmptyDirectory(t *testing.T) {
 		t.Fatal("a receipt with no stored response is not reviewable evidence")
 	}
 }
+
+// planeStampingEdge answers both legs with explicit plane headers, and lets
+// a test suppress or alter either one. It exists because the regression
+// tests below are all about what happens when plane evidence is WRONG or
+// MISSING, which fakeEdge (which always stamps correctly) cannot express.
+type planeStampingEdge struct {
+	body            string
+	candidatePlane  string
+	baselinePlane   string
+	candidateBuild  string
+	candidateType   string
+	baselineType    string
+	candidateStatus int
+}
+
+func (e *planeStampingEdge) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var parsed struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(raw, &parsed)
+		isBaseline := strings.Contains(parsed.Query, "python-plane control")
+
+		plane, contentType, status := e.candidatePlane, e.candidateType, e.candidateStatus
+		if isBaseline {
+			plane, contentType, status = e.baselinePlane, e.baselineType, http.StatusOK
+		}
+		if plane != "" {
+			w.Header().Set(planeHeader, plane)
+		}
+		if !isBaseline && e.candidateBuild != "" {
+			w.Header().Set(buildHeader, e.candidateBuild)
+		}
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		w.Header().Set("Content-Type", contentType)
+		if status == 0 {
+			status = http.StatusOK
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(e.body))
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func runnerAgainst(t *testing.T, edge *planeStampingEdge, mode string) *Runner {
+	t.Helper()
+	server := edge.server(t)
+	runner := newRunner(t, &fakeEdge{goBody: edge.body, pythonBody: edge.body}, mode)
+	runner.Config.PythonEdgeURL = server.URL
+	runner.Client = server.Client()
+	return runner
+}
+
+// A shadow operation is NOT exempt from the plane assertion. The exemption
+// existed because /query/proof carried no plane header; the proof handler
+// now stamps one, so a --proof-url pointed at anything returning a
+// plausible 200 must refuse instead of producing a receipt.
+func TestShadowCandidateWithNoPlaneEvidenceIsRefused(t *testing.T) {
+	body := `{"data":{"featureFlags":[]}}`
+	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "shadow")
+	bogus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(bogus.Close)
+	runner.Config.GoProofURL = bogus.URL
+
+	outcomes, _, err := runner.Run(context.Background(), nil)
+	if !errors.Is(err, ErrNothingMeasured) {
+		t.Fatalf("a candidate with no plane evidence measured nothing, got %v", err)
+	}
+	if outcomes[0].RefusalReason != RefusalPlaneUnidentified {
+		t.Fatalf("expected %s, got %s", RefusalPlaneUnidentified, outcomes[0].RefusalReason)
+	}
+}
+
+// The BASELINE must be positively identified as Python. Accepting an absent
+// header let the control be Go, silently comparing Go against Go.
+func TestBaselineWithNoPlaneEvidenceIsRefused(t *testing.T) {
+	runner := runnerAgainst(t, &planeStampingEdge{
+		body:           `{"data":{"featureFlags":[]}}`,
+		candidatePlane: "go",
+		baselinePlane:  "", // header suppressed
+	}, "canary")
+
+	outcomes, _, err := runner.Run(context.Background(), nil)
+	if !errors.Is(err, ErrNothingMeasured) {
+		t.Fatalf("an unidentified baseline measured nothing, got %v", err)
+	}
+	if outcomes[0].RefusalReason != RefusalPlaneUnidentified {
+		t.Fatalf("expected %s, got %s (%s)", RefusalPlaneUnidentified, outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
+	}
+}
+
+// Two identical GraphQL error envelopes compare with zero findings. That
+// must NOT be a match: agreement on a failure is not proof the operation
+// works on the candidate plane.
+func TestIdenticalErrorsAreUnsupportedNotMatch(t *testing.T) {
+	errBody := `{"errors":[{"message":"boom","path":["featureFlags"],"extensions":{"code":"INTERNAL"}}]}`
+	runner := runnerAgainst(t, &planeStampingEdge{
+		body: errBody, candidatePlane: "go", baselinePlane: "python",
+	}, "canary")
+
+	outcomes, summary, err := runner.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if outcomes[0].TerminalState != TerminalStateUnsupported {
+		t.Fatalf("two identical errors must be unsupported, got %s", outcomes[0].TerminalState)
+	}
+	if summary.ByTerminalState[TerminalStateMatch] != 0 {
+		t.Fatalf("no match may be recorded: %+v", summary.ByTerminalState)
+	}
+	var named bool
+	for _, finding := range outcomes[0].Findings {
+		if finding.Kind == "errored_response" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("the downgrade must carry its reason: %v", outcomes[0].Findings)
+	}
+}
+
+// A candidate that returns no data at all cannot back a proof either.
+func TestCandidateWithNoDataIsUnsupported(t *testing.T) {
+	runner := runnerAgainst(t, &planeStampingEdge{
+		body: `{"data":null}`, candidatePlane: "go", baselinePlane: "python",
+	}, "canary")
+
+	outcomes, err := func() ([]Outcome, error) {
+		o, _, e := runner.Run(context.Background(), nil)
+		return o, e
+	}()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if outcomes[0].TerminalState != TerminalStateUnsupported {
+		t.Fatalf("a data-less candidate must be unsupported, got %s", outcomes[0].TerminalState)
+	}
+}
+
+// Identical bodies under DIFFERENT content types are not parity: the client
+// is being told to interpret the same bytes differently.
+func TestContentTypeDivergenceIsAMismatch(t *testing.T) {
+	runner := runnerAgainst(t, &planeStampingEdge{
+		body:           `{"data":{"featureFlags":[]}}`,
+		candidatePlane: "go", baselinePlane: "python",
+		candidateType: "application/problem+json", baselineType: "application/json",
+	}, "canary")
+
+	outcomes, _, err := runner.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if outcomes[0].TerminalState != TerminalStateMismatch {
+		t.Fatalf("a content-type divergence must mismatch, got %s", outcomes[0].TerminalState)
+	}
+	var named bool
+	for _, finding := range outcomes[0].Findings {
+		if finding.Path == "$.http.header.content-type" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("the divergent header must be a named finding: %v", outcomes[0].Findings)
+	}
+}
+
+// The serving process's own build must equal the one the receipt will name.
+func TestServingBuildMustMatchTheNamedBuild(t *testing.T) {
+	runner := runnerAgainst(t, &planeStampingEdge{
+		body:           `{"data":{"featureFlags":[]}}`,
+		candidatePlane: "go", baselinePlane: "python",
+		candidateBuild: "some-other-build",
+	}, "canary")
+
+	outcomes, _, err := runner.Run(context.Background(), nil)
+	if !errors.Is(err, ErrNothingMeasured) {
+		t.Fatalf("a build mismatch measured nothing, got %v", err)
+	}
+	if outcomes[0].RefusalReason != RefusalBuildMismatch {
+		t.Fatalf("expected %s, got %s", RefusalBuildMismatch, outcomes[0].RefusalReason)
+	}
+}
+
+// And the agreeing case still passes, so the check above is discriminating
+// rather than refusing everything.
+func TestServingBuildAgreementStillMatches(t *testing.T) {
+	runner := runnerAgainst(t, &planeStampingEdge{
+		body:           `{"data":{"featureFlags":[{"key":"a"}]}}`,
+		candidatePlane: "go", baselinePlane: "python",
+		candidateBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36",
+	}, "canary")
+
+	outcomes, _, err := runner.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if outcomes[0].TerminalState != TerminalStateMatch {
+		t.Fatalf("an agreeing build must not block a match, got %s (%s)", outcomes[0].TerminalState, outcomes[0].RefusalDetail)
+	}
+	if outcomes[0].Candidate.Build != "b18e56fa79cfe20ce0f75df148144b832d92be36" {
+		t.Fatalf("the serving build must be recorded, got %q", outcomes[0].Candidate.Build)
+	}
+}

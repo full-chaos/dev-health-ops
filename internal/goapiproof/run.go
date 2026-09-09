@@ -35,6 +35,8 @@ const (
 	RefusalStaleExclusion      = "declared_exclusion_matched_nothing"
 	RefusalStaleTierB          = "declared_tier_b_field_matched_nothing"
 	RefusalStaleBaselineDefect = "declared_baseline_defect_matched_nothing"
+	RefusalPlaneUnidentified   = "response_carried_no_plane_evidence"
+	RefusalBuildMismatch       = "serving_build_is_not_the_named_build"
 )
 
 // Measurement routes. Recorded on every receipt so a proof-route
@@ -54,6 +56,22 @@ const (
 // a fallback to Python is indistinguishable from a Go-served response,
 // and every receipt this command writes would be worthless.
 const planeHeader = "x-dev-health-plane"
+
+// buildHeader names the build of the process that served THIS request.
+//
+// Only /query/proof stamps it (cmd/query-api/buildinfo_route.go). The
+// Python edge cannot: go_api_dispatcher's _forward_to_go builds a NEW
+// Response carrying only content, status and media_type, so any header
+// query-api sets on a /query response is dropped before the client sees
+// it. So per-request build binding is available on the proof route and
+// NOT on the edge route -- see proveOne, and the run-level stability
+// check the command performs to bound the residual.
+const buildHeader = "x-dev-health-build"
+
+// contentTypeHeader is compared between the planes. A body that compares
+// equal under a DIFFERENT content type is not parity: the client is being
+// told to interpret those identical bytes differently.
+const contentTypeHeader = "content-type"
 
 // baselineComment is appended to a registered document to obtain the
 // PYTHON side of the comparison through the real edge.
@@ -79,11 +97,23 @@ const baselineComment = "\n# dev-health prove: python-plane control (CHAOS-5425)
 // bodies; HTTP status, headers and effects are the outer runner's job,
 // and a 200-with-errors is a different fact from a 500.
 type Observation struct {
-	StatusCode int           `json:"status_code"`
-	Plane      string        `json:"plane"`
-	Body       []byte        `json:"-"`
-	BodyRef    string        `json:"body_ref,omitempty"`
-	Elapsed    time.Duration `json:"elapsed_ns"`
+	StatusCode int    `json:"status_code"`
+	Plane      string `json:"plane"`
+	// Build is the serving process's build identity, when the route stamps
+	// one. Empty on the edge route by construction -- see buildHeader.
+	Build string `json:"build,omitempty"`
+	// Headers is the BOUNDED set of response headers this comparison
+	// treats as part of the observable response: content-type, the plane
+	// header, the build header. Deliberately not every header -- Date and
+	// Content-Length differ on every pair of requests and would drown a
+	// real divergence in noise. An earlier version's doc comment claimed
+	// headers were observed while the struct recorded none, so a
+	// content-type divergence was invisible (codex r1 F4, reproduced:
+	// application/problem+json vs application/json compared as match).
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    []byte            `json:"-"`
+	BodyRef string            `json:"body_ref,omitempty"`
+	Elapsed time.Duration     `json:"elapsed_ns"`
 }
 
 // Outcome is one operation's complete result: what was attempted, what
@@ -235,7 +265,7 @@ func (r *Runner) Run(ctx context.Context, db Querier) ([]Outcome, Summary, error
 				return outcomes, summary, err
 			}
 			receipt.RequestIdentity = identity
-			if _, err := Write(ctx, db, receipt); err != nil {
+			if _, err := WriteAtomic(ctx, db, receipt); err != nil {
 				return outcomes, summary, err
 			}
 			outcome.ReceiptWritten = true
@@ -316,14 +346,35 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	}
 	outcome.Candidate = &candidate
 
-	// The candidate MUST have been served by Go. A fallback is a real,
-	// recordable outcome -- but it is a fallback, not a proof, and it must
-	// never be written as one.
-	if row.Mode != "shadow" && candidate.Plane != "go" {
+	// The candidate MUST have been served by Go, on EVERY route.
+	//
+	// The shadow route used to be exempt, because /query/proof carried no
+	// plane header to check. That exemption meant a mis-pointed
+	// --proof-url at anything returning a plausible 200 produced a MATCH
+	// receipt (codex r1 F1, reproduced: a bare httptest server with no
+	// headers, terminal_state=match). The proof route now stamps the
+	// header itself, so there is nothing left to exempt -- and an ABSENT
+	// header is its own refusal rather than a skipped check, because
+	// "no evidence" and "evidence of Go" must never read the same.
+	switch {
+	case candidate.Plane == "":
+		return refuse(RefusalPlaneUnidentified,
+			fmt.Sprintf("candidate leg carried no %s header (status %d): with no plane evidence this response cannot back a proof. On the edge route, GO_API_PLANE_HEADER_ENABLED must be true; on the proof route, the deployment predates the header the proof handler stamps", planeHeader, candidate.StatusCode))
+	case candidate.Plane != "go":
 		outcome.RefusalReason = RefusalWrongPlane
 		outcome.RefusalDetail = fmt.Sprintf("candidate leg was served by plane %q (status %d): the edge fell back to Python", candidate.Plane, candidate.StatusCode)
 		outcome.TerminalState = "fallback"
 		return outcome
+	}
+
+	// Per-request build binding, where the route can provide it. The proof
+	// route stamps the build that served this exact request; the edge route
+	// cannot (the Python dispatcher rebuilds the response and drops the
+	// header), so its receipts rest on the run-level stability check the
+	// command performs instead -- see VerifyBuildStable.
+	if candidate.Build != "" && candidate.Build != r.Registry.BuildIdentity {
+		return refuse(RefusalBuildMismatch,
+			fmt.Sprintf("the process that served this request reports build %q, but /buildinfo reported %q -- a receipt naming the second would attribute this evidence to a build that did not produce it", candidate.Build, r.Registry.BuildIdentity))
 	}
 
 	baseline, err := r.post(ctx, r.Config.PythonEdgeURL, document+baselineComment, variables)
@@ -331,7 +382,18 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		return refuse(RefusalTransport, "baseline leg: "+err.Error())
 	}
 	outcome.Baseline = &baseline
-	if baseline.Plane != "" && baseline.Plane != "python" {
+	// The baseline must be POSITIVELY identified as Python. Accepting an
+	// absent header here (the previous behaviour) meant the "control" could
+	// be Go, or anything else, whenever GO_API_PLANE_HEADER_ENABLED was off
+	// -- every receipt would then be comparing Go against Go with no
+	// symptom at all (codex r1 F2, reproduced: baseline_plane="",
+	// terminal_state=match). This is the single assumption the whole proof
+	// rests on, so it is asserted, never inferred from silence.
+	switch {
+	case baseline.Plane == "":
+		return refuse(RefusalPlaneUnidentified,
+			fmt.Sprintf("baseline leg carried no %s header (status %d): the control cannot be shown to be Python, so the comparison cannot back a proof. Set GO_API_PLANE_HEADER_ENABLED=true on the edge", planeHeader, baseline.StatusCode))
+	case baseline.Plane != "python":
 		return refuse(RefusalWrongPlane, fmt.Sprintf("baseline leg was served by plane %q -- the control must be Python", baseline.Plane))
 	}
 
@@ -382,8 +444,9 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	outcome.DifferencesOutsideBaselineDefect = result.DifferencesOutsideBaselineDefect
 
 	// The outer HTTP observation is part of the verdict, not decoration: a
-	// body that compares equal under a different status code is not parity.
-	if candidate.StatusCode != baseline.StatusCode && outcome.TerminalState == TerminalStateMatch {
+	// body that compares equal under a different status code, or under a
+	// different content type, is not parity.
+	if candidate.StatusCode != baseline.StatusCode {
 		outcome.TerminalState = TerminalStateMismatch
 		outcome.Findings = append(outcome.Findings, Finding{
 			Kind:   FindingMismatch,
@@ -391,7 +454,61 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 			Detail: fmt.Sprintf("baseline %d != candidate %d", baseline.StatusCode, candidate.StatusCode),
 		})
 	}
+	for _, header := range comparedHeaders {
+		baselineValue, candidateValue := baseline.Headers[header], candidate.Headers[header]
+		if baselineValue != candidateValue {
+			outcome.TerminalState = TerminalStateMismatch
+			outcome.Findings = append(outcome.Findings, Finding{
+				Kind:   FindingMismatch,
+				Path:   "$.http.header." + header,
+				Detail: fmt.Sprintf("baseline %q != candidate %q", baselineValue, candidateValue),
+			})
+		}
+	}
+
+	// AGREEMENT ON A FAILURE IS NOT PROOF OF PARITY.
+	//
+	// Two identical GraphQL error envelopes compare with zero findings --
+	// same errors, `data` absent on both sides, which the comparator
+	// correctly does not treat as a difference. That produced a
+	// `deployed_executed`/`match` receipt for a request that FAILED on
+	// both planes (codex r1 F3, reproduced), and such a receipt is exactly
+	// what `enable`'s preflight reads as authorization. A proof run has to
+	// show the operation WORKING on the candidate, not merely failing the
+	// same way twice, so an errored response downgrades a match to
+	// `unsupported` -- recorded, legible, and unable to authorize anything.
+	if outcome.TerminalState == TerminalStateMatch {
+		if reason := erroredResponse(baselineSnapshot, candidateSnapshot); reason != "" {
+			outcome.TerminalState = TerminalStateUnsupported
+			outcome.Findings = append(outcome.Findings, Finding{
+				Kind:   "errored_response",
+				Path:   "$.errors",
+				Detail: reason + "; agreement on a failure is not proof that the operation works on the candidate plane",
+			})
+		}
+	}
 	return outcome
+}
+
+// comparedHeaders is the bounded set of response headers treated as part
+// of the observable response. See Observation.Headers for why it is a set
+// and not "every header".
+var comparedHeaders = []string{contentTypeHeader}
+
+// erroredResponse reports why these two responses cannot back a proof,
+// or "" when both carry a clean, data-bearing result.
+func erroredResponse(baseline, candidate Snapshot) string {
+	switch {
+	case len(candidate.Errors) > 0 && len(baseline.Errors) > 0:
+		return fmt.Sprintf("both planes returned GraphQL errors (%d candidate, %d baseline)", len(candidate.Errors), len(baseline.Errors))
+	case len(candidate.Errors) > 0:
+		return fmt.Sprintf("the candidate returned %d GraphQL error(s)", len(candidate.Errors))
+	case len(baseline.Errors) > 0:
+		return fmt.Sprintf("the baseline returned %d GraphQL error(s)", len(baseline.Errors))
+	case !candidate.DataPresent || candidate.Data == nil:
+		return "the candidate returned no data"
+	}
+	return ""
 }
 
 func (r *Runner) post(ctx context.Context, url, document string, variables map[string]any) (Observation, error) {
@@ -437,8 +554,12 @@ func (r *Runner) post(ctx context.Context, url, document string, variables map[s
 	observation := Observation{
 		StatusCode: response.StatusCode,
 		Plane:      strings.ToLower(response.Header.Get(planeHeader)),
-		Body:       responseBody,
-		Elapsed:    time.Since(started),
+		Build:      strings.TrimSpace(response.Header.Get(buildHeader)),
+		Headers: map[string]string{
+			contentTypeHeader: strings.ToLower(strings.TrimSpace(response.Header.Get(contentTypeHeader))),
+		},
+		Body:    responseBody,
+		Elapsed: time.Since(started),
 	}
 	if r.Artifacts != nil {
 		ref, err := r.Artifacts.Put(responseBody)

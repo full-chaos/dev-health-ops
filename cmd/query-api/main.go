@@ -265,6 +265,12 @@ func main() {
 		// is, assigned directly, not returned from a helper).
 	} else {
 		log.Print("query-api: /query route not configured (CLICKHOUSE_URI/GO_API_REGISTRY_POSTGRES_URI/GO_API_ENVELOPE_* unset) -- staying Wave-0 empty")
+		// Say so about the proof route too, with its own explicit zero.
+		// Previously this branch logged nothing about /query/proof, so an
+		// operator reading the log could not tell "the proof route is off"
+		// from "nobody ever considered it" -- the same conflation the
+		// registered/not-registered lines exist to prevent (codex r1 F8).
+		mountProofRoute(mux, nil)
 	}
 	mux.HandleFunc("/readyz", readyzHandler(ready))
 

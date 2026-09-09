@@ -375,3 +375,73 @@ func TestDatabaseRejectsAReceiptForAnUnregisteredBuild(t *testing.T) {
 		t.Fatalf("expected the composite FK to fire, got %v", err)
 	}
 }
+
+// Both statements must land in ONE transaction. Rolling back the caller's
+// transaction must leave NEITHER the receipt nor the candidate-build row --
+// if the build insert autocommitted separately, a failed receipt would
+// leave an orphan behind.
+func TestWriteParticipatesInTheCallersTransaction(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if _, err := Write(ctx, tx, Receipt{
+		SchemaDigest:      testSchemaDigest,
+		DocumentDigest:    testDocumentDigest,
+		SelectedOperation: "featureFlags",
+		CandidateBuild:    testCandidateBuild,
+		RequestIdentity:   "identity-1",
+		Stage:             EnablementProofStage,
+		TerminalState:     EnablementProofTerminalState,
+		MeasurementRoute:  RouteEdge,
+		ObservedAt:        time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	for _, table := range []string{"go_api_proof_run", "go_api_candidate_build"} {
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s kept %d row(s) after a rollback -- the two statements are not atomic", table, count)
+		}
+	}
+}
+
+// WriteAtomic on a pool commits both rows.
+func TestWriteAtomicCommitsBothRows(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	if _, err := WriteAtomic(ctx, pool, Receipt{
+		SchemaDigest:      testSchemaDigest,
+		DocumentDigest:    testDocumentDigest,
+		SelectedOperation: "featureFlags",
+		CandidateBuild:    testCandidateBuild,
+		RequestIdentity:   "identity-1",
+		Stage:             EnablementProofStage,
+		TerminalState:     EnablementProofTerminalState,
+		MeasurementRoute:  RouteEdge,
+		ObservedAt:        time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
+	}
+
+	for _, table := range []string{"go_api_proof_run", "go_api_candidate_build"} {
+		var count int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if count != 1 {
+			t.Fatalf("%s has %d row(s), want 1", table, count)
+		}
+	}
+}

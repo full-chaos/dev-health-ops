@@ -53,7 +53,40 @@ const deploymentEnvEnv = "DEV_HEALTH_ENV"
 
 // productionPostures are the DEV_HEALTH_ENV values that mean production.
 // Matching is case-insensitive and trimmed.
+//
+// This set is NOT the gate. The gate is that the posture must be DECLARED
+// and must not be in this set -- an UNSET DEV_HEALTH_ENV refuses too. An
+// earlier version treated only these values as disqualifying, which meant
+// a production deployment that simply never set the variable got the proof
+// route: a fail-OPEN default on the one check whose whole job is to keep a
+// measurement route out of production (codex r1 F6, reproduced -- with
+// DEV_HEALTH_ENV="" and the flag set, the route registered and logged
+// routes_registered=1). A posture nobody declared is not evidence of a
+// non-production posture.
 var productionPostures = map[string]bool{"prod": true, "production": true}
+
+// planeHeaderName and buildHeaderName are what the proof route stamps on
+// every response it serves.
+//
+// Both exist because of codex r1's F1 and F5. The Python edge stamps
+// x-dev-health-plane on the responses IT serves, so a canary/primary
+// candidate leg can prove which plane answered -- but /query/proof does not
+// go through that edge, so a proof-route response carried NO plane evidence
+// at all, and go-api-prove skipped the check for exactly that reason. A
+// mis-pointed --proof-url at any endpoint returning a plausible 200 then
+// produced a MATCH receipt (reproduced: a bare httptest server with no
+// headers yielded terminal_state=match). Stamping here means the proof
+// route's own responses carry the same evidence the edge provides, so the
+// runner can assert the plane on EVERY route with no exception.
+//
+// The build header closes the other half: it names the build of the
+// process that actually served THIS request, so a receipt cannot claim a
+// build read from /buildinfo on one replica while another replica served
+// the query.
+const (
+	planeHeaderName = "x-dev-health-plane"
+	buildHeaderName = "x-dev-health-build"
+)
 
 // buildInfoResponse is GET /buildinfo's body.
 //
@@ -148,11 +181,33 @@ func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 // and an operator debugging a shadow operation that will not measure must
 // be able to tell them apart from the process log alone -- the same
 // lesson logRoutingStateDrift exists to encode one table over.
+// withProofProvenance wraps the proof handler so every response it serves
+// names the plane and the build that served it. See planeHeaderName.
+func withProofProvenance(handler http.HandlerFunc, commit string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Set BEFORE the handler runs: once the wrapped handler calls
+		// WriteHeader, the header map is already on the wire and a later
+		// write is silently dropped.
+		w.Header().Set(planeHeaderName, "go")
+		if commit != "" {
+			w.Header().Set(buildHeaderName, commit)
+		}
+		handler(w, r)
+	}
+}
+
 func mountProofRoute(mux *http.ServeMux, handler http.HandlerFunc) {
 	posture := strings.ToLower(strings.TrimSpace(os.Getenv(deploymentEnvEnv)))
 	enabled := strings.EqualFold(strings.TrimSpace(os.Getenv(proofRouteEnabledEnv)), "true")
 
 	switch {
+	case posture == "":
+		// Fail CLOSED: an undeclared posture is not a non-production one.
+		log.Printf(
+			"query-api: /query/proof NOT registered: %s is unset, so this deployment has not declared a non-production posture (routes_registered=0); %s=%v is ignored without one",
+			deploymentEnvEnv, proofRouteEnabledEnv, enabled,
+		)
+		return
 	case productionPostures[posture]:
 		// Refused even with the flag set: a measurement route that can
 		// execute an operation an operator deliberately did NOT canary
@@ -179,7 +234,7 @@ func mountProofRoute(mux *http.ServeMux, handler http.HandlerFunc) {
 		return
 	}
 
-	mux.HandleFunc("/query/proof", handler)
+	mux.HandleFunc("/query/proof", withProofProvenance(handler, version.Current("query-api").Commit))
 	log.Printf(
 		"query-api: /query/proof REGISTERED (routes_registered=1, %s=%q): measurement-only, admits shadow, unreachable from the Python edge",
 		deploymentEnvEnv, posture,

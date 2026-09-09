@@ -236,6 +236,18 @@ func run() error {
 	}
 	outcomes, summary, runErr := runner.Run(ctx, db)
 
+	// Re-read the build AFTER the run: every receipt just written names
+	// registry.BuildIdentity, and this is what shows that build was still
+	// the one answering when the last one was written. See VerifyBuildStable
+	// for exactly what this does and does not close.
+	if stabilityErr := goapiproof.VerifyBuildStable(ctx, client, f.buildInfoURL, authHeaders, registry.BuildIdentity); stabilityErr != nil {
+		if runErr == nil {
+			runErr = stabilityErr
+		} else {
+			runErr = fmt.Errorf("%w; additionally: %v", runErr, stabilityErr)
+		}
+	}
+
 	// The report is written and printed BEFORE the run error is returned:
 	// a failed run's evidence is exactly what an operator needs, and a
 	// command that swallows its own output on failure is the "report the
@@ -314,6 +326,12 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 		proofURL = "(none: shadow-mode operations cannot be measured in this deployment)"
 	}
 	fmt.Printf("go-api-prove: edge=%s proof_route=%s\n", f.edgeURL, proofURL)
+	// State the build-binding strength per route rather than leaving a
+	// reader to assume it is uniform: the proof route binds the build per
+	// request from the serving process's own response header; the edge
+	// route cannot (the Python dispatcher drops it) and rests on the
+	// before/after stability check instead.
+	fmt.Println("go-api-prove:   build binding: route=proof per-request (response header); route=edge run-level (buildinfo before+after, plus routing-row agreement)")
 	for _, state := range sortedKeys(summary.ByTerminalState) {
 		fmt.Printf("go-api-prove:   terminal_state %s = %d\n", state, summary.ByTerminalState[state])
 	}

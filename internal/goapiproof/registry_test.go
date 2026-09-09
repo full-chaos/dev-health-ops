@@ -114,3 +114,52 @@ func TestFetchRegistryRefusesAnEmptyRegistration(t *testing.T) {
 		t.Fatal("a process registering no operations has nothing to prove")
 	}
 }
+
+// A build that moves DURING a run invalidates every receipt the run wrote,
+// because each names the build read before it started.
+func TestVerifyBuildStableRefusesAMovedBuild(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"commit":"build-after","modified":false}`))
+	}))
+	t.Cleanup(server.Close)
+
+	err := VerifyBuildStable(context.Background(), server.Client(), server.URL,
+		map[string]string{"Authorization": "Bearer x"}, "build-before")
+	if err == nil {
+		t.Fatal("a build that moved mid-run must fail the run")
+	}
+	if !strings.Contains(err.Error(), "build-before") || !strings.Contains(err.Error(), "build-after") {
+		t.Fatalf("the failure must name BOTH builds, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected exactly one re-read, got %d", calls)
+	}
+}
+
+func TestVerifyBuildStableAcceptsAnUnchangedBuild(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"commit":"same-build","modified":false}`))
+	}))
+	t.Cleanup(server.Close)
+
+	if err := VerifyBuildStable(context.Background(), server.Client(), server.URL,
+		map[string]string{"Authorization": "Bearer x"}, "same-build"); err != nil {
+		t.Fatalf("an unchanged build must pass: %v", err)
+	}
+}
+
+// A re-read that FAILS is not the same as a stable build -- the run cannot
+// show its receipts name the build that served them.
+func TestVerifyBuildStableRefusesWhenTheRereadFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	if err := VerifyBuildStable(context.Background(), server.Client(), server.URL,
+		map[string]string{"Authorization": "Bearer x"}, "some-build"); err == nil {
+		t.Fatal("a failed re-read must fail the run, not pass silently")
+	}
+}

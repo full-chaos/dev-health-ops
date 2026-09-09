@@ -157,6 +157,36 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	return commit, nil
 }
 
+// VerifyBuildStable re-reads /buildinfo AFTER a run and refuses when the
+// serving build moved underneath it.
+//
+// This bounds the residual codex r1's F5 named. Per-request build binding
+// is available only on the proof route, which stamps the serving build on
+// its own responses; the EDGE route cannot provide it, because the Python
+// dispatcher's _forward_to_go builds a new Response carrying only content,
+// status and media_type and drops every header query-api set. Closing that
+// half needs the edge to forward the header -- a Python change this lane is
+// barred from making, and one that belongs to the dispatcher's owner.
+//
+// So an edge-route receipt's build claim rests on: the routing rows and
+// /buildinfo agreeing before the run (VerifyCandidateBuild), and the same
+// build still answering after it (this). What that leaves uncovered is
+// narrow and nameable: two replicas serving DIFFERENT builds simultaneously
+// for the whole run. That is the staggered-rollout state the fleet's own
+// lockstep rule already forbids -- migrate and every go-* image rebuild
+// together, never staggered -- so the residual is a deployment invariant,
+// not an unexamined hole. It is stated on the report rather than assumed.
+func VerifyBuildStable(ctx context.Context, client *http.Client, buildInfoURL string, headers map[string]string, before string) error {
+	after, err := FetchBuildIdentity(ctx, client, buildInfoURL, headers)
+	if err != nil {
+		return fmt.Errorf("goapiproof: re-reading the build identity after the run failed, so the receipts cannot be shown to name the build that served them: %w", err)
+	}
+	if after != before {
+		return fmt.Errorf("goapiproof: the serving build moved DURING the run (%s -> %s) -- every receipt this run wrote names a build that was not serving for all of it", before, after)
+	}
+	return nil
+}
+
 // VerifyCandidateBuild cross-checks the build the process reports against
 // what the routing rows point at.
 //

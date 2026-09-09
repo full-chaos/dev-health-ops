@@ -120,3 +120,61 @@ func TestBuildInfoHandlerRejectsNonGet(t *testing.T) {
 		t.Fatalf("got %d", recorder.Code)
 	}
 }
+
+// The proof route's own responses must carry the plane and the build that
+// served them. Without this, a proof-route response was indistinguishable
+// from any other endpoint returning a plausible 200, and go-api-prove
+// skipped the plane check on that route for exactly that reason.
+func TestProofRouteStampsPlaneAndBuild(t *testing.T) {
+	handler := withProofProvenance(
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+		"b18e56fa79cfe20ce0f75df148144b832d92be36",
+	)
+	recorder := httptest.NewRecorder()
+	handler(recorder, httptest.NewRequest(http.MethodPost, "/query/proof", nil))
+
+	if got := recorder.Header().Get(planeHeaderName); got != "go" {
+		t.Fatalf("proof responses must name their plane, got %q", got)
+	}
+	if got := recorder.Header().Get(buildHeaderName); got != "b18e56fa79cfe20ce0f75df148144b832d92be36" {
+		t.Fatalf("proof responses must name their build, got %q", got)
+	}
+}
+
+// A build the process cannot name must not be stamped as an empty claim --
+// an empty header reads as "this build is the empty string", which the
+// runner would then compare against a real commit.
+func TestProofRouteOmitsAnUnknowableBuild(t *testing.T) {
+	handler := withProofProvenance(func(w http.ResponseWriter, _ *http.Request) {}, "")
+	recorder := httptest.NewRecorder()
+	handler(recorder, httptest.NewRequest(http.MethodPost, "/query/proof", nil))
+
+	if _, present := recorder.Header()[http.CanonicalHeaderKey(buildHeaderName)]; present {
+		t.Fatal("an unknown build must be absent, not an empty header")
+	}
+	if got := recorder.Header().Get(planeHeaderName); got != "go" {
+		t.Fatalf("the plane is still knowable, got %q", got)
+	}
+}
+
+// The production refusal must fail CLOSED on an undeclared posture: an
+// unset DEV_HEALTH_ENV is not evidence of a non-production deployment.
+func TestProofRouteRefusesAnUndeclaredPosture(t *testing.T) {
+	t.Setenv(proofRouteEnabledEnv, "true")
+	t.Setenv(deploymentEnvEnv, "")
+
+	mux := http.NewServeMux()
+	output := captureLog(t, func() {
+		mountProofRoute(mux, func(http.ResponseWriter, *http.Request) {})
+	})
+
+	if mountedPaths(t, mux, "/query/proof") {
+		t.Fatal("an undeclared posture must refuse, not fall through to registration")
+	}
+	if !strings.Contains(output, "routes_registered=0") {
+		t.Fatalf("the refusal must carry an explicit zero, got %q", output)
+	}
+	if !strings.Contains(output, "has not declared a non-production posture") {
+		t.Fatalf("the refusal must name its reason, got %q", output)
+	}
+}

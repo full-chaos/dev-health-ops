@@ -61,11 +61,20 @@ if [ "${rc}" -ne 0 ]; then
   exit 1
 fi
 
-# Normalised changed lines: side marker plus content, line numbers dropped so
-# an unrelated insertion elsewhere in a generated file does not churn every
-# entry. `diff` is used directly rather than `git diff` -- the copy is not a
-# repository, and more importantly a git-based comparison would silently treat
-# an untracked file as clean, which is the exact trap this repo has hit.
+# Each entry is <file> <enclosing declaration> <+|-><content>.
+#
+# Line numbers are dropped so an unrelated insertion elsewhere in a generated
+# file does not churn every entry. The ENCLOSING DECLARATION is kept because
+# content alone is ambiguous: 81 of these entries are comment lines, and two
+# genuinely different changes -- the same comment text removed from two
+# different types -- normalise to one identical entry, so the guard would see
+# one where there are two and a swap between them as no change at all. `diff
+# -F` supplies it from the hunk header, which is stable under edits elsewhere
+# in the file in a way a line number is not.
+#
+# `diff` is used directly rather than `git diff`: the copy is not a
+# repository, and a git-based comparison silently treats an untracked file as
+# clean, which is a trap this repo has hit.
 actual="${WORK}/.actual"
 : >"${actual}"
 for rel in "${GENERATED_FILES[@]}"; do
@@ -73,9 +82,31 @@ for rel in "${GENERATED_FILES[@]}"; do
     echo "check_gqlgen_drift: generation left ${rel} MISSING in the copy -- treat any success as false." >&2
     exit 1
   fi
-  diff -u "${ROOT}/${rel}" "${WORK}/${rel}" \
-    | grep -E '^[+-][^+-]' \
-    | sed -e "s|^|${rel}\t|" >>"${actual}" || true
+  # diff exits 0 (same), 1 (differs) or >=2 (ERROR). Only the first two are
+  # results; >=2 is a broken comparison and must not read as "no drift". The
+  # status is taken from PIPESTATUS[0] because a pipeline reports its LAST
+  # command's status, and a `|| true` on the end would swallow the error
+  # entirely -- an empty diff and a failed diff are indistinguishable
+  # downstream, which is how a guard like this passes vacuously.
+  # `set +e` is REQUIRED, not defensive: diff exits 1 whenever the files
+  # differ, which is the NORMAL case here, and under `set -e` that terminates
+  # the script before the status is ever read. This is the same class the
+  # round flagged, and it bit again while fixing it -- the guard aborted at
+  # the first differing file and reported nothing.
+  set +e
+  diff -u -F '^\(type\|func\|var\|const\) ' "${ROOT}/${rel}" "${WORK}/${rel}" >"${WORK}/.raw" 2>"${WORK}/.differr"
+  dstatus=$?
+  set -e
+  if [ "${dstatus}" -ge 2 ]; then
+    echo "check_gqlgen_drift: diff FAILED on ${rel} (exit ${dstatus}); the comparison is broken, not empty." >&2
+    cat "${WORK}/.differr" >&2
+    exit 1
+  fi
+  awk -v rel="${rel}" '
+    /^@@/ { decl = $0; sub(/^@@[^@]*@@[[:space:]]*/, "", decl); if (decl == "") decl = "(file scope)"; next }
+    /^(---|\+\+\+)/ { next }
+    /^[+-]/ { printf "%s\t%s\t%s\n", rel, decl, $0 }
+  ' "${WORK}/.raw" >>"${actual}"
 done
 sort -o "${actual}" "${actual}"
 
@@ -98,7 +129,7 @@ if [ "${UPDATE}" -eq 1 ]; then
     echo "# not yet in the SDL -- those entries DISAPPEAR when the SDL half lands,"
     echo "# and this file must shrink accordingly rather than be re-blessed)."
     echo "#"
-    printf '# Format: <file><TAB><+|-><line content>. %s\n' "'-' is in the checked-in file and"
+    printf '# Format: <file><TAB><enclosing decl><TAB><+|-><line content>. %s\n' "'-' is in the checked-in file and"
     echo "# not in a fresh generation; '+' is the reverse."
     cat "${actual}"
   } >"${ALLOWLIST}"

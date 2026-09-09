@@ -80,14 +80,60 @@ def test_the_guard_and_wrapper_exist_and_are_executable() -> None:
         )
 
 
+def _drift_guard_steps() -> list[dict]:
+    """Every go-quality step that actually invokes the guard.
+
+    Parsed, not grepped. A substring match cannot tell a live step from one
+    that is present and inert -- `if: false`, a commented-out `run`, a step
+    that only echoes the path -- and "present but inert" is the failure mode a
+    guard against silent reverts must not have. The review round proved the
+    string assertion passes against a disabled step.
+    """
+    document = yaml.safe_load(GO_QUALITY.read_text())
+    steps: list[dict] = []
+    for job in document.get("jobs", {}).values():
+        for step in job.get("steps", []) or []:
+            run = step.get("run")
+            if isinstance(run, str) and "ci/check_gqlgen_drift.sh" in run:
+                steps.append(step)
+    return steps
+
+
 def test_go_quality_still_runs_the_drift_guard() -> None:
-    """The step can be renamed; it cannot be removed."""
-    assert "ci/check_gqlgen_drift.sh" in GO_QUALITY.read_text(), (
-        "go-quality.yml no longer invokes ci/check_gqlgen_drift.sh. The gqlgen "
-        "output drift is then unguarded: a regeneration silently reverts the "
+    """The step can be renamed; it cannot be removed or disabled."""
+    steps = _drift_guard_steps()
+    assert steps, (
+        "no go-quality step runs ci/check_gqlgen_drift.sh. The gqlgen output "
+        "drift is then unguarded: a regeneration silently reverts the "
         "nullability hand-edits (CHAOS-4650/4657/4658/4701/4703) and nothing "
-        "fails. Restore the step or delete this test with a ticket saying why."
+        "fails. Restore the step, or delete this test with a ticket saying why."
     )
+    for step in steps:
+        run = step["run"]
+        # The command must be reachable, not merely mentioned -- a `run` that
+        # only echoes the path, or comments it out, satisfies a grep.
+        assert any(
+            line.strip().startswith(
+                (
+                    "bash ci/check_gqlgen_drift.sh",
+                    "ci/check_gqlgen_drift.sh",
+                    "./ci/check_gqlgen_drift.sh",
+                )
+            )
+            for line in run.splitlines()
+        ), f"the guard step mentions the script but does not invoke it:\n{run}"
+
+        condition = str(step.get("if", "")).strip().lower()
+        assert condition not in {
+            "false",
+            "${{ false }}",
+            "$\u007b\u007b false \u007d\u007d",
+        }, (
+            "the guard step is present but disabled by its `if:` condition. That is "
+            "indistinguishable from a working guard in every report, and leaves the "
+            "hand-edits unprotected. Remove the step honestly, with a ticket, rather "
+            "than switching it off."
+        )
 
 
 def test_every_generator_input_triggers_the_workflow_that_runs_the_guard() -> None:
@@ -112,8 +158,16 @@ def test_the_allowlist_is_present_and_well_formed() -> None:
         "hand-edits are gone and that is the bug."
     )
     for entry in entries:
-        assert "\t" in entry, f"entry is not <file><TAB><+|->content: {entry!r}"
-        path, change = entry.split("\t", 1)
+        # <file><TAB><enclosing declaration><TAB><+|-><content>. The middle
+        # field exists because content alone collides: the same comment line
+        # removed from two different types normalises to one entry, so the
+        # guard would see one change where there are two (CHAOS-5489 round r1).
+        parts = entry.split("\t", 2)
+        assert len(parts) == 3, (
+            f"entry is not <file><TAB><decl><TAB><+|->content: {entry!r}"
+        )
+        path, decl, change = parts
+        assert decl, f"entry has an empty declaration field: {entry!r}"
         assert change[:1] in "+-", f"entry does not start with + or -: {entry!r}"
         assert (REPO_ROOT / path).exists(), (
             f"the allowlist names {path}, which does not exist. Either the generated "

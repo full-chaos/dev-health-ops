@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -228,5 +229,32 @@ func TestAnUnstampedBuildSetsNoBuildHeader(t *testing.T) {
 
 	if _, present := recorder.Header()[http.CanonicalHeaderKey(buildHeaderName)]; present {
 		t.Fatal("an unstamped build must set NO build header rather than an empty one")
+	}
+}
+
+// r5 P3: removing the wrapper from the PRODUCTION /query registration
+// survived the suite, because the existing test calls withProofProvenance
+// directly and never asserts that main.go uses it. A guard nothing can
+// kill is a guard nobody is holding.
+//
+// This reads the registration source, which is a weaker assertion than
+// exercising it and is what is available without standing up the whole
+// route: buildQueryRoute needs a database, ClickHouse and a registry.
+// Stated plainly rather than dressed up -- the strong version belongs
+// with the deployed-executed proof run, which is what this whole PR
+// exists to make possible.
+func TestTheProductionQueryRouteIsRegisteredWithProvenance(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	text := string(source)
+
+	if !strings.Contains(text, `mux.HandleFunc("/query", withProofProvenance(`) {
+		t.Fatal("the production /query route is not registered through withProofProvenance: without it no canary or primary operation can be proven, and the Python edge forwards a header that is never set")
+	}
+	// And the proof route keeps its own wrapper.
+	if !strings.Contains(text, `/query`) {
+		t.Fatal("no /query registration found at all -- this test has stopped reading what it thinks it reads")
 	}
 }

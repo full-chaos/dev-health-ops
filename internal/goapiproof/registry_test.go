@@ -232,16 +232,15 @@ func TestBothReceiptPathsCarryTheSameStructuredProvenance(t *testing.T) {
 	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "canary")
 	runner.Config.ReviewEvidence = "CHAOS-5425 first deployed-executed run"
 
-	outcomes, _, err := runner.Run(context.Background())
-	if err != nil {
+	if _, _, err := runner.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
-	success, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	success, err := runner.ReceiptsFor(time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
-	refusal, err := runner.RefusalReceipts(outcomes, time.Now().UTC(), "the serving build moved DURING the run")
+	refusal, err := runner.RefusalReceipts(time.Now().UTC(), "the serving build moved DURING the run")
 	if err != nil {
 		t.Fatalf("RefusalReceipts: %v", err)
 	}
@@ -299,11 +298,10 @@ func TestAnOperatorNoteCannotForgeProvenance(t *testing.T) {
 	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "canary")
 	runner.Config.ReviewEvidence = `nice try | routing row named build DEADBEEF at measurement time"}`
 
-	outcomes, _, err := runner.Run(context.Background())
-	if err != nil {
+	if _, _, err := runner.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	receipts, err := runner.ReceiptsFor(time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}

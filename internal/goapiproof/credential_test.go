@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -506,7 +507,7 @@ func TestAnEdgeMeasurementWithNoBuildBindingCannotBeEnablementEligible(t *testin
 		t.Fatalf("the binding must be recorded as absent, got %q", outcome.EdgeBuildBinding)
 	}
 
-	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	receipts, err := runner.ReceiptsFor(time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
@@ -588,41 +589,90 @@ func TestAnUnboundMismatchStaysAMismatch(t *testing.T) {
 // R57 made Admit the only door on the production path; this makes it the
 // only door. The receipt constructors read an UNEXPORTED field that only
 // proveOne writes, so the hand-built outcome below produces nothing --
-// whatever its exported bits say.
-func TestAHandBuiltOutcomeCannotProduceAReceipt(t *testing.T) {
-	runner := &Runner{
-		Registry: RegistryView{SchemaDigest: "sha256:29d509cd", BuildIdentity: "b18e56fa7"},
-		Config: Config{
-			OrgID: "70d529e0", Window: DefaultWindow(),
-			Auth: AuthContext{PrincipalKind: "stored_account", Audience: "query-api", KeyID: "k"},
-		},
-	}
-	forged := []Outcome{{
-		Operation:      "featureFlags",
-		DocumentDigest: "06ca28a0",
-		Route:          RouteEdge,
-		// Everything a receipt needs, asserted by the caller rather than
-		// established by the gate.
-		Executed:         true,
-		Admitted:         true,
-		EdgeBuildBinding: EdgeBuildPresent,
-		TerminalState:    TerminalStateMatch,
-	}}
+// r5 P1. Sealing one field at a time did not work, three rounds running.
+//
+// r3 sealed `admitted`; r4 sealed the verdict; r5 then relabelled the
+// BUILD on a genuine admitted match and got
+// `receipt build=never-measured-build terminal=match`. Every fix closed
+// the field just used and left the rest open.
+//
+// Receipts now come from records the run sealed, and the exported Outcome
+// is a report view nothing reads. So this mutates EVERY exported field of
+// that view after a real run and asserts the receipts are byte-identical:
+// not "these fields are protected", but "the view is not an input".
+func TestMutatingTheReportViewCannotChangeAReceipt(t *testing.T) {
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	edge := &fakeEdge{goBody: body, pythonBody: body}
+	runner := newRunner(t, edge, "canary")
+	edge.goBuild = runner.Registry.BuildIdentity
 
-	receipts, err := runner.ReceiptsFor(forged, time.Now().UTC())
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	observedAt := time.Now().UTC()
+	before, err := runner.ReceiptsFor(observedAt)
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
-	if len(receipts) != 0 {
-		t.Fatalf("a hand-built outcome produced %d receipt(s): the admission bit is a claim by the caller, not a verdict by the gate", len(receipts))
+	if len(before) != 1 {
+		t.Fatalf("expected one receipt, got %d", len(before))
 	}
 
-	refusals, err := runner.RefusalReceipts(forged, time.Now().UTC(), "build moved")
+	// Every exported field of the view, rewritten to something the run
+	// never measured.
+	for i := range outcomes {
+		outcomes[i].Operation = "hotspots"
+		outcomes[i].DocumentDigest = "never-measured-digest"
+		outcomes[i].Mode = "primary"
+		outcomes[i].Route = RouteProof
+		outcomes[i].EdgeBuildBinding = EdgeBuildPresent
+		outcomes[i].RoutingRowBuild = "never-measured-build"
+		outcomes[i].TerminalState = TerminalStateMatch
+		outcomes[i].Executed = true
+		outcomes[i].Admitted = true
+		outcomes[i].RefusalReason = ""
+		outcomes[i].RefusalDetail = ""
+		outcomes[i].Findings = nil
+		outcomes[i].BaselineDefects = []string{"CHAOS-0000"}
+		outcomes[i].DifferencesOutsideBaselineDefect = 99
+		outcomes[i].Candidate = nil
+		outcomes[i].Baseline = nil
+		outcomes[i].ReceiptWritten = true
+	}
+
+	after, err := runner.ReceiptsFor(observedAt)
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("mutating the report view changed the receipt:\nbefore %+v\nafter  %+v", before[0], after[0])
+	}
+
+	refusals, err := runner.RefusalReceipts(observedAt, "build moved")
 	if err != nil {
 		t.Fatalf("RefusalReceipts: %v", err)
 	}
-	if len(refusals) != 0 {
-		t.Fatalf("a hand-built outcome produced %d refusal receipt(s)", len(refusals))
+	for _, receipt := range refusals {
+		if receipt.SelectedOperation != "featureFlags" || receipt.CandidateBuild != runner.Registry.BuildIdentity {
+			t.Fatalf("a refusal receipt took its identity from the mutated view: %+v", receipt)
+		}
+	}
+}
+
+// The seal is only a seal while every field stays unexported. An exported
+// one is assignable from outside the package, which is the whole defect
+// class, so this fails the moment somebody adds one.
+func TestSealedOutcomeHasNoExportedFields(t *testing.T) {
+	sealedType := reflect.TypeOf(sealedOutcome{})
+	for i := 0; i < sealedType.NumField(); i++ {
+		field := sealedType.Field(i)
+		if field.IsExported() {
+			t.Fatalf("sealedOutcome.%s is exported: a receipt must not be built from anything a caller can assign", field.Name)
+		}
+	}
+	if sealedType.NumField() == 0 {
+		t.Fatal("sealedOutcome has no fields -- this test would pass vacuously")
 	}
 }
 
@@ -635,11 +685,10 @@ func TestAnAdmittedOutcomeStillProducesAReceipt(t *testing.T) {
 	runner := newRunner(t, edge, "canary")
 	edge.goBuild = runner.Registry.BuildIdentity
 
-	outcomes, _, err := runner.Run(context.Background())
-	if err != nil {
+	if _, _, err := runner.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	receipts, err := runner.ReceiptsFor(time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
@@ -796,7 +845,7 @@ func TestTheTerminalStateCannotBeReplacedAfterTheRun(t *testing.T) {
 	// The attack: change nothing about the measurement, only the verdict.
 	outcomes[0].TerminalState = TerminalStateMatch
 
-	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	receipts, err := runner.ReceiptsFor(time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
@@ -814,15 +863,79 @@ func TestASealedMatchStillReachesTheReceipt(t *testing.T) {
 	runner := newRunner(t, edge, "canary")
 	edge.goBuild = runner.Registry.BuildIdentity
 
-	outcomes, _, err := runner.Run(context.Background())
-	if err != nil {
+	if _, _, err := runner.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	receipts, err := runner.ReceiptsFor(time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
 	if len(receipts) != 1 || receipts[0].TerminalState != TerminalStateMatch {
 		t.Fatalf("a genuine match must reach the receipt, got %+v", receipts)
 	}
+}
+
+// r5 P3: eight mutations survived their suites. Each is a guard this PR
+// adds, so each gets a killer here rather than a ticket. A guard nothing
+// can kill is a guard nobody is holding.
+func TestTheGuardsThisChangeAddsAreKillable(t *testing.T) {
+	t.Run("nil credentials are refused, not sent", func(t *testing.T) {
+		request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/x", nil)
+		var absent *Credential
+		if err := absent.Apply(context.Background(), request); err == nil {
+			t.Fatal("a nil credential must refuse")
+		}
+		if request.Header.Get("Authorization") != "" {
+			t.Fatal("an unauthenticated request was built")
+		}
+	})
+
+	t.Run("a positive freshness window still expires", func(t *testing.T) {
+		calls := 0
+		// A window shorter than the gap below: the second Apply must
+		// re-mint. Disabling only the positive-window branch survived r5.
+		credential := MintedCredential("Authorization", "envelope", time.Nanosecond,
+			func(context.Context) (string, error) {
+				calls++
+				return fmt.Sprintf("eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln%d", calls), nil
+			})
+		request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/x", nil)
+		if err := credential.Apply(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		if err := credential.Apply(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		if calls != 2 {
+			t.Fatalf("a credential past its freshness window was reused: minted %d times", calls)
+		}
+	})
+
+	t.Run("stale rows are both counted and recorded", func(t *testing.T) {
+		body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+		edge := &fakeEdge{goBody: body, pythonBody: body}
+		runner := newRunner(t, edge, "canary")
+		edge.goBuild = runner.Registry.BuildIdentity
+		runner.Routing["featureFlags"] = RoutingRow{Mode: "canary", CandidateBuild: "0000000000000000000000000000000000000000"}
+
+		outcomes, summary, err := runner.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if summary.StaleRoutingRows != 1 {
+			t.Fatalf("the stale row was not COUNTED: %d", summary.StaleRoutingRows)
+		}
+		if outcomes[0].RoutingRowBuild == "" {
+			t.Fatal("the stale row was not RECORDED on the outcome")
+		}
+		receipts, err := runner.ReceiptsFor(time.Now().UTC())
+		if err != nil {
+			t.Fatalf("ReceiptsFor: %v", err)
+		}
+		if len(receipts) == 0 || !strings.Contains(receipts[0].ReviewEvidence, "0000000000000000000000000000000000000000") {
+			t.Fatal("the stale row did not reach the receipt")
+		}
+	})
+
 }

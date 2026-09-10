@@ -309,3 +309,49 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = original
 	return <-done
 }
+
+// r5 P3: three surviving mutations in this command's guards.
+func TestThisCommandsGuardsAreKillable(t *testing.T) {
+	t.Run("the helper timeout stays short enough to diagnose", func(t *testing.T) {
+		// Raising it 20s -> 200s survived r5's suite. A hung helper that
+		// takes three minutes to fail is one an operator will kill by
+		// hand and never diagnose.
+		if mintTimeout > 30*time.Second {
+			t.Fatalf("mintTimeout is %s", mintTimeout)
+		}
+	})
+
+	t.Run("the routing cross-check is reachable from the CLI path", func(t *testing.T) {
+		// Bypassing the cross-check survived r5. Asserted against the
+		// package function the CLI calls, so removing the call site
+		// leaves this failing rather than untested.
+		err := goapiproof.VerifyCandidateBuild("running-build", "", map[string]goapiproof.RoutingRow{
+			"featureFlags": {Mode: "canary", CandidateBuild: "some-other-build"},
+		})
+		if err == nil {
+			t.Fatal("a row naming another build must refuse the run")
+		}
+	})
+
+	t.Run("the binding line is counted, not hardcoded", func(t *testing.T) {
+		// Hardcoding `absent=1` survived r5, so this drives a PRESENT
+		// binding and asserts the report says so.
+		outcomes := []goapiproof.Outcome{{
+			Operation: "featureFlags", Route: goapiproof.RouteEdge,
+			Executed: true, Admitted: true,
+			EdgeBuildBinding: goapiproof.EdgeBuildPresent,
+			TerminalState:    "match",
+		}}
+		printed := captureStdout(t, func() {
+			_ = emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
+				goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"},
+				outcomes, goapiproof.Summary{Attempted: 1, Admitted: 1, Executed: 1}, nil)
+		})
+		if !strings.Contains(printed, "build binding "+goapiproof.EdgeBuildPresent+" = 1") {
+			t.Fatalf("the binding line did not follow the outcomes:\n%s", printed)
+		}
+		if strings.Contains(printed, goapiproof.EdgeBuildAbsent+" = 1") {
+			t.Fatalf("the binding line was hardcoded to absent:\n%s", printed)
+		}
+	})
+}

@@ -253,62 +253,37 @@ func TestNullRootIsAdmissibleOnlyWhereTheSDLAllowsIt(t *testing.T) {
 	}
 }
 
-// Receipt construction requires ADMISSION, not merely Executed.
+// Receipt construction requires a MEASUREMENT, not a caller's assertion
+// that one happened.
 //
-// `Run` sets Executed only after Admit passes, so the two cannot disagree
-// today -- but ReceiptsFor is exported and takes whatever it is handed, and
-// a confirmation-pass probe drove exactly that: a hand-built outcome with
-// Executed true and Admitted false produced a receipt.
+// This test has been rewritten three times, and the sequence is the point.
+// It began by checking `Executed`; a probe set `Executed` by hand. r3 made
+// it check an unexported `admitted`; r4 reassigned the exported verdict
+// instead. r5 relabelled the build and the operation on a genuine run.
+// Each version closed the field that had just been used.
 //
-// r3 then showed the fix was incomplete: the check read an EXPORTED bool,
-// which any caller can set. The constructors now read an unexported field
-// written only by proveOne, so a hand-built outcome produces nothing
-// whatever its exported bits say -- see
-// TestAHandBuiltOutcomeCannotProduceAReceipt.
-func TestReceiptsRequireAdmissionNotJustExecution(t *testing.T) {
+// There is now nothing to hand these constructors: they read only the
+// sealed records `Run` captured. A caller with no measurement gets no
+// receipt because it has nothing to pass, not because a check refused it.
+func TestReceiptsComeOnlyFromAMeasuredRun(t *testing.T) {
 	runner := &Runner{
 		Registry: RegistryView{SchemaDigest: "sha256:x", BuildIdentity: "b"},
 		Config:   Config{OrgID: "70d529e0", Window: DefaultWindow()},
 	}
-	unadmitted := []Outcome{{
-		Operation:      "featureFlags",
-		DocumentDigest: "d",
-		Route:          RouteEdge,
-		Executed:       true,
-		Admitted:       false,
-		TerminalState:  TerminalStateMatch,
-	}}
 
-	receipts, err := runner.ReceiptsFor(unadmitted, time.Now().UTC())
+	receipts, err := runner.ReceiptsFor(time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
 	if len(receipts) != 0 {
-		t.Fatalf("an unadmitted outcome must produce no receipt, got %d", len(receipts))
+		t.Fatalf("a runner that never ran produced %d receipt(s)", len(receipts))
 	}
 
-	refusals, err := runner.RefusalReceipts(unadmitted, time.Now().UTC(), "build moved")
+	refusals, err := runner.RefusalReceipts(time.Now().UTC(), "build moved")
 	if err != nil {
 		t.Fatalf("RefusalReceipts: %v", err)
 	}
 	if len(refusals) != 0 {
-		t.Fatalf("an unadmitted outcome has no withheld result either, got %d", len(refusals))
-	}
-
-	// The control USED to be `unadmitted[0].Admitted = true`, and r3
-	// showed that was the hole rather than the control: setting the
-	// exported bool by hand produced a real receipt, so this test was
-	// asserting -- and protecting -- the very behaviour that made the
-	// admission invariant unenforceable from outside proveOne.
-	//
-	// The bit the constructors read is now unexported and written only by
-	// proveOne, so the control has to be an outcome that actually passed
-	// the gate. It lives in credential_test.go as
-	// TestAnAdmittedOutcomeStillProducesAReceipt, driven through Run
-	// against a fake edge, because that is the only way to obtain one.
-	// Asserted here too, so the discrimination this test claims is proven
-	// in this test:
-	if len(receipts) != 0 {
-		t.Fatal("receipts leaked from an unadmitted outcome")
+		t.Fatalf("a runner that never ran produced %d refusal receipt(s)", len(refusals))
 	}
 }

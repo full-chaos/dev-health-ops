@@ -320,9 +320,9 @@ func run() error {
 	case stabilityErr != nil:
 		// No match receipt may be written -- but writing nothing would make
 		// the run invisible, indistinguishable from one that never ran.
-		receipts, receiptErr = runner.RefusalReceipts(outcomes, observedAt, stabilityErr.Error())
+		receipts, receiptErr = runner.RefusalReceipts(observedAt, stabilityErr.Error())
 	default:
-		receipts, receiptErr = runner.ReceiptsFor(outcomes, observedAt)
+		receipts, receiptErr = runner.ReceiptsFor(observedAt)
 	}
 	if receiptErr != nil {
 		return receiptErr

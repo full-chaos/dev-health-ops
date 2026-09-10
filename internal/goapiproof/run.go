@@ -181,6 +181,46 @@ type Outcome struct {
 	ReceiptWritten                   bool         `json:"receipt_written"`
 }
 
+// sealedOutcome is what a measurement ACTUALLY established, captured by
+// proveOne at the moment it was established, and the only thing a receipt
+// is ever built from.
+//
+// This type exists because sealing one field at a time did not work, three
+// rounds running. r3 sealed `admitted` after a hand-built Outcome forged a
+// receipt; r4 sealed the verdict after a real outcome's TerminalState was
+// reassigned; r5 then relabelled the build, schema digest, org, document,
+// operation and route on a genuine admitted match and got
+// `receipt build=never-measured-build terminal=match`. Each fix closed the
+// field that had just been used and left the rest open, which is a
+// blacklist whose default is TRUST -- the exact shape R57 was written to
+// end on the admission side and which I rebuilt here.
+//
+// So there is no field to reassign rather than a growing list of fields
+// that may not be. Every field is unexported; the struct never leaves this
+// package; the exported Outcome is a report VIEW derived from it, and no
+// constructor, writer or receipt reads that view. TestSealedOutcomeHasNoExportedFields
+// fails if anyone adds one.
+type sealedOutcome struct {
+	operation       string
+	documentDigest  string
+	schemaDigest    string
+	candidateBuild  string
+	orgID           string
+	mode            string
+	route           string
+	edgeBinding     string
+	routingRowBuild string
+	terminalState   string
+	executed        bool
+	admitted        bool
+
+	baselineRef  string
+	candidateRef string
+
+	baselineDefects                  []string
+	differencesOutsideBaselineDefect int
+}
+
 // Summary is the explicit-zero telemetry block. Every field is printed on
 // every run, including the zeros: a run that measured nothing must be
 // impossible to mistake for a run that found nothing wrong.
@@ -265,6 +305,12 @@ type Runner struct {
 	Artifacts *ArtifactStore
 	Config    Config
 	Now       func() time.Time
+
+	// sealed is what the last Run measured. Receipts are built from THIS
+	// and never from anything a caller holds -- see sealedOutcome. It is
+	// populated only by Run, so ReceiptsFor takes no outcomes at all:
+	// there is nothing to hand it and therefore nothing to forge.
+	sealed []sealedOutcome
 }
 
 // ErrNothingMeasured is returned when a run produced no executed
@@ -308,6 +354,9 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		ByRefusalReason: map[string]int{},
 	}
 	outcomes := make([]Outcome, 0, len(operations))
+	// Reset, so a second Run cannot write receipts for the first one's
+	// measurements.
+	r.sealed = make([]sealedOutcome, 0, len(operations))
 
 	for _, operation := range operations {
 		summary.Attempted++
@@ -330,6 +379,7 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		}
 
 		outcomes = append(outcomes, outcome)
+		r.sealed = append(r.sealed, r.seal(outcome))
 	}
 
 	if summary.Executed == 0 {
@@ -351,33 +401,33 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 // hand-built outcome with Executed set and Admitted false produced a
 // receipt. Unreachable from the command, one line to make unreachable
 // everywhere.
-func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receipt, error) {
-	receipts := make([]Receipt, 0, len(outcomes))
-	for _, outcome := range outcomes {
-		if !outcome.Executed || !outcome.admitted {
+func (r *Runner) ReceiptsFor(observedAt time.Time) ([]Receipt, error) {
+	receipts := make([]Receipt, 0, len(r.sealed))
+	for _, sealed := range r.sealed {
+		if !sealed.executed || !sealed.admitted {
 			continue
 		}
-		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
+		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, r.variablesFor(sealed.operation))
 		if err != nil {
 			return nil, err
 		}
 		receipts = append(receipts, Receipt{
-			SchemaDigest:                     r.Registry.SchemaDigest,
-			DocumentDigest:                   outcome.DocumentDigest,
-			SelectedOperation:                outcome.Operation,
-			CandidateBuild:                   r.Registry.BuildIdentity,
+			SchemaDigest:                     sealed.schemaDigest,
+			DocumentDigest:                   sealed.documentDigest,
+			SelectedOperation:                sealed.operation,
+			CandidateBuild:                   sealed.candidateBuild,
 			RequestIdentity:                  identity,
 			Stage:                            Stage,
-			TerminalState:                    outcome.terminalState,
-			OrgID:                            r.Config.OrgID,
-			ReviewEvidence:                   r.reviewEvidence(outcome, "", 0, 0),
+			TerminalState:                    sealed.terminalState,
+			OrgID:                            sealed.orgID,
+			ReviewEvidence:                   r.reviewEvidence(sealed, "", 0, 0),
 			RecordedBy:                       r.Config.RecordedBy,
 			ObservedAt:                       observedAt,
-			BaselineResponseRef:              observationRef(outcome.Baseline),
-			CandidateResponseRef:             observationRef(outcome.Candidate),
-			MeasurementRoute:                 outcome.Route,
-			BaselineDefects:                  outcome.BaselineDefects,
-			DifferencesOutsideBaselineDefect: outcome.DifferencesOutsideBaselineDefect,
+			BaselineResponseRef:              sealed.baselineRef,
+			CandidateResponseRef:             sealed.candidateRef,
+			MeasurementRoute:                 sealed.route,
+			BaselineDefects:                  sealed.baselineDefects,
+			DifferencesOutsideBaselineDefect: sealed.differencesOutsideBaselineDefect,
 		})
 	}
 	return receipts, nil
@@ -398,35 +448,35 @@ func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receip
 // run-level row for a structural reason: go_api_proof_run carries a
 // 4-column composite FK to go_api_candidate_build, so a row that named no
 // operation could not be written without inventing one.
-func (r *Runner) RefusalReceipts(outcomes []Outcome, observedAt time.Time, cause string) ([]Receipt, error) {
+func (r *Runner) RefusalReceipts(observedAt time.Time, cause string) ([]Receipt, error) {
 	admitted := 0
-	for _, outcome := range outcomes {
-		if outcome.Executed && outcome.admitted {
+	for _, sealed := range r.sealed {
+		if sealed.executed && sealed.admitted {
 			admitted++
 		}
 	}
-	receipts := make([]Receipt, 0, len(outcomes))
-	for _, outcome := range outcomes {
-		if !outcome.Executed || !outcome.admitted {
+	receipts := make([]Receipt, 0, len(r.sealed))
+	for _, sealed := range r.sealed {
+		if !sealed.executed || !sealed.admitted {
 			continue
 		}
-		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
+		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, r.variablesFor(sealed.operation))
 		if err != nil {
 			return nil, err
 		}
 		receipts = append(receipts, Receipt{
-			SchemaDigest:      r.Registry.SchemaDigest,
-			DocumentDigest:    outcome.DocumentDigest,
-			SelectedOperation: outcome.Operation,
-			CandidateBuild:    r.Registry.BuildIdentity,
+			SchemaDigest:      sealed.schemaDigest,
+			DocumentDigest:    sealed.documentDigest,
+			SelectedOperation: sealed.operation,
+			CandidateBuild:    sealed.candidateBuild,
 			RequestIdentity:   identity,
 			Stage:             Stage,
 			TerminalState:     "proof_failed",
-			OrgID:             r.Config.OrgID,
-			ReviewEvidence:    r.reviewEvidence(outcome, cause, admitted, len(outcomes)),
+			OrgID:             sealed.orgID,
+			ReviewEvidence:    r.reviewEvidence(sealed, cause, admitted, len(r.sealed)),
 			RecordedBy:        r.Config.RecordedBy,
 			ObservedAt:        observedAt,
-			MeasurementRoute:  outcome.Route,
+			MeasurementRoute:  sealed.route,
 		})
 	}
 	return receipts, nil
@@ -674,10 +724,35 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		})
 	}
 	// Sealed LAST, from whatever the run concluded after every adjustment
-	// above. Assigning outcome.TerminalState afterwards changes the report
+	// above. Assigning any exported field afterwards changes the report
 	// and cannot change a receipt.
 	outcome.terminalState = outcome.TerminalState
 	return outcome
+}
+
+// seal captures what a measurement established, at the moment it was
+// established. Every value comes from the run -- the registry the process
+// reported, the config this run was given, the outcome proveOne produced --
+// and none of it can be reached again from outside this package.
+func (r *Runner) seal(outcome Outcome) sealedOutcome {
+	return sealedOutcome{
+		operation:                        outcome.Operation,
+		documentDigest:                   outcome.DocumentDigest,
+		schemaDigest:                     r.Registry.SchemaDigest,
+		candidateBuild:                   r.Registry.BuildIdentity,
+		orgID:                            r.Config.OrgID,
+		mode:                             outcome.Mode,
+		route:                            outcome.Route,
+		edgeBinding:                      outcome.EdgeBuildBinding,
+		routingRowBuild:                  outcome.RoutingRowBuild,
+		terminalState:                    outcome.terminalState,
+		executed:                         outcome.Executed,
+		admitted:                         outcome.admitted,
+		baselineRef:                      observationRef(outcome.Baseline),
+		candidateRef:                     observationRef(outcome.Candidate),
+		baselineDefects:                  append([]string(nil), outcome.BaselineDefects...),
+		differencesOutsideBaselineDefect: outcome.DifferencesOutsideBaselineDefect,
+	}
 }
 
 // decodeLeg turns one leg's body into a Snapshot, or names why it cannot.
@@ -781,7 +856,7 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 		// The error is returned verbatim from net/http, which includes the
 		// URL but never a header value -- no credential can reach a log
 		// through this path.
-		return Observation{}, fmt.Errorf("request to %s failed (the error is not quoted: an HTTP client routinely embeds the URL it was given, credentials and all): %w", EndpointLabel(url), StripEndpointFromError(err))
+		return Observation{}, fmt.Errorf("request to %s failed (the error is not quoted: an HTTP client routinely embeds the URL it was given, credentials and all): %w", EndpointLabel(url), SanitizeError(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 
@@ -878,12 +953,12 @@ type ReceiptProvenance struct {
 // for both the success and the refusal path (r1 P2): the refusal path used
 // to build its own prose and dropped the routing-row fact entirely, so the
 // receipts that most needed provenance had the least.
-func (r *Runner) reviewEvidence(outcome Outcome, refusal string, measured, attempted int) string {
+func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, attempted int) string {
 	provenance := ReceiptProvenance{
 		Operator:         r.Config.ReviewEvidence,
-		MeasurementRoute: outcome.Route,
-		EdgeBuildBinding: outcome.EdgeBuildBinding,
-		RoutingRowBuild:  outcome.RoutingRowBuild,
+		MeasurementRoute: sealed.route,
+		EdgeBuildBinding: sealed.edgeBinding,
+		RoutingRowBuild:  sealed.routingRowBuild,
 		Refusal:          refusal,
 	}
 	if refusal != "" {

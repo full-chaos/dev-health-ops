@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -124,41 +125,71 @@ func safeEndpoint(raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
-// StripEndpointFromError removes any URL an HTTP client embedded in its
-// own error text.
-//
-// net/url's *url.Error redacts USERINFO when it formats the URL, which is
-// what made this class survive three rounds: the sanitised copy sits next
-// to whatever the outer wrap prints, and a reader sees the asterisks and
-// moves on. On the opaque form there is no userinfo, so the redaction is a
-// no-op and the credential rides through in full -- measured by r4.
-//
-// So the URL is REMOVED rather than trusted to redact itself. The
-// operation and the underlying cause are kept, which is what a reader
-// needs; the caller has already named the endpoint safely.
-func StripEndpointFromError(err error) error {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
-		return fmt.Errorf("%s: %w", urlErr.Op, urlErr.Err)
-	}
-	return err
-}
-
 // ErrCredentialInURL is returned for a URL carrying embedded credentials.
 var ErrCredentialInURL = errors.New("goapiproof: URL carries embedded credentials")
 
-// RefuseCredentialsInURL rejects a URL with userinfo, or one this package
-// cannot safely describe.
+// SanitizeError is the package's ERROR BOUNDARY: every error that leaves
+// goapiproof for an operator goes through it.
 //
-// EndpointLabel keeps a credential out of THIS program's messages; only
-// refusal keeps it off the command line, where the process table, the
-// shell history and every log that records an invocation can already read
-// it. So both: refuse at the boundary, and never print a raw URL even
-// then, because a URL can reach an error from somewhere the boundary does
-// not cover.
+// Three rounds of per-site stripping failed, each in a place the previous
+// fix had not imagined. r3 wrapped the URL in the message; r4 found the
+// opaque form, where url.Error has no userinfo to redact; r5 found a
+// credential inside a REDIRECT's Location header -- `failed to parse
+// Location header "http://host/SECRET/%zz"` -- reached through a nested
+// wrap that the top-level unwrap never saw, plus unsanitised
+// request-construction errors in three functions.
 //
-// The no-"//" form is refused as unparseable rather than inspected for
-// userinfo, because that is exactly the form where User is nil while a
+// The pattern is the finding. A stripper that unwraps one known error type
+// at one known site is a blacklist, and every round found the entry it did
+// not have. This walks the WHOLE chain and then scrubs the rendered text,
+// so a URL is removed wherever it came from and whatever wrapped it --
+// including from a library that has not been written yet.
+func SanitizeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(scrubURLs(unwrapOperation(err)))
+}
+
+// unwrapOperation renders the whole chain, expanding a *url.Error into its
+// operation, its URL and its cause rather than using its own formatting.
+//
+// The URL is deliberately KEPT here and handed to scrubURLs, which rebuilds
+// it from its safe parts or replaces it wholesale. Dropping it would be
+// safe and unhelpful: an operator staring at "Get: connection refused"
+// cannot tell which of four endpoints refused. url.Error's OWN formatting
+// is what must not be trusted -- it redacts userinfo and nothing else, so
+// it is a no-op on every other shape a credential takes.
+func unwrapOperation(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Op + " " + urlErr.URL + ": " + unwrapOperation(urlErr.Err)
+	}
+	return err.Error()
+}
+
+// urlToken matches anything URL-SHAPED, with or without "//": a scheme,
+// a colon, and a run of non-space characters. Deliberately greedy about
+// what counts as a URL -- over-scrubbing an error message costs
+// legibility, under-scrubbing costs a credential.
+var urlToken = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*:[^\s"']+`)
+
+// scrubURLs replaces every URL-shaped token with its allowlisted rebuild,
+// or with a placeholder when it cannot be rebuilt safely.
+func scrubURLs(message string) string {
+	return urlToken.ReplaceAllStringFunc(message, func(token string) string {
+		trimmed := strings.TrimRight(token, `.,;:)]}"'`)
+		suffix := token[len(trimmed):]
+		parsed, err := safeEndpoint(trimmed)
+		if err != nil {
+			return "(redacted url)" + suffix
+		}
+		// Scheme, host and PATH only -- never userinfo, query or fragment,
+		// each of which has carried a credential in a real finding.
+		return parsed.Scheme + "://" + parsed.Host + parsed.Path + suffix
+	})
+}
+
 // credential is present -- checking User there would wave it through.
 func RefuseCredentialsInURL(flagName, raw string) error {
 	if _, err := safeEndpoint(raw); err != nil {
@@ -195,7 +226,7 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return RegistryView{}, fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(registryURL), StripEndpointFromError(err))
+		return RegistryView{}, fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(registryURL), SanitizeError(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
@@ -256,7 +287,7 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(buildInfoURL), StripEndpointFromError(err))
+		return "", fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(buildInfoURL), SanitizeError(err))
 	}
 	defer func() { _ = response.Body.Close() }()
 

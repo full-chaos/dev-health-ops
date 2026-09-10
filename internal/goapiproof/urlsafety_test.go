@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -88,8 +89,61 @@ func TestAClosedEndpointDoesNotLeakItsURL(t *testing.T) {
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("a connection failure leaked the credential: %v", err)
 	}
-	if !errors.Is(err, err) { // keep errors imported for the wrap assertions above
-		t.Fatal("unreachable")
+}
+
+// r5 P1-2: a credential inside a REDIRECT's Location header reached the
+// operator through a NESTED wrap that the top-level unwrap never saw.
+// Three rounds of per-site stripping each missed the site the next round
+// found, so the sanitizer is now one boundary that walks the whole chain
+// and scrubs the rendered text.
+func TestTheSanitizerScrubsURLsWhereverTheyCameFrom(t *testing.T) {
+	const secret = "REVIEW_SYNTHETIC_SECRET"
+
+	for name, err := range map[string]error{
+		"a bare message": errors.New(`failed to parse Location header "http://host/` + secret + `/%zz"`),
+		"a nested wrap": fmt.Errorf("outer: %w",
+			fmt.Errorf("middle: %w",
+				errors.New(`Get "http://alice:`+secret+`@host/registry": dial tcp`))),
+		"a url.Error": &url.Error{
+			Op:  "Get",
+			URL: "http://alice:" + secret + "@host/registry",
+			Err: errors.New(`failed to parse Location header "http:` + secret + `@host/x"`),
+		},
+		"the opaque form": errors.New(`Get "http:` + secret + `@host/registry": no Host`),
+		"a credential in the query": errors.New(
+			`Get "http://host/registry?token=` + secret + `": dial tcp`),
+		"a credential in the fragment": errors.New(
+			`Get "http://host/registry#` + secret + `": dial tcp`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			sanitized := SanitizeError(err)
+			if strings.Contains(sanitized.Error(), secret) {
+				t.Fatalf("the credential survived sanitizing: %v", sanitized)
+			}
+		})
 	}
-	_ = fmt.Sprint(err)
+}
+
+// It must still say something an operator can act on: the operation and
+// the safe part of the endpoint survive.
+func TestTheSanitizerKeepsWhatIsSafeToKeep(t *testing.T) {
+	sanitized := SanitizeError(&url.Error{
+		Op:  "Get",
+		URL: "http://query-api.test:8090/registry",
+		Err: errors.New("connection refused"),
+	}).Error()
+
+	for _, want := range []string{"Get", "connection refused", "query-api.test"} {
+		if !strings.Contains(sanitized, want) {
+			t.Fatalf("the sanitizer removed something safe and useful (%q): %s", want, sanitized)
+		}
+	}
+}
+
+// A nil error stays nil, so the boundary can be applied unconditionally at
+// a call site without inventing a failure.
+func TestSanitizingNilStaysNil(t *testing.T) {
+	if SanitizeError(nil) != nil {
+		t.Fatal("SanitizeError(nil) must be nil")
+	}
 }

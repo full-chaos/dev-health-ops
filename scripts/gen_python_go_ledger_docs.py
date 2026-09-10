@@ -398,7 +398,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "async_runner.py": {
         "category": "c",
-        "evidence": "imported by live sync_bootstrap/system_ops/system_webhooks/work_graph_tasks (and feature_flag_sync, itself LIVE per that file's own row) — 'run coroutine inside Celery task' helper",
+        "evidence": "imported by live sync_bootstrap.py, processors/dataset_adapters.py, api/external_ingest/consumer.py, and feature_flag_sync.py (itself LIVE per that file's own row) — 'run coroutine inside Celery task' helper. work_graph_tasks.py, a former importer, was deleted (CHAOS-3093)",
         "ticket": "n/a",
     },
     "celery_app.py": {
@@ -408,18 +408,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "config.py": {
         "category": "c",
-        "evidence": "used by queue_monitor.py, queues.py, celery_app.py, sync_reconciler.py, external_ingest_reconciler.py, and api/external_ingest/stream_health.py — env/config constants",
+        "evidence": "used by queues.py, celery_app.py, sync_reconciler.py, and api/external_ingest/stream_health.py — env/config constants. queue_monitor.py and external_ingest_reconciler.py, former importers, were deleted (CHAOS-3093)",
         "ticket": "n/a",
-    },
-    "external_ingest_recompute.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` x2 (L230,L313); sole importer tasks.py:1; zero hits in api/internal/*.py",
-        "ticket": "CHAOS-4439 (dead worker modules)",
-    },
-    "external_ingest_reconciler.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` (L59 prune_external_ingest_batches); sole Python importer tasks.py:2-4 -- CHAOS-4439 had found (config.py:164-167) this task was still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod; CHAOS-4065 (this PR) replaced that fleet with cmd/ask-dev-jobs-probe, which calls internal/jobs/system.ExternalIngestBatchStore directly -- the acceptance-fleet blocker is gone, deletion is CHAOS-3093's scope",
-        "ticket": "CHAOS-3093 (delete)",
     },
     "feature_flag_sync.py": {
         "category": "a",
@@ -435,11 +425,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "category": "a",
         "evidence": "resolve_worker_job_route called sync_units.py:999, inside dispatch_sync_run",
         "ticket": "n/a",
-    },
-    "metrics_daily.py": {
-        "category": "a",
-        "evidence": "`@celery_app.task` (L19 run_daily_metrics); sole Python importer tasks.py:5 -- CHAOS-4439 peer read (PR #2237, lane-5006-provider-kind) found a live producer that CHAOS-4439's own original ticket evidence missed: external_ingest/recompute.py:356 (celery.chain per-repo fan-out) and :397 (send_task repo-less fallback) dispatch it by the exact registered task name `dev_health_ops.workers.tasks.run_daily_metrics`, reachable live from external_ingest/processor.py:414's batch-accept path. CHAOS-3092 (PR-A) deleted the OTHER producer this row used to be contrasted with -- the HTTP daily-metrics bridge route (worker_metrics.py's `execute_daily_metrics` -> metrics.job_daily) is gone, so external_ingest/recompute.py is now the only live Python producer of daily-metrics compute. The task itself stays (CHAOS-5296).",
-        "ticket": "CHAOS-4439 (kept -- live producer via external-ingest recompute chain; deletion waits on CHAOS-4427, not CUT-11/CHAOS-3083 as an earlier draft wrongly cited)",
     },
     "org_guard.py": {
         "category": "c",
@@ -461,11 +446,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported sync_units.py:125, used sync_units.py:999-1000 inside dispatch_sync_run",
         "ticket": "n/a",
     },
-    "queue_monitor.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` (L84 monitor_queue_depths); Python importers celery_app.py (comment only) + tasks.py:5; no route caller -- CHAOS-4439 had found (config.py:164-167) this task was still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod; already fully superseded in prod by cmd/dev-health-worker/queue_health.go's queueHealthMonitor (CHAOS-3040 P2, landed #1738), and CHAOS-4065 (this PR) replaced the acceptance fleet's probe with cmd/ask-dev-jobs-probe's `queue-depth` check against the same River table -- the acceptance-fleet blocker is gone, deletion is CHAOS-3093's scope",
-        "ticket": "CHAOS-3093 (delete)",
-    },
     "queues.py": {
         "category": "c",
         "evidence": "imported only by config.py:1 — per-provider queue-name constants",
@@ -486,11 +466,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported directly worker_sync.py:22-25; served by /reference-discovery and /reference-discovery-populate routes",
         "ticket": "n/a",
     },
-    "report_task.py": {
-        "category": "b",
-        "evidence": "corrected 2026-08-28 per codex review: `execute_saved_report` also has a live caller — `api/graphql/resolvers/reports.py:617`, inside the on-demand report GraphQL mutation, calls `execute_saved_report.apply_async(...)` wrapped in `try/except (ImportError, AttributeError): pass`. That call is a Celery dispatch with no consumer (Celery retired, CHAOS-4026) so it is a live call site with a dead effect — deleting this file changes that call from 'silently enqueues into a void' to 'silently ImportErrors, same net no-op' (the except clause already handles absence), but the reports.py:617 call site must be removed/updated in the SAME change, not left importing a deleted module",
-        "ticket": "CHAOS-4439 (coordinate with reports.py:617 removal, not a pure file deletion)",
-    },
     "runner.py": {
         "category": "c",
         "evidence": "used by src/dev_health_ops/cli.py:728,842 (register_commands) — operator CLI for Celery queue inspection, not the Go bridge",
@@ -503,13 +478,13 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "sync_reconciler.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` x2 (L84 reconcile_sync_dispatch, L131 prune_rate_limit_observations); sole importer tasks.py:11-13; prune_rate_limit_observations was also a beat_schedule entry the ask-dev acceptance fleet's real Celery worker+beat boot kept alive independent of prod (workers/config.py:182-186) -- CHAOS-4065 (this PR) replaced that fleet's probe with cmd/ask-dev-jobs-probe's `retention` check against internal/jobs/system.RateLimitObservationStore directly, so nothing in this repo still needs a live fleet for it",
-        "ticket": "CHAOS-3093 (delete)",
+        "evidence": "`@celery_app.task` x2 (L84 reconcile_sync_dispatch, L131 prune_rate_limit_observations); sole importer tasks.py. prune_rate_limit_observations's beat entry survived CHAOS-4065's ask-dev-acceptance-fleet replacement (cmd/ask-dev-jobs-probe's `retention` check now covers that cadence natively), but reconcile_sync_dispatch has a very large test surface (canonical-incident-feature gating, outbox relay, backfill-orphan cleanup, unreclaimable-dispatching sweep, ~14 test functions across test_chaos_2581_invariants.py and others) beyond what CHAOS-4056's inventory sweep verified 1:1 Go parity for -- kept for CHAOS-3093's own reviewed pass (PR2a'), which must carry a one-row-per-deleted-test mapping onto the equivalent internal/syncreconciler / internal/scheduler/sync Go test",
+        "ticket": "CHAOS-3093 (PR2a' -- deferred, needs Go-invariant-parity mapping, not a drive-by delete)",
     },
     "sync_scheduler.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` (L394 dispatch_scheduled_syncs); sole importer tasks.py:14",
-        "ticket": "CHAOS-4439 (dead worker modules)",
+        "evidence": "`@celery_app.task` (L394 dispatch_scheduled_syncs); sole importer tasks.py. Deferred alongside sync_reconciler.py to the same CHAOS-3093 reviewed pass (PR2a') -- test_scheduler_timezone.py calls dispatch_scheduled_syncs directly and test_p1_bug_fixes.py/test_compose_config.py assert its beat_schedule entry, none of which CHAOS-4056's sweep verified 1:1 Go parity for",
+        "ticket": "CHAOS-3093 (PR2a' -- deferred, needs Go-invariant-parity mapping, not a drive-by delete)",
     },
     "sync_units.py": {
         "category": "a",
@@ -528,7 +503,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "task_utils.py": {
         "category": "c",
-        "evidence": "imported by live files (sync_units, reference_discovery, team_autoimport, work_graph_tasks) and dead ones — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it",
+        "evidence": "imported by live files (sync_units, reference_discovery, team_autoimport) — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it, and work_graph_tasks.py until CHAOS-3093 deleted it",
         "ticket": "n/a",
     },
     "tasks.py": {
@@ -565,11 +540,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "category": "a",
         "evidence": "run_post_sync_team_autoimport imported worker_sync.py:27, served by /team-autoimport",
         "ticket": "CHAOS-4198",
-    },
-    "work_graph_tasks.py": {
-        "category": "a",
-        "evidence": "CHAOS-3092 (leftovers) deleted worker_workgraph.py's inline import of this module along with the plain run_investment_materialize task it called -- the module stays live via tasks.py's top-level import and the dispatch_investment_materialize_partitioned/run_investment_materialize_chunk chord, dispatched from post_sync_dispatch.py and external_ingest/recompute.py",
-        "ticket": "n/a",
     },
 }
 

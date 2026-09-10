@@ -16,6 +16,15 @@ deleted in this cleanup:
     run-membership-backfill-daily, ask-dev-retention-sweep, and the
     never-live consume-pending-scheduled-sync-occurrences seam.
 
+CHAOS-3093 (2026-09-09, PR2a) additionally retired monitor-queue-depths and
+prune-external-ingest-batches outright: CHAOS-4065 replaced the
+ask-dev-acceptance release-blocking gate's real Celery worker+beat fleet
+(their last reason to survive) with a Go-native probe that re-executes the
+same production Go code directly. dispatch-scheduled-syncs, reconcile-sync-
+dispatch, and prune-rate-limit-observations remain flagged-surviving below
+(unchanged) -- they are CHAOS-3093's own PR2a', a separate reviewed pass with
+its own Go-invariant-parity mapping, not this PR's concern.
+
 This test imports the real ``celery_app`` (autodiscovery included) and the
 real ``beat_schedule`` and asserts the deleted task names are absent from
 both -- so a resurrected task (a stray ``@celery_app.task`` decorator, or a
@@ -61,6 +70,19 @@ _DEAD_TASK_NAMES = (
     "dispatch_membership_backfill",
     "run_ask_dev_retention_cleanup",
     "consume_pending_scheduled_sync_occurrences",
+    # CHAOS-3093 (PR2a): queue_monitor.py/external_ingest_reconciler.py/
+    # external_ingest_recompute.py/metrics_daily.py/work_graph_tasks.py/
+    # report_task.py deleted outright -- see the module-level docstring
+    # addendum above.
+    "monitor_queue_depths",
+    "prune_external_ingest_batches",
+    "flush_external_ingest_recompute",
+    "run_daily_metrics",
+    "run_investment_materialize_chunk",
+    "finalize_investment_materialize_partitioned",
+    "dispatch_investment_materialize_partitioned",
+    "run_membership_backfill",
+    "execute_saved_report",
 )
 
 # Beat schedule keys that must no longer exist.
@@ -79,6 +101,9 @@ _DEAD_BEAT_ENTRIES = (
     "run-membership-backfill-daily",
     "ask-dev-retention-sweep",
     "consume-pending-scheduled-sync-occurrences",
+    # CHAOS-3093 (PR2a):
+    "monitor-queue-depths",
+    "prune-external-ingest-batches",
 )
 
 # Whole modules deleted because every symbol they exported was dead
@@ -89,33 +114,39 @@ _DELETED_MODULES = (
     "report_scheduler.py",
     "ask_dev_retention.py",
     "metrics_tasks.py",
+    # CHAOS-3093 (PR2a) -- see the module-level docstring addendum above.
+    # #7 report_task.py's one task (execute_saved_report) is deleted outright
+    # because reports.py's resolver already routes the user-facing "run now"
+    # trigger through the durable outbox -> River -> Go's report.execute_
+    # on_demand (CHAOS-4440), so nothing else called it.
+    "queue_monitor.py",
+    "external_ingest_reconciler.py",
+    "external_ingest_recompute.py",
+    "metrics_daily.py",
+    "work_graph_tasks.py",
+    "report_task.py",
 )
 
-# Entries this PR deliberately did NOT delete -- either because they are
-# still reachable by something other than the dead Celery Beat cadence
-# (a dormant-Go operational HTTP bridge, the ask-dev-acceptance release
-# gate's real Celery fleet), or because their removal needs its own
-# reviewed pass (flagged to team-lead: reconcile-sync-dispatch,
-# dispatch-scheduled-syncs). This guards the inverse mistake: a drive-by
-# deletion of something this PR explicitly chose to keep.
+# Entries this PR deliberately did NOT delete -- because their removal
+# needs its own reviewed pass (flagged to team-lead: reconcile-sync-dispatch,
+# dispatch-scheduled-syncs, and prune-rate-limit-observations, which lives in
+# the same sync_reconciler.py module as reconcile-sync-dispatch). This is
+# CHAOS-3093's PR2a' (tracked separately from PR2a, which retired the other
+# three beat entries outright -- monitor-queue-depths and prune-external-
+# ingest-batches moved to _DEAD_BEAT_ENTRIES/_DEAD_TASK_NAMES above;
+# dispatch-go-external-ingest-recompute-bridge was here until CHAOS-5296 and
+# is RETIRED, guarded by test_recompute_bridge_task_is_deleted below, not
+# flagged-surviving). This tuple guards the inverse mistake: a drive-by
+# deletion of something a PR explicitly chose to keep.
 _FLAGGED_SURVIVING_BEAT_ENTRIES = (
     "dispatch-scheduled-syncs",
     "reconcile-sync-dispatch",
-    # dispatch-go-external-ingest-recompute-bridge was here until CHAOS-5296.
-    # It is now RETIRED, not kept: its whole purpose was draining Go-authored
-    # rows into the Python planner, and that reader is native Go now, so the
-    # entry has no task to call. test_recompute_bridge_task_is_deleted below
-    # is what guards it staying gone.
-    "monitor-queue-depths",
     "prune-rate-limit-observations",
-    "prune-external-ingest-batches",
 )
 _FLAGGED_SURVIVING_TASK_NAMES = (
     "dispatch_scheduled_syncs",
     "reconcile_sync_dispatch",
-    "monitor_queue_depths",
     "prune_rate_limit_observations",
-    "prune_external_ingest_batches",
 )
 
 
@@ -216,14 +247,12 @@ def test_runner_cli_no_longer_boots_a_real_celery_process() -> None:
 
 
 def test_flagged_entries_were_not_silently_dropped() -> None:
-    """The entries this PR chose to KEEP must still be there.
+    """The entries a PR chose to KEEP must still be there.
 
-    Guards the inverse mistake to the rest of this file: a drive-by
-    deletion of dispatch-scheduled-syncs, reconcile-sync-dispatch, the
-    CHAOS-4057 recompute bridge, or the ask-dev-acceptance-fleet-dependent
-    entries (monitor-queue-depths, prune-rate-limit-observations,
-    prune-external-ingest-batches) would break something this PR explicitly
-    decided not to touch, without any other test catching it.
+    Guards the inverse mistake to the rest of this file: a drive-by deletion
+    of dispatch-scheduled-syncs, reconcile-sync-dispatch, or prune-rate-
+    limit-observations would break something CHAOS-3093 explicitly deferred
+    to its own reviewed pass (PR2a'), without any other test catching it.
     """
     from dev_health_ops.workers import tasks
     from dev_health_ops.workers.config import beat_schedule
@@ -247,24 +276,27 @@ def test_flagged_entries_were_not_silently_dropped() -> None:
 
 
 def test_recompute_bridge_task_is_deleted() -> None:
-    """CHAOS-5296: the Celery bridge is gone, replaced by a native consumer.
+    """CHAOS-5296 + CHAOS-3093: the Celery bridge is gone, replaced by a
+    native consumer, and the whole module it lived in is gone too.
 
     This assertion is the inverse of the one it replaces. CHAOS-4026 kept the
-    task because it was the ONLY reader of the Go runner's bridge rows, and
+    module because it was the ONLY reader of the Go runner's bridge rows, and
     deleting it then would have been a second silent data-loss incident on top
     of the one CHAOS-4057 found. CHAOS-5296 removed that condition by shipping
     the reader in Go (internal/externalrecompute/drain.go) and repointing the
-    writer at it in the same change, so no legacy enqueue can happen at all.
+    writer at it in the same change, so no legacy enqueue can happen at all --
+    CHAOS-3093 (PR2a) then deleted workers/external_ingest_recompute.py
+    outright (its other task, flush_external_ingest_recompute, had zero
+    Celery consumers since 2026-08-19; its one remaining live call site,
+    external_ingest/recompute.py's schedule_or_coalesce, was retargeted to a
+    named celery_app.send_task instead of importing the module).
 
-    Asserting its ABSENCE rather than just deleting the old test is deliberate:
-    a task re-added here would have no consumer and would silently reintroduce
-    the split-brain this ticket closed.
+    Asserting the module's absence (not just one attribute's) is deliberate:
+    a task re-added here would have no consumer and would silently
+    reintroduce the split-brain this ticket closed.
     """
-    from dev_health_ops.workers import external_ingest_recompute
-
-    assert not hasattr(
-        external_ingest_recompute, "dispatch_external_ingest_recompute_bridge"
-    )
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("dev_health_ops.workers.external_ingest_recompute")
 
 
 def test_celery_presence_dispatch_plane_is_deleted() -> None:

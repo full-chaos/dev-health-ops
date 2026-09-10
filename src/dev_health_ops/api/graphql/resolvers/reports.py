@@ -613,17 +613,14 @@ async def resolve_trigger_report(
         if run is None:
             raise ValueError("Report run missing after atomic creation")
 
-    try:
-        from dev_health_ops.workers.report_task import execute_saved_report
-
-        execute_saved_report.apply_async(
-            kwargs={"report_id": str(report_uuid), "run_id": str(run_id_uuid)},
-            queue="reports",
-        )
-    except (ImportError, AttributeError):
-        # Celery may not be available in test/dev environments;
-        # the report run record is still created for manual pickup.
-        pass
+    # CHAOS-3093: the transaction above already enqueued the real handoff
+    # (create_on_demand_report_execution -> enqueue_worker_job -> the durable
+    # outbox -> River), which internal/jobs/report/report.go's fully
+    # Go-native `report.execute_on_demand` executor consumes (CHAOS-4440).
+    # This used to ALSO publish a redundant Celery task as a belt-and-braces
+    # dispatch; Celery has had no consumer since 2026-08-19 (CHAOS-4026), so
+    # that publish never did anything observable and workers.report_task
+    # (its target) is deleted.
 
     return _to_report_run_type(
         run_id=run_id_uuid,

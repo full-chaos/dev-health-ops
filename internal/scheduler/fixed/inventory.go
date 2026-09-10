@@ -325,8 +325,15 @@ func checkedInSchedules() []Schedule {
 				"store. Off-peak and clear of the nightly metric jobs.",
 		},
 		{
-			ID:               "prune_external_ingest_batches",
-			LegacyBeatEntry:  "prune-external-ingest-batches",
+			ID: "prune_external_ingest_batches",
+			// CHAOS-3093 (2026-09-09): the legacy Beat entry
+			// "prune-external-ingest-batches" (and workers/
+			// external_ingest_reconciler.py, its sole Python source) was
+			// deleted outright -- CHAOS-4065's Go-native ask-dev-acceptance
+			// probe already replaced the release-blocking gate's last
+			// dependency on a real Celery fleet for this cadence. Native
+			// now; see RetiredBeatInventory.
+			Native:           true,
 			Cadence:          DailyAt(5, 15),
 			Timezone:         inventoryTimezone,
 			CatchUp:          CatchUpSkip,
@@ -639,6 +646,32 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 				"deletion.",
 			Evidence: "CHAOS-4026, CHAOS-4056 beat-schedule inventory (N/A -- never live).",
 		},
+		// CHAOS-3093 (2026-09-09): CHAOS-4065 replaced the ask-dev-acceptance
+		// release-blocking gate's real Celery worker+beat fleet -- the last
+		// reason CHAOS-4026 had kept these two entries and their Python task
+		// implementations alive -- with a Go-native probe (cmd/ask-dev-jobs-
+		// probe) that re-executes the same production Go code these two
+		// cadences already ran through directly against Postgres. Both
+		// entries and their sole Python modules (workers/queue_monitor.py,
+		// workers/external_ingest_reconciler.py) were deleted outright.
+		{
+			Name:    "monitor-queue-depths",
+			Cadence: EveryInterval(60 * time.Second),
+			Reason: "queueHealthMonitor (cmd/dev-health-worker/queue_health.go) has owned this " +
+				"cadence in prod since CHAOS-3040 P2 (#1738); the legacy monitor_queue_depths " +
+				"Celery task probed kombu/Valkey list depth, which has no River analogue, and " +
+				"the ask-dev-acceptance probe now checks River queue depth directly.",
+			Evidence: "CHAOS-3093; cmd/ask-dev-jobs-probe's queue-depth check (CHAOS-4065, #2418).",
+		},
+		{
+			Name:    "prune-external-ingest-batches",
+			Cadence: DailyAt(5, 15),
+			Reason: "internal/scheduler/fixed's RetentionProducer (schedule ID " +
+				"prune_external_ingest_batches, now Native) plus internal/jobs/system's " +
+				"ExternalIngestBatchStore already own this retention cadence; the ask-dev-jobs-" +
+				"probe's retention check proves it live against real Postgres.",
+			Evidence: "CHAOS-3093; cmd/ask-dev-jobs-probe's retention check (CHAOS-4065, #2418).",
+		},
 	}
 }
 
@@ -664,25 +697,10 @@ func LegacyBeatInventory() []LegacyEntry {
 				"job would put lease repair behind the queue it repairs.",
 		},
 		{
-			Name:     "monitor-queue-depths",
-			Cadence:  EveryInterval(60 * time.Second),
-			Owner:    OwnerRuntimeTelemetry,
-			OwnerRef: "river runtime telemetry",
-			Note: "The legacy task probes kombu/Valkey list depth, which has no River analogue. " +
-				"River job age, depth, and saturation are exported natively by the runtime, so this " +
-				"is a replacement rather than a port.",
-		},
-		{
 			Name:     "prune-rate-limit-observations",
 			Cadence:  DailyAt(5, 0),
 			Owner:    OwnerFixedSchedule,
 			OwnerRef: "prune_rate_limit_observations",
-		},
-		{
-			Name:     "prune-external-ingest-batches",
-			Cadence:  DailyAt(5, 15),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "prune_external_ingest_batches",
 		},
 	}
 }

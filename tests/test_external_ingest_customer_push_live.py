@@ -26,15 +26,14 @@ Postgres + Valkey (never mocks/FakeValkey for the boundary under test):
   all 9 v1 record-kind families.
 - ``GET /batches/{id}`` reports accepted/rejected counts and per-record
   rejection diagnostics for a deliberately-invalid record.
-- Bounded metric recompute is proven QUEUED, not executed inline. The real
-  dispatch seam (CHAOS-2699) is
+- CHAOS-3093: the bounded-recompute "proven QUEUED, not executed inline"
+  scenario that used to live here patched
   ``workers.external_ingest_recompute.flush_external_ingest_recompute
-  .apply_async(countdown=...)`` -- the real ``celery_app.send_task`` calls
-  for ``run_daily_metrics``/etc. only happen inside THAT task, which this
-  test never runs. Only ``apply_async`` is patched (``patch.object`` on the
-  real, registered task object) so the real task/registration/debounce path
-  (including the real Valkey SETNX guard key) still runs; the test also
-  asserts the task's production dotted name to catch a rename.
+  .apply_async`` -- a Celery publish with no consumer since 2026-08-19 and
+  now a deleted module. The schedule_or_coalesce()/Valkey debounce dispatch
+  seam (CHAOS-2699) it proved "still runs" is untouched by that deletion and
+  is covered directly by
+  ``tests/test_external_ingest_recompute_debounce.py``.
 - Disabled-source (403) and stream-unavailable (503, never accept-and-warn)
   regressions.
 
@@ -78,7 +77,6 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -521,26 +519,21 @@ async def test_idempotency_conflict_returns_409(client, source_and_token):
 
 
 # ---------------------------------------------------------------------------
-# 5./7. Worker pass -> all 9 kinds land in ClickHouse; bounded recompute is
-#    QUEUED (real flush-task apply_async), never executed inline
+# 5./7. Worker pass -> all 9 kinds land in ClickHouse. CHAOS-3093: the
+# dedicated "recompute is queued, not executed inline" assertion that used
+# to live here (test_worker_processes_all_nine_kinds_and_recompute_is_queued_
+# not_inline) patched workers.external_ingest_recompute.flush_external_ingest_
+# recompute.apply_async, a Celery publish with no consumer since 2026-08-19
+# and now a deleted module -- the underlying schedule_or_coalesce()/Valkey
+# debounce path it proved "still runs" is untouched by this deletion and is
+# covered directly by tests/test_external_ingest_recompute_debounce.py.
 # ---------------------------------------------------------------------------
 
 
-async def test_worker_processes_all_nine_kinds_and_recompute_is_queued_not_inline(
+async def test_worker_processes_all_nine_kinds(
     client, source_and_token, org_id, ch_sink
 ):
-    from dev_health_ops.workers.external_ingest_recompute import (
-        flush_external_ingest_recompute,
-    )
     from tests._helpers_external_ingest import ALL_KINDS, build_batch_envelope
-
-    # Registered production task name -- catches a rename/re-registration
-    # regression that would otherwise silently defeat the patch.object below
-    # (patching an attribute on the wrong/stale task object).
-    assert (
-        flush_external_ingest_recompute.name
-        == "dev_health_ops.workers.tasks.flush_external_ingest_recompute"
-    )
 
     envelope = build_batch_envelope(
         idempotency_key=f"e2e-worker-full-{uuid.uuid4()}", kinds=ALL_KINDS
@@ -551,39 +544,15 @@ async def test_worker_processes_all_nine_kinds_and_recompute_is_queued_not_inlin
     assert resp.status_code == 202, resp.text
     ingestion_id = resp.json()["ingestionId"]
 
-    # Patch ONLY the enqueue call, not the whole task object: the real
-    # schedule_or_coalesce() dispatch path (including its real Valkey SETNX
-    # debounce guard) still runs; only the actual Celery publish is
-    # intercepted.
-    with patch.object(
-        flush_external_ingest_recompute, "apply_async"
-    ) as mock_apply_async:
-        # Real production entry point: XREADGROUP -> parse -> process_batch
-        # -> XACK, not a hardcoded process_batch(...) call. This discovers
-        # ALL orgs' streams via a wildcard pattern, so it may also sweep up
-        # pending entries left by earlier tests in this module (each has
-        # its own org_id -- harmless cross-contamination) in the same pass;
-        # the return value is therefore a cross-org sum, not scoped to this
-        # test's own ingestion_id, hence the weak sanity check below rather
-        # than an exact-count assertion.
-        accepted = await _run_consumer_pass()
+    # Real production entry point: XREADGROUP -> parse -> process_batch ->
+    # XACK, not a hardcoded process_batch(...) call. This discovers ALL orgs'
+    # streams via a wildcard pattern, so it may also sweep up pending entries
+    # left by earlier tests in this module (each has its own org_id --
+    # harmless cross-contamination) in the same pass; the return value is
+    # therefore a cross-org sum, not scoped to this test's own ingestion_id,
+    # hence the weak sanity check below rather than an exact-count assertion.
+    accepted = await _run_consumer_pass()
     assert accepted > 0
-
-    # (a) recompute was QUEUED for THIS org specifically -- filter by kwargs
-    # rather than assert_called_once(), since other orgs swept up in the
-    # same consumer pass each trigger their own independent apply_async call.
-    matching_calls = [
-        call
-        for call in mock_apply_async.call_args_list
-        if call.kwargs.get("kwargs")
-        == {
-            "org_id": org_id,
-            "source_system": "github",
-            "source_instance": "acme/api",
-        }
-    ]
-    assert len(matching_calls) == 1, mock_apply_async.call_args_list
-    assert matching_calls[0].kwargs["countdown"] > 0
 
     status_resp = await client.get(
         f"{BASE}/batches/{ingestion_id}", headers=_headers(source_and_token)
@@ -593,16 +562,6 @@ async def test_worker_processes_all_nine_kinds_and_recompute_is_queued_not_inlin
     assert status_body["status"] == "completed"
     assert status_body["itemsAccepted"] == len(ALL_KINDS)
     assert status_body["itemsRejected"] == 0
-
-    # (b) recompute was NOT executed inline: dispatch_and_persist_scope (the
-    # only writer of the batch's recompute_status/jobs, and of any
-    # run_daily_metrics/work_graph/investment-materialize Celery dispatch)
-    # runs exclusively from inside the flush task we just proved was merely
-    # SCHEDULED, not invoked -- so immediately after the worker's status
-    # flip, the batch's recompute block must still show its pre-dispatch
-    # default and zero jobs.
-    assert status_body["recompute"]["status"] == "not_applicable"
-    assert status_body["recompute"]["jobs"] == []
 
     # ClickHouse rows for all 9 v1 sink tables -- FINAL + org_id predicate
     # (house rule), one row per family is sufficient.
@@ -622,9 +581,6 @@ async def test_worker_processes_all_nine_kinds_and_recompute_is_queued_not_inlin
 async def test_status_reports_partial_with_rejection_diagnostics(
     client, source_and_token, org_id
 ):
-    from dev_health_ops.workers.external_ingest_recompute import (
-        flush_external_ingest_recompute,
-    )
     from tests._helpers_external_ingest import build_batch_envelope
 
     envelope = build_batch_envelope(
@@ -638,12 +594,8 @@ async def test_status_reports_partial_with_rejection_diagnostics(
     assert resp.status_code == 202, resp.text
     ingestion_id = resp.json()["ingestionId"]
 
-    # Same real production entry point as the previous scenario (finding 2);
-    # only the enqueue call is patched (not asserted here -- covered by the
-    # dedicated recompute scenario above) so a real, unpatched apply_async
-    # never attempts a live Celery broker publish in this test.
-    with patch.object(flush_external_ingest_recompute, "apply_async"):
-        accepted = await _run_consumer_pass()
+    # Same real production entry point as the previous scenario (finding 2).
+    accepted = await _run_consumer_pass()
     assert accepted > 0
 
     status_resp = await client.get(

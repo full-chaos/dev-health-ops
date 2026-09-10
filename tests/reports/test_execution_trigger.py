@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-from contextlib import contextmanager
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -283,111 +279,6 @@ def test_python_live_run_lease_is_not_acknowledged_as_success(engine):
             assert active.value.retry_after_seconds > 0
 
 
-def test_python_task_redelivers_worker_loss_after_live_lease(engine, monkeypatch):
-    with Session(engine) as session:
-        with session.begin():
-            report, _ = _seed(session)
-            trigger = create_on_demand_report_execution(session, report.id, "org-a")
-            assert start_report_run(session, trigger.run_id) is not None
-
-    @contextmanager
-    def session_scope():
-        with Session(engine) as session:
-            yield session
-
-    class RetryRequested(RuntimeError):
-        pass
-
-    retry: dict[str, object] = {}
-
-    def request_retry(*, exc, countdown):
-        retry.update(exc=exc, countdown=countdown)
-        raise RetryRequested
-
-    from dev_health_ops.workers.report_task import execute_saved_report
-
-    monkeypatch.setattr(
-        "dev_health_ops.db.get_postgres_session_sync",
-        session_scope,
-    )
-    monkeypatch.setattr(execute_saved_report, "retry", request_retry)
-    with pytest.raises(RetryRequested):
-        execute_saved_report(trigger.report_id, trigger.run_id)
-
-    assert isinstance(retry["exc"], ReportRunLeaseActive)
-    assert 1 <= retry["countdown"] <= 300  # type: ignore[operator]
-    assert execute_saved_report.acks_late is True
-    assert execute_saved_report.reject_on_worker_lost is True
-
-
-def test_python_task_counts_durable_expired_lease_outcomes(engine, monkeypatch):
-    with Session(engine) as session:
-        with session.begin():
-            report, _ = _seed(session)
-            recovered = create_on_demand_report_execution(session, report.id, "org-a")
-            assert start_report_run(session, recovered.run_id) is not None
-            recovered_run = session.get(ReportRun, recovered.run_id)
-            assert recovered_run is not None
-            recovered_run.execution_lease_expires_at = datetime.now(UTC) - timedelta(
-                seconds=1
-            )
-
-            exhausted = create_on_demand_report_execution(session, report.id, "org-a")
-            assert start_report_run(session, exhausted.run_id) is not None
-            exhausted_run = session.get(ReportRun, exhausted.run_id)
-            assert exhausted_run is not None
-            exhausted_run.execution_reclaim_count = MAX_REPORT_RUN_EXECUTION_RECLAIMS
-            exhausted_run.execution_lease_expires_at = datetime.now(UTC) - timedelta(
-                seconds=1
-            )
-
-    @contextmanager
-    def session_scope():
-        with Session(engine) as session:
-            try:
-                yield session
-                session.commit()
-            except Exception:
-                session.rollback()
-                raise
-
-    async def recovered_result(*_args):
-        return SimpleNamespace(rendered_markdown="# recovered", provenance=[])
-
-    from dev_health_ops.metrics.prometheus import REPORT_RUN_LEASE_EXPIRED_TOTAL
-    from dev_health_ops.workers.report_task import execute_saved_report
-
-    monkeypatch.setattr(
-        "dev_health_ops.db.get_postgres_session_sync",
-        session_scope,
-    )
-    monkeypatch.setattr(
-        "dev_health_ops.db.require_clickhouse_uri", lambda: "clickhouse://fake/db"
-    )
-    monkeypatch.setattr("dev_health_ops.db.reset_async_engines", lambda: None)
-    monkeypatch.setattr(
-        "dev_health_ops.reports.engine.execute_report", recovered_result
-    )
-    retrying = REPORT_RUN_LEASE_EXPIRED_TOTAL.labels(result="retrying")
-    failed = REPORT_RUN_LEASE_EXPIRED_TOTAL.labels(result="failed")
-    retrying_before = retrying._value.get()
-    failed_before = failed._value.get()
-
-    result = execute_saved_report(recovered.report_id, recovered.run_id)
-    assert result["status"] == "success"
-    assert retrying._value.get() == retrying_before + 1
-
-    with pytest.raises(ReportRunReclaimExhausted):
-        execute_saved_report(exhausted.report_id, exhausted.run_id)
-    assert failed._value.get() == failed_before + 1
-
-    with Session(engine) as session:
-        terminal = session.get(ReportRun, exhausted.run_id)
-        assert terminal is not None
-        assert terminal.status == ReportRunStatus.FAILED.value
-        assert terminal.error == REPORT_RUN_RECLAIM_EXHAUSTED_CODE
-
-
 def test_python_scheduler_redispatches_only_after_running_lease_expires(engine):
     scheduled_for = datetime(2026, 8, 13, 12, tzinfo=UTC)
     with Session(engine) as session:
@@ -430,52 +321,6 @@ def test_python_scheduler_redispatches_only_after_running_lease_expires(engine):
             assert expired.created is False
             assert expired.run_id == first.run_id
             assert expired.dispatch_required is True
-
-
-def test_python_worker_renews_execution_lease_during_long_work(engine, monkeypatch):
-    with Session(engine) as session:
-        with session.begin():
-            report, _ = _seed(session)
-            trigger = create_on_demand_report_execution(session, report.id, "org-a")
-            claim = start_report_run(session, trigger.run_id)
-            assert claim is not None
-            run = session.get(ReportRun, trigger.run_id)
-            assert run is not None
-            initial_expiry = run.execution_lease_expires_at
-
-    @contextmanager
-    def session_scope():
-        with Session(engine) as session:
-            yield session
-
-    monkeypatch.setattr(
-        "dev_health_ops.db.get_postgres_session_sync",
-        session_scope,
-    )
-
-    async def slow_report(*_args):
-        await asyncio.sleep(0.04)
-        return "finished"
-
-    from dev_health_ops.workers.report_task import _execute_with_report_run_lease
-
-    result = asyncio.run(
-        _execute_with_report_run_lease(
-            slow_report,
-            object(),
-            [],
-            "clickhouse://unused",
-            trigger.run_id,
-            replace(claim, lease_seconds=0.03),
-        )
-    )
-    assert result == "finished"
-    with Session(engine) as session:
-        run = session.get(ReportRun, trigger.run_id)
-        assert run is not None
-        assert initial_expiry is not None
-        assert run.execution_lease_expires_at is not None
-        assert run.execution_lease_expires_at > initial_expiry
 
 
 def test_python_run_claim_terminalizes_after_bounded_reclaims(engine):

@@ -103,16 +103,13 @@ def test_celery_config_has_per_provider_sync_queues() -> None:
     assert "sync" in task_queues
 
 
-def test_queue_monitor_beat_entry() -> None:
-    """CHAOS-2299: queue depth/age telemetry runs every minute on a dedicated
-    `monitoring` queue — not `default`, which can flood (telemetry would die
-    exactly when it is needed)."""
-    from dev_health_ops.workers.config import beat_schedule
-
-    entry = beat_schedule["monitor-queue-depths"]
-    assert entry["task"] == "dev_health_ops.workers.tasks.monitor_queue_depths"
-    assert entry["schedule"] == 60.0
-    assert entry["options"] == {"queue": "monitoring"}
+# CHAOS-3093 (2026-09-09): test_queue_monitor_beat_entry tested the
+# monitor-queue-depths beat entry and workers/queue_monitor.py's
+# monitor_queue_depths task, both deleted with this cleanup (CHAOS-4065's
+# Go-native ask-dev-acceptance probe already re-executes queueHealthMonitor
+# directly, and cmd/dev-health-worker/queue_health.go has owned this cadence
+# in prod since CHAOS-3040 P2/#1738). See
+# tests/workers/test_celery_dead_code_contract.py.
 
 
 def test_scheduled_sync_dispatcher_uses_scheduler_queue() -> None:

@@ -15,21 +15,28 @@ The corrected contract (CHAOS-2888 plan, Workstream A):
 - Complexity is enqueued only for a *current single-day* sync:
   ``metrics_backfill_days in (None, 1)`` and ``metrics_day`` is either absent
   or equals ``utc_today()``. When enqueued for an explicit window, the
-  signature carries the explicit ``day``/``backfill_days=1`` rather than
+  dispatch carries the explicit ``day``/``backfill_days=1`` rather than
   relying on the task's implicit today/1 defaults.
 - Any other window (multi-day, or single-day but not today) is a historical
   backfill: complexity is skipped and a ``historical_complexity_unsupported``
   warning is logged with the requested date range.
 
-These tests prove the seam without a live ClickHouse: they patch the same
-Celery ``chain`` / ``signature`` factories the sibling dispatch tests patch.
+CHAOS-3093: ``_dispatch_post_sync_tasks`` no longer chains complexity ahead of
+an investment-materialize step -- that chain partner
+(``dispatch_investment_materialize_partitioned``, workers/work_graph_tasks.py)
+was deleted outright as dead-into-the-void Celery machinery with no consumer
+since 2026-08-19, and Go's investment.materialize route is river-only. What
+survives is a standalone ``celery_app.send_task(...)`` for
+``run_complexity_job``, same dead-into-the-void status but kept as a named
+send_task pending its own eventual retirement (CHAOS-4427). These tests prove
+the seam without a live ClickHouse by patching that ``send_task`` call.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Import connectors first to defuse the providers._base <-> connectors circular
 # import that otherwise ERRORs isolated collection (mirrors CHAOS-2370).
@@ -37,37 +44,26 @@ import dev_health_ops.connectors  # noqa: F401
 from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
 
 _COMPLEXITY_TASK = "dev_health_ops.workers.tasks.run_complexity_job"
-_INVESTMENT_TASK = (
-    "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned"
-)
 
 
 def _run_dispatch(**kwargs):
-    """Drive _dispatch_post_sync_tasks with chain/signature/send_task patched.
+    """Drive _dispatch_post_sync_tasks with send_task patched.
 
-    Returns (signature_mock, chain_mock, chain_instance_mock, send_task_mock).
+    Returns the send_task mock.
     """
-    with (
-        patch(
-            "dev_health_ops.workers.post_sync_dispatch.celery_app.signature"
-        ) as mock_signature,
-        patch("dev_health_ops.workers.post_sync_dispatch.chain") as mock_chain,
-        patch(
-            "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
-        ) as mock_send_task,
-    ):
-
-        def _make_sig(name, **sig_kwargs):
-            sig = MagicMock(name=f"sig:{name}")
-            sig.task_name = name
-            sig.sig_kwargs = sig_kwargs
-            return sig
-
-        mock_signature.side_effect = _make_sig
-        chain_instance = MagicMock(name="chain_instance")
-        mock_chain.return_value = chain_instance
+    with patch(
+        "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
+    ) as mock_send_task:
         _dispatch_post_sync_tasks(**kwargs)
-    return mock_signature, mock_chain, chain_instance, mock_send_task
+    return mock_send_task
+
+
+def _complexity_calls(mock_send_task) -> list:
+    return [
+        call
+        for call in mock_send_task.call_args_list
+        if call.args[0] == _COMPLEXITY_TASK
+    ]
 
 
 def _freeze_today(monkeypatch, today: date) -> None:
@@ -85,7 +81,7 @@ def test_current_single_day_sync_enqueues_complexity_with_explicit_date(
     implicit-today defaults."""
     _freeze_today(monkeypatch, date(2026, 3, 5))
 
-    _, mock_chain, chain_instance, _ = _run_dispatch(
+    mock_send_task = _run_dispatch(
         provider="github",
         sync_targets=["git"],
         org_id="org-123",
@@ -93,16 +89,14 @@ def test_current_single_day_sync_enqueues_complexity_with_explicit_date(
         to_date="2026-03-05",
     )
 
-    complexity_sig, materialize_sig = mock_chain.call_args.args
-    assert complexity_sig.task_name == _COMPLEXITY_TASK
-    assert complexity_sig.sig_kwargs["kwargs"] == {
+    calls = _complexity_calls(mock_send_task)
+    assert len(calls) == 1
+    assert calls[0].kwargs["kwargs"] == {
         "org_id": "org-123",
         "day": "2026-03-05",
         "backfill_days": 1,
     }
-    assert complexity_sig.sig_kwargs["queue"] == "metrics"
-    assert complexity_sig.sig_kwargs.get("immutable") is True
-    chain_instance.apply_async.assert_called_once_with()
+    assert calls[0].kwargs["queue"] == "metrics"
 
 
 def test_current_sync_without_explicit_window_still_enqueues_complexity(
@@ -113,16 +107,15 @@ def test_current_sync_without_explicit_window_still_enqueues_complexity(
     own implicit today/1 defaults."""
     _freeze_today(monkeypatch, date(2026, 3, 5))
 
-    _, mock_chain, chain_instance, _ = _run_dispatch(
+    mock_send_task = _run_dispatch(
         provider="github",
         sync_targets=["git", "prs"],
         org_id="org-123",
     )
 
-    complexity_sig, materialize_sig = mock_chain.call_args.args
-    assert complexity_sig.task_name == _COMPLEXITY_TASK
-    assert complexity_sig.sig_kwargs["kwargs"] == {"org_id": "org-123"}
-    chain_instance.apply_async.assert_called_once_with()
+    calls = _complexity_calls(mock_send_task)
+    assert len(calls) == 1
+    assert calls[0].kwargs["kwargs"] == {"org_id": "org-123"}
 
 
 def test_historical_single_day_sync_skips_complexity_dispatch(
@@ -134,7 +127,7 @@ def test_historical_single_day_sync_skips_complexity_dispatch(
     _freeze_today(monkeypatch, date(2026, 3, 5))
 
     with caplog.at_level(logging.WARNING):
-        _, mock_chain, chain_instance, _ = _run_dispatch(
+        mock_send_task = _run_dispatch(
             provider="github",
             sync_targets=["git"],
             org_id="org-123",
@@ -142,12 +135,7 @@ def test_historical_single_day_sync_skips_complexity_dispatch(
             to_date="2026-01-01",
         )
 
-    chain_sigs = mock_chain.call_args.args
-    task_names = [sig.task_name for sig in chain_sigs]
-    assert _COMPLEXITY_TASK not in task_names
-    materialize_sig = chain_sigs[0]
-    assert materialize_sig.task_name == _INVESTMENT_TASK
-    chain_instance.apply_async.assert_called_once_with()
+    assert _complexity_calls(mock_send_task) == []
     assert "historical_complexity_unsupported" in caplog.text
     assert "2026-01-01" in caplog.text
 
@@ -158,7 +146,7 @@ def test_historical_multi_day_backfill_skips_complexity_but_keeps_daily_window(
     """A multi-day historical backfill must not enqueue complexity (it would
     fabricate a flat historical trend from current file contents)."""
     with caplog.at_level(logging.WARNING):
-        _, mock_chain, chain_instance, _ = _run_dispatch(
+        mock_send_task = _run_dispatch(
             provider="github",
             sync_targets=["git"],
             org_id="org-123",
@@ -166,12 +154,7 @@ def test_historical_multi_day_backfill_skips_complexity_but_keeps_daily_window(
             to_date="2026-01-14",
         )
 
-    chain_sigs = mock_chain.call_args.args
-    task_names = [sig.task_name for sig in chain_sigs]
-    assert _COMPLEXITY_TASK not in task_names
-    (materialize_sig,) = chain_sigs
-    assert materialize_sig.task_name == _INVESTMENT_TASK
-    chain_instance.apply_async.assert_called_once_with()
+    assert _complexity_calls(mock_send_task) == []
     assert "historical_complexity_unsupported" in caplog.text
     assert "2026-01-01" in caplog.text
     assert "2026-01-14" in caplog.text
@@ -186,7 +169,7 @@ def test_historical_backfill_skips_complexity_for_explicit_metrics_kwargs(
     _freeze_today(monkeypatch, date(2026, 3, 5))
 
     with caplog.at_level(logging.WARNING):
-        _, mock_chain, _, _ = _run_dispatch(
+        mock_send_task = _run_dispatch(
             provider="github",
             sync_targets=["git"],
             org_id="org-123",
@@ -194,7 +177,5 @@ def test_historical_backfill_skips_complexity_for_explicit_metrics_kwargs(
             metrics_backfill_days=14,
         )
 
-    chain_sigs = mock_chain.call_args.args
-    task_names = [sig.task_name for sig in chain_sigs]
-    assert _COMPLEXITY_TASK not in task_names
+    assert _complexity_calls(mock_send_task) == []
     assert "historical_complexity_unsupported" in caplog.text

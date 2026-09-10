@@ -375,3 +375,26 @@ func TestTheFeatureFlagEventsLimitMatchesTheSDLDefault(t *testing.T) {
 		t.Fatalf("the SDL now defaults limit to %s, but the spec sends 1000: go-api-prove is measuring a different page than a client that omits the argument", match[1])
 	}
 }
+
+// TestWorkGraphEdgesDeclaresNoBaselineDefect: the 5449 BaselineDefect
+// covered a merge-state-dependent artefact, not a permanent defect --
+// Python's un-deduped read only undercounted distinct edgeIds while
+// ClickHouse's work_graph_edges table carried enough unmerged
+// ReplacingMergeTree row versions for the shared ORDER BY's first 1000
+// rows to include duplicates. Measured live (12:59Z 2026-09-10, JOB 5):
+// Python and Go both returned 1000 edges / 1000 distinct edgeIds, zero
+// differences -- the declaration matched nothing and go-api-prove
+// correctly REFUSED the run rather than reporting an excused mismatch
+// that was not occurring. A blanket `data.workGraphEdges.edges` path left
+// in place would mask any FUTURE regression on this operation, which is
+// exactly what the vacuity guard exists to prevent -- so the fix is
+// removal, not a refreshed measurement.
+func TestWorkGraphEdgesDeclaresNoBaselineDefect(t *testing.T) {
+	spec, err := SpecFor("workGraphEdges")
+	if err != nil {
+		t.Fatalf("SpecFor: %v", err)
+	}
+	if len(spec.Parity.BaselineDefects) != 0 {
+		t.Fatalf("workGraphEdges declares %d BaselineDefect(s), want 0 -- the 5449 declaration was merge-state dependent (see operations.go), a stale declaration here would mask a real future regression: %#v", len(spec.Parity.BaselineDefects), spec.Parity.BaselineDefects)
+	}
+}

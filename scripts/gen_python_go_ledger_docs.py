@@ -466,11 +466,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported directly worker_sync.py:22-25; served by /reference-discovery and /reference-discovery-populate routes",
         "ticket": "n/a",
     },
-    "runner.py": {
-        "category": "c",
-        "evidence": "used by src/dev_health_ops/cli.py:728,842 (register_commands) — operator CLI for Celery queue inspection, not the Go bridge",
-        "ticket": "n/a",
-    },
     "sync_bootstrap.py": {
         "category": "a",
         "evidence": "imported by reference_discovery.py/team_autoimport.py/sync_units.py:134; resolve_run_auth reached from dispatch_sync_run",

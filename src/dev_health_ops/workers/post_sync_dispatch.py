@@ -1,23 +1,15 @@
 from __future__ import annotations
 
-import logging
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from dev_health_ops.models import SyncRun, SyncRunUnit, SyncRunUnitStatus
-from dev_health_ops.utils.datetime import utc_today
-from dev_health_ops.workers.celery_app import celery_app
-from dev_health_ops.workers.task_utils import _GIT_TARGETS
 
-# DORA (deployment frequency, lead time, change-failure-rate, MTTR) is computed
-# from synced deployments/CI/incidents in ClickHouse. These targets can be
-# scheduled independently of git/prs (e.g. a deployments-only sync config), so a
-# post-sync DORA recompute must fire on any of them, not only on git.
-_DORA_TARGETS = {"deployments", "cicd", "incidents"}
-
-logger = logging.getLogger(__name__)
+# CHAOS-3093 (PR2b): _DORA_TARGETS (deployments/cicd/incidents) and this
+# module's own logger fed the now-deleted dispatch decisions in
+# _dispatch_post_sync_tasks -- removed with them.
 
 
 @dataclass(frozen=True)
@@ -156,18 +148,12 @@ def _dispatch_post_sync_tasks(
     auto_import_teams: bool = False,
     sync_run_id: str | None = None,
 ) -> None:
-    target_set = set(sync_targets)
-    has_git = bool(target_set & _GIT_TARGETS)
-    has_dora = bool(target_set & _DORA_TARGETS)
-    dispatched: list[str] = []
-
-    if from_date is not None and to_date is not None:
-        metrics_window_start = date.fromisoformat(from_date)
-        metrics_window_end = date.fromisoformat(to_date)
-        if metrics_day is None:
-            metrics_day = metrics_window_end.isoformat()
-        if metrics_backfill_days is None:
-            metrics_backfill_days = (metrics_window_end - metrics_window_start).days + 1
+    # metrics_day/metrics_backfill_days/from_date/to_date fed ONLY the
+    # run_complexity_job single-day-vs-historical dispatch decision deleted
+    # below (CHAOS-3093, PR2b) -- their from_date/to_date-derived computation
+    # is deleted with it. The parameters stay in this function's signature
+    # (its caller, sync_units.py, is untouched in this PR) but are no longer
+    # read here.
 
     # run_complexity_job writes file_complexity_snapshots, which the native Go
     # daily worker's FileRiskHotspotsExecutor reads
@@ -203,39 +189,14 @@ def _dispatch_post_sync_tasks(
     # historical complexity trend rather than reflecting real historical state
     # (CHAOS-2888). Complexity is safe to enqueue only for a current single-day
     # sync: backfill_days in (None, 1) and day absent or == utc_today().
-    if has_git:
-        is_current_single_day = metrics_backfill_days in (None, 1) and (
-            metrics_day is None or metrics_day == utc_today().isoformat()
-        )
-        if is_current_single_day:
-            complexity_kwargs: dict[str, Any] = {"org_id": org_id}
-            if metrics_day is not None:
-                complexity_kwargs["day"] = metrics_day
-                complexity_kwargs["backfill_days"] = 1
-            # CHAOS-3093: previously the head of a chain with
-            # dispatch_investment_materialize_partitioned (workers.work_graph_tasks,
-            # deleted -- CHAOS-3093, Go-native since; investment.materialize's
-            # route is river-only, rollback_route=none). No consumer has existed
-            # for either since Celery stopped (CHAOS-4026), so this was already a
-            # dispatch into the void either way -- standalone here changes nothing
-            # observable, it only drops the now-nonexistent chain partner.
-            celery_app.send_task(
-                "dev_health_ops.workers.tasks.run_complexity_job",
-                kwargs=complexity_kwargs,
-                queue="metrics",
-            )
-            dispatched.append("run_complexity_job")
-        else:
-            logger.warning(
-                "historical_complexity_unsupported: skipping run_complexity_job "
-                "org_id=%s from_date=%s to_date=%s metrics_day=%s "
-                "metrics_backfill_days=%s",
-                org_id,
-                from_date,
-                to_date,
-                metrics_day,
-                metrics_backfill_days,
-            )
+    #
+    # CHAOS-3093 (PR2b): the whole `run_complexity_job` dispatch-decision block
+    # that used to live here (the single-day-vs-historical check, the kwargs
+    # it built, and the "skipping" warning for the historical case) is deleted
+    # outright, not just its `celery_app.send_task` call -- `run_complexity_job`
+    # itself was deleted as a celery_task definition under CHAOS-4439 (an
+    # earlier, independent ticket), so this entire block has computed a
+    # decision nothing has acted on since then.
 
     # `run_work_graph_build` (the Celery-dispatched Python build task) was
     # deleted under CHAOS-4924, and `dispatch_investment_materialize_partitioned`
@@ -250,39 +211,29 @@ def _dispatch_post_sync_tasks(
     # `sync_dispatch.go:455`. Nothing replaces either deleted link; the Go
     # writer already is the replacement.
 
-    if has_git or has_dora:
-        celery_app.send_task(
-            "dev_health_ops.workers.tasks.run_dora_metrics",
-            kwargs={"org_id": org_id},
-            queue="metrics",
-        )
-        dispatched.append("run_dora_metrics")
-
-    if dispatched:
-        logger.info(
-            "Post-sync dispatch for config org_id=%s provider=%s targets=%s: %s",
-            org_id,
-            provider,
-            sync_targets,
-            dispatched,
-        )
-
-    # Post-sync team auto-import (CHAOS-2647): restore the legacy per-config-run
-    # refresh of team/project/member attribution on the unitized path. Dispatched
-    # as a separate credential-resolving "sync" task (this relay has no credentials)
-    # and gated on the canonical config's ``auto_import_teams``. Best-effort: a
-    # dispatch failure must never break post-sync metric fan-out.
-    if auto_import_teams and sync_run_id:
-        try:
-            celery_app.send_task(
-                "dev_health_ops.workers.tasks.run_post_sync_team_autoimport",
-                kwargs={"sync_run_id": sync_run_id},
-                queue="sync",
-            )
-        except Exception:
-            logger.exception(
-                "Post-sync team auto-import dispatch failed for "
-                "org_id=%s sync_run_id=%s",
-                org_id,
-                sync_run_id,
-            )
+    # CHAOS-3093 (PR2b): run_dora_metrics was ALSO deleted as a celery_task
+    # definition under CHAOS-4439 (the same ticket that deleted
+    # run_complexity_job above) -- this `has_git or has_dora` dispatch
+    # decision and its `celery_app.send_task` have been computing a decision
+    # nothing has acted on since then, deleted outright with it.
+    #
+    # Post-sync team auto-import (CHAOS-2647) used to be dispatched from here
+    # as a separate credential-resolving "sync" task, gated on the canonical
+    # config's `auto_import_teams`. That `celery_app.send_task` call is
+    # deleted too -- Celery has had zero consumers since CHAOS-4026, and the
+    # REAL live trigger for run_post_sync_team_autoimport today is the HTTP
+    # compatibility bridge (api/internal/worker_sync.py's /team-autoimport,
+    # called from teamCatalogAutoimportBridge.TeamAutoImport on the Go side;
+    # see team_autoimport.py's own module docstring for the full caller
+    # enumeration) -- this was always a second, redundant, dead-into-the-void
+    # dispatch attempt alongside that real path, not the real path itself.
+    #
+    # With every dispatch decision in this function now deleted, this is a
+    # deliberate no-op: every parameter (provider/sync_targets/org_id/
+    # metrics_day/metrics_backfill_days/from_date/to_date/
+    # work_graph_from_date/work_graph_to_date/auto_import_teams/sync_run_id)
+    # is accepted but unread, left in the signature rather than trimmed,
+    # since this function's sole caller (sync_units.py) is untouched in this
+    # PR. Flagged to team-lead: candidate for full deletion (function +
+    # call site) in a follow-up once sync_units.py is back in scope.
+    pass

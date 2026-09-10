@@ -269,29 +269,43 @@ def test_runner_cli_no_longer_boots_a_real_celery_process() -> None:
     Scope addition ratified on CHAOS-4026 (2026-08-21 reconciliation sweep):
     runner.py's start-worker/start-scheduler subcommands booted a real
     ``celery worker``/``celery beat`` process and were the last CLI-level
-    way to falsify CUT-18 (CHAOS-3931). ``inspect`` survives deliberately --
-    it only reads Celery's control-plane RPC (useful for the still-live
-    ask-dev-acceptance Celery fleet) and cannot itself start a process.
+    way to falsify CUT-18 (CHAOS-3931). ``inspect`` survived that sweep
+    deliberately -- it only read Celery's control-plane RPC (useful for the
+    then-still-live ask-dev-acceptance Celery fleet) and could not itself
+    start a process.
+
+    CHAOS-3093 (PR2b) finished the job: CHAOS-4065 already converted that
+    ask-dev-acceptance fleet to `entrypoint: ["sleep", "infinity"]` with Go
+    healthchecks, leaving `inspect` with zero live Celery fleet anywhere to
+    read -- the whole module (and the `dev-hops workers` CLI group that
+    existed only to host it) is deleted outright.
     """
-    source = (_WORKERS_SRC / "runner.py").read_text(encoding="utf-8")
-    assert 'add_parser("start-worker"' not in source
-    assert "add_parser('start-worker'" not in source
-    assert 'add_parser("start-scheduler"' not in source
-    assert "add_parser('start-scheduler'" not in source
-    assert "_cmd_start_worker" not in source
-    assert "_cmd_start_scheduler" not in source
+    assert not (_WORKERS_SRC / "runner.py").exists(), (
+        "workers/runner.py reappeared -- its sole subcommand (`inspect`, a "
+        "Celery control-plane RPC reader) has no Celery fleet left anywhere "
+        "to read (CHAOS-3093, PR2b)."
+    )
 
-    import argparse
+    import os
+    import subprocess
+    import sys
 
-    from dev_health_ops.workers.runner import register_commands
-
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers()
-    register_commands(subparsers)
-    registered = set(subparsers.choices)
-    assert "start-worker" not in registered
-    assert "start-scheduler" not in registered
-    assert "inspect" in registered  # control-plane read-only survives
+    env = os.environ.copy()
+    env["DISABLE_DOTENV"] = "1"
+    env["PYTHONPATH"] = "src"
+    result = subprocess.run(
+        [sys.executable, "-m", "dev_health_ops.cli", "workers", "--help"],
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+        cwd=_REPO_ROOT,
+    )
+    assert result.returncode != 0, (
+        "`dev-hops workers` reappeared as a top-level command -- it existed "
+        "only to host `inspect`, which is deleted (CHAOS-3093, PR2b)."
+    )
+    assert "invalid choice: 'workers'" in result.stderr
 
 
 def test_recompute_bridge_task_is_deleted() -> None:

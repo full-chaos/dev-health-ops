@@ -2,13 +2,23 @@
 
 Uses ``fakeredis.FakeValkey`` (same fixture family as
 ``tests/test_ingest_streams.py``) instead of a live Valkey instance.
+
+CHAOS-3093 (PR2b): the `celery_app.send_task` dispatch this function used to
+make on a newly-acquired guard is deleted outright -- it was dead-into-the-
+void (zero Celery consumers since CHAOS-4026, and
+flush_external_ingest_recompute was itself already deleted as a celery_task
+definition under CHAOS-3093's own earlier PR2a). The debounce/guard
+bookkeeping (the WATCH/MULTI pending-blob merge and the SETNX guard
+acquisition) is unrelated to that dispatch's liveness and stays exactly as
+before -- these tests assert on the guard key's presence/TTL and the merged
+pending blob instead of a dispatch call.
 """
 
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -58,43 +68,22 @@ def _call(
         "dev_health_ops.external_ingest.recompute._get_redis_client",
         return_value=client,
     ):
-        mock_send_task = MagicMock()
-        with patch(
-            "dev_health_ops.external_ingest.recompute.celery_app.send_task",
-            mock_send_task,
-        ):
-            schedule_or_coalesce(
-                org_id=ORG,
-                source_system=SYSTEM,
-                source_instance=INSTANCE,
-                ingestion_id=ingestion_id,
-                repo_ids=repo_ids or set(),
-                team_ids=team_ids or set(),
-                window_start=window_start,
-                window_end=window_end,
-                record_kinds=record_kinds or set(),
-            )
-        return mock_send_task
+        schedule_or_coalesce(
+            org_id=ORG,
+            source_system=SYSTEM,
+            source_instance=INSTANCE,
+            ingestion_id=ingestion_id,
+            repo_ids=repo_ids or set(),
+            team_ids=team_ids or set(),
+            window_start=window_start,
+            window_end=window_end,
+            record_kinds=record_kinds or set(),
+        )
 
 
-def test_first_call_acquires_guard_and_schedules_flush() -> None:
+def test_first_call_acquires_guard() -> None:
     client = _fake_client()
-    mock_send_task = _call(
-        client, repo_ids={"repo-a"}, record_kinds={"pull_request.v1"}
-    )
-
-    mock_send_task.assert_called_once()
-    args, kwargs = mock_send_task.call_args
-    assert args[0] == (
-        "dev_health_ops.workers.external_ingest_recompute."
-        "flush_external_ingest_recompute"
-    )
-    assert kwargs["kwargs"] == {
-        "org_id": ORG,
-        "source_system": SYSTEM,
-        "source_instance": INSTANCE,
-    }
-    assert kwargs["countdown"] == 45
+    _call(client, repo_ids={"repo-a"}, record_kinds={"pull_request.v1"})
 
     assert _ttl(client, GUARD_KEY) > 0
     raw = _get_str(client, PENDING_KEY)
@@ -106,7 +95,7 @@ def test_first_call_acquires_guard_and_schedules_flush() -> None:
 
 def test_second_call_within_window_widens_blob_without_rescheduling() -> None:
     client = _fake_client()
-    mock_send_task_1 = _call(
+    _call(
         client,
         ingestion_id="ing-1",
         repo_ids={"repo-a"},
@@ -114,7 +103,8 @@ def test_second_call_within_window_widens_blob_without_rescheduling() -> None:
         window_start=datetime(2026, 6, 25, tzinfo=timezone.utc),
         window_end=datetime(2026, 6, 25, 12, tzinfo=timezone.utc),
     )
-    mock_send_task_2 = _call(
+    guard_ttl_after_first_call = _ttl(client, GUARD_KEY)
+    _call(
         client,
         ingestion_id="ing-2",
         repo_ids={"repo-b"},
@@ -123,8 +113,11 @@ def test_second_call_within_window_widens_blob_without_rescheduling() -> None:
         window_end=datetime(2026, 6, 26, tzinfo=timezone.utc),
     )
 
-    mock_send_task_1.assert_called_once()
-    mock_send_task_2.assert_not_called()
+    # The second call must NOT re-acquire the guard (SETNX correctly refuses
+    # while it's still held) -- "without rescheduling" now means "without a
+    # fresh guard window", the observable half of what used to also gate a
+    # second dispatch.
+    assert _ttl(client, GUARD_KEY) <= guard_ttl_after_first_call
 
     raw = _get_str(client, PENDING_KEY)
     assert raw is not None
@@ -138,16 +131,17 @@ def test_second_call_within_window_widens_blob_without_rescheduling() -> None:
     assert blob["window_end"] == datetime(2026, 6, 26, tzinfo=timezone.utc).isoformat()
 
 
-def test_guard_expiry_allows_rescheduling() -> None:
+def test_guard_expiry_allows_reacquisition() -> None:
     client = _fake_client()
-    mock_send_task_1 = _call(client, ingestion_id="ing-1")
-    assert mock_send_task_1.call_count == 1
+    _call(client, ingestion_id="ing-1")
+    assert _ttl(client, GUARD_KEY) > 0
 
     # Simulate the debounce window elapsing (Valkey TTL eviction).
     client.delete(GUARD_KEY)
+    assert _get_str(client, GUARD_KEY) is None
 
-    mock_send_task_2 = _call(client, ingestion_id="ing-2")
-    assert mock_send_task_2.call_count == 1
+    _call(client, ingestion_id="ing-2")
+    assert _ttl(client, GUARD_KEY) > 0
 
 
 def test_different_source_instances_debounce_independently() -> None:
@@ -156,34 +150,30 @@ def test_different_source_instances_debounce_independently() -> None:
         "dev_health_ops.external_ingest.recompute._get_redis_client",
         return_value=client,
     ):
-        mock_send_task = MagicMock()
-        with patch(
-            "dev_health_ops.external_ingest.recompute.celery_app.send_task",
-            mock_send_task,
-        ):
-            schedule_or_coalesce(
-                org_id=ORG,
-                source_system="github",
-                source_instance=INSTANCE,
-                ingestion_id="ing-1",
-                repo_ids=set(),
-                team_ids=set(),
-                window_start=None,
-                window_end=None,
-                record_kinds=set(),
-            )
-            schedule_or_coalesce(
-                org_id=ORG,
-                source_system="gitlab",
-                source_instance=INSTANCE,
-                ingestion_id="ing-2",
-                repo_ids=set(),
-                team_ids=set(),
-                window_start=None,
-                window_end=None,
-                record_kinds=set(),
-            )
-    assert mock_send_task.call_count == 2
+        schedule_or_coalesce(
+            org_id=ORG,
+            source_system="github",
+            source_instance=INSTANCE,
+            ingestion_id="ing-1",
+            repo_ids=set(),
+            team_ids=set(),
+            window_start=None,
+            window_end=None,
+            record_kinds=set(),
+        )
+        schedule_or_coalesce(
+            org_id=ORG,
+            source_system="gitlab",
+            source_instance=INSTANCE,
+            ingestion_id="ing-2",
+            repo_ids=set(),
+            team_ids=set(),
+            window_start=None,
+            window_end=None,
+            record_kinds=set(),
+        )
+    assert _ttl(client, recompute_mod._guard_key(ORG, "github", INSTANCE)) > 0
+    assert _ttl(client, recompute_mod._guard_key(ORG, "gitlab", INSTANCE)) > 0
 
 
 def test_no_redis_url_falls_back_to_synchronous_dispatch(monkeypatch) -> None:
@@ -239,30 +229,24 @@ def test_valkey_connection_error_falls_back_to_synchronous_dispatch(
     mock_dispatch.assert_called_once()
 
 
-def test_debounce_seconds_override_used_for_countdown_and_guard_ttl() -> None:
+def test_debounce_seconds_override_used_for_guard_ttl() -> None:
     client = _fake_client()
     with patch(
         "dev_health_ops.external_ingest.recompute._get_redis_client",
         return_value=client,
     ):
-        mock_send_task = MagicMock()
-        with patch(
-            "dev_health_ops.external_ingest.recompute.celery_app.send_task",
-            mock_send_task,
-        ):
-            schedule_or_coalesce(
-                org_id=ORG,
-                source_system=SYSTEM,
-                source_instance=INSTANCE,
-                ingestion_id="ing-1",
-                repo_ids=set(),
-                team_ids=set(),
-                window_start=None,
-                window_end=None,
-                record_kinds=set(),
-                debounce_seconds=10,
-            )
-    assert mock_send_task.call_args.kwargs["countdown"] == 10
+        schedule_or_coalesce(
+            org_id=ORG,
+            source_system=SYSTEM,
+            source_instance=INSTANCE,
+            ingestion_id="ing-1",
+            repo_ids=set(),
+            team_ids=set(),
+            window_start=None,
+            window_end=None,
+            record_kinds=set(),
+            debounce_seconds=10,
+        )
     assert _ttl(client, GUARD_KEY) <= 10
 
 

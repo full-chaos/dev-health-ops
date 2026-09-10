@@ -260,7 +260,6 @@ Category key: **LIVE** = reached today from a live FastAPI bridge route. **CELER
 | `rate_limit_defer.py` | LIVE | plan_rate_limit_deferral imported sync_units.py:130-132, called sync_units.py:1514 inside dispatch_sync_run | n/a |
 | `recommendations_tasks.py` | LIVE | _compute_recommendations_for_org imported/called worker_metrics.py:1833/1863, served by /remaining-metrics/v1/execute | n/a |
 | `reference_discovery.py` | LIVE | imported directly worker_sync.py:22-25; served by /reference-discovery and /reference-discovery-populate routes | n/a |
-| `runner.py` | LIBRARY / SHARED | used by src/dev_health_ops/cli.py:728,842 (register_commands) — operator CLI for Celery queue inspection, not the Go bridge | n/a |
 | `sync_bootstrap.py` | LIVE | imported by reference_discovery.py/team_autoimport.py/sync_units.py:134; resolve_run_auth reached from dispatch_sync_run | n/a |
 | `sync_units.py` | LIVE | dispatch_sync_run/finalize_sync_run imported worker_sync.py:26, served by /dispatch and /finalize | n/a |
 | `system_ops.py` | LIVE | imported worker_operational.py (phone_home_heartbeat only, serving /heartbeat) — CHAOS-5353 deleted send_billing_notification and its fence helpers from this module | n/a |

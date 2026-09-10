@@ -1,115 +1,18 @@
 from __future__ import annotations
 
-import json
-from argparse import Namespace
-
-import pytest
-
-
-def test_worker_inspect_sanitizes_task_arguments(monkeypatch, capsys) -> None:
-    from dev_health_ops.workers import runner
-    from dev_health_ops.workers.celery_app import celery_app
-
-    class FakeInspector:
-        def active(self) -> dict[str, list[dict[str, object]]]:
-            return {
-                "worker@node": [
-                    {
-                        "id": "task-1",
-                        "name": "dev_health_ops.workers.tasks.dispatch_sync_run",
-                        "args": ["sensitive-value"],
-                        "kwargs": {"credential": "sensitive-value"},
-                        "argsrepr": "('sensitive-value',)",
-                        "kwargsrepr": "{'credential': 'sensitive-value'}",
-                        "headers": {"x-provider-credential": "sensitive-value"},
-                        "properties": {"correlation_id": "sensitive-value"},
-                        "delivery_info": {
-                            "routing_key": "sync.github",
-                            "redelivered": False,
-                        },
-                    }
-                ]
-            }
-
-    def fake_inspect(timeout: float) -> FakeInspector:
-        assert timeout == 0.1
-        return FakeInspector()
-
-    monkeypatch.setattr(celery_app.control, "inspect", fake_inspect)
-
-    ns = Namespace(state="active", timeout=0.1, output="json")
-
-    assert runner._cmd_inspect(ns) == 0
-
-    output = capsys.readouterr().out
-    payload = json.loads(output)
-    task = payload["worker@node"][0]
-    assert task == {
-        "delivery_info": {"redelivered": False, "routing_key": "sync.github"},
-        "id": "task-1",
-        "name": "dev_health_ops.workers.tasks.dispatch_sync_run",
-    }
-    assert "sensitive-value" not in output
-    assert "args" not in task
-    assert "kwargs" not in task
-    assert "headers" not in task
-    assert "properties" not in task
-
-
-def test_worker_inspect_quiet_json_restores_otel_on_parse_error(monkeypatch) -> None:
-    from dev_health_ops import cli
-
-    monkeypatch.setenv("OTEL_ENABLED", "true")
-
-    with pytest.raises(SystemExit):
-        cli.main(["workers", "inspect", "--state", "bogus", "--output", "json"])
-
-    assert cli.os.environ["OTEL_ENABLED"] == "true"
-
-
-def test_worker_inspect_sanitizes_nested_scheduled_request(monkeypatch, capsys) -> None:
-    from dev_health_ops.workers import runner
-    from dev_health_ops.workers.celery_app import celery_app
-
-    class FakeInspector:
-        def scheduled(self) -> dict[str, list[dict[str, object]]]:
-            return {
-                "worker@node": [
-                    {
-                        "eta": "2026-01-01T00:00:00+00:00",
-                        "priority": 3,
-                        "request": {
-                            "id": "task-2",
-                            "name": "dev_health_ops.workers.tasks.dispatch_sync_run",
-                            "args": ["sensitive-value"],
-                            "kwargs": {"credential": "sensitive-value"},
-                            "headers": {"x-provider-credential": "sensitive-value"},
-                            "delivery_info": {"routing_key": "sync.github"},
-                        },
-                    }
-                ]
-            }
-
-    monkeypatch.setattr(celery_app.control, "inspect", lambda timeout: FakeInspector())
-
-    ns = Namespace(state="scheduled", timeout=0.1, output="json")
-
-    assert runner._cmd_inspect(ns) == 0
-
-    output = capsys.readouterr().out
-    payload = json.loads(output)
-    task = payload["worker@node"][0]
-    assert task == {
-        "delivery_info": {"routing_key": "sync.github"},
-        "eta": "2026-01-01T00:00:00+00:00",
-        "id": "task-2",
-        "name": "dev_health_ops.workers.tasks.dispatch_sync_run",
-        "priority": 3,
-    }
-    assert "sensitive-value" not in output
-    assert "args" not in task
-    assert "kwargs" not in task
-    assert "headers" not in task
+# CHAOS-3093 (PR2b): workers/runner.py's `inspect` CLI subcommand (and its
+# sanitization helpers `_cmd_inspect`/`_inspect_worker_tasks`/`_sanitize_*`)
+# are deleted outright -- it only read Celery's control-plane RPC
+# (`celery_app.control.inspect`), and CHAOS-4065 already converted the last
+# claimed live consumer (the ask-dev-acceptance fleet's `worker`/`beat`
+# services in tests/acceptance/compose.ask-dev.yml) to
+# `entrypoint: ["sleep", "infinity"]` with Go `ask-dev-jobs-probe`
+# healthchecks -- there is no Celery fleet left anywhere, live or in test
+# infra, for it to inspect. The three tests that exercised it
+# (test_worker_inspect_sanitizes_task_arguments,
+# test_worker_inspect_quiet_json_restores_otel_on_parse_error,
+# test_worker_inspect_sanitizes_nested_scheduled_request) are deleted with
+# it.
 
 
 def test_worker_late_ack_exclusions_are_explicit() -> None:

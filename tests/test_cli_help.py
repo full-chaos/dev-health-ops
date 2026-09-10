@@ -46,8 +46,9 @@ def _run_cli_help(*args: str) -> subprocess.CompletedProcess[str]:
         ("go-api", "routing", "status", "--help"),
         ("migrate", "--help"),
         ("migrate", "clickhouse", "repair", "--help"),
-        ("workers", "--help"),
-        ("workers", "inspect", "--help"),
+        # workers deleted under CHAOS-3093/PR2b (dev-hops workers inspect was
+        # its only subcommand, itself deleted -- no Celery fleet left
+        # anywhere for it to inspect).
         ("maintenance", "--help"),
     ],
 )

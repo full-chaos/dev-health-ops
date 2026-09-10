@@ -374,6 +374,73 @@ func TestRetiredBeatEntriesStayAbsentAndExplained(t *testing.T) {
 	}
 }
 
+// CHAOS-3093 (PR2b, r1 codex review finding): TestRetiredBeatEntriesStayAbsentAndExplained
+// only checks that each listed retired entry is absent-and-explained -- a
+// mutation that RENAMES a retired entry's Name (e.g. "prune-rate-limit-
+// observations" -> a typo) still passes it trivially, because the renamed
+// string is still absent from the live Python schedule and Reason/Evidence
+// are still non-empty. That mutation would also silently drift
+// RetiredBeatInventory from contracts/jobs/v1/transitional-inventory.json's
+// own retired_beat_entries list (checked independently by
+// ci/check_transitional_inventory.py / tests/workers/
+// test_transitional_inventory_contract.py on the Python side), with nothing
+// on the Go side to catch it. This pins the exact, reviewed name set so a
+// rename, an accidental add, or an accidental removal all fail here.
+func TestRetiredBeatEntriesNamesArePinnedExactly(t *testing.T) {
+	expected := []string{
+		"ask-dev-retention-sweep",
+		"consume-pending-scheduled-sync-occurrences",
+		"dispatch-go-external-ingest-recompute-bridge",
+		"dispatch-scheduled-metrics",
+		"dispatch-scheduled-reports",
+		"dispatch-scheduled-syncs",
+		"external-ingest-stream-health",
+		"monitor-queue-depths",
+		"phone-home-heartbeat",
+		"process-external-ingest-streams",
+		"process-ingest-streams",
+		"process-product-telemetry-streams",
+		"prune-external-ingest-batches",
+		"prune-rate-limit-observations",
+		"reconcile-sync-dispatch",
+		"run-capacity-forecast",
+		"run-complexity-daily",
+		"run-daily-metrics",
+		"run-membership-backfill-daily",
+		"run-recommendations",
+		"run-release-impact-daily",
+	}
+	sort.Strings(expected)
+
+	actual := make([]string, 0, len(RetiredBeatInventory()))
+	seen := make(map[string]struct{}, len(RetiredBeatInventory()))
+	for _, retired := range RetiredBeatInventory() {
+		if _, duplicate := seen[retired.Name]; duplicate {
+			t.Fatalf("retired beat entry %q is listed more than once", retired.Name)
+		}
+		seen[retired.Name] = struct{}{}
+		actual = append(actual, retired.Name)
+	}
+	sort.Strings(actual)
+
+	if len(actual) != len(expected) {
+		t.Fatalf("RetiredBeatInventory() has %d entries, want %d -- a retired "+
+			"beat entry was added, removed, or renamed without updating this "+
+			"pin (and, on the Python side, transitional-inventory.json's "+
+			"retired_beat_entries list)\ngot:  %v\nwant: %v",
+			len(actual), len(expected), actual, expected)
+	}
+	for i := range expected {
+		if actual[i] != expected[i] {
+			t.Fatalf("RetiredBeatInventory() name mismatch at sorted index %d: "+
+				"got %q, want %q -- a retired beat entry was renamed without "+
+				"updating this pin (and, on the Python side, "+
+				"transitional-inventory.json's retired_beat_entries list)",
+				i, actual[i], expected[i])
+		}
+	}
+}
+
 // Sync coverage is durable product state, not runtime telemetry. Its Python
 // Beat entry and task are deleted only after the native schedule and producer
 // are constructed, so a Go-only stack can create cold projections and rebuild

@@ -426,11 +426,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "resolve_worker_job_route called sync_units.py:999, inside dispatch_sync_run",
         "ticket": "n/a",
     },
-    "org_guard.py": {
-        "category": "c",
-        "evidence": "corrected 2026-08-28 per codex review (a 3rd caller exists, but is itself dead): `organization_exists_sync` is also called at `sync/execution_trigger.py:325`, inside `_require_locked_scheduled_eligibility` — but that function's ONLY caller is `create_scheduled_sync_execution_trigger` (`execution_trigger.py:74`), whose ONLY caller is `sync_scheduler.py:318` (dead, category b below). `create_sync_execution_trigger` (the function the LIVE admin router `api/admin/routers/sync.py` calls) does NOT reach this eligibility check. Do not delete without re-verifying this chain at delete time — a future refactor could make `create_scheduled_sync_execution_trigger` live again",
-        "ticket": "CHAOS-4439 (re-verify chain before deleting)",
-    },
     "post_sync_dispatch.py": {
         "category": "a",
         "evidence": "build_post_sync_dispatch_payload called sync_units.py:2274, inside finalize_sync_run (live via worker_sync.py:26)",

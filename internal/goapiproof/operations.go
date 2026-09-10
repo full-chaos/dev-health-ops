@@ -267,22 +267,37 @@ var operationSpecs = map[string]OperationSpec{
 			"data.analytics.breakdowns.items.value":      "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Derived from CHAOS-5451's rule rather than an observed divergence, and this table's payload always sets useInvestment=true; on the non-investment path the same measure is an exact integer sum",
 		}},
 	},
-	// sankey.coverage.teamCoverage/.repoCoverage are deliberately NOT
-	// declared, and the reason is path-dependent rather than permanent: on
-	// the committed WORK_TYPE payload they are count()/countIf() integers
-	// (sankeycoverage.go:128-131) and Tier A is correct. If a future
-	// registered document adds a REPO dimension, useRepoAllocation flips on
-	// (investment.go:501) and those same two leaves become sum()/sumIf()
-	// float sums (sankeycoverage.go:192-195) -- Tier B at that point, not
-	// before (lane-goapi-parity, CHAOS-5451).
+	// sankey.coverage.teamCoverage/.repoCoverage: CORRECTED, not new --
+	// this table used to say these were count()/countIf() integers on the
+	// committed WORK_TYPE payload and would only become float sums if a
+	// future document added a REPO dimension to the sankey path. That was
+	// wrong about the gate: resolveSankeyCoverage's totalExpr/repoTotalExpr
+	// and assignedTeamCountExpr/assignedRepoCountExpr switch to
+	// sum()/sumIf(repoEffortCol, ...) whenever coverageUseInvestment is
+	// true (sankeycoverage.go:210-213), unconditionally on whether REPO is
+	// in the path -- useRepoAllocation is a different flag that gates
+	// breakdowns/sankey VALUE compilation (validate.go's dbExpression),
+	// not coverage. investmentFullVariables sets batch-level
+	// useInvestment=true, and resolve.go:428 reads coverage's flag
+	// straight from that (the raw three-state flag, not auto-routed), so
+	// this document's coverage has always compiled to the float-sum form.
+	// A deployed-executed run (JOB 5, build e4a9fabff) measured this
+	// directly: repoCoverage came back 1 ULP off
+	// (0.9931181145418517 vs 0.9931181145418516) with the vacuity guard
+	// not firing. Rule-derived per CHAOS-5451, not just the one observed
+	// field -- teamCoverage shares the same sum()/sumIf() expressions and
+	// is declared alongside it rather than left to fail only on a future
+	// run where the summation order happens to differ.
 	"investmentFull": {
 		ResponseRoot: "analytics",
 		Variables:    investmentFullVariables,
 		Parity: Options{
 			FloatTierB: map[string]string{
-				"data.analytics.breakdowns.items.value": "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Rule-derived, not observed (CHAOS-5451)",
-				"data.analytics.sankey.nodes.value":     "CompileSankey calls the same dbExpression as breakdowns, so on the investment path this is the same SUM(subcategory_kv.2) float sum; subcategory_kv ARRAY JOINs a Map(String, Float64) column (investment.go:514, migration 017:12). Rule-derived, not observed (CHAOS-5451)",
-				"data.analytics.sankey.edges.value":     "same float sum as sankey.nodes.value -- one dbExpression, one compiled measure (validate.go:245-246, investment.go:514). Rule-derived, not observed (CHAOS-5451)",
+				"data.analytics.breakdowns.items.value":       "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Rule-derived, not observed (CHAOS-5451)",
+				"data.analytics.sankey.nodes.value":           "CompileSankey calls the same dbExpression as breakdowns, so on the investment path this is the same SUM(subcategory_kv.2) float sum; subcategory_kv ARRAY JOINs a Map(String, Float64) column (investment.go:514, migration 017:12). Rule-derived, not observed (CHAOS-5451)",
+				"data.analytics.sankey.edges.value":           "same float sum as sankey.nodes.value -- one dbExpression, one compiled measure (validate.go:245-246, investment.go:514). Rule-derived, not observed (CHAOS-5451)",
+				"data.analytics.sankey.coverage.teamCoverage": "ratio of float sums: assignedTeam/total, both sum()/sumIf(repoEffortCol, ...) once coverageUseInvestment is true, which this document's committed useInvestment=true payload always sets (sankeycoverage.go:210-212,490). Rule-derived, not observed (CHAOS-5451)",
+				"data.analytics.sankey.coverage.repoCoverage": "ratio of float sums: assignedRepo/repoTotal, both sum()/sumIf(repoEffortCol, ...) once coverageUseInvestment is true, same gate as teamCoverage (sankeycoverage.go:210-211,213,493). Measured live at build e4a9fabff (JOB 5, run 5167b7de-18da-4747-addf-16c65a2858c8): 0.9931181145418517 vs 0.9931181145418516, 1 ULP, relative 1.1e-16 (CHAOS-5451)",
 			},
 			// CHAOS-5546: sankey.go's nodes/edges queries are a plain
 			// ClickHouse UNION ALL with no outer ORDER BY. Measured live:

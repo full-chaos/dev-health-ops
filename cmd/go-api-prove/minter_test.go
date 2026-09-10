@@ -433,3 +433,44 @@ func TestACleanHelperStillReturnsItsCredential(t *testing.T) {
 		t.Fatalf("got %q", minted)
 	}
 }
+
+// r7 P3: mutations that bypassed URL validation, removed the bracketing
+// deadline, or stretched the credential freshness window all survived,
+// because `run()` has no test and a guard inside it is a guard nobody
+// holds. These pin the pieces that CAN be reached without a harness for
+// the whole command; the harness itself is a follow-up.
+func TestTheCLIsOwnGuardsAreReachable(t *testing.T) {
+	t.Run("endpoint flags are validated", func(t *testing.T) {
+		for _, bad := range []flags{
+			{registryURL: "http://alice:s3cret@host/registry"},
+			{buildInfoURL: "http:s3cret@host/buildinfo"},
+			{edgeURL: "ftp://host/graphql"},
+			{proofURL: "http://alice@host/query/proof"},
+		} {
+			if err := validateEndpointFlags(bad); err == nil {
+				t.Fatalf("a credential-bearing endpoint flag was accepted: %+v", bad)
+			} else if strings.Contains(err.Error(), "s3cret") {
+				t.Fatalf("the refusal echoed the credential: %v", err)
+			}
+		}
+		if err := validateEndpointFlags(flags{
+			registryURL:  "http://query-api.test:8090/registry",
+			buildInfoURL: "http://query-api.test:8090/buildinfo",
+			edgeURL:      "http://api.test:8000/graphql",
+		}); err != nil {
+			t.Fatalf("ordinary endpoints were refused: %v", err)
+		}
+	})
+
+	t.Run("the credential freshness window stays well inside the TTL", func(t *testing.T) {
+		// ENVELOPE_DEFAULT_TTL_SECONDS is 60. Stretching this to 250s
+		// survived r7: a value at or past the TTL means every request
+		// after the first carries an expired envelope.
+		if proofCredentialFreshness >= 60*time.Second {
+			t.Fatalf("freshness %s is not inside the 60s envelope TTL", proofCredentialFreshness)
+		}
+		if proofCredentialFreshness > 30*time.Second {
+			t.Fatalf("freshness %s leaves too little margin for the request to arrive and be verified", proofCredentialFreshness)
+		}
+	})
+}

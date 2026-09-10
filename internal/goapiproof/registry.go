@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // ErrNoBuildIdentity reports that the running query-api did not tell us
@@ -128,110 +128,82 @@ func safeEndpoint(raw string) (*url.URL, error) {
 // ErrCredentialInURL is returned for a URL carrying embedded credentials.
 var ErrCredentialInURL = errors.New("goapiproof: URL carries embedded credentials")
 
-// SanitizeError is the package's ERROR BOUNDARY: every error that leaves
-// goapiproof for an operator goes through it.
+// TransportFailure describes a transport error WITHOUT its message.
 //
-// Three rounds of per-site stripping failed, each in a place the previous
-// fix had not imagined. r3 wrapped the URL in the message; r4 found the
-// opaque form, where url.Error has no userinfo to redact; r5 found a
-// credential inside a REDIRECT's Location header -- `failed to parse
-// Location header "http://host/SECRET/%zz"` -- reached through a nested
-// wrap that the top-level unwrap never saw, plus unsanitised
-// request-construction errors in three functions.
+// Four rounds tried to make an error message safe to print: wrap the URL,
+// strip the URL, scrub the URL, invert the matcher. Each fixed the shape
+// it was shown and the next round supplied another -- an opaque form, a
+// redirect Location, a filename-relative Location, a query-only one. The
+// text is attacker-shaped and there is no finite list of ways a secret can
+// appear in it.
 //
-// The pattern is the finding. A stripper that unwraps one known error type
-// at one known site is a blacklist, and every round found the entry it did
-// not have. This walks the WHOLE chain and then scrubs the rendered text,
-// so a URL is removed wherever it came from and whatever wrapped it --
-// including from a library that has not been written yet.
-func SanitizeError(err error) error {
-	if err == nil {
-		return nil
-	}
-	return errors.New(scrubURLs(unwrapOperation(err)))
+// So the text is DROPPED, not sanitised. What reaches an operator is a
+// fixed message, the endpoint label this package rebuilt from parts it can
+// account for, and a CLASS. That is everything the message was ever needed
+// for -- which endpoint, and what kind of failure -- and it has no channel
+// through which an arbitrary string can travel.
+type TransportFailure struct {
+	// Endpoint is the rebuilt scheme://host label, never the raw URL.
+	Endpoint string
+	// Class is one of the constants below.
+	Class string
 }
 
-// unwrapOperation renders the whole chain, expanding a *url.Error into its
-// operation, its URL and its cause rather than using its own formatting.
-//
-// The URL is deliberately KEPT here and handed to scrubURLs, which rebuilds
-// it from its safe parts or replaces it wholesale. Dropping it would be
-// safe and unhelpful: an operator staring at "Get: connection refused"
-// cannot tell which of four endpoints refused. url.Error's OWN formatting
-// is what must not be trusted -- it redacts userinfo and nothing else, so
-// it is a no-op on every other shape a credential takes.
-func unwrapOperation(err error) string {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) && urlErr.Err != nil {
-		return urlErr.Op + " " + urlErr.URL + ": " + unwrapOperation(urlErr.Err)
-	}
-	return err.Error()
-}
-
-// The sanitizer's two matchers.
-//
-// urlToken catches anything with a scheme -- `http://host/x`, and the
-// no-"//" form `http:SECRET@host/x` that defeated two earlier fixes.
-//
-// quotedToken catches what r6 found the first one missing: a RELATIVE
-// URL. A redirect's Location header is routinely a path, and Go quotes it
-// into the error verbatim -- `failed to parse Location header
-// "/REVIEW_SECRET/%zz"`. There is no scheme to key on, so the match is on
-// the quoting instead.
-var (
-	urlToken    = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*:[^\s"']+`)
-	quotedToken = regexp.MustCompile(`"[^"]*"`)
+// Transport failure classes. Deliberately coarse: an operator needs to
+// know whether to look at the network, the deployment or the request, and
+// a finer taxonomy would be another place for a detail to leak.
+const (
+	TransportTimeout  = "timeout"
+	TransportRefused  = "connection_refused"
+	TransportRedirect = "redirect"
+	TransportParse    = "malformed_response"
+	TransportFailed   = "request_failed"
 )
 
-// scrubURLs removes every URL-shaped thing from a rendered error.
-//
-// A rebuilt endpoint keeps its SCHEME AND HOST ONLY. The path is dropped,
-// which is a correction to the first version of this function: r6 showed a
-// credential living in the path of an otherwise valid URL, so re-emitting
-// the path re-emits the secret. Host and scheme are enough to tell an
-// operator which endpoint failed, which is the whole job.
-func scrubURLs(message string) string {
-	// Quoted first: Go's own errors quote the offending value, and a
-	// quoted relative path has no scheme for urlToken to find.
-	message = quotedToken.ReplaceAllStringFunc(message, func(quoted string) string {
-		inner := quoted[1 : len(quoted)-1]
-		if !looksLikeALocation(inner) {
-			return quoted
-		}
-		if rebuilt, ok := rebuildEndpoint(inner); ok {
-			return `"` + rebuilt + `"`
-		}
-		return `"(redacted url)"`
-	})
-	return urlToken.ReplaceAllStringFunc(message, func(token string) string {
-		trimmed := strings.TrimRight(token, `.,;:)]}"'`)
-		suffix := token[len(trimmed):]
-		if rebuilt, ok := rebuildEndpoint(trimmed); ok {
-			return rebuilt + suffix
-		}
-		return "(redacted url)" + suffix
-	})
+func (f TransportFailure) Error() string {
+	return fmt.Sprintf("goapiproof: %s failed (%s). The underlying error is deliberately not reported: it can contain the request URL, and a URL can carry a credential in its userinfo, path, query or fragment", f.Endpoint, f.Class)
 }
 
-// looksLikeALocation reports whether a quoted string might be a URL or a
-// path. Deliberately generous: over-scrubbing an error message costs
-// legibility, under-scrubbing costs a credential, and this file exists
-// because that trade was made the other way three times.
-func looksLikeALocation(value string) bool {
-	return strings.HasPrefix(value, "/") ||
-		strings.Contains(value, "://") ||
-		urlToken.MatchString(value)
-}
-
-// rebuildEndpoint returns scheme://host for a URL this package can fully
-// account for. Everything else is unrebuildable, including every relative
-// path -- a path alone has no safe part to keep.
-func rebuildEndpoint(raw string) (string, bool) {
-	parsed, err := safeEndpoint(raw)
-	if err != nil {
-		return "", false
+// classifyTransport maps an error to a class WITHOUT reading its message
+// for anything but the redirect sentinel this package raises itself.
+func classifyTransport(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), os.IsTimeout(err):
+		return TransportTimeout
+	case errors.Is(err, errRedirectRefused):
+		return TransportRedirect
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return TransportRefused
 	}
-	return parsed.Scheme + "://" + parsed.Host, true
+	return TransportFailed
+}
+
+// errRedirectRefused is returned by every client this package builds.
+//
+// The registry, /buildinfo and the measured routes are DIRECT endpoints:
+// nothing legitimate redirects. Following one means fetching a URL the
+// operator did not supply and this package never validated, and every
+// redirect finding in this file's history arrived through the Location
+// header. Refusing is both safer and more honest than sanitising what a
+// redirect produces.
+var errRedirectRefused = errors.New("goapiproof: refusing to follow a redirect")
+
+// NoRedirectClient returns a client that refuses redirects.
+func NoRedirectClient(base *http.Client) *http.Client {
+	client := &http.Client{}
+	if base != nil {
+		*client = *base
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errRedirectRefused
+	}
+	return client
+}
+
+// transportError builds the only error this package emits for a failed
+// request.
+func transportError(rawURL string, err error) error {
+	return TransportFailure{Endpoint: EndpointLabel(rawURL), Class: classifyTransport(err)}
 }
 
 // credential is present -- checking User there would wave it through.
@@ -261,16 +233,16 @@ const (
 // running binary computed, and every surface that could have said so was
 // reading the same stale source as the thing that was wrong.
 func FetchRegistry(ctx context.Context, client *http.Client, registryURL string) (RegistryView, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
+	// Redirects are REFUSED: /registry and /buildinfo are direct
+	// endpoints, so a redirect means fetching something nobody validated.
+	client = NoRedirectClient(client)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, registryURL, nil)
 	if err != nil {
 		return RegistryView{}, fmt.Errorf("goapiproof: build registry request: %w", err)
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return RegistryView{}, fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(registryURL), SanitizeError(err))
+		return RegistryView{}, transportError(registryURL, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
@@ -319,9 +291,9 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 //     build that cannot identify itself is exactly the case this check
 //     exists for.
 func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL string, credential *Credential) (string, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
+	// Redirects are REFUSED: /registry and /buildinfo are direct
+	// endpoints, so a redirect means fetching something nobody validated.
+	client = NoRedirectClient(client)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildInfoURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: build buildinfo request: %w", err)
@@ -331,7 +303,7 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("goapiproof: read %s: %w", EndpointLabel(buildInfoURL), SanitizeError(err))
+		return "", transportError(buildInfoURL, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 

@@ -178,18 +178,8 @@ func run() error {
 	// keeps a credential out of this program's OWN messages; only refusal
 	// keeps it off the command line, where the process table and every log
 	// that records an invocation can already read it.
-	for _, flagged := range []struct{ name, value string }{
-		{"-registry-url", f.registryURL},
-		{"-buildinfo-url", f.buildInfoURL},
-		{"-edge-url", f.edgeURL},
-		{"-proof-url", f.proofURL},
-	} {
-		if flagged.value == "" {
-			continue
-		}
-		if err := goapiproof.RefuseCredentialsInURL(flagged.name, flagged.value); err != nil {
-			return err
-		}
+	if err := validateEndpointFlags(f); err != nil {
+		return err
 	}
 
 	ctx := context.Background()
@@ -738,3 +728,28 @@ func killHelperGroup(cmd *exec.Cmd) {
 // this runs after the helper has already been SIGKILLed, and anything
 // still alive after it is not going to be killed by waiting longer.
 const helperReapTimeout = 2 * time.Second
+
+// validateEndpointFlags refuses any endpoint flag this package cannot
+// fully account for.
+//
+// A function rather than an inline loop so a test can call it. r7 killed
+// the inline version by bypassing the check, and nothing failed --
+// `run()` has no test at all, so a guard inside it is a guard nobody
+// holds. This is the smallest seam that makes the check testable without
+// a harness for the whole command.
+func validateEndpointFlags(f flags) error {
+	for _, flagged := range []struct{ name, value string }{
+		{"-registry-url", f.registryURL},
+		{"-buildinfo-url", f.buildInfoURL},
+		{"-edge-url", f.edgeURL},
+		{"-proof-url", f.proofURL},
+	} {
+		if flagged.value == "" {
+			continue
+		}
+		if err := goapiproof.RefuseCredentialsInURL(flagged.name, flagged.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}

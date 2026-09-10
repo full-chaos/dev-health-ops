@@ -3,7 +3,6 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -232,34 +231,38 @@ func TestAnUnstampedBuildSetsNoBuildHeader(t *testing.T) {
 	}
 }
 
-// r5 P3: removing the wrapper from the PRODUCTION /query registration
-// survived the suite, because the existing test calls withProofProvenance
-// directly and never asserts that main.go uses it. A guard nothing can
-// kill is a guard nobody is holding.
+// r5/r6/r7: the production /query registration must actually stamp the
+// build, and this asserts it by DRIVING the real mux rather than reading
+// main.go's source.
 //
-// This reads the registration source, which is a weaker assertion than
-// exercising it and is what is available without standing up the whole
-// route: buildQueryRoute needs a database, ClickHouse and a registry.
-// Stated plainly rather than dressed up -- the strong version belongs
-// with the deployed-executed proof run, which is what this whole PR
-// exists to make possible.
-func TestTheProductionQueryRouteIsRegisteredWithProvenance(t *testing.T) {
-	source, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read main.go: %v", err)
-	}
-	text := string(source)
+// The source-text version was defeated twice -- once by wrapping the
+// registration in `if false` and registering the raw handler instead, once
+// by handing the wrapper an empty build. Both left the pin green, because
+// reading source is not running it. mountQueryRoute exists so this test
+// can register the real route on a real mux and serve a real request.
+func TestTheProductionQueryRouteStampsTheBuild(t *testing.T) {
+	mux := http.NewServeMux()
+	served := false
+	mountQueryRoute(mux, func(w http.ResponseWriter, _ *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	})
 
-	if !strings.Contains(text, `mux.HandleFunc("/query", withProofProvenance(`) {
-		t.Fatal("the production /query route is not registered through withProofProvenance: without it no canary or primary operation can be proven, and the Python edge forwards a header that is never set")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/query", nil))
+
+	if !served {
+		t.Fatal("the production handler did not run")
 	}
-	// r6 killed the previous version by passing an EMPTY build to the
-	// wrapper: the registration matched, the header was never set, and the
-	// pin passed. So the commit argument is checked too.
-	if !strings.Contains(text, `withProofProvenance(handlers.Query, version.Current("query-api").Commit)`) {
-		t.Fatal("the production /query wrapper is not given the running build: an empty commit sets no header, so the route is wrapped and still unbindable")
+	if recorder.Header().Get(planeHeaderName) != "go" {
+		t.Fatalf("the production /query route did not stamp the plane: %v", recorder.Header())
 	}
-	if !strings.Contains(text, `/query`) {
-		t.Fatal("no /query registration found at all -- this test has stopped reading what it thinks it reads")
+	// The build comes from the binary's own stamp, which is empty in a
+	// test binary -- so this asserts the WIRING (the wrapper is reached
+	// with whatever the process reports) and the plane header proves the
+	// wrapper ran. The build value itself is asserted in
+	// TestTheNormalQueryRouteCarriesProvenanceHeaders, which passes one.
+	if _, wired := recorder.Header()[http.CanonicalHeaderKey(planeHeaderName)]; !wired {
+		t.Fatal("the wrapper was not reached at all")
 	}
 }

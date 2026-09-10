@@ -2,11 +2,8 @@ package goapiproof
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -91,100 +88,82 @@ func TestAClosedEndpointDoesNotLeakItsURL(t *testing.T) {
 	}
 }
 
-// r5 P1-2: a credential inside a REDIRECT's Location header reached the
-// operator through a NESTED wrap that the top-level unwrap never saw.
-// Three rounds of per-site stripping each missed the site the next round
-// found, so the sanitizer is now one boundary that walks the whole chain
-// and scrubs the rendered text.
-func TestTheSanitizerScrubsURLsWhereverTheyCameFrom(t *testing.T) {
-	const secret = "REVIEW_SYNTHETIC_SECRET"
-
-	for name, err := range map[string]error{
-		"a bare message": errors.New(`failed to parse Location header "http://host/` + secret + `/%zz"`),
-		"a nested wrap": fmt.Errorf("outer: %w",
-			fmt.Errorf("middle: %w",
-				errors.New(`Get "http://alice:`+secret+`@host/registry": dial tcp`))),
-		"a url.Error": &url.Error{
-			Op:  "Get",
-			URL: "http://alice:" + secret + "@host/registry",
-			Err: errors.New(`failed to parse Location header "http:` + secret + `@host/x"`),
-		},
-		"the opaque form": errors.New(`Get "http:` + secret + `@host/registry": no Host`),
-		"a credential in the query": errors.New(
-			`Get "http://host/registry?token=` + secret + `": dial tcp`),
-		"a credential in the fragment": errors.New(
-			`Get "http://host/registry#` + secret + `": dial tcp`),
-	} {
-		t.Run(name, func(t *testing.T) {
-			sanitized := SanitizeError(err)
-			if strings.Contains(sanitized.Error(), secret) {
-				t.Fatalf("the credential survived sanitizing: %v", sanitized)
-			}
-		})
-	}
-}
-
-// It must still say something an operator can act on: the operation and
-// the safe part of the endpoint survive.
-func TestTheSanitizerKeepsWhatIsSafeToKeep(t *testing.T) {
-	sanitized := SanitizeError(&url.Error{
-		Op:  "Get",
-		URL: "http://query-api.test:8090/registry",
-		Err: errors.New("connection refused"),
-	}).Error()
-
-	for _, want := range []string{"Get", "connection refused", "query-api.test"} {
-		if !strings.Contains(sanitized, want) {
-			t.Fatalf("the sanitizer removed something safe and useful (%q): %s", want, sanitized)
-		}
-	}
-}
-
-// A nil error stays nil, so the boundary can be applied unconditionally at
-// a call site without inventing a failure.
-func TestSanitizingNilStaysNil(t *testing.T) {
-	if SanitizeError(nil) != nil {
-		t.Fatal("SanitizeError(nil) must be nil")
-	}
-}
-
-// r6 P1: a RELATIVE redirect location. Go quotes it into the error
-// verbatim -- `failed to parse Location header "/REVIEW_SECRET/%zz"` --
-// and there is no scheme for a scheme-keyed matcher to find. The earlier
-// version also re-emitted the PATH of a URL it could account for, which
-// re-emits a secret living in that path.
-func TestTheSanitizerRemovesRelativeAndPathCredentials(t *testing.T) {
+// Four rounds tried to make a transport error's TEXT safe to print --
+// wrap the URL, strip it, scrub it, invert the matcher -- and each round
+// supplied a shape the last fix did not know: an opaque URL, a redirect
+// Location, a filename-relative Location, a query-only one.
+//
+// The text is now dropped rather than sanitised, and redirects are
+// refused outright. This drives the reviewer's redirect shapes through a
+// REAL http.Client with an in-memory transport and asserts the synthetic
+// secret appears zero times in what an operator sees.
+func TestARedirectNeverReachesAnOperatorError(t *testing.T) {
 	const secret = "REVIEW_SECRET"
 
-	for name, err := range map[string]error{
-		"relative location": errors.New(
-			`Get "http://query-api.test/registry": failed to parse Location header "/` + secret + `/%zz"`),
-		"credential in the path of a valid URL": errors.New(
-			`Get "http://query-api.test/` + secret + `/registry": dial tcp`),
-		"relative location, no quotes around the outer": errors.New(
-			`failed to parse Location header "/` + secret + `"`),
-		"protocol-relative": errors.New(
-			`Get "//alice:` + secret + `@host/registry": dial tcp`),
+	for name, location := range map[string]string{
+		"absolute":          "http://evil.test/" + secret + "/x",
+		"protocol-relative": "//alice:" + secret + "@host/x",
+		"filename-relative": secret + "/%zz",
+		"query-only":        "?token=" + secret + "%zz",
+		"fragment-only":     "#" + secret,
+		"path-absolute":     "/" + secret + "/%zz",
 	} {
 		t.Run(name, func(t *testing.T) {
-			sanitized := SanitizeError(err).Error()
-			if strings.Contains(sanitized, secret) {
-				t.Fatalf("the credential survived: %s", sanitized)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Location", location)
+				w.WriteHeader(http.StatusFound)
+			}))
+			t.Cleanup(server.Close)
+
+			// Every entry point that talks to a remote endpoint.
+			_, registryErr := FetchRegistry(context.Background(), server.Client(), server.URL)
+			_, buildErr := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+				StaticCredential("Authorization", "envelope", "Bearer x"))
+
+			for label, err := range map[string]error{"FetchRegistry": registryErr, "FetchBuildIdentity": buildErr} {
+				if err == nil {
+					t.Fatalf("%s followed a redirect instead of refusing it", label)
+				}
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("%s leaked the redirect target: %v", label, err)
+				}
 			}
 		})
 	}
 }
 
-// And a rebuilt endpoint keeps scheme and host and NOTHING else, so a
-// future edit cannot reintroduce the path.
-func TestARebuiltEndpointCarriesNoPath(t *testing.T) {
-	sanitized := SanitizeError(errors.New(
-		`Get "http://query-api.test:8090/registry/v2": connection refused`)).Error()
+// A refused redirect must say so, or an operator cannot tell it from a
+// network failure and will go looking in the wrong place.
+func TestARefusedRedirectIsNamedAsOne(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "http://elsewhere.test/registry")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
 
-	if !strings.Contains(sanitized, "query-api.test") {
-		t.Fatalf("the host must survive, or an operator cannot tell which endpoint failed: %s", sanitized)
+	_, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	if err == nil {
+		t.Fatal("a redirect must be refused")
 	}
-	if strings.Contains(sanitized, "/registry") {
-		t.Fatalf("the path must NOT survive -- a credential can live in it: %s", sanitized)
+	if !strings.Contains(err.Error(), TransportRedirect) {
+		t.Fatalf("the failure class must say redirect: %v", err)
+	}
+	// And it must name the endpoint the operator actually configured.
+	if !strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("the error must name the endpoint that was asked: %v", err)
+	}
+}
+
+// The error carries a class and an endpoint and nothing else -- in
+// particular, not the underlying message.
+func TestATransportFailureCarriesNoUnderlyingText(t *testing.T) {
+	failure := TransportFailure{Endpoint: "http://query-api.test", Class: TransportRefused}
+	rendered := failure.Error()
+
+	if !strings.Contains(rendered, "query-api.test") || !strings.Contains(rendered, TransportRefused) {
+		t.Fatalf("the endpoint and class must both appear: %s", rendered)
+	}
+	if !strings.Contains(rendered, "deliberately not reported") {
+		t.Fatalf("the message must SAY the underlying error was dropped, or a reader will think it was lost: %s", rendered)
 	}
 }

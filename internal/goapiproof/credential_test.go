@@ -35,6 +35,7 @@ type twoPlaneServers struct {
 	proof  *httptest.Server
 	edgeOK string
 	seen   map[string]string
+	all    []string
 	mu     sync.Mutex
 }
 
@@ -75,10 +76,24 @@ func newTwoPlaneServers(t *testing.T, body string, envelope func() string) *twoP
 	return s
 }
 
+// record APPENDS. r7 found the map version hiding a rejected candidate:
+// the baseline leg runs after the candidate and overwrote the recorded
+// value, so sending the proof credential on a canary candidate leg looked
+// identical to sending the right one. A fixture that keeps only the last
+// observation cannot see the first.
 func (s *twoPlaneServers) record(plane, value string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seen[plane] = value
+	s.all = append(s.all, plane+" "+value)
+}
+
+// credentialsSeen returns every (plane, credential) pair observed, in
+// order.
+func (s *twoPlaneServers) credentialsSeen() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.all...)
 }
 
 func (s *twoPlaneServers) credentialSeenBy(plane string) string {
@@ -108,8 +123,15 @@ func TestEachPlaneReceivesItsOwnCredential(t *testing.T) {
 		if _, _, err := runner.Run(context.Background()); err != nil && mode == "shadow" {
 			t.Fatalf("Run(%s): %v", mode, err)
 		}
-		if got := servers.credentialSeenBy("edge"); got != servers.edgeOK {
-			t.Fatalf("mode=%s: the edge received %q, not the access token", mode, got)
+		// EVERY edge observation, not the last one: the baseline leg runs
+		// after the candidate and used to overwrite it.
+		for _, seen := range servers.credentialsSeen() {
+			if strings.HasPrefix(seen, "edge ") && seen != "edge "+servers.edgeOK {
+				t.Fatalf("mode=%s: an edge leg carried %q, not the access token", mode, seen)
+			}
+			if strings.HasPrefix(seen, "proof ") && seen != "proof "+envelope {
+				t.Fatalf("mode=%s: a proof leg carried %q, not the envelope", mode, seen)
+			}
 		}
 	}
 

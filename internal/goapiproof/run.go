@@ -846,17 +846,19 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 		return Observation{}, err
 	}
 
-	client := r.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
+	// Wrapped so redirects are REFUSED. The measured routes are direct
+	// endpoints; following a redirect would fetch a URL the operator never
+	// supplied and this package never validated, and every redirect
+	// finding in this seam's history arrived through a Location header.
+	client := NoRedirectClient(r.Client)
 	started := time.Now()
 	response, err := client.Do(request)
 	if err != nil {
-		// The error is returned verbatim from net/http, which includes the
-		// URL but never a header value -- no credential can reach a log
-		// through this path.
-		return Observation{}, fmt.Errorf("request to %s failed (the error is not quoted: an HTTP client routinely embeds the URL it was given, credentials and all): %w", EndpointLabel(url), SanitizeError(err))
+		// The transport error is DROPPED, not quoted and not scrubbed.
+		// What comes back is the endpoint label this package rebuilt and a
+		// failure class -- see TransportFailure for the four rounds of
+		// sanitising that preceded that decision.
+		return Observation{}, transportError(url, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 

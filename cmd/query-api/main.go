@@ -191,6 +191,18 @@ func readyzDependencyClass(err error) string {
 	return "dependency"
 }
 
+// mountQueryRoute registers the production /query handler WITH provenance.
+//
+// A function rather than an inline registration so a test can drive the
+// real mux and assert the header arrives. r7 defeated the previous
+// source-text pin twice -- once by wrapping the registration in `if false`
+// and registering the raw handler instead, once by handing the wrapper an
+// empty build -- and both mutations left the pin green, because reading
+// source is not the same as running it.
+func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
+	mux.HandleFunc("/query", withProofProvenance(query, version.Current("query-api").Commit))
+}
+
 func main() {
 	// CHAOS-5408: installs the process-wide OTel TracerProvider so the spans
 	// the resolvers in internal/graph already start (org-scoping-rejection
@@ -243,7 +255,7 @@ func main() {
 		// The same wrapper as the proof route, deliberately: one
 		// implementation, so the two routes cannot drift into disagreeing
 		// about what they claim.
-		mux.HandleFunc("/query", withProofProvenance(handlers.Query, version.Current("query-api").Commit))
+		mountQueryRoute(mux, handlers.Query)
 		// GET /registry: what THIS process registers, and the schema digest
 		// it computed. Mounted with /query, not beside /healthz, on purpose
 		// -- it describes /query's registration set, so an unconfigured

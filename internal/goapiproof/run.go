@@ -17,8 +17,13 @@ import (
 // makes reaches a DEPLOYED build over HTTP through the real edge. The
 // shadow-mode operations get a deployed_executed receipt too -- they were
 // executed on the deployed build -- but their verdict is the comparator's
-// true one, so a divergence lands as `mismatch` and authorizes nothing.
-// Promotion is a separate decision that reads terminal_state = 'match'.
+// true one, so a divergence lands as `mismatch`.
+//
+// A mismatch is NOT automatically harmless: since CHAOS-5484 a
+// fully-cited one is enablement proof. Promotion reads the predicate in
+// goapiproof.EnablementProofClause, not `terminal_state = 'match'` -- an
+// earlier version of this comment said the latter and was left standing
+// after the rule moved.
 const Stage = EnablementProofStage
 
 // Refusal reasons. Every one of these is NAMED and printed: "prove
@@ -804,19 +809,43 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	// ruling, 2026-09-09 -- the same trade #2395 made in choosing
 	// proof_failed over inventing `refused`).
 	//
-	// Scoped to `match` deliberately. A mismatch already authorizes
-	// nothing, and rewriting it as `unsupported` would DESTROY the
-	// divergence the run found -- turning "these planes disagree" into
-	// "we could not tell", which is a worse record and a false one. Only
-	// the enablement-eligible verdict is downgraded.
-	if outcome.TerminalState == TerminalStateMatch &&
-		outcome.Route == RouteEdge && outcome.EdgeBuildBinding == EdgeBuildAbsent {
-		outcome.TerminalState = TerminalStateUnsupported
+	// UNBOUND EVIDENCE AUTHORIZES NOTHING, in any mode, whatever the
+	// verdict.
+	//
+	// This used to be scoped to `match`, justified by "a mismatch already
+	// authorizes nothing". That was true until CHAOS-5484, which made a
+	// FULLY-CITED mismatch enablement proof -- and the justification went
+	// on sitting here reading as current while the code it justified had
+	// become a hole: an edge measurement with no per-request binding,
+	// whose body differences were all cited, was admitted for primary.
+	// astra r3 reproduced it end to end (`primary enable rc=0`).
+	//
+	// The two verdicts are handled differently because the truest RECORD
+	// differs, not because one is safe:
+	//
+	//   - a MATCH becomes `unsupported`. "The planes agreed, but nothing
+	//     ties that to a build" is genuinely "we could not tell".
+	//   - a MISMATCH stays a mismatch, because rewriting it would DESTROY
+	//     the divergence the run found -- turning "these planes disagree"
+	//     into "we could not tell", a worse record and a false one. It is
+	//     disqualified instead by counting the missing binding as a
+	//     difference OUTSIDE the cited baseline defect, which is what it
+	//     is: no BaselineDefect declares body paths that could cite "the
+	//     response carried no build header", so it is uncitable by
+	//     construction. Same mechanism as an $.http.* difference, for the
+	//     same reason.
+	if outcome.Route == RouteEdge && outcome.EdgeBuildBinding == EdgeBuildAbsent &&
+		(outcome.TerminalState == TerminalStateMatch || outcome.TerminalState == TerminalStateMismatch) {
 		outcome.Findings = append(outcome.Findings, Finding{
 			Kind:   FindingMismatch,
 			Path:   "$.http.header." + buildHeader,
-			Detail: "the measured response carried no serving-build header, so this measurement is not bound to a query-api process. A deployment beginning mid-run would be indistinguishable from a stable one, so this cannot authorize an enablement (CHAOS-5479 delivers the header; until every replica serves it, edge measurements stay unsupported)",
+			Detail: "the measured response carried no serving-build header, so this measurement is not bound to a query-api process. A deployment beginning mid-run would be indistinguishable from a stable one, so this cannot authorize an enablement in ANY mode (CHAOS-5479 delivers the header; until every replica serves it, edge measurements cannot be proof)",
 		})
+		if outcome.TerminalState == TerminalStateMatch {
+			outcome.TerminalState = TerminalStateUnsupported
+		} else {
+			outcome.DifferencesOutsideBaselineDefect++
+		}
 	}
 	// Sealed LAST, from whatever the run concluded after every adjustment
 	// above. Assigning any exported field afterwards changes the report

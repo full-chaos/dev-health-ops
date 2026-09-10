@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -634,14 +635,20 @@ func TestAnOverLongOperatorNoteIsRefused(t *testing.T) {
 	}
 }
 
-// The downgrade is scoped to `match` on purpose, and this pins that.
+// An unbound MISMATCH keeps its verdict -- and is disqualified anyway.
 //
-// Rewriting an unbound MISMATCH as `unsupported` would destroy the
-// divergence the run found -- turning "these planes disagree" into "we
-// could not tell", which is both a worse record and a false one. A
-// mismatch already authorizes nothing, so there is nothing to protect
-// against.
-func TestAnUnboundMismatchStaysAMismatch(t *testing.T) {
+// This test used to pin the downgrade as "scoped to `match` on purpose",
+// on the reasoning that "a mismatch already authorizes nothing, so there
+// is nothing to protect against". CHAOS-5484 made that false in the same
+// PR this test lives in: a fully-cited mismatch IS enablement proof. The
+// test went on passing and pinned the hole shut (astra r3, P1).
+//
+// What is true, and what this pins now: rewriting the verdict would
+// DESTROY the divergence the run found -- "these planes disagree" is not
+// "we could not tell" -- so the mismatch stands, and the missing binding
+// is counted as a difference outside the cited baseline defect instead.
+// The record stays honest and the receipt cannot authorize anything.
+func TestAnUnboundMismatchStaysAMismatchAndCannotAuthorize(t *testing.T) {
 	runner := newRunner(t, &fakeEdge{
 		goBody:     `{"data":{"featureFlags":[{"key":"a"}]}}`,
 		pythonBody: `{"data":{"featureFlags":[{"key":"b"}]}}`,
@@ -656,6 +663,17 @@ func TestAnUnboundMismatchStaysAMismatch(t *testing.T) {
 	}
 	if outcomes[0].EdgeBuildBinding != EdgeBuildAbsent {
 		t.Fatalf("the absent binding must still be recorded: %q", outcomes[0].EdgeBuildBinding)
+	}
+	// ...and it authorizes nothing, which is the half this test used to
+	// assert away. An unbound measurement cannot be proof in ANY mode.
+	if outcomes[0].DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("an UNBOUND mismatch reports outside=%d: with every body difference cited it would be admitted as enablement proof, for primary as well as canary, on evidence tied to no replica",
+			outcomes[0].DifferencesOutsideBaselineDefect)
+	}
+	if !slices.ContainsFunc(outcomes[0].Findings, func(f Finding) bool {
+		return f.Path == "$.http.header."+buildHeader
+	}) {
+		t.Fatal("the missing build header must be a NAMED finding, not just a counter bump: an operator reading the receipt has to see why it was disqualified")
 	}
 }
 

@@ -10,13 +10,16 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// EnablementProofStage and EnablementProofTerminalState are the exact
-// pair `dev-hops go-api routing enable`'s preflight selects on
-// (go_api_routing_admin.build_enablement_proof_select: stage =
-// 'deployed_executed' AND terminal_state = 'match'). A receipt written
-// with any other pair is recorded evidence but authorizes nothing --
-// which is precisely what a shadow operation's recorded divergence
-// should do.
+// EnablementProofStage and EnablementProofTerminalState are two of the
+// values `dev-hops go-api routing enable`'s preflight selects on.
+//
+// They are NOT the whole rule, and this comment used to say they were
+// ("the exact pair ... a receipt written with any other pair authorizes
+// nothing"). CHAOS-5484 made a FULLY-CITED mismatch enablement proof and
+// split admission by target mode, so the rule is now
+// EnablementProofClause -- stage, terminal state, the citation counters,
+// AND the route. Read that function; do not infer the rule from these two
+// constants.
 const (
 	EnablementProofStage         = "deployed_executed"
 	EnablementProofTerminalState = "match"

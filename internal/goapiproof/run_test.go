@@ -959,3 +959,57 @@ func TestACitedMismatchWithNoHTTPDifferenceStaysFullyCited(t *testing.T) {
 			outcome.DifferencesOutsideBaselineDefect, outcome.Findings)
 	}
 }
+
+// astra r3 P1, the case that actually reaches the hole: an unbound
+// measurement whose every body difference IS cited.
+//
+// A test using an UNcited difference cannot pin this -- the uncited
+// difference alone makes outside non-zero, so the assertion passes
+// whether or not the missing binding is counted. (That is exactly how the
+// first version of this pin was vacuous: the mutation applied and the
+// test still passed.) The citation is what makes `outside` reach zero,
+// and zero is what the predicate reads as "every difference here is a
+// known Python defect".
+//
+// So: flowMatrix, whose spec declares CHAOS-5448 over nodes.value; a body
+// difference on that exact path; and NO serving-build header. Without the
+// disqualification this receipt is enablement proof for canary AND
+// primary, tied to no replica.
+func TestAnUnboundFullyCitedMismatchCannotAuthorizeAnything(t *testing.T) {
+	baseline := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":2}]}}}}`
+	candidate := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`
+
+	// goBuild deliberately EMPTY: the edge dropped the header, which is
+	// the normal state until #2365.
+	edge := &fakeEdge{goBody: candidate, pythonBody: baseline}
+	runner := flowMatrixRunner(t, edge)
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outcome := outcomes[0]
+
+	if outcome.EdgeBuildBinding != EdgeBuildAbsent {
+		t.Fatalf("this test needs an UNBOUND measurement to mean anything, got binding %q", outcome.EdgeBuildBinding)
+	}
+	if outcome.TerminalState != TerminalStateMismatch {
+		t.Fatalf("the divergence must survive as a mismatch, got %q -- rewriting it would destroy the finding", outcome.TerminalState)
+	}
+	if len(outcome.BaselineDefects) == 0 {
+		t.Fatal("the body difference must be CITED for this test to reach the hole: an uncited one makes outside non-zero on its own and the assertion below passes vacuously")
+	}
+	if outcome.DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("outside=%d on an UNBOUND, fully-cited mismatch: the enablement predicate reads that as proof, for primary as well as canary, on a measurement tied to no replica (astra r3 reproduced `primary enable rc=0`)",
+			outcome.DifferencesOutsideBaselineDefect)
+	}
+
+	// The receipt carries it, since that column is what the predicate reads.
+	receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 1 || receipts[0].DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("the RECEIPT says outside=%v -- a zero here admits the run", receipts)
+	}
+}

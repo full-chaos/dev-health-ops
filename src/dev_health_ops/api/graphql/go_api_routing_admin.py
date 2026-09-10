@@ -703,29 +703,46 @@ async def routing_status_rows(
     # stop -- and reporting every row against the stricter one would mark
     # a legitimately-proven shadow row UNPROVEN, since a shadow operation
     # cannot be measured on the edge at all.
-    proven: frozenset[str] = frozenset()
+    # Trap #120 again, and the reason it kept recurring: the grouping is a
+    # SECOND keyed map, and re-keying only the live-row map above left it
+    # collapsing. `grouped[...][operation] = document` keys the inner dict
+    # by operation, so two documents sharing a (build, target mode) lost
+    # one of them; and `operations_with_enablement_proof` returns operation
+    # NAMES, so proof found for either document marked BOTH proven. astra
+    # r3 reproduced it: `routing status --json` exited 0 reporting
+    # "proven": true for a catalog document with no proof of its own,
+    # borrowed from a drifted row at a different build and target mode.
+    #
+    # The proof key is (schema_digest, document_digest, selected_operation,
+    # candidate_build) plus the target mode. It is carried WHOLE from here
+    # to the lookup and back: the result set below is keyed by the same
+    # (operation, document) pair the query asked about, never by name.
+    proven: set[tuple[str, str]] = set()
     grouped: dict[tuple[str, str], dict[str, str]] = {}
-    for (operation, _document), row in live_by_document.items():
+    for (operation, document), row in live_by_document.items():
         target_mode = (
             ENABLEMENT_TARGET_MODE_EDGE_ONLY
             if row.mode == ENABLEMENT_TARGET_MODE_EDGE_ONLY
             else ENABLEMENT_TARGET_MODE_ANY_ROUTE
         )
-        # The row's OWN document_digest, not the catalog's: this reports
-        # what is actually in the table, and a row whose document digest
-        # has drifted from the catalog must not borrow the catalog's
-        # proof.
+        # The row's OWN document_digest, not the catalog's: a row whose
+        # document has drifted from the catalog must not borrow the
+        # catalog's proof, and vice versa.
         grouped.setdefault((row.current_candidate_build, target_mode), {})[
             operation
-        ] = row.document_digest
+        ] = document
     for (build, target_mode), operations in sorted(grouped.items()):
-        proven |= await operations_with_enablement_proof(
+        found = await operations_with_enablement_proof(
             session,
             schema_digest=live_schema_digest,
             candidate_build=build,
             operations=operations,
             target_mode=target_mode,
         )
+        # Re-pair each returned name with the document THIS group asked
+        # about, so a name can never carry proof across a document, a
+        # build or a target mode.
+        proven |= {(operation, operations[operation]) for operation in found}
 
     statuses: list[OperationStatus] = []
     for operation, document_digest in catalog:
@@ -745,7 +762,7 @@ async def routing_status_rows(
                     owner=live_row.owner,
                     updated_at=live_row.updated_at,
                     stale_digests=stale,
-                    proven=operation in proven,
+                    proven=(operation, document_digest) in proven,
                 )
             )
         elif stale:
@@ -789,6 +806,7 @@ async def routing_status_rows(
                     rollout_percentage=drifted_row.rollout_percentage,
                     owner=drifted_row.owner,
                     updated_at=drifted_row.updated_at,
+                    proven=(operation, drifted_digest) in proven,
                 )
             )
     return statuses

@@ -609,3 +609,85 @@ async def test_disable_plans_against_the_catalogs_document(
         f"the rollback plan reported current_mode={change.current_mode!r} "
         "-- the mode of a row the caller did not name"
     )
+
+
+@pytest.mark.asyncio
+async def test_proof_never_transfers_between_documents_of_one_operation(
+    session: AsyncSession,
+) -> None:
+    """astra r3 P1: status reported a catalog document PROVEN on a drifted
+    row's proof, across a different build AND a different target mode.
+
+    Two rows for one operation: the catalog's document at ``primary`` on
+    one build, a drifted document at ``canary`` on another. Only the
+    DRIFTED one has a proof run. The proof key is (schema_digest,
+    document_digest, selected_operation, candidate_build) plus the target
+    mode -- so nothing about that receipt says anything about the catalog's
+    row, and status must not claim otherwise.
+
+    It did, because the grouping keyed its inner dict by operation and the
+    reader returns operation NAMES: the name came back proven and every
+    document wearing that name inherited it.
+    """
+    operation, catalog_document = CATALOG[0]
+    drifted_document = "0" * 64
+    other_build = "1" * 40
+
+    await enable_operation(
+        session,
+        schema_digest=LIVE,
+        document_digest=catalog_document,
+        selected_operation=operation,
+        candidate_build=BUILD,
+        mode="primary",
+    )
+    await enable_operation(
+        session,
+        schema_digest=LIVE,
+        document_digest=drifted_document,
+        selected_operation=operation,
+        candidate_build=other_build,
+        mode="canary",
+    )
+    # The proof belongs to the DRIFTED document, on the OTHER build.
+    await register_candidate_build(
+        session,
+        schema_digest=LIVE,
+        document_digest=drifted_document,
+        selected_operation=operation,
+        candidate_build=other_build,
+    )
+    await record_proof_run(
+        session,
+        schema_digest=LIVE,
+        document_digest=drifted_document,
+        selected_operation=operation,
+        candidate_build=other_build,
+        request_identity="test",
+        stage=ENABLEMENT_PROOF_STAGE,
+        terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+    )
+    await _record_measurement_provenance(session)
+    await session.commit()
+
+    statuses = await routing_status_rows(
+        session, live_schema_digest=LIVE, catalog=CATALOG
+    )
+    by_state = {(s.operation, s.digest_state): s for s in statuses}
+
+    catalog_row = by_state[(operation, "MATCH")]
+    assert catalog_row.document_digest == catalog_document
+    assert catalog_row.proven is False, (
+        "the CATALOG's document was reported proven on a receipt recorded "
+        "against a DIFFERENT document, a DIFFERENT build and a DIFFERENT "
+        "target mode -- a promotion to primary certified by evidence that "
+        "says nothing about it"
+    )
+
+    drift_row = by_state[(operation, "DOCUMENT_DRIFT")]
+    assert drift_row.document_digest == drifted_document
+    assert drift_row.proven is True, (
+        "the drifted row owns that proof and must still report it -- "
+        "otherwise this test would also pass with proof reporting broken "
+        "for everything, which is a different defect"
+    )

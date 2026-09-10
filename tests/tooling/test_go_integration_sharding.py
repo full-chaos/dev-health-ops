@@ -56,6 +56,7 @@ EXPECTED_PACKAGES = {
     "internal/jobrescue",
     "internal/jobroute",
     "internal/jobruntime",
+    "internal/migrationmatrix",
     # CHAOS-5006 PR2: the end-to-end proof that
     # ResolveProviderKindForOrg's org-BYO precedence (org BYO beats an
     # explicit platform LLM_PROVIDER, only the none/mock kill-switch
@@ -450,10 +451,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # path, both against a real ClickHouse container). 52 -> 53.
     # CHAOS-4806 added internal/jobs/metrics/daily/benchmarking's first
     # //go:build integration file: 53 -> 54.
-    # CURRENT TOTAL: 54 -- the one number to bump when a new
+    # CHAOS-5484 added internal/migrationmatrix: 54 -> 55.
+    # CURRENT TOTAL: 55 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "54 package(s) discovered, 0 denylisted, 54 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 54 package(s)" in result.stdout
+    assert "55 package(s) discovered, 0 denylisted, 55 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 55 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -515,8 +517,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5523 added cmd/query-api/internal/featureflags: 52 -> 53 (see
     # the "package(s) discovered" comment above).
     # CHAOS-4806 added internal/jobs/metrics/daily/benchmarking: 53 -> 54.
-    # CURRENT TOTAL: 54 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 54
+    # CHAOS-5484 added internal/migrationmatrix: 54 -> 55.
+    # CURRENT TOTAL: 55 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 55
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -2043,9 +2046,11 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # discovered - 1 for the providersync shard-1 package).
     # CHAOS-4806 added internal/jobs/metrics/daily/benchmarking: 52 -> 53
     # (54 discovered - 1 for the providersync shard-1 package).
-    # CURRENT TOTAL: 53 (== discovered-total-minus-one -- keep this in
+    # CHAOS-5484 added internal/migrationmatrix: 53 -> 54 (55 discovered
+    # - 1 for the providersync shard-1 package).
+    # CURRENT TOTAL: 54 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 53
+    assert len(selected_packages) == len(set(selected_packages)) == 54
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []

@@ -169,10 +169,13 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # //go:build integration file (baselines_nullable_integration_test.go:
     # a nil *float64 field round-trips as a real ClickHouse NULL against
     # migration 090's newly-Nullable columns). 53 -> 54.
-    # CURRENT TOTAL: 54. Adding one -tags=integration package bumps every
+    # CHAOS-5484 added internal/migrationmatrix, which drives the exported
+    # ReadRoutingState against a real Postgres instead of reconstructing its
+    # SQL: 54 -> 55.
+    # CURRENT TOTAL: 55. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "54 package(s) discovered, 0 denylisted, 54 will run" in result.stdout
+    assert "55 package(s) discovered, 0 denylisted, 55 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

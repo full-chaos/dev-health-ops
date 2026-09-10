@@ -177,6 +177,14 @@ internal/joboutbox	12
 internal/jobrescue	5
 internal/jobroute	6
 internal/jobruntime	5
+internal/migrationmatrix	5
+# internal/migrationmatrix (CHAOS-5484): one integration test, one Postgres
+# container, MEASURED on bigboy at 3.303s for the whole package
+# (`go test -tags=integration -count=1 ./internal/migrationmatrix/...`).
+# Rounded up to 5 for CI headroom, the same treatment internal/jobruntime
+# and internal/jobrescue get. It drives the exported ReadRoutingState
+# rather than a reconstruction of its SQL, which is why it needs a
+# container at all -- re-time if the package gains tests.
 # internal/goapiproof (CHAOS-5425): ceil() of its measured bigboy run, 25.2s
 # for the `prove` verb's receipt-writer suite -- seven tests, each taking a
 # fresh Postgres container so the registry's real FK and CHECK constraints are

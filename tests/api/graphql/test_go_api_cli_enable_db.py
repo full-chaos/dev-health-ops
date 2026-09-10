@@ -378,3 +378,74 @@ async def test_a_proof_for_a_different_document_does_not_authorize_enablement(
 
     assert ENABLEMENT_PROOF_STAGE in capsys.readouterr().err
     assert await _rows(session_factory) == [], "a wrong-document proof enabled a row"
+
+
+@pytest.mark.asyncio
+async def test_the_cli_passes_its_own_mode_to_the_proof_predicate(
+    session_factory: Any,
+) -> None:
+    """r1 P3: hardcoding ``"canary"`` at the call site passed all 8 tests.
+
+    That mutation is the mode split defeated in one word. The only proof
+    on record here is a PROOF-route receipt, which ``canary`` admits and
+    ``primary`` must not: promotion to primary is promotion to real
+    traffic, so it demands evidence that traversed the real edge.
+
+    With the caller hardcoding canary, ``--mode primary`` would preflight
+    against the laxer rule and enable a row into served traffic on
+    measurement-only evidence -- silently, with a zero exit and no
+    warning. Every existing test used ``mode="canary"``, so the argument
+    was never observed to travel.
+    """
+    catalog = dict(catalog_entries())
+    async with session_factory() as session:
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=catalog["featureFlags"],
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+        )
+        await record_proof_run(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=catalog["featureFlags"],
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+            request_identity="test",
+            stage=ENABLEMENT_PROOF_STAGE,
+            terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+        )
+        # PROOF route: admissible for canary, inadmissible for primary.
+        await session.execute(
+            sa.update(ProofRun).values(
+                measurement_route="proof", build_binding="per_request"
+            )
+        )
+        await session.commit()
+
+    with FakeQueryAPI(registry_payload()) as url:
+        # canary accepts it...
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="canary"))
+            == 0
+        )
+
+    rows = await _rows(session_factory)
+    assert [row.mode for row in rows] == ["canary"]
+
+    with FakeQueryAPI(registry_payload()) as url:
+        # ...and primary REFUSES it, on the same row, differing only in
+        # the mode the CLI was asked for.
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="primary"))
+            != 0
+        ), (
+            "the CLI enabled a PRIMARY row on proof-route evidence: the "
+            "target mode is not reaching the preflight predicate, so the "
+            "canary/primary split authorizes nothing"
+        )
+
+    # And the refusal wrote nothing: the row is still canary.
+    rows = await _rows(session_factory)
+    assert [row.mode for row in rows] == ["canary"]

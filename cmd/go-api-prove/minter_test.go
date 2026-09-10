@@ -293,8 +293,21 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 		Admitted:         true,
 		EdgeBuildBinding: goapiproof.EdgeBuildAbsent,
 		TerminalState:    "unsupported",
+	}, {
+		// r1 P3: the fixture held only ADMITTED outcomes, so dropping the
+		// `if outcome.Admitted` filter changed nothing and passed. A
+		// refused outcome carries no binding -- counting it would print
+		// `build binding  = 1`, an empty name with a real count, which
+		// reads as a binding nobody can name rather than as an operation
+		// that never got one.
+		Operation:     "pr",
+		Route:         goapiproof.RouteEdge,
+		Executed:      false,
+		Admitted:      false,
+		RefusalReason: goapiproof.RefusalNotRouted,
+		TerminalState: "",
 	}}
-	summary := goapiproof.Summary{Attempted: 1, Admitted: 1, Executed: 1}
+	summary := goapiproof.Summary{Attempted: 2, Admitted: 1, Executed: 1, Refused: 1}
 
 	printed := captureStdout(t, func() {
 		// F5: the previous fixture used "http://edge.test/graphql", which is
@@ -315,6 +328,14 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 	}
 	if !strings.Contains(printed, "build binding "+goapiproof.EdgeBuildAbsent+" = 1") {
 		t.Fatalf("the build-binding counter must be COUNTED from the outcomes, not asserted as a sentence:\n%s", printed)
+	}
+	// r1 P3: only ADMITTED outcomes have a binding. A refused one counted
+	// here prints an empty binding name with a real count.
+	if strings.Contains(printed, "build binding  =") {
+		t.Fatalf("a refused outcome was counted as a build binding, printing an empty name:\n%s", printed)
+	}
+	if strings.Contains(printed, goapiproof.EdgeBuildAbsent+" = 2") {
+		t.Fatalf("the refused outcome was folded into the admitted count:\n%s", printed)
 	}
 	// And it must never print the credential itself.
 	if strings.Contains(printed, minted) || strings.Contains(printed, strings.SplitN(minted, ".", 2)[0]) {

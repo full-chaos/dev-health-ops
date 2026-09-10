@@ -178,6 +178,30 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 	if !found["featureFlags"] {
 		t.Fatal("a deployed_executed/match receipt must satisfy the enablement predicate")
 	}
+
+	// r1 P3: this test proved the receipt was READABLE by the predicate
+	// and never that what landed in the row was what Write was handed.
+	// Mutating Write's parameter to nullIfEmpty("") persisted NULL and
+	// this test still passed, because the predicate does not look at
+	// build_binding. Nothing else would have noticed either: no
+	// enablement reader consumes the column yet, so a regression writing
+	// the wrong binding stays invisible while enablement goes on reading
+	// green -- which is precisely the "audit data quietly wrong" case the
+	// column exists to prevent.
+	var storedBinding *string
+	if err := pool.QueryRow(ctx,
+		`SELECT build_binding FROM go_api_proof_run
+		  WHERE schema_digest = $1 AND candidate_build = $2 AND selected_operation = $3`,
+		testSchemaDigest, testCandidateBuild, "featureFlags",
+	).Scan(&storedBinding); err != nil {
+		t.Fatalf("read back build_binding: %v", err)
+	}
+	if storedBinding == nil {
+		t.Fatal("build_binding was written as NULL: the run KNEW the binding and the row does not say so, and no reader will ever flag it")
+	}
+	if *storedBinding != EdgeBuildAbsent {
+		t.Fatalf("build_binding read back as %q, want %q -- the row must carry the binding the run established, not another one", *storedBinding, EdgeBuildAbsent)
+	}
 }
 
 // Every one of the four key columns must be load-bearing. A proof

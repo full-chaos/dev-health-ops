@@ -274,12 +274,22 @@ const EnablementCitedMismatchState = "mismatch"
 // shape, so the two statements can never be compared as text. They are
 // pinned by BEHAVIOUR instead: both sides' tests drive their own
 // production predicate over tests/fixtures/enablement_proof_admission_cases.json.
+//
+// `baseline_defect IS NOT NULL` is deliberately ABSENT. It reads as a
+// guard and is not one: `cardinality(NULL) > 0` evaluates to NULL, which
+// is not TRUE, so a NULL citation list is already excluded by the
+// cardinality clause alone. r1 proved it by removing the IS NOT NULL from
+// both implementations and watching every case still pass. Both the NULL
+// and the empty-array cases are in the shared table
+// (`mismatch_cited_but_defect_null_refused`,
+// `mismatch_cited_but_defect_empty_refused`), so this is covered rather
+// than merely argued -- and a clause that can never change an outcome is
+// one more thing a reader has to reason about for nothing.
 const enablementProofPredicate = `p.stage = $3
 		    AND (
 		          p.terminal_state = $6
 		       OR (p.terminal_state = $7
 		           AND p.differences_outside_baseline_defect = 0
-		           AND p.baseline_defect IS NOT NULL
 		           AND cardinality(p.baseline_defect) > 0)
 		    )`
 

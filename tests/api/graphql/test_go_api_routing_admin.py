@@ -364,3 +364,84 @@ async def test_count_rows_by_schema_digest_sees_every_digest(
         LIVE: len(CATALOG),
         SUPERSEDED: len(CATALOG),
     }
+
+
+@pytest.mark.asyncio
+async def test_status_holds_a_primary_row_to_the_edge_rule(
+    session: AsyncSession,
+) -> None:
+    """r1 P3: disabling the primary branch of the grouping passed all 9 tests.
+
+    ``routing_status_rows`` groups by (candidate build, the mode's own
+    route rule) precisely so a ``primary`` row is judged against the
+    STRICTER rule. Collapsing that grouping to the laxer one reports a
+    primary row as PROVEN on proof-route evidence -- measurement-only
+    evidence certifying a row that is serving real traffic, which is the
+    exact claim the canary/primary split exists to stop.
+
+    It survived because every status test enabled rows at ``canary``,
+    where both rules agree, so the branch was never taken.
+    """
+    await _enable_all(session, mode="primary")
+    operation, document_digest = CATALOG[0]
+
+    await record_proof_run(
+        session,
+        schema_digest=LIVE,
+        document_digest=document_digest,
+        selected_operation=operation,
+        candidate_build=BUILD,
+        request_identity="test",
+        stage=ENABLEMENT_PROOF_STAGE,
+        terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+    )
+    # PROOF route: admissible for canary, inadmissible for primary.
+    await _record_measurement_provenance(session, route="proof", binding="per_request")
+    await session.commit()
+
+    statuses = await routing_status_rows(
+        session, live_schema_digest=LIVE, catalog=CATALOG
+    )
+    by_operation = {s.operation: s for s in statuses}
+    assert by_operation[operation].proven is False, (
+        "a PRIMARY row was reported proven on proof-route evidence: the "
+        "status grouping is judging it by the canary rule, so an operator "
+        "reading `status` sees real traffic certified by a measurement "
+        "that never traversed the edge"
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_proves_a_primary_row_on_edge_evidence(
+    session: AsyncSession,
+) -> None:
+    """The control for the test above: the strict rule is satisfiable.
+
+    Without this, the assertion above would also pass if `primary` rows
+    could never be proven at all -- which would be a different defect
+    reading as a fix.
+    """
+    await _enable_all(session, mode="primary")
+    operation, document_digest = CATALOG[0]
+
+    await record_proof_run(
+        session,
+        schema_digest=LIVE,
+        document_digest=document_digest,
+        selected_operation=operation,
+        candidate_build=BUILD,
+        request_identity="test",
+        stage=ENABLEMENT_PROOF_STAGE,
+        terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+    )
+    await _record_measurement_provenance(session, route="edge", binding="absent")
+    await session.commit()
+
+    statuses = await routing_status_rows(
+        session, live_schema_digest=LIVE, catalog=CATALOG
+    )
+    by_operation = {s.operation: s for s in statuses}
+    assert by_operation[operation].proven is True, (
+        "a PRIMARY row with EDGE evidence was not proven: the strict rule "
+        "is refusing what it is supposed to admit"
+    )

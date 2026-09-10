@@ -13,7 +13,15 @@ everywhere, on every PR.
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy.dialects import postgresql
+
+from dev_health_ops.api.graphql.go_api_routing_admin import (
+    ENABLEMENT_TARGET_MODE_EDGE_ONLY,
+    ENABLEMENT_TARGET_MODES,
+    MEASUREMENT_ROUTE_EDGE,
+    build_enablement_proof_select,
+)
 
 
 def _compiled_proof_query(
@@ -133,3 +141,63 @@ def test_sql_metacharacters_in_an_operation_name_stay_data() -> None:
     assert "DROP TABLE go_api_proof_run" not in sql.replace("''", "'").split("WHERE")[0]
     # The quote is escaped by doubling, i.e. it is a literal, not syntax.
     assert "feature''; DROP TABLE" in sql
+
+
+def test_an_unknown_target_mode_is_refused_rather_than_defaulted() -> None:
+    """r1 P3: disabling this guard passed all six tests in this file.
+
+    Fail-closed on an unrecognised mode is not decoration. The two known
+    modes have DIFFERENT route rules -- ``primary`` demands edge evidence,
+    ``canary`` accepts any recorded route -- so a mode that falls through
+    to the laxer branch is a promotion to served traffic accepted on
+    measurement-only evidence. That is the exact claim the mode split
+    exists to stop, and it would be silent: the predicate would compile
+    and the query would return rows.
+    """
+    for unknown in ("", "shadow", "Primary", "canary ", "unknown"):
+        with pytest.raises(ValueError) as caught:
+            build_enablement_proof_select(
+                schema_digest="sha256:live",
+                candidate_build="b",
+                operations={"featureFlags": "doc-ff"},
+                target_mode=unknown,
+            )
+        message = str(caught.value)
+        assert "unknown target mode" in message, message
+        # The refusal must NAME the offending value and the legal ones, or
+        # an operator sees a rejection with nothing to act on.
+        assert repr(unknown) in message, message
+        for legal in ENABLEMENT_TARGET_MODES:
+            assert legal in message, message
+
+
+def test_the_two_known_modes_compile_to_different_route_rules() -> None:
+    """The control: the guard above must not be refusing everything.
+
+    And the two modes must actually DIFFER -- if both compiled to the same
+    predicate the split would be decorative, and every test asserting the
+    split would be asserting nothing.
+    """
+    compiled = {}
+    for mode in ENABLEMENT_TARGET_MODES:
+        statement = build_enablement_proof_select(
+            schema_digest="sha256:live",
+            candidate_build="b",
+            operations={"featureFlags": "doc-ff"},
+            target_mode=mode,
+        )
+        compiled[mode] = " ".join(
+            str(
+                statement.compile(
+                    dialect=postgresql.dialect(),
+                    compile_kwargs={"literal_binds": True},
+                )
+            ).split()
+        )
+
+    assert len(set(compiled.values())) == len(compiled), (
+        "the target modes compile to identical predicates, so the mode "
+        f"split authorizes nothing: {compiled}"
+    )
+    # primary is the STRICTER one: it must name the edge route explicitly.
+    assert MEASUREMENT_ROUTE_EDGE in compiled[ENABLEMENT_TARGET_MODE_EDGE_ONLY]

@@ -526,7 +526,11 @@ def _admissible_terminal_state() -> ColumnElement[bool]:
         and_(
             ProofRun.terminal_state == ENABLEMENT_PROOF_CITED_MISMATCH_STATE,
             ProofRun.differences_outside_baseline_defect == 0,
-            ProofRun.baseline_defect.is_not(None),
+            # No ``baseline_defect IS NOT NULL`` here, deliberately:
+            # ``cardinality(NULL) > 0`` is NULL, not TRUE, so a NULL
+            # citation list is already excluded by the cardinality clause.
+            # Both the NULL and empty-array cases are in the shared
+            # admission table, so this is covered rather than argued.
             func.cardinality(ProofRun.baseline_defect) > 0,
         ),
     )

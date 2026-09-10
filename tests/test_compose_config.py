@@ -1475,7 +1475,17 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
     go-worker-heavy's depends_on fails this test.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
-    one_shot_setup = {"go-river-provision", "go-river-migrate", "go-contractcheck"}
+    one_shot_setup = {
+        "go-river-provision",
+        "go-river-migrate",
+        "go-contractcheck",
+        # R98: the route-activation chain's own credential-minting step
+        # reuses the Python `service-credentials create` CLI (no Go-native
+        # equivalent exists) and, like go-river-provision, legitimately
+        # waits on `migrate` for the same reason -- it is a one-shot setup
+        # step, not a long-running process that could move traffic.
+        "go-worker-operator-credential",
+    }
     go_services = {
         name: spec
         for name, spec in services.items()

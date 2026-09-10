@@ -12,6 +12,18 @@
 # empty volume -- it is no longer a way to attach to another project's data.
 name: dev-health-ops
 
+# codex review (r3, P1): the Python operational-bridge SERVERS (`api`,
+# `metrics-api`, via worker_auth.py's `_bounded_secret("WORKER_OPERATIONAL_BRIDGE_TOKEN")`)
+# and the Go worker CLIENTS that call them must read this exact shell
+# variable to the exact same default -- a mismatch means every bridge call
+# fails closed with 401, not a readiness-visible failure. One shared
+# anchor, merged into both `&env` (api/metrics-api/billing-edge/worker)
+# below and `&go-worker-env-base` below that, so the literal default lives
+# in exactly one place rather than two copies that can drift.
+x-worker-operational-bridge-token:
+  token: &worker-operational-bridge-token
+    WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+
 # Go/River worker topology (CHAOS-3142, folded in at CHAOS-3088 from
 # deploy/docker-compose/compose.go-workers.yml -- that file keeps its own
 # copy for compose.production.yml's separate `--profile go-workers` overlay
@@ -99,9 +111,12 @@ x-go-worker-env-base: &go-worker-env-base
   # construct this bridge unconditionally, so an empty default here made
   # EVERY worker family fail to compose at all ("worker readiness
   # dependency is unavailable"), not the live-but-unready shape the other
-  # empty-defaults produce. Matches the bigboy overlay's own fix exactly:
-  # a non-empty local placeholder, not a credential.
-  WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+  # empty-defaults produce. codex review (r3, P1): that fix only reached
+  # the Go-worker side -- `api`/`metrics-api` never picked up the same
+  # default, so every bridge call 401'd. Merged from the single shared
+  # `x-worker-operational-bridge-token` anchor above instead of a second
+  # literal here.
+  <<: *worker-operational-bridge-token
   AUTO_RUN_MIGRATIONS: "false"
   # CHAOS-4587: see `migrate`'s own comment on this variable below -- must
   # move with the migrate export in the same deploy pass; see
@@ -112,6 +127,11 @@ volumes:
   postgres_data:
     driver: local
   clickhouse_data:
+    driver: local
+  # R98 (chris, route-activation for a Go-default bring-up): holds the
+  # one-shot operator credential go-worker-operator-credential mints, read
+  # by the go-sync-*-route-activate chain below.
+  go_worker_operator_token:
     driver: local
 
 services:
@@ -407,6 +427,12 @@ services:
     command: |
       --host 0.0.0.0 --port 8000 --reload
     environment: &env
+      # codex review (r3, P1): api/metrics-api -- and, via this shared
+      # anchor, billing-edge -- are the servers worker_auth.py authorizes
+      # incoming Go operational-bridge calls against; this must read the
+      # exact same shell variable and default as the Go-worker side below
+      # (x-worker-operational-bridge-token), never a second literal.
+      <<: *worker-operational-bridge-token
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
       PYTHONPATH: /app/src
       # GraphQL analytics endpoint available at /graphql
@@ -914,6 +940,206 @@ services:
     depends_on:
       go-river-migrate:
         condition: service_completed_successfully
+
+  # R98 (chris, 2026-09-10): on a fresh Go-default bring-up, the four
+  # sync-dispatch "frozen kinds" alembic migration 0049 seeds are assigned
+  # transport `celery` -- the reconciler's `sync_dispatch_route_fence`
+  # readiness check (internal/syncroute.Fence.Check) correctly refuses
+  # readiness on that drift, since nothing actually consumes Celery
+  # anymore. Folded in from the proven design already running the shared
+  # bigboy stack (compose/compose.go.workers.yml, untracked, outside this
+  # repository): `dev-health-workerctl` mints and uses an audited operator
+  # credential to flip each kind to `river`, the exact reference
+  # implementation option (a) names. This is the default for THIS file;
+  # `sync.provider_unit`'s own canary-route activation (the fifth
+  # `job-routes apply` the bigboy overlay also runs) is NOT folded in --
+  # that promotion is chris's separate, already-tracked decision, not a
+  # compose default.
+  #
+  # dev-health-workerctl authenticates its very first database action (the
+  # operator token) against `internal_service_credentials` -- there is no
+  # Go-native way to mint that row, so this one-shot reuses the existing
+  # Python CLI command the bigboy overlay also uses
+  # (`service-credentials create`), same local build as `migrate`/`worker`
+  # above. Idempotent by construction: it only mints a token when the
+  # shared volume file is empty.
+  go-worker-operator-credential:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: runner
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    # codex proof (executed): Docker creates a named volume's mount point
+    # root:root, so the usual 65532:65532 non-root user this file's other
+    # one-shot steps run as cannot write the token file into it at all
+    # ("Permission denied" -- reproduced, then fixed). Matches the bigboy
+    # overlay's own `user: "0:0"` for this exact service; the minted file
+    # is chown'd to 65532:65532 and chmod 0400 below, so the route-activate
+    # chain (which mounts this volume read-only as that same non-root user)
+    # can read it, but nothing else can. codex proof (executed, three
+    # rounds): dropping every capability (this file's usual one-shot
+    # convention) made even uid 0 fail "Operation not permitted" on, in
+    # order, the initial file create (needs DAC_OVERRIDE -- a dropped-
+    # capability root does not bypass permission bits the way an
+    # unconstrained root does), `chown` (needs CHOWN), and `chmod` of the
+    # now-non-root-owned file (needs FOWNER) -- reproduced and fixed each
+    # time. Add back only those three rather than keep every root
+    # capability, which is what the bigboy overlay's own version of this
+    # service does instead.
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      <<: *env
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        token=/run/go-worker-operator/token
+        if [ ! -s "$$token" ]; then
+          umask 077
+          dev-hops service-credentials create \
+            --service worker-operator \
+            --scope workers:read \
+            --scope workers:operate > "$$token.tmp"
+          chown 65532:65532 "$$token.tmp"
+          chmod 0400 "$$token.tmp"
+          mv "$$token.tmp" "$$token"
+        fi
+    volumes:
+      - go_worker_operator_token:/run/go-worker-operator
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # `routes apply` is idempotent: re-applying the same transport to a route
+  # already at that transport is a no-op (confirmed by reading
+  # internal/syncroute -- the mutation path compares current to declared
+  # and returns cleanly when they already match), so a second `up` after
+  # the first activation run is safe and exits 0 without changing anything.
+  go-worker-route-activate: &go-worker-route-activate
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      <<: *go-worker-env-base
+      WORKER_OPERATOR_TOKEN_FILE: /run/go-worker-operator/token
+    volumes:
+      - go_worker_operator_token:/run/go-worker-operator:ro
+    depends_on:
+      go-worker-operator-credential:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-sync-dispatch-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-dispatch-sync-run
+      - dispatch_sync_run
+
+  go-sync-finalize-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-finalize-sync-run
+      - finalize_sync_run
+    depends_on:
+      # The operator intentionally permits one audited mutation at a time --
+      # serialize the four route changes rather than race its advisory lock
+      # with four parallel one-shot containers.
+      go-sync-dispatch-route-activate:
+        condition: service_completed_successfully
+      go-worker-operator-credential:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-sync-post-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-post-sync
+      - post_sync
+    depends_on:
+      go-sync-finalize-route-activate:
+        condition: service_completed_successfully
+      go-worker-operator-credential:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-sync-reference-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-reference-discovery
+      - reference_discovery
+    depends_on:
+      go-sync-post-route-activate:
+        condition: service_completed_successfully
+      go-worker-operator-credential:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
 
   go-worker-heavy: &go-worker
     # codex review (r3 -- team-lead): a bare `docker compose up` built

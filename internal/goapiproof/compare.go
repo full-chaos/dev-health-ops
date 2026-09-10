@@ -15,14 +15,21 @@
 // function it mirrors by name, and the rule number from CHAOS-4381 it
 // implements. A rule change lands in both or in neither.
 //
-// What this file deliberately does NOT port: `tie_ordering="relaxed"` /
-// `relaxed_list_path`. Parity rule 5 makes positional list ordering the
-// default and every relaxation a per-operation exception carrying a
-// written reason and a ticket. None of the fifteen registered operations
-// has one today, so porting the relaxation machinery would ship an unused
-// loosening whose first user would face no review. Absent it, an
-// order-only divergence is reported as an ordinary `mismatch` finding --
-// loud, recorded, and ticketable -- never silently tolerated.
+// Parity rule 5 makes positional list ordering the default and every
+// relaxation a per-operation exception carrying a written reason and a
+// ticket. That escape (`OrderInsensitiveList`, this file's port of
+// Python's `tie_ordering="relaxed"` / `relaxed_list_path`) was originally
+// left unported: none of the fifteen registered operations had a use for
+// it, and porting unused relaxation machinery ships a loosening its first
+// user would face no review for. CHAOS-5546 is that first user:
+// `investmentFull`'s sankey nodes/edges query is a plain ClickHouse
+// `UNION ALL` with no outer ORDER BY, and the SAME compiled SQL run 4
+// times in a row against the live engine came back in 3 different
+// orderings -- a positional comparison of that list reports engine
+// nondeterminism as a Go-vs-Python defect, on BOTH planes, forever.
+// `OrderInsensitiveList` pairs elements by a declared key instead of
+// position; every OTHER list in every OTHER operation stays positional
+// by default, exactly as before.
 package goapiproof
 
 import (
@@ -127,6 +134,19 @@ type Result struct {
 	// differences" are different facts, and an omitted zero hides which
 	// one happened.
 	DifferencesOutsideBaselineDefect int `json:"differences_outside_baseline_defect"`
+
+	// UnusedOrderInsensitiveLists names every OrderInsensitiveLists entry
+	// whose Path matched no list in this comparison. Same discipline as
+	// UnusedExclusions/UnusedTierB: a relaxation that relaxes nothing is
+	// either stale or misspelled, and the caller fails the run on it.
+	UnusedOrderInsensitiveLists []string `json:"unused_order_insensitive_lists,omitempty"`
+
+	// OrderInsensitiveListRefusals names every declared list whose
+	// comparison hit an element missing one of its declared KeyFields --
+	// the declaration does not describe the data it was pointed at, so
+	// the pairing it promises cannot be built. The caller fails the run
+	// on this exactly as it does on a stale declaration.
+	OrderInsensitiveListRefusals []string `json:"order_insensitive_list_refusals,omitempty"`
 }
 
 // IsMatch reports whether the verdict is a clean match.
@@ -177,6 +197,47 @@ type Options struct {
 	// MISSING watermark on either side is then `unsupported`, not a
 	// silent comparison without one -- parity rule 4.
 	RequireWatermark bool
+
+	// OrderInsensitiveLists declares parity rule 5's per-operation escape:
+	// a named list is compared by KEY, not position, because the
+	// underlying data source has no order guarantee. See
+	// OrderInsensitiveList.
+	OrderInsensitiveLists []OrderInsensitiveList
+}
+
+// OrderInsensitiveList declares that a list at Path must be compared by
+// KeyFields rather than position -- CHAOS-5546's finding for
+// investmentFull's sankey nodes/edges: the underlying ClickHouse
+// `UNION ALL` has no ORDER BY, so the SAME query returns different
+// element orders run to run, on both planes, and a positional comparison
+// reports that engine artefact as a Go-vs-Python defect forever.
+//
+// This changes HOW two lists are compared, never whether every element
+// still is: elements are paired by KeyFields and every other field is
+// still compared value-for-value within the pair (parity rules 1-4 all
+// still apply inside a paired element); a key present on only one side is
+// still a finding (a real missing/extra element, not a reordering); a
+// length difference is still visible as an implied missing/extra key.
+// The two vacuity guards mirror BaselineDefect's "an entry that excuses
+// nothing fails the run": a declaration matching NO list in this
+// comparison, or an element that does not carry every one of KeyFields at
+// all, is a REFUSAL (Result.UnusedOrderInsensitiveLists /
+// Result.OrderInsensitiveListRefusals), never a silent no-op and never a
+// promotion to match.
+type OrderInsensitiveList struct {
+	// Path is the dotted, index-free path to the LIST ITSELF (the same
+	// form FloatTierB/VolatileFields/BaselineDefect.Paths use), e.g.
+	// "data.analytics.sankey.nodes".
+	Path string
+	// KeyFields names the element field(s) that together uniquely
+	// identify an element for pairing, e.g. []string{"id"} for sankey
+	// nodes or []string{"source", "target"} for sankey edges.
+	KeyFields []string
+	// Reason states, in words, why this list's order carries no parity
+	// signal.
+	Reason string
+	// Ticket is the issue that owns the relaxation, e.g. "CHAOS-5546".
+	Ticket string
 }
 
 // BaselineDefect declares that a named set of field paths differs
@@ -216,8 +277,14 @@ type BaselineDefect struct {
 // a declaration that matched nothing can be reported rather than sitting
 // in the table reading as coverage.
 type tracker struct {
-	volatile map[string]bool
-	tierB    map[string]bool
+	volatile         map[string]bool
+	tierB            map[string]bool
+	orderInsensitive map[string]bool
+	// orderInsensitiveKeyMissing collects one message per declared list
+	// that hit an element missing a declared key field. A slice, not a
+	// set: every occurrence is worth reporting, since it names which
+	// side and which list.
+	orderInsensitiveKeyMissing []string
 }
 
 // Compare compares a baseline (Python) and candidate (Go) response under
@@ -250,7 +317,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		}
 	}
 
-	track := &tracker{volatile: map[string]bool{}, tierB: map[string]bool{}}
+	track := &tracker{volatile: map[string]bool{}, tierB: map[string]bool{}, orderInsensitive: map[string]bool{}}
 	findings := compareErrors(baseline.Errors, candidate.Errors, "$.errors")
 
 	switch {
@@ -278,7 +345,28 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 	result.UnusedExclusions = unmatched(opts.VolatileFields, track.volatile)
 	result.UnusedTierB = unmatched(opts.FloatTierB, track.tierB)
 	classifyBaselineDefects(&result, opts.BaselineDefects)
+
+	declaredOrderInsensitive := make(map[string]string, len(opts.OrderInsensitiveLists))
+	for _, decl := range opts.OrderInsensitiveLists {
+		declaredOrderInsensitive[decl.Path] = decl.Ticket
+	}
+	result.UnusedOrderInsensitiveLists = unmatched(declaredOrderInsensitive, track.orderInsensitive)
+	sort.Strings(track.orderInsensitiveKeyMissing)
+	result.OrderInsensitiveListRefusals = track.orderInsensitiveKeyMissing
 	return result
+}
+
+// findOrderInsensitiveList looks up a declared OrderInsensitiveList by
+// its list-level path (the tiered form compareList's own `path` argument
+// reduces to, e.g. "data.analytics.sankey.nodes" -- never an indexed
+// element path).
+func findOrderInsensitiveList(opts Options, path string) (OrderInsensitiveList, bool) {
+	for _, decl := range opts.OrderInsensitiveLists {
+		if decl.Path == path {
+			return decl, true
+		}
+	}
+	return OrderInsensitiveList{}, false
 }
 
 // unmatched lists declared table keys that nothing marked as used.
@@ -448,18 +536,24 @@ func sortIdentities(ids [][2]string) {
 
 // --- Structural JSON comparison (parity rules 2, 3, 5) -----------------
 
-var listIndexSuffix = regexp.MustCompile(`\[\d+\]`)
+// listIndexSuffix matches ANY single bracketed suffix a comparator path
+// segment can carry: a positional index ("[0]") or an OrderInsensitiveList
+// pairing key ("[key=\"feature_delivery.build\"]"). It is stripped from
+// the WHOLE path BEFORE splitting on "." -- not per already-split segment
+// -- because a pairing key can itself contain a literal "." (e.g. a
+// SUBCATEGORY node id like "feature_delivery.build"), which would
+// otherwise be misread as a path-segment boundary and corrupt every
+// Tier-B/volatile-field lookup for fields nested inside that element.
+var listIndexSuffix = regexp.MustCompile(`\[[^\[\]]*\]`)
 
 // tieredPath normalises a concrete comparator path ("$.data.edges[0].score")
 // to the dotted, index-free form callers declare Tier-B and volatile
 // fields with ("data.edges.score").
 func tieredPath(path string) string {
+	path = listIndexSuffix.ReplaceAllString(path, "")
 	segments := strings.Split(path, ".")
 	if len(segments) > 0 && segments[0] == "$" {
 		segments = segments[1:]
-	}
-	for i, segment := range segments {
-		segments[i] = listIndexSuffix.ReplaceAllString(segment, "")
 	}
 	return strings.Join(segments, ".")
 }
@@ -702,10 +796,16 @@ func compareDict(baseline, candidate map[string]any, path string, opts Options, 
 	return findings
 }
 
-// compareList compares positionally -- parity rule 5's default. A length
-// difference is reported alone: element-wise findings past that point
-// would be a cascade of noise about an offset, not independent defects.
+// compareList compares positionally -- parity rule 5's default -- unless
+// this list's path is declared as an OrderInsensitiveList, in which case
+// it defers to compareListByKey entirely. A length difference is reported
+// alone: element-wise findings past that point would be a cascade of
+// noise about an offset, not independent defects.
 func compareList(baseline, candidate []any, path string, opts Options, track *tracker) []Finding {
+	if decl, ok := findOrderInsensitiveList(opts, tieredPath(path)); ok {
+		track.orderInsensitive[decl.Path] = true
+		return compareListByKey(baseline, candidate, path, decl, opts, track)
+	}
 	if len(baseline) != len(candidate) {
 		return []Finding{{
 			Kind:   FindingMismatch,
@@ -720,6 +820,95 @@ func compareList(baseline, candidate []any, path string, opts Options, track *tr
 			continue
 		}
 		findings = append(findings, compareJSON(baseline[i], candidate[i], childPath, opts, nil, track)...)
+	}
+	return findings
+}
+
+// orderInsensitiveKey builds the pairing key for one element under decl:
+// the declared KeyFields' values, joined so distinct field-value tuples
+// cannot collide (0x1f, ASCII unit separator, cannot appear in a
+// %v-formatted JSON scalar). ok is false when the element is not an
+// object, or is missing ANY declared key field -- the caller REFUSES the
+// whole comparison in that case rather than guessing a pairing, exactly
+// as BaselineDefect's vacuity guard refuses a stale declaration.
+func orderInsensitiveKey(element any, keyFields []string) (string, bool) {
+	object, isObject := element.(map[string]any)
+	if !isObject {
+		return "", false
+	}
+	parts := make([]string, len(keyFields))
+	for i, field := range keyFields {
+		value, ok := object[field]
+		if !ok {
+			return "", false
+		}
+		parts[i] = fmt.Sprintf("%v", value)
+	}
+	return strings.Join(parts, "\x1f"), true
+}
+
+// compareListByKey is OrderInsensitiveList's comparator: elements are
+// paired by decl.KeyFields instead of position, and every paired element
+// is still compared field-by-field via compareJSON -- parity rules 1-4
+// all still apply inside a pair. A key present on only one side is a
+// genuine missing/extra-element finding, not a reordering, so it is
+// reported per-key rather than collapsed into one length mismatch.
+//
+// If ANY element on EITHER side does not carry every declared key field,
+// the declaration does not describe this data: the whole list is refused
+// (tracked, never silently downgraded to a finding) rather than guessing
+// a partial pairing that could hide a real divergence behind a comparison
+// nobody actually asked for.
+func compareListByKey(baseline, candidate []any, path string, decl OrderInsensitiveList, opts Options, track *tracker) []Finding {
+	index := func(elements []any, side string) (map[string]any, bool) {
+		byKey := make(map[string]any, len(elements))
+		for _, element := range elements {
+			key, ok := orderInsensitiveKey(element, decl.KeyFields)
+			if !ok {
+				track.orderInsensitiveKeyMissing = append(track.orderInsensitiveKeyMissing, fmt.Sprintf(
+					"order-insensitive list %q (ticket %s): a %s element at %s is missing one of the declared key field(s) %v",
+					decl.Path, decl.Ticket, side, path, decl.KeyFields))
+				return nil, false
+			}
+			byKey[key] = element
+		}
+		return byKey, true
+	}
+
+	baselineByKey, baselineOK := index(baseline, "baseline")
+	candidateByKey, candidateOK := index(candidate, "candidate")
+	if !baselineOK || !candidateOK {
+		return nil
+	}
+
+	keys := make([]string, 0, len(baselineByKey)+len(candidateByKey))
+	seen := make(map[string]bool, len(baselineByKey)+len(candidateByKey))
+	for key := range baselineByKey {
+		seen[key] = true
+		keys = append(keys, key)
+	}
+	for key := range candidateByKey {
+		if !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
+	var findings []Finding
+	for _, key := range keys {
+		elementPath := fmt.Sprintf("%s[key=%q]", path, key)
+		baselineElement, inBaseline := baselineByKey[key]
+		candidateElement, inCandidate := candidateByKey[key]
+		if inBaseline != inCandidate {
+			detail := "present in baseline, absent in candidate"
+			if !inBaseline {
+				detail = "present in candidate, absent in baseline"
+			}
+			findings = append(findings, Finding{Kind: FindingMismatch, Path: elementPath, Detail: detail})
+			continue
+		}
+		findings = append(findings, compareJSON(baselineElement, candidateElement, elementPath, opts, nil, track)...)
 	}
 	return findings
 }

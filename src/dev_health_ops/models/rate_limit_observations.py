@@ -44,8 +44,10 @@ class ProviderRateLimitObservation(Base):
     versa).
 
     No foreign keys to ``sync_runs`` / ``sync_run_units`` / ``Integration``:
-    this is a durable, independently-retained observation log (see the
-    beat-scheduled prune task, ``workers/sync_reconciler.py``), not a
+    this is a durable, independently-retained observation log (see
+    ``internal/scheduler/fixed``'s ``prune_rate_limit_observations``
+    RetentionProducer, the Go-native successor to the deleted Python
+    ``workers/sync_reconciler.py`` beat-scheduled prune task), not a
     dependent child row -- it must survive its parent run/unit being pruned
     or deleted, mirroring ``SyncRunUnit.integration_id`` (also FK-less, per
     ``models/integrations.py``).

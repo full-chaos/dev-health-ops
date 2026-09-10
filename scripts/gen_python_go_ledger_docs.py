@@ -408,7 +408,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "config.py": {
         "category": "c",
-        "evidence": "used by queues.py, celery_app.py, sync_reconciler.py, and api/external_ingest/stream_health.py — env/config constants. queue_monitor.py and external_ingest_reconciler.py, former importers, were deleted (CHAOS-3093)",
+        "evidence": "used by queues.py, celery_app.py, and api/external_ingest/stream_health.py — env/config constants. queue_monitor.py, external_ingest_reconciler.py, and sync_reconciler.py, former importers, were deleted (CHAOS-3093)",
         "ticket": "n/a",
     },
     "feature_flag_sync.py": {

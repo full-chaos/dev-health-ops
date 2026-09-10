@@ -33,6 +33,19 @@ import (
 // eagerly at construction time -- see mockPingFailureServer below for why
 // valkey needs a different construction) so the logged error is genuine,
 // not fabricated.
+// dialFailureSubstrings is the SHARED accepted set for every domain_postgres/
+// clickhouse case below -- both the real-dial cases (racing RST vs timeout
+// vs context-deadline, see closedPortAddr) and the deterministic
+// already-expired-context cases read from this ONE slice. Sharing it is
+// load-bearing, not cosmetic: codex r1 F-1 found that the deterministic
+// cases originally carried their OWN copy of just the third entry, so
+// reverting the widening on the real-dial cases (removing "context deadline
+// exceeded" from their list) left the deterministic cases untouched and the
+// suite green -- the widening itself had no regression coverage. Reading
+// every case from this one slice means removing an accepted spelling here
+// fails every case that can produce it, real-dial and deterministic alike.
+var dialFailureSubstrings = []string{"connection refused", "i/o timeout", "context deadline exceeded"}
+
 func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -58,7 +71,7 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 		{
 			name:           "domain_postgres",
 			check:          "domain_postgres",
-			wantSubstrings: []string{"connection refused", "i/o timeout", "context deadline exceeded"},
+			wantSubstrings: dialFailureSubstrings,
 			run: func(t *testing.T, storage *productionStreamStorage) error {
 				storage.domainPool = newRefusedDomainPool(t)
 				storage.domainRole = "domain_role"
@@ -69,7 +82,7 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 		{
 			name:           "clickhouse",
 			check:          "clickhouse",
-			wantSubstrings: []string{"connection refused", "i/o timeout", "context deadline exceeded"},
+			wantSubstrings: dialFailureSubstrings,
 			run: func(t *testing.T, storage *productionStreamStorage) error {
 				storage.clickHouse = newRefusedClickHouseConn(t)
 				return storage.ClickHouseReady(contextWithTimeout(t))
@@ -81,13 +94,21 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 			// scheduling -- under load, the 500ms test context can expire
 			// before the kernel's RST is even processed, and pgx reports
 			// that as "context deadline exceeded" instead of "connection
-			// refused"/"i/o timeout". An already-expired context forces
-			// that same real error path deterministically (no dial race to
-			// win or lose), proving the third spelling is both genuine and
-			// accepted, without relying on a timing flake to reproduce it.
+			// refused"/"i/o timeout". An already-expired context does NOT
+			// replay that race -- codex r1 measured (dial_calls=0) that
+			// pgxpool short-circuits on ctx.Err() before ever attempting a
+			// dial, so no dial happens at all here. What it DOES prove,
+			// deterministically: pgx reports that short-circuit as the
+			// exact same "context deadline exceeded" text a real dial-side
+			// timeout would produce, so the third accepted spelling is a
+			// genuine, currently-producible error text, not a hypothetical
+			// one -- without depending on a timing race to reproduce it.
+			// wantSubstrings is the SHARED dialFailureSubstrings (not a
+			// private one-entry copy) so reverting the widening on the
+			// cases above fails this case too -- see that var's comment.
 			name:           "domain_postgres_context_deadline",
 			check:          "domain_postgres",
-			wantSubstrings: []string{"context deadline exceeded"},
+			wantSubstrings: dialFailureSubstrings,
 			run: func(t *testing.T, storage *productionStreamStorage) error {
 				storage.domainPool = newRefusedDomainPool(t)
 				storage.domainRole = "domain_role"
@@ -96,11 +117,12 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 			},
 		},
 		{
-			// Same rationale as domain_postgres_context_deadline above, for
-			// clickhouse's Ping path.
+			// Same rationale as domain_postgres_context_deadline above
+			// (clickhouse-go's Ping also short-circuits on ctx.Err() with
+			// dial_calls=0, per codex r1's probe) -- clickhouse's Ping path.
 			name:           "clickhouse_context_deadline",
 			check:          "clickhouse",
-			wantSubstrings: []string{"context deadline exceeded"},
+			wantSubstrings: dialFailureSubstrings,
 			run: func(t *testing.T, storage *productionStreamStorage) error {
 				storage.clickHouse = newRefusedClickHouseConn(t)
 				return storage.ClickHouseReady(contextAlreadyExceeded(t))
@@ -187,10 +209,12 @@ func contextWithTimeout(t *testing.T) context.Context {
 }
 
 // contextAlreadyExceeded returns a context whose deadline is already in the
-// past, so a dependency check dialing through it fails immediately and
-// deterministically with a context-deadline error -- CHAOS-5540's third
-// accepted spelling, reproduced here without racing host/network timing the
-// way the RST-vs-timeout split above necessarily does.
+// past. pgxpool/clickhouse-go both short-circuit on ctx.Err() before
+// attempting to dial (measured: dial_calls=0), so this does not replay the
+// RST-vs-timeout dial race the two cases above cover -- what it DOES
+// deterministically produce is the exact "context deadline exceeded" text,
+// CHAOS-5540's third accepted spelling, without depending on host/network
+// timing to reproduce it.
 func contextAlreadyExceeded(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))

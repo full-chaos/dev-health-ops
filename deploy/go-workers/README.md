@@ -358,8 +358,9 @@ sections.
    staged the Go path beside them, are deleted -- there is no Celery fleet
    left to coexist with. `helm upgrade --install dev-health
    deploy/helm/dev-health` and `kubectl apply -k deploy/kubernetes/` render
-   the Go topology (every group at `replicas: 0`) with no extra values file
-   or separate `apply`; scale groups per step 3 below.
+   the Go topology (CHAOS-5541: every group at `replicas: 1`, matching
+   `deployment.json`'s go_default posture) with no extra values file or
+   separate `apply`; scale groups per step 3 below.
 
    This bootstrap validates schema and contracts only. It does not invoke
    `dev-health-workerctl`, mutate a worker route, or transfer Celery/Beat

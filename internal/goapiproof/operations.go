@@ -81,10 +81,23 @@ type OperationSpec struct {
 	ResponseRoot string
 
 	// RootNullable mirrors the SDL: whether ResponseRoot is declared
-	// WITHOUT a trailing `!`. Only capacityForecast and throughputForecast
-	// are; TestResponseRootNullabilityMatchesTheSDL derives the truth from
-	// contracts/graphql/v1/schema.graphql and fails if this drifts.
+	// WITHOUT a trailing `!`. capacityForecast, throughputForecast and
+	// pr are; TestResponseRootNullabilityMatchesTheSDL derives the truth
+	// from contracts/graphql/v1/schema.graphql and fails if this drifts.
 	RootNullable bool
+
+	// InstanceVariable names a document variable that identifies ONE
+	// STORED ROW -- `pr`'s `$id` is the only one today -- and that this
+	// table therefore cannot supply.
+	//
+	// Empty for every operation whose request is fully determined by
+	// the org and the window. When set, proveOne refuses the operation
+	// by name rather than sending an invented value. The refusal, not
+	// the omission, is the point: leaving `pr` OUT of this table would
+	// refuse the whole RUN via AssertCoverage (which is what blocked
+	// JOB 5), while inventing an id would satisfy the SDL, return null
+	// on both planes and report a match having measured nothing.
+	InstanceVariable string
 
 	// Parity is this operation's declared comparator configuration.
 	Parity Options
@@ -169,6 +182,28 @@ var operationSpecs = map[string]OperationSpec{
 				"granularity": "DAY", "scope": "REPO",
 				"repoIds": nil, "teamIds": nil, "limit": 500,
 			}}
+		},
+	},
+	// CHAOS-5523 registered this operation; the table did not gain an
+	// entry with it, and AssertCoverage correctly refused the whole run
+	// (JOB 5, 2026-09-10). Its registered document declares
+	// `$orgId: String!` and `$limit: Int!` as REQUIRED and `$flagKey` /
+	// `$environment` as nullable, so all four are sent explicitly:
+	// omitting a nullable variable and sending it as null are the same
+	// thing to the resolver here (both arrive as a nil *string), and
+	// stating them keeps the request shape readable beside the document.
+	//
+	// limit=1000 is the SDL's own default for the argument
+	// (`limit: Int! = 1000`), which is what a client that omits it gets --
+	// the document requires the variable, so a value must be chosen, and
+	// the SDL's default is the only non-arbitrary one available.
+	"featureFlagEvents": {
+		ResponseRoot: "featureFlagEvents",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{
+				"orgId": orgID, "flagKey": nil, "environment": nil,
+				"limit": 1000,
+			}
 		},
 	},
 	"featureFlags": {
@@ -263,6 +298,29 @@ var operationSpecs = map[string]OperationSpec{
 			"data.operatingReview.sections.metrics.delta.absolute":   "derived from the same float aggregates as sections.metrics.value (CHAOS-5451)",
 			"data.operatingReview.sections.metrics.delta.percent":    "derived from the same float aggregates as sections.metrics.value (CHAOS-5451)",
 		}},
+	},
+	// CHAOS-4991 registered `pr`; like featureFlagEvents it arrived
+	// without an entry here and AssertCoverage refused the run.
+	//
+	// Unlike every other operation in this table, `pr` cannot be built
+	// from the org and the window alone: its document requires `$id: ID!`,
+	// an identifier for ONE stored pull request. InstanceVariable says so,
+	// and proveOne refuses the operation by name rather than sending an
+	// invented value -- see RefusalNeedsInstanceID for why an invented one
+	// is worse than no entry at all rather than better.
+	//
+	// The Variables func is still written out, and correctly, because it
+	// is what a caller with a real id would need; `id` is left empty so
+	// nothing can read this entry as a usable request. If `pr` is ever to
+	// be proven, the id has to come from the run (a flag, or a row read
+	// from the org's own data), not from this table.
+	"pr": {
+		ResponseRoot:     "pr",
+		RootNullable:     true,
+		InstanceVariable: "id",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "id": ""}
+		},
 	},
 	"reviewEdges": {
 		ResponseRoot: "reviewEdges",

@@ -38,6 +38,15 @@ const (
 	RefusalNonFinite           = "response_carried_a_non_finite_json_number"
 	RefusalPlaneUnidentified   = "response_carried_no_plane_evidence"
 	RefusalBuildMismatch       = "serving_build_is_not_the_named_build"
+	// RefusalNeedsInstanceID is for an operation whose registered
+	// document requires an identifier for ONE stored row -- `pr(id:)`
+	// today. The table cannot supply one: any value it invented would
+	// be valid against the SDL (`ID!` accepts any string) and would
+	// return null on BOTH planes, so the comparison would report a
+	// match having measured nothing. That is the exact failure D15/R4
+	// exists to prevent, and it is worse than the missing-spec refusal
+	// because it is silent. Named and refused instead.
+	RefusalNeedsInstanceID = "operation_needs_an_instance_identifier"
 )
 
 // Measurement routes. Recorded on every receipt so a proof-route
@@ -582,6 +591,17 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		candidateURL = r.Config.GoProofURL
 	default:
 		return refuse(RefusalNotRouted, fmt.Sprintf("mode=%q is not a Go-serving mode", row.Mode))
+	}
+
+	// Reached only for an operation this deployment DOES route to Go.
+	// An unrouted one is already refused above as not_routed, which is
+	// the operative fact about it today; this fires the day such an
+	// operation is routed and would otherwise be compared with an
+	// invented identifier.
+	if spec.InstanceVariable != "" {
+		return refuse(RefusalNeedsInstanceID, fmt.Sprintf(
+			"the registered document requires $%s, an identifier for one stored row, and this table has no source for one: any value it invented would satisfy the SDL and return null on BOTH planes, so the run would record a match having compared nothing",
+			spec.InstanceVariable))
 	}
 
 	variables := spec.Variables(r.Config.OrgID, r.Config.Window)

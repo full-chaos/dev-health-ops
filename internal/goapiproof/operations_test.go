@@ -9,21 +9,34 @@ import (
 	"testing"
 )
 
-// The fifteen operations the running query-api registered at the
-// 2026-09-07 measurement (enablement artifact 10-status-canary.json /
-// src/dev_health_ops/api/graphql/go_api_operations.json). Written out
-// rather than loaded from that JSON on purpose: this test's job is to
-// fail when the two DISAGREE, and a test that reads the same file the
-// code reads can only ever agree with itself.
-var registeredAt20260907 = []string{
+// The operations the running query-api registers, written out rather
+// than loaded from the same place the code reads: this test's job is to
+// fail when two artefacts DISAGREE, and a test that reads the code's own
+// source of truth can only ever agree with itself.
+//
+// Fifteen at the 2026-09-07 measurement (enablement artifact
+// 10-status-canary.json / go_api_operations.json); seventeen since
+// CHAOS-4991 registered `pr` and CHAOS-5523 registered
+// `featureFlagEvents` on 2026-09-09.
+//
+// Keeping this list correct by hand is exactly what failed: both
+// operations were registered without an entry in operationSpecs, and
+// nothing caught it until go-api-prove refused a live JOB 5 run.
+// TestOperationSpecsCoverExactlyWhatQueryAPIRegisters (registered_set_test.go)
+// is the guard that does not depend on anyone remembering; this list
+// stays because the refusal tests below need a known-good base to
+// perturb, and because a second, independent statement of the set is
+// what makes a drift legible rather than merely detected.
+var registeredOperations = []string{
 	"capacityForecast", "capacityForecasts", "cognitiveLoad", "complexityTimeseries",
-	"featureFlags", "flowMatrix", "hotspots", "investmentBreakdown", "investmentFull",
-	"operatingReview", "reviewEdges", "throughputForecast",
+	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
+	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
+	"reviewEdges", "throughputForecast",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 }
 
 func TestAssertCoverageAcceptsTheRegisteredSet(t *testing.T) {
-	if err := AssertCoverage(registeredAt20260907); err != nil {
+	if err := AssertCoverage(registeredOperations); err != nil {
 		t.Fatalf("the committed table must cover every registered operation: %v", err)
 	}
 }
@@ -31,7 +44,7 @@ func TestAssertCoverageAcceptsTheRegisteredSet(t *testing.T) {
 // D15/R4: an operation the running binary registers but this table cannot
 // build a request for must FAIL the run, never be quietly skipped.
 func TestAssertCoverageRefusesAnUncoveredOperation(t *testing.T) {
-	err := AssertCoverage(append(append([]string(nil), registeredAt20260907...), "somethingBrandNew"))
+	err := AssertCoverage(append(append([]string(nil), registeredOperations...), "somethingBrandNew"))
 	if err == nil {
 		t.Fatal("an uncovered registered operation must fail, not be skipped")
 	}
@@ -43,7 +56,7 @@ func TestAssertCoverageRefusesAnUncoveredOperation(t *testing.T) {
 // The opposite direction: a stale entry here reads as coverage while
 // proving nothing about a binary that no longer registers it.
 func TestAssertCoverageRefusesAStaleEntry(t *testing.T) {
-	err := AssertCoverage(registeredAt20260907[:len(registeredAt20260907)-1])
+	err := AssertCoverage(registeredOperations[:len(registeredOperations)-1])
 	if err == nil {
 		t.Fatal("an operation covered here but not registered must fail")
 	}
@@ -97,8 +110,14 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 	// The operations whose SDL input carries no date range at all. Named
 	// explicitly so adding a windowed operation without wiring its window
 	// fails this test rather than joining a silent allowlist.
+	// featureFlagEvents and pr are windowless for the same reason
+	// featureFlags is: they select current state or one stored row, not a
+	// range. `pr` is additionally refused at run time (InstanceVariable),
+	// but its Variables func is still checked here -- a spec that quietly
+	// ignored the window would be wrong whether or not the run sends it.
 	windowless := map[string]bool{
-		"capacityForecast": true, "capacityForecasts": true, "featureFlags": true,
+		"capacityForecast": true, "capacityForecasts": true,
+		"featureFlagEvents": true, "featureFlags": true, "pr": true,
 		"throughputForecast": true, "workGraphArtifacts": true, "workGraphEdges": true,
 		"workGraphFlow": true,
 	}

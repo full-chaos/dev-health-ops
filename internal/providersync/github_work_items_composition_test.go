@@ -329,7 +329,7 @@ func TestGitHubWorkItemEngineSeamIsInvokedPerDay(t *testing.T) {
 		Source: &fakeGitHubWorkItemDerivationContextSource{}, engine: recorder,
 	}
 
-	derived, err := deriver.Derive(
+	derived, _, err := deriver.Derive(
 		context.Background(), claim, githubWorkItemDeriverFixture(claim),
 		time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC),
 	)
@@ -464,7 +464,7 @@ func TestGitHubWorkItemDeriverMirrorsCHAOS3494WriteAmplification(t *testing.T) {
 	singleBefore := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
 	singleSince := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
 	single.SinceAt, single.BeforeAt = &singleSince, &singleBefore
-	oneDay, err := deriver.Derive(context.Background(), single, rows, normalizedAt)
+	oneDay, _, err := deriver.Derive(context.Background(), single, rows, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +477,7 @@ func TestGitHubWorkItemDeriverMirrorsCHAOS3494WriteAmplification(t *testing.T) {
 	multiBefore := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
 	multiSince := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	multi.SinceAt, multi.BeforeAt = &multiSince, &multiBefore
-	threeDay, err := deriver.Derive(context.Background(), multi, rows, normalizedAt)
+	threeDay, _, err := deriver.Derive(context.Background(), multi, rows, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +522,7 @@ func TestGitHubWorkItemDeriverLoadsDerivationContextOncePerRun(t *testing.T) {
 	source := &countingGitHubWorkItemDerivationContextSource{}
 	deriver := GitHubWorkItemDeriver{Source: source, engine: githubWorkItemStubEngine{}}
 
-	if _, err := deriver.Derive(
+	if _, _, err := deriver.Derive(
 		context.Background(), claim, githubWorkItemDeriverFixture(claim),
 		time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC),
 	); err != nil {
@@ -586,7 +586,7 @@ func TestGitHubWorkItemDeriverFailsClosedWithoutConfiguredEngine(t *testing.T) {
 	claim := githubWorkItemOracleClaim()
 	deriver := GitHubWorkItemDeriver{Source: &fakeGitHubWorkItemDerivationContextSource{}}
 
-	derived, err := deriver.Derive(
+	derived, _, err := deriver.Derive(
 		context.Background(), claim, githubWorkItemDeriverFixture(claim),
 		time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC),
 	)
@@ -646,7 +646,7 @@ func TestGitHubWorkItemDeriverFailsClosedOnUnusableInput(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := testCase.deriver.Derive(
+			if _, _, err := testCase.deriver.Derive(
 				context.Background(), testCase.claim, rows, testCase.at,
 			); !errors.Is(err, ErrInvalidConfiguration) {
 				t.Fatalf("error=%v want ErrInvalidConfiguration", err)
@@ -677,7 +677,7 @@ func TestGitHubWorkItemDeriverRejectsEngineOverreach(t *testing.T) {
 				Source: &fakeGitHubWorkItemDerivationContextSource{},
 				engine: githubWorkItemOverreachingEngine{destination: testCase.destination},
 			}
-			if _, err := deriver.Derive(
+			if _, _, err := deriver.Derive(
 				context.Background(), claim, rows, normalizedAt,
 			); !errors.Is(err, ErrInvalidConfiguration) {
 				t.Fatalf("error=%v want ErrInvalidConfiguration", err)
@@ -762,7 +762,7 @@ func TestGitHubWorkItemDeriverPropagatesEngineFailure(t *testing.T) {
 		Source: &fakeGitHubWorkItemDerivationContextSource{},
 		engine: githubWorkItemStubEngine{err: sentinel},
 	}
-	if _, err := deriver.Derive(
+	if _, _, err := deriver.Derive(
 		context.Background(), claim, githubWorkItemDeriverFixture(claim),
 		time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC),
 	); !errors.Is(err, sentinel) {
@@ -803,7 +803,7 @@ func TestGitHubWorkItemCompositionNeverFailsOpen(t *testing.T) {
 			Source: &fakeGitHubWorkItemDerivationContextSource{},
 			engine: githubWorkItemSilentEngine{rows: nil},
 		}
-		if _, err := deriver.Derive(
+		if _, _, err := deriver.Derive(
 			context.Background(), claim, rows, normalizedAt,
 		); !errors.Is(err, ErrGitHubWorkItemsDerivationsUnavailable) {
 			t.Fatalf("error=%v want ErrGitHubWorkItemsDerivationsUnavailable", err)
@@ -819,7 +819,7 @@ func TestGitHubWorkItemCompositionNeverFailsOpen(t *testing.T) {
 			Source: &fakeGitHubWorkItemDerivationContextSource{},
 			engine: githubWorkItemSilentEngine{rows: partial},
 		}
-		_, err := deriver.Derive(context.Background(), claim, rows, normalizedAt)
+		_, _, err := deriver.Derive(context.Background(), claim, rows, normalizedAt)
 		if !errors.Is(err, ErrGitHubWorkItemsDerivationsUnavailable) {
 			t.Fatalf("error=%v want ErrGitHubWorkItemsDerivationsUnavailable", err)
 		}
@@ -883,7 +883,7 @@ func TestGitHubWorkItemDeriverComposesTheFullSixteenEffectManifest(t *testing.T)
 		engine: githubWorkItemStubEngine{},
 	}
 
-	derived, err := deriver.Derive(context.Background(), claim, rows, normalizedAt)
+	derived, _, err := deriver.Derive(context.Background(), claim, rows, normalizedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -897,7 +897,7 @@ func TestGitHubWorkItemDeriverComposesTheFullSixteenEffectManifest(t *testing.T)
 		}
 	}
 
-	effects, err := buildGitHubWorkItemsRouteEffects(rows, derived)
+	effects, err := buildGitHubWorkItemsRouteEffects(rows, derived, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

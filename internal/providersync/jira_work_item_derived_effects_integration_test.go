@@ -23,7 +23,7 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 	defer cancel()
 	conn := githubDerivedIntegrationConn(t, ctx)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewJiraWorkItemDerivedClickHouseEffects(conn, lease)
+	sink, err := NewJiraWorkItemDerivedClickHouseEffects(conn, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 		conn,
 		providerfoundation.LeaseGuardFunc(func(context.Context) error {
 			return providerfoundation.ErrLeaseLost
-		}),
+		}), nil,
 	)
 	if err != nil {
 		t.Fatal(err)

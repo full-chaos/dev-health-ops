@@ -72,6 +72,21 @@ type storedPreparedEffect struct {
 	Recovery      EffectRecoveryPolicy `json:"recovery"`
 	Rows          []json.RawMessage    `json:"rows"`
 	PayloadBytes  int                  `json:"payload_bytes"`
+	// MembershipRejections (CHAOS-4320 round 7, codex round 6 P1, executed
+	// repro): EffectBatch.MembershipRejections is a separate durable field
+	// from Rows, and this prepared-route recovery envelope is a SEPARATE
+	// JSON-serialized projection of EffectBatch from the in-process value --
+	// a pending effect recovered through THIS envelope (fetch succeeded,
+	// commit had not happened yet) rebuilds its EffectBatch via
+	// BuildEffectBatch(stored.Destination, stored.Recovery, stored.Rows),
+	// which never touches this field, so recovery silently dropped every
+	// rejection observation for the same reason a `json:"-"` tag would have
+	// (round 2's own class, one layer further out: not a missing tag this
+	// time, but a whole separate stored type that never named the field at
+	// all). `omitempty` matches every OTHER destination's effect, which
+	// never populates this and must not gain a spurious `[]` in its stored
+	// JSON.
+	MembershipRejections []json.RawMessage `json:"membership_rejections,omitempty"`
 }
 
 func encodePreparedRouteManifest(
@@ -102,9 +117,20 @@ func encodePreparedRouteManifest(
 				return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
 			}
 		}
+		// Same sensitive-key scrub as Rows above, applied to
+		// MembershipRejections for the same reason: this envelope has no
+		// separate trust tier for a second payload field just because it
+		// is not part of the ContentDigest/RowCount identity below.
+		for _, rejection := range effect.MembershipRejections {
+			var rejectionValue any
+			if json.Unmarshal(rejection, &rejectionValue) != nil || containsPreparedRouteSensitiveKey(rejectionValue) {
+				return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
+			}
+		}
 		effects = append(effects, storedPreparedEffect{
 			Destination: effect.Destination, ContentDigest: effect.ContentDigest,
 			Recovery: effect.Recovery, Rows: effect.Rows, PayloadBytes: effect.PayloadBytes,
+			MembershipRejections: effect.MembershipRejections,
 		})
 	}
 	watermark := batch.Watermark
@@ -184,6 +210,13 @@ func decodePreparedRouteManifest(
 			state.Effects[index].Recovery != rebuilt.Recovery {
 			return PreparedRouteManifest{}, ErrEffectLedgerConflict
 		}
+		// BuildEffectBatch only ever constructs Rows -- it deliberately does
+		// not accept or validate MembershipRejections (that field is not
+		// part of any OTHER destination's contract, and giving every caller
+		// of BuildEffectBatch a new parameter for one destination's field
+		// was the exact blast radius this design avoided). Reattach it here,
+		// the one place a stored effect becomes a live EffectBatch again.
+		rebuilt.MembershipRejections = stored.MembershipRejections
 		effects = append(effects, rebuilt)
 	}
 	batch := CompleteRouteBatch{

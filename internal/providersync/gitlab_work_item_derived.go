@@ -70,6 +70,10 @@ type GitLabWorkItemDerivedRows struct {
 	WorkItemUserMetricsDaily       []gitlabWorkItemUserMetricsDailyRow
 	Gaps                           []GitLabWorkItemDerivedGap
 	Watermark                      *time.Time
+	// MembershipRejections (CHAOS-4320 round 6) is NOT one of the destinations
+	// producedDestinations() lists -- it is attached only to the
+	// WorkItemTeamAttributions EffectBatch's own MembershipRejections field.
+	MembershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 func (rows GitLabWorkItemDerivedRows) producedDestinations() []string {
@@ -221,6 +225,7 @@ func (deriver GitLabWorkItemDeriver) Derive(
 		result.EstimateCoverageMetricsDaily = append(result.EstimateCoverageMetricsDaily, surfaces.EstimateCoverage...)
 		result.WorkItemTeamAttributions = append(result.WorkItemTeamAttributions, surfaces.TeamAttributions...)
 		result.WorkItemStateDurationsDaily = append(result.WorkItemStateDurationsDaily, surfaces.StateDurations...)
+		result.MembershipRejections = append(result.MembershipRejections, surfaces.MembershipRejections...)
 
 		engine := GitHubWorkItemEngineDeriver{
 			statusMapping:        deriver.statusMapping,
@@ -253,6 +258,11 @@ type GitLabWorkItemDerivedEffectRows struct {
 	WorkItemStateDurationsDaily    []gitlabWorkItemStateDurationDailyRow
 	WorkItemTeamAttributions       []gitlabWorkItemTeamAttributionRow
 	WorkItemUserMetricsDaily       []gitlabWorkItemUserMetricsDailyRow
+	// MembershipRejections (CHAOS-4320 round 6) stays as the unmarshaled
+	// teamattribution shape through this struct -- BuildGitLabWorkItemDerivedEffects
+	// marshals it, only for the work_item_team_attributions case, the same
+	// place every other row family here gets marshaled.
+	MembershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 func (rows GitLabWorkItemDerivedRows) EffectRows() GitLabWorkItemDerivedEffectRows {
@@ -267,6 +277,7 @@ func (rows GitLabWorkItemDerivedRows) EffectRows() GitLabWorkItemDerivedEffectRo
 		WorkItemStateDurationsDaily:    rows.WorkItemStateDurationsDaily,
 		WorkItemTeamAttributions:       rows.WorkItemTeamAttributions,
 		WorkItemUserMetricsDaily:       rows.WorkItemUserMetricsDaily,
+		MembershipRejections:           rows.MembershipRejections,
 	}
 }
 
@@ -296,6 +307,13 @@ func BuildGitLabWorkItemDerivedEffects(rows GitLabWorkItemDerivedEffectRows) ([]
 			effect, err = buildGitLabTypedDerivedEffect(destination, rows.WorkItemStateDurationsDaily)
 		case "work_item_team_attributions":
 			effect, err = buildGitLabTypedDerivedEffect(destination, rows.WorkItemTeamAttributions)
+			if err == nil {
+				var marshaledRejections []json.RawMessage
+				marshaledRejections, err = marshalGitHubWorkItemTeamAttributionRejections(rows.MembershipRejections)
+				if err == nil {
+					effect.MembershipRejections = marshaledRejections
+				}
+			}
 		case "work_item_user_metrics_daily":
 			effect, err = buildGitLabTypedDerivedEffect(destination, rows.WorkItemUserMetricsDaily)
 		default:
@@ -387,9 +405,16 @@ type GitLabWorkItemDerivedClickHouseEffects struct {
 	WorkItemUserMetricsDaily       GitHubWorkItemUserMetricsDailyClickHouseEffects
 }
 
+// metrics (CHAOS-4320 round 7, codex round 6 P1, executed repro): the
+// worker's real constructor call left this nil, so RecordTeamAttributionOwnershipChecked's
+// nil-receiver-safe no-op silently swallowed every GitLab ownership_checked
+// sample despite the plumbing being otherwise correct end to end -- an
+// executed write with no sample to show for it. Threaded the same way
+// NewGitHubWorkItemClickHouseEffects already accepts and forwards it.
 func NewGitLabWorkItemDerivedClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (GitLabWorkItemDerivedClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return GitLabWorkItemDerivedClickHouseEffects{}, ErrInvalidConfiguration
@@ -404,7 +429,7 @@ func NewGitLabWorkItemDerivedClickHouseEffects(
 		WorkItemCycleTimes:             GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease},
 		WorkItemMetricsDaily:           GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease},
 		WorkItemStateDurationsDaily:    GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease},
-		WorkItemTeamAttributions:       GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease},
+		WorkItemTeamAttributions:       GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics},
 		WorkItemUserMetricsDaily:       GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease},
 	}
 	if missing := sink.MissingDestinations(); len(missing) > 0 {

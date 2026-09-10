@@ -269,7 +269,7 @@ func buildGitHubWorkItemEngineOracleRows(
 		providerEngine = linearWorkItemEngineDeriver{engine: engine}
 	}
 	deriver := GitHubWorkItemDeriver{Source: source, engine: providerEngine}
-	encoded, err := deriver.deriveForProvider(
+	encoded, _, err := deriver.deriveForProvider(
 		context.Background(), provider, claim, rows, computedAt,
 	)
 	if err != nil {

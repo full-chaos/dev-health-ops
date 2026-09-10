@@ -187,8 +187,19 @@ func githubWorkItemDerivationOracleCases() []oracleCase {
 					"RepoID": repoID, "RepoFullName": "acme/api", "IsPrimary": 1,
 					"Specificity": 70, "Priority": 0, "UpdatedAt": now,
 				}},
+				// CHAOS-4320: TeamID is "team-repo" here (not a separate
+				// "team-member", as this fixture had before that ticket) --
+				// the resolved membership team must OWN repoID or Go's new
+				// repo-ownership gate drops the assignee_membership
+				// candidate entirely, which would (a) break the
+				// provenance-retention assertion below and (b) silently
+				// diverge from Python here (no such gate there), breaking
+				// the byte-identical live-oracle comparison this case
+				// feeds. The dropped-candidate case itself is covered on a
+				// Python-independent fixture in cascade_smoke_test.go
+				// instead.
 				"Members": []any{map[string]any{
-					"Provider": "github", "TeamID": "team-member", "TeamName": "Member Team",
+					"Provider": "github", "TeamID": "team-repo", "TeamName": "Member Team",
 					"MemberID": "dev@example.com", "IsPrimary": 1,
 					"Specificity": 50, "Priority": 0, "UpdatedAt": now,
 				}},

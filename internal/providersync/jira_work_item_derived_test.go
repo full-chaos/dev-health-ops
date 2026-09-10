@@ -163,7 +163,7 @@ func TestJiraEvaluatedEmptyAIRecoversAnInterruptedEffect(t *testing.T) {
 	ledger := &memoryEffectLedger{state: state}
 	sink, err := NewJiraWorkItemDerivedClickHouseEffects(
 		jiraDerivedStubConn{},
-		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }), nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestJiraEvaluatedEmptyAIRecoversAnInterruptedEffect(t *testing.T) {
 
 func TestJiraCompositeSinkOwnsDirectDerivedAndEvaluatedEmptyAI(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewJiraWorkItemCompositeClickHouseEffects(jiraDerivedStubConn{}, lease)
+	sink, err := NewJiraWorkItemCompositeClickHouseEffects(jiraDerivedStubConn{}, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestJiraMetricTripletEffectsReachTheirMigratedStores(t *testing.T) {
 	}
 	sink, err := NewJiraWorkItemDerivedClickHouseEffects(
 		jiraDerivedProbeConn{},
-		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }), nil,
 	)
 	if err != nil {
 		t.Fatal(err)

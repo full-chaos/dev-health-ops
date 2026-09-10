@@ -68,13 +68,68 @@ type githubWorkItemTeamAttributionRow struct {
 	// persisted to work_item_team_attributions (excluded from the INSERT
 	// column list in WriteGitHubWorkItemEffect and from
 	// newGitHubTeamAttributionColumns's oracle-comparison projection, both
-	// deliberately). Carried here ONLY so WriteGitHubWorkItemEffect --
-	// the actual metrics-capable write boundary -- can derive the
-	// membership-layer telemetry label (chris/team-lead, 2026-08-26) from
-	// candidate.Priority (already on teamattribution.GithubWorkItemDerivationCandidate,
-	// no new field there) without threading a *providerfoundation.Metrics
-	// through the pure build*/resolve chain in between.
-	Priority int `json:"-"`
+	// deliberately -- both are explicit field lists, not JSON-tag-driven,
+	// so a real tag here does not leak into either).
+	//
+	// A REAL json tag, not `json:"-"` (codex round 2, P1, CHAOS-4320: fixed
+	// a bug that predates this ticket, present since CHAOS-4321): this row
+	// does not go straight from buildGitHubWorkItemTeamAttributions to
+	// WriteGitHubWorkItemEffect -- it is `json.Marshal`ed into a
+	// json.RawMessage (marshalGitHubWorkItemDerivedRows /
+	// githubWorkItemDerivedSurfaces.derivedRows) as part of the effects/
+	// outbox layer, then `json.Unmarshal`ed back into this same struct type
+	// in validateGitHubWorkItemDerivedEffect before WriteGitHubWorkItemEffect
+	// ever sees it. A field tagged `json:"-"` is dropped by the marshal
+	// step and is therefore ALWAYS its zero value by the time the write
+	// boundary reads it -- carried here ONLY so WriteGitHubWorkItemEffect
+	// can derive the membership-layer telemetry label (chris/team-lead,
+	// 2026-08-26) from candidate.Priority, this field silently meant
+	// row.Priority was ALWAYS 0 in production regardless of the real
+	// admin_override/provider_fallback layer, since the ticket that added
+	// it. Verified directly: json.Marshal of a `json:"-"` int field emits
+	// `{}` for it, and unmarshaling that back into a fresh struct reads 0
+	// regardless of the original value -- the exact round-trip this row
+	// goes through.
+	Priority int `json:"priority"`
+	// OwnershipReason mirrors Priority's carry-not-persist pattern above,
+	// for CHAOS-4320's ownership_checked telemetry (codex round 1, P1): set
+	// from candidate.OwnershipReason ONLY for a winning assignee_membership/
+	// author_membership row, so WriteGitHubWorkItemEffect can tell a
+	// genuinely-confirmed owner apart from an R74 ownership-unknown
+	// pass-through, which used to collapse into one "owned" label with no
+	// way to distinguish them. Same real-tag requirement as Priority above
+	// (codex round 2, P1): `json:"-"` here made WriteGitHubWorkItemEffect
+	// always see "" and always fall back to "owned", making round 1's F1
+	// fix a no-op in production despite passing every unit test that calls
+	// Resolve()/buildGitHubWorkItemTeamAttributions directly and skips the
+	// effects/outbox JSON round-trip.
+	OwnershipReason string `json:"ownership_reason"`
+}
+
+// githubWorkItemTeamAttributionRejectionRow is CHAOS-4320 round 6's
+// replacement for round 4/5's Rejected marker row (BOTH removed, chris via
+// team-lead, 2026-09-10): a marker row shared githubWorkItemTeamAttributionRow's
+// shape, which meant it could be (and was, round 5 P1) mistaken for a real
+// candidate by InspectGitHubWorkItemEffect -- both the write boundary AND the
+// inspector had to know about the marker convention, and the two silently
+// fell out of sync. This type never enters Rows at all: it travels on
+// EffectBatch.MembershipRejections, a durable field of its own that only
+// WriteGitHubWorkItemEffect for work_item_team_attributions ever reads. The
+// inspector needs NO knowledge of rejections whatsoever -- there is no
+// marker convention left for it to fall out of sync with.
+//
+// Real json tags throughout (Trap #125, the exact class codex round 2
+// found on Priority/OwnershipReason above): this type round-trips through
+// json.Marshal/json.Unmarshal exactly like a real row does, and a `json:"-"`
+// tag here would silently drop the value the same way.
+type githubWorkItemTeamAttributionRejectionRow struct {
+	WorkItemID string     `json:"work_item_id"`
+	Provider   string     `json:"provider"`
+	RepoID     *uuid.UUID `json:"repo_id"`
+	Source     string     `json:"source"`
+	TeamID     *string    `json:"team_id"`
+	TeamName   *string    `json:"team_name"`
+	Reason     string     `json:"reason"`
 }
 
 // githubWorkItemStateDurationDailyRow mirrors
@@ -97,6 +152,12 @@ type githubWorkItemDerivedSurfaces struct {
 	EstimateCoverage []githubEstimateCoverageMetricsDailyRow
 	TeamAttributions []githubWorkItemTeamAttributionRow
 	StateDurations   []githubWorkItemStateDurationDailyRow
+	// MembershipRejections (CHAOS-4320 round 6) is NOT one of this builder's
+	// three row destinations above and is never merged into TeamAttributions
+	// or any derivedRows() output -- it travels separately, onto
+	// EffectBatch.MembershipRejections, so it can never be mistaken for a
+	// real persisted row (round 4/5's marker-row mechanism, removed).
+	MembershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 const (
@@ -200,7 +261,7 @@ func buildWorkItemDerivedSurfacesForProvider(
 	if err != nil {
 		return githubWorkItemDerivedSurfaces{}, err
 	}
-	attributions, err := buildGitHubWorkItemTeamAttributions(
+	attributions, rejections, err := buildGitHubWorkItemTeamAttributions(
 		claim, rows, computedAt, derived,
 	)
 	if err != nil {
@@ -213,9 +274,10 @@ func buildWorkItemDerivedSurfacesForProvider(
 		return githubWorkItemDerivedSurfaces{}, err
 	}
 	return githubWorkItemDerivedSurfaces{
-		EstimateCoverage: coverage,
-		TeamAttributions: attributions,
-		StateDurations:   durations,
+		EstimateCoverage:     coverage,
+		TeamAttributions:     attributions,
+		StateDurations:       durations,
+		MembershipRejections: rejections,
 	}, nil
 }
 
@@ -305,13 +367,25 @@ func buildGitHubWorkItemTeamAttributions(
 	rows githubWorkItemRows,
 	computedAt time.Time,
 	derived teamattribution.GithubWorkItemDerivationContext,
-) ([]githubWorkItemTeamAttributionRow, error) {
+) ([]githubWorkItemTeamAttributionRow, []teamattribution.GithubWorkItemDerivationRejectedMembership, error) {
 	result := make([]githubWorkItemTeamAttributionRow, 0, len(rows.WorkItems))
+	// rejections (CHAOS-4320 round 6) travels OUT of this function as its
+	// own return value, never merged into `result` -- round 4/5's marker-row
+	// mechanism put a Rejected=true row into this SAME slice specifically so
+	// it could ride the effects/outbox round trip, but that meant
+	// InspectGitHubWorkItemEffect had to separately know to exclude it (r5's
+	// P1: it didn't, and a batch containing a rejection replayed forever).
+	// Keeping rejections structurally OUT of the row slice removes that
+	// failure mode instead of requiring the inspector to keep matching the
+	// writer's exclusion logic by hand.
+	rejections := make([]teamattribution.GithubWorkItemDerivationRejectedMembership, 0)
 	for _, item := range rows.WorkItems {
 		if err := assertGitHubWorkItemDerivedTenancy(claim, item); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		_, _, candidates := derived.Resolve(githubWorkItemDerivationSubjectFromRow(item))
+		_, _, candidates, itemRejections := derived.ResolveWithMembershipRejections(
+			githubWorkItemDerivationSubjectFromRow(item),
+		)
 		for _, candidate := range candidates {
 			// Python emits candidate.team_id / team_name UNNORMALISED here --
 			// unlike every other derived surface, which routes them through
@@ -320,13 +394,14 @@ func buildGitHubWorkItemTeamAttributions(
 			// estimate coverage. D16: mirrored, pinned by the
 			// unassigned_candidate oracle case.
 			result = append(result, githubWorkItemTeamAttributionRow{
-				WorkItemID: item.WorkItemID,
-				Provider:   item.Provider,
-				Source:     candidate.Source,
-				IsPrimary:  candidate.IsPrimary,
-				Confidence: candidate.Confidence,
-				Evidence:   candidate.Evidence,
-				Priority:   candidate.Priority,
+				WorkItemID:      item.WorkItemID,
+				Provider:        item.Provider,
+				Source:          candidate.Source,
+				IsPrimary:       candidate.IsPrimary,
+				Confidence:      candidate.Confidence,
+				Evidence:        candidate.Evidence,
+				Priority:        candidate.Priority,
+				OwnershipReason: candidate.OwnershipReason,
 				ComputedAt: githubWorkItemDerivedStamp(
 					computedAt, githubTeamAttributionStampPrecision,
 				),
@@ -336,8 +411,9 @@ func buildGitHubWorkItemTeamAttributions(
 				OrgID:    item.OrgID,
 			})
 		}
+		rejections = append(rejections, itemRejections...)
 	}
-	return result, nil
+	return result, rejections, nil
 }
 
 type githubStateDurationKey struct {
@@ -554,6 +630,38 @@ func (surfaces githubWorkItemDerivedSurfaces) derivedRows() (map[string][]json.R
 		return nil, ErrInvalidConfiguration
 	}
 	return result, nil
+}
+
+// marshalGitHubWorkItemTeamAttributionRejections (CHAOS-4320 round 6)
+// converts accumulated repo-ownership-gate rejection events into the typed,
+// real-json-tagged githubWorkItemTeamAttributionRejectionRow shape and
+// marshals them with the SAME mechanism derivedRows() uses for real rows --
+// this is what EffectBatch.MembershipRejections is populated from. Deliberately
+// a STANDALONE function, not a githubWorkItemDerivedSurfaces method: the
+// route layer accumulates rejections ACROSS a multi-day loop (mirroring how
+// `derived`, the row map, is itself accumulated across days) before this is
+// ever called, so by the time marshaling happens there is no single
+// surfaces value left to hang the method off of.
+func marshalGitHubWorkItemTeamAttributionRejections(
+	rejections []teamattribution.GithubWorkItemDerivationRejectedMembership,
+) ([]json.RawMessage, error) {
+	typed := make([]githubWorkItemTeamAttributionRejectionRow, 0, len(rejections))
+	for _, rejection := range rejections {
+		var repoID *uuid.UUID
+		if rejection.RepoID != nil {
+			parsed, err := uuid.Parse(*rejection.RepoID)
+			if err != nil {
+				return nil, fmt.Errorf("%w: membership rejection repo_id", ErrEffectRecoveryUnsafe)
+			}
+			repoID = &parsed
+		}
+		typed = append(typed, githubWorkItemTeamAttributionRejectionRow{
+			WorkItemID: rejection.WorkItemID, Provider: rejection.Provider, RepoID: repoID,
+			Source: rejection.Source, TeamID: rejection.TeamID, TeamName: rejection.TeamName,
+			Reason: rejection.Reason,
+		})
+	}
+	return marshalGitHubWorkItemDerivedRows(typed)
 }
 
 func marshalGitHubWorkItemDerivedRows(rows any) ([]json.RawMessage, error) {

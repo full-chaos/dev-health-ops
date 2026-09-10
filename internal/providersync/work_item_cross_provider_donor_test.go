@@ -505,7 +505,7 @@ func TestDeriverReportsStoredEdgeObservationToTheRoute(t *testing.T) {
 		Source: source, engine: githubWorkItemStubEngine{},
 		observations: newWorkItemDerivationObservations(),
 	}
-	if _, err := deriver.Derive(
+	if _, _, err := deriver.Derive(
 		context.Background(), claim, crossProviderRows(claim), now,
 	); err != nil {
 		t.Fatal(err)
@@ -550,7 +550,7 @@ func TestDeriverReportsTeamAttributionTallyToTheRoute(t *testing.T) {
 		Source: source, engine: githubWorkItemStubEngine{},
 		observations: newWorkItemDerivationObservations(),
 	}
-	if _, err := deriver.Derive(
+	if _, _, err := deriver.Derive(
 		context.Background(), claim, crossProviderRows(claim), now,
 	); err != nil {
 		t.Fatal(err)

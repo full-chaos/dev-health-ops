@@ -28,11 +28,12 @@ type GitLabWorkItemFamilyClickHouseEffects struct {
 func NewGitLabWorkItemFamilyClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (GitLabWorkItemFamilyClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return GitLabWorkItemFamilyClickHouseEffects{}, ErrInvalidConfiguration
 	}
-	derived, err := NewGitLabWorkItemDerivedClickHouseEffects(conn, lease)
+	derived, err := NewGitLabWorkItemDerivedClickHouseEffects(conn, lease, metrics)
 	if err != nil {
 		return GitLabWorkItemFamilyClickHouseEffects{}, err
 	}

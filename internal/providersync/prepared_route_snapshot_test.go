@@ -19,6 +19,70 @@ import (
 	"github.com/google/uuid"
 )
 
+// TestPreparedRouteSnapshotRetainsMembershipRejections is CHAOS-4320's
+// red-first pin for codex round 6's first P1 (NOT CLEAN, executed repro):
+// EffectBatch.MembershipRejections is a durable field of its own, but this
+// prepared-route recovery envelope is a SEPARATE JSON-serialized projection
+// of EffectBatch (storedPreparedEffect) from the in-process value -- a
+// pending effect recovered through this envelope (fetch succeeded, commit
+// had not happened yet) rebuilds its EffectBatch via
+// BuildEffectBatch(stored.Destination, stored.Recovery, stored.Rows), which
+// never touched MembershipRejections at all, so recovery silently dropped
+// every rejection observation. This test attaches two rejection events to
+// the team_attributions destination's EffectBatch, round-trips the WHOLE
+// manifest through encodePreparedRouteManifest/decodePreparedRouteManifest
+// (the real production envelope, not a hand-rolled marshal), and asserts
+// both survive.
+func TestPreparedRouteSnapshotRetainsMembershipRejections(t *testing.T) {
+	t.Parallel()
+	claim := githubWorkItemOracleClaim()
+	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	batch := preparedGitHubWorkItemsFixture(t, claim)
+	teamID := "nonowner"
+	rejections := []githubWorkItemTeamAttributionRejectionRow{
+		{WorkItemID: "acme/api#1", Provider: "github", Source: "assignee_membership", TeamID: &teamID, Reason: "repo_not_owned"},
+		{WorkItemID: "acme/api#1", Provider: "github", Source: "author_membership", TeamID: &teamID, Reason: "repo_not_owned"},
+	}
+	marshaledRejections, err := marshalGitHubWorkItemDerivedRows(rejections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range batch.Effects {
+		if batch.Effects[index].Destination == githubTeamAttributionsDestination {
+			batch.Effects[index].MembershipRejections = marshaledRejections
+		}
+	}
+	payload, reference, err := encodePreparedRouteManifest(
+		claim, batch, ShadowComparison{Match: true, NativeRecords: 16, PythonRecords: 16}, normalizedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := NewEffectLedgerState(claim, batch.Effects, normalizedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.SchemaVersion = "v2"
+	state.PreparedSnapshot = &reference
+	manifest, err := decodePreparedRouteManifest(payload, claim, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recoveredRejections []json.RawMessage
+	for _, effect := range manifest.Batch.Effects {
+		if effect.Destination == githubTeamAttributionsDestination {
+			recoveredRejections = effect.MembershipRejections
+		}
+	}
+	if len(recoveredRejections) != 2 {
+		t.Fatalf(
+			"recovered MembershipRejections = %d entries, want 2 -- prepared-route recovery "+
+				"must not drop this field",
+			len(recoveredRejections),
+		)
+	}
+}
+
 func TestPreparedRouteSnapshotRoundTripBindsExactGitHubWorkItemsManifest(t *testing.T) {
 	t.Parallel()
 	claim := githubWorkItemOracleClaim()

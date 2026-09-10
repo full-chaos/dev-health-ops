@@ -22,7 +22,7 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 	defer cancel()
 	conn := githubDerivedIntegrationConn(t, ctx)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewGitLabWorkItemDerivedClickHouseEffects(conn, lease)
+	sink, err := NewGitLabWorkItemDerivedClickHouseEffects(conn, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

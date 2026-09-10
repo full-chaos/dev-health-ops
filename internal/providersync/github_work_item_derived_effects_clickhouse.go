@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // ClickHouse effect adapters for the three derived destinations this lane
@@ -449,6 +450,25 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	if len(rows) == 0 {
 		return nil
 	}
+	// CHAOS-4320 round 6, P1 fix (chris via team-lead, 2026-09-10): a
+	// repo-ownership-gate rejection is decoded from effect.MembershipRejections,
+	// a SEPARATE durable field from Rows -- never mixed into `rows` at all
+	// (round 4/5's marker-row mechanism did that; it broke
+	// InspectGitHubWorkItemEffect, which had no way to know which rows were
+	// markers, r5's P1). Deduped by the same (repo, work item, team, source)
+	// identity a real row's sorting key already uses -- two rejection events
+	// sharing that identity are the same ownership check, counted once
+	// (r5's second P1: this destination's granted-row counting already
+	// dedupes the equivalent duplicate; the rejection path getting a
+	// different count for the same shape of duplicate was the actual bug).
+	rejections, err := decodeGitHubWorkItemTeamAttributionRejections(effect.MembershipRejections)
+	if err != nil {
+		return err
+	}
+	rejections = githubWorkItemDerivedSortingKeyDedupe(
+		rejections, githubTeamAttributionRejectionSortingKey,
+		githubWorkItemDerivedZeroTime, githubWorkItemDerivedAlwaysFalse,
+	)
 	// Collisions are GENUINELY REACHABLE here, unlike the two map-derived
 	// destinations: the resolver emits one candidate per ownership fact, so two
 	// facts naming the same team differently produce two rows with an identical
@@ -476,6 +496,17 @@ is_primary, confidence, evidence, computed_at)`)
 	// same batch would then double-count the rows that DID make it through
 	// the first, failed attempt.
 	primaryRows := make([]githubWorkItemTeamAttributionRow, 0, len(rows))
+	// membershipRows (codex round 3, P1, fixed): EVERY assignee_membership/
+	// author_membership row that made it into the batch, primary or not --
+	// NOT just primaryRows. ownership_checked answers "how often did the
+	// gate's outcome matter at all," and most gated candidates never win
+	// primary (repo_ownership and every higher-precedence source in `order`
+	// outrank membership whenever they also resolve) -- restricting this
+	// counter to primaryRows the way the membership-layer counter below
+	// deliberately does (CHAOS-4244: only the winner counts for THAT
+	// series) would make ownership_checked silently blind to most real
+	// gate activity, defeating the reason it exists.
+	membershipRows := make([]githubWorkItemTeamAttributionRow, 0, len(rows))
 	for _, row := range rows {
 		if err := batch.Append(
 			identity.OrgID, githubWorkItemDerivedRepoID(row.RepoID), row.WorkItemID,
@@ -487,6 +518,9 @@ is_primary, confidence, evidence, computed_at)`)
 		}
 		if row.IsPrimary == 1 {
 			primaryRows = append(primaryRows, row)
+		}
+		if row.Source == "assignee_membership" || row.Source == "author_membership" {
+			membershipRows = append(membershipRows, row)
 		}
 	}
 	if err := sink.Lease.Assert(ctx); err != nil {
@@ -504,16 +538,101 @@ is_primary, confidence, evidence, computed_at)`)
 		// resolved it. HERE, at the actual metrics-capable write boundary --
 		// not inside resolveMembership/resolve(), which stay pure. row.Priority
 		// is carried (not persisted) exactly for this: see its doc comment on
-		// githubWorkItemTeamAttributionRow.
+		// githubWorkItemTeamAttributionRow. Deliberately primary-only (unlike
+		// ownership_checked below): this series measures the WINNING outcome
+		// (CHAOS-4244), not every candidate.
 		if row.Source == "assignee_membership" || row.Source == "author_membership" {
 			layer := "provider_fallback"
 			if row.Priority == 0 {
 				layer = "admin_override"
 			}
 			sink.Metrics.RecordTeamAttributionMembershipLayer(layer)
+		} else if row.Source == "unassigned" {
+			if reason, ok := strings.CutPrefix(row.Evidence, "no_candidate:"); ok &&
+				reason == teamattribution.MembershipOwnershipReasonUnknown {
+				sink.Metrics.RecordTeamAttributionOwnershipChecked(reason)
+			}
 		}
 	}
+	// CHAOS-4320 (R74; codex round 1 P1 fixed, round 3 P1 fixed): every
+	// assignee_membership/author_membership row that survived into the
+	// batch only exists because teamOwnsSubjectRepo let it through --
+	// either the resolved team genuinely owns the repo, or ownership data
+	// for the repo is entirely absent (R74: pass-through, still counted).
+	// row.OwnershipReason is carried (not persisted) exactly so this write
+	// boundary can tell the two apart -- "owned" vs "ownership_unknown" --
+	// rather than collapsing both to "owned" the way an earlier version of
+	// this code did.
+	for _, row := range membershipRows {
+		recordGitHubWorkItemTeamAttributionOwnershipChecked(sink.Metrics, row.OwnershipReason)
+	}
+	// CHAOS-4320 round 6 (chris via team-lead, 2026-09-10): rejections carry
+	// the gate's OTHER outcome -- a candidate that never became a row at
+	// all. Recorded here, after Send() succeeds, for the SAME double-count-
+	// on-retry reason primaryRows/membershipRows above are staged and
+	// recorded post-Send rather than inline: MembershipRejections is a
+	// durable, replay-able field of the SAME EffectBatch real rows travel
+	// through, so a retried delivery of this batch would otherwise
+	// double-count a rejection the first attempt already recorded.
+	for _, rejection := range rejections {
+		recordGitHubWorkItemTeamAttributionOwnershipChecked(sink.Metrics, rejection.Reason)
+	}
 	return nil
+}
+
+// decodeGitHubWorkItemTeamAttributionRejections unmarshals
+// EffectBatch.MembershipRejections the same way validateGitHubWorkItemDerivedEffect
+// decodes Rows -- a malformed element fails closed with ErrInvalidConfiguration
+// rather than silently dropping a rejection.
+func decodeGitHubWorkItemTeamAttributionRejections(
+	raw []json.RawMessage,
+) ([]githubWorkItemTeamAttributionRejectionRow, error) {
+	rejections := make([]githubWorkItemTeamAttributionRejectionRow, 0, len(raw))
+	for _, message := range raw {
+		var rejection githubWorkItemTeamAttributionRejectionRow
+		if err := json.Unmarshal(message, &rejection); err != nil {
+			return nil, ErrInvalidConfiguration
+		}
+		rejections = append(rejections, rejection)
+	}
+	return rejections, nil
+}
+
+// githubTeamAttributionRejectionSortingKey mirrors githubTeamAttributionSortingKey's
+// shape exactly (repo, work item, team, source) -- CHAOS-4320 round 5's P1:
+// two rejection events sharing this identity are the same ownership check
+// and must count once, exactly like the equivalent granted-row duplicate
+// already does.
+func githubTeamAttributionRejectionSortingKey(row githubWorkItemTeamAttributionRejectionRow) string {
+	return strings.Join([]string{
+		githubWorkItemDerivedRepoID(row.RepoID).String(), row.WorkItemID,
+		githubWorkItemDerivedNullableString(row.TeamID), row.Source,
+	}, "\x00")
+}
+
+// githubWorkItemDerivedZeroTime and githubWorkItemDerivedAlwaysFalse feed
+// githubWorkItemDerivedSortingKeyDedupe's version/preferred parameters for a
+// rejection row, which carries neither a version column nor an is_primary
+// concept (it is a fact -- "this exact resolution was rejected" -- not
+// versioned content). With version always equal, the dedupe's own tie-break
+// falls through to "last occurrence wins," which is deterministic and
+// sufficient: any occurrence of an identical rejection identity carries the
+// same reason.
+func githubWorkItemDerivedZeroTime[T any](T) time.Time { return time.Time{} }
+func githubWorkItemDerivedAlwaysFalse[T any](T) bool   { return false }
+
+// recordGitHubWorkItemTeamAttributionOwnershipChecked is the shared skip-
+// don't-guess guard (codex round 3, P1) for both membershipRows (a survived
+// candidate) and rejections (CHAOS-4320 round 4/6: a gate rejection) -- an
+// empty reason means this exact row cannot be attested (a pre-migration
+// replay of a durable EffectBatch payload that predates the field, which
+// json.Unmarshal cannot distinguish from "explicitly empty" on a plain
+// string), so it is skipped rather than guessed at.
+func recordGitHubWorkItemTeamAttributionOwnershipChecked(metrics *providerfoundation.Metrics, reason string) {
+	if reason == "" {
+		return
+	}
+	metrics.RecordTeamAttributionOwnershipChecked(reason)
 }
 
 // githubWorkItemTeamAttributionMetricSource maps a written row onto
@@ -576,6 +695,16 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) InspectGitHubWorkIte
 	if sink.Conn == nil {
 		return EffectConflict, ErrInvalidConfiguration
 	}
+	// CHAOS-4320 round 6 (chris via team-lead, 2026-09-10): this function is
+	// deliberately UNCHANGED by the ownership gate -- a repo-ownership-gate
+	// rejection never reaches Rows at all (it travels on the separate,
+	// durable EffectBatch.MembershipRejections field this function never
+	// reads), so there is no marker convention here to keep in sync with
+	// the writer. Round 4/5's marker-row mechanism required this function
+	// to separately know which rows to exclude and got it wrong once (r5's
+	// P1: a batch containing a rejection replayed forever); this design
+	// removes that failure mode structurally rather than fixing it again.
+	//
 	// The expectation must name the row the WRITE will actually leave behind,
 	// or the readback compares against a row storage discarded.
 	rows = githubWorkItemDerivedSortingKeyDedupe(

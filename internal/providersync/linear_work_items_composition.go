@@ -78,14 +78,14 @@ func (handler LinearWorkItemFamilyRouteHandler) Collect(
 		Dependencies: typed.Dependencies, ReopenEvents: typed.ReopenEvents,
 		Interactions: typed.Interactions, Sprints: typed.Sprints,
 	}
-	derived, err := handler.Derived.Derive(ctx, claim, rows, normalizedAt)
+	derived, membershipRejections, err := handler.Derived.Derive(ctx, claim, rows, normalizedAt)
 	if err != nil {
 		// No raw effects or watermark escape when the governed derived family
 		// is unavailable. Collection has no persistence side effect, so the
 		// caller has nothing it can partially commit.
 		return CompleteRouteBatch{}, err
 	}
-	derivedEffects, err := buildLinearWorkItemDerivedEffectsFromMap(derived)
+	derivedEffects, err := buildLinearWorkItemDerivedEffectsFromMap(derived, membershipRejections)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
@@ -115,11 +115,12 @@ type LinearWorkItemFamilyClickHouseEffects struct {
 func NewLinearWorkItemFamilyClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (LinearWorkItemFamilyClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return LinearWorkItemFamilyClickHouseEffects{}, ErrInvalidConfiguration
 	}
-	derived, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lease)
+	derived, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lease, metrics)
 	if err != nil {
 		return LinearWorkItemFamilyClickHouseEffects{}, err
 	}

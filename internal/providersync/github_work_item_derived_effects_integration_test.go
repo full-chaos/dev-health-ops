@@ -683,6 +683,68 @@ WHERE org_id = ? AND work_item_id = ?`, githubDerivedIntegrationOrg, "acme/api#3
 	}
 }
 
+// TestGitHubWorkItemTeamAttributionsRejectionReadbackStaysExact is
+// CHAOS-4320's red-first pin, updated in round 6 for the design that
+// replaced round 4/5's marker-row mechanism (chris via team-lead,
+// 2026-09-10): a repo-ownership-gate rejection now travels on
+// EffectBatch.MembershipRejections, a field separate from Rows that
+// InspectGitHubWorkItemEffect never reads at all -- this test proves that
+// a batch carrying a real row AND a non-empty MembershipRejections still
+// inspects EffectExact and that the rejection never reaches the actual
+// ClickHouse INSERT.
+func TestGitHubWorkItemTeamAttributionsRejectionReadbackStaysExact(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := githubDerivedIntegrationConn(t, ctx)
+	sink := GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: githubDerivedIntegrationLease()}
+
+	repoID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	ownerTeamID, ownerTeamName := "team-owner", "Owner Team"
+	rejectedTeamID := "team-outsider"
+	real := githubWorkItemTeamAttributionRow{
+		WorkItemID: "acme/api#9", Provider: "github", Source: "repo_ownership",
+		IsPrimary: 1, Confidence: "high", Evidence: "repo:acme/api",
+		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC),
+		RepoID:     &repoID, TeamID: &ownerTeamID, TeamName: &ownerTeamName,
+		OrgID: githubDerivedIntegrationOrg,
+	}
+	rejection := githubWorkItemTeamAttributionRejectionRow{
+		WorkItemID: "acme/api#9", Provider: "github", RepoID: &repoID,
+		Source: "assignee_membership", TeamID: &rejectedTeamID, Reason: "repo_not_owned",
+	}
+
+	rows := []githubWorkItemTeamAttributionRow{real}
+	effect := githubDerivedIntegrationEffect(t, githubTeamAttributionsDestination, rows)
+	marshaledRejections, err := marshalGitHubWorkItemDerivedRows(
+		[]githubWorkItemTeamAttributionRejectionRow{rejection},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect.MembershipRejections = marshaledRejections
+	identity := githubDerivedIntegrationIdentity(githubTeamAttributionsDestination, len(rows))
+
+	if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+		t.Fatalf(
+			"inspection = %v, err = %v, want EffectExact -- MembershipRejections must not "+
+				"affect the inspection of the rows that DID persist",
+			inspection, err,
+		)
+	}
+	var stored uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_team_attributions FINAL
+WHERE org_id = ? AND work_item_id = ? AND team_id = ?`,
+		githubDerivedIntegrationOrg, "acme/api#9", rejectedTeamID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 0 {
+		t.Fatalf("the rejection was persisted: stored count = %d, want 0", stored)
+	}
+}
+
 // Each readback fences the FULL sorting key, and until now every readback test
 // wrote a single row per natural key -- so dropping any one fence still
 // selected exactly that row, `found` stayed 1, and the verdict stayed Exact.

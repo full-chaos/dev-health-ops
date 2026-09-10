@@ -22,9 +22,11 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import tempfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -398,290 +400,370 @@ def test_the_guards_comment_count_matches_the_allowlist() -> None:
     )
 
 
-def _run_guard_with_fake_generator(script: str) -> subprocess.CompletedProcess[str]:
-    """Run the real guard, substituting a fake generator for gqlgen.
+# ---------------------------------------------------------------------------
+# Behavioural tests.
+#
+# NOTHING BELOW TOUCHES THE WORKING TREE. An earlier version ran the wrapper in
+# the repo and repaired it afterwards with `git checkout` plus a deletion loop
+# for untracked files. Review round r7 showed what that costs: a developer's
+# uncommitted edit and their untracked file were both destroyed by the cleanup,
+# which is a far worse bug than any this suite is looking for. Every scenario
+# now runs against a private copy of the tree, and one test proves that.
+# ---------------------------------------------------------------------------
 
-    Everything else is the real script: the tree copy, the file-set check, the
-    diff, the digest, the allowlist comparison and the exit status.
+GENERATED_AREA_REL = "cmd/query-api/internal/graph"
+
+
+@pytest.fixture(scope="module")
+def tree_copy(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One private copy of the repository, reused by the tests below.
+
+    Copied once because it is the expensive part; each test that mutates a
+    script restores that one file afterwards, so the copy stays pristine
+    between tests without paying for a fresh copy every time.
     """
-    env = dict(os.environ, GQLGEN_DRIFT_GENERATE_CMD=script)
-    return subprocess.run(
-        ["bash", str(GUARD)],
+    root = tmp_path_factory.mktemp("gqlgen-tree") / "repo"
+    root.mkdir()
+    result = subprocess.run(
+        "tar -C . --exclude=./.git --exclude=./.venv --exclude=./.uv-cache "
+        f"--exclude=./node_modules --exclude=./site -cf - . | tar -C {root} -xf -",
         cwd=REPO_ROOT,
+        shell=True,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert result.returncode == 0, f"could not copy the tree: {result.stderr}"
+    return root
+
+
+def _run_in(
+    tree: Path, script: str, **env_extra: str
+) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ, **env_extra)
+    return subprocess.run(
+        ["bash", str(tree / "ci" / script)],
+        cwd=tree,
         env=env,
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=900,
     )
 
 
-def test_the_guard_fails_when_every_hand_edit_is_reverted() -> None:
-    """The behavioural test the text assertions could not be.
-
-    Round r5 mutated the guard to exit early, to skip the digest comparison,
-    and to be a no-op, and all ten of the assertions here still passed --
-    because none of them ran the guard and looked at what it DID. A generator
-    that writes nothing leaves the regenerated copy identical to the tree, so
-    every documented hand-edit reads as REVERTED. A guard that does not fail
-    here is not guarding.
-    """
-    result = _run_guard_with_fake_generator("true")
-    assert result.returncode != 0, (
-        "the guard exited 0 when every documented hand-edit had vanished. It is "
-        "not comparing anything -- an early exit, a skipped comparison or a "
-        f"swallowed status.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-    assert "LOST drift" in result.stderr, (
-        "the guard failed, but not for the right reason: it should report LOST "
-        f"drift when hand-edits disappear.\nstderr:\n{result.stderr}"
-    )
-
-
-def test_the_guard_fails_on_generator_output_it_does_not_track() -> None:
-    """An untracked output is an unguarded file, not a harmless extra.
-
-    Round r5 pointed a resolver stanza at a new path; generation succeeded, the
-    guard diffed only its three listed files and reported everything documented,
-    and the extra file broke the build with a redeclared Resolver.
-    """
-    result = _run_guard_with_fake_generator(
-        "printf 'package graph\\n' > internal/graph/zz_untracked_output.go"
-    )
-    assert result.returncode != 0, (
-        "generation wrote a file the guard does not track and the guard passed. "
-        "Hand-edits in such a file would be unprotected, and the file itself can "
-        f"break the build.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    )
-    assert "zz_untracked_output.go" in result.stderr, (
-        f"the guard failed but never named the untracked output.\n{result.stderr}"
-    )
-
-
-def test_ci_neither_re_blesses_the_allowlist_nor_fakes_the_generator() -> None:
-    """Two ways to make the CI step pass while checking nothing."""
-    for _job, step in _drift_guard_steps():
-        run = step["run"]
-        assert "--update" not in run, (
-            "the CI step runs the guard with --update, which REWRITES the "
-            "allowlist to match whatever was generated. It then always passes, "
-            "and the hand-edit contract is silently re-blessed on every run."
-        )
-        assert "GQLGEN_GENERATE_CMD" not in run, (
-            "the CI step overrides the generator. That hook exists so this file "
-            "can test the guard's behaviour; in CI it means the guard is checking "
-            "output that gqlgen never produced."
-        )
-        # Step-level env is not the only place an override can live: a
-        # job-level (or workflow-level) env reaches the step just as well, and
-        # round r6 escaped the step-only assertion that way.
-        for scope, holder in (("step", step), ("job", _job)):
-            env_text = str(holder.get("env", ""))
-            for hook in ("GQLGEN_DRIFT_GENERATE_CMD", "GQLGEN_GENERATE_CMD"):
-                assert hook not in env_text, (
-                    f"{hook} is set in the guard's {scope}-level env, so the guard "
-                    "runs against a fake generator instead of gqlgen."
-                )
-
-
-GENERATED_AREA = REPO_ROOT / "cmd" / "query-api" / "internal" / "graph"
-
-
-def _area_digests() -> dict[str, str]:
-    """Content of every .go file in the generated area, by relative path."""
+def _digests(tree: Path) -> dict[str, str]:
     import hashlib
 
-    out: dict[str, str] = {}
-    for path in sorted(GENERATED_AREA.rglob("*.go")):
-        out[str(path.relative_to(GENERATED_AREA))] = hashlib.sha256(
-            path.read_bytes()
-        ).hexdigest()
-    return out
+    area = tree / GENERATED_AREA_REL
+    return {
+        str(p.relative_to(area)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(area.rglob("*.go"))
+    }
 
 
-def _run_wrapper(fake_generator: str) -> subprocess.CompletedProcess[str]:
-    """Run the wrapper against a fake generator, then put the area back.
+@contextmanager
+def _pristine_area(tree: Path) -> Iterator[None]:
+    """Put the copy's generated area back exactly as it was.
 
-    These tests deliberately make generation destructive, and the thing under
-    test is whether the wrapper repairs it. When the wrapper is BROKEN -- which
-    is exactly the case a mutation run creates -- the damage is real and lands
-    in the developer's working tree: one mutation run here left resolver.go
-    stripped of 21 lines. The assertions capture state before restoring, so a
-    failure still reports honestly, but the tree is not left broken either way.
+    The module-scoped copy is shared, and a mutant with a protection disabled
+    deliberately leaves damage -- that is what makes it a mutant. Without this,
+    the damage leaks into whichever test runs next and it fails for a reason
+    that has nothing to do with what it is testing. Cost me a debugging round.
     """
-    env = dict(os.environ, GQLGEN_GENERATE_CMD=fake_generator)
+    area = tree / GENERATED_AREA_REL
+    saved = {p.relative_to(area): p.read_bytes() for p in area.rglob("*.go")}
     try:
-        return subprocess.run(
-            ["bash", str(WRAPPER)],
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        yield
     finally:
-        subprocess.run(
-            ["git", "-C", str(REPO_ROOT), "checkout", "--", str(GENERATED_AREA)],
-            capture_output=True,
-            text=True,
-        )
-        for stray in GENERATED_AREA.rglob("*.go"):
-            tracked = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(REPO_ROOT),
-                    "ls-files",
-                    "--error-unmatch",
-                    str(stray),
-                ],
-                capture_output=True,
-                text=True,
-            )
-            if tracked.returncode != 0:
-                stray.unlink()
+        for path in list(area.rglob("*.go")):
+            if path.relative_to(area) not in saved:
+                path.unlink()
+        for rel_path, blob in saved.items():
+            target = area / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists() or target.read_bytes() != blob:
+                target.write_bytes(blob)
 
 
-def _run_wrapper_capturing(
-    fake_generator: str,
-) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
-    """Run the wrapper and read the area BEFORE the tree is put back."""
-    captured: dict[str, str] = {}
-    env = dict(os.environ, GQLGEN_GENERATE_CMD=fake_generator)
+@contextmanager
+def _mutated(tree: Path, rel: str, mutate: Callable[[str], str]) -> Iterator[None]:
+    """Apply a source mutation inside the COPY, then put that file back."""
+    target = tree / rel
+    original = target.read_text()
+    changed = mutate(original)
+    assert changed != original, f"mutation for {rel} did not change anything"
+    target.write_text(changed)
     try:
-        result = subprocess.run(
-            ["bash", str(WRAPPER)],
-            cwd=REPO_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        captured = _area_digests()
-        return result, captured
+        yield
     finally:
-        subprocess.run(
-            ["git", "-C", str(REPO_ROOT), "checkout", "--", str(GENERATED_AREA)],
-            capture_output=True,
-            text=True,
-        )
-        for stray in list(GENERATED_AREA.rglob("*.go")):
-            tracked = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(REPO_ROOT),
-                    "ls-files",
-                    "--error-unmatch",
-                    str(stray),
-                ],
-                capture_output=True,
-                text=True,
-            )
-            if tracked.returncode != 0:
-                stray.unlink()
+        target.write_text(original)
 
 
-def test_the_wrapper_restores_the_area_when_generation_fails() -> None:
-    """Executes the WRAPPER, which nothing did before.
+def test_the_suite_never_touches_the_developers_working_tree(tree_copy: Path) -> None:
+    """The bug r7 found in this file, asserted against.
 
-    Round r6 mutated it to `exit 0`, disabled its restore, removed its signal
-    traps and disabled its missing-output check; every mutation survived,
-    because the suite only ever read the file. This runs it against a
-    generator that behaves like the real one on failure -- deleting its
-    outputs first -- and requires the tree to come back byte-identical.
+    A dirty edit and an untracked file are planted in the COPY, the destructive
+    scenarios are run, and both must survive. The earlier cleanup -- `git
+    checkout` plus deleting every untracked .go file -- destroyed exactly these
+    two things, in the developer's real tree.
     """
-    before = _area_digests()
-    result, after = _run_wrapper_capturing(
-        "rm -f internal/graph/generated.go internal/graph/model/models_gen.go; exit 1"
+    dirty = tree_copy / GENERATED_AREA_REL / "resolver.go"
+    marker = "// developer's uncommitted edit\n"
+    dirty.write_text(dirty.read_text() + marker)
+    untracked = tree_copy / GENERATED_AREA_REL / "scratch_notes.go"
+    untracked.write_text("package graph\n// untracked scratch file\n")
+
+    _run_in(
+        tree_copy,
+        "gqlgen_generate.sh",
+        GQLGEN_GENERATE_CMD="rm -f internal/graph/generated.go; exit 1",
     )
-    assert after == before, (
-        "the wrapper did not restore the generated area after a failed run. "
-        f"changed: {sorted(k for k in before if before.get(k) != after.get(k))}; "
-        f"missing: {sorted(set(before) - set(after))}\n{result.stderr}"
+    _run_in(tree_copy, "check_gqlgen_drift.sh", GQLGEN_DRIFT_GENERATE_CMD="true")
+
+    assert dirty.read_text().endswith(marker), (
+        "a pre-existing uncommitted edit was destroyed. Whatever this suite finds, "
+        "it must not cost a developer their work."
     )
-    assert result.returncode != 0, (
-        "generation failed and the wrapper reported success. A wrapper that "
-        "cannot fail cannot protect anything."
+    assert untracked.exists(), "a pre-existing untracked file was deleted."
+    untracked.unlink()
+    dirty.write_text(dirty.read_text()[: -len(marker)])
+
+
+def test_the_wrapper_restores_the_area_when_generation_fails(tree_copy: Path) -> None:
+    before = _digests(tree_copy)
+    result = _run_in(
+        tree_copy,
+        "gqlgen_generate.sh",
+        GQLGEN_GENERATE_CMD=(
+            "rm -f internal/graph/generated.go internal/graph/model/models_gen.go; exit 1"
+        ),
+    )
+    assert _digests(tree_copy) == before, (
+        f"the wrapper did not restore the area after a failed run.\n{result.stderr}"
+    )
+    assert result.returncode != 0, "generation failed and the wrapper reported success."
+
+
+def test_the_wrapper_restores_a_hand_written_file_it_does_not_generate(
+    tree_copy: Path,
+) -> None:
+    """Overwriting an existing file leaves the file SET unchanged."""
+    before = _digests(tree_copy)
+    result = _run_in(
+        tree_copy,
+        "gqlgen_generate.sh",
+        GQLGEN_GENERATE_CMD="printf 'package graph\\n' > internal/graph/resolver.go; exit 1",
+    )
+    assert _digests(tree_copy).get("resolver.go") == before["resolver.go"], (
+        f"the hand-written resolver.go was left overwritten.\n{result.stderr}"
     )
 
 
-def test_the_wrapper_restores_a_hand_written_file_it_does_not_generate() -> None:
-    """The P1 a file-SET comparison could not see.
+def test_the_wrapper_removes_files_its_failed_run_created(tree_copy: Path) -> None:
+    before = _digests(tree_copy)
+    result = _run_in(
+        tree_copy,
+        "gqlgen_generate.sh",
+        GQLGEN_GENERATE_CMD=(
+            "mkdir -p internal/graph/nested && printf 'package nested\\n' "
+            "> internal/graph/nested/generated.go; exit 1"
+        ),
+    )
+    assert set(_digests(tree_copy)) == set(before), (
+        f"a failed run left untracked generator output behind.\n{result.stderr}"
+    )
 
-    Pointing exec.filename at internal/graph/resolver.go makes gqlgen
-    OVERWRITE a hand-written file. It still exists afterwards, so a set
-    comparison sees nothing, and the earlier wrapper restored its three listed
-    files, announced success and left resolver.go destroyed.
+
+def test_the_wrapper_refuses_a_config_that_writes_outside_the_area(
+    tree_copy: Path,
+) -> None:
+    """Refusal, not recovery: recovery cannot cover the whole repository."""
+    victim = tree_copy / "ZZ_victim.go"
+    victim.write_text("package main\n// hand-written, outside the generated area\n")
+    before = victim.read_text()
+    with _mutated(
+        tree_copy,
+        "cmd/query-api/gqlgen.yml",
+        lambda t: t.replace(
+            "  filename: internal/graph/generated.go",
+            "  filename: ../../ZZ_victim.go",
+            1,
+        ),
+    ):
+        result = _run_in(tree_copy, "gqlgen_generate.sh")
+    assert result.returncode == 2, (
+        "the wrapper did not REFUSE a config pointing outside the protected area; "
+        f"it returned {result.returncode}.\n{result.stderr}"
+    )
+    assert victim.read_text() == before, (
+        "the wrapper ran anyway and destroyed a hand-written file it cannot restore."
+    )
+    assert "REFUSING" in result.stderr and "ZZ_victim.go" in result.stderr, (
+        f"the refusal did not name the offending path.\n{result.stderr}"
+    )
+    victim.unlink()
+
+
+def test_the_guard_passes_on_the_real_tree(tree_copy: Path) -> None:
+    """The positive control, running the REAL script with the REAL generator.
+
+    r7 found the previous positive control replayed only the GraphQL directory,
+    so it never saw the go tool tidying go.sum -- which made the real script
+    fail on a pristine tree while all seventeen tests passed.
     """
-    before = _area_digests()
-    assert "resolver.go" in before, "resolver.go is the file under test"
-    result = _run_wrapper(
-        "printf 'package graph\\n' > internal/graph/resolver.go; exit 1"
-    )
-    after = _area_digests()
-    assert after.get("resolver.go") == before["resolver.go"], (
-        "generation overwrote the hand-written resolver.go and the wrapper left it "
-        f"that way, so `type Resolver` is gone and the build is broken.\n{result.stderr}"
-    )
-
-
-def test_the_wrapper_removes_files_its_failed_run_created() -> None:
-    before = _area_digests()
-    result, after = _run_wrapper_capturing(
-        "mkdir -p internal/graph/nested && printf 'package nested\\n' "
-        "> internal/graph/nested/generated.go; exit 1"
-    )
-    assert set(after) == set(before), (
-        "a failed run left files behind that it created. They are untracked "
-        f"generator output and can break the build.\n{result.stderr}"
-    )
-
-
-def test_the_guard_passes_on_a_faithful_regeneration() -> None:
-    """The positive control. Without it, 'always fail' is a passing guard.
-
-    Every other behavioural test here asserts the guard FAILS. Round r6 mutated
-    it to fail unconditionally with the expected diagnostics and that survived
-    the whole suite. This replays a real regeneration and requires exit 0,
-    which no always-fail mutant can satisfy.
-
-    Generation happens in a COPY of the tree, never in the working tree: the
-    generator deletes its outputs before writing them, and a test that had to
-    `git checkout` afterwards would discard a developer's uncommitted work in
-    that directory on any failure.
-    """
-    with tempfile.TemporaryDirectory() as tmp:
-        copy = Path(tmp) / "tree"
-        copy.mkdir()
-        copied = subprocess.run(
-            "tar -C . --exclude=./.git --exclude=./.venv --exclude=./.uv-cache "
-            f"--exclude=./node_modules -cf - . | tar -C {copy} -xf -",
-            cwd=REPO_ROOT,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        assert copied.returncode == 0, f"could not copy the tree: {copied.stderr}"
-        generated = subprocess.run(
-            "go run github.com/99designs/gqlgen generate --config gqlgen.yml",
-            cwd=copy / "cmd" / "query-api",
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        assert generated.returncode == 0, (
-            f"could not produce a real regeneration to replay: {generated.stderr}"
-        )
-        captured = copy / "cmd" / "query-api" / "internal" / "graph"
-        result = _run_guard_with_fake_generator(f'cp -a "{captured}/." internal/graph/')
-
+    result = _run_in(tree_copy, "check_gqlgen_drift.sh")
     assert result.returncode == 0, (
-        "the guard FAILED on output identical to a real regeneration. It is "
-        "failing unconditionally, which passes every failure-only test here "
-        f"while protecting nothing.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        "the guard FAILED on an unmodified tree, so CI cannot pass.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    assert "all documented" in result.stdout, (
-        f"the guard exited 0 without reporting a comparison.\n{result.stdout}"
+    assert "all documented" in result.stdout, result.stdout
+
+
+# Each entry disables ONE protection in a copy of the scripts and names the
+# scenario that must then fail. Round r7's headline P3 was that all seventeen
+# tests passed with each protection individually disabled -- the mutations were
+# only ever run by hand, so the SUITE did not kill them. It does now.
+def _resolver_intact(tree: Path, before: dict[str, str], _r: object) -> bool:
+    return _digests(tree).get("resolver.go") == before["resolver.go"]
+
+
+def _no_new_files(tree: Path, before: dict[str, str], _r: object) -> bool:
+    return set(_digests(tree)) == set(before)
+
+
+def _failed_naming(fragment: str) -> Callable[..., bool]:
+    """Failed, AND for this specific reason.
+
+    Exit status alone is not enough for the guard's checks: the digest and the
+    allowlist catch several of the same scenarios by a different route, so a
+    mutant with one check disabled still exits non-zero. That is defence in
+    depth working, and it means "did it fail?" cannot tell whether the check
+    under test did anything. The diagnostic can.
+    """
+
+    def observable(_t: Path, _b: dict[str, str], result: object) -> bool:
+        return getattr(result, "returncode", 0) != 0 and fragment in getattr(
+            result, "stderr", ""
+        )
+
+    return observable
+
+
+# Each protection, the scenario that exercises it, and THE OBSERVABLE THAT
+# PROVES IT WORKED. The observable is not always the exit status: a wrapper
+# that fails to restore still exits non-zero, because generation itself failed
+# -- the thing that differs is the file content. Conflating the two is how a
+# mutation test ends up proving nothing, which is what r7 found here.
+_MUTANTS: list[
+    tuple[str, str, Callable[[str], str], str, dict[str, str], Callable[..., bool], str]
+] = [
+    (
+        "area restoration disabled",
+        "ci/gqlgen_generate.sh",
+        lambda t: t.replace("restore_area() {", "restore_area() { return 0;", 1),
+        "gqlgen_generate.sh",
+        {
+            "GQLGEN_GENERATE_CMD": (
+                "printf 'package graph\\n' > internal/graph/resolver.go; exit 1"
+            )
+        },
+        _resolver_intact,
+        "the hand-written resolver.go comes back byte-identical",
+    ),
+    (
+        "created-file purge disabled",
+        "ci/gqlgen_generate.sh",
+        lambda t: t.replace(
+            "purge_unexpected() {", "purge_unexpected() { return 0;", 1
+        ),
+        "gqlgen_generate.sh",
+        {
+            "GQLGEN_GENERATE_CMD": (
+                "mkdir -p internal/graph/nested && printf 'package nested\\n' "
+                "> internal/graph/nested/generated.go; exit 1"
+            )
+        },
+        _no_new_files,
+        "output the failed run created is removed",
+    ),
+    (
+        "hand-written-file rejection disabled",
+        "ci/check_gqlgen_drift.sh",
+        # Disables the DETECTION, not the summary `if` after it -- the
+        # diagnostic is printed inside the loop, so neutering the trailing
+        # condition left the message intact and the mutant looked alive.
+        lambda t: t.replace(
+            'case " ${GENERATED_FILES[*]} " in *" ${full} "*) continue ;; esac',
+            "continue",
+            1,
+        ),
+        "check_gqlgen_drift.sh",
+        {
+            "GQLGEN_DRIFT_GENERATE_CMD": (
+                "printf 'package graph\\n' > internal/graph/resolver.go"
+            )
+        },
+        _failed_naming("MODIFIED files it does not generate"),
+        "the guard fails NAMING an overwritten hand-written file",
+    ),
+    (
+        "outside-root rejection disabled",
+        "ci/check_gqlgen_drift.sh",
+        lambda t: t.replace('if [ -s "${WORK}/.outside" ]; then', "if false; then", 1),
+        "check_gqlgen_drift.sh",
+        {"GQLGEN_DRIFT_GENERATE_CMD": "printf 'x\\n' > ../../ZZ_escaped.txt"},
+        _failed_naming("wrote OUTSIDE the generated root"),
+        "the guard fails NAMING a write outside the generated root",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "rel", "mutate", "script", "env", "observable", "claim"),
+    _MUTANTS,
+    ids=[m[0].replace(" ", "-") for m in _MUTANTS],
+)
+def test_every_protection_is_load_bearing(
+    tree_copy: Path,
+    label: str,
+    rel: str,
+    mutate: Callable[[str], str],
+    script: str,
+    env: dict[str, str],
+    observable: Callable[..., bool],
+    claim: str,
+) -> None:
+    """Prove each protection is what produces its guarantee.
+
+    Round r7's headline P3: all seventeen tests still passed with each
+    protection individually disabled, because the mutations were only ever run
+    by hand. Two executed claims per protection:
+
+    intact   -> the guarantee HOLDS
+    disabled -> the guarantee BREAKS
+
+    The second half is the one that makes the first mean anything. If the
+    guarantee still holds with the protection removed, something else is
+    providing it and this protection is untested.
+
+    Everything runs in a private copy of the tree.
+    """
+    before = _digests(tree_copy)
+    with _pristine_area(tree_copy):
+        intact = _run_in(tree_copy, script, **env)
+        intact_held = observable(tree_copy, before, intact)
+    assert intact_held, (
+        f"{label}: with every protection intact, {claim} -- did not hold.\n"
+        f"stdout:\n{intact.stdout}\nstderr:\n{intact.stderr}"
+    )
+
+    before = _digests(tree_copy)
+    with _pristine_area(tree_copy), _mutated(tree_copy, rel, mutate):
+        mutant = _run_in(tree_copy, script, **env)
+        broke = not observable(tree_copy, before, mutant)
+
+    assert broke, (
+        f"{label}: {claim} -- STILL held with this protection disabled, so the "
+        "protection is not what provides it and nothing here tests it.\n"
+        f"stdout:\n{mutant.stdout}\nstderr:\n{mutant.stderr}"
     )

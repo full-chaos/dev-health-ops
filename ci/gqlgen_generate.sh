@@ -70,6 +70,7 @@ on_signal() {
   echo "gqlgen_generate: ${sig} received mid-run; restoring before exit." >&2
   restore || true
   restore_area || true
+  restore_modules || true
   purge_unexpected || true
   cleanup
   trap - EXIT
@@ -83,6 +84,77 @@ trap 'on_signal INT' INT
 trap 'on_signal TERM' TERM
 trap 'on_signal HUP' HUP
 trap cleanup EXIT
+
+# REFUSE, DO NOT RECOVER, when the config points outside the protected area.
+#
+# Round r7 pointed exec.filename at a pre-existing file at the repo root. The
+# wrapper restored its area, announced "generated files restored to their
+# pre-run content", and left that file overwritten -- a true statement about
+# the area and a false one about the tree. Recovery cannot be stretched to
+# cover the whole repository, so the answer is to not start: every output path
+# the config names must resolve inside the generated root, checked BEFORE
+# generation, or this exits without running the generator at all.
+#
+# Parsed with python3 + PyYAML rather than grep, because a key's value can be
+# quoted, folded, or nested and a regex over YAML is its own defect class.
+# The reader is written to a file with the printf BUILTIN, not fed in on a
+# heredoc: bash writes a heredoc into a pipe whose read end it also holds, so
+# a payload over the host's effective pipe budget hangs the script forever
+# (CHAOS-3362). This repo has a test for exactly that, and it caught this.
+OUTPUTS_PY="${SNAPSHOT}/read_outputs.py"
+{
+  printf '%s\n' 'import sys'
+  printf '%s\n' 'try:'
+  printf '%s\n' '    import yaml'
+  printf '%s\n' 'except ImportError:'
+  printf '%s\n' '    print("ERROR: PyYAML unavailable; cannot verify output paths")'
+  printf '%s\n' '    sys.exit(3)'
+  printf '%s\n' 'with open("gqlgen.yml", encoding="utf-8") as handle:'
+  printf '%s\n' '    cfg = yaml.safe_load(handle) or {}'
+  printf '%s\n' 'paths = []'
+  printf '%s\n' 'for section in ("exec", "model", "federation"):'
+  printf '%s\n' '    value = cfg.get(section) or {}'
+  printf '%s\n' '    if isinstance(value, dict) and value.get("filename"):'
+  printf '%s\n' '        paths.append(value["filename"])'
+  printf '%s\n' 'resolver = cfg.get("resolver") or {}'
+  printf '%s\n' 'if isinstance(resolver, dict):'
+  printf '%s\n' '    if resolver.get("filename"):'
+  printf '%s\n' '        paths.append(resolver["filename"])'
+  printf '%s\n' '    if resolver.get("dir"):'
+  printf '%s\n' '        paths.append(resolver["dir"].rstrip("/") + "/")'
+  printf '%s\n' 'for path in paths:'
+  printf '%s\n' '    print(path)'
+} >"${OUTPUTS_PY}"
+config_outputs="$(cd "${QUERY_API}" && python3 "${OUTPUTS_PY}")" || {
+  echo "gqlgen_generate: could not read the generator's output paths from gqlgen.yml." >&2
+  echo "${config_outputs}" >&2
+  exit 2
+}
+if printf '%s\n' "${config_outputs}" | grep -q '^ERROR:'; then
+  printf '%s\n' "${config_outputs}" >&2
+  exit 2
+fi
+outside=0
+while IFS= read -r out; do
+  [ -n "${out}" ] || continue
+  abs="$(cd "${QUERY_API}" && readlink -m "${out}")"
+  case "${abs}/" in
+    "${ROOT}/cmd/query-api/internal/graph/"*) ;;
+    *)
+      echo "gqlgen_generate: REFUSING -- gqlgen.yml points an output outside the protected area:" >&2
+      echo "    ${out}  ->  ${abs#"${ROOT}/"}" >&2
+      outside=1
+      ;;
+  esac
+done <<EOF
+${config_outputs}
+EOF
+if [ "${outside}" -ne 0 ]; then
+  echo "  Only cmd/query-api/internal/graph is snapshotted and restored. Generation" >&2
+  echo "  into any other path can destroy a hand-written file this script cannot" >&2
+  echo "  put back, so it does not run at all rather than half-recover afterwards." >&2
+  exit 2
+fi
 
 missing=0
 for rel in "${GENERATED_FILES[@]}"; do
@@ -125,6 +197,29 @@ list_generated_area() {
   [ -d "${GENERATED_ROOT}" ] || return 0
   ( cd "${GENERATED_ROOT}" && find . -type f -name '*.go' -print ) | sort
 }
+# The module files are snapshotted with the area: running the generator runs
+# the go tool, which tidies them. r7 measured 92 checksum lines removed on a
+# pristine tree. A failed run must not leave that tidy behind either.
+MODULE_FILES=(go.mod go.sum)
+for m in "${MODULE_FILES[@]}"; do
+  [ -f "${ROOT}/${m}" ] && cp -p "${ROOT}/${m}" "${SNAPSHOT}/${m}"
+done
+restore_modules() {
+  local m rc=0
+  for m in "${MODULE_FILES[@]}"; do
+    [ -f "${SNAPSHOT}/${m}" ] || continue
+    if ! cmp -s "${SNAPSHOT}/${m}" "${ROOT}/${m}"; then
+      if cp -p "${SNAPSHOT}/${m}" "${ROOT}/${m}"; then
+        echo "gqlgen_generate: restored ${m} (the go tool had tidied it)." >&2
+      else
+        echo "gqlgen_generate: RESTORE FAILED for ${m} -- recover with: git checkout -- ${m}" >&2
+        rc=1
+      fi
+    fi
+  done
+  return "${rc}"
+}
+
 list_generated_area >"${SNAPSHOT}/.files-before"
 mkdir -p "${SNAPSHOT}/area"
 while IFS= read -r rel; do
@@ -190,6 +285,7 @@ if [ "${rc}" -ne 0 ]; then
   echo "  error above is its own known behaviour, not a lost log." >&2
   restore || exit 1
   restore_area || exit 1
+  restore_modules || exit 1
   purge_unexpected || exit 1
   echo "gqlgen_generate: generated files restored to their pre-run content." >&2
   exit "${rc}"

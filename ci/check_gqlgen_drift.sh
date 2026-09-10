@@ -42,7 +42,9 @@ UPDATE=0
 [ "${1:-}" = "--update" ] && UPDATE=1
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/gqlgen-drift-XXXXXX")"
-# shellcheck disable=SC2317  # invoked by the EXIT trap below
+# shellcheck disable=SC2317,SC2329  # invoked by the EXIT trap below
+# SC2329 is 0.11.0's rename of the never-invoked check; the pin is 0.11.0,
+# so silencing only SC2317 left this failing under the version CI runs.
 cleanup() { chmod -R u+w "${WORK}" 2>/dev/null || true; rm -rf "${WORK}"; }
 trap cleanup EXIT
 
@@ -116,10 +118,18 @@ fi
 # `diff` is used directly rather than `git diff`: the copy is not a
 # repository, and a git-based comparison silently treats an untracked file as
 # clean, which is a trap this repo has hit.
+# go.mod/go.sum are EXEMPT from the outside-root check and diffed instead.
+# Running the generator runs the go tool, which tidies the module files as a
+# matter of course -- review round r7 measured gqlgen removing 92 checksum
+# lines on a pristine tree, which made this check fail the build before any
+# drift was compared. That is a real generator side effect, so it is drift to
+# be reported, not an out-of-scope write to be refused.
 find "${WORK}" -type f -newer "${WORK}/.gen-marker" \
   -not -path "${WORK}/cmd/query-api/internal/graph/*" \
   -not -name '.gen-marker' -not -name '.gen.log' -not -name '.outside' \
-  -not -path "${WORK}/.git/*" -print | sed "s|^${WORK}/||" | sort >"${WORK}/.outside"
+  -not -path "${WORK}/.git/*" \
+  -not -path "${WORK}/go.mod" -not -path "${WORK}/go.sum" \
+  -print | sed "s|^${WORK}/||" | sort >"${WORK}/.outside"
 if [ -s "${WORK}/.outside" ]; then
   echo "check_gqlgen_drift: generation wrote OUTSIDE the generated root:" >&2
   sed 's|^|    |' "${WORK}/.outside" >&2
@@ -154,6 +164,19 @@ if ! diff -q "${WORK}/.set-root" "${WORK}/.set-gen" >/dev/null; then
   echo "  A file the guard does not diff is a file whose contents are unprotected." >&2
   exit 1
 fi
+
+# The module files are compared like any other tracked output: a tidy that
+# changes them is reported, so it is visible and deliberate rather than
+# silently swallowed by the exemption above.
+for modfile in go.mod go.sum; do
+  if ! cmp -s "${ROOT}/${modfile}" "${WORK}/${modfile}"; then
+    echo "check_gqlgen_drift: running the generator CHANGED ${modfile}:" >&2
+    diff -u "${ROOT}/${modfile}" "${WORK}/${modfile}" | sed 's|^|    |' | head -20 >&2
+    echo "  The go tool tidied the module files while generating. Commit the" >&2
+    echo "  tidied ${modfile}, or pin the dependency that keeps moving." >&2
+    exit 1
+  fi
+done
 
 untracked_changed=0
 while IFS= read -r rel; do

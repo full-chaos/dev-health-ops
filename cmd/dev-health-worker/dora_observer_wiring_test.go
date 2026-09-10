@@ -112,3 +112,30 @@ func TestTheRealCollectorSatisfiesTheOpenDayZeroRowObserver(t *testing.T) {
 		t.Fatalf("the wired observer must accept a valid observation: %v", err)
 	}
 }
+
+// TestTheRealCollectorSatisfiesTheScopeRefusalObserver guards the CHAOS-5395
+// type assertion in sync_dispatch.go, the SAME shape as the OpenDayZeroRow
+// assertion just above and for the same reason: a failed assertion is
+// SILENT, remainingStore.scopeRefusalObserver stays nil, and every scope
+// refusal -- including the exact "dora scope names an unregistered metric"
+// case this ticket exists for -- goes uncounted with nothing to say why.
+func TestTheRealCollectorSatisfiesTheScopeRefusalObserver(t *testing.T) {
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatalf("new collector: %v", err)
+	}
+	// Through the STATIC type sync_dispatch.go holds, not the concrete one.
+	var observer jobruntime.Observer = collector
+
+	candidate, ok := observer.(remaining.ScopeRefusalObserver)
+	if !ok {
+		t.Fatal(
+			"the worker's observer does NOT satisfy remaining.ScopeRefusalObserver, " +
+				"so sync_dispatch.go passes nil and the scope-refused counter " +
+				"stays at zero with nothing to indicate why",
+		)
+	}
+	if err := candidate.ObserveRemainingMetricsScopeRefused("dora", "unknown_dora_metric"); err != nil {
+		t.Fatalf("the wired observer must accept a valid observation: %v", err)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // githubProjectV2NoopSnapshotDiffReader is the ProjectMembershipSnapshotDiff
@@ -95,10 +96,10 @@ func (deriver *githubWorkItemsRouteDeriver) Derive(
 	_ Claim,
 	rows githubWorkItemRows,
 	_ time.Time,
-) (map[string][]json.RawMessage, error) {
+) (map[string][]json.RawMessage, []teamattribution.GithubWorkItemDerivationRejectedMembership, error) {
 	deriver.calls++
 	deriver.got = rows
-	return deriver.rows, deriver.err
+	return deriver.rows, nil, deriver.err
 }
 
 func githubWorkItemsRouteDerivedRows(t *testing.T) map[string][]json.RawMessage {
@@ -951,12 +952,12 @@ func TestGitHubWorkItemsRouteRejectsIncompleteDerivedDestinationSet(t *testing.T
 		"extra":   extra,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := buildGitHubWorkItemsRouteEffects(emptyGitHubWorkItemRows(), rows); !errors.Is(err, ErrGitHubWorkItemsDerivationsUnavailable) {
+			if _, err := buildGitHubWorkItemsRouteEffects(emptyGitHubWorkItemRows(), rows, nil); !errors.Is(err, ErrGitHubWorkItemsDerivationsUnavailable) {
 				t.Fatalf("error=%v", err)
 			}
 		})
 	}
-	if effects, err := buildGitHubWorkItemsRouteEffects(emptyGitHubWorkItemRows(), complete); err != nil || len(effects) != len(githubWorkItemRouteDestinations()) {
+	if effects, err := buildGitHubWorkItemsRouteEffects(emptyGitHubWorkItemRows(), complete, nil); err != nil || len(effects) != len(githubWorkItemRouteDestinations()) {
 		t.Fatalf("complete effects=%d error=%v", len(effects), err)
 	}
 }

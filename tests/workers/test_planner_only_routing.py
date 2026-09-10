@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -27,9 +26,7 @@ from dev_health_ops.models import (
     Integration,
     IntegrationDataset,
     IntegrationSource,
-    SyncDispatchOutbox,
     SyncRunMode,
-    SyncRunUnit,
 )
 from dev_health_ops.models.settings import SyncConfiguration
 from dev_health_ops.models.users import Organization
@@ -199,111 +196,13 @@ def test_migrated_config_returns_plan_request(db_session):
     assert result.mode == SyncRunMode.INCREMENTAL.value
 
 
-# ---------------------------------------------------------------------------
-# Test 5c: scheduler skips unmigrated config
-# ---------------------------------------------------------------------------
-
-
-def test_scheduler_skips_unmigrated_config(db_session, monkeypatch):
-    """_maybe_dispatch_config must return False for an unmigrated config.
-
-    The scheduler calls planner_request_for_config_if_routed; when it returns
-    None the scheduler logs a warning and returns False (skip).
-    """
-    from dev_health_ops.workers.sync_scheduler import _maybe_dispatch_config
-
-    org_id = str(uuid.uuid4())
-    integration = _seed_integration(db_session, org_id)
-    config = _seed_config(
-        db_session,
-        org_id,
-        integration,
-        migrated=False,
-        schedule_cron="0 * * * *",
-    )
-
-    # Patch org existence check so the scheduler doesn't bail early.
-    monkeypatch.setattr(
-        "dev_health_ops.workers.sync_scheduler.organization_exists_sync",
-        lambda session, org_id_arg: True,
-    )
-
-    now = datetime.now(timezone.utc)
-    result = _maybe_dispatch_config(db_session, config, now)
-
-    assert result is False, (
-        "_maybe_dispatch_config must return False (skip) for an unmigrated config"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 5d: migrated config with schedule → scheduler plans durable outbox handoff
-# ---------------------------------------------------------------------------
-
-
-def test_scheduler_routes_migrated_config_through_planner(db_session, monkeypatch):
-    """A migrated, due config must be planned with a durable outbox wakeup."""
-    from dev_health_ops.workers.sync_scheduler import _maybe_dispatch_config
-
-    org_id = _seed_org(db_session)
-    integration = _seed_integration(db_session, org_id)
-    _seed_source(db_session, org_id, integration)
-    _seed_dataset(db_session, org_id, integration)
-    config = _seed_config(
-        db_session,
-        org_id,
-        integration,
-        migrated=True,
-        schedule_cron="0 * * * *",
-    )
-    # Force last_sync_at far in the past so the config is due.
-    # Use a naive datetime: croniter.get_next(datetime) returns naive, so
-    # _maybe_dispatch_config's comparison requires both sides to be naive.
-    config.last_sync_at = datetime(2000, 1, 1)  # naive UTC
-    db_session.flush()
-
-    plan_calls: list[object] = []
-    from dev_health_ops.sync import execution_trigger as execution_trigger_mod
-    from dev_health_ops.sync.dispatch_outbox import (
-        OUTBOX_KIND_DISCOVERY,
-        OUTBOX_STATUS_PENDING,
-    )
-
-    original_plan = execution_trigger_mod.plan_sync_run
-
-    def fake_plan(session, request):
-        plan_calls.append(request)
-        return original_plan(session, request)
-
-    monkeypatch.setattr(execution_trigger_mod, "plan_sync_run", fake_plan)
-    monkeypatch.setattr(
-        "dev_health_ops.workers.sync_scheduler.organization_exists_sync",
-        lambda session, org_id_arg: True,
-    )
-    _patch_db_session(monkeypatch, db_session)
-
-    # Production passes an aware UTC now (dispatch_scheduled_syncs uses
-    # datetime.now(timezone.utc)); the scheduler now compares against aware UTC.
-    now = datetime.now(timezone.utc)
-    result = _maybe_dispatch_config(db_session, config, now)
-
-    assert result is True, (
-        "_maybe_dispatch_config must return True for a due, migrated config"
-    )
-    assert len(plan_calls) == 1, "plan_sync_run must be called exactly once"
-    outbox = db_session.query(SyncDispatchOutbox).one()
-    assert outbox.kind == OUTBOX_KIND_DISCOVERY
-    assert outbox.status == OUTBOX_STATUS_PENDING
-    dataset_keys = {
-        unit.dataset_key
-        for unit in db_session.query(SyncRunUnit).order_by(SyncRunUnit.dataset_key)
-    }
-    # CHAOS-3400: `security` is opt-in like every other dataset -- only
-    # `commits` was seeded/enabled, so only `commits` plans. Prior to that
-    # fix, a scheduled code-host sync silently auto-enabled `security` even
-    # though it was never selected; this assertion used to read
-    # {"commits", "security"}, encoding that bug as expected behaviour.
-    assert dataset_keys == {"commits"}
+# CHAOS-3093: Tests 5c/5d (test_scheduler_skips_unmigrated_config,
+# test_scheduler_routes_migrated_config_through_planner) tested
+# workers.sync_scheduler._maybe_dispatch_config, a thin wrapper around
+# planner_request_for_config_if_routed (tested directly above/below) plus a
+# durable-outbox plan call -- deleted with that module (dispatch_scheduled_syncs
+# had zero real callers since CHAOS-4054 removed the dispatch plane; the
+# scheduling cadence itself is internal/scheduler/sync, already Go-native).
 
 
 # ---------------------------------------------------------------------------

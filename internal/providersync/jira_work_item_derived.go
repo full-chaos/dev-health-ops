@@ -54,6 +54,9 @@ type JiraWorkItemDerivedRows struct {
 	WorkItemTeamAttributions       []JiraWorkItemTeamAttributionRow
 	WorkItemUserMetricsDaily       []JiraWorkItemUserMetricsDailyRow
 	Watermark                      *time.Time
+	// MembershipRejections (CHAOS-4320 round 6) -- see the identical field's
+	// doc comment on GitLabWorkItemDerivedRows.
+	MembershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 func (rows JiraWorkItemDerivedRows) producedDestinations() []string {
@@ -281,6 +284,7 @@ func (deriver JiraWorkItemDeriver) Derive(
 		result.EstimateCoverageMetricsDaily = append(result.EstimateCoverageMetricsDaily, surfaces.EstimateCoverage...)
 		result.WorkItemTeamAttributions = append(result.WorkItemTeamAttributions, surfaces.TeamAttributions...)
 		result.WorkItemStateDurationsDaily = append(result.WorkItemStateDurationsDaily, surfaces.StateDurations...)
+		result.MembershipRejections = append(result.MembershipRejections, surfaces.MembershipRejections...)
 
 		engine := GitHubWorkItemEngineDeriver{
 			statusMapping: deriver.statusMapping, investmentClassifier: deriver.investmentClassifier,
@@ -313,6 +317,7 @@ type JiraWorkItemDerivedEffectRows struct {
 	WorkItemStateDurationsDaily    []JiraWorkItemStateDurationDailyRow
 	WorkItemTeamAttributions       []JiraWorkItemTeamAttributionRow
 	WorkItemUserMetricsDaily       []JiraWorkItemUserMetricsDailyRow
+	MembershipRejections           []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 func (rows JiraWorkItemDerivedRows) EffectRows() JiraWorkItemDerivedEffectRows {
@@ -326,6 +331,7 @@ func (rows JiraWorkItemDerivedRows) EffectRows() JiraWorkItemDerivedEffectRows {
 		WorkItemStateDurationsDaily:    rows.WorkItemStateDurationsDaily,
 		WorkItemTeamAttributions:       rows.WorkItemTeamAttributions,
 		WorkItemUserMetricsDaily:       rows.WorkItemUserMetricsDaily,
+		MembershipRejections:           rows.MembershipRejections,
 	}
 }
 
@@ -353,6 +359,13 @@ func BuildJiraWorkItemDerivedEffects(rows JiraWorkItemDerivedEffectRows) ([]Effe
 			effect, err = buildJiraTypedDerivedEffect(destination, rows.WorkItemStateDurationsDaily)
 		case "work_item_team_attributions":
 			effect, err = buildJiraTypedDerivedEffect(destination, rows.WorkItemTeamAttributions)
+			if err == nil {
+				var marshaledRejections []json.RawMessage
+				marshaledRejections, err = marshalGitHubWorkItemTeamAttributionRejections(rows.MembershipRejections)
+				if err == nil {
+					effect.MembershipRejections = marshaledRejections
+				}
+			}
 		case "work_item_user_metrics_daily":
 			effect, err = buildJiraTypedDerivedEffect(destination, rows.WorkItemUserMetricsDaily)
 		default:
@@ -479,9 +492,12 @@ type JiraWorkItemDerivedClickHouseEffects struct {
 	WorkItemUserMetricsDaily       JiraWorkItemEffectAdapter
 }
 
+// metrics (CHAOS-4320 round 7, codex round 6 P1) -- see the identical
+// parameter's doc comment on NewGitLabWorkItemDerivedClickHouseEffects.
 func NewJiraWorkItemDerivedClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (JiraWorkItemDerivedClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return JiraWorkItemDerivedClickHouseEffects{}, ErrInvalidConfiguration
@@ -499,7 +515,7 @@ func NewJiraWorkItemDerivedClickHouseEffects(
 		WorkItemCycleTimes:             wrap("work_item_cycle_times", GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease}),
 		WorkItemMetricsDaily:           wrap("work_item_metrics_daily", GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
 		WorkItemStateDurationsDaily:    wrap("work_item_state_durations_daily", GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemTeamAttributions:       wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemTeamAttributions:       wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics}),
 		WorkItemUserMetricsDaily:       wrap("work_item_user_metrics_daily", GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
 	}
 	if len(sink.MissingDestinations()) > 0 {
@@ -637,11 +653,12 @@ type JiraWorkItemCompositeClickHouseEffects struct {
 func NewJiraWorkItemCompositeClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (JiraWorkItemCompositeClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return JiraWorkItemCompositeClickHouseEffects{}, ErrInvalidConfiguration
 	}
-	derived, err := NewJiraWorkItemDerivedClickHouseEffects(conn, lease)
+	derived, err := NewJiraWorkItemDerivedClickHouseEffects(conn, lease, metrics)
 	if err != nil {
 		return JiraWorkItemCompositeClickHouseEffects{}, err
 	}

@@ -59,3 +59,87 @@ func TestRegisteredFeatureFlagsDocument_MatchesCapturedWireFixture(t *testing.T)
 		)
 	}
 }
+
+// TestRegisteredFeatureFlagEventsDocument_MatchesCapturedWireFixture is
+// CHAOS-5523's evidence-bar requirement, modelled directly on
+// TestRegisteredFeatureFlagsDocument_MatchesCapturedWireFixture above:
+// registeredFeatureFlagEventsDocument must digest to the SAME value as a
+// fixture captured off a real HTTP request produced by this repo's own
+// unmodified web-side graphqlFetch -- not rebuilt from source, not
+// trusted from the const's own doc comment.
+//
+// testdata/wire_capture/featureflagevents_captured.graphql was captured
+// the same way featureflags_captured.graphql was (see
+// testdata/wire_capture/README.md's featureFlagEvents section for the
+// exact mechanism and both digests) -- this test proves the const
+// against that fixture independently of the doc comment's claim.
+func TestRegisteredFeatureFlagEventsDocument_MatchesCapturedWireFixture(t *testing.T) {
+	captured, err := os.ReadFile("testdata/wire_capture/featureflagevents_captured.graphql")
+	if err != nil {
+		t.Fatalf("read captured wire fixture: %v", err)
+	}
+
+	gotDigest := digestHex(string(captured))
+	wantDigest := digestHex(registeredFeatureFlagEventsDocument)
+
+	if gotDigest != wantDigest {
+		t.Fatalf(
+			"registeredFeatureFlagEventsDocument digest %s does NOT match the digest of a REAL captured request (%s) -- "+
+				"a real client's featureFlagEvents request would 404 against this route (CHAOS-4696 class). "+
+				"captured fixture:\n%s\n\nregistered const:\n%s",
+			wantDigest, gotDigest, string(captured), registeredFeatureFlagEventsDocument,
+		)
+	}
+
+	// Same negative control as the featureFlags test above: the captured
+	// fixture must differ from the raw, unprinted web source text's
+	// digest, proving this test can tell real wire bytes apart from a
+	// source-copied guess.
+	const rawSourceDigestEvents = "4a3e3f98adb538466e4a7963af6ba88bc1b1fbcc4c08c56895f838c1d00210b9"
+	if gotDigest == rawSourceDigestEvents {
+		t.Fatalf(
+			"captured wire fixture digests to the RAW SOURCE TEXT digest (%s) -- "+
+				"the capture mechanism is not observing urql's real print()+__typename transforms; "+
+				"this test would pass even if the underlying defect returned",
+			rawSourceDigestEvents,
+		)
+	}
+}
+
+// TestRegisteredPrDetailDocument_MatchesCapturedWireFixture is CHAOS-4991's
+// evidence-bar requirement for the `pr` operation, same discipline as
+// TestRegisteredFeatureFlagsDocument_MatchesCapturedWireFixture above.
+//
+// testdata/wire_capture/pr_captured.graphql was produced by IMPORTING the
+// web repo's own, live, pinned `wireForm()` (scripts/graphql-wire-parity.ts
+// -- the exact function that repo's own CI wire-parity gate calls) and
+// invoking it directly against the real `PR_DETAIL_QUERY` export
+// (web/src/lib/graphql/queries.ts:94-138) via `tsx`, so `@urql/core` was
+// resolved from the web repo's own pinned node_modules -- the same
+// `createRequest` -> `formatDocument` -> `stringifyDocument` pipeline
+// `fetchExchange` calls in production, not a hand-rolled reimplementation
+// of its rules. This differs from featureflags_captured.graphql's
+// mechanism (an actual HTTP request captured off a real listener) only in
+// HOW the real urql code was invoked -- both paths call the identical
+// pinned `@urql/core` functions in the identical order; see this file's
+// own package-level precedent doc comment and
+// testdata/wire_capture/README.md's "pr" section for the full method and
+// why a live-HTTP capture was not required to meet the same evidence bar.
+func TestRegisteredPrDetailDocument_MatchesCapturedWireFixture(t *testing.T) {
+	captured, err := os.ReadFile("testdata/wire_capture/pr_captured.graphql")
+	if err != nil {
+		t.Fatalf("read captured wire fixture: %v", err)
+	}
+
+	gotDigest := digestHex(string(captured))
+	wantDigest := digestHex(registeredPrDetailDocument)
+
+	if gotDigest != wantDigest {
+		t.Fatalf(
+			"registeredPrDetailDocument digest %s does NOT match the digest of the captured wire form (%s) -- "+
+				"a real client's pr request would 404 against this route once/if enabled (CHAOS-4696-class defect). "+
+				"captured fixture:\n%s\n\nregistered const:\n%s",
+			wantDigest, gotDigest, string(captured), registeredPrDetailDocument,
+		)
+	}
+}

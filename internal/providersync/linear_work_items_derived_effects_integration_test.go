@@ -24,7 +24,7 @@ func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing
 	now := time.Date(2026, 8, 4, 12, 34, 56, 123456000, time.UTC)
 	effects := linearDerivedIntegrationEffects(t, claim, now)
 	lease := &linearDerivedCountingLease{}
-	sink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lease)
+	sink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestLinearDerivedClickHouseEffectsRecoverAfterLeaseLoss(t *testing.T) {
 			// The dispatcher checks before and after its adapter. Losing the lease
 			// on the post-write assertion leaves a durable row but returns an error.
 			lostLease := &linearDerivedCountingLease{failAt: testCase.failAt}
-			lostSink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lostLease)
+			lostSink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lostLease, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,7 +112,7 @@ func TestLinearDerivedClickHouseEffectsRecoverAfterLeaseLoss(t *testing.T) {
 			}
 
 			recoveredLease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-			recoveredSink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, recoveredLease)
+			recoveredSink, err := NewLinearWorkItemDerivedClickHouseEffects(conn, recoveredLease, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

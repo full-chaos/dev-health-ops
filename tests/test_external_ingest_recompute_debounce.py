@@ -58,10 +58,10 @@ def _call(
         "dev_health_ops.external_ingest.recompute._get_redis_client",
         return_value=client,
     ):
-        mock_task = MagicMock()
+        mock_send_task = MagicMock()
         with patch(
-            "dev_health_ops.workers.external_ingest_recompute.flush_external_ingest_recompute",
-            mock_task,
+            "dev_health_ops.external_ingest.recompute.celery_app.send_task",
+            mock_send_task,
         ):
             schedule_or_coalesce(
                 org_id=ORG,
@@ -74,15 +74,21 @@ def _call(
                 window_end=window_end,
                 record_kinds=record_kinds or set(),
             )
-        return mock_task
+        return mock_send_task
 
 
 def test_first_call_acquires_guard_and_schedules_flush() -> None:
     client = _fake_client()
-    mock_task = _call(client, repo_ids={"repo-a"}, record_kinds={"pull_request.v1"})
+    mock_send_task = _call(
+        client, repo_ids={"repo-a"}, record_kinds={"pull_request.v1"}
+    )
 
-    mock_task.apply_async.assert_called_once()
-    kwargs = mock_task.apply_async.call_args.kwargs
+    mock_send_task.assert_called_once()
+    args, kwargs = mock_send_task.call_args
+    assert args[0] == (
+        "dev_health_ops.workers.external_ingest_recompute."
+        "flush_external_ingest_recompute"
+    )
     assert kwargs["kwargs"] == {
         "org_id": ORG,
         "source_system": SYSTEM,
@@ -100,7 +106,7 @@ def test_first_call_acquires_guard_and_schedules_flush() -> None:
 
 def test_second_call_within_window_widens_blob_without_rescheduling() -> None:
     client = _fake_client()
-    mock_task_1 = _call(
+    mock_send_task_1 = _call(
         client,
         ingestion_id="ing-1",
         repo_ids={"repo-a"},
@@ -108,7 +114,7 @@ def test_second_call_within_window_widens_blob_without_rescheduling() -> None:
         window_start=datetime(2026, 6, 25, tzinfo=timezone.utc),
         window_end=datetime(2026, 6, 25, 12, tzinfo=timezone.utc),
     )
-    mock_task_2 = _call(
+    mock_send_task_2 = _call(
         client,
         ingestion_id="ing-2",
         repo_ids={"repo-b"},
@@ -117,8 +123,8 @@ def test_second_call_within_window_widens_blob_without_rescheduling() -> None:
         window_end=datetime(2026, 6, 26, tzinfo=timezone.utc),
     )
 
-    mock_task_1.apply_async.assert_called_once()
-    mock_task_2.apply_async.assert_not_called()
+    mock_send_task_1.assert_called_once()
+    mock_send_task_2.assert_not_called()
 
     raw = _get_str(client, PENDING_KEY)
     assert raw is not None
@@ -134,14 +140,14 @@ def test_second_call_within_window_widens_blob_without_rescheduling() -> None:
 
 def test_guard_expiry_allows_rescheduling() -> None:
     client = _fake_client()
-    mock_task_1 = _call(client, ingestion_id="ing-1")
-    assert mock_task_1.apply_async.call_count == 1
+    mock_send_task_1 = _call(client, ingestion_id="ing-1")
+    assert mock_send_task_1.call_count == 1
 
     # Simulate the debounce window elapsing (Valkey TTL eviction).
     client.delete(GUARD_KEY)
 
-    mock_task_2 = _call(client, ingestion_id="ing-2")
-    assert mock_task_2.apply_async.call_count == 1
+    mock_send_task_2 = _call(client, ingestion_id="ing-2")
+    assert mock_send_task_2.call_count == 1
 
 
 def test_different_source_instances_debounce_independently() -> None:
@@ -150,10 +156,10 @@ def test_different_source_instances_debounce_independently() -> None:
         "dev_health_ops.external_ingest.recompute._get_redis_client",
         return_value=client,
     ):
-        mock_task = MagicMock()
+        mock_send_task = MagicMock()
         with patch(
-            "dev_health_ops.workers.external_ingest_recompute.flush_external_ingest_recompute",
-            mock_task,
+            "dev_health_ops.external_ingest.recompute.celery_app.send_task",
+            mock_send_task,
         ):
             schedule_or_coalesce(
                 org_id=ORG,
@@ -177,7 +183,7 @@ def test_different_source_instances_debounce_independently() -> None:
                 window_end=None,
                 record_kinds=set(),
             )
-    assert mock_task.apply_async.call_count == 2
+    assert mock_send_task.call_count == 2
 
 
 def test_no_redis_url_falls_back_to_synchronous_dispatch(monkeypatch) -> None:
@@ -239,10 +245,10 @@ def test_debounce_seconds_override_used_for_countdown_and_guard_ttl() -> None:
         "dev_health_ops.external_ingest.recompute._get_redis_client",
         return_value=client,
     ):
-        mock_task = MagicMock()
+        mock_send_task = MagicMock()
         with patch(
-            "dev_health_ops.workers.external_ingest_recompute.flush_external_ingest_recompute",
-            mock_task,
+            "dev_health_ops.external_ingest.recompute.celery_app.send_task",
+            mock_send_task,
         ):
             schedule_or_coalesce(
                 org_id=ORG,
@@ -256,7 +262,7 @@ def test_debounce_seconds_override_used_for_countdown_and_guard_ttl() -> None:
                 record_kinds=set(),
                 debounce_seconds=10,
             )
-    assert mock_task.apply_async.call_args.kwargs["countdown"] == 10
+    assert mock_send_task.call_args.kwargs["countdown"] == 10
     assert _ttl(client, GUARD_KEY) <= 10
 
 

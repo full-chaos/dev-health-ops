@@ -28,6 +28,7 @@ type LinearWorkItemDerivedEffectRows struct {
 	WorkItemStateDurationsDaily    []LinearWorkItemStateDurationDailyRow
 	WorkItemTeamAttributions       []LinearWorkItemTeamAttributionRow
 	WorkItemUserMetricsDaily       []LinearWorkItemUserMetricsDailyRow
+	MembershipRejections           []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 var linearWorkItemDerivedEffectDestinations = []string{
@@ -88,11 +89,12 @@ func BuildLinearWorkItemDerivedEffects(
 	if err != nil {
 		return nil, err
 	}
-	return buildLinearWorkItemDerivedEffectsFromMap(projections)
+	return buildLinearWorkItemDerivedEffectsFromMap(projections, rows.MembershipRejections)
 }
 
 func buildLinearWorkItemDerivedEffectsFromMap(
 	rows map[string][]json.RawMessage,
+	membershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership,
 ) ([]EffectBatch, error) {
 	if len(rows) != len(linearWorkItemDerivedEffectDestinations) {
 		return nil, ErrInvalidConfiguration
@@ -102,6 +104,10 @@ func buildLinearWorkItemDerivedEffectsFromMap(
 			return nil, ErrInvalidConfiguration
 		}
 	}
+	marshaledRejections, err := marshalGitHubWorkItemTeamAttributionRejections(membershipRejections)
+	if err != nil {
+		return nil, err
+	}
 	effects := make([]EffectBatch, 0, len(linearWorkItemDerivedEffectDestinations))
 	for _, destination := range linearWorkItemDerivedEffectDestinations {
 		effect, err := BuildEffectBatch(
@@ -109,6 +115,11 @@ func buildLinearWorkItemDerivedEffectsFromMap(
 		)
 		if err != nil {
 			return nil, err
+		}
+		// CHAOS-4320 round 6 -- see the identical attach point in
+		// BuildGitHubWorkItemEffects.
+		if destination == githubTeamAttributionsDestination {
+			effect.MembershipRejections = marshaledRejections
 		}
 		effects = append(effects, effect)
 	}
@@ -251,66 +262,70 @@ func (deriver LinearWorkItemDeriver) Derive(
 	claim Claim,
 	rows linearWorkItemRows,
 	normalizedAt time.Time,
-) (map[string][]json.RawMessage, error) {
+) (map[string][]json.RawMessage, []teamattribution.GithubWorkItemDerivationRejectedMembership, error) {
 	if ctx == nil || deriver.Source == nil || claim.Validate() != nil ||
 		claim.Provider != "linear" || claim.Dataset != "work-items" ||
 		normalizedAt.IsZero() {
-		return nil, ErrInvalidConfiguration
+		return nil, nil, ErrInvalidConfiguration
 	}
 	githubRows, err := linearWorkItemRowsAsGitHub(rows)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	days, err := githubWorkItemDerivedDays(claim, normalizedAt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	derivationContext, err := loadWorkItemDerivationContextForProvider(
 		ctx, "linear", claim, githubRows, deriver.Source, normalizedAt,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	deriver.observations.recordStoredEdgeMerge(derivationContext.StoredEdgeMerge)
 	aiAttributions, err := normalizeLinearWorkItemAIAttributions(claim, rows, normalizedAt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	aiRows, err := effectRowsFromValues(aiAttributions)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	derived := map[string][]json.RawMessage{"ai_attribution": aiRows}
 	for _, destination := range githubWorkItemDerivedOwnedDestinations {
 		derived[destination] = []json.RawMessage{}
 	}
+	// rejections (CHAOS-4320 round 6) -- see the identical accumulator in
+	// GitHubWorkItemDeriver.deriveForProvider.
+	rejections := make([]teamattribution.GithubWorkItemDerivationRejectedMembership, 0)
 	for _, day := range days {
 		triplet, err := buildWorkItemMetricTripletForProvider(
 			"linear", claim, githubRows, day, normalizedAt, derivationContext,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		tripletRows, err := triplet.derivedRows()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := githubWorkItemMergeDerivedRows(derived, tripletRows); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		surfaces, err := buildWorkItemDerivedSurfacesForProvider(
 			"linear", claim, githubRows, day, normalizedAt, derivationContext,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		surfaceRows, err := surfaces.derivedRows()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := githubWorkItemMergeDerivedRows(derived, surfaceRows); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		rejections = append(rejections, surfaces.MembershipRejections...)
 		if deriver.engine == nil {
 			continue
 		}
@@ -318,10 +333,10 @@ func (deriver LinearWorkItemDeriver) Derive(
 			ctx, claim, githubRows, day, normalizedAt, derivationContext,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := githubWorkItemMergeEngineRows(derived, engineRows); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	missing := make([]string, 0)
@@ -331,11 +346,11 @@ func (deriver LinearWorkItemDeriver) Derive(
 		}
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"%w: %s", ErrGitHubWorkItemsDerivationsUnavailable, strings.Join(missing, ", "),
 		)
 	}
-	return derived, nil
+	return derived, rejections, nil
 }
 
 var linearAIAttributionLabelKinds = map[string]string{
@@ -517,9 +532,12 @@ type LinearWorkItemDerivedClickHouseEffects struct {
 	WorkItemUserMetricsDaily       LinearWorkItemEffectAdapter
 }
 
+// metrics (CHAOS-4320 round 7, codex round 6 P1) -- see the identical
+// parameter's doc comment on NewGitLabWorkItemDerivedClickHouseEffects.
 func NewLinearWorkItemDerivedClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (LinearWorkItemDerivedClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return LinearWorkItemDerivedClickHouseEffects{}, ErrInvalidConfiguration
@@ -537,7 +555,7 @@ func NewLinearWorkItemDerivedClickHouseEffects(
 		WorkItemCycleTimes:             wrap("work_item_cycle_times", GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease}),
 		WorkItemMetricsDaily:           wrap("work_item_metrics_daily", GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
 		WorkItemStateDurationsDaily:    wrap("work_item_state_durations_daily", GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemTeamAttributions:       wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemTeamAttributions:       wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics}),
 		WorkItemUserMetricsDaily:       wrap("work_item_user_metrics_daily", GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
 	}
 	if missing := sink.MissingDestinations(); len(missing) > 0 {

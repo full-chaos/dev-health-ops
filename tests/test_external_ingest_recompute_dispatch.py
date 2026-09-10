@@ -7,7 +7,6 @@ ClickHouse.
 
 from __future__ import annotations
 
-import inspect
 import pathlib
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -237,31 +236,12 @@ def test_never_references_disqualified_tasks() -> None:
         assert forbidden not in source, f"{forbidden} must never be referenced (D6)"
 
 
-def test_daily_metrics_kwargs_subset_of_task_signature() -> None:
-    """D14: kwargs built for run_daily_metrics must be a strict subset of
-    the real task's ``.run`` signature -- catches kwarg drift that a
-    mocked ``.delay()``/``.apply_async()`` call would hide."""
-    from dev_health_ops.workers.metrics_daily import run_daily_metrics
-
-    plan = _plan()
-    kwargs = recompute_mod._daily_metrics_kwargs(plan, repo_id="repo-a")
-    params = set(inspect.signature(run_daily_metrics.run).parameters)
-    assert set(kwargs) <= params
-
-    fallback_kwargs = recompute_mod._daily_metrics_kwargs(plan, repo_id=None)
-    assert set(fallback_kwargs) <= params
-    assert "repo_id" not in fallback_kwargs
-
-
-def test_investment_kwargs_subset_of_task_signature() -> None:
-    from dev_health_ops.workers.work_graph_tasks import (
-        dispatch_investment_materialize_partitioned,
-    )
-
-    plan = _plan(team_ids=("team-a",))
-    kwargs = recompute_mod._investment_kwargs(plan)
-    params = set(
-        inspect.signature(dispatch_investment_materialize_partitioned.run).parameters
-    )
-    assert set(kwargs) <= params
-    assert kwargs["force"] is False
+# D14's kwarg-vs-real-task-signature drift guards (test_daily_metrics_kwargs_
+# subset_of_task_signature / test_investment_kwargs_subset_of_task_signature)
+# were removed under CHAOS-3093: their subject tasks (workers/metrics_daily.py's
+# run_daily_metrics, workers/work_graph_tasks.py's
+# dispatch_investment_materialize_partitioned) are deleted -- dispatch here is
+# now a bare celery_app.send_task(name, ...) string call with no importable
+# task object left to diff kwargs against. The dispatch itself is unchanged
+# (still dead-into-the-void, no Celery consumer since 2026-08-19); only the
+# now-impossible signature-drift check is gone.

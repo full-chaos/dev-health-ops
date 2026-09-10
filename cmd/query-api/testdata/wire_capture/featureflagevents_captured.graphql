@@ -1,0 +1,22 @@
+query FeatureFlagEvents($orgId: String!, $flagKey: String, $environment: String, $limit: Int!) {
+  featureFlagEvents(
+    orgId: $orgId
+    flagKey: $flagKey
+    environment: $environment
+    limit: $limit
+  ) {
+    events {
+      flagKey
+      eventType
+      prevState
+      nextState
+      actorType
+      environment
+      eventTs
+      __typename
+    }
+    totalCount
+    degradedReason
+    __typename
+  }
+}

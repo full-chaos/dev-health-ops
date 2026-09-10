@@ -105,77 +105,159 @@ services:
       - ask-dev-acceptance
 
   # ---------------------------------------------------------------------------
-  # CHAOS-3219 Wave 4: general jobs fleet for "API+jobs" acceptance parity.
+  # CHAOS-4065: Go-native "GENERAL scheduled jobs" acceptance parity.
   #
-  # Evidence (see ops PR description / CHAOS-3219 report for full citations):
-  # Ask Dev itself has ZERO Celery dependency today -- answer generation runs
-  # synchronously in the API/SSE request path (api/dev/orchestrator.py,
-  # runtime.py), quota enforcement is inline SQL (persistence/service.py
-  # _enforce_admission_limits/_enforce_platform_allowance), and its retention
-  # sweep (DevPersistenceService.cleanup_expired,
-  # persistence/service.py:2858) is NEVER called from workers/tasks.py, any
-  # beat_schedule entry (workers/config.py), or any CLI command -- it is
-  # dead/unwired code today (a product gap, not an acceptance-environment
-  # gap; flagged upstream). So no queue name is "required by Ask Dev".
-  # `worker` + `beat` are still booted because the release-blocking gate's
-  # "API+jobs" framing and Wave 4 Phase 3c (persistence/retention/ops corpus
-  # group) need a live, real Celery+beat fleet to exercise the platform's
-  # GENERAL scheduled jobs (prune-rate-limit-observations,
-  # prune-external-ingest-batches, monitor-queue-depths, ...) -- topology
-  # parity with production, not an Ask Dev-specific requirement. Per the
-  # "no required job may exit success after skipping substantive work"
-  # principle, each gets a healthcheck that proves the process is doing real
-  # work, not just that the container is running.
+  # Ask Dev itself has ZERO Celery dependency (answer generation runs
+  # synchronously in the API/SSE request path; quota enforcement is inline
+  # SQL; its own retention sweep is unwired product code, flagged
+  # upstream) -- no queue name here is "required by Ask Dev". This fleet
+  # instead proves the platform's GENERAL scheduled jobs work, and as of
+  # 2026-08-19 (CHAOS-4026) prod runs those natively in Go, not Celery: a
+  # release-blocking gate that still booted a real Celery worker+beat fleet
+  # was testing a topology that no longer exists in prod. `worker`/`beat`
+  # below are repointed at `ask-dev-jobs-probe` (cmd/ask-dev-jobs-probe),
+  # which re-executes the exact production code for each cadence directly
+  # against this stack's own Postgres on every healthcheck tick:
+  #   - `worker` (queue-depth): cmd/dev-health-worker/queue_health.go's
+  #     queueHealthMonitor samples River's queue state every 60s in prod;
+  #     the probe's `queue-depth` check runs the same `river_job` query.
+  #   - `beat` (retention): internal/scheduler/fixed's RetentionProducer
+  #     dispatches jobcontract.KindRetentionCleanup under schedule ids
+  #     `prune_rate_limit_observations`/`prune_external_ingest_batches`;
+  #     the probe's `retention` check calls the same
+  #     internal/jobs/system stores (RateLimitObservationStore/
+  #     ExternalIngestBatchStore) those handlers use, with the same
+  #     retention-window defaults (14/90 days).
+  # No Celery service is started anywhere in this file. Per the "no
+  # required job may exit success after skipping substantive work"
+  # principle, each container's main process is an inert placeholder
+  # (`sleep infinity`) and its healthcheck is the real, repeated work.
   # ---------------------------------------------------------------------------
+
+  # The canonical Python `migrate` service (above) owns Alembic + ClickHouse.
+  # River's own schema is a SEPARATE migrator (`dev-health-worker-migrate`,
+  # cmd/dev-health-worker-migrate) that requires its three runtime roles to
+  # already exist -- provisioned here from the same checked-in SQL
+  # deploy/docker-compose/compose.go-workers.yml's `go-river-provision`
+  # uses, built locally (no ghcr pull) since the `runner` target already
+  # ships psql + the SQL file (docker/Dockerfile).
+  river-provision:
+    container_name: ask-dev-acceptance-river-provision
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: runner
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        exec psql \
+          --host=postgres --username=postgres --dbname="${POSTGRES_DB:-postgres}" \
+          --set=domain_role="$$RIVER_DOMAIN_DATABASE_ROLE" \
+          --set=queue_role="$$RIVER_QUEUE_DATABASE_ROLE" \
+          --set=coordinator_role="$$RIVER_COORDINATOR_DATABASE_ROLE" \
+          --set=domain_password="$$RIVER_DOMAIN_DATABASE_PASSWORD" \
+          --set=queue_password="$$RIVER_QUEUE_DATABASE_PASSWORD" \
+          --set=coordinator_password="$$RIVER_COORDINATOR_DATABASE_PASSWORD" \
+          --file=/usr/local/share/dev-health/provision_river_roles.sql
+    environment:
+      PGPASSWORD: postgres
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Applies the pinned River schema (dev-health-worker-migrate, already
+  # baked into the `runner` image) now that its roles exist, then
+  # independently verifies the result with `--check`.
+  river-migrate:
+    container_name: ask-dev-acceptance-river-migrate
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: runner
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - "dev-health-worker-migrate && dev-health-worker-migrate --check"
+    environment:
+      MIGRATION_DATABASE_URI: postgresql://postgres:postgres@postgres:5432/${POSTGRES_DB:-postgres}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+    depends_on:
+      river-provision:
+        condition: service_completed_successfully
+
   worker:
-    container_name: ask-dev-acceptance-worker
+    container_name: ask-dev-acceptance-queue-health-probe
+    entrypoint: ["sleep", "infinity"]
+    command: []
+    # Adds to (does not replace) the base `worker-base` environment/
+    # depends_on -- the inherited Celery-only entries (CELERY_BROKER_URL,
+    # EMAIL_*, valkey/pgbouncer readiness) are unread by this container and
+    # harmless; only the two keys below are actually used.
+    environment:
+      POSTGRES_URI: postgresql://postgres:postgres@postgres:5432/${POSTGRES_DB:-postgres}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+    depends_on:
+      river-migrate:
+        condition: service_completed_successfully
     healthcheck:
-      # Codex finding (HIGH, 2026-08-05): `celery inspect ping` only proves
-      # the control-plane RPC answers -- it is served independently of the
-      # task pool, so a worker whose pool is wedged (deadlock, exhausted
-      # concurrency, a stuck task) can keep answering ping while never
-      # draining a single queued task. Real receipt instead: dispatch a
-      # uniquely-identified task through the SAME required queue
-      # (`monitoring`) the worker actually consumes and block for ITS
-      # result (scripts/acceptance/healthcheck_worker_probe.py -- reuses
-      # the existing monitor_queue_depths production task, no new
-      # production code). RED-verified: a `--pool=solo` worker occupied by
-      # a deliberately blocking task times this out and `up --wait`
-      # correctly reports unhealthy (see run history / PR description for
-      # the live proof).
+      # Real receipt, not a liveness ping: every tick re-runs the query
+      # cmd/dev-health-worker/queue_health.go's queueHealthMonitor issues
+      # against River's OWN state table, fresh, against this stack's real
+      # schema (see cmd/ask-dev-jobs-probe's `queue-depth` check). A query
+      # failure (missing table, unreachable Postgres) reports unhealthy.
       test:
         - "CMD"
-        - "python"
-        - "/app/scripts/acceptance/healthcheck_worker_probe.py"
+        - "/usr/local/bin/ask-dev-jobs-probe"
+        - "queue-depth"
       interval: 5s
       timeout: 10s
       retries: 20
       start_period: 15s
 
   beat:
-    container_name: ask-dev-acceptance-beat
+    container_name: ask-dev-acceptance-retention-probe
+    entrypoint: ["sleep", "infinity"]
+    command: []
+    # Adds to (does not replace) the base `worker-base` environment/
+    # depends_on -- see the identical note on `worker` above.
+    environment:
+      POSTGRES_URI: postgresql://postgres:postgres@postgres:5432/${POSTGRES_DB:-postgres}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
-      # Codex finding (HIGH, 2026-08-05): the persistent schedule file's
-      # mtime is touched by beat's own bookkeeping regardless of whether a
-      # due task was actually published and consumed -- it does not prove
-      # publication or consumption. beat cannot itself execute a probe (it
-      # only schedules), so the real receipt is what its own dispatching
-      # already produces: the existing `monitor-queue-depths` beat entry
-      # (interval 60s, queue `monitoring`) is the sentinel, and a WORKER
-      # executing it writes a timestamped result into the shared Celery
-      # result backend -- read here
-      # (scripts/acceptance/healthcheck_beat_sentinel.py) and required to
-      # be within a bounded freshness window. A beat that stopped
-      # dispatching (or a fleet that stopped consuming) ages out and this
-      # reports unhealthy.
+      # Real receipt: every tick re-runs BOTH retention cadences' real
+      # production code (internal/jobs/system's RateLimitObservationStore
+      # and ExternalIngestBatchStore, the same stores
+      # internal/scheduler/fixed's RetentionProducer dispatches) against
+      # this stack's real tables -- see cmd/ask-dev-jobs-probe's
+      # `retention` check. Needs no River schema (these are plain Postgres
+      # tables `migrate` already creates) -- `depends_on` above adds only
+      # `migrate` on top of the inherited `worker-base` set (valkey/
+      # clickhouse/pgbouncer, harmless and already up by boot_services
+      # ordering; see the note at `environment:` above).
       test:
         - "CMD"
-        - "python"
-        - "/app/scripts/acceptance/healthcheck_beat_sentinel.py"
+        - "/usr/local/bin/ask-dev-jobs-probe"
+        - "retention"
       interval: 15s
       timeout: 10s
       retries: 20
-      start_period: 90s
+      start_period: 15s
 
   ask-dev-scripted-openai:
     container_name: ask-dev-acceptance-scripted-openai

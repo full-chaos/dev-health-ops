@@ -34,6 +34,11 @@ EXPECTED_PACKAGES = {
     "cmd/dev-health-workerctl",
     "cmd/query-api",
     "cmd/query-api/internal/analytics",
+    # CHAOS-5523: the featureFlagEvents port's own Testcontainers-backed
+    # tests (events_integration_test.go) -- the org-scoping/flagKey-filter/
+    # ORDER BY/count-not-limit-bound happy path and the real UNKNOWN_TABLE
+    # degraded path, both against a real ClickHouse engine.
+    "cmd/query-api/internal/featureflags",
     "cmd/query-api/internal/hotspots",
     # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
     # real Map(String, Float64) theme/subcategory columns -- a fake
@@ -69,6 +74,12 @@ EXPECTED_PACKAGES = {
     # real engine, so a fake connection cannot prove them.
     "internal/jobs/investment/chwrite",
     "internal/jobs/metrics/daily",
+    # CHAOS-4806: the package's first //go:build integration file,
+    # baselines_nullable_integration_test.go -- proves a nil *float64
+    # aggregate field round-trips as a real ClickHouse NULL (migration
+    # 090's newly-Nullable columns) and does not corrupt a present
+    # sibling field on the same row, against a real server.
+    "internal/jobs/metrics/daily/benchmarking",
     "internal/jobs/metrics/daily/icfinalize",
     "internal/jobs/metrics/remaining",
     # CHAOS-5318: the native GitHub App installation/marketplace_purchase
@@ -432,10 +443,17 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # file (receipt_integration_test.go: the `prove` verb's receipt writer
     # and the enablement-proof predicate, against a real Postgres with the
     # registry's actual FK and CHECK constraints). 51 -> 52.
-    # CURRENT TOTAL: 52 -- the one number to bump when a new
+    # CHAOS-5523 added cmd/query-api/internal/featureflags's first
+    # //go:build integration file (events_integration_test.go: the
+    # featureFlagEvents port's org-scoping/flagKey-filter/ORDER BY/
+    # count-not-limit-bound happy path and the real UNKNOWN_TABLE degraded
+    # path, both against a real ClickHouse container). 52 -> 53.
+    # CHAOS-4806 added internal/jobs/metrics/daily/benchmarking's first
+    # //go:build integration file: 53 -> 54.
+    # CURRENT TOTAL: 54 -- the one number to bump when a new
     # -tags=integration package is added.
-    assert "52 package(s) discovered, 0 denylisted, 52 will run" in result.stdout
-    assert "integration shard plan: 3 shard(s), 52 package(s)" in result.stdout
+    assert "54 package(s) discovered, 0 denylisted, 54 will run" in result.stdout
+    assert "integration shard plan: 3 shard(s), 54 package(s)" in result.stdout
 
     output = dict(
         line.split("=", maxsplit=1)
@@ -493,8 +511,12 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # package, not just its two integration files, was deleted). FLATTENED
     # includes the providersync shard-1 package, same as every other count
     # in this comment block.
-    # CURRENT TOTAL: 51 -- the one number to bump.
-    assert len(flattened) == len(set(flattened)) == 52
+    # CHAOS-5425 added internal/goapiproof: 51 -> 52.
+    # CHAOS-5523 added cmd/query-api/internal/featureflags: 52 -> 53 (see
+    # the "package(s) discovered" comment above).
+    # CHAOS-4806 added internal/jobs/metrics/daily/benchmarking: 53 -> 54.
+    # CURRENT TOTAL: 54 -- the one number to bump.
+    assert len(flattened) == len(set(flattened)) == 54
     assert set(flattened) == EXPECTED_PACKAGES
     assert assignments[1] == {"internal/providersync"}
 
@@ -1848,9 +1870,75 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # integration-tagged UNCHANGED at 153.
     # TestInvestmentGoCallSiteReflectorResolvesConstantFieldValues pins the
     # reflector that the reachability test now derives its expectation from.
-    assert len(expected_provider_tests) == 1337
+    # CHAOS-4320 (a recurrence guard for the effects/outbox JSON round-trip
+    # class): +2 ordinary top-level (1337 -> 1339), integration-tagged
+    # UNCHANGED at 153. TestGitHubWorkItemTeamAttributionRowSurvivesThe-
+    # EffectsJSONRoundTrip and TestGitHubWorkItemTeamAttributionRowNo-
+    # ExportedFieldReadsBackZero are both in-memory, non-integration tests.
+    # CHAOS-4320 round 3 (two codex P1 fixes, red-first pinned): +2 ordinary
+    # top-level (1339 -> 1341), integration-tagged UNCHANGED at 153.
+    # TestWriteGitHubWorkItemEffectCountsOwnershipCheckedOnEveryMembershipRow
+    # (the writer must count ownership_checked on every non-primary
+    # membership row, not just primaryRows, and must skip rather than guess
+    # "owned" on an empty reason) and TestBuildGitHubWorkItemTeamAttributions-
+    # CarriesOwnershipReasonFromTheRealResolver (a mutation-resistant pin
+    # that the real builder, not a hand-built row, carries OwnershipReason
+    # through) are both in-memory, non-integration tests.
+    # CHAOS-4320 round 4 (one codex P1 fix, three P3 test-strength fixes):
+    # +2 ordinary top-level (1341 -> 1343), integration-tagged UNCHANGED at
+    # 153. TestRejectedMembershipsAreCountedByOwnershipChecked (a gate
+    # REJECTION must reach ownership_checked -- it never became a row at
+    # all, so it was completely unobservable before this) and
+    # TestBuildGitHubWorkItemTeamAttributionsCarriesOwnershipReasonForAuthor-
+    # FromTheRealResolver (the author/reporter path's sibling of the
+    # existing assignee-path pin above) are both in-memory, non-integration
+    # tests.
+    # CHAOS-4320 round 5 (two codex P1 fixes, two P3 test-strength fixes):
+    # +3 top-level (1343 -> 1346), of which ONE is integration-tagged
+    # (153 -> 154): TestGitHubWorkItemTeamAttributionsRejectionMarkerReadback-
+    # StaysExact (`-tags=integration`, real ClickHouse -- a rejected marker
+    # row must never persist, and InspectGitHubWorkItemEffect must not read
+    # its absence as the whole effect being absent). The other two are
+    # in-memory, non-integration:
+    # TestRejectedRowsWithIdenticalSortingKeyCountOnceNotTwice (two rejected
+    # rows sharing a sorting key must collapse to one counted sample, same
+    # as the granted-row path already does) and
+    # TestWriteGitHubWorkItemEffectDoesNotCountOnAFailedSend (counting must
+    # gate on a successful Send, not merely follow the Append loop in
+    # source order).
+    # CHAOS-4320 round 6 (chris via team-lead, 2026-09-10: dropped the
+    # marker-row mechanism entirely -- rejections now travel on
+    # EffectBatch.MembershipRejections, never Rows): +2 ordinary top-level
+    # (1346 -> 1348), integration-tagged UNCHANGED at 154 (the round-5
+    # integration test above was renamed to
+    # TestGitHubWorkItemTeamAttributionsRejectionReadbackStaysExact for the
+    # new mechanism, a rename not an addition).
+    # TestGitHubWorkItemTeamAttributionRejectionRowSurvivesTheEffectsJSONRoundTrip
+    # (Trap #125: the new githubWorkItemTeamAttributionRejectionRow type
+    # must survive the same JSON round trip real rows do) and
+    # TestWriteGitHubWorkItemEffectInsertsEveryRowNoFilteringPath (the
+    # invariant this design is built on: every row in Rows reaches the
+    # INSERT, no filtering path exists) are both in-memory, non-integration
+    # tests.
+    # CHAOS-4320 round 7 (codex round 6, two P1 fixes, three P3
+    # test-strength fixes): +6 ordinary top-level (1348 -> 1354),
+    # integration-tagged UNCHANGED at 154. TestPreparedRouteSnapshotRetainsMembershipRejections
+    # (a rejection must survive the prepared-route recovery envelope, a
+    # SEPARATE JSON projection of EffectBatch from the in-process value);
+    # TestGitLabWorkItemFamilyConstructorEmitsOwnershipMetrics,
+    # TestJiraWorkItemCompositeConstructorEmitsOwnershipMetrics, and
+    # TestLinearWorkItemFamilyConstructorEmitsOwnershipMetrics (the real
+    # worker constructors left Metrics nil for these three providers, so
+    # the new counter never fired despite otherwise-correct plumbing);
+    # TestGitHubWorkItemDeriverCarriesRealRejectionsIntoRouteEffects (a
+    # real rejection must reach the built route effects, not just a
+    # hand-attached one); and TestRejectedRowsWithDistinctKeysAreNotCollapsed
+    # (each of the sorting key's repo/work-item/team components must
+    # actually distinguish two rejections, not just Source) are all
+    # in-memory, non-integration tests.
+    assert len(expected_provider_tests) == 1354
 
-    assert len(expected_integration_tests) == 153
+    assert len(expected_integration_tests) == 154
     assert expected_integration_tests < expected_provider_tests
 
     provider_assignments: dict[int, set[str]] = {}
@@ -1866,7 +1954,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1337
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1354
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1949,9 +2037,15 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
     # for the providersync shard-1 package).
     # CHAOS-5336 removed internal/testsupport/computeparity entirely: 51 ->
     # 50 (51 discovered - 1 for the providersync shard-1 package).
-    # CURRENT TOTAL: 50 (== discovered-total-minus-one -- keep this in
+    # CHAOS-5425 added internal/goapiproof: 50 -> 51 (52 discovered - 1 for
+    # the providersync shard-1 package).
+    # CHAOS-5523 added cmd/query-api/internal/featureflags: 51 -> 52 (53
+    # discovered - 1 for the providersync shard-1 package).
+    # CHAOS-4806 added internal/jobs/metrics/daily/benchmarking: 52 -> 53
+    # (54 discovered - 1 for the providersync shard-1 package).
+    # CURRENT TOTAL: 53 (== discovered-total-minus-one -- keep this in
     # sync with the discovered-total literal above when either changes).
-    assert len(selected_packages) == len(set(selected_packages)) == 51
+    assert len(selected_packages) == len(set(selected_packages)) == 53
     assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
@@ -1968,7 +2062,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1337
+    assert len(selected_tests) == len(set(selected_tests)) == 1354
     assert set(selected_tests) == expected_tests
 
 

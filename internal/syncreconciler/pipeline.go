@@ -162,6 +162,10 @@ type MutationPipeline struct {
 	config       MutationPipelineConfig
 
 	stages stageTelemetry
+	// runawayLog dedupes the CHAOS-4097 runaway report's ERROR stream across
+	// ticks (CHAOS-5470). It is per-pipeline mutable state shared between
+	// Step calls, so it carries its own mutex, same as the two below.
+	runawayLog runawayLogState
 	// rollupBumps reuses dev_health_sync_run_rollup_bumped_total (CHAOS-4559,
 	// widened CHAOS-4586) for THIS pipeline's own two terminal-status
 	// mechanisms -- UnreclaimableSweep.terminalize and LeaseRepair.Step's
@@ -258,6 +262,7 @@ func NewMutationPipeline(
 		orphanedUnit: orphanedUnit,
 		config:       config,
 		stages:       newStageTelemetry(),
+		runawayLog:   newRunawayLogState(),
 		rollupBumps:  newRollupBumpCounts(),
 	}
 	if config.Registry != nil {
@@ -808,15 +813,56 @@ func (pipeline *MutationPipeline) Step(
 	// the commit and a materialization failure does not make a looping run
 	// less true. It is emitted per row rather than as a total so the log line
 	// names something an operator can go and look at.
-	for _, wakeup := range materialized.Runaway {
+	//
+	// CHAOS-5470: emitted on TRANSITION into the over-threshold set and then
+	// on a growing interval, never once per tick. The report is a pure read
+	// of a durable column, so a permanently stuck row produced one ERROR per
+	// second, forever -- 1410329c ran at attempts=1344 for days that way. The
+	// count itself did not get quieter: runaway_dispatch_pass below states it
+	// on every pass, and every withheld line is accounted for there as
+	// `suppressed`. See runaway_log.go for the policy and for why no WRITE
+	// changed.
+	//
+	// reportStep/reportDelivered are computed BEFORE this, rather than after
+	// as they used to be, because reportDelivered is what licenses forgetting
+	// a row that is missing from this pass -- see decide's own comment.
+	if materialized.RunawayReportStep != "" {
+		reportStep = materialized.RunawayReportStep
+	}
+	reportDelivered = !aborted && materialized.RunawayReportStep == "" && materializerErr == nil
+	runawayEmissions, runawayOutcome := pipeline.runawayLog.decide(
+		now, materialized.Runaway, materialized.RunawayTruncated, reportDelivered,
+	)
+	for _, emission := range runawayEmissions {
 		slog.Error(
 			"syncreconciler.dispatch_wakeup_attempts_exceeded",
-			"sync_run_id", wakeup.SyncRunID,
-			"attempts", wakeup.Attempts,
+			"sync_run_id", emission.Wakeup.SyncRunID,
+			"attempts", emission.Wakeup.Attempts,
 			"threshold", runawayDispatchAttempts,
 			"truncated", materialized.RunawayTruncated,
+			"reason", emission.Reason,
+			"state", emission.State,
+			"untracked_rows", emission.UntrackedRows,
 		)
 	}
+	// Every pass, zeros included -- the contract ready_finalize_pass and
+	// orphaned_unit_pass already hold. This is what makes deduplicating the
+	// ERROR stream safe: `total` is the EXACT count (never len(Runaway),
+	// which is a sample capped at runawayDispatchScan), and `suppressed`
+	// names exactly how many lines this pass chose not to print.
+	slog.InfoContext(ctx, "syncreconciler.runaway_dispatch_pass",
+		"total", materialized.RunawayTotal,
+		"sampled", len(materialized.Runaway),
+		"truncated", materialized.RunawayTruncated,
+		"emitted", runawayOutcome.Emitted,
+		"suppressed", runawayOutcome.Suppressed,
+		"tracked", runawayOutcome.Tracked,
+		"untracked", runawayOutcome.Untracked,
+		"threshold", runawayDispatchAttempts,
+		"report_step", materialized.RunawayReportStep,
+		"report_delivered", reportDelivered,
+		"now", now.UTC().Format(time.RFC3339Nano),
+	)
 	// A BROKEN DETECTOR MUST NOT READ AS A CLEAN ONE (adversarial review
 	// finding). An empty Runaway above means one of two opposite things: no
 	// run is looping, or the statement that would have said so did not run.
@@ -831,16 +877,13 @@ func (pipeline *MutationPipeline) Step(
 	// The distinction the log preserves: a named step means the report itself
 	// faulted, the upstream code means the pass never reached it. Those want
 	// different first questions even though the counter merges them.
-	if materialized.RunawayReportStep != "" {
-		reportStep = materialized.RunawayReportStep
-	}
-	// !aborted guards this the same way the rest of the accounting does: when
-	// repair already aborted the tick, the materializer never ran at all, and
-	// its zero-value MaterializerResult{} has an empty RunawayReportStep for
-	// the same reason a genuinely successful, nothing-to-report pass would --
-	// without this guard the two are indistinguishable and a repair outage
-	// would read as a delivered report.
-	reportDelivered = !aborted && materialized.RunawayReportStep == "" && materializerErr == nil
+	// reportStep/reportDelivered were assigned above, before the runaway
+	// emission block that now consumes reportDelivered. The !aborted guard
+	// there does the same job it always did: when repair aborted the tick the
+	// materializer never ran, and its zero-value MaterializerResult{} has an
+	// empty RunawayReportStep for the same reason a genuinely successful,
+	// nothing-to-report pass would -- without that guard the two are
+	// indistinguishable and a repair outage would read as a delivered report.
 	// THE EXACT TOTAL, never len(Runaway) (review finding). Runaway is a
 	// sample capped at runawayDispatchScan; CHAOS-4093 held 83 stuck runs, so
 	// a gauge fed from the sample would have reported 20 for an incident more

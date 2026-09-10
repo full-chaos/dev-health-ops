@@ -226,32 +226,35 @@ func (r *queryResolver) WorkGraphEdges(ctx context.Context, orgID string, filter
 	return result, nil
 }
 
-// Pr is the resolver for the pr field (CHAOS-4980). Wires CHAOS-4924's
-// fetchLinkedIssueRows reader into the linkedIssues sub-field via
-// workgraph.ResolveLinkedIssues; the fast-path-vs-FINAL-oracle dispatch
-// lives entirely inside fetchLinkedIssueRows, so this resolver is
-// flag-oblivious by construction. Same "authorized org always wins"
-// convention as WorkGraphEdges/WorkGraphFlow above -- Python's own
-// resolve_pr (resolvers/pr.py:212) never even receives this field's org_id
-// GraphQL argument, deriving org solely from the request context, so
-// ignoring the argument here (rather than rejecting a mismatch, as
-// Analytics does) is the parity-correct choice for this field specifically.
+// Pr is the resolver for the pr field (CHAOS-4980, completed by
+// CHAOS-4991). Wires CHAOS-4924's fetchLinkedIssueRows reader into the
+// linkedIssues sub-field via workgraph.ResolveLinkedIssues; the
+// fast-path-vs-FINAL-oracle dispatch lives entirely inside
+// fetchLinkedIssueRows, so this resolver is flag-oblivious by
+// construction. Same "authorized org always wins" convention as
+// WorkGraphEdges/WorkGraphFlow above -- Python's own resolve_pr
+// (resolvers/pr.py:212) never even receives this field's org_id GraphQL
+// argument, deriving org solely from the request context, so ignoring
+// the argument here (rather than rejecting a mismatch, as Analytics does)
+// is the parity-correct choice for this field specifically.
 //
-// SCOPE NOTE, deliberate (see workgraph.ResolveLinkedIssues's and
-// workgraph.PRCoreRowExists's doc comments for the full rationale): this
-// wires the "does the PR exist" check and linkedIssues only. The PR core
-// row's OWN columns, reviews, and commits (Python's
-// _fetch_pr_row/_fetch_reviews/_fetch_commits) are not yet ported to Go,
-// so a PR that DOES exist gets a PARTIAL PullRequestDetail --
-// id/orgId/repoId/number/linkedIssues only, every other field left at its
-// zero value. An unknown PR/org/repo returns nil, matching resolve_pr's
-// own nil-for-unknown behavior exactly (workgraph.PRCoreRowExists is the
-// cheap existence check that makes this possible without the full
-// core-row port). Tracked as a follow-up ticket, not this one. Separately,
-// and regardless of this resolver's completeness: `pr` has no registered
-// document in query_route.go's digestByOperation, so routeswitch can
-// never make it reachable yet either -- see
-// pr_operation_not_registered_test.go.
+// CHAOS-4991 completes the port CHAOS-4980 left partial: the PR core
+// row's OWN columns (workgraph.FetchPRCoreRow), reviews
+// (workgraph.ResolveReviews), and commits (workgraph.ResolveCommits) --
+// Python's _fetch_pr_row/_fetch_reviews/_fetch_commits -- are now wired
+// in below, so a PR that DOES exist gets the FULL PullRequestDetail. An
+// unknown PR/org/repo still returns nil, matching resolve_pr's own
+// nil-for-unknown behavior exactly -- workgraph.FetchPRCoreRow's own
+// ok=false return IS that check now (CHAOS-4991 codex round 1, F-2: this
+// comment previously said workgraph.PRCoreRowExists "remains the cheap
+// existence check used first," but this resolver no longer calls
+// PRCoreRowExists at all -- FetchPRCoreRow subsumes that role, since it
+// has to read the row's existence either way to return its columns).
+// `pr` is now also registered in
+// query_route.go's digestByOperation (CHAOS-4991) -- see
+// registeredPrDetailDocument's own doc comment there for what
+// registration does and does not mean (registration only, NOT
+// enablement).
 func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model.PullRequestDetail, error) {
 	claims, ok := authctx.FromContext(ctx)
 	if !ok || claims.OrgID == "" {
@@ -269,12 +272,22 @@ func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model
 		return nil, nil
 	}
 
-	exists, err := workgraph.PRCoreRowExists(ctx, r.ClickHouse, claims.OrgID, repoID, number)
+	core, exists, err := workgraph.FetchPRCoreRow(ctx, r.ClickHouse, claims.OrgID, repoID, number)
 	if err != nil {
 		return nil, fmt.Errorf("pr: %w", err)
 	}
 	if !exists {
 		return nil, nil
+	}
+
+	reviews, err := workgraph.ResolveReviews(ctx, r.ClickHouse, claims.OrgID, repoID, number)
+	if err != nil {
+		return nil, fmt.Errorf("pr: %w", err)
+	}
+
+	commits, err := workgraph.ResolveCommits(ctx, r.ClickHouse, claims.OrgID, repoID, number)
+	if err != nil {
+		return nil, fmt.Errorf("pr: %w", err)
 	}
 
 	linkedIssues, err := workgraph.ResolveLinkedIssues(ctx, r.ClickHouse, claims.OrgID, repoID, number)
@@ -283,11 +296,32 @@ func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model
 	}
 
 	return &model.PullRequestDetail{
-		ID:           fmt.Sprintf("%s#pr%d", repoID, number),
-		OrgID:        claims.OrgID,
-		RepoID:       repoID,
-		Number:       number,
-		LinkedIssues: linkedIssues,
+		ID:                    fmt.Sprintf("%s#pr%d", repoID, number),
+		OrgID:                 claims.OrgID,
+		RepoID:                repoID,
+		RepoName:              core.RepoName,
+		Number:                number,
+		Title:                 core.Title,
+		Body:                  core.Body,
+		State:                 core.State,
+		AuthorName:            core.AuthorName,
+		AuthorEmail:           core.AuthorEmail,
+		CreatedAt:             core.CreatedAt,
+		MergedAt:              core.MergedAt,
+		ClosedAt:              core.ClosedAt,
+		HeadBranch:            core.HeadBranch,
+		BaseBranch:            core.BaseBranch,
+		Additions:             core.Additions,
+		Deletions:             core.Deletions,
+		ChangedFiles:          core.ChangedFiles,
+		FirstReviewAt:         core.FirstReviewAt,
+		FirstCommentAt:        core.FirstCommentAt,
+		ChangesRequestedCount: core.ChangesRequestedCount,
+		ReviewsCount:          core.ReviewsCount,
+		CommentsCount:         core.CommentsCount,
+		Reviews:               reviews,
+		Commits:               commits,
+		LinkedIssues:          linkedIssues,
 	}, nil
 }
 
@@ -427,19 +461,112 @@ func (r *queryResolver) FeatureFlags(ctx context.Context, orgID string, provider
 	return result, nil
 }
 
-// FeatureFlagEvents is the resolver for the featureFlagEvents field.
+// FeatureFlagEvents is the resolver for the featureFlagEvents field
+// (CHAOS-5523, closing the gap featureFlags's own Wave 1 canary
+// deliberately left open -- README.md's former "featureFlagEvents --
+// explicitly out of scope for the Wave 1 canary" bullet, removed by this
+// change). Ports
+// dev_health_ops.api.graphql.resolvers.feature_flags.resolve_feature_flag_events
+// via featureflags.ResolveEvents -- see that function's doc comment for
+// the exact parity contract (WHERE clauses, ORDER BY event_ts ASC, LIMIT
+// clamp, missing-table degraded path, and the count query's deliberate
+// no-limit divergence from the row query).
+//
+// Same org-scoping authorization contract as FeatureFlags above
+// (schema.resolvers.go:381-428): query-api trusts the effective-principal
+// envelope, not an independent Postgres/Valkey lookup, so the check here
+// is "does the envelope's org match the orgId argument the client is
+// asking about". Same org-scoping span sweep discipline too -- the span
+// starts BEFORE the authorization guard so a rejected request is counted
+// rather than producing no span at all.
 func (r *queryResolver) FeatureFlagEvents(ctx context.Context, orgID string, flagKey *string, environment *string, limit int) (*model.FeatureFlagEventsResult, error) {
-	panic(fmt.Errorf("not implemented: FeatureFlagEvents - featureFlagEvents"))
+	spanCtx, finish := startFeatureFlagEventsSpan(ctx)
+
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		finish("denied", attribute.String("denial_reason", "no_org"))
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+	if claims.OrgID != orgID {
+		finish("denied", attribute.String("denial_reason", "org_mismatch"), attribute.String("org_id", claims.OrgID))
+		return nil, &gqlerror.Error{
+			Message: "org_id is required for all analytics queries",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	result, err := featureflags.ResolveEvents(spanCtx, r.ClickHouse, orgID, flagKey, environment, limit)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("featureFlagEvents: %w", err)
+	}
+	if result.DegradedReason != nil {
+		finish("degraded")
+	} else {
+		finish("ok")
+	}
+	return result, nil
 }
 
-// WorkItemTeamAttributions is the resolver for the workItemTeamAttributions field.
+// WorkItemTeamAttributions is the resolver for the workItemTeamAttributions
+// field. Deliberately left UNPORTED by CHAOS-3969: unlike its sibling
+// WorkUnitTeamAttributions below (which CHAOS-3969 does port), this field
+// is not issued by any web document today -- confirmed by searching
+// web/src for a caller (`rg --hidden workItemTeamAttributions
+// web/src` -- no hits) -- so there is nothing to port against yet: no
+// real request shape, no dual-run fixture, no registered-document text to
+// verify parity against. CHAOS-3969 ports resolve_work_unit_team_attributions
+// only (team_attribution.py); this sibling
+// (resolve_work_item_team_attributions, the per-work-ITEM reader CHAOS-2600
+// originally shipped) stays a panic stub until a future ticket has an
+// actual caller to port against.
 func (r *queryResolver) WorkItemTeamAttributions(ctx context.Context, orgID string, workItemIds []string, teamID *string) ([]model.WorkItemTeamAttribution, error) {
 	panic(fmt.Errorf("not implemented: WorkItemTeamAttributions - workItemTeamAttributions"))
 }
 
-// WorkUnitTeamAttributions is the resolver for the workUnitTeamAttributions field.
+// WorkUnitTeamAttributions is the resolver for the workUnitTeamAttributions
+// field (CHAOS-3969). Ports team_attribution.py's
+// resolve_work_unit_team_attributions via workgraph.ResolveWorkUnitTeamAttributions
+// -- see that function's doc comment for the shared run-scope protocol it
+// reuses. Same "authorized org always wins" authorization convention as
+// Pr/WorkGraphEdges above: orgID is the GraphQL argument, but the org
+// actually queried is claims.OrgID from the verified envelope, never the
+// caller-supplied value.
+//
+// Not registered as a routeswitch document in query_route.go by this PR
+// (deliberate, per this ticket's own Deliverables text, unlike sibling
+// CHAOS-4991) -- this only makes the resolver correct and stops the panic;
+// it does not make workUnitTeamAttributions reachable from a real request
+// yet (see query_route.go's own "registration is not enablement" doc
+// comments for what a later registration PR still has to do: a
+// byte-for-byte wire-form document capture, a digest, and a separate
+// enablement decision).
 func (r *queryResolver) WorkUnitTeamAttributions(ctx context.Context, orgID string, workUnitIds []string, teamID *string) ([]model.WorkUnitTeamAttribution, error) {
-	panic(fmt.Errorf("not implemented: WorkUnitTeamAttributions - workUnitTeamAttributions"))
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return nil, &gqlerror.Error{
+			Message: "Authorization required",
+			Path:    graphql.GetPath(ctx),
+			Extensions: map[string]interface{}{
+				"code": "AUTHORIZATION_ERROR",
+			},
+		}
+	}
+
+	results, err := workgraph.ResolveWorkUnitTeamAttributions(ctx, r.ClickHouse, claims.OrgID, workUnitIds, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("workUnitTeamAttributions: %w", err)
+	}
+	return results, nil
 }
 
 // SecurityAlerts is the resolver for the securityAlerts field.

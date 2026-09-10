@@ -191,3 +191,490 @@ func TestPRCoreRowExists_RealClickHouse(t *testing.T) {
 		t.Fatal("expected an unseeded PR number to not exist")
 	}
 }
+
+// TestFetchPRCoreRow_RealClickHouse is CHAOS-4991's proof that
+// FetchPRCoreRow's Scan destinations actually match what a REAL
+// ClickHouse driver hands back for every column type in play here --
+// notably the Nullable(String)/Nullable(DateTime64)/Nullable(UInt32)
+// double-pointer destinations and the LEFT JOIN repo_name column (see
+// FetchPRCoreRow's own doc comment for the join_use_nulls=0 rationale) --
+// none of which the fake-client unit tests in pr_test.go can catch (the
+// SAME class of gap fetchLinkedIssueRowsFinal's doc comment already
+// documents for the Float32-argMax trap).
+func TestFetchPRCoreRow_RealClickHouse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = ch.Close(context.Background()) }()
+
+	chschema.Apply(ctx, t, ch)
+
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open ClickHouse admin connection: %v", err)
+	}
+	defer func() { _ = admin.Close() }()
+
+	const (
+		orgID          = "org-4991-core"
+		repoID         = "00000000-4991-0000-0000-000000000001"
+		seededPRNumber = 7
+		bareRepoID     = "00000000-4991-0000-0000-000000000099" // no `repos` row
+		barePRNumber   = 8
+	)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	reposBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider, source_id)
+    `)
+	if err != nil {
+		t.Fatalf("prepare repos batch: %v", err)
+	}
+	if err := reposBatch.Append(repoID, "acme/widgets", nil, now, nil, nil, now, orgID, "github", nil); err != nil {
+		t.Fatalf("append repos row: %v", err)
+	}
+	if err := reposBatch.Send(); err != nil {
+		t.Fatalf("send repos batch: %v", err)
+	}
+
+	prBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO git_pull_requests (
+            org_id, repo_id, number, title, body, state, author_name, author_email,
+            created_at, merged_at, closed_at, head_branch, base_branch,
+            additions, deletions, changed_files, first_review_at,
+            first_comment_at, changes_requested_count, reviews_count,
+            comments_count, last_synced
+        )
+    `)
+	if err != nil {
+		t.Fatalf("prepare git_pull_requests batch: %v", err)
+	}
+	created := time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC)
+	merged := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+	firstReview := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	if err := prBatch.Append(
+		orgID, repoID, uint32(seededPRNumber), "Fix the thing", "body text", "merged",
+		"Ada Lovelace", "ada@example.com",
+		created, merged, nil, "feature/x", "main",
+		uint32(120), uint32(40), uint32(7), firstReview,
+		nil, uint32(2), uint32(3),
+		uint32(5), now,
+	); err != nil {
+		t.Fatalf("append seeded git_pull_requests row: %v", err)
+	}
+	// A second PR whose repo_id has NO matching `repos` row at all -- the
+	// join_use_nulls=0 edge case FetchPRCoreRow's doc comment documents:
+	// anyLast(repos.repo) must come back "" (mapped to nil RepoName), not
+	// panic or error.
+	if err := prBatch.Append(
+		orgID, bareRepoID, uint32(barePRNumber), "No repo row", nil, "open",
+		nil, nil,
+		created, nil, nil, nil, nil,
+		nil, nil, nil, nil,
+		nil, uint32(0), uint32(0),
+		uint32(0), now,
+	); err != nil {
+		t.Fatalf("append bare git_pull_requests row: %v", err)
+	}
+	if err := prBatch.Send(); err != nil {
+		t.Fatalf("send git_pull_requests batch: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	row, ok, err := FetchPRCoreRow(ctx, client, orgID, repoID, seededPRNumber)
+	if err != nil {
+		t.Fatalf("FetchPRCoreRow (seeded): %v", err)
+	}
+	if !ok {
+		t.Fatal("expected the seeded PR to be found")
+	}
+	if row.RepoName == nil || *row.RepoName != "acme/widgets" {
+		t.Errorf("RepoName = %v, want acme/widgets", row.RepoName)
+	}
+	if row.Title == nil || *row.Title != "Fix the thing" {
+		t.Errorf("Title = %v", row.Title)
+	}
+	if row.Body == nil || *row.Body != "body text" {
+		t.Errorf("Body = %v", row.Body)
+	}
+	if row.State == nil || *row.State != "merged" {
+		t.Errorf("State = %v", row.State)
+	}
+	if !row.CreatedAt.Equal(created) {
+		t.Errorf("CreatedAt = %v, want %v", row.CreatedAt, created)
+	}
+	if row.MergedAt == nil || !row.MergedAt.Equal(merged) {
+		t.Errorf("MergedAt = %v, want %v", row.MergedAt, merged)
+	}
+	if row.ClosedAt != nil {
+		t.Errorf("ClosedAt = %v, want nil", row.ClosedAt)
+	}
+	if row.Additions == nil || *row.Additions != 120 {
+		t.Errorf("Additions = %v, want 120", row.Additions)
+	}
+	if row.Deletions == nil || *row.Deletions != 40 {
+		t.Errorf("Deletions = %v, want 40", row.Deletions)
+	}
+	if row.ChangedFiles == nil || *row.ChangedFiles != 7 {
+		t.Errorf("ChangedFiles = %v, want 7", row.ChangedFiles)
+	}
+	if row.FirstReviewAt == nil || !row.FirstReviewAt.Equal(firstReview) {
+		t.Errorf("FirstReviewAt = %v, want %v", row.FirstReviewAt, firstReview)
+	}
+	if row.FirstCommentAt != nil {
+		t.Errorf("FirstCommentAt = %v, want nil", row.FirstCommentAt)
+	}
+	if row.ChangesRequestedCount != 2 || row.ReviewsCount != 3 || row.CommentsCount != 5 {
+		t.Errorf("counts = %d/%d/%d, want 2/3/5", row.ChangesRequestedCount, row.ReviewsCount, row.CommentsCount)
+	}
+
+	bareRow, ok, err := FetchPRCoreRow(ctx, client, orgID, bareRepoID, barePRNumber)
+	if err != nil {
+		t.Fatalf("FetchPRCoreRow (bare repo): %v", err)
+	}
+	if !ok {
+		t.Fatal("expected the bare-repo PR to be found")
+	}
+	if bareRow.RepoName != nil {
+		t.Errorf("RepoName = %v, want nil for a repo_id with no matching repos row (join_use_nulls=0 case)", *bareRow.RepoName)
+	}
+	if bareRow.Title == nil || *bareRow.Title != "No repo row" {
+		t.Errorf("Title = %v", bareRow.Title)
+	}
+	if bareRow.Body != nil || bareRow.State == nil || *bareRow.State != "open" {
+		t.Errorf("Body/State = %v/%v", bareRow.Body, bareRow.State)
+	}
+	if bareRow.Additions != nil || bareRow.MergedAt != nil {
+		t.Errorf("Additions/MergedAt = %v/%v, want nil/nil", bareRow.Additions, bareRow.MergedAt)
+	}
+
+	_, ok, err = FetchPRCoreRow(ctx, client, orgID, repoID, 99999)
+	if err != nil {
+		t.Fatalf("FetchPRCoreRow (unknown): %v", err)
+	}
+	if ok {
+		t.Fatal("expected an unseeded PR number to not be found")
+	}
+}
+
+// TestResolveReviews_RealClickHouse proves ResolveReviews's Scan
+// destinations against a real ClickHouse engine and its ordering
+// (submitted_at ASC, review_id ASC).
+func TestResolveReviews_RealClickHouse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = ch.Close(context.Background()) }()
+
+	chschema.Apply(ctx, t, ch)
+
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open ClickHouse admin connection: %v", err)
+	}
+	defer func() { _ = admin.Close() }()
+
+	const (
+		orgID    = "org-4991-reviews"
+		repoID   = "00000000-4991-0000-0000-000000000002"
+		prNumber = 11
+	)
+	earlier := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	later := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
+
+	batch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO git_pull_request_reviews (org_id, repo_id, number, review_id, reviewer, state, submitted_at, last_synced)
+    `)
+	if err != nil {
+		t.Fatalf("prepare git_pull_request_reviews batch: %v", err)
+	}
+	// Seeded out of order -- ResolveReviews must return them
+	// submitted_at ASC, not insertion order.
+	if err := batch.Append(orgID, repoID, uint32(prNumber), "rev-2", "hubot", "changes_requested", later, later); err != nil {
+		t.Fatalf("append review row: %v", err)
+	}
+	if err := batch.Append(orgID, repoID, uint32(prNumber), "rev-1", "octocat", "approved", earlier, earlier); err != nil {
+		t.Fatalf("append review row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send git_pull_request_reviews batch: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	got, err := ResolveReviews(ctx, client, orgID, repoID, prNumber)
+	if err != nil {
+		t.Fatalf("ResolveReviews: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d reviews, want 2: %+v", len(got), got)
+	}
+	if got[0].ReviewID != "rev-1" || !got[0].SubmittedAt.Equal(earlier) {
+		t.Errorf("got[0] = %+v, want rev-1 at %v (earlier first)", got[0], earlier)
+	}
+	if got[1].ReviewID != "rev-2" || !got[1].SubmittedAt.Equal(later) {
+		t.Errorf("got[1] = %+v, want rev-2 at %v (later second)", got[1], later)
+	}
+	if got[0].Reviewer != "octocat" || got[0].State != "approved" {
+		t.Errorf("got[0] reviewer/state = %q/%q, want octocat/approved", got[0].Reviewer, got[0].State)
+	}
+}
+
+// TestResolveReviews_FinalCollapsesDuplicateVersions is CHAOS-4991's
+// red-first proof for codex round chaos-4991-r1's F-1 (CHAOS-4516 class):
+// git_pull_request_reviews is a ReplacingMergeTree(last_synced) keyed on
+// (org_id, repo_id, number, review_id) (migration 027) -- an UNMERGED
+// duplicate physical row for the same logical review (two INSERTs with
+// the same review_id, different last_synced) is visible as TWO rows to a
+// query that omits FINAL, and collapses to exactly ONE (the highest
+// last_synced) with it. This seeds exactly that shape and asserts
+// ResolveReviews returns exactly one row, carrying the LATER version's
+// state -- proving the `FROM git_pull_request_reviews FINAL` in
+// ResolveReviews's query text is load-bearing, not cosmetic. (Confirmed
+// RED against the pre-fix, no-FINAL query by hand before landing the fix:
+// this test returned 2 rows -- both physical versions -- with FINAL
+// removed, and 1 with it restored.)
+func TestResolveReviews_FinalCollapsesDuplicateVersions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = ch.Close(context.Background()) }()
+
+	chschema.Apply(ctx, t, ch)
+
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open ClickHouse admin connection: %v", err)
+	}
+	defer func() { _ = admin.Close() }()
+
+	const (
+		orgID    = "org-4991-dedup"
+		repoID   = "00000000-4991-0000-0000-000000000004"
+		prNumber = 33
+		reviewID = "rev-dup-1"
+	)
+	older := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC)
+
+	// TWO physical versions of the SAME logical review (identical
+	// org_id/repo_id/number/review_id -- the full ReplacingMergeTree key),
+	// differing only in state and last_synced (the version column) --
+	// inserted as TWO SEPARATE batches/parts, deliberately, not one batch
+	// with two rows: ClickHouse's `optimize_on_insert` setting (default 1
+	// on this stack, confirmed live) collapses ReplacingMergeTree
+	// duplicates WITHIN a single insert block at insert time, REGARDLESS
+	// of FINAL -- a single two-row batch would silently produce only one
+	// physical row and this test would pass vacuously even against the
+	// pre-fix, no-FINAL query (caught exactly this way while red-proving
+	// this test: a one-batch version stayed green with FINAL removed).
+	// Two separate Send() calls create two separate parts, which only a
+	// real merge (or FINAL) -- not insert-time optimization -- collapses.
+	olderBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO git_pull_request_reviews (org_id, repo_id, number, review_id, reviewer, state, submitted_at, last_synced)
+    `)
+	if err != nil {
+		t.Fatalf("prepare git_pull_request_reviews batch (older version): %v", err)
+	}
+	if err := olderBatch.Append(orgID, repoID, uint32(prNumber), reviewID, "octocat", "pending", older, older); err != nil {
+		t.Fatalf("append older review version: %v", err)
+	}
+	if err := olderBatch.Send(); err != nil {
+		t.Fatalf("send older review version batch: %v", err)
+	}
+
+	newerBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO git_pull_request_reviews (org_id, repo_id, number, review_id, reviewer, state, submitted_at, last_synced)
+    `)
+	if err != nil {
+		t.Fatalf("prepare git_pull_request_reviews batch (newer version): %v", err)
+	}
+	if err := newerBatch.Append(orgID, repoID, uint32(prNumber), reviewID, "octocat", "approved", older, newer); err != nil {
+		t.Fatalf("append newer review version: %v", err)
+	}
+	if err := newerBatch.Send(); err != nil {
+		t.Fatalf("send newer review version batch: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	got, err := ResolveReviews(ctx, client, orgID, repoID, prNumber)
+	if err != nil {
+		t.Fatalf("ResolveReviews: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d reviews, want exactly 1 (FINAL must collapse the two physical versions of review_id=%q): %+v", len(got), reviewID, got)
+	}
+	if got[0].State != "approved" {
+		t.Fatalf("got state %q, want %q (the version with the higher last_synced must win)", got[0].State, "approved")
+	}
+}
+
+// TestResolveCommits_RealClickHouse is CHAOS-4991's proof that
+// ResolveCommits's toFloat64(argMax(link.confidence, ...)) cast actually
+// works against a REAL ClickHouse driver (work_graph_pr_commit.confidence
+// is Float32 -- see ResolveCommits's own doc comment for the trap this
+// guards, the same class fetchLinkedIssueRowsFinal's doc comment
+// documents for work_graph_issue_pr), and that the LEFT JOIN against
+// git_commits maps every column correctly, both for a commit WITH a
+// matching git_commits row and one WITHOUT (join_use_nulls=0 edge case).
+func TestResolveCommits_RealClickHouse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = ch.Close(context.Background()) }()
+
+	chschema.Apply(ctx, t, ch)
+
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	admin, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatalf("open ClickHouse admin connection: %v", err)
+	}
+	defer func() { _ = admin.Close() }()
+
+	const (
+		orgID    = "org-4991-commits"
+		repoID   = "00000000-4991-0000-0000-000000000003"
+		prNumber = 21
+	)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	authorWhen := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+
+	commitsBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO git_commits (
+            repo_id, hash, message, author_name, author_email, author_when,
+            committer_name, committer_email, committer_when, parents, last_synced, org_id
+        )
+    `)
+	if err != nil {
+		t.Fatalf("prepare git_commits batch: %v", err)
+	}
+	if err := commitsBatch.Append(
+		repoID, "deadbeef", "fix: the bug", "Ada Lovelace", "ada@example.com", authorWhen,
+		"Ada Lovelace", "ada@example.com", authorWhen, uint32(1), now, orgID,
+	); err != nil {
+		t.Fatalf("append git_commits row: %v", err)
+	}
+	if err := commitsBatch.Send(); err != nil {
+		t.Fatalf("send git_commits batch: %v", err)
+	}
+
+	linkBatch, err := admin.PrepareBatch(ctx, `
+        INSERT INTO work_graph_pr_commit (repo_id, pr_number, commit_hash, confidence, provenance, evidence, last_synced, org_id)
+    `)
+	if err != nil {
+		t.Fatalf("prepare work_graph_pr_commit batch: %v", err)
+	}
+	// Linked commit WITH a matching git_commits row.
+	if err := linkBatch.Append(repoID, uint32(prNumber), "deadbeef", float32(0.92), "native", "api_pr_commits", now, orgID); err != nil {
+		t.Fatalf("append work_graph_pr_commit row: %v", err)
+	}
+	// Linked commit hash with NO matching git_commits row -- the
+	// join_use_nulls=0 edge case ResolveCommits's doc comment documents:
+	// message/author_name/author_email come back nil, author_when comes
+	// back the zero value (never NULL, never an error).
+	if err := linkBatch.Append(repoID, uint32(prNumber), "c0ffee00", float32(0.5), "heuristic", "commit_message_reference", now, orgID); err != nil {
+		t.Fatalf("append work_graph_pr_commit row (no matching commit): %v", err)
+	}
+	if err := linkBatch.Send(); err != nil {
+		t.Fatalf("send work_graph_pr_commit batch: %v", err)
+	}
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: ch.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	got, err := ResolveCommits(ctx, client, orgID, repoID, prNumber)
+	if err != nil {
+		t.Fatalf("ResolveCommits: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d commits, want 2: %+v", len(got), got)
+	}
+
+	byHash := map[string]int{}
+	for i, c := range got {
+		byHash[c.Hash] = i
+	}
+
+	matched := got[byHash["deadbeef"]]
+	if matched.Message == nil || *matched.Message != "fix: the bug" {
+		t.Errorf("matched.Message = %v", matched.Message)
+	}
+	if matched.AuthorName == nil || *matched.AuthorName != "Ada Lovelace" {
+		t.Errorf("matched.AuthorName = %v", matched.AuthorName)
+	}
+	if matched.AuthorWhen == nil || !matched.AuthorWhen.Equal(authorWhen) {
+		t.Errorf("matched.AuthorWhen = %v, want %v", matched.AuthorWhen, authorWhen)
+	}
+	if matched.Confidence == nil || *matched.Confidence < 0.919 || *matched.Confidence > 0.921 {
+		t.Errorf("matched.Confidence = %v, want ~0.92 (Float32->Float64 cast survives the round trip)", matched.Confidence)
+	}
+	if matched.Provenance == nil || *matched.Provenance != "native" {
+		t.Errorf("matched.Provenance = %v", matched.Provenance)
+	}
+
+	unmatched := got[byHash["c0ffee00"]]
+	if unmatched.Message != nil {
+		t.Errorf("unmatched.Message = %v, want nil (no matching git_commits row)", *unmatched.Message)
+	}
+	if unmatched.AuthorName != nil || unmatched.AuthorEmail != nil {
+		t.Errorf("unmatched.AuthorName/AuthorEmail = %v/%v, want nil/nil", unmatched.AuthorName, unmatched.AuthorEmail)
+	}
+	if unmatched.AuthorWhen == nil {
+		t.Error("unmatched.AuthorWhen = nil, want a non-nil zero-value time (join_use_nulls=0 case, not NULL)")
+	}
+	if unmatched.Confidence == nil || *unmatched.Confidence < 0.499 || *unmatched.Confidence > 0.501 {
+		t.Errorf("unmatched.Confidence = %v, want ~0.5", unmatched.Confidence)
+	}
+	if unmatched.Provenance == nil || *unmatched.Provenance != "heuristic" {
+		t.Errorf("unmatched.Provenance = %v", unmatched.Provenance)
+	}
+}

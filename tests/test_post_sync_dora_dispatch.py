@@ -13,14 +13,17 @@ stale DORA until the next daily beat after such a sync.
 ``has_dora = target_set & _DORA_TARGETS`` ({"deployments", "cicd",
 "incidents"}) and dispatches ``run_dora_metrics`` when ``has_git or has_dora``.
 
-These tests prove the seam without a live ClickHouse: they patch the same
-Celery ``send_task`` / ``chain`` / ``signature`` factories the sibling
-investment-dispatch test patches and assert the dispatch contract.
+CHAOS-3093: the sibling investment-dispatch chain (``chain``/``signature``)
+this file used to patch alongside ``send_task`` was deleted outright
+(dead-into-the-void Celery machinery, no consumer since 2026-08-19) --
+``run_dora_metrics`` was never part of that chain, it has always been a
+standalone ``celery_app.send_task(...)`` call, so these tests only ever
+needed to patch that one seam.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
 
@@ -28,35 +31,19 @@ _DORA_TASK = "dev_health_ops.workers.tasks.run_dora_metrics"
 
 
 def _run_dispatch(provider: str, sync_targets: list[str], org_id: str):
-    """Drive _dispatch_post_sync_tasks with chain/signature/send_task patched.
+    """Drive _dispatch_post_sync_tasks with send_task patched.
 
-    Returns (signature_mock, chain_mock, chain_instance_mock, send_task_mock).
+    Returns the send_task mock.
     """
-    with (
-        patch(
-            "dev_health_ops.workers.post_sync_dispatch.celery_app.signature"
-        ) as mock_signature,
-        patch("dev_health_ops.workers.post_sync_dispatch.chain") as mock_chain,
-        patch(
-            "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
-        ) as mock_send_task,
-    ):
-
-        def _make_sig(name, **kwargs):
-            sig = MagicMock(name=f"sig:{name}")
-            sig.task_name = name
-            sig.sig_kwargs = kwargs
-            return sig
-
-        mock_signature.side_effect = _make_sig
-        chain_instance = MagicMock(name="chain_instance")
-        mock_chain.return_value = chain_instance
+    with patch(
+        "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
+    ) as mock_send_task:
         _dispatch_post_sync_tasks(
             provider=provider,
             sync_targets=sync_targets,
             org_id=org_id,
         )
-    return mock_signature, mock_chain, chain_instance, mock_send_task
+    return mock_send_task
 
 
 def _dora_calls(mock_send_task):
@@ -70,7 +57,7 @@ def _dora_calls(mock_send_task):
 
 def test_dora_dispatched_for_deployments_only_no_git() -> None:
     """deployments-only (no git) => run_dora_metrics sent, org-scoped."""
-    _, _, _, mock_send_task = _run_dispatch(
+    mock_send_task = _run_dispatch(
         provider="github",
         sync_targets=["deployments"],
         org_id="org-123",
@@ -85,7 +72,7 @@ def test_dora_dispatched_for_deployments_only_no_git() -> None:
 
 def test_dora_dispatched_for_cicd_only_no_git() -> None:
     """cicd-only (no git) => run_dora_metrics sent, org-scoped."""
-    _, _, _, mock_send_task = _run_dispatch(
+    mock_send_task = _run_dispatch(
         provider="github",
         sync_targets=["cicd"],
         org_id="org-456",
@@ -98,7 +85,7 @@ def test_dora_dispatched_for_cicd_only_no_git() -> None:
 
 def test_dora_dispatched_for_incidents_only_no_git() -> None:
     """incidents-only (no git) => run_dora_metrics sent, org-scoped."""
-    _, _, _, mock_send_task = _run_dispatch(
+    mock_send_task = _run_dispatch(
         provider="github",
         sync_targets=["incidents"],
         org_id="org-789",
@@ -112,10 +99,10 @@ def test_dora_dispatched_for_incidents_only_no_git() -> None:
 def test_dora_not_dispatched_for_work_items_only() -> None:
     """work-items-only (no git, no DORA targets) => run_dora_metrics NOT sent.
 
-    A Jira/Linear work-items sync still fires the investment chain, but DORA has
-    no fresh inputs, so it must not be enqueued.
+    A Jira/Linear work-items sync has no DORA-relevant inputs, so it must not
+    be enqueued.
     """
-    _, _, _, mock_send_task = _run_dispatch(
+    mock_send_task = _run_dispatch(
         provider="jira",
         sync_targets=["work-items"],
         org_id="org-123",
@@ -126,7 +113,7 @@ def test_dora_not_dispatched_for_work_items_only() -> None:
 
 def test_dora_dispatched_for_git_only() -> None:
     """git-only still dispatches run_dora_metrics (CHAOS-2382 unchanged)."""
-    _, _, _, mock_send_task = _run_dispatch(
+    mock_send_task = _run_dispatch(
         provider="github",
         sync_targets=["git", "prs"],
         org_id="org-123",

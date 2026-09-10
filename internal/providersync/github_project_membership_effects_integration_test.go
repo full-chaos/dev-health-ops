@@ -91,7 +91,7 @@ func TestGitHubProjectsV2PullRequestReachesClickHouseThroughTheEffectPath(t *tes
 	for _, destination := range githubWorkItemDerivedDestinations {
 		derived[destination] = []json.RawMessage{}
 	}
-	effects, err := buildGitHubWorkItemsRouteEffects(fetched.Rows, derived)
+	effects, err := buildGitHubWorkItemsRouteEffects(fetched.Rows, derived, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

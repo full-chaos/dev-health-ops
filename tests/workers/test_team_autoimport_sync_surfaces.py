@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from contextlib import contextmanager
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -51,22 +51,17 @@ _ORG = "team-autoimport-sync-org"
 
 @contextmanager
 def _patched_post_sync_dispatch():
-    """Patch the celery factories so _dispatch_post_sync_tasks never hits a broker.
+    """Patch celery_app.send_task so _dispatch_post_sync_tasks never hits a broker.
 
-    Mirrors tests/test_post_sync_dora_dispatch.py: signature/chain are stubbed so
-    the investment chain does not dispatch, leaving send_task observable.
+    Mirrors tests/test_post_sync_dora_dispatch.py. CHAOS-3093: the investment
+    chain (``chain``/``signature``) this used to also stub was deleted
+    outright (dead-into-the-void, no consumer since 2026-08-19) --
+    ``run_post_sync_team_autoimport`` was never part of it, it has always
+    been a standalone ``celery_app.send_task(...)`` call.
     """
-    with (
-        patch(
-            "dev_health_ops.workers.post_sync_dispatch.celery_app.signature"
-        ) as mock_signature,
-        patch("dev_health_ops.workers.post_sync_dispatch.chain") as mock_chain,
-        patch(
-            "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
-        ) as mock_send_task,
-    ):
-        mock_signature.side_effect = lambda name, **kwargs: MagicMock()
-        mock_chain.return_value = MagicMock()
+    with patch(
+        "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
+    ) as mock_send_task:
         yield mock_send_task
 
 

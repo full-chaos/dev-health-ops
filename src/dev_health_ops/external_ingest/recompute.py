@@ -539,7 +539,9 @@ def schedule_or_coalesce(
     D10: different source instances debounce independently since their
     repo/team scopes are disjoint. Writes/merges the pending scope blob
     into Valkey and, iff a SETNX guard key is newly acquired, schedules
-    ``flush_external_ingest_recompute.apply_async(countdown=debounce_seconds)``.
+    ``flush_external_ingest_recompute`` via a named ``celery_app.send_task(...,
+    countdown=debounce_seconds)`` (CHAOS-3093: the direct task import this used
+    to call ``.apply_async()`` on no longer exists, its module was deleted).
 
     If Valkey is unavailable (no ``REDIS_URL``, connection error, or any
     other exception talking to it), degrades to an IMMEDIATE synchronous
@@ -622,11 +624,18 @@ def schedule_or_coalesce(
             )
 
         if acquired:
-            from dev_health_ops.workers.external_ingest_recompute import (
-                flush_external_ingest_recompute,
-            )
-
-            flush_external_ingest_recompute.apply_async(
+            # CHAOS-3093: workers/external_ingest_recompute.py (the
+            # flush_external_ingest_recompute task) was deleted -- it has had
+            # no Celery consumer since 2026-08-19 (rollback_route=none), so
+            # this send_task is dead-into-the-void the same way the other
+            # retired dispatch sites in this PR are. Kept as a named
+            # send_task (not deleted outright) because the debounce/guard
+            # bookkeeping above it is still live and unrelated to this
+            # dispatch's own liveness; see CHAOS-4065/4026 for the
+            # Go-drain-visibility follow-up on this seam.
+            celery_app.send_task(
+                "dev_health_ops.workers.external_ingest_recompute."
+                "flush_external_ingest_recompute",
                 kwargs={
                     "org_id": org_id,
                     "source_system": source_system,

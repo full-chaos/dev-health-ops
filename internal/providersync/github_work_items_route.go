@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 var (
@@ -172,7 +173,7 @@ type githubWorkItemsDeriver interface {
 		Claim,
 		githubWorkItemRows,
 		time.Time,
-	) (map[string][]json.RawMessage, error)
+	) (map[string][]json.RawMessage, []teamattribution.GithubWorkItemDerivationRejectedMembership, error)
 }
 
 // GitHubWorkItemsRouteHandler composes the already-ported REST, PR-social, and
@@ -426,11 +427,11 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		}
 	}
 
-	derived, err := handler.Deriver.Derive(ctx, claim, rows, normalizedAt)
+	derived, membershipRejections, err := handler.Deriver.Derive(ctx, claim, rows, normalizedAt)
 	if err != nil {
 		return CompleteRouteBatch{}, usage.wrap(err)
 	}
-	effects, err := buildGitHubWorkItemsRouteEffects(rows, derived)
+	effects, err := buildGitHubWorkItemsRouteEffects(rows, derived, membershipRejections)
 	if err != nil {
 		return CompleteRouteBatch{}, usage.wrap(err)
 	}
@@ -548,6 +549,7 @@ func finishGitHubWorkItemsEvidence(evidence *FetchEvidence, rows githubWorkItemR
 func buildGitHubWorkItemsRouteEffects(
 	rows githubWorkItemRows,
 	derived map[string][]json.RawMessage,
+	membershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership,
 ) ([]EffectBatch, error) {
 	if len(derived) != len(githubWorkItemDerivedDestinations) {
 		return nil, ErrGitHubWorkItemsDerivationsUnavailable
@@ -606,8 +608,13 @@ func buildGitHubWorkItemsRouteEffects(
 	if err != nil {
 		return nil, err
 	}
+	marshaledRejections, err := marshalGitHubWorkItemTeamAttributionRejections(membershipRejections)
+	if err != nil {
+		return nil, err
+	}
 	return BuildGitHubWorkItemEffects(GitHubWorkItemEffectRows{
 		AIAttribution:                  directAI,
+		MembershipRejections:           marshaledRejections,
 		EstimateCoverageMetricsDaily:   derived["estimate_coverage_metrics_daily"],
 		InvestmentClassificationsDaily: derived["investment_classifications_daily"],
 		InvestmentMetricsDaily:         derived["investment_metrics_daily"],

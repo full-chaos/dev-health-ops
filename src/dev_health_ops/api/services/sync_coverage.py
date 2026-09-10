@@ -1408,9 +1408,10 @@ def _backfill_interval(job: _BackfillJobLike) -> CoverageInterval:
 def _backfill_job_sync_run_id(job: _BackfillJobLike) -> str | None:
     """Extract the linked SyncRun id from a backfill job's celery_task_id.
 
-    Mirrors the identical helper in ``api/admin/routers/sync.py`` and
-    ``workers/sync_reconciler.py`` (duplicated locally -- pulling it in would
-    create a router import cycle from this service module).
+    Mirrors the identical helper in ``api/admin/routers/sync.py`` (duplicated
+    locally -- pulling it in would create a router import cycle from this
+    service module). ``workers/sync_reconciler.py`` had a third copy before
+    it was deleted outright under CHAOS-3093 (PR2a').
     """
     task_id = str(job.celery_task_id or "")
     marker = "sync_run:"

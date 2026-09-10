@@ -3,8 +3,6 @@
 import os
 from typing import Any
 
-from celery.schedules import crontab
-
 
 def _int_env(name: str, default: int) -> int:
     try:
@@ -39,15 +37,15 @@ late_ack_excluded_tasks = (
     # dispatch_release_impact, dispatch_membership_backfill, and
     # dispatch_scheduled_reports were deleted -- Go now owns these cadences
     # and Celery Beat has not scheduled them since the 2026-08-19 stop.
-    # dispatch_scheduled_syncs stays (see beat_schedule's header comment).
-    "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
-    "dev_health_ops.workers.tasks.dispatch_investment_materialize_partitioned",
     "dev_health_ops.workers.tasks.phone_home_heartbeat",
-    # CHAOS-2699's debounced recompute flush task. Valkey's SETNX debounce
-    # guard is the durability/dedup layer here, not Celery's acks-late
-    # redelivery -- reuses the existing `default` queue, no task_queues/compose
-    # change needed.
-    "dev_health_ops.workers.tasks.flush_external_ingest_recompute",
+    # CHAOS-3093: dispatch_investment_materialize_partitioned (workers/
+    # work_graph_tasks.py) and flush_external_ingest_recompute (workers/
+    # external_ingest_recompute.py) were both deleted outright -- dead-into-
+    # the-void, no Celery consumer since 2026-08-19 -- so neither registers
+    # with the Celery app any more and both were removed from this tuple.
+    # PR2a' deleted dispatch_scheduled_syncs (workers/sync_scheduler.py) the
+    # same way -- internal/scheduler/sync's coordinator/loop owns this
+    # cadence natively now.
 )
 task_annotations = {
     task_name: {"acks_late": False, "reject_on_worker_lost": False}
@@ -141,59 +139,20 @@ task_queues: dict[str, dict[str, Any]] = {
 # tests/workers/test_celery_dead_code_contract.py. See CHAOS-4056's beat
 # inventory comment for the full per-entry Go-successor mapping.
 #
-# The entries below survive deliberately -- flagged to team-lead rather
-# than deleted, per-entry reasons:
-#   * dispatch-scheduled-syncs, reconcile-sync-dispatch -- each has a very
-#     large test surface (canonical-incident-feature gating, outbox relay,
-#     backfill-orphan cleanup, unreclaimable-dispatching sweep) beyond what
-#     CHAOS-4056's inventory sweep verified 1:1 Go parity for. Removing
-#     either needs its own reviewed pass, not a drive-by deletion here.
-#     (CHAOS-4054 step 4 has since deleted the Celery-transport fallback
-#     these two used to reach -- provider_unit_transport.py is gone -- so
-#     that particular reason for keeping them no longer applies; the test
-#     surface one still does.)
-#   * monitor-queue-depths, prune-rate-limit-observations, prune-external-
-#     ingest-batches -- still exercised by a REAL Celery worker+beat fleet in
-#     tests/acceptance/compose.ask-dev.yml's release-blocking gate (see the
-#     comment above its `worker`/`beat` services), independent of prod.
-beat_schedule = {
-    "dispatch-scheduled-syncs": {
-        "task": "dev_health_ops.workers.tasks.dispatch_scheduled_syncs",
-        "schedule": 300.0,
-        "options": {"queue": "scheduler"},
-    },
-    "reconcile-sync-dispatch": {
-        "task": "dev_health_ops.workers.tasks.reconcile_sync_dispatch",
-        "schedule": 60.0,
-        "options": {"queue": "sync"},
-    },
-    "monitor-queue-depths": {
-        "task": "dev_health_ops.workers.tasks.monitor_queue_depths",
-        "schedule": 60.0,
-        # Dedicated `monitoring` queue: telemetry must keep flowing even when
-        # `default` floods (that is precisely when it is needed).
-        "options": {"queue": "monitoring"},
-    },
-    # Retention for the durable rate-limit observation store (CHAOS-2758).
-    # Env-tunable via SYNC_RATE_LIMIT_OBSERVATION_RETENTION_DAYS (default 14,
-    # see workers/sync_reconciler.py). Scheduled off-peak, clear of the other
-    # nightly jobs (1:00 metrics, 1:30 release-impact, 2:00 recommendations,
-    # 3:30 membership backfill).
-    "prune-rate-limit-observations": {
-        "task": "dev_health_ops.workers.tasks.prune_rate_limit_observations",
-        "schedule": crontab(hour=5, minute=0),
-        "options": {"queue": "sync"},
-    },
-    # Retention for the external-ingest status store (CHAOS-2694). Env-tunable
-    # via EXTERNAL_INGEST_STATUS_RETENTION_DAYS (default 90, see
-    # workers/external_ingest_reconciler.py). Scheduled immediately after
-    # prune-rate-limit-observations (5:00), clear of the other nightly jobs.
-    "prune-external-ingest-batches": {
-        "task": "dev_health_ops.workers.tasks.prune_external_ingest_batches",
-        "schedule": crontab(hour=5, minute=15),
-        "options": {"queue": "sync"},
-    },
-}
+# CHAOS-3093 (2026-09-09, PR2a') retired the three entries this file used to
+# keep -- dispatch-scheduled-syncs, reconcile-sync-dispatch, prune-rate-
+# limit-observations -- outright. This is the reviewed pass PR2a deferred:
+# internal/scheduler/sync's coordinator/loop (live, already the real
+# OwnerRef in internal/scheduler/fixed/inventory.go's LegacyBeatInventory
+# before this change) owns sync dispatch; internal/syncreconciler (live,
+# SweepModeActive) owns reconciliation; internal/jobs/system's
+# RateLimitObservationStore + internal/scheduler/fixed's RetentionProducer
+# own the rate-limit retention sweep. Every deleted Python invariant test's
+# Go-side pin is mapped in this PR's TEST-EVIDENCE, not restated here.
+# workers/sync_scheduler.py and workers/sync_reconciler.py are deleted
+# outright. All three entries are pinned absent by
+# tests/workers/test_celery_dead_code_contract.py.
+beat_schedule: dict[str, Any] = {}
 
 # Result settings
 result_expires = 86400  # Results expire after 24 hours

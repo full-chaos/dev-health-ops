@@ -273,6 +273,7 @@ type Metrics struct {
 	allArtifactsUnreadable         map[string]uint64
 	workItemTeamAttributionWritten map[string]uint64
 	teamAttributionMembershipLayer map[string]uint64
+	ownershipChecked               map[string]uint64
 	projectsV2DegradedSnapshots    map[string]uint64
 	unitClaimed                    map[string]uint64
 	unitFailed                     map[string]uint64
@@ -306,6 +307,7 @@ func NewMetrics() *Metrics {
 		allArtifactsUnreadable:         map[string]uint64{},
 		workItemTeamAttributionWritten: map[string]uint64{},
 		teamAttributionMembershipLayer: map[string]uint64{},
+		ownershipChecked:               map[string]uint64{},
 		projectsV2DegradedSnapshots:    map[string]uint64{},
 		unitClaimed:                    map[string]uint64{},
 		unitFailed:                     map[string]uint64{},
@@ -1231,6 +1233,45 @@ func (m *Metrics) RecordTeamAttributionMembershipLayer(layer string) {
 	m.teamAttributionMembershipLayer[MetricTeamAttributionMembershipLayerLabel(layer)]++
 }
 
+// metricTeamAttributionOwnershipCheckedVocabulary bounds CHAOS-4320's
+// repo-ownership-gate outcome label to a closed set, mirroring every other
+// bounded vocabulary in this file. "owned" is the resolved team actually
+// owning the repo (the gate let the candidate through); "repo_not_owned" is
+// the repo having an ownership row that excludes the resolved team;
+// "ownership_unknown" is the repo having no ownership row at all (R74:
+// gate skipped, membership passes through, still counted so the pass-
+// through stays visible).
+var metricTeamAttributionOwnershipCheckedVocabulary = map[string]struct{}{
+	"owned": {}, "repo_not_owned": {}, "ownership_unknown": {},
+}
+
+// MetricTeamAttributionOwnershipCheckedLabel bounds the ownership-checked
+// telemetry label. An unrecognized value collapses to "other" rather than
+// minting an unbounded series.
+func MetricTeamAttributionOwnershipCheckedLabel(value string) string {
+	lowered := strings.ToLower(strings.TrimSpace(value))
+	if _, known := metricTeamAttributionOwnershipCheckedVocabulary[lowered]; !known {
+		return "other"
+	}
+	return lowered
+}
+
+// RecordTeamAttributionOwnershipChecked counts ONE CHAOS-4320
+// repo-ownership-gate outcome for a winning assignee_membership/
+// author_membership resolution, or for an "unassigned" outcome the gate
+// itself produced. Called from WriteGitHubWorkItemEffect, the actual
+// metrics-capable write boundary -- NOT from teamOwnsSubjectRepo/Resolve(),
+// which stay pure (same discipline as RecordTeamAttributionMembershipLayer
+// above).
+func (m *Metrics) RecordTeamAttributionOwnershipChecked(reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ownershipChecked[MetricTeamAttributionOwnershipCheckedLabel(reason)]++
+}
+
 // MetricProjectsV2DegradedReasonLabel bounds the provider response classes
 // emitted by the GitHub Projects V2 collector. The vocabulary is closed so a
 // provider payload cannot mint unbounded Prometheus series.
@@ -1509,6 +1550,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_team_attribution_membership_layer_total",
 		"assignee_membership/author_membership resolutions by which layer resolved them (CHAOS-4321).",
 		"layer", m.teamAttributionMembershipLayer,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_team_attribution_ownership_checked_total",
+		"CHAOS-4320 repo-ownership-gate outcomes for assignee_membership/author_membership resolutions, by bounded reason (owned/repo_not_owned/ownership_unknown).",
+		"reason", m.ownershipChecked,
 	); err != nil {
 		return err
 	}

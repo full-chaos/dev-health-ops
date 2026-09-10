@@ -152,8 +152,14 @@ func TestGitHubWorkItemDerivationPreservesPrecedenceAndProvenance(t *testing.T) 
 			RepoID: &repoIDText, RepoFullName: "acme/api", IsPrimary: 1,
 			Specificity: 70, UpdatedAt: now,
 		}},
+		// CHAOS-4320: TeamID "team-repo" (not a separate "team-member"),
+		// so the assignee's resolved team OWNS repoID -- Go's repo-
+		// ownership gate would otherwise drop this candidate entirely
+		// (correctly; see cascade_smoke_test.go for that case), which is
+		// not what this test exists to check (repo_ownership outranking
+		// an assignee_membership candidate that's still present).
 		Members: []teamattribution.GithubWorkItemDerivationMemberFact{{
-			Provider: "github", TeamID: "team-member", TeamName: "Member Team",
+			Provider: "github", TeamID: "team-repo", TeamName: "Member Team",
 			MemberID: "dev@example.com", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
 		}},
 		ManualFallbacks: []teamattribution.GithubWorkItemDerivationManualFallback{{
@@ -950,10 +956,22 @@ func TestGitHubWorkItemDerivationNeverInfersTeamFromPersonMembershipUnlessAdminM
 }
 
 func TestGitHubWorkItemDerivationOwnershipWinsOverAssigneeAndAuthorMembership(t *testing.T) {
-	// CHAOS-4321: ownership always wins, even when BOTH assignee and author
-	// are admin-mapped to a DIFFERENT team -- membership candidates still
-	// appear as non-primary provenance rows, they just never outrank a real
-	// repo_ownership fact.
+	// CHAOS-4321: ownership always wins as primary, even when BOTH assignee
+	// and author are admin-mapped to a DIFFERENT team.
+	//
+	// CHAOS-4320 (this test UPDATED, not merely re-asserted -- Trap #116):
+	// before this ticket, "team-other" not owning repoID had no consequence
+	// beyond losing the primary slot -- assignee_membership/author_membership
+	// still appeared as non-primary provenance rows, laundering "any team
+	// this person belongs to" into a persisted attribution the repo-
+	// ownership tier itself would never grant. The OLD assertion here
+	// (`!sources["assignee_membership"] || !sources["author_membership"]`
+	// failing the test) was pinning that defective behavior. The repo-
+	// ownership gate now drops both candidates entirely instead: they fall
+	// through the cascade exactly like a non-member would, so neither
+	// source appears at all, and the run resolves to "unassigned" evidence
+	// naming MembershipOwnershipReasonNotOwned had repo_ownership itself not
+	// already supplied a primary.
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
 	derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{
@@ -986,8 +1004,8 @@ func TestGitHubWorkItemDerivationOwnershipWinsOverAssigneeAndAuthorMembership(t 
 	if primarySource != "repo_ownership" {
 		t.Fatalf("primary source = %q, want repo_ownership", primarySource)
 	}
-	if !sources["assignee_membership"] || !sources["author_membership"] {
-		t.Fatalf("candidates = %+v, want assignee_membership AND author_membership present as non-primary rows", candidates)
+	if sources["assignee_membership"] || sources["author_membership"] {
+		t.Fatalf("candidates = %+v, want assignee_membership AND author_membership ABSENT (team-other does not own repoID, CHAOS-4320 gate)", candidates)
 	}
 }
 

@@ -698,6 +698,156 @@ const registeredThroughputForecastDocument = `query ThroughputForecast($orgId: S
   }
 }`
 
+// registeredFeatureFlagEventsDocument is CHAOS-5523's registered document
+// for the featureFlagEvents operation -- the operation featureFlags's own
+// Wave 1 canary deliberately deferred (cmd/query-api/README.md's former
+// "featureFlagEvents -- explicitly out of scope for the Wave 1 canary"
+// bullet, removed by this change).
+//
+// Source const: FEATURE_FLAG_EVENTS_QUERY, web/src/lib/feature-flags/
+// queries.ts:19, operation name "FeatureFlagEvents", individual scalar
+// arguments (orgId/flagKey/environment/limit) -- same shape as
+// featureFlags above, not the single-`$input`-object shape most other
+// operations in this file use.
+//
+// WIRE FORM, not source text -- same CHAOS-4696 discipline
+// registeredFeatureFlagsDocument's own doc comment explains at length:
+// urql's real exchange chain runs the source query through TWO
+// transformations before it leaves the browser (cacheExchange's
+// formatDocument, which injects a `__typename` selection into every
+// non-root selection set, then fetchExchange's stringifyDocument, which
+// reflows long argument lists) before anything hits the network. This
+// text is a REAL CAPTURE, not hand-reflowed: produced by running this
+// repo's own unmodified graphqlFetch (src/lib/graphql/server.ts) against
+// a real local HTTP listener, adapted from
+// web/scripts/capture-graphql-wire-fixture.ts (that script itself
+// hardcodes FEATURE_FLAG_REGISTRY_QUERY; this operation's capture used a
+// same-mechanism variant script run once against an unmodified
+// dev-health-web checkout, output verified byte-for-byte against
+// cmd/query-api/testdata/wire_capture/featureflagevents_captured.graphql
+// and its digest cross-checked independently in Python before being
+// pasted here -- see that file's README section and
+// query_route_wire_capture_test.go's
+// TestRegisteredFeatureFlagEventsDocument_MatchesCapturedWireFixture,
+// which asserts this const's digest against that fixture on every run,
+// independently of this comment's claim).
+const registeredFeatureFlagEventsDocument = `query FeatureFlagEvents($orgId: String!, $flagKey: String, $environment: String, $limit: Int!) {
+  featureFlagEvents(
+    orgId: $orgId
+    flagKey: $flagKey
+    environment: $environment
+    limit: $limit
+  ) {
+    events {
+      flagKey
+      eventType
+      prevState
+      nextState
+      actorType
+      environment
+      eventTs
+      __typename
+    }
+    totalCount
+    degradedReason
+    __typename
+  }
+}`
+
+// registeredPrDetailDocument is CHAOS-4991's registered document for the
+// `pr` operation -- the PR detail view (core row, reviews, commits,
+// linkedIssues). CHAOS-4980 wired the linkedIssues sub-field and the
+// nil-for-unknown existence check only, and pr_operation_not_registered_test.go
+// (removed by this change) asserted `pr` must stay UNREGISTERED until the
+// rest of the port landed -- see workgraph.ResolveLinkedIssues's own doc
+// comment for that history. CHAOS-4991 completes the port
+// (workgraph.FetchPRCoreRow/ResolveReviews/ResolveCommits, wired into
+// schema.resolvers.go's Pr resolver) and registers the document here,
+// satisfying that guard's condition.
+//
+// REGISTRATION IS NOT ENABLEMENT (same standing ruling
+// registeredInvestmentBreakdownDocument's doc comment carries verbatim
+// from CHAOS-4538's brief): PostgresSwitch.Enabled() is fail-closed
+// (routeswitch/postgres_switch.go) -- a missing registry row, a lookup
+// error, or an unresolvable digest all return false and Python keeps
+// serving every real request. Registering this document only makes it
+// POSSIBLE for a future, separately-decided enablement to route traffic
+// here (and makes it reachable via /query/proof, the shadow-inclusive
+// measurement-only plane -- CHAOS-5425); it does not itself route
+// anything. Whether/when to enable is the orchestrator's/chris's call,
+// not this port's.
+//
+// Same "registered documents only" contract, same "sourced from the real
+// client file, not reconstructed" discipline as every const above: this
+// is the urql WIRE FORM, not the source text in
+// web/src/lib/graphql/queries.ts (PR_DETAIL_QUERY, queries.ts:94-138,
+// operation name "PrDetail", variables `$orgId: String!` and `$id: ID!`).
+// Verified by IMPORTING the web repo's own, live, pinned tooling --
+// scripts/graphql-wire-parity.ts's exported `wireForm()`, the SAME
+// function that repo's own CI parity gate calls -- rather than a
+// hand-reflowed guess: `wireForm(PR_DETAIL_QUERY)` was invoked directly
+// (via `tsx`, resolving `@urql/core` from the web repo's own
+// node_modules) and its sha256(strings.TrimSpace(...)) digest recorded
+// alongside the byte-exact captured text under
+// testdata/wire_capture/pr_captured.graphql -- see that file and
+// query_route_wire_capture_test.go's
+// TestRegisteredPrDetailDocument_MatchesCapturedWireFixture, which
+// asserts this const's digest against that fixture independently of this
+// comment's own claim.
+const registeredPrDetailDocument = `query PrDetail($orgId: String!, $id: ID!) {
+  pr(orgId: $orgId, id: $id) {
+    id
+    orgId
+    repoId
+    repoName
+    number
+    title
+    body
+    state
+    authorName
+    authorEmail
+    createdAt
+    mergedAt
+    closedAt
+    headBranch
+    baseBranch
+    additions
+    deletions
+    changedFiles
+    firstReviewAt
+    firstCommentAt
+    changesRequestedCount
+    reviewsCount
+    commentsCount
+    reviews {
+      reviewId
+      reviewer
+      state
+      submittedAt
+      __typename
+    }
+    commits {
+      hash
+      message
+      authorName
+      authorEmail
+      authorWhen
+      confidence
+      provenance
+      evidence
+      __typename
+    }
+    linkedIssues {
+      workItemId
+      confidence
+      provenance
+      evidence
+      __typename
+    }
+    __typename
+  }
+}`
+
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
 // now shared code in cmd/query-api/internal/digest so
@@ -1204,6 +1354,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"capacityForecast":     digestHex(registeredCapacityForecastDocument),
 		"capacityForecasts":    digestHex(registeredCapacityForecastsDocument),
 		"throughputForecast":   digestHex(registeredThroughputForecastDocument),
+		"featureFlagEvents":    digestHex(registeredFeatureFlagEventsDocument),
+		"pr":                   digestHex(registeredPrDetailDocument),
 	}
 	// CHAOS-4710 deliverable 3: log the mounted set HERE, where
 	// digestByOperation actually lives, rather than handing main.go a

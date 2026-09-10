@@ -155,6 +155,16 @@ cmd/dev-health-worker	24
 cmd/dev-health-workerctl	13
 cmd/query-api	110
 cmd/query-api/internal/analytics	22
+# cmd/query-api/internal/featureflags (CHAOS-5523, 2026-09-09): TWO
+# Testcontainers-backed tests (events_integration_test.go), each starting
+# its own ClickHouse container -- same container-plus-DDL shape as this
+# file's other per-test-container packages, weight scales with TEST COUNT
+# not assertion count. MEASURED locally: `go test -tags=integration
+# -count=1 ./cmd/query-api/internal/featureflags/...`, package time
+# 29.734s (11.70s happy-path container + 17.82s missing-table container).
+# Rounded up to 30 for CI headroom, same treatment internal/goapiproof
+# gets above. Re-time if this package gains tests.
+cmd/query-api/internal/featureflags	30
 cmd/query-api/internal/hotspots	26
 cmd/query-api/internal/investmentexplain	41
 cmd/query-api/internal/routeswitch	5
@@ -185,6 +195,13 @@ internal/jobs/investment/categorize	15
 internal/jobs/investment/chquery	122
 internal/jobs/investment/chwrite	130
 internal/jobs/metrics/daily	6
+# internal/jobs/metrics/daily/benchmarking (CHAOS-4806): first
+# -tags=integration file in this package,
+# TestWriteBaselinesNullFieldsRoundTripAsRealClickHouseNull, one
+# Testcontainers-backed ClickHouse test. 20s is ceil() of a local
+# -count=1 run (17.949s) plus margin, same shape as this file's other
+# single-container-per-test packages. Re-time if the package gains tests.
+internal/jobs/metrics/daily/benchmarking	20
 internal/jobs/metrics/daily/icfinalize	51
 internal/jobs/metrics/remaining	6
 internal/jobs/operational	55

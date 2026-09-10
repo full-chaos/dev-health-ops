@@ -362,7 +362,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
 				}
 				glSink, err := providersync.NewGitLabWorkItemFamilyClickHouseEffects(
-					clickhouseConnection, session,
+					clickhouseConnection, session, providerMetrics,
 				)
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
@@ -386,7 +386,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
 				}
 				jiraSink, err := providersync.NewJiraWorkItemCompositeClickHouseEffects(
-					clickhouseConnection, session,
+					clickhouseConnection, session, providerMetrics,
 				)
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
@@ -410,7 +410,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					return providersync.CompleteRouteExecutor{}, providersync.ErrInvalidConfiguration
 				}
 				linearSink, err := providersync.NewLinearWorkItemFamilyClickHouseEffects(
-					clickhouseConnection, session,
+					clickhouseConnection, session, providerMetrics,
 				)
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err

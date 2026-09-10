@@ -2026,7 +2026,10 @@ def test_deferral_lifecycle_columns_are_classified_and_stamped_correctly():
     sites = [
         ("src/dev_health_ops/workers/sync_units.py", "SUCCESS"),
         ("src/dev_health_ops/workers/sync_units.py", "RETRYING"),
-        ("src/dev_health_ops/workers/sync_reconciler.py", "RETRYING"),
+        # workers/sync_reconciler.py's RETRYING stamp site was deleted outright
+        # under CHAOS-3093 (PR2a'); internal/syncreconciler's
+        # TestExpiredLeaseRetryStampClearsEveryEpisodeColumn is its Go
+        # analogue and proves the same per-episode-column invariant there.
         ("src/dev_health_ops/sync/budget_guard.py", "RETRYING"),
     ]
     checked = 0
@@ -2879,9 +2882,11 @@ def test_every_terminal_deferral_stamp_routes_through_the_chokepoint():
 
     repo_root = pathlib.Path(__file__).resolve().parents[1]
     guard_path = "src/dev_health_ops/sync/budget_guard.py"
+    # workers/sync_reconciler.py was deleted outright under CHAOS-3093
+    # (PR2a') -- a nonexistent file cannot stamp a owned category outside the
+    # chokepoint, so it is removed from this scan rather than scanned.
     other_paths = [
         "src/dev_health_ops/workers/sync_units.py",
-        "src/dev_health_ops/workers/sync_reconciler.py",
     ]
 
     guard_source = (repo_root / guard_path).read_text()

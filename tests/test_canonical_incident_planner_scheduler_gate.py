@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from unittest.mock import MagicMock
 
 import pytest
 
 from dev_health_ops.models import (
     IntegrationDataset,
-    JobRun,
-    JobStatus,
-    ScheduledJob,
     SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
@@ -26,7 +22,6 @@ from tests.canonical_incident_orchestration_support import (
     CanonicalState,
     canonical_state_context,
     create_canonical_graph,
-    disable_feature_for_org,
 )
 
 
@@ -162,152 +157,23 @@ def test_planner_keeps_jira_work_items_ungated_when_feature_is_off(
     assert state.session.query(SyncRun).count() == 1
 
 
-def test_scheduler_skips_disabled_canonical_config_before_marker_or_work(
-    canonical_state: CanonicalState,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dev_health_ops.workers import sync_scheduler
-
-    # Given
-    state = canonical_state
-    graph = create_canonical_graph(state, state.disabled_org_id, with_config=True)
-    assert graph.config is not None
-    job = ScheduledJob(
-        name=f"sync-config-{graph.config.id}",
-        job_type="sync",
-        schedule_cron="* * * * *",
-        org_id=str(state.disabled_org_id),
-        provider="pagerduty",
-        sync_config_id=graph.config.id,
-        tz="UTC",
-        status=JobStatus.ACTIVE.value,
-    )
-    state.session.add(job)
-    state.session.commit()
-    dispatch = MagicMock()
-    monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_args: True)
-    monkeypatch.setattr(
-        "dev_health_ops.workers.sync_units.dispatch_sync_run",
-        dispatch,
-    )
-
-    # When
-    dispatched = sync_scheduler._maybe_dispatch_config(
-        state.session,
-        graph.config,
-        SYNC_FIXTURE_BEFORE,
-    )
-
-    # Then
-    state.session.refresh(job)
-    assert dispatched is False
-    assert job.next_run_at is None
-    assert state.session.query(SyncRun).count() == 0
-    assert state.session.query(JobRun).count() == 0
-    dispatch.apply_async.assert_not_called()
-
-
-def test_scheduler_rechecks_feature_immediately_before_enqueue(
-    canonical_state: CanonicalState,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dev_health_ops.sync import execution_trigger
-    from dev_health_ops.workers import sync_scheduler
-
-    # Given
-    state = canonical_state
-    graph = create_canonical_graph(state, state.enabled_org_id, with_config=True)
-    assert graph.config is not None
-    job = ScheduledJob(
-        name=f"sync-config-{graph.config.id}",
-        job_type="sync",
-        schedule_cron="* * * * *",
-        org_id=str(state.enabled_org_id),
-        provider="pagerduty",
-        sync_config_id=graph.config.id,
-        tz="UTC",
-        status=JobStatus.ACTIVE.value,
-    )
-    state.session.add(job)
-    state.session.commit()
-    dispatch = MagicMock()
-    real_trigger = execution_trigger.create_sync_execution_trigger
-
-    def create_then_disable(*args, **kwargs):
-        trigger = real_trigger(*args, **kwargs)
-        disable_feature_for_org(state, state.enabled_org_id)
-        return trigger
-
-    monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_args: True)
-    monkeypatch.setattr(
-        execution_trigger,
-        "create_sync_execution_trigger",
-        create_then_disable,
-    )
-    monkeypatch.setattr(
-        "dev_health_ops.workers.sync_units.dispatch_sync_run",
-        dispatch,
-    )
-
-    # When
-    result = sync_scheduler._maybe_dispatch_config(
-        state.session,
-        graph.config,
-        SYNC_FIXTURE_BEFORE,
-    )
-
-    # Then
-    assert result is False
-    dispatch.apply_async.assert_not_called()
-    assert state.session.query(SyncRun).count() == 1
-
-
-def test_scheduler_skips_typed_pagerduty_disable_without_enqueuing(
-    canonical_state: CanonicalState,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dev_health_ops.sync import execution_trigger
-    from dev_health_ops.sync.execution_trigger import SyncExecutionTriggerResult
-    from dev_health_ops.workers import sync_scheduler
-
-    state = canonical_state
-    graph = create_canonical_graph(state, state.enabled_org_id, with_config=True)
-    assert graph.config is not None
-    job = ScheduledJob(
-        name=f"sync-config-{graph.config.id}",
-        job_type="sync",
-        schedule_cron="* * * * *",
-        org_id=str(state.enabled_org_id),
-        provider="pagerduty",
-        sync_config_id=graph.config.id,
-        tz="UTC",
-        status=JobStatus.ACTIVE.value,
-    )
-    state.session.add(job)
-    state.session.commit()
-    dispatch = MagicMock()
-    monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_args: True)
-    monkeypatch.setattr(
-        execution_trigger,
-        "create_sync_execution_trigger",
-        lambda *_args, **_kwargs: SyncExecutionTriggerResult(
-            sync_run_id="sync-run-1",
-            job_run_id="job-run-1",
-            total_units=0,
-            dispatch_required=False,
-            terminal_reason="PagerDuty account identity needs repair",
-        ),
-    )
-    monkeypatch.setattr(
-        "dev_health_ops.workers.sync_units.dispatch_sync_run",
-        dispatch,
-    )
-
-    result = sync_scheduler._maybe_dispatch_config(
-        state.session,
-        graph.config,
-        SYNC_FIXTURE_BEFORE,
-    )
-
-    assert result is False
-    dispatch.apply_async.assert_not_called()
+# CHAOS-3093 (2026-09-09, PR2a'): three tests tested workers/sync_scheduler.py's
+# _maybe_dispatch_config directly, deleted outright along with the module --
+# internal/scheduler/sync's coordinator/loop owns sync dispatch natively now.
+#   * test_scheduler_skips_disabled_canonical_config_before_marker_or_work ->
+#     internal/scheduler/sync/eligibility_gate_integration_test.go's
+#     TestHandoffRefusesAConfigWhoseCanonicalIncidentFeatureIsDisabled.
+#   * test_scheduler_rechecks_feature_immediately_before_enqueue -> the Go
+#     architecture doesn't recheck-then-enqueue across two steps the way
+#     Python did (an intentional structural improvement, not a gap): the
+#     occurrence reconciler commits a decision and its materialization in
+#     ONE transaction (occurrence_reconciler.go's reconcileOne), and a feature
+#     disabled mid-flight terminalizes race-safely --
+#     internal/syncdispatchruntime/feature_disabled_termination_integration_test.go's
+#     TestTerminalizeFeatureDisabledRunBulkAndRaceSafeRunning.
+#   * test_scheduler_skips_typed_pagerduty_disable_without_enqueuing -> the
+#     Go materializer's own PagerDuty account-identity repair path
+#     (materializer.go's preparePagerDutyRepair/disablePagerDutyConfigs)
+#     disables without creating units, in the same domain transaction --
+#     internal/scheduler/sync/materializer_integration_test.go's
+#     TestNativeMaterializerPagerDutyRepairAndUnitsShareDomainTransaction.

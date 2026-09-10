@@ -285,8 +285,6 @@ earlier "CI cannot build this" caveat.)
 - Deployed executed proof, shadow, and canary (plan §5 stages 3-5) — every
   wave delivers only local dual-run proof (stage 2); a deploy is routed
   through the epic orchestrator, not this lane.
-- `featureFlagEvents` — explicitly out of scope for the Wave 1 canary
-  (plan §6).
 - The `DateTime` and `JSON` GraphQL scalars are still the same Wave-0
   placeholder mappings, still KNOWN INCORRECT for the reasons `gqlgen.yml`
   documents — Wave 2 fixed only `Date` (`reviewEdges`'s/`cognitiveLoad`'s

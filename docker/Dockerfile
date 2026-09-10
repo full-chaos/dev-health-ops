@@ -36,6 +36,11 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY cmd/dev-health-worker-migrate ./cmd/dev-health-worker-migrate
+# CHAOS-4065: ask-dev-jobs-probe is the Ask Dev acceptance gate's Go-native
+# replacement for the Celery worker/beat healthchecks -- see its own package
+# doc comment. It is a one-shot CLI, same shape as dev-health-worker-migrate,
+# so it rides the same builder stage rather than earning a dedicated one.
+COPY cmd/ask-dev-jobs-probe ./cmd/ask-dev-jobs-probe
 COPY internal ./internal
 
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -46,8 +51,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags="-s -w -buildid=" \
       -o /out/dev-health-worker-migrate \
       ./cmd/dev-health-worker-migrate \
+    && GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
+      -buildvcs=false \
+      -trimpath \
+      -ldflags="-s -w -buildid=" \
+      -o /out/ask-dev-jobs-probe \
+      ./cmd/ask-dev-jobs-probe \
     && touch -d "@${SOURCE_DATE_EPOCH}" \
-      /out/dev-health-worker-migrate
+      /out/dev-health-worker-migrate /out/ask-dev-jobs-probe
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
 # Install build dependencies and compile wheels. This stage is NOT shipped.
@@ -118,6 +129,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git wget postgr
 # Copy installed packages from builder (no build tools, pip, or setuptools).
 COPY --from=builder /install /usr/local
 COPY --from=go-migrator-builder /out/dev-health-worker-migrate /usr/local/bin/dev-health-worker-migrate
+COPY --from=go-migrator-builder /out/ask-dev-jobs-probe /usr/local/bin/ask-dev-jobs-probe
 
 # River runtime-role provisioning travels WITH the image that runs it. It used
 # to be bind-mounted from a source checkout, which a pull-only host cannot

@@ -35,6 +35,11 @@ type GitHubWorkItemEffectRows struct {
 	// their destination resolvable.
 	ProjectMembershipTransitions []json.RawMessage
 	Projects                     []json.RawMessage
+	// MembershipRejections (CHAOS-4320 round 6) is NOT one of the 18 named
+	// destinations above -- it is attached ONLY to the WorkItemTeamAttributions
+	// EffectBatch's own MembershipRejections field by BuildGitHubWorkItemEffects,
+	// never marshaled as a Rows destination of its own.
+	MembershipRejections []json.RawMessage
 }
 
 // githubWorkItemEffectRowsByDestination is intentionally a projection map,
@@ -99,6 +104,16 @@ func BuildGitHubWorkItemEffects(rows GitHubWorkItemEffectRows) ([]EffectBatch, e
 		)
 		if err != nil {
 			return nil, err
+		}
+		// CHAOS-4320 round 6: attached AFTER BuildEffectBatch, not threaded
+		// through it -- MembershipRejections is not part of ContentDigest/
+		// PayloadBytes validation, and BuildEffectBatch's signature stays
+		// exactly what every OTHER destination and every other caller
+		// already uses. Only work_item_team_attributions ever carries a
+		// non-empty value here; every other destination's effect leaves
+		// this nil, unchanged from before this ticket.
+		if destination == githubTeamAttributionsDestination {
+			effect.MembershipRejections = rows.MembershipRejections
 		}
 		effects = append(effects, effect)
 	}

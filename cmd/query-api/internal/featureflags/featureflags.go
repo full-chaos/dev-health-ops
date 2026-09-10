@@ -131,6 +131,24 @@ func isoformatUTC(t time.Time) string {
 // dedicated "Unknown table ... identifier" clause names "feature_flag"
 // specifically -- not merely mentions it somewhere in the echoed SQL.
 func isMissingFeatureFlagTable(err error) bool {
+	return isMissingTable(err, "feature_flag")
+}
+
+// isMissingFeatureFlagEventTable is isMissingFeatureFlagTable's
+// counterpart for the feature_flag_event table (CHAOS-5523's
+// resolve_feature_flag_events degraded path), sharing the exact same
+// code-60 + dedicated-identifier-clause mechanism via isMissingTable --
+// not a second hand-rolled detector.
+func isMissingFeatureFlagEventTable(err error) bool {
+	return isMissingTable(err, "feature_flag_event")
+}
+
+// isMissingTable is the table-name-parametrized form of
+// _is_missing_clickhouse_table_error: true only when err is (or wraps) a
+// ClickHouse UNKNOWN_TABLE (code 60) exception AND its dedicated "Unknown
+// table ... identifier" clause names tableName specifically -- not merely
+// mentions it somewhere in the echoed SQL.
+func isMissingTable(err error, tableName string) bool {
 	var exception *clickhousedriver.Exception
 	if !errors.As(err, &exception) {
 		return false
@@ -143,7 +161,7 @@ func isMissingFeatureFlagTable(err error) bool {
 		if idx := lastIndexByte(name, '.'); idx >= 0 {
 			name = name[idx+1:]
 		}
-		if name == "feature_flag" {
+		if name == tableName {
 			return true
 		}
 	}

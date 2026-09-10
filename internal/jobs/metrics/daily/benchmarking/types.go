@@ -82,6 +82,29 @@ type PeriodComparisonRecord struct {
 }
 
 // BenchmarkBaselineRecord mirrors testops_schemas.py:499-518.
+//
+// CurrentValue/BaselineValue/PercentileRank/P25-90Value are all *float64,
+// nil meaning undefined (CHAOS-4806, ruling R73 -- see migrations
+// 090_testops_baselines_nullable_fields.sql and
+// 092_testops_percentile_rank_nullable_field.sql): a scope's own latest
+// value can be a NaN/+-Inf reading, a rolling window can drop to zero valid
+// samples once non-finite entries are filtered, or an order statistic can
+// overflow to +-Inf on an extreme-but-finite input -- none of these may
+// write NaN/+-Inf onto the wire, and none may fall back to 0.0 (or, for
+// PercentileRank specifically, a misleadingly confident 100/0) as a
+// stand-in for "no value." PercentileRank was originally left required on
+// the premise that its ratio-of-counts formula cannot itself become
+// non-finite -- true for a NaN comparison value, but FALSE for a +-Inf
+// one: every finite candidate genuinely compares less-than +Inf (or
+// greater-than -Inf), so an undefined CurrentValue could still rank a
+// fully "leading"/100% row (codex round chaos-4806-r3b's own executed
+// repro). Migration 092 closes this.
+//
+// READER WARNING (see migration 090's own trailing comment for the full
+// sweep): any future reader of these columns that dedups with a bare
+// argMax(col, computed_at) will silently skip a NULL and resurrect an
+// older non-null value instead -- use argMaxIf/a FINAL-with-tuple-ordering
+// pattern instead.
 type BenchmarkBaselineRecord struct {
 	MetricName        string
 	ScopeType         string
@@ -89,26 +112,30 @@ type BenchmarkBaselineRecord struct {
 	PeriodStart       time.Time
 	PeriodEnd         time.Time
 	RollingWindowDays int
-	CurrentValue      float64
-	BaselineValue     float64
-	PercentileRank    float64
-	P25Value          float64
-	P50Value          float64
-	P75Value          float64
-	P90Value          float64
+	CurrentValue      *float64
+	BaselineValue     *float64
+	PercentileRank    *float64
+	P25Value          *float64
+	P50Value          *float64
+	P75Value          *float64
+	P90Value          *float64
 	SampleSize        int
 	ComputedAt        time.Time
 	OrgID             string
 }
 
 // MaturityBandRecord mirrors testops_schemas.py:521-535.
+//
+// Value is *float64 (nil = undefined), because it is populated directly from
+// a BenchmarkBaselineRecord.CurrentValue (see ClassifyMaturityBands) -- same
+// R73 reasoning as that field.
 type MaturityBandRecord struct {
 	MetricName     string
 	ScopeType      string
 	ScopeKey       string
 	PeriodStart    time.Time
 	PeriodEnd      time.Time
-	Value          float64
+	Value          *float64
 	PercentileRank float64
 	MaturityBand   string
 	Confidence     float64

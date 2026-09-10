@@ -1949,13 +1949,13 @@ generation to distinguish `team_ownership` from direct churn and
 
 > ℹ️ **Note:** Reports are not managed or triggered via the CLI. They are managed entirely through the GraphQL API or the Report Center UI. See [Reports](../../use/reports/index.md) for details.
 
-AI-generated reports are managed through the GraphQL API and executed as Celery tasks. Reports are not triggered via CLI — they are created, triggered, and scheduled through the Report Center UI or GraphQL mutations.
+AI-generated reports are managed through the GraphQL API and executed by Go's native report runtime. Reports are not triggered via CLI — they are created, triggered, and scheduled through the Report Center UI or GraphQL mutations.
 
 ### How Reports Work
 
 1. **Create** a SavedReport via the Report Center UI or `createSavedReport` mutation
 2. **Trigger** execution manually ("Run Now") or via a cron schedule
-3. The `execute_saved_report` Celery task runs on the `reports` queue
+3. The trigger writes a durable outbox row, relayed to River and executed by Go's `report.execute_on_demand`/`report.execute_scheduled` (CHAOS-4440; CHAOS-3093 deleted the last Celery report task, `execute_saved_report`)
 4. The engine fetches metrics from ClickHouse, generates insights, and renders markdown
 5. Results are persisted as a `ReportRun` with rendered content and provenance records
 
@@ -1969,11 +1969,11 @@ Each report requires a `ReportPlan` that defines scope, time range, sections, an
 
 ### Scheduling
 
-Reports can be scheduled with a five-field cron expression (via `scheduleCron` in the create/update mutation). Create and update validate the field count and value ranges before persistence. Invalid input returns an error that identifies how to correct it. The periodic scan for due reports was `dispatch_scheduled_reports` (a Celery beat task, run every 5 minutes) until CHAOS-4026 (2026-08-21) deleted it -- Go's `report.execute_scheduled` fixed schedule now owns that scan. `execute_saved_report` (the per-report execution work, dispatched via `execute_saved_report.apply_async(...)`) was not part of that cleanup and still runs on the `reports` Celery queue.
+Reports can be scheduled with a five-field cron expression (via `scheduleCron` in the create/update mutation). Create and update validate the field count and value ranges before persistence. Invalid input returns an error that identifies how to correct it. The periodic scan for due reports was `dispatch_scheduled_reports` (a Celery beat task, run every 5 minutes) until CHAOS-4026 (2026-08-21) deleted it -- Go's `report.execute_scheduled` fixed schedule now owns that scan. `execute_saved_report` (the per-report execution work) was not part of that cleanup at the time, but CHAOS-3093 has since deleted it outright -- report execution is now Go-only end to end, dispatched through the durable outbox and River.
 
 ### Worker Configuration
 
-Reports execution still runs on Celery's `reports` queue; see [Run workers and jobs](../../operate/run/workers-and-jobs.md) for how the Go-only runtime is started now that `workers start-worker` is gone.
+Reports execution is Go-only now -- no Celery task remains in this path; see [Run workers and jobs](../../operate/run/workers-and-jobs.md) for how the Go-only runtime is started.
 
 ### GraphQL Mutations
 

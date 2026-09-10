@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/reviewedges"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -665,6 +666,16 @@ func configureWorkerDependenciesWithSources(
 	// CHAOS-4393: same process-wide-singleton-needs-registration shape as
 	// CHAOS-4308 above -- register here so the family name is always present.
 	if err := registry.RegisterMetrics("sync_coverage_folded_key_resolution", synccoverage.FoldedKeyResolutionMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-4806 (ruling R73): same process-wide-singleton-needs-registration
+	// shape as the writer counters above -- internal/jobs/metrics/finite is
+	// the ONE non-finite-value write boundary every metric writer and
+	// serializer routes through; register it here so a NaN/+-Inf trip is
+	// always observable at the scrape, never only inferable from a swallowed
+	// NULL.
+	if err := registry.RegisterMetrics("metrics_finite_boundary", finite.MetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

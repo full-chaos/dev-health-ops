@@ -115,7 +115,7 @@ func TestLinearWorkItemFamilyConstructionExposesOneCompleteBoundary(t *testing.T
 	var _ EffectReadback = LinearWorkItemFamilyClickHouseEffects{}
 
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewLinearWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease)
+	sink, err := NewLinearWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T
 
 func TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	complete, err := NewLinearWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease)
+	complete, err := NewLinearWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

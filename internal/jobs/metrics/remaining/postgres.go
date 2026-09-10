@@ -95,6 +95,7 @@ type PostgresStore struct {
 	leaseObserver          jobruntime.RemainingMetricsLeaseObserver
 	openDayZeroRowObserver OpenDayZeroRowObserver
 	manualBackfillObserver ManualBackfillObserver
+	scopeRefusalObserver   ScopeRefusalObserver
 	logger                 *slog.Logger
 }
 
@@ -147,6 +148,44 @@ func (store *PostgresStore) observeManualBackfill(family, outcome string) {
 	if store.manualBackfillObserver != nil {
 		_ = store.manualBackfillObserver.ObserveRemainingMetricsManualBackfill(family, outcome)
 	}
+}
+
+// ScopeRefusalObserver reports one StartRunRequest scope that
+// normalizeStartRunRequest refused, by bounded family and reason
+// (CHAOS-5395: the first reason is "unknown_dora_metric" -- a doraScope
+// naming a metric outside defaultDORAMetrics). Refusing at scope-validation
+// time already makes the failure loud (the caller gets a non-nil error
+// instead of a silently-accepted scope that later computes and writes
+// nothing); this counter is the operator-facing twin, so a typo shows up as
+// a moving series rather than only a caller-side error a human has to be
+// watching for.
+type ScopeRefusalObserver interface {
+	ObserveRemainingMetricsScopeRefused(family, reason string) error
+}
+
+// SetScopeRefusalObserver wires the optional CHAOS-5395 signal. A nil
+// observer (the default) means telemetry never gates request handling --
+// observeScopeRefused is always a safe no-op.
+func (store *PostgresStore) SetScopeRefusalObserver(observer ScopeRefusalObserver) {
+	store.scopeRefusalObserver = observer
+}
+
+func (store *PostgresStore) observeScopeRefused(family, reason string) {
+	if store.scopeRefusalObserver != nil {
+		_ = store.scopeRefusalObserver.ObserveRemainingMetricsScopeRefused(family, reason)
+	}
+}
+
+// scopeRefusalReason maps a normalizeStartRunRequest error onto
+// ScopeRefusalObserver's bounded reason vocabulary. Only reasons a caller
+// might act on differently get their own label; everything else collapses
+// to "invalid_scope" rather than minting an unbounded series from arbitrary
+// validation text.
+func scopeRefusalReason(err error) string {
+	if errors.Is(err, ErrUnknownDORAMetricName) {
+		return "unknown_dora_metric"
+	}
+	return "invalid_scope"
 }
 
 // observeReleaseLost records a durably resolved release-lost outcome. Metric
@@ -266,8 +305,13 @@ func (store *PostgresStore) StartRunTx(
 	if !store.valid() || tx == nil {
 		return Run{}, ErrUnavailable
 	}
+	requestedFamily := request.Family
 	request, err := normalizeStartRunRequest(request)
 	if err != nil {
+		// requestedFamily, not request.Family: normalizeStartRunRequest
+		// returns a zero-value StartRunRequest alongside a non-nil error, so
+		// request.Family is already blank here.
+		store.observeScopeRefused(requestedFamily, scopeRefusalReason(err))
 		return Run{}, err
 	}
 
@@ -355,7 +399,12 @@ func normalizeStartRunRequest(request StartRunRequest) (StartRunRequest, error) 
 	for ordinal := range request.Scopes {
 		canonical, err := validateFamilyScope(request.Family, request.Scopes[ordinal])
 		if err != nil {
-			return StartRunRequest{}, ErrInvalidState
+			// Wrapped (not the bare sentinel) so a caller can still tell
+			// WHICH refusal this was via errors.Is(err, ErrUnknownDORAMetricName)
+			// -- e.g. to drive ScopeRefusalObserver -- while every existing
+			// errors.Is(err, ErrInvalidState) check keeps matching (Go 1.20+
+			// resolves errors.Is through both %w verbs).
+			return StartRunRequest{}, fmt.Errorf("%w: %w", ErrInvalidState, err)
 		}
 		request.Scopes[ordinal], err = canonicalJSON(canonical)
 		if err != nil {

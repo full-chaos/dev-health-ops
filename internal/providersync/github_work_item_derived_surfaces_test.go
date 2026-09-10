@@ -516,7 +516,7 @@ func TestGitHubWorkItemDerivedBuildersAssertTenancyBeforeSkipping(t *testing.T) 
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Errorf("estimate coverage: got %v, want ErrInvalidConfiguration", err)
 	}
-	if _, err := buildGitHubWorkItemTeamAttributions(
+	if _, _, err := buildGitHubWorkItemTeamAttributions(
 		claim, rows, computedAt, derived,
 	); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Errorf("team attributions: got %v, want ErrInvalidConfiguration", err)

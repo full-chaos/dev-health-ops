@@ -479,6 +479,44 @@ migrations:
       #    publish a dedicated migrator image.
       image: ""
       pullPolicy: ""
+    # -- CHAOS-4272/CHAOS-4455: sync-dispatch route activation and the
+    #    one-shot operator credential that authenticates it. 0049 seeds
+    #    `sync_dispatch_transport_routes` at transport=celery for four kinds
+    #    (dispatch_sync_run, finalize_sync_run, post_sync,
+    #    reference_discovery); Celery has had no consumer since CHAOS-4026,
+    #    so a fresh install dispatches none of them until an operator runs
+    #    `dev-health-workerctl routes apply` for each. The `sync-provider`
+    #    worker group's own job route (sync.provider_unit) is a SEPARATE
+    #    table (`worker_job_routes`) that migration 0107 already promotes
+    #    unconditionally -- see that migration's own docstring -- so it
+    #    needs no Job here; what `sync-provider` (like every group) still
+    #    needs is provisionRoles+riverMigrate actually being on.
+    #    Folded in from the proven design running the shared bigboy compose
+    #    stack (compose/compose.go.workers.yml, untracked, outside this
+    #    repo) and from PR chore/celery-retire-pr3's root compose.yml.
+    #    Ordered after riverMigrate (10): a weight-15 Job mints the
+    #    one-shot operator credential, then applies the four routes in the
+    #    SAME serialized order Compose uses (the operator permits one
+    #    audited mutation at a time -- these run as ordered initContainers
+    #    sharing one emptyDir token file, not four Jobs, since Kubernetes
+    #    hook Jobs have no depends_on). Idempotent: `routes apply` on a
+    #    route already at its target transport is a no-op
+    #    (internal/syncroute), so re-running on every upgrade is safe.
+    #    Renders ONLY when provisionRoles AND riverMigrate are BOTH also
+    #    enabled -- exactly the go_default fresh-install chain those two
+    #    already gate. An existing deployment with either off is
+    #    unaffected: same "unchanged on upgrade" invariant those two flags
+    #    already promise, so this defaulting to true does not, by itself,
+    #    change any existing installation's behaviour.
+    routeActivate:
+      enabled: true
+      # -- Image carrying `dev-health-workerctl`. Empty means the published
+      #    `ghcr.io/full-chaos/dev-health-go-operator` image (docker/
+      #    go-worker.Dockerfile's `operator` target, entrypoint
+      #    dev-health-workerctl) -- the same binary Compose's
+      #    go-worker-route-activate/go-sync-*-route-activate services run.
+      image: ""
+      pullPolicy: ""
     backoffLimit: 2
     activeDeadlineSeconds: 1800
     resources:

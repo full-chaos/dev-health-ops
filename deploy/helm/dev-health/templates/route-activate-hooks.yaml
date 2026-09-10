@@ -1,0 +1,260 @@
+{{- /*
+CHAOS-4272/CHAOS-4455: the sync-dispatch route activation chain and the
+one-shot operator credential that authenticates it.
+
+Root cause (CHAOS-4272). Alembic 0049 seeds `sync_dispatch_transport_routes`
+at transport=celery for four kinds -- dispatch_sync_run, finalize_sync_run,
+post_sync, reference_discovery. The Celery fleet has had no consumer since
+CHAOS-4026, so a fresh install's producer stages outbox rows for a transport
+nothing drains, and the reconciler's own `sync_dispatch_route_fence` refuses
+readiness on that drift. An operator has always had to run
+`dev-health-workerctl routes apply` by hand for each kind; this chart never
+ran that step. `sync.provider_unit`'s OWN route lives in a different table
+(`worker_job_routes`) and migration 0107 already promotes it unconditionally
+-- see that migration's docstring -- so CHAOS-4455's remaining gap (the
+`sync-provider` worker group crash-looping, `queue_coverage_validation_failed`,
+per this chart's `goWorkers.groups[].sync-provider` comment) is provisionRoles
+and riverMigrate actually running, not a second route Job.
+
+Reference design: the proven bigboy compose overlay
+(compose/compose.go.workers.yml, untracked, outside this repository) and PR
+chore/celery-retire-pr3's root compose.yml, which folds the same chain into
+the default `docker compose up`. Both serialize the four route mutations
+behind one operator credential, because dev-health-workerctl's operator
+permits one audited mutation at a time.
+
+Kubernetes shape. Compose expresses the serialization as five one-shot
+containers sharing a named Docker volume via `depends_on:
+condition: service_completed_successfully`. Helm hook Jobs have no
+depends_on between sibling Jobs at the same weight, so the equivalent here is
+ONE Job whose initContainers run in the same order, sharing one emptyDir for
+the operator token file instead of a persistent volume -- a fresh token is
+minted on every install/upgrade (there is no cross-release volume), which is
+fine: `routes apply` is idempotent on the token's OWN authorization, not on
+whether the token is new (see RISK-NOTES for the one accepted side effect,
+an unrevoked credential row per release).
+
+Direct-to-Postgres, not through the goWorkers pgbouncer poolers: those
+poolers are REGULAR chart resources, created only after pre-install/
+pre-upgrade hooks finish, so on a fresh install they do not exist yet when
+this hook runs -- the exact reason river-migrate and provision-roles above
+also connect directly. workerctl's own default QueueControlMode/
+CoordinatorMode ("direct") is session-safe, so a direct connection needs no
+extra flags.
+
+Gated on provisionRoles.enabled AND riverMigrate.enabled, deliberately not a
+`fail`: those two already default to false "so an existing deployment is
+unchanged on upgrade" (see their own comments in values.yaml). This defaults
+to true, but has no effect unless an operator has ALSO turned both of those
+on -- exactly the go_default fresh-install chain those two already gate, so
+this new default does not, by itself, change any existing installation.
+*/}}
+{{- if .Values.migrations.hook.enabled }}
+{{- if and .Values.migrations.hook.provisionRoles.enabled .Values.migrations.hook.riverMigrate.enabled .Values.migrations.hook.routeActivate.enabled }}
+{{- $hookEvents := .Values.migrations.hook.events }}
+{{- $poolerSecret := .Values.goWorkers.pgbouncer.secret }}
+{{- /*
+provisionRoles.enabled=true already `fail`s river-hooks.yaml's render when
+$poolerSecret has neither create nor externalSecretName, and Helm renders
+every template before any of them takes effect -- so by the time this file's
+resources exist, that guard has already passed. No need to repeat it.
+*/}}
+{{- $routeActivateSecretName := ternary (printf "%s-route-activate-secrets" (include "dev-health.fullname" .)) (toString $poolerSecret.externalSecretName) $poolerSecret.create }}
+{{- $postgresHost := include "dev-health.goPgbouncerPostgresHost" . }}
+{{- $postgresPort := include "dev-health.goPgbouncerPostgresPort" . }}
+{{- $postgresDatabase := include "dev-health.goPgbouncerPostgresDatabase" . }}
+{{- $operatorImage := .Values.migrations.hook.routeActivate.image | default "ghcr.io/full-chaos/dev-health-go-operator:latest" }}
+{{- $operatorPullPolicy := .Values.migrations.hook.routeActivate.pullPolicy | default .Values.image.pullPolicy }}
+{{- $routeKinds := list "dispatch_sync_run" "finalize_sync_run" "post_sync" "reference_discovery" }}
+{{- if $poolerSecret.create }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $routeActivateSecretName }}
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "route-activate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  RIVER_DOMAIN_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD is required when migrations.hook.routeActivate.enabled=true" $poolerSecret.data.RIVER_DOMAIN_DATABASE_PASSWORD | quote }}
+  RIVER_QUEUE_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD is required when migrations.hook.routeActivate.enabled=true" $poolerSecret.data.RIVER_QUEUE_DATABASE_PASSWORD | quote }}
+  RIVER_COORDINATOR_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD is required when migrations.hook.routeActivate.enabled=true" $poolerSecret.data.RIVER_COORDINATOR_DATABASE_PASSWORD | quote }}
+{{- end }}
+---
+{{- /*
+The one-shot operator-credential mint reuses the SAME elevated DSN
+river-migrate runs against (dev-health.riverMigrationDSN) -- not a superuser
+requirement, just the ops runtime's regular application database connection,
+same class of access `dev-hops service-credentials create` already runs with
+in Compose (its DATABASE_URI/POSTGRES_URI point at the plain app database).
+Bundled here as its own hook-scoped Secret (not reused from migrate-secrets
+or river-migrate-secrets) for the same reason those two don't share a copy
+either: each hook-scoped Secret's hook-succeeded delete policy is not
+provably still present by the time a LATER weight tier's Job starts.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "dev-health.fullname" . }}-route-activate-credential-secrets
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "route-activate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  DATABASE_URI: {{ include "dev-health.riverMigrationDSN" . | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "dev-health.fullname" . }}-route-activate
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "route-activate" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ join "," $hookEvents }}
+    helm.sh/hook-weight: "15"
+    {{- /*
+    FAIL-CLOSED, deliberately, like the two hooks above: before-hook-creation
+    only, NOT hook-succeeded. A failed activation's pod must survive for its
+    logs -- Helm aborts the release on any hook failure either way, so a
+    partially-activated route set never reaches workers pointed at it.
+    */}}
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.hook.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.hook.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dev-health.componentSelectorLabels" (dict "component" "route-activate" "context" $) | nindent 8 }}
+    spec:
+      {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+      volumes:
+        - name: operator-token
+          emptyDir: {}
+      initContainers:
+        - name: operator-credential
+          {{- /*
+          The OPS RUNTIME image: `dev-hops service-credentials create` is the
+          only way to mint a row in `internal_service_credentials` today --
+          there is no Go-native equivalent -- same command Compose's
+          go-worker-operator-credential service runs. Idempotent by
+          construction: only mints when the shared emptyDir file is empty,
+          same guard Compose uses on its persistent volume.
+          */}}
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              token=/run/go-worker-operator/token
+              if [ ! -s "$token" ]; then
+                dev-hops service-credentials create \
+                  --service worker-operator \
+                  --scope workers:read \
+                  --scope workers:operate > "$token"
+              fi
+          envFrom:
+            - secretRef:
+                name: {{ include "dev-health.fullname" . }}-route-activate-credential-secrets
+          volumeMounts:
+            - name: operator-token
+              mountPath: /run/go-worker-operator
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+        {{- range $kind := $routeKinds }}
+        - name: route-activate-{{ $kind | replace "_" "-" }}
+          image: {{ $operatorImage }}
+          imagePullPolicy: {{ $operatorPullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          {{- /*
+          Full DSNs are built in-shell from separate parts (role/host/port/
+          database as plain env, password via secretKeyRef) rather than
+          templated as one Secret value, so this renders correctly whether
+          goWorkers.pgbouncer.secret.create is true (chart-owned passwords)
+          or false (an operator-managed external Secret this chart never
+          reads plaintext from) -- same reasoning as provision-roles.yaml's
+          own PARTS-based connection.
+          */}}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              export POSTGRES_URI="postgresql://${RIVER_DOMAIN_DATABASE_ROLE}:${RIVER_DOMAIN_DATABASE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+              export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_DATABASE_ROLE}:${RIVER_QUEUE_DATABASE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+              export COORDINATOR_DATABASE_URI="postgresql://${RIVER_COORDINATOR_DATABASE_ROLE}:${RIVER_COORDINATOR_DATABASE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+              exec dev-health-workerctl routes apply \
+                --reason helm_release_start \
+                --correlation-id "{{ $.Release.Name }}-route-activate-{{ $kind | replace "_" "-" }}" \
+                {{ $kind }}
+          env:
+            - name: POSTGRES_HOST
+              value: {{ $postgresHost | quote }}
+            - name: POSTGRES_PORT
+              value: {{ $postgresPort | quote }}
+            - name: POSTGRES_DB
+              value: {{ $postgresDatabase | quote }}
+            - name: RIVER_DOMAIN_DATABASE_ROLE
+              value: {{ $.Values.config.RIVER_DOMAIN_DATABASE_ROLE | quote }}
+            - name: RIVER_QUEUE_DATABASE_ROLE
+              value: {{ $.Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
+            - name: RIVER_COORDINATOR_DATABASE_ROLE
+              value: {{ $.Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
+            - name: RIVER_DATABASE_SCHEMA
+              value: {{ $.Values.config.RIVER_DATABASE_SCHEMA | default "river" | quote }}
+            - name: RIVER_DOMAIN_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $routeActivateSecretName }}
+                  key: RIVER_DOMAIN_DATABASE_PASSWORD
+            - name: RIVER_QUEUE_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $routeActivateSecretName }}
+                  key: RIVER_QUEUE_DATABASE_PASSWORD
+            - name: RIVER_COORDINATOR_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $routeActivateSecretName }}
+                  key: RIVER_COORDINATOR_DATABASE_PASSWORD
+            - name: WORKER_OPERATOR_TOKEN_FILE
+              value: /run/go-worker-operator/token
+          volumeMounts:
+            - name: operator-token
+              mountPath: /run/go-worker-operator
+              readOnly: true
+          resources:
+            {{- toYaml $.Values.migrations.hook.resources | nindent 12 }}
+        {{- end }}
+      containers:
+        {{- /*
+        Kubernetes Jobs require at least one `containers` entry; every
+        actual step above is an initContainer so their strict, sequential
+        order (Compose's depends_on chain) is honoured. This is a no-op.
+        */}}
+        - name: done
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          command: ["/bin/sh", "-ec", "exit 0"]
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+{{- end }}
+{{- end }}

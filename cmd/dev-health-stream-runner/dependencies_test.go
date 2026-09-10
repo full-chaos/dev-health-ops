@@ -44,9 +44,13 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 		// dial a closed local listener, which is refused ("connection
 		// refused") on most stacks but was measured to time out instead
 		// ("i/o timeout", CHAOS-5478) on at least one hosted CI runner's
-		// network stack -- both are the SAME dependency-unavailable class
-		// (a dial failure), so either is accepted; a bare non-network string
-		// (e.g. a driver-internal error unrelated to dialing) is not.
+		// network stack; under host load the 500ms test context can also
+		// expire before the kernel's RST is even processed, which pgx/
+		// clickhouse-go report as "context deadline exceeded" (CHAOS-5540,
+		// hit on #2422 twice and #2423). All three are the SAME
+		// dependency-unavailable class (a dial failure that never reaches a
+		// live peer), so any of the three is accepted; a bare non-network
+		// string (e.g. a driver-internal error unrelated to dialing) is not.
 		check          string
 		wantSubstrings []string
 		run            func(t *testing.T, storage *productionStreamStorage) error
@@ -54,7 +58,7 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 		{
 			name:           "domain_postgres",
 			check:          "domain_postgres",
-			wantSubstrings: []string{"connection refused", "i/o timeout"},
+			wantSubstrings: []string{"connection refused", "i/o timeout", "context deadline exceeded"},
 			run: func(t *testing.T, storage *productionStreamStorage) error {
 				storage.domainPool = newRefusedDomainPool(t)
 				storage.domainRole = "domain_role"
@@ -65,10 +69,41 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 		{
 			name:           "clickhouse",
 			check:          "clickhouse",
-			wantSubstrings: []string{"connection refused", "i/o timeout"},
+			wantSubstrings: []string{"connection refused", "i/o timeout", "context deadline exceeded"},
 			run: func(t *testing.T, storage *productionStreamStorage) error {
 				storage.clickHouse = newRefusedClickHouseConn(t)
 				return storage.ClickHouseReady(contextWithTimeout(t))
+			},
+		},
+		{
+			// CHAOS-5540: the RST-vs-timeout race the two cases above cover
+			// (closedPortAddr's doc comment) is itself a race against host
+			// scheduling -- under load, the 500ms test context can expire
+			// before the kernel's RST is even processed, and pgx reports
+			// that as "context deadline exceeded" instead of "connection
+			// refused"/"i/o timeout". An already-expired context forces
+			// that same real error path deterministically (no dial race to
+			// win or lose), proving the third spelling is both genuine and
+			// accepted, without relying on a timing flake to reproduce it.
+			name:           "domain_postgres_context_deadline",
+			check:          "domain_postgres",
+			wantSubstrings: []string{"context deadline exceeded"},
+			run: func(t *testing.T, storage *productionStreamStorage) error {
+				storage.domainPool = newRefusedDomainPool(t)
+				storage.domainRole = "domain_role"
+				storage.riverSchema = "river"
+				return storage.DomainPostgresReady(contextAlreadyExceeded(t))
+			},
+		},
+		{
+			// Same rationale as domain_postgres_context_deadline above, for
+			// clickhouse's Ping path.
+			name:           "clickhouse_context_deadline",
+			check:          "clickhouse",
+			wantSubstrings: []string{"context deadline exceeded"},
+			run: func(t *testing.T, storage *productionStreamStorage) error {
+				storage.clickHouse = newRefusedClickHouseConn(t)
+				return storage.ClickHouseReady(contextAlreadyExceeded(t))
 			},
 		},
 		{
@@ -147,6 +182,18 @@ func TestReadinessChecksWithNoLoggerNeverPanic(t *testing.T) {
 func contextWithTimeout(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// contextAlreadyExceeded returns a context whose deadline is already in the
+// past, so a dependency check dialing through it fails immediately and
+// deterministically with a context-deadline error -- CHAOS-5540's third
+// accepted spelling, reproduced here without racing host/network timing the
+// way the RST-vs-timeout split above necessarily does.
+func contextAlreadyExceeded(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	t.Cleanup(cancel)
 	return ctx
 }

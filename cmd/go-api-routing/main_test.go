@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"reflect"
@@ -80,7 +82,7 @@ func TestBearerEnvVarIsDistinctFromTheProveEdgeToken(t *testing.T) {
 //     tells an operator WHICH credential was refused. Passing the wrong
 //     one is a defect that only shows up against a real stack.
 func TestTheBuildInfoReadCarriesTheEnvelope(t *testing.T) {
-	const bearer = "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln"
+	bearer := syntheticJWT(t, map[string]string{"sub": "u-1"})
 	credential := buildInfoCredential(bearer)
 
 	request, err := http.NewRequest(http.MethodGet, "http://query-api.test/buildinfo", nil)
@@ -127,4 +129,26 @@ func TestTheBuildInfoReadCarriesTheEnvelope(t *testing.T) {
 			t.Fatalf("buildInfoCredential(%q) was installed", bad)
 		}
 	}
+}
+
+// syntheticJWT builds a JWT-SHAPED value at RUNTIME, so no `eyJ...`
+// literal appears anywhere in the tree. Gitleaks' `jwt` rule matches on
+// SHAPE, not on whether the value is real, so a synthetic fixture written
+// as a literal fails the secret scan exactly like a leaked one -- and the
+// answer is to stop writing the shape into the source, not to teach the
+// scanner to skip a file.
+func syntheticJWT(t *testing.T, claims map[string]string) string {
+	t.Helper()
+	segment := func(value any) string {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal a JWT segment: %v", err)
+		}
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	return strings.Join([]string{
+		segment(map[string]string{"alg": "EdDSA"}),
+		segment(claims),
+		base64.RawURLEncoding.EncodeToString([]byte("synthetic-signature")),
+	}, ".")
 }

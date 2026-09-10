@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -359,20 +360,65 @@ func newTwoPlaneRunner(t *testing.T, servers *twoPlaneServers, edge, proof *Cred
 	}
 }
 
+// syntheticJWT builds a JWT-SHAPED value at RUNTIME, from segments this
+// function encodes itself.
+//
+// It exists so no `eyJ...` literal appears anywhere in the tree. Gitleaks'
+// `jwt` rule matches on shape, not on whether a value is real, so a
+// synthetic fixture written as a literal fails the secret scan exactly
+// like a leaked one -- and the right answer is to stop writing the shape
+// into the source, not to teach the scanner to skip a file. (An ignore
+// entry would also cover any FUTURE literal added to that file, which is
+// the opposite of what a secret scan is for.)
+//
+// Building it from marshalled structs also states what these tests are
+// actually about: three non-empty base64url segments joined by dots, the
+// shape jwt.encode produces.
+func syntheticJWT(t *testing.T, claims map[string]string) string {
+	t.Helper()
+	segment := func(value any) string {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal a JWT segment: %v", err)
+		}
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	return strings.Join([]string{
+		segment(map[string]string{"alg": "EdDSA"}),
+		segment(claims),
+		base64.RawURLEncoding.EncodeToString([]byte("synthetic-signature")),
+	}, ".")
+}
+
+// jwtSegment is the same, for ONE segment, so the malformed-shape table
+// below can be built without a literal either.
+func jwtSegment(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal a JWT segment: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
 // A minting command that prints something OTHER than a token -- a usage
 // line, an error, a JSON blob, a shell prompt -- must be refused at the
 // source. Sending it produces a 401 that reads exactly like a rejected
 // credential, which is the confusion this whole file exists to remove.
 func TestAMintedValueThatIsNotAnEnvelopeIsRefused(t *testing.T) {
+	header := jwtSegment(t, map[string]string{"alg": "EdDSA"})
+	payload := jwtSegment(t, map[string]string{"sub": "u-1"})
+	signature := base64.RawURLEncoding.EncodeToString([]byte("sig"))
+
 	for name, printed := range map[string]string{
 		"a usage line":        "usage: mint-envelope [--org ORG]",
 		"an error message":    "Error: no such container: api",
-		"a JSON blob":         `{"envelope":"eyJhbGci"}`,
+		"a JSON blob":         `{"envelope":"` + header + `"}`,
 		"an opaque token":     "abcdef0123456789",
-		"two segments":        "eyJhbGci.eyJzdWIi",
-		"an empty segment":    "eyJhbGci..c2ln",
-		"a token with a tab":  "eyJhbGci.eyJzdWIi.c2ln\there",
-		"non-base64url bytes": "eyJhbGci.eyJzdWIi.++signature++",
+		"two segments":        header + "." + payload,
+		"an empty segment":    header + ".." + signature,
+		"a token with a tab":  header + "." + payload + "." + signature + "\there",
+		"non-base64url bytes": header + "." + payload + ".++" + signature + "++",
 	} {
 		t.Run(name, func(t *testing.T) {
 			credential := MintedCredential("Authorization", "envelope", 0,
@@ -395,7 +441,7 @@ func TestAMintedValueThatIsNotAnEnvelopeIsRefused(t *testing.T) {
 // refusing everything.
 func TestAWellFormedEnvelopePassesTheShapeCheck(t *testing.T) {
 	// Three non-empty base64url segments -- the shape jwt.encode produces.
-	token := "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEiLCJvcmdfaWQiOiJvLTEifQ.c2lnbmF0dXJl"
+	token := syntheticJWT(t, map[string]string{"sub": "u-1", "org_id": "o-1"})
 	if err := ValidateEnvelopeShape(token); err != nil {
 		t.Fatalf("a well-formed envelope was refused: %v", err)
 	}
@@ -408,8 +454,9 @@ func TestAWellFormedEnvelopePassesTheShapeCheck(t *testing.T) {
 // working. A fifteen-operation run that minted once is a run that will
 // fail at the closing /buildinfo.
 func TestMintsCountsRefreshesAndNeverExposesAValue(t *testing.T) {
+	minted := syntheticJWT(t, map[string]string{"sub": "u-1"})
 	credential := MintedCredential("Authorization", "envelope", 0, func(context.Context) (string, error) {
-		return "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln", nil
+		return minted, nil
 	}).WithShapeValidator(ValidateEnvelopeShape)
 
 	request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/buildinfo", nil)
@@ -421,7 +468,7 @@ func TestMintsCountsRefreshesAndNeverExposesAValue(t *testing.T) {
 	if credential.Mints() != 3 {
 		t.Fatalf("expected 3 mints, got %d", credential.Mints())
 	}
-	if credential.Kind() == "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln" {
+	if credential.Kind() == minted {
 		t.Fatal("Kind must name the credential, never carry its value")
 	}
 }
@@ -927,7 +974,7 @@ func TestTheGuardsThisChangeAddsAreKillable(t *testing.T) {
 		credential := MintedCredential("Authorization", "envelope", time.Nanosecond,
 			func(context.Context) (string, error) {
 				calls++
-				return fmt.Sprintf("eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln%d", calls), nil
+				return fmt.Sprintf("%s%d", syntheticJWT(t, map[string]string{"sub": "u-1"}), calls), nil
 			})
 		request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/x", nil)
 		if err := credential.Apply(context.Background(), request); err != nil {

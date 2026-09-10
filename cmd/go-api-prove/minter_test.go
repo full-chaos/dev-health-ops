@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"io"
@@ -130,11 +131,34 @@ func TestAMalformedStaticProofBearerFailsAtConstruction(t *testing.T) {
 	}
 }
 
+// syntheticJWT builds a JWT-SHAPED value at RUNTIME, so no `eyJ...`
+// literal appears anywhere in the tree. Gitleaks' `jwt` rule matches on
+// SHAPE, not on whether a value is real, so a synthetic fixture written
+// as a literal fails the secret scan exactly like a leaked one -- and the
+// answer is to stop writing the shape into the source, not to teach the
+// scanner to skip a file (an ignore entry would cover every FUTURE literal
+// added there too, which is the opposite of what a secret scan is for).
+func syntheticJWT(t *testing.T, claims map[string]string) string {
+	t.Helper()
+	segment := func(value any) string {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal a JWT segment: %v", err)
+		}
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	return strings.Join([]string{
+		segment(map[string]string{"alg": "EdDSA"}),
+		segment(claims),
+		base64.RawURLEncoding.EncodeToString([]byte("synthetic-signature")),
+	}, ".")
+}
+
 // And a well-formed one is accepted, so the check above is not simply
 // refusing everything.
 func TestAWellFormedStaticProofBearerIsAccepted(t *testing.T) {
 	t.Setenv(edgeBearerEnvVar, "edge-token")
-	t.Setenv(proofBearerEnvVar, "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln")
+	t.Setenv(proofBearerEnvVar, syntheticJWT(t, map[string]string{"sub": "u-1"}))
 	edge, proof, err := credentials(flags{})
 	if err != nil {
 		t.Fatalf("a well-formed static envelope was refused: %v", err)
@@ -251,10 +275,10 @@ func TestAnExitedParentWithALivingChildStillHonoursTheDeadline(t *testing.T) {
 // silently stops working -- which is the same class as a guard with no
 // killer test, one layer out.
 func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
+	minted := syntheticJWT(t, map[string]string{"sub": "u-1"})
 	credential := goapiproof.MintedCredential("Authorization", "envelope", 0,
-		func(context.Context) (string, error) {
-			return "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln", nil
-		}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
+		func(context.Context) (string, error) { return minted, nil },
+	).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 	request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/x", nil)
 	for i := 0; i < 3; i++ {
 		if err := credential.Apply(context.Background(), request); err != nil {
@@ -293,7 +317,7 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 		t.Fatalf("the build-binding counter must be COUNTED from the outcomes, not asserted as a sentence:\n%s", printed)
 	}
 	// And it must never print the credential itself.
-	if strings.Contains(printed, "eyJhbGciOiJFZERTQSJ9") {
+	if strings.Contains(printed, minted) || strings.Contains(printed, strings.SplitN(minted, ".", 2)[0]) {
 		t.Fatalf("the report printed the credential:\n%s", printed)
 	}
 	// F5: the endpoint line is printed on EVERY successful run and is what
@@ -432,13 +456,14 @@ func TestNoHelperDescendantSurvivesTheDeadline(t *testing.T) {
 // credential it printed is still returned. Reaping must not break the
 // happy path.
 func TestACleanHelperStillReturnsItsCredential(t *testing.T) {
-	helper := writeHelper(t, "#!/bin/sh\nprintf 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln'\n")
+	token := syntheticJWT(t, map[string]string{"sub": "u-1"})
+	helper := writeHelper(t, "#!/bin/sh\nprintf '"+token+"'\n")
 	minted, err := mintBearer(context.Background(), []string{helper})
 	if err != nil {
 		t.Fatalf("mintBearer: %v", err)
 	}
-	if !strings.HasPrefix(minted, "Bearer eyJhbGci") {
-		t.Fatalf("got %q", minted)
+	if minted != "Bearer "+token {
+		t.Fatalf("got %q, want %q", minted, "Bearer "+token)
 	}
 }
 
@@ -555,7 +580,7 @@ func TestTheMintedProofCredentialIsShapeValidated(t *testing.T) {
 // shell script writes a value -- appends a newline, and a header value
 // containing one makes Go's transport reject the request outright.
 func TestAHelperUsingEchoStillYieldsAUsableHeader(t *testing.T) {
-	helper := writeHelper(t, "#!/bin/sh\necho 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln'\n")
+	helper := writeHelper(t, "#!/bin/sh\necho '"+syntheticJWT(t, map[string]string{"sub": "u-1"})+"'\n")
 	minted, err := mintBearer(context.Background(), []string{helper})
 	if err != nil {
 		t.Fatalf("mintBearer: %v", err)

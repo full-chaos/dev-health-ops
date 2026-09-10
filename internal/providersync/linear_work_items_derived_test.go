@@ -71,7 +71,7 @@ func TestLinearWorkItemDeriverUsesLinearRowsAndEvaluatesAllTenDestinations(t *te
 		Source: source,
 		engine: linearDerivedEngineStub{},
 	}
-	derived, err := deriver.Derive(
+	derived, _, err := deriver.Derive(
 		context.Background(), claim, linearWorkItemRows{
 			WorkItems: []linearWorkItemRow{row},
 			StatusTransitions: []linearWorkItemTransitionRow{{
@@ -128,7 +128,7 @@ func TestLinearWorkItemDeriverRejectsWrongProviderClaim(t *testing.T) {
 		Source: &fakeGitHubWorkItemDerivationContextSource{},
 		engine: linearDerivedEngineStub{},
 	}
-	_, err := deriver.Derive(
+	_, _, err := deriver.Derive(
 		context.Background(), claim, linearWorkItemRows{}, day.Add(3*time.Hour),
 	)
 	if !errors.Is(err, ErrInvalidConfiguration) {
@@ -144,7 +144,7 @@ func TestLinearWorkItemDeriverRejectsMalformedRepositoryID(t *testing.T) {
 		Source: &fakeGitHubWorkItemDerivationContextSource{},
 		engine: linearDerivedEngineStub{},
 	}
-	_, err := deriver.Derive(context.Background(), claim, linearWorkItemRows{
+	_, _, err := deriver.Derive(context.Background(), claim, linearWorkItemRows{
 		WorkItems: []linearWorkItemRow{{
 			WorkItemID: "LIN-1", Provider: "linear", CreatedAt: day.Add(time.Hour),
 			UpdatedAt: day.Add(2 * time.Hour), OrgID: claim.OrgID, RepoID: &badRepo,

@@ -54,6 +54,9 @@ type JiraWorkItemDerivedRows struct {
 	WorkItemTeamAttributions       []JiraWorkItemTeamAttributionRow
 	WorkItemUserMetricsDaily       []JiraWorkItemUserMetricsDailyRow
 	Watermark                      *time.Time
+	// MembershipRejections (CHAOS-4320 round 6) -- see the identical field's
+	// doc comment on GitLabWorkItemDerivedRows.
+	MembershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 func (rows JiraWorkItemDerivedRows) producedDestinations() []string {
@@ -281,6 +284,7 @@ func (deriver JiraWorkItemDeriver) Derive(
 		result.EstimateCoverageMetricsDaily = append(result.EstimateCoverageMetricsDaily, surfaces.EstimateCoverage...)
 		result.WorkItemTeamAttributions = append(result.WorkItemTeamAttributions, surfaces.TeamAttributions...)
 		result.WorkItemStateDurationsDaily = append(result.WorkItemStateDurationsDaily, surfaces.StateDurations...)
+		result.MembershipRejections = append(result.MembershipRejections, surfaces.MembershipRejections...)
 
 		engine := GitHubWorkItemEngineDeriver{
 			statusMapping: deriver.statusMapping, investmentClassifier: deriver.investmentClassifier,
@@ -313,6 +317,7 @@ type JiraWorkItemDerivedEffectRows struct {
 	WorkItemStateDurationsDaily    []JiraWorkItemStateDurationDailyRow
 	WorkItemTeamAttributions       []JiraWorkItemTeamAttributionRow
 	WorkItemUserMetricsDaily       []JiraWorkItemUserMetricsDailyRow
+	MembershipRejections           []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 func (rows JiraWorkItemDerivedRows) EffectRows() JiraWorkItemDerivedEffectRows {
@@ -326,6 +331,7 @@ func (rows JiraWorkItemDerivedRows) EffectRows() JiraWorkItemDerivedEffectRows {
 		WorkItemStateDurationsDaily:    rows.WorkItemStateDurationsDaily,
 		WorkItemTeamAttributions:       rows.WorkItemTeamAttributions,
 		WorkItemUserMetricsDaily:       rows.WorkItemUserMetricsDaily,
+		MembershipRejections:           rows.MembershipRejections,
 	}
 }
 
@@ -353,6 +359,13 @@ func BuildJiraWorkItemDerivedEffects(rows JiraWorkItemDerivedEffectRows) ([]Effe
 			effect, err = buildJiraTypedDerivedEffect(destination, rows.WorkItemStateDurationsDaily)
 		case "work_item_team_attributions":
 			effect, err = buildJiraTypedDerivedEffect(destination, rows.WorkItemTeamAttributions)
+			if err == nil {
+				var marshaledRejections []json.RawMessage
+				marshaledRejections, err = marshalGitHubWorkItemTeamAttributionRejections(rows.MembershipRejections)
+				if err == nil {
+					effect.MembershipRejections = marshaledRejections
+				}
+			}
 		case "work_item_user_metrics_daily":
 			effect, err = buildJiraTypedDerivedEffect(destination, rows.WorkItemUserMetricsDaily)
 		default:

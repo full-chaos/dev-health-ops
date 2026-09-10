@@ -41,6 +41,19 @@ type EffectBatch struct {
 	Recovery      EffectRecoveryPolicy
 	Rows          []json.RawMessage
 	PayloadBytes  int
+	// MembershipRejections (CHAOS-4320 round 6, chris via team-lead,
+	// 2026-09-10) is a SEPARATE durable payload from Rows, used ONLY by the
+	// work_item_team_attributions destination to carry repo-ownership-gate
+	// rejection events. It is NOT part of ContentDigest/PayloadBytes/
+	// BuildEffectBatch's validation -- every other destination, and every
+	// other caller of BuildEffectBatch, simply never populates it and is
+	// completely unaffected. Deliberately separate from Rows rather than a
+	// same-shaped marker row within it (round 4/5's approach, removed):
+	// InspectGitHubWorkItemEffect only ever reads Rows, so it needs no
+	// knowledge of rejections at all, and cannot silently fall out of sync
+	// with what the writer excludes the way it did when a marker row's
+	// exclusion logic lived only in WriteGitHubWorkItemEffect.
+	MembershipRejections []json.RawMessage
 }
 
 func BuildEffectBatch(

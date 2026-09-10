@@ -683,24 +683,16 @@ WHERE org_id = ? AND work_item_id = ?`, githubDerivedIntegrationOrg, "acme/api#3
 	}
 }
 
-// TestGitHubWorkItemTeamAttributionsRejectionMarkerReadbackStaysExact is
-// CHAOS-4320's red-first pin for codex round 5's first P1 (NOT CLEAN,
-// executed repro): WriteGitHubWorkItemEffect deliberately excludes a
-// Rejected marker row from the INSERT (round 4's own fix -- it must never
-// persist), but InspectGitHubWorkItemEffect did not know that and queried
-// ClickHouse expecting to find one anyway. A single absent marker row
-// dragged inspectGitHubWorkItemDerivedRows' weakest-verdict rule down to
-// EffectAbsent for the WHOLE effect, even though every row that was
-// actually supposed to persist did. Recovery would then treat an
-// already-durably-written effect as never written and replay it forever --
-// re-recording the same rejection's ownership_checked sample on every
-// single recovery pass, not just once.
-//
-// This test writes a REAL row and a Rejected marker row through the real
-// WriteGitHubWorkItemEffect against a real ClickHouse container, then
-// inspects the SAME effect and asserts EffectExact -- the marker row's
-// absence from storage must not read as the whole effect being absent.
-func TestGitHubWorkItemTeamAttributionsRejectionMarkerReadbackStaysExact(t *testing.T) {
+// TestGitHubWorkItemTeamAttributionsRejectionReadbackStaysExact is
+// CHAOS-4320's red-first pin, updated in round 6 for the design that
+// replaced round 4/5's marker-row mechanism (chris via team-lead,
+// 2026-09-10): a repo-ownership-gate rejection now travels on
+// EffectBatch.MembershipRejections, a field separate from Rows that
+// InspectGitHubWorkItemEffect never reads at all -- this test proves that
+// a batch carrying a real row AND a non-empty MembershipRejections still
+// inspects EffectExact and that the rejection never reaches the actual
+// ClickHouse INSERT.
+func TestGitHubWorkItemTeamAttributionsRejectionReadbackStaysExact(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	conn := githubDerivedIntegrationConn(t, ctx)
@@ -708,7 +700,7 @@ func TestGitHubWorkItemTeamAttributionsRejectionMarkerReadbackStaysExact(t *test
 
 	repoID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
 	ownerTeamID, ownerTeamName := "team-owner", "Owner Team"
-	rejectedTeamID, rejectedTeamName := "team-outsider", "Outsider Team"
+	rejectedTeamID := "team-outsider"
 	real := githubWorkItemTeamAttributionRow{
 		WorkItemID: "acme/api#9", Provider: "github", Source: "repo_ownership",
 		IsPrimary: 1, Confidence: "high", Evidence: "repo:acme/api",
@@ -716,17 +708,20 @@ func TestGitHubWorkItemTeamAttributionsRejectionMarkerReadbackStaysExact(t *test
 		RepoID:     &repoID, TeamID: &ownerTeamID, TeamName: &ownerTeamName,
 		OrgID: githubDerivedIntegrationOrg,
 	}
-	rejected := githubWorkItemTeamAttributionRow{
-		WorkItemID: "acme/api#9", Provider: "github", Source: "assignee_membership",
-		IsPrimary: 0, Confidence: "none", Evidence: "ownership_rejected",
-		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC),
-		RepoID:     &repoID, TeamID: &rejectedTeamID, TeamName: &rejectedTeamName,
-		OrgID: githubDerivedIntegrationOrg, OwnershipReason: "repo_not_owned",
-		Rejected: true,
+	rejection := githubWorkItemTeamAttributionRejectionRow{
+		WorkItemID: "acme/api#9", Provider: "github", RepoID: &repoID,
+		Source: "assignee_membership", TeamID: &rejectedTeamID, Reason: "repo_not_owned",
 	}
 
-	rows := []githubWorkItemTeamAttributionRow{real, rejected}
+	rows := []githubWorkItemTeamAttributionRow{real}
 	effect := githubDerivedIntegrationEffect(t, githubTeamAttributionsDestination, rows)
+	marshaledRejections, err := marshalGitHubWorkItemDerivedRows(
+		[]githubWorkItemTeamAttributionRejectionRow{rejection},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect.MembershipRejections = marshaledRejections
 	identity := githubDerivedIntegrationIdentity(githubTeamAttributionsDestination, len(rows))
 
 	if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
@@ -734,8 +729,8 @@ func TestGitHubWorkItemTeamAttributionsRejectionMarkerReadbackStaysExact(t *test
 	}
 	if inspection, err := sink.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
 		t.Fatalf(
-			"inspection = %v, err = %v, want EffectExact -- the rejected marker row's "+
-				"absence from storage must not read as the whole effect being absent",
+			"inspection = %v, err = %v, want EffectExact -- MembershipRejections must not "+
+				"affect the inspection of the rows that DID persist",
 			inspection, err,
 		)
 	}
@@ -746,7 +741,7 @@ WHERE org_id = ? AND work_item_id = ? AND team_id = ?`,
 		t.Fatal(err)
 	}
 	if stored != 0 {
-		t.Fatalf("rejected marker row was persisted: stored count = %d, want 0", stored)
+		t.Fatalf("the rejection was persisted: stored count = %d, want 0", stored)
 	}
 }
 

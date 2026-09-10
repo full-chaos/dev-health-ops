@@ -1884,7 +1884,21 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestWriteGitHubWorkItemEffectDoesNotCountOnAFailedSend (counting must
     # gate on a successful Send, not merely follow the Append loop in
     # source order).
-    assert len(expected_provider_tests) == 1346
+    # CHAOS-4320 round 6 (chris via team-lead, 2026-09-10: dropped the
+    # marker-row mechanism entirely -- rejections now travel on
+    # EffectBatch.MembershipRejections, never Rows): +2 ordinary top-level
+    # (1346 -> 1348), integration-tagged UNCHANGED at 154 (the round-5
+    # integration test above was renamed to
+    # TestGitHubWorkItemTeamAttributionsRejectionReadbackStaysExact for the
+    # new mechanism, a rename not an addition).
+    # TestGitHubWorkItemTeamAttributionRejectionRowSurvivesTheEffectsJSONRoundTrip
+    # (Trap #125: the new githubWorkItemTeamAttributionRejectionRow type
+    # must survive the same JSON round trip real rows do) and
+    # TestWriteGitHubWorkItemEffectInsertsEveryRowNoFilteringPath (the
+    # invariant this design is built on: every row in Rows reaches the
+    # INSERT, no filtering path exists) are both in-memory, non-integration
+    # tests.
+    assert len(expected_provider_tests) == 1348
 
     assert len(expected_integration_tests) == 154
     assert expected_integration_tests < expected_provider_tests
@@ -1902,7 +1916,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1346
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1348
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2004,7 +2018,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1346
+    assert len(selected_tests) == len(set(selected_tests)) == 1348
     assert set(selected_tests) == expected_tests
 
 

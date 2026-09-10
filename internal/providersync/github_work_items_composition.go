@@ -392,7 +392,7 @@ func (deriver GitHubWorkItemDeriver) Derive(
 	claim Claim,
 	rows githubWorkItemRows,
 	normalizedAt time.Time,
-) (map[string][]json.RawMessage, error) {
+) (map[string][]json.RawMessage, []teamattribution.GithubWorkItemDerivationRejectedMembership, error) {
 	return deriver.deriveForProvider(ctx, "github", claim, rows, normalizedAt)
 }
 
@@ -402,22 +402,22 @@ func (deriver GitHubWorkItemDeriver) deriveForProvider(
 	claim Claim,
 	rows githubWorkItemRows,
 	normalizedAt time.Time,
-) (map[string][]json.RawMessage, error) {
+) (map[string][]json.RawMessage, []teamattribution.GithubWorkItemDerivationRejectedMembership, error) {
 	if ctx == nil || deriver.Source == nil || claim.Validate() != nil ||
 		!isDerivedWorkItemProvider(provider) || claim.Provider != provider ||
 		claim.Dataset != "work-items" ||
 		normalizedAt.IsZero() {
-		return nil, ErrInvalidConfiguration
+		return nil, nil, ErrInvalidConfiguration
 	}
 	days, err := githubWorkItemDerivedDays(claim, normalizedAt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	derivationContext, err := loadWorkItemDerivationContextForProvider(
 		ctx, provider, claim, rows, deriver.Source, normalizedAt,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	deriver.observations.recordStoredEdgeMerge(derivationContext.StoredEdgeMerge)
 	// Every owned destination is present from the start, so a destination that
@@ -426,33 +426,40 @@ func (deriver GitHubWorkItemDeriver) deriveForProvider(
 	for _, destination := range githubWorkItemDerivedOwnedDestinations {
 		derived[destination] = []json.RawMessage{}
 	}
+	// rejections (CHAOS-4320 round 6) accumulates across the day loop the
+	// SAME way `derived` does -- surfaces.MembershipRejections never rides
+	// in the row map itself (round 4/5's marker-row mechanism did that; see
+	// its doc comment on EffectBatch.MembershipRejections for why that was
+	// removed).
+	rejections := make([]teamattribution.GithubWorkItemDerivationRejectedMembership, 0)
 	for _, day := range days {
 		triplet, err := buildWorkItemMetricTripletForProvider(
 			provider, claim, rows, day, normalizedAt, derivationContext,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		tripletRows, err := triplet.derivedRows()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := githubWorkItemMergeDerivedRows(derived, tripletRows); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		surfaces, err := buildWorkItemDerivedSurfacesForProvider(
 			provider, claim, rows, day, normalizedAt, derivationContext,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		surfaceRows, err := surfaces.derivedRows()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := githubWorkItemMergeDerivedRows(derived, surfaceRows); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		rejections = append(rejections, surfaces.MembershipRejections...)
 		// CHAOS-4244: tally written team_attribution rows by source, for the
 		// route's observations map (see workItemDerivationObservations doc).
 		deriver.observations.recordTeamAttributionRows(surfaces.TeamAttributions)
@@ -463,10 +470,10 @@ func (deriver GitHubWorkItemDeriver) deriveForProvider(
 			ctx, claim, rows, day, normalizedAt, derivationContext,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := githubWorkItemMergeEngineRows(derived, engineRows); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if missing := githubWorkItemMissingDerivedDestinations(derived); len(missing) > 0 {
@@ -474,12 +481,12 @@ func (deriver GitHubWorkItemDeriver) deriveForProvider(
 		// destinations. An empty slice is indistinguishable from "evaluated,
 		// produced nothing", which is precisely the claim this port cannot
 		// honestly make about a metric whose engine does not exist yet.
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"%w: %s",
 			ErrGitHubWorkItemsDerivationsUnavailable, strings.Join(missing, ", "),
 		)
 	}
-	return derived, nil
+	return derived, rejections, nil
 }
 
 // githubWorkItemMergeDerivedRows appends one builder's output onto the

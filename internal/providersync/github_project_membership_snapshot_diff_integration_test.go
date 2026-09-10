@@ -84,7 +84,7 @@ func TestGitHubProjectV2SnapshotDiffAddsIssueAndRetiresARemovedSubjectFromPresen
 	if len(firstFetch.Rows.ProjectMemberships) != 2 {
 		t.Fatalf("sync 1 memberships=%+v, want the PR add plus the issue add", firstFetch.Rows.ProjectMemberships)
 	}
-	firstEffects, err := buildGitHubWorkItemsRouteEffects(firstFetch.Rows, derived)
+	firstEffects, err := buildGitHubWorkItemsRouteEffects(firstFetch.Rows, derived, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ WHERE org_id = ? AND subject_kind = 'work_item' AND subject_id = ?`,
 		t.Fatalf("sync 2 diff=%+v, want exactly one work_item removal naming the issue", secondDiff)
 	}
 	secondFetch.Rows.ProjectMemberships = append(secondFetch.Rows.ProjectMemberships, secondDiff...)
-	secondEffects, err := buildGitHubWorkItemsRouteEffects(secondFetch.Rows, derived)
+	secondEffects, err := buildGitHubWorkItemsRouteEffects(secondFetch.Rows, derived, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

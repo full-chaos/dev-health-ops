@@ -579,10 +579,18 @@ func NormalizedDerivationTime(value time.Time) time.Time {
 // RecordTeamAttributionOwnershipChecked is called from
 // WriteGitHubWorkItemEffect, never from this package.
 type GithubWorkItemDerivationRejectedMembership struct {
-	Source   string
-	Reason   string
-	TeamID   *string
-	TeamName *string
+	// WorkItemID and RepoID are carried so a caller can dedupe rejection
+	// events by the SAME (repo, work item, team, source) identity a real
+	// candidate row's sorting key already uses (CHAOS-4320 round 5, P1:
+	// without this, two rejections for the identical resolution counted as
+	// two ownership_checked samples instead of one).
+	WorkItemID string
+	Provider   string
+	RepoID     *string
+	Source     string
+	Reason     string
+	TeamID     *string
+	TeamName   *string
 }
 
 func (derived GithubWorkItemDerivationContext) Resolve(
@@ -594,9 +602,11 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 
 // ResolveWithMembershipRejections is Resolve, plus every repo-ownership-gate
 // rejection event this resolution produced (CHAOS-4320 round 4, P1). Used
-// ONLY by buildGitHubWorkItemTeamAttributions, which turns these into
-// non-persisted marker rows the write boundary can count; every other
-// caller of Resolve() has no use for them and stays on the 3-value form.
+// ONLY by buildGitHubWorkItemTeamAttributions, which carries these OUT as
+// data on EffectBatch.MembershipRejections (round 6: never mixed into the
+// row slice -- round 4/5's marker-row mechanism did that and it broke
+// recovery readback); every other caller of Resolve() has no use for them
+// and stays on the 3-value form.
 func (derived GithubWorkItemDerivationContext) ResolveWithMembershipRejections(
 	subject GithubWorkItemDerivationSubject,
 ) (*string, *string, []GithubWorkItemDerivationCandidate, []GithubWorkItemDerivationRejectedMembership) {
@@ -679,6 +689,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 			} else {
 				membershipSkipReasons[ownershipReason] = struct{}{}
 				rejections = append(rejections, GithubWorkItemDerivationRejectedMembership{
+					WorkItemID: subject.WorkItemID, Provider: subject.Provider, RepoID: subject.RepoID,
 					Source: "assignee_membership", Reason: ownershipReason,
 					TeamID: assigneeCandidates[0].TeamID, TeamName: assigneeCandidates[0].TeamName,
 				})
@@ -715,6 +726,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 				if !owns {
 					membershipSkipReasons[ownershipReason] = struct{}{}
 					rejections = append(rejections, GithubWorkItemDerivationRejectedMembership{
+						WorkItemID: subject.WorkItemID, Provider: subject.Provider, RepoID: subject.RepoID,
 						Source: "author_membership", Reason: ownershipReason,
 						TeamID: reporterCandidates[0].TeamID, TeamName: reporterCandidates[0].TeamName,
 					})

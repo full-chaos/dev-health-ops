@@ -285,7 +285,7 @@ func TestGitHubWorkItemDeriverPropagatesReachableClassifierError(t *testing.T) {
 		engine: engine,
 	}
 
-	derived, err := deriver.Derive(context.Background(), claim, rows, computedAt)
+	derived, _, err := deriver.Derive(context.Background(), claim, rows, computedAt)
 	if derived != nil {
 		t.Fatalf("classifier failure returned partial derived rows=%v", derived)
 	}

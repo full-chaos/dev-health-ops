@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -54,7 +55,7 @@ func TestBuildGitHubWorkItemTeamAttributionsCarriesOwnershipReasonFromTheRealRes
 		CreatedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
 		UpdatedAt: now, OrgID: claim.OrgID,
 	}}}
-	attributions, err := buildGitHubWorkItemTeamAttributions(
+	attributions, _, err := buildGitHubWorkItemTeamAttributions(
 		claim, rows, now, teamattribution.NewGitHubWorkItemDerivationContext(facts),
 	)
 	if err != nil {
@@ -109,7 +110,7 @@ func TestBuildGitHubWorkItemTeamAttributionsCarriesOwnershipReasonForAuthorFromT
 		CreatedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
 		UpdatedAt: now, OrgID: claim.OrgID,
 	}}}
-	attributions, err := buildGitHubWorkItemTeamAttributions(
+	attributions, _, err := buildGitHubWorkItemTeamAttributions(
 		claim, rows, now, teamattribution.NewGitHubWorkItemDerivationContext(facts),
 	)
 	if err != nil {
@@ -213,7 +214,6 @@ func TestGitHubWorkItemTeamAttributionRowNoExportedFieldReadsBackZero(t *testing
 		ComputedAt: time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
 		RepoID:     &repoID, TeamID: &teamID, TeamName: &teamName,
 		OrgID: "org-acme", Priority: 10, OwnershipReason: "ownership_unknown",
-		Rejected: true,
 	}
 
 	// Sanity control: EVERY exported field on the original must itself be
@@ -270,11 +270,25 @@ func (conn *ownershipReasonWriteConn) PrepareBatch(
 type ownershipReasonWriteBatch struct {
 	driver.Batch
 	SendErr error
+	// Appended records every Append call's WorkItemID+Source argument pair
+	// (args[2], args[6] in the INSERT's own column order), so a test can
+	// assert on exactly which rows reached the INSERT without needing its
+	// own SQL-aware fake.
+	Appended []string
 }
 
-func (batch *ownershipReasonWriteBatch) Append(...any) error { return nil }
-func (batch *ownershipReasonWriteBatch) Send() error         { return batch.SendErr }
-func (batch *ownershipReasonWriteBatch) Abort() error        { return nil }
+func (batch *ownershipReasonWriteBatch) Append(args ...any) error {
+	if len(args) >= 7 {
+		if workItemID, ok := args[2].(string); ok {
+			if source, ok := args[6].(string); ok {
+				batch.Appended = append(batch.Appended, workItemID+"|"+source)
+			}
+		}
+	}
+	return nil
+}
+func (batch *ownershipReasonWriteBatch) Send() error  { return batch.SendErr }
+func (batch *ownershipReasonWriteBatch) Abort() error { return nil }
 
 // TestWriteGitHubWorkItemEffectCountsOwnershipCheckedOnEveryMembershipRow is
 // CHAOS-4320's red-first pin for codex round 3's two P1s (NOT CLEAN,
@@ -384,9 +398,13 @@ func TestWriteGitHubWorkItemEffectCountsOwnershipCheckedOnEveryMembershipRow(t *
 // completely unobservable, indistinguishable from "nobody was ever gated at
 // all."
 //
-// This test goes through the REAL end-to-end path -- the real derivation
-// context, the real resolver (via buildGitHubWorkItemTeamAttributions), the
-// real EffectBatch JSON round trip, the real validator, and the real
+// Round 6 (chris via team-lead, 2026-09-10) replaced the marker-row
+// mechanism this test originally pinned: rejections now travel as
+// buildGitHubWorkItemTeamAttributions's own second return value, attached
+// to EffectBatch.MembershipRejections -- a field separate from Rows -- and
+// never mixed into the candidate list at all. This test still goes through
+// the REAL end-to-end path -- the real derivation context, the real
+// resolver, the real MembershipRejections JSON round trip, and the real
 // WriteGitHubWorkItemEffect -- with only the ClickHouse Conn/Batch faked, so
 // it fails the way production actually fails. One work item has BOTH a
 // non-owning assignee and a non-owning reporter (same identity, "alice"),
@@ -418,7 +436,7 @@ func TestRejectedMembershipsAreCountedByOwnershipChecked(t *testing.T) {
 		Assignees: []string{"alice"}, Reporter: stringPointer("alice"),
 		CreatedAt: now, UpdatedAt: now, OrgID: claim.OrgID,
 	}}}
-	attributions, err := buildGitHubWorkItemTeamAttributions(
+	attributions, rejections, err := buildGitHubWorkItemTeamAttributions(
 		claim, rows, now, teamattribution.NewGitHubWorkItemDerivationContext(facts),
 	)
 	if err != nil {
@@ -426,19 +444,26 @@ func TestRejectedMembershipsAreCountedByOwnershipChecked(t *testing.T) {
 	}
 	for _, row := range attributions {
 		if row.Source == "assignee_membership" || row.Source == "author_membership" {
-			if !row.Rejected {
-				t.Fatalf(
-					"got a real (non-rejected) %s row for a non-owning candidate: %+v",
-					row.Source, row,
-				)
-			}
+			t.Fatalf(
+				"got a real %s row in the candidate list for a non-owning identity -- "+
+					"rejections must never become a persisted candidate: %+v",
+				row.Source, row,
+			)
 		}
+	}
+	if len(rejections) != 2 {
+		t.Fatalf("rejections = %+v, want exactly 2 (assignee + author)", rejections)
 	}
 
 	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired, attributions)
 	if err != nil {
 		t.Fatal(err)
 	}
+	marshaledRejections, err := marshalGitHubWorkItemTeamAttributionRejections(rejections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect.MembershipRejections = marshaledRejections
 	identity := GitHubWorkItemEffectIdentity{
 		OrgID: claim.OrgID, Provider: "github", Destination: githubTeamAttributionsDestination,
 		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
@@ -467,43 +492,51 @@ func TestRejectedMembershipsAreCountedByOwnershipChecked(t *testing.T) {
 
 // TestRejectedRowsWithIdenticalSortingKeyCountOnceNotTwice is CHAOS-4320's
 // red-first pin for codex round 5's second P1 (NOT CLEAN, executed repro):
-// persistedRows go through githubWorkItemDerivedSortingKeyDedupe before
-// anything counts them, so two candidates that resolve to an identical
-// (repo, work item, team, source) key collapse to ONE row before the
-// "owned"/membership-layer counters ever see them -- exactly the identity
-// this destination's ReplacingMergeTree engine itself uses. rejectedRows
-// did NOT get the same treatment: two rejection events sharing that
-// identical key counted as TWO ownership_checked samples, so the same kind
-// of duplicate meant a different count depending on which outcome (owned
-// vs rejected) it had.
+// granted candidates go through githubWorkItemDerivedSortingKeyDedupe
+// before anything counts them, so two candidates that resolve to an
+// identical (repo, work item, team, source) key collapse to ONE row before
+// the "owned"/membership-layer counters ever see them -- exactly the
+// identity this destination's ReplacingMergeTree engine itself uses.
+// Rejection events did NOT get the same treatment: two rejections sharing
+// that identical key counted as TWO ownership_checked samples, so the same
+// kind of duplicate meant a different count depending on which outcome
+// (owned vs rejected) it had.
 //
-// This test writes two rejected marker rows that share an IDENTICAL
-// sorting key (same repo, work item, team, source) through the real
-// WriteGitHubWorkItemEffect and asserts exactly ONE repo_not_owned sample,
-// matching what the equivalent duplicate would do on the granted path.
+// This test attaches two rejection events sharing an IDENTICAL sorting key
+// (same repo, work item, team, source) to EffectBatch.MembershipRejections
+// (round 6's mechanism) through the real WriteGitHubWorkItemEffect and
+// asserts exactly ONE repo_not_owned sample, matching what the equivalent
+// granted-row duplicate would do.
 func TestRejectedRowsWithIdenticalSortingKeyCountOnceNotTwice(t *testing.T) {
 	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
 	teamID := "nonowner"
 	teamName := "Nonowner"
-	duplicateRejection := githubWorkItemTeamAttributionRow{
-		WorkItemID: "gh:acme/api#5", Provider: "github", Source: "assignee_membership",
-		IsPrimary: 0, Confidence: "none", Evidence: "ownership_rejected",
-		ComputedAt: time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
-		RepoID:     &repoID, TeamID: &teamID, TeamName: &teamName,
-		OrgID: "org-acme", OwnershipReason: "repo_not_owned", Rejected: true,
+	duplicateRejection := githubWorkItemTeamAttributionRejectionRow{
+		WorkItemID: "gh:acme/api#5", Provider: "github",
+		RepoID: &repoID, Source: "assignee_membership",
+		TeamID: &teamID, TeamName: &teamName, Reason: "repo_not_owned",
 	}
-	// Same sorting key (repo, work item, team, source) as the row above --
-	// only Evidence/ComputedAt differ, mirroring the resolver-recomputation
-	// case the existing collision tests for GRANTED rows already cover
-	// (e.g. two ownership facts naming one team differently).
-	sameKeyLaterRejection := duplicateRejection
-	sameKeyLaterRejection.ComputedAt = duplicateRejection.ComputedAt.Add(time.Second)
-	rows := []githubWorkItemTeamAttributionRow{duplicateRejection, sameKeyLaterRejection}
-
-	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired, rows)
+	// Same sorting key (repo, work item, team, source) as the rejection
+	// above -- a genuine duplicate resolution, mirroring the resolver-
+	// recomputation case the existing collision tests for GRANTED rows
+	// already cover (e.g. two ownership facts naming one team differently).
+	sameKeyRejection := duplicateRejection
+	rejections := []githubWorkItemTeamAttributionRejectionRow{duplicateRejection, sameKeyRejection}
+	marshaledRejections, err := marshalGitHubWorkItemDerivedRows(rejections)
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired,
+		[]githubWorkItemTeamAttributionRow{{
+			WorkItemID: "gh:acme/api#5", Provider: "github", Source: "repo_ownership",
+			IsPrimary: 1, Confidence: "high", Evidence: "repo_ownership=x", OrgID: "org-acme",
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect.MembershipRejections = marshaledRejections
 	identity := GitHubWorkItemEffectIdentity{
 		OrgID: "org-acme", Provider: "github", Destination: githubTeamAttributionsDestination,
 		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
@@ -524,7 +557,7 @@ func TestRejectedRowsWithIdenticalSortingKeyCountOnceNotTwice(t *testing.T) {
 	rendered := output.String()
 	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="repo_not_owned"} 1`) {
 		t.Fatalf(
-			"two rejected rows sharing an identical sorting key were counted separately instead of "+
+			"two rejection events sharing an identical sorting key were counted separately instead of "+
 				"collapsing to one, like the equivalent granted-row duplicate does:\n%s",
 			rendered,
 		)
@@ -575,16 +608,21 @@ func TestWriteGitHubWorkItemEffectDoesNotCountOnAFailedSend(t *testing.T) {
 			IsPrimary: 0, Confidence: "high", Evidence: "assignee=dev@example.com",
 			OrgID: "org-acme", OwnershipReason: "ownership_unknown",
 		},
-		{
-			WorkItemID: "gh:acme/api#1", Provider: "github", Source: "author_membership",
-			IsPrimary: 0, Confidence: "none", Evidence: "ownership_rejected",
-			OrgID: "org-acme", OwnershipReason: "repo_not_owned", Rejected: true,
-		},
+	}
+	teamID := "nonowner"
+	rejections := []githubWorkItemTeamAttributionRejectionRow{{
+		WorkItemID: "gh:acme/api#1", Provider: "github", Source: "author_membership",
+		TeamID: &teamID, Reason: "repo_not_owned",
+	}}
+	marshaledRejections, err := marshalGitHubWorkItemDerivedRows(rejections)
+	if err != nil {
+		t.Fatal(err)
 	}
 	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
+	effect.MembershipRejections = marshaledRejections
 	identity := GitHubWorkItemEffectIdentity{
 		OrgID: "org-acme", Provider: "github", Destination: githubTeamAttributionsDestination,
 		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
@@ -610,4 +648,104 @@ func TestWriteGitHubWorkItemEffectDoesNotCountOnAFailedSend(t *testing.T) {
 			rendered,
 		)
 	}
+}
+
+// TestWriteGitHubWorkItemEffectInsertsEveryRowNoFilteringPath is CHAOS-4320
+// round 6's invariant test (chris via team-lead, 2026-09-10): the design
+// this round replaces round 4/5's marker-row mechanism with is explicitly
+// "no rows that travel through the effects batch only to be filtered before
+// INSERT" -- rejections now travel on a SEPARATE EffectBatch field
+// (MembershipRejections) that this function never even looks at when
+// building the INSERT, so there is no filtering branch left over Rows at
+// all. This test proves that structurally: every row in a batch (four
+// distinct sorting keys, including sources that used to be eligible for
+// gate rejection) reaches batch.Append exactly once, with no member
+// unexpectedly absent -- the shape a reintroduced filtering step would
+// break.
+func TestWriteGitHubWorkItemEffectInsertsEveryRowNoFilteringPath(t *testing.T) {
+	rows := []githubWorkItemTeamAttributionRow{
+		{
+			WorkItemID: "gh:acme/api#1", Provider: "github", Source: "repo_ownership",
+			IsPrimary: 1, Confidence: "high", Evidence: "repo_ownership=x", OrgID: "org-acme",
+		},
+		{
+			WorkItemID: "gh:acme/api#1", Provider: "github", Source: "assignee_membership",
+			IsPrimary: 0, Confidence: "high", Evidence: "assignee=dev@example.com",
+			OrgID: "org-acme", OwnershipReason: "ownership_unknown",
+		},
+		{
+			WorkItemID: "gh:acme/api#2", Provider: "github", Source: "author_membership",
+			IsPrimary: 0, Confidence: "high", Evidence: "reporter=bob",
+			OrgID: "org-acme", OwnershipReason: "owned",
+		},
+		{
+			WorkItemID: "gh:acme/api#3", Provider: "github", Source: "unassigned",
+			IsPrimary: 1, Confidence: "none", Evidence: "no_candidate", OrgID: "org-acme",
+		},
+	}
+	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &ownershipReasonWriteConn{}
+	sink := GitHubWorkItemTeamAttributionsClickHouseEffects{
+		Conn:    conn,
+		Lease:   providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Metrics: providerfoundation.NewMetrics(),
+	}
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: "org-acme", Provider: "github", Destination: githubTeamAttributionsDestination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+	if err := sink.WriteGitHubWorkItemEffect(context.Background(), identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"gh:acme/api#1|repo_ownership", "gh:acme/api#1|assignee_membership",
+		"gh:acme/api#2|author_membership", "gh:acme/api#3|unassigned",
+	}
+	got := append([]string(nil), conn.batch.Appended...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("appended rows = %v, want %v -- every distinct-key row must reach the INSERT, none filtered", got, want)
+	}
+}
+
+// TestGitHubWorkItemTeamAttributionRejectionRowSurvivesTheEffectsJSONRoundTrip
+// is CHAOS-4320 round 6's pin for team-lead's explicit ask (Trap #125, the
+// exact class codex round 2 found on Priority/OwnershipReason): the new
+// githubWorkItemTeamAttributionRejectionRow type, carried on
+// EffectBatch.MembershipRejections, must survive the SAME json.Marshal/
+// json.Unmarshal round trip real rows go through -- a field given
+// `json:"-"` by mistake would silently read back its zero value here
+// exactly as it did for Priority/OwnershipReason before round 2's fix.
+// Populates every exported field to a non-zero value (the same positive-
+// control discipline TestGitHubWorkItemTeamAttributionRowNoExportedFieldReadsBackZero
+// already uses) and fails if any field reads back zero after the round
+// trip through decodeGitHubWorkItemTeamAttributionRejections, the actual
+// function WriteGitHubWorkItemEffect calls.
+func TestGitHubWorkItemTeamAttributionRejectionRowSurvivesTheEffectsJSONRoundTrip(t *testing.T) {
+	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
+	teamID := "team-outsider"
+	teamName := "Outsider Team"
+	original := githubWorkItemTeamAttributionRejectionRow{
+		WorkItemID: "gh:acme/api#1", Provider: "github", RepoID: &repoID,
+		Source: "assignee_membership", TeamID: &teamID, TeamName: &teamName,
+		Reason: "repo_not_owned",
+	}
+	assertNoExportedFieldIsZero(t, "original", original)
+
+	marshaled, err := marshalGitHubWorkItemDerivedRows([]githubWorkItemTeamAttributionRejectionRow{original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeGitHubWorkItemTeamAttributionRejections(marshaled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded) != 1 {
+		t.Fatalf("decoded = %+v, want exactly 1", decoded)
+	}
+	assertNoExportedFieldIsZero(t, "round-tripped", decoded[0])
 }

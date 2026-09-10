@@ -104,35 +104,32 @@ type githubWorkItemTeamAttributionRow struct {
 	// Resolve()/buildGitHubWorkItemTeamAttributions directly and skips the
 	// effects/outbox JSON round-trip.
 	OwnershipReason string `json:"ownership_reason"`
-	// Rejected marks a NON-PERSISTED observation row (CHAOS-4320 round 4,
-	// P1): a repo-ownership-gate REJECTION of an assignee_membership/
-	// author_membership candidate never becomes a real attribution row --
-	// it is dropped before Resolve() even returns it, so it correctly never
-	// reaches work_item_team_attributions -- but that also made the gate
-	// actually firing completely unobservable: no row, no counter sample,
-	// nothing. buildGitHubWorkItemTeamAttributions appends one of these
-	// marker rows per rejection (OwnershipReason set to the raw rejection
-	// reason, e.g. "repo_not_owned") so it can ride the SAME EffectBatch/
-	// outbox round trip real candidate rows already use and reach
-	// WriteGitHubWorkItemEffect, which records it via
-	// RecordTeamAttributionOwnershipChecked and then EXCLUDES it from the
-	// actual ClickHouse INSERT (both the column list and
-	// newGitHubTeamAttributionColumns's oracle-comparison projection are
-	// explicit field/column lists, same non-leaking guarantee Priority's
-	// doc comment above already establishes for this exact mechanism).
-	//
-	// A REAL json tag (same reasoning as Priority/OwnershipReason above):
-	// `json:"-"` would silently read back false regardless of what was set,
-	// which would make every rejection marker row indistinguishable from a
-	// real candidate row after the round trip -- reproducing the exact
-	// defect class round 2 fixed, for a brand new field.
-	//
-	// Never true for a row Python could have produced: Python's
-	// compute_work_items.py has no repo-ownership gate at all (the
-	// CHAOS-4320 baseline_defect), so it never rejects a membership
-	// candidate and this field is always false on anything the live-
-	// python-oracle or byte-identical parity tests compare.
-	Rejected bool `json:"rejected"`
+}
+
+// githubWorkItemTeamAttributionRejectionRow is CHAOS-4320 round 6's
+// replacement for round 4/5's Rejected marker row (BOTH removed, chris via
+// team-lead, 2026-09-10): a marker row shared githubWorkItemTeamAttributionRow's
+// shape, which meant it could be (and was, round 5 P1) mistaken for a real
+// candidate by InspectGitHubWorkItemEffect -- both the write boundary AND the
+// inspector had to know about the marker convention, and the two silently
+// fell out of sync. This type never enters Rows at all: it travels on
+// EffectBatch.MembershipRejections, a durable field of its own that only
+// WriteGitHubWorkItemEffect for work_item_team_attributions ever reads. The
+// inspector needs NO knowledge of rejections whatsoever -- there is no
+// marker convention left for it to fall out of sync with.
+//
+// Real json tags throughout (Trap #125, the exact class codex round 2
+// found on Priority/OwnershipReason above): this type round-trips through
+// json.Marshal/json.Unmarshal exactly like a real row does, and a `json:"-"`
+// tag here would silently drop the value the same way.
+type githubWorkItemTeamAttributionRejectionRow struct {
+	WorkItemID string     `json:"work_item_id"`
+	Provider   string     `json:"provider"`
+	RepoID     *uuid.UUID `json:"repo_id"`
+	Source     string     `json:"source"`
+	TeamID     *string    `json:"team_id"`
+	TeamName   *string    `json:"team_name"`
+	Reason     string     `json:"reason"`
 }
 
 // githubWorkItemStateDurationDailyRow mirrors
@@ -155,6 +152,12 @@ type githubWorkItemDerivedSurfaces struct {
 	EstimateCoverage []githubEstimateCoverageMetricsDailyRow
 	TeamAttributions []githubWorkItemTeamAttributionRow
 	StateDurations   []githubWorkItemStateDurationDailyRow
+	// MembershipRejections (CHAOS-4320 round 6) is NOT one of this builder's
+	// three row destinations above and is never merged into TeamAttributions
+	// or any derivedRows() output -- it travels separately, onto
+	// EffectBatch.MembershipRejections, so it can never be mistaken for a
+	// real persisted row (round 4/5's marker-row mechanism, removed).
+	MembershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 const (
@@ -258,7 +261,7 @@ func buildWorkItemDerivedSurfacesForProvider(
 	if err != nil {
 		return githubWorkItemDerivedSurfaces{}, err
 	}
-	attributions, err := buildGitHubWorkItemTeamAttributions(
+	attributions, rejections, err := buildGitHubWorkItemTeamAttributions(
 		claim, rows, computedAt, derived,
 	)
 	if err != nil {
@@ -271,9 +274,10 @@ func buildWorkItemDerivedSurfacesForProvider(
 		return githubWorkItemDerivedSurfaces{}, err
 	}
 	return githubWorkItemDerivedSurfaces{
-		EstimateCoverage: coverage,
-		TeamAttributions: attributions,
-		StateDurations:   durations,
+		EstimateCoverage:     coverage,
+		TeamAttributions:     attributions,
+		StateDurations:       durations,
+		MembershipRejections: rejections,
 	}, nil
 }
 
@@ -363,13 +367,23 @@ func buildGitHubWorkItemTeamAttributions(
 	rows githubWorkItemRows,
 	computedAt time.Time,
 	derived teamattribution.GithubWorkItemDerivationContext,
-) ([]githubWorkItemTeamAttributionRow, error) {
+) ([]githubWorkItemTeamAttributionRow, []teamattribution.GithubWorkItemDerivationRejectedMembership, error) {
 	result := make([]githubWorkItemTeamAttributionRow, 0, len(rows.WorkItems))
+	// rejections (CHAOS-4320 round 6) travels OUT of this function as its
+	// own return value, never merged into `result` -- round 4/5's marker-row
+	// mechanism put a Rejected=true row into this SAME slice specifically so
+	// it could ride the effects/outbox round trip, but that meant
+	// InspectGitHubWorkItemEffect had to separately know to exclude it (r5's
+	// P1: it didn't, and a batch containing a rejection replayed forever).
+	// Keeping rejections structurally OUT of the row slice removes that
+	// failure mode instead of requiring the inspector to keep matching the
+	// writer's exclusion logic by hand.
+	rejections := make([]teamattribution.GithubWorkItemDerivationRejectedMembership, 0)
 	for _, item := range rows.WorkItems {
 		if err := assertGitHubWorkItemDerivedTenancy(claim, item); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		_, _, candidates, rejections := derived.ResolveWithMembershipRejections(
+		_, _, candidates, itemRejections := derived.ResolveWithMembershipRejections(
 			githubWorkItemDerivationSubjectFromRow(item),
 		)
 		for _, candidate := range candidates {
@@ -397,41 +411,9 @@ func buildGitHubWorkItemTeamAttributions(
 				OrgID:    item.OrgID,
 			})
 		}
-		// CHAOS-4320 round 4, P1: a repo-ownership-gate rejection never
-		// produces a candidate above -- Resolve() drops it before the
-		// candidate list is even built, exactly as intended (the row must
-		// never persist to work_item_team_attributions). Without this,
-		// though, the gate actually firing was completely unobservable: no
-		// row, no counter sample, nothing distinguishes "the gate rejected
-		// someone" from "nobody was ever gated at all." Append a NON-
-		// PERSISTED marker row per rejection instead -- Rejected=true keeps
-		// it out of the real ClickHouse INSERT and out of every existing
-		// row-count-based assertion (recordTeamAttributionRows already
-		// skips non-primary rows; this is also non-primary), while still
-		// letting it ride the same EffectBatch/outbox round trip so
-		// WriteGitHubWorkItemEffect -- the actual metrics-capable write
-		// boundary -- can count it before dropping it.
-		for _, rejection := range rejections {
-			result = append(result, githubWorkItemTeamAttributionRow{
-				WorkItemID: item.WorkItemID,
-				Provider:   item.Provider,
-				Source:     rejection.Source,
-				IsPrimary:  0,
-				Confidence: "none",
-				Evidence:   "ownership_rejected",
-				ComputedAt: githubWorkItemDerivedStamp(
-					computedAt, githubTeamAttributionStampPrecision,
-				),
-				RepoID:          item.RepoID,
-				TeamID:          rejection.TeamID,
-				TeamName:        rejection.TeamName,
-				OrgID:           item.OrgID,
-				OwnershipReason: rejection.Reason,
-				Rejected:        true,
-			})
-		}
+		rejections = append(rejections, itemRejections...)
 	}
-	return result, nil
+	return result, rejections, nil
 }
 
 type githubStateDurationKey struct {
@@ -648,6 +630,38 @@ func (surfaces githubWorkItemDerivedSurfaces) derivedRows() (map[string][]json.R
 		return nil, ErrInvalidConfiguration
 	}
 	return result, nil
+}
+
+// marshalGitHubWorkItemTeamAttributionRejections (CHAOS-4320 round 6)
+// converts accumulated repo-ownership-gate rejection events into the typed,
+// real-json-tagged githubWorkItemTeamAttributionRejectionRow shape and
+// marshals them with the SAME mechanism derivedRows() uses for real rows --
+// this is what EffectBatch.MembershipRejections is populated from. Deliberately
+// a STANDALONE function, not a githubWorkItemDerivedSurfaces method: the
+// route layer accumulates rejections ACROSS a multi-day loop (mirroring how
+// `derived`, the row map, is itself accumulated across days) before this is
+// ever called, so by the time marshaling happens there is no single
+// surfaces value left to hang the method off of.
+func marshalGitHubWorkItemTeamAttributionRejections(
+	rejections []teamattribution.GithubWorkItemDerivationRejectedMembership,
+) ([]json.RawMessage, error) {
+	typed := make([]githubWorkItemTeamAttributionRejectionRow, 0, len(rejections))
+	for _, rejection := range rejections {
+		var repoID *uuid.UUID
+		if rejection.RepoID != nil {
+			parsed, err := uuid.Parse(*rejection.RepoID)
+			if err != nil {
+				return nil, fmt.Errorf("%w: membership rejection repo_id", ErrEffectRecoveryUnsafe)
+			}
+			repoID = &parsed
+		}
+		typed = append(typed, githubWorkItemTeamAttributionRejectionRow{
+			WorkItemID: rejection.WorkItemID, Provider: rejection.Provider, RepoID: repoID,
+			Source: rejection.Source, TeamID: rejection.TeamID, TeamName: rejection.TeamName,
+			Reason: rejection.Reason,
+		})
+	}
+	return marshalGitHubWorkItemDerivedRows(typed)
 }
 
 func marshalGitHubWorkItemDerivedRows(rows any) ([]json.RawMessage, error) {

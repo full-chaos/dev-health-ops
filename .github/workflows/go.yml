@@ -72,6 +72,12 @@ on:
       # under testdata/ or fixtures/, so the shared glob above does not
       # reach it.
       - 'cmd/query-api/internal/investmentexplain/prompts/**'
+      # gqlgen.yml is the generator's configuration -- the schema it
+      # reads and every path it writes. Editing it changes the generated Go
+      # layer as surely as editing the SDL does, and go-quality now runs a drift
+      # check that regenerates from it. Without this line a gqlgen.yml-only
+      # change is classified non-Go and that check passes vacuously.
+      - 'cmd/query-api/gqlgen.yml'
       - 'docker/go-worker.Dockerfile'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
@@ -178,6 +184,12 @@ on:
       # under testdata/ or fixtures/, so the shared glob above does not
       # reach it.
       - 'cmd/query-api/internal/investmentexplain/prompts/**'
+      # gqlgen.yml is the generator's configuration -- the schema it
+      # reads and every path it writes. Editing it changes the generated Go
+      # layer as surely as editing the SDL does, and go-quality now runs a drift
+      # check that regenerates from it. Without this line a gqlgen.yml-only
+      # change is classified non-Go and that check passes vacuously.
+      - 'cmd/query-api/gqlgen.yml'
       - 'docker/go-worker.Dockerfile'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'

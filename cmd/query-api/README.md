@@ -235,13 +235,30 @@ is enabled." What exists in this Wave:
 
 `gqlgen.yml` points directly at
 [`contracts/graphql/v1/schema.graphql`](../../contracts/graphql/v1/README.md)
-— the CI-checked export of the Strawberry schema — never a copy. To
-regenerate after a schema change:
+— the CI-checked export of the Strawberry schema — never a copy.
+
+Regeneration goes through `cmd/gqlgen-guard`, never the generator directly:
 
 ```bash
-cd cmd/query-api
-go run github.com/99designs/gqlgen generate --config gqlgen.yml
+# from the repository root
+go run ./cmd/gqlgen-guard check-drift   # compare, write nothing, exit non-zero on drift
+go run ./cmd/gqlgen-guard generate      # regenerate and copy the outputs back
 ```
+
+The guard runs the generator inside a private copy of the module and copies
+back only the paths `gqlgen.yml` itself declares. That matters here because the
+checked-in generated files carry deliberate hand-edits — the nullability
+rulings recorded in the file comments — that a bare `gqlgen generate` reverts,
+and because the generator runs `go mod tidy`, which in a reduced module rewrites
+`go.mod` wholesale. Neither can reach the working tree through the guard.
+
+Every difference between the checked-in files and a fresh generation is
+recorded in [`contracts/gqlgen/v1/expected-drift.record`](../../contracts/gqlgen/v1/expected-drift.record),
+which `go-quality` compares byte for byte. New drift fails, and so does a
+recorded hand-edit that has silently vanished. When a difference is a
+deliberate change, rewrite the record with
+`go run ./cmd/gqlgen-guard check-drift -update` and review the diff of that
+file as part of the change.
 
 Review the diff; it is the same drift-review contract as web's codegen
 against the same SDL pin.

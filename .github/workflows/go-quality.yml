@@ -162,6 +162,32 @@ jobs:
           bash ci/check_migration_matrix.sh contract
           bash ci/check_migration_matrix_test.sh
 
+      - name: Check the gqlgen output has not drifted from its hand-edits
+        if: steps.relevance.outputs.relevant == 'true'
+        # cmd/query-api's generated GraphQL layer carries deliberate
+        # hand-edits -- the nullability rulings recorded in the file comments --
+        # and a bare `gqlgen generate` reverts every one of them.
+        #
+        # Until tools.go was added, the only thing preventing that revert
+        # was that `gqlgen generate` COULD NOT RUN: the CLI's own dependencies
+        # were absent from go.sum, so the command documented in
+        # cmd/query-api/README.md failed before doing anything. An accident was
+        # holding a contract. This step is what replaces the accident.
+        #
+        # The guard regenerates inside a PRIVATE COPY of the module -- the
+        # generator never runs in the checkout, so no configuration can make it
+        # write here -- and compares the result with the checked-in files. The
+        # comparison is byte for byte against contracts/gqlgen/v1/expected-drift.record,
+        # which makes it exact in BOTH directions: new drift means something was
+        # regenerated over a hand-edit, and a MISSING entry means a hand-edit
+        # vanished. The second is how a nullability ruling would quietly revert,
+        # and a subset check would not see it.
+        #
+        # -update is deliberately absent: it REWRITES the record instead of
+        # comparing against it, which would make this step incapable of failing.
+        # A test asserts this command does not carry it.
+        run: go run ./cmd/gqlgen-guard check-drift
+
       - name: Install locked live provider oracle dependencies
         if: steps.relevance.outputs.relevant == 'true'
         run: python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt

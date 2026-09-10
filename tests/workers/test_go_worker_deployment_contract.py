@@ -316,19 +316,29 @@ def _kubernetes_pagerduty_containers(path: Path) -> dict[str, dict]:
     return containers
 
 
-def test_go_worker_groups_are_disabled_future_topology() -> None:
+def test_go_worker_groups_are_enabled_by_default_under_go_default_state() -> None:
+    # CHAOS-5541: the manifest moved from coexistence_disabled (every process
+    # off by default) to go_default (Go processes on by default, Celery
+    # legacy/opt-in). Only sync-provider stays off -- compose does not run it
+    # (verified: `docker ps` on the live stack shows one container each for
+    # every other process, none for sync-provider).
     manifest = _load_json(_DEPLOYMENT)
 
-    assert manifest["deployment_state"] == "coexistence_disabled"
+    assert manifest["deployment_state"] == "go_default"
     assert manifest["runtime_role_env"] == [
         "RIVER_COORDINATOR_DATABASE_ROLE",
         "RIVER_DOMAIN_DATABASE_ROLE",
         "RIVER_QUEUE_DATABASE_ROLE",
     ]
-    assert all(
-        not process["enabled_by_default"] and process["min_replicas"] == 0
-        for process in manifest["processes"]
-    )
+    disabled_processes = {"sync-provider"}
+    for process in manifest["processes"]:
+        assert process["min_replicas"] == 0
+        if process["name"] in disabled_processes:
+            assert not process["enabled_by_default"]
+            assert process["desired_replicas"] == 0
+        else:
+            assert process["enabled_by_default"]
+            assert process["desired_replicas"] == 1
     for process in manifest["processes"]:
         assert [item["queue"] for item in process["queue_workers"]] == process["queues"]
         assert all(item["max_workers"] > 0 for item in process["queue_workers"])
@@ -655,6 +665,15 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
 
 
 def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
+    # CHAOS-5541: under go_default, desired_replicas is the manifest's
+    # declared intent for what SHOULD run -- decoupled from the static
+    # renderer files, which stay pinned to min_replicas (0 for every process,
+    # in both deployment_state values) so that rendering or applying a
+    # topology never auto-starts a live pod on its own. Scaling from 0 is a
+    # deliberate follow-on action (exactly how the live dev stack reaches its
+    # own desired_replicas=1: a separate worker-scale-override.yml overlay,
+    # not an edit to this checked-in file). Compare renderer replicas against
+    # min_replicas, not desired_replicas.
     manifest = {
         process["name"]: process for process in _load_json(_DEPLOYMENT)["processes"]
     }
@@ -687,13 +706,13 @@ def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
     }
     for profile, service_name in services.items():
         contract = manifest[profile]
-        desired = contract["desired_replicas"]
+        rendered_replicas = contract["min_replicas"]
         grace = contract["shutdown_grace_seconds"]
-        assert compose[service_name]["deploy"]["replicas"] == desired
+        assert compose[service_name]["deploy"]["replicas"] == rendered_replicas
         assert compose[service_name]["stop_grace_period"] == f"{grace}s"
-        assert swarm[service_name]["deploy"]["replicas"] == desired
+        assert swarm[service_name]["deploy"]["replicas"] == rendered_replicas
         assert swarm[service_name]["stop_grace_period"] == f"{grace}s"
-        assert kubernetes[profile]["spec"]["replicas"] == desired
+        assert kubernetes[profile]["spec"]["replicas"] == rendered_replicas
         pod_spec = kubernetes[profile]["spec"]["template"]["spec"]
         assert pod_spec["terminationGracePeriodSeconds"] == grace
         if contract["runtime"] == "river":
@@ -726,7 +745,7 @@ def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
                 _process_arguments(pod_spec["containers"][0])["--shutdown-timeout"]
                 == f"{grace}s"
             )
-        assert helm[profile]["replicas"] == desired
+        assert helm[profile]["replicas"] == rendered_replicas
         assert helm[profile]["terminationGracePeriodSeconds"] == grace
         if contract["runtime"] == "river":
             target = kubernetes[profile]["metadata"]["name"]
@@ -812,7 +831,7 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
 
     rendered = _GO_COMPOSE.read_text(encoding="utf-8")
     assert "workerctl route" not in rendered
-    assert _load_json(_DEPLOYMENT)["deployment_state"] == "coexistence_disabled"
+    assert _load_json(_DEPLOYMENT)["deployment_state"] == "go_default"
 
 
 @pytest.mark.parametrize("path", [_GO_COMPOSE_ONLY, _GO_SWARM_ONLY])

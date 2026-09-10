@@ -470,6 +470,68 @@ func TestManifestAllowsIndependentGroupsWithTheSameRiverQueueSet(t *testing.T) {
 	}
 }
 
+// CHAOS-5541: go_default is the second deployment_state -- Go processes may
+// be enabled by default there. coexistence_disabled keeps its original,
+// unchanged all-disabled posture; an unrecognized state is rejected outright;
+// and an enabled process under go_default still needs an actual running
+// replica.
+func TestManifestGoDefaultReplicaPolicy(t *testing.T) {
+	t.Parallel()
+	t.Run("go_default enabled process is accepted", func(t *testing.T) {
+		t.Parallel()
+		manifest, registry := loadFixture(t)
+		manifest.DeploymentState = DeploymentStateGoDefault
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "sync-provider" {
+				manifest.Processes[index].EnabledByDefault = true
+				manifest.Processes[index].DesiredReplicas = 1
+			}
+		}
+		if _, err := manifest.Validate(registry); err != nil {
+			t.Fatalf("expected a go_default manifest with an enabled process to validate: %v", err)
+		}
+	})
+
+	t.Run("coexistence_disabled still rejects an enabled process", func(t *testing.T) {
+		t.Parallel()
+		manifest, registry := loadFixture(t)
+		manifest.DeploymentState = DeploymentStateCoexistenceDisabled
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "sync-provider" {
+				manifest.Processes[index].EnabledByDefault = true
+				manifest.Processes[index].DesiredReplicas = 1
+			}
+		}
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected coexistence_disabled to reject an enabled process")
+		}
+	})
+
+	t.Run("unknown deployment state is rejected", func(t *testing.T) {
+		t.Parallel()
+		manifest, registry := loadFixture(t)
+		manifest.DeploymentState = DeploymentState("go_and_celery_both")
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected an unrecognized deployment state to fail validation")
+		}
+	})
+
+	t.Run("go_default enabled process with zero desired replicas is rejected", func(t *testing.T) {
+		t.Parallel()
+		manifest, registry := loadFixture(t)
+		manifest.DeploymentState = DeploymentStateGoDefault
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "sync-provider" {
+				manifest.Processes[index].EnabledByDefault = true
+				manifest.Processes[index].DesiredReplicas = 0
+			}
+		}
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected an enabled go_default process with zero desired replicas to fail validation")
+		}
+	})
+}
+
 func TestLoadRejectsRegistryProfileFieldInStrictJSON(t *testing.T) {
 	t.Parallel()
 	manifestBytes, err := os.ReadFile(filepath.Join("..", "..", "deploy", "go-workers", "deployment.json"))

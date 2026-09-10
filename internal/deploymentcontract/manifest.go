@@ -18,6 +18,25 @@ import (
 
 const maxManifestBytes = 512 * 1024
 
+// DeploymentState is the checked-in manifest's declared coexistence posture.
+// It is a typed constant, not a bare string, so every comparison site (the
+// manifest's own identity check and each process's replica-policy branch)
+// derives from the same two literals instead of drifting independently.
+type DeploymentState string
+
+const (
+	// DeploymentStateCoexistenceDisabled is the original, all-disabled
+	// posture: every process must declare EnabledByDefault=false and
+	// MinReplicas=0 -- Go processes exist in the deployment artifacts but
+	// nothing in them is on by default.
+	DeploymentStateCoexistenceDisabled DeploymentState = "coexistence_disabled"
+	// DeploymentStateGoDefault is the posture where Go processes are
+	// enabled by default and Celery is legacy/opt-in. A process MAY declare
+	// EnabledByDefault=true with MinReplicas>=0, and any enabled process
+	// must declare DesiredReplicas>=1.
+	DeploymentStateGoDefault DeploymentState = "go_default"
+)
+
 var (
 	namePattern  = regexp.MustCompile(`^[a-z][a-z0-9-]+$`)
 	queuePattern = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
@@ -105,14 +124,14 @@ type Process struct {
 }
 
 type Manifest struct {
-	SchemaVersion   int            `json:"schema_version"`
-	DeploymentState string         `json:"deployment_state"`
-	Registry        string         `json:"registry"`
-	RuntimeRoleEnv  []string       `json:"runtime_role_env"`
-	PostgresBudget  PostgresBudget `json:"postgres_budget"`
-	MigrationJob    MigrationJob   `json:"migration_job"`
-	OperatorCLI     OperatorCLI    `json:"operator_cli"`
-	Processes       []Process      `json:"processes"`
+	SchemaVersion   int             `json:"schema_version"`
+	DeploymentState DeploymentState `json:"deployment_state"`
+	Registry        string          `json:"registry"`
+	RuntimeRoleEnv  []string        `json:"runtime_role_env"`
+	PostgresBudget  PostgresBudget  `json:"postgres_budget"`
+	MigrationJob    MigrationJob    `json:"migration_job"`
+	OperatorCLI     OperatorCLI     `json:"operator_cli"`
+	Processes       []Process       `json:"processes"`
 }
 
 type BudgetSummary struct {
@@ -152,7 +171,12 @@ func Load(path string, registry jobcontract.Registry) (Manifest, BudgetSummary, 
 }
 
 func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary, error) {
-	if manifest.SchemaVersion != 1 || manifest.DeploymentState != "coexistence_disabled" {
+	if manifest.SchemaVersion != 1 {
+		return BudgetSummary{}, errors.New("unsupported deployment manifest identity")
+	}
+	switch manifest.DeploymentState {
+	case DeploymentStateCoexistenceDisabled, DeploymentStateGoDefault:
+	default:
 		return BudgetSummary{}, errors.New("unsupported deployment manifest identity")
 	}
 	if manifest.Registry != "contracts/jobs/v1/registry.json" {
@@ -213,7 +237,7 @@ func (manifest Manifest) Validate(registry jobcontract.Registry) (BudgetSummary,
 			return BudgetSummary{}, fmt.Errorf("duplicate deployment process %s", process.Name)
 		}
 		seenNames[process.Name] = struct{}{}
-		if err := validateProcess(process, queueCoverage); err != nil {
+		if err := validateProcess(process, queueCoverage, manifest.DeploymentState); err != nil {
 			return BudgetSummary{}, fmt.Errorf("deployment process %s: %w", process.Name, err)
 		}
 
@@ -444,11 +468,31 @@ func validateOperatorCLI(operator OperatorCLI) error {
 	return nil
 }
 
-func validateProcess(process Process, coverage map[string]queueCoverage) error {
-	if !namePattern.MatchString(process.Name) || process.EnabledByDefault || process.MinReplicas != 0 ||
+func validateProcess(process Process, coverage map[string]queueCoverage, state DeploymentState) error {
+	if !namePattern.MatchString(process.Name) ||
 		process.DesiredReplicas < process.MinReplicas || process.DesiredReplicas > process.MaxReplicas ||
 		process.MaxReplicas < 1 || process.MaxReplicas > 8 || process.ShutdownGraceSeconds < 60 {
-		return errors.New("identity or coexistence replica policy is invalid")
+		return errors.New("identity or replica policy is invalid")
+	}
+	switch state {
+	case DeploymentStateCoexistenceDisabled:
+		// Original, unchanged posture: nothing may be on by default.
+		if process.EnabledByDefault || process.MinReplicas != 0 {
+			return errors.New("coexistence_disabled replica policy is invalid")
+		}
+	case DeploymentStateGoDefault:
+		// Go processes may be enabled by default. MinReplicas is no longer
+		// pinned to zero, but an enabled process must actually declare a
+		// running replica -- EnabledByDefault=true with DesiredReplicas=0
+		// describes a process that is on and yet runs nothing.
+		if process.MinReplicas < 0 {
+			return errors.New("go_default replica policy is invalid")
+		}
+		if process.EnabledByDefault && process.DesiredReplicas < 1 {
+			return errors.New("go_default replica policy is invalid")
+		}
+	default:
+		return errors.New("unsupported deployment state")
 	}
 	if process.DomainMaxConnections < 1 || process.DomainMaxConnections > 16 ||
 		process.QueueControlMaxConnections < 0 || process.QueueControlMaxConnections > 4 ||

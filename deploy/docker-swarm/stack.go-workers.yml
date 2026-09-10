@@ -1,6 +1,8 @@
-# Additive Swarm topology. Deploy it with stack.yml as a second config file;
-# all replicas start at zero, so this is inert until an operator scales a
-# reviewed worker group. The base stack keeps Celery, Beat, and Valkey DB 0.
+# Additive Swarm topology. Deploy it with stack.yml as a second config file.
+# CHAOS-5541: replicas here declare go_default's intent (1 each, matching
+# deployment.json's desired_replicas) -- this is a checked-in renderer, not
+# a live deploy; applying this file to a real Swarm cluster is what actually
+# starts anything. The base stack keeps Celery, Beat, and Valkey DB 0.
 # One definition per shared flag; every service references these so a value has
 # a single source and the rendered command still names it explicitly.
 x-go-worker-flag:
@@ -66,7 +68,12 @@ x-go-worker: &go-worker
   networks: [dev-health-internal]
   deploy: &go-worker-deploy
     mode: replicated
-    replicas: 0
+    # CHAOS-5541: deployment.json moved to go_default (desired_replicas: 1
+    # for every process here); this stays a checked-in renderer, not a live
+    # deploy action -- prod rebuild is deferred to k8s (see this file's own
+    # deploy/README history), so flipping this value has no effect on any
+    # running Swarm stack today.
+    replicas: 1
     update_config: {parallelism: 1, delay: 15s, failure_action: rollback, order: start-first}
     rollback_config: {parallelism: 1, delay: 15s, order: stop-first}
     restart_policy: {condition: on-failure, delay: 5s, max_attempts: 3}

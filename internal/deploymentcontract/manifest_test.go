@@ -470,6 +470,124 @@ func TestManifestAllowsIndependentGroupsWithTheSameRiverQueueSet(t *testing.T) {
 	}
 }
 
+// CHAOS-5541: go_default is the second deployment_state -- Go processes may
+// be enabled by default there. coexistence_disabled keeps its original,
+// unchanged all-disabled posture; an unrecognized state is rejected outright;
+// and an enabled process under go_default still needs an actual running
+// replica.
+func TestManifestGoDefaultReplicaPolicy(t *testing.T) {
+	t.Parallel()
+	t.Run("go_default enabled process is accepted", func(t *testing.T) {
+		t.Parallel()
+		manifest, registry := loadFixture(t)
+		manifest.DeploymentState = DeploymentStateGoDefault
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "sync-provider" {
+				manifest.Processes[index].EnabledByDefault = true
+				manifest.Processes[index].DesiredReplicas = 1
+			}
+		}
+		if _, err := manifest.Validate(registry); err != nil {
+			t.Fatalf("expected a go_default manifest with an enabled process to validate: %v", err)
+		}
+	})
+
+	t.Run("coexistence_disabled still rejects an enabled process", func(t *testing.T) {
+		t.Parallel()
+		manifest, registry := loadFixture(t)
+		manifest.DeploymentState = DeploymentStateCoexistenceDisabled
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "sync-provider" {
+				manifest.Processes[index].EnabledByDefault = true
+				manifest.Processes[index].DesiredReplicas = 1
+			}
+		}
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected coexistence_disabled to reject an enabled process")
+		}
+	})
+
+	t.Run("unknown deployment state is rejected", func(t *testing.T) {
+		t.Parallel()
+		manifest, registry := loadFixture(t)
+		manifest.DeploymentState = DeploymentState("go_and_celery_both")
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected an unrecognized deployment state to fail validation")
+		}
+	})
+
+	t.Run("go_default enabled process with zero desired replicas is rejected", func(t *testing.T) {
+		t.Parallel()
+		manifest, registry := loadFixture(t)
+		manifest.DeploymentState = DeploymentStateGoDefault
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "sync-provider" {
+				manifest.Processes[index].EnabledByDefault = true
+				manifest.Processes[index].DesiredReplicas = 0
+			}
+		}
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected an enabled go_default process with zero desired replicas to fail validation")
+		}
+	})
+
+	t.Run("go_default rejects a negative min_replicas", func(t *testing.T) {
+		t.Parallel()
+		manifest, registry := loadFixture(t)
+		manifest.DeploymentState = DeploymentStateGoDefault
+		for index := range manifest.Processes {
+			if manifest.Processes[index].Name == "sync-provider" {
+				manifest.Processes[index].MinReplicas = -1
+			}
+		}
+		if _, err := manifest.Validate(registry); err == nil {
+			t.Fatal("expected a negative min_replicas under go_default to fail validation")
+		}
+	})
+}
+
+// CHAOS-5541: the schema's deployment_state enum is checked-in documentation
+// of the contract Go actually enforces (manifest.go's own DeploymentState
+// switch) -- nothing else in this repo exercises it, so a drift between the
+// two (e.g. the schema still pinning a single const) would go unnoticed.
+func TestDeploymentManifestSchemaDeclaresBothStates(t *testing.T) {
+	t.Parallel()
+	schemaBytes, err := os.ReadFile(filepath.Join("..", "..", "contracts", "jobs", "v1", "deployment-manifest.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("deployment manifest schema is missing a top-level properties object")
+	}
+	deploymentState, ok := properties["deployment_state"].(map[string]any)
+	if !ok {
+		t.Fatal("deployment manifest schema is missing the deployment_state property")
+	}
+	rawEnum, ok := deploymentState["enum"].([]any)
+	if !ok {
+		t.Fatal("deployment manifest schema's deployment_state property has no enum")
+	}
+	enum := make([]string, 0, len(rawEnum))
+	for _, value := range rawEnum {
+		text, ok := value.(string)
+		if !ok {
+			t.Fatalf("deployment manifest schema's deployment_state enum has a non-string value: %#v", value)
+		}
+		enum = append(enum, text)
+	}
+	sort.Strings(enum)
+	want := []string{string(DeploymentStateCoexistenceDisabled), string(DeploymentStateGoDefault)}
+	sort.Strings(want)
+	if !equalStrings(enum, want) {
+		t.Fatalf("deployment_state enum = %v, want %v", enum, want)
+	}
+}
+
 func TestLoadRejectsRegistryProfileFieldInStrictJSON(t *testing.T) {
 	t.Parallel()
 	manifestBytes, err := os.ReadFile(filepath.Join("..", "..", "deploy", "go-workers", "deployment.json"))

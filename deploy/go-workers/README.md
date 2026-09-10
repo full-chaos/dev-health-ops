@@ -117,11 +117,23 @@ not reset these rows manually or broaden the recovery predicate.
 
 ## CHAOS-3052 deployment runbook
 
-The deployment artifacts are additive and default-off. `compose.yml` remains
-untouched; the existing Celery workers, singleton Beat, and Valkey database 0
-remain the baseline in every default deployment. `deployment_state` is still
-`coexistence_disabled`, so rendering or scaling a Go workload does **not**
-transfer a job, queue, or scheduler marker to Go.
+`deployment_state` (CHAOS-5541) is now `go_default`: `deployment.json`'s nine
+Go processes all declare `enabled_by_default: true` with
+`desired_replicas: 1`, matching the production topology `compose.yml` (root)
+already runs unconditionally. This is a **declaration of intent** in the
+checked-in manifest, not by itself a live scale.
+
+The Swarm/Kubernetes/Helm renderers in this directory tree now default to
+`replicas: 1` for every group too, matching `desired_replicas` -- but they
+remain checked-in renderer files, not a deploy action: applying one to a
+real cluster is what actually starts anything, and no production target runs
+these today (prod rebuild is deferred to k8s). `deploy/docker-compose/compose.go-workers.yml`
+(the separate, opt-in overlay for `compose.production.yml`, edited apart from
+root `compose.yml`) is unaffected by this PR. Rendering or scaling a Go
+workload does **not** transfer a job, queue, or scheduler marker to Go on its
+own either -- that is governed separately (`contracts/jobs/v1/migration-state.json`'s
+per-kind route, and `internal/scheduler/sync/ownership.go`'s own, unrelated
+`coexistence_disabled` scheduler-owner mode).
 
 ### Images and topology
 
@@ -346,8 +358,9 @@ sections.
    staged the Go path beside them, are deleted -- there is no Celery fleet
    left to coexist with. `helm upgrade --install dev-health
    deploy/helm/dev-health` and `kubectl apply -k deploy/kubernetes/` render
-   the Go topology (every group at `replicas: 0`) with no extra values file
-   or separate `apply`; scale groups per step 3 below.
+   the Go topology (CHAOS-5541: every group at `replicas: 1`, matching
+   `deployment.json`'s go_default posture) with no extra values file or
+   separate `apply`; scale groups per step 3 below.
 
    This bootstrap validates schema and contracts only. It does not invoke
    `dev-health-workerctl`, mutate a worker route, or transfer Celery/Beat

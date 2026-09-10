@@ -15,7 +15,7 @@
   ],
   "properties": {
     "schema_version": {"const": 1},
-    "deployment_state": {"const": "coexistence_disabled"},
+    "deployment_state": {"enum": ["coexistence_disabled", "go_default"]},
     "registry": {"const": "contracts/jobs/v1/registry.json"},
     "runtime_role_env": {
       "type": "array",
@@ -138,8 +138,8 @@
           "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]+$"},
           "binary": {"type": "string", "pattern": "^dev-health-[a-z-]+$"},
           "runtime": {"enum": ["control", "river", "stream"]},
-          "enabled_by_default": {"const": false},
-          "min_replicas": {"const": 0},
+          "enabled_by_default": {"type": "boolean"},
+          "min_replicas": {"type": "integer", "minimum": 0, "maximum": 8},
           "desired_replicas": {"type": "integer", "minimum": 0, "maximum": 8},
           "max_replicas": {"type": "integer", "minimum": 1, "maximum": 8},
           "shutdown_grace_seconds": {"type": "integer", "minimum": 60, "maximum": 86460},

@@ -170,11 +170,11 @@ billingEdge:
 # Go/River is the only worker topology this chart renders; the Celery
 # worker/beat pools and values keys it replaced (`worker`, `workerIngest`,
 # `workerExternalIngest`, `workerHeavy`, `beat`) were deleted in CHAOS-4195 --
-# production stopped running them on 2026-08-19 (CHAOS-4026). Every group
-# below defaults to replicas: 0 so a fresh install stays inert until an
-# operator deliberately scales the groups it needs (see
-# deploy/go-workers/README.md); pgbouncer is required (see values.schema.json)
-# because every group dials it for domain/queue/coordinator connections.
+# production stopped running them on 2026-08-19 (CHAOS-4026). CHAOS-5541:
+# every group below now defaults to replicas: 1, matching deployment.json's
+# go_default posture (see deploy/go-workers/README.md); pgbouncer is required
+# (see values.schema.json) because every group dials it for domain/queue/
+# coordinator connections.
 #
 # KNOWN GAP: this chart provisions no PostgreSQL roles. Before scaling ANY
 # group, create the three roles named by RIVER_DOMAIN_DATABASE_ROLE /
@@ -294,7 +294,7 @@ goWorkers:
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       queues: [investment, metrics, reports, workgraph]
       queueConcurrency: {investment: 1, metrics: 2, reports: 2, workgraph: 1}
-      replicas: 0
+      replicas: 1
       terminationGracePeriodSeconds: 7260
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
@@ -312,7 +312,7 @@ goWorkers:
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       queues: [coverage, heartbeat, retention, webhooks]
       queueConcurrency: {coverage: 1, heartbeat: 1, retention: 1, webhooks: 4}
-      replicas: 0
+      replicas: 1
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
@@ -320,7 +320,7 @@ goWorkers:
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       queues: [sync]
       queueConcurrency: {sync: 4}
-      replicas: 0
+      replicas: 1
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
@@ -331,33 +331,33 @@ goWorkers:
       image: ghcr.io/full-chaos/dev-health-go-worker:latest
       queues: [sync_provider]
       queueConcurrency: {sync_provider: 2}
-      replicas: 0
+      replicas: 1
       terminationGracePeriodSeconds: 960
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepth: 1, oldestAgeSeconds: 60, saturationMilli: 800m}
     - name: reconciler
       image: ghcr.io/full-chaos/dev-health-go-reconciler:latest
-      replicas: 0
+      replicas: 1
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: false}
     - name: scheduler
       image: ghcr.io/full-chaos/dev-health-go-scheduler:latest
-      replicas: 0
+      replicas: 1
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
       autoscaling: {enabled: false}
     - name: stream-external
       image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
       runtimeProfile: external
-      replicas: 0
+      replicas: 1
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: false}
     - name: stream-ingest
       image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
       runtimeProfile: ingest
-      replicas: 0
+      replicas: 1
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: false}
@@ -366,7 +366,7 @@ goWorkers:
     - name: stream-pagerduty
       image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
       runtimeProfile: pagerduty
-      replicas: 0
+      replicas: 1
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: false}
@@ -620,12 +620,10 @@ config:
   #    named the retired Celery dispatch, "river" hands the stream to Go
   #    (CUT-14/18). Celery is gone (CHAOS-4195), so "river" is the only
   #    functioning value -- the Go stream-pagerduty group is this chart's
-  #    sole consumer of a staged webhook entry. It defaults to replicas: 0
-  #    like every other group (goWorkers.groups), so a fresh install ACCEPTS
-  #    PagerDuty webhooks into the durable outbox but nothing drains it until
-  #    an operator scales stream-pagerduty -- staged, not lost, but scale it
-  #    before relying on PagerDuty delivery:
-  #    kubectl scale deployment/<release>-go-stream-pagerduty --replicas=1
+  #    sole consumer of a staged webhook entry. CHAOS-5541: it now defaults
+  #    to replicas: 1 like every other group (goWorkers.groups), matching
+  #    deployment.json's go_default posture, so a fresh install both ACCEPTS
+  #    PagerDuty webhooks into the durable outbox and drains it by default.
   PROVIDER_SYNC_QUEUES_ENABLED: "true"
   SYNC_COST_CLASS_QUEUES: "true"
   HIDE_MIGRATED_CHILD_CONFIGS: "true"

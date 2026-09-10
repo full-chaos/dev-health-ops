@@ -1,9 +1,11 @@
 # Go/River workloads (CHAOS-3052). This is the only worker topology this
 # tree renders -- the Celery manifests it replaced (worker.yaml, beat.yaml)
 # were deleted in CHAOS-4195. Listed in kustomization.yaml; apply after the
-# migration Job completes. Every group deploys at replicas: 0 by default --
-# scale the groups you need (README.md) -- and exposes /healthz, /readyz,
-# and /metrics.
+# migration Job completes. CHAOS-5541: every group now deploys at
+# replicas: 1 by default, matching deployment.json's go_default posture --
+# this is a checked-in renderer, not a live deploy; applying it to a real
+# cluster is what actually starts anything (prod deploy is deferred to k8s
+# on oci). Exposes /healthz, /readyz, and /metrics.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -48,7 +50,7 @@ metadata:
   namespace: dev-health
   labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: heavy}
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
   selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: heavy}}
   template:
@@ -74,7 +76,7 @@ metadata:
   namespace: dev-health
   labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: ops}
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
   selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: ops}}
   template:
@@ -100,7 +102,7 @@ metadata:
   namespace: dev-health
   labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync}
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
   selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync}}
   template:
@@ -126,7 +128,7 @@ metadata:
   namespace: dev-health
   labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync-provider}
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
   selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: sync-provider}}
   template:
@@ -149,7 +151,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: dev-health-go-reconciler, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: reconciler}}
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
   selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: reconciler}}
   template:
@@ -172,7 +174,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: dev-health-go-scheduler, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: scheduler}}
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
   selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: scheduler}}
   template:
@@ -195,7 +197,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: dev-health-go-stream-external, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-external}}
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
   selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-external}}
   template:
@@ -218,7 +220,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: dev-health-go-stream-ingest, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-ingest}}
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
   selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-ingest}}
   template:
@@ -241,7 +243,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: dev-health-go-stream-pagerduty, namespace: dev-health, labels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-pagerduty}}
 spec:
-  replicas: 0
+  replicas: 1
   strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
   selector: {matchLabels: {app.kubernetes.io/component: go-worker, dev-health.io/worker-group: stream-pagerduty}}
   template:

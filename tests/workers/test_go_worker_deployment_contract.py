@@ -316,19 +316,26 @@ def _kubernetes_pagerduty_containers(path: Path) -> dict[str, dict]:
     return containers
 
 
-def test_go_worker_groups_are_disabled_future_topology() -> None:
+def test_go_worker_groups_are_enabled_by_default_under_go_default_state() -> None:
+    # CHAOS-5541: the manifest moved from coexistence_disabled (every process
+    # off by default) to go_default (Go processes on by default, Celery
+    # legacy/opt-in). Every one of the nine processes is enabled at
+    # desired_replicas 1, matching the intended production topology (#2429's
+    # compose.yml runs the nine-process fleet, including sync-provider, at
+    # deploy.replicas: 1 each -- CHAOS-3087's deployment.json leaving every
+    # process disabled was tracked there as this ticket's own gap).
     manifest = _load_json(_DEPLOYMENT)
 
-    assert manifest["deployment_state"] == "coexistence_disabled"
+    assert manifest["deployment_state"] == "go_default"
     assert manifest["runtime_role_env"] == [
         "RIVER_COORDINATOR_DATABASE_ROLE",
         "RIVER_DOMAIN_DATABASE_ROLE",
         "RIVER_QUEUE_DATABASE_ROLE",
     ]
-    assert all(
-        not process["enabled_by_default"] and process["min_replicas"] == 0
-        for process in manifest["processes"]
-    )
+    for process in manifest["processes"]:
+        assert process["min_replicas"] == 0
+        assert process["enabled_by_default"]
+        assert process["desired_replicas"] == 1
     for process in manifest["processes"]:
         assert [item["queue"] for item in process["queue_workers"]] == process["queues"]
         assert all(item["max_workers"] > 0 for item in process["queue_workers"])
@@ -397,14 +404,17 @@ def test_go_worker_image_packages_lifecycle_route_operator() -> None:
     ) in dockerfile
 
 
-def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() -> None:
-    """CHAOS-3052: every supported deploy surface renders an inert, hardened
-    topology -- every group/service still defaults replicas: 0, so merely
-    being present or (Helm/Kubernetes, CHAOS-4195) being the default-rendered
-    topology never puts a live Go pod up on its own. Compose/Swarm stay
-    additive beside the unchanged Celery/Beat/Valkey services there; Helm and
-    Kubernetes no longer have a Celery/Beat baseline to stay additive to --
-    they render only this topology.
+def test_go_deployment_surfaces_are_additive_and_group_complete() -> None:
+    """CHAOS-3052: every supported deploy surface renders a complete,
+    hardened topology for the nine processes. CHAOS-5541: the Swarm/
+    Kubernetes/Helm renderers now default to replicas: 1, matching
+    deployment.json's go_default posture -- these are checked-in renderer
+    files, not a live deploy action; applying one to a real cluster is what
+    actually starts anything (no production deploy target runs these tonight
+    -- prod rebuild is deferred to k8s). Compose stays additive beside the
+    unchanged Celery/Beat/Valkey services there; Helm and Kubernetes no
+    longer have a Celery/Beat baseline to stay additive to -- they render
+    only this topology.
     """
     expected_profiles = {
         process["name"] for process in _load_json(_DEPLOYMENT)["processes"]
@@ -477,7 +487,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
             )
             == "true"
         )
-        assert service["deploy"]["replicas"] == 0
+        assert service["deploy"]["replicas"] == 1
         assert service["deploy"]["update_config"]["order"] == "start-first"
 
     deployments = {
@@ -487,7 +497,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
     }
     assert len(deployments) == len(expected_profiles)
     for deployment in deployments.values():
-        assert deployment["spec"]["replicas"] == 0
+        assert deployment["spec"]["replicas"] == 1
         pod_security = deployment["spec"]["template"]["spec"]["securityContext"]
         assert pod_security["runAsNonRoot"] is True
         container = deployment["spec"]["template"]["spec"]["containers"][0]
@@ -506,8 +516,8 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
     values = _load_yaml(_HELM_CHART / "values.yaml")
     # CHAOS-4195: the Celery Helm templates/values keys and Kubernetes
     # manifests were deleted, so goWorkers is the only topology left and
-    # defaults to enabled=true (each group still defaults replicas: 0, so
-    # a fresh install stays inert until an operator scales one).
+    # defaults to enabled=true. CHAOS-5541: each group now defaults to
+    # replicas: 1, matching deployment.json's go_default posture.
     assert values["goWorkers"]["enabled"] is True
     assert "profiles" not in values["goWorkers"]
     assert "groups" in values["goWorkers"]
@@ -812,7 +822,7 @@ def test_go_compose_bootstrap_is_post_alembic_fail_closed_and_route_inert() -> N
 
     rendered = _GO_COMPOSE.read_text(encoding="utf-8")
     assert "workerctl route" not in rendered
-    assert _load_json(_DEPLOYMENT)["deployment_state"] == "coexistence_disabled"
+    assert _load_json(_DEPLOYMENT)["deployment_state"] == "go_default"
 
 
 @pytest.mark.parametrize("path", [_GO_COMPOSE_ONLY, _GO_SWARM_ONLY])

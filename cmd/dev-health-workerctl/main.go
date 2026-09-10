@@ -218,7 +218,7 @@ func (source manifestQueueStatusSource) Status(ctx context.Context) (workerQueue
 		return workerQueueStatusResponse{}, errors.New("deployment manifest has no River worker groups")
 	}
 	return workerQueueStatusResponse{
-		DeploymentState: source.manifest.DeploymentState,
+		DeploymentState: string(source.manifest.DeploymentState),
 		ConnectionBudget: workerConnectionBudgetStatus{
 			QueueSession: connectionBudgetStatus{
 				Used: source.budget.QueueSessionClientConnections,
@@ -518,7 +518,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	lockHeld = false
 	runtime := &operatorRuntime{
 		service: service, principal: authentication.Principal(), pools: pools, lockTx: lockTx,
-		streamDeploymentState: manifest.DeploymentState, streams: streams, queueControlMode: mode,
+		streamDeploymentState: string(manifest.DeploymentState), streams: streams, queueControlMode: mode,
 		registry: registry, lookup: lookup,
 	}
 	runtime.queueStatusSource = manifestQueueStatusSource{

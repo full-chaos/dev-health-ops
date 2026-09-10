@@ -272,6 +272,20 @@ spec:
           the ops runtime image, which already runs the Python CLI) is the
           correct percent-encoder for a URI's userinfo component; a POSIX
           shell has no equivalent built in.
+
+          codex review (r3, P1 -- executed, fixed): the fix above encoded
+          every PASSWORD but left POSTGRES_DB (goWorkers.pgbouncer.postgres.
+          database, operator-settable via --set) interpolated raw into the
+          URI PATH. Confirmed: a database name containing `#` (e.g.
+          "review#db") starts a URI fragment the same way an unencoded `#`
+          in a password did -- `urllib.parse.urlsplit` on the resulting URI
+          parses path=/review, fragment=db, and workerctl's own real-DB
+          repro activated the route against the TRUNCATED "review" database
+          while the intended "review#db" stayed on its prior transport, with
+          NO error (transport=river reported successfully) -- the exact
+          invisible-at-Info regression a truncated-but-valid path produces.
+          Encoding the database component the same way the password is
+          encoded is the fix.
           */}}
           image: {{ include "dev-health.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -287,9 +301,10 @@ spec:
               domain_pw=$(encode "$RIVER_DOMAIN_DATABASE_PASSWORD")
               queue_pw=$(encode "$RIVER_QUEUE_DATABASE_PASSWORD")
               coordinator_pw=$(encode "$RIVER_COORDINATOR_DATABASE_PASSWORD")
-              printf '%s' "postgresql://${RIVER_DOMAIN_DATABASE_ROLE}:${domain_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" > /run/route-dsn/POSTGRES_URI
-              printf '%s' "postgresql://${RIVER_QUEUE_DATABASE_ROLE}:${queue_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" > /run/route-dsn/WORKER_DATABASE_URI
-              printf '%s' "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE}:${coordinator_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" > /run/route-dsn/COORDINATOR_DATABASE_URI
+              db=$(encode "$POSTGRES_DB")
+              printf '%s' "postgresql://${RIVER_DOMAIN_DATABASE_ROLE}:${domain_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${db}" > /run/route-dsn/POSTGRES_URI
+              printf '%s' "postgresql://${RIVER_QUEUE_DATABASE_ROLE}:${queue_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${db}" > /run/route-dsn/WORKER_DATABASE_URI
+              printf '%s' "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE}:${coordinator_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${db}" > /run/route-dsn/COORDINATOR_DATABASE_URI
           env:
             - name: POSTGRES_HOST
               value: {{ $postgresHost | quote }}

@@ -183,6 +183,20 @@ def test_all_four_kinds_are_present_as_ordered_initcontainers() -> None:
     )
 
 
+def test_the_no_op_done_container_actually_exits_zero() -> None:
+    """codex review (r3, P3 -- executed, fixed): NOTHING pinned this
+    container's command -- mutating it from `exit 0` to `exit 1` survived
+    the entire runnable suite. Kubernetes Jobs require a `containers` entry
+    even though every real step here is an initContainer (see the
+    template's own comment); a non-zero exit on this no-op would fail an
+    otherwise fully-succeeded activation Job for no reason."""
+    jobs = _jobs(*_FULL_CHAIN_ON)
+    containers = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["containers"]
+    assert len(containers) == 1, containers
+    assert containers[0]["name"] == "done", containers
+    assert containers[0]["command"] == ["/bin/sh", "-ec", "exit 0"], containers[0]
+
+
 @pytest.mark.parametrize("kind", _KINDS)
 def test_each_kind_invokes_routes_apply_with_that_exact_kind(kind: str) -> None:
     """No `command:` override on these containers -- the operator image has
@@ -205,6 +219,19 @@ def test_each_kind_invokes_routes_apply_with_that_exact_kind(kind: str) -> None:
     assert "--reason" in args and "--correlation-id" in args, (
         f"routes apply requires both flags: {args!r}"
     )
+    # codex review (r3, P3 -- executed, fixed): NOTHING previously asserted
+    # these four env values -- a mutation redirecting any one of them to a
+    # nonexistent path survived the entire runnable suite (75 passed, 1
+    # skipped) and was only caught by the reviewer's separate real-operator
+    # execution (`configuration_error`/`authentication_failed`). Pin the
+    # literal paths at the template level too, so this class of mutation is
+    # killed cheaply, without needing a live container.
+    env = {item["name"]: item.get("value") for item in container["env"]}
+    assert env["POSTGRES_URI_FILE"] == "/run/route-dsn/POSTGRES_URI", env
+    assert env["WORKER_DATABASE_URI_FILE"] == "/run/route-dsn/WORKER_DATABASE_URI", env
+    assert env["COORDINATOR_DATABASE_URI_FILE"] == "/run/route-dsn/COORDINATOR_DATABASE_URI", env
+    assert env["WORKER_OPERATOR_TOKEN_FILE"] == "/run/go-worker-operator/token", env
+    assert env["RIVER_DATABASE_SCHEMA"] == "river", env
 
 
 def test_route_activate_uses_the_published_operator_image() -> None:
@@ -600,6 +627,49 @@ def test_route_dsn_script_percent_encodes_every_uri_special_password(
     assert urllib.parse.unquote(parsed.password or "") == password, (case_id, postgres_uri)
 
 
+def test_route_dsn_script_percent_encodes_the_queue_and_coordinator_passwords_too(
+    tmp_path: Path,
+) -> None:
+    """codex review (r3, P3 -- executed, fixed): the sweep above only ever
+    varied RIVER_DOMAIN_DATABASE_PASSWORD -- encode() is called separately
+    for all three roles, so a defect isolated to the queue or coordinator
+    call site survived the whole domain sweep. One reserved-character case
+    per remaining role, same round-trip proof as the domain sweep."""
+    import urllib.parse
+
+    out_dir = _run_route_dsn_script(
+        tmp_path, RIVER_QUEUE_DATABASE_PASSWORD="q#pw", RIVER_COORDINATOR_DATABASE_PASSWORD="c#pw"
+    )
+    worker_uri = (out_dir / "WORKER_DATABASE_URI").read_text(encoding="utf-8")
+    coordinator_uri = (out_dir / "COORDINATOR_DATABASE_URI").read_text(encoding="utf-8")
+    assert worker_uri == "postgresql://devhealth_queue:q%23pw@postgres.internal:5432/devhealth", worker_uri
+    assert (
+        coordinator_uri == "postgresql://devhealth_coordinator:c%23pw@postgres.internal:5432/devhealth"
+    ), coordinator_uri
+    assert urllib.parse.unquote(urllib.parse.urlsplit(worker_uri).password) == "q#pw"
+    assert urllib.parse.unquote(urllib.parse.urlsplit(coordinator_uri).password) == "c#pw"
+
+
+def test_route_dsn_script_percent_encodes_the_database_name(tmp_path: Path) -> None:
+    """codex review (r3, P1 -- executed, fixed, regression pin): a database
+    name containing a URI-reserved character truncated the DSN at that
+    character (a `#` starts a fragment) -- the operator then activated the
+    route against the TRUNCATED database while the intended one, silently,
+    stayed on its prior transport. This is the r1 password class recurring
+    on the database-name component, which the r1 fix never touched."""
+    import urllib.parse
+
+    out_dir = _run_route_dsn_script(tmp_path, POSTGRES_DB="review#db")
+    postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
+    assert postgres_uri == "postgresql://devhealth_domain:d-pw@postgres.internal:5432/review%23db", postgres_uri
+    parsed = urllib.parse.urlsplit(postgres_uri)
+    assert parsed.fragment == "", (
+        "an unencoded `#` in the database name starts a URI fragment and "
+        f"truncates the path silently: {postgres_uri}"
+    )
+    assert urllib.parse.unquote(parsed.path.lstrip("/")) == "review#db", postgres_uri
+
+
 # --- input-domain table: migrations.hook.routeActivate.enabled -------------
 #
 # One boolean values key. Its domain: absent (default), true, false, and the
@@ -650,6 +720,37 @@ def test_route_activate_enabled_rejects_a_non_boolean_string() -> None:
     )
     assert "/migrations/hook/routeActivate/enabled" in completed.stderr, completed.stderr
     assert "boolean" in completed.stderr, completed.stderr
+
+
+def test_route_activate_enabled_rejects_an_explicit_null() -> None:
+    """codex review (r3, P1 -- executed, fixed): `--set-json …enabled=null`
+    DELETES the key during Helm's values coalescing rather than ever
+    reaching the type:boolean check above -- the merged values object then
+    has no `enabled` property at all, which the chart's `if` treats as
+    false, silently disabling activation with exit 0. Reproduced before
+    this fix: exit 0, migrate/provision-roles/river-migrate Jobs render,
+    route-activate does not. `required: [enabled]` on the routeActivate
+    object closes this without rejecting a render that never overrode the
+    key at all (values.yaml's own default stays present in that case)."""
+    completed = subprocess.run(
+        [
+            "helm",
+            "template",
+            _RELEASE,
+            str(_CHART),
+            *[x for s in _FULL_CHAIN_ON for x in ("--set", s)],
+            "--set-json",
+            "migrations.hook.routeActivate.enabled=null",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0, (
+        "an explicit null override must fail the render now -- silently "
+        "deactivating route-activate with no error is the exact r3 P1"
+    )
+    assert "/migrations/hook/routeActivate" in completed.stderr, completed.stderr
+    assert "enabled" in completed.stderr, completed.stderr
 
 
 @pytest.mark.parametrize("value", ["true", "false"])
@@ -763,10 +864,25 @@ def test_operator_credential_cli_fails_closed_without_any_dsn_env() -> None:
     (not a stub) with an empty environment -- the exact reproduction of the
     r2 P1 finding, kept as a red-first regression pin: this must always fail
     with the CLI's own "missing required input(s)" message, never silently
-    proceed or hang trying to reach a default host."""
+    proceed or hang trying to reach a default host.
+
+    codex review (r3, P1 -- executed, fixed): the mandated review-worktree
+    setup is `uv sync --no-install-project` -- dependencies only, the
+    `dev_health_ops` package itself is never installed into the venv (no
+    dist-info, no editable .pth). This subprocess used to rely on the venv
+    ALREADY having the project installed (true only when a lane's own
+    iteration venv did a full `uv sync --extra dev`); under the mandated
+    setup it fails `ModuleNotFoundError: No module named 'dev_health_ops'`
+    (reproduced with `python -S`, which skips the same site-packages .pth
+    processing) BEFORE the CLI's own argument parsing ever runs -- exit 1,
+    not the guard's exit 2. Setting PYTHONPATH to `src` explicitly makes the
+    subprocess importable regardless of install mode, matching how `pytest`
+    itself resolves the package via `pyproject.toml`'s `pythonpath` setting
+    without needing the project installed either."""
     venv_python = Path(__file__).resolve().parents[2] / ".venv" / "bin" / "python"
     if not venv_python.exists():
         pytest.skip("no local .venv to exec the real CLI against")
+    src_dir = str(Path(__file__).resolve().parents[2] / "src")
     completed = subprocess.run(
         [
             str(venv_python),
@@ -783,7 +899,7 @@ def test_operator_credential_cli_fails_closed_without_any_dsn_env() -> None:
         ],
         capture_output=True,
         text=True,
-        env={"PATH": os.environ["PATH"]},
+        env={"PATH": os.environ["PATH"], "PYTHONPATH": src_dir},
     )
     assert completed.returncode == 2, completed.stderr
     assert "missing required input(s)" in completed.stderr

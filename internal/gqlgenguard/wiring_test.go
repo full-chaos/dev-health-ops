@@ -81,6 +81,11 @@ func TestTheGuardsOwnInputsCanTriggerTheJobThatRunsIt(t *testing.T) {
 		{"'.github/workflows/go.yml'", "the file these path lists live in"},
 		{"'**/go.mod'", "tools.go's requires, without which the generator cannot start"},
 		{"'**/go.sum'", "the same"},
+		// Round 1: this file's own TestTheGuardsInputsAreClassifiedRelevant...
+		// EXECUTES ci/go_relevance.py, which makes the script an input of a Go
+		// test. go.yml named it only in comments, so a change to the classifier
+		// alone was classified non-Go and this very test never ran against it.
+		{"'ci/go_relevance.py'", "the relevance classifier the test below executes"},
 	}
 	for _, r := range required {
 		if n := strings.Count(workflow, r.pattern); n < 2 {
@@ -104,6 +109,7 @@ func TestTheGuardsInputsAreClassifiedRelevantByTheRelevanceScript(t *testing.T) 
 		"internal/gqlgenguard/guard.go",
 		"contracts/gqlgen/v1/expected-drift.record",
 		".github/workflows/go-quality.yml",
+		"ci/go_relevance.py",
 	} {
 		t.Run(changed, func(t *testing.T) {
 			out, err := runRelevance(t, script, changed)

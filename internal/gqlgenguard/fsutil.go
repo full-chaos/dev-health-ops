@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -103,18 +104,60 @@ func digestFile(root *os.Root, rel string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
-// CopyTree copies every file, directory and symlink from src to dst.
+// DroppedLink is a symbolic link in the source tree that CopyTree did not
+// reproduce, and why.
+type DroppedLink struct {
+	// Path is slash-separated and relative to the source root.
+	Path string
+	// Reason is one of the dropped* constants.
+	Reason string
+	// Detail is the resolution error behind droppedUnresolved, kept so the
+	// report says WHY a link did not resolve (escaped, dangling, looping), and
+	// empty for droppedAbsolute.
+	Detail string
+}
+
+// The reasons a link is dropped from the copy. They are the whole vocabulary:
+// a link is reproduced, or it is dropped for exactly one of these.
+const (
+	droppedAbsolute   = "absolute target"
+	droppedUnresolved = "does not resolve inside the module"
+)
+
+// CopyTree copies every file and directory from src to dst, and every symbolic
+// link whose target is relative AND resolves, through src, to something that
+// exists inside src. Every other link is NOT reproduced: its name is kept as an
+// inert link to itself, and it is returned.
 //
-// Both ends are *os.Root handles, so neither a symlink nor a crafted name can
-// read or write outside the two trees. A symlink is REPRODUCED, target text and
-// all, including one whose target is absolute or leaves the tree: os.Root
-// accepts creating such a link and refuses every read THROUGH it, so the copy
-// is a faithful reproduction and the confinement is the operating system's
-// rather than a rule about which targets are allowed. Refusing them instead
-// would make the guard unusable in any checkout that happens to contain a
-// virtual environment or a toolchain cache.
-func CopyTree(src, dst *os.Root, skip func(rel string) bool) error {
-	return fs.WalkDir(src.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
+// Both ends are *os.Root handles, so neither a link nor a crafted name can make
+// THIS function read or write outside the two trees. But the copy is handed to
+// the generator, an ordinary child process the roots do not confine: a link
+// reproduced in the copy is a link the generator follows. Round 1 of review
+// proved it -- a schema symlinked from outside the module was read by the real
+// CLI and landed in the generated output. So the copy carries only links that
+// stay inside the module:
+//
+//   - an absolute target is dropped even when it names a path inside the
+//     module, because in the copy it would name the REAL tree, not the copy;
+//   - a relative target is kept only when src.Stat -- which follows the link
+//     through the root and refuses any step outside it -- succeeds. A link that
+//     escapes, even to come back in, dangles, or loops is dropped.
+//
+// A dropped link is not simply omitted. Its NAME stays in the copy as a link
+// to itself -- an inert self-loop that resolves nowhere -- so any read, write
+// or traversal of that name by the generator or the go command fails loudly
+// with "too many levels of symbolic links" instead of finding nothing and
+// carrying on. A schema that is a link out of the module therefore refuses the
+// generation rather than silently vanishing from it.
+//
+// Dropping rather than refusing keeps the guard usable in a checkout that
+// carries a virtual environment or a toolchain cache, both full of absolute
+// links the generator never needed. Every dropped link is returned so the
+// caller can report it: an input the generator needed and could not see must
+// be explicable from the output.
+func CopyTree(src, dst *os.Root, skip func(rel string) bool) ([]DroppedLink, error) {
+	var dropped []DroppedLink
+	err := fs.WalkDir(src.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -145,6 +188,14 @@ func CopyTree(src, dst *os.Root, skip func(rel string) bool) error {
 			if err := dst.MkdirAll(path.Dir(rel), 0o755); err != nil {
 				return fmt.Errorf("create directory for %q: %w", rel, err)
 			}
+			if reason, detail := linkDropReason(src, rel, target); reason != "" {
+				dropped = append(dropped, DroppedLink{Path: rel, Reason: reason, Detail: detail})
+				// The inert stand-in: a relative link to its own name.
+				if err := dst.Symlink(path.Base(rel), rel); err != nil {
+					return fmt.Errorf("create inert stand-in for dropped link %q: %w", rel, err)
+				}
+				return nil
+			}
 			if err := dst.Symlink(target, rel); err != nil {
 				return fmt.Errorf("create symlink %q -> %q: %w", rel, target, err)
 			}
@@ -158,6 +209,26 @@ func CopyTree(src, dst *os.Root, skip func(rel string) bool) error {
 			return fmt.Errorf("refusing to copy %q: not a regular file, directory or symlink (%s)", rel, info.Mode())
 		}
 	})
+	if err != nil {
+		return nil, err
+	}
+	return dropped, nil
+}
+
+// linkDropReason returns "" when the link at rel may be reproduced, and the
+// reason it may not otherwise, with the resolution error as detail.
+func linkDropReason(src *os.Root, rel, target string) (reason, detail string) {
+	if filepath.IsAbs(target) || path.IsAbs(target) {
+		return droppedAbsolute, ""
+	}
+	// Stat follows the whole chain through the root. It fails for a step
+	// outside the root ("path escapes from parent"), a missing target, and a
+	// loop alike -- and each of those is a link the copy must not carry, so
+	// they share one reason rather than being told apart by error text.
+	if _, err := src.Stat(rel); err != nil {
+		return droppedUnresolved, err.Error()
+	}
+	return "", ""
 }
 
 func copyFile(src, dst *os.Root, rel string, perm fs.FileMode) error {

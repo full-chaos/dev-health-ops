@@ -62,7 +62,7 @@ func TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDigests(t *testing.T)
 		t.Fatalf("open the copy root: %v", err)
 	}
 	defer dst.Close()
-	if err := CopyTree(src, dst, skipVCS); err != nil {
+	if _, err := CopyTree(src, dst, skipVCS); err != nil {
 		t.Fatalf("copy the repository: %v", err)
 	}
 

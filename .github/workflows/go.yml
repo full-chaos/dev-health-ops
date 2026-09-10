@@ -78,6 +78,12 @@ on:
       # check that regenerates from it. Without this line a gqlgen.yml-only
       # change is classified non-Go and that check passes vacuously.
       - 'cmd/query-api/gqlgen.yml'
+      # ci/go_relevance.py decides whether go-quality's steps run at all, and
+      # internal/gqlgenguard's wiring test executes it -- so it is an input of
+      # a Go test. It was named only in comments here, never as a path, so a
+      # change to the relevance decider alone was classified non-Go and the gate
+      # that depends on it passed vacuously.
+      - 'ci/go_relevance.py'
       - 'docker/go-worker.Dockerfile'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
@@ -190,6 +196,12 @@ on:
       # check that regenerates from it. Without this line a gqlgen.yml-only
       # change is classified non-Go and that check passes vacuously.
       - 'cmd/query-api/gqlgen.yml'
+      # ci/go_relevance.py decides whether go-quality's steps run at all, and
+      # internal/gqlgenguard's wiring test executes it -- so it is an input of
+      # a Go test. It was named only in comments here, never as a path, so a
+      # change to the relevance decider alone was classified non-Go and the gate
+      # that depends on it passed vacuously.
+      - 'ci/go_relevance.py'
       - 'docker/go-worker.Dockerfile'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'

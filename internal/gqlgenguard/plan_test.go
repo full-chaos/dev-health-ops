@@ -2,6 +2,7 @@ package gqlgenguard
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -426,6 +427,16 @@ func assertRealGenerationStaysInsideThePlan(t *testing.T, f *fixture, plan *Plan
 		t.Fatalf("the real generator wrote nothing, so this row proves nothing about the plan")
 	}
 	t.Logf("the real generator wrote %d path(s), every one inside the plan: %v", len(wrote), wrote)
+
+	// Every file gqlgen just wrote must pass the guard's own provenance check on
+	// the NEXT run. This is what keeps the anchored shapes honest: they are
+	// typed out in the guard, and a gqlgen that wrote a notice in a shape the
+	// guard does not know -- a layout it forgot, a version that moved a line --
+	// fails here, against the real generator, instead of refusing a real
+	// checkout's own generated files as hand-written.
+	if err := refuseHandWrittenCollisions(root, plan, io.Discard); err != nil {
+		t.Fatalf("a file the REAL generator wrote fails the guard's own provenance check: %v", err)
+	}
 }
 
 func planPaths(p *Plan) []string {

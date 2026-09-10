@@ -6,11 +6,16 @@
 //	gqlgen-guard generate      regenerate and copy the outputs back
 //
 // The generator never runs in the working tree. Every read and write the guard
-// performs goes through an *os.Root opened on the module root, so a path that
-// resolves outside the module -- an absolute `resolver.dir`, a
-// `filename_template` carrying `../`, a symbolic link pointing away -- is
-// refused by path resolution itself rather than by a check that has to
-// enumerate the ways out.
+// itself performs goes through an *os.Root opened on the module root, so an
+// output path that resolves outside the module -- an absolute `resolver.dir`,
+// a `filename_template` carrying `../` -- is refused by path resolution itself
+// rather than by a check that has to enumerate the ways out.
+//
+// The generator is an ordinary child process that *os.Root does not confine,
+// so the private copy it runs in carries no way out: a symbolic link whose
+// target is absolute or does not resolve inside the module is not reproduced
+// -- its name stays as an inert link to itself, and it is reported -- and a
+// schema pattern that would pass through one is refused before generating.
 //
 // Interrupting the guard at any point before the copy-back phase leaves the
 // working tree byte for byte as it was: the private copy is discarded and

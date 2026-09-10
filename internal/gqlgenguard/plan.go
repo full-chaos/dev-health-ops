@@ -17,7 +17,10 @@
 package gqlgenguard
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +29,7 @@ import (
 
 	"github.com/99designs/gqlgen/codegen/config"
 	"github.com/vektah/gqlparser/v2/validator"
+	"gopkg.in/yaml.v3"
 )
 
 // Declaree names the configuration section an output path came from. It is
@@ -117,10 +121,43 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	// outside it silently produces paths rooted at wherever the guard was
 	// started, which is the working tree rather than the private copy.
 	err = withWorkingDir(configDirAbs, func() error {
-		var err error
+		// gqlgen's schema globbing SWALLOWS every error on the way to a file:
+		// filepath.Glob returns "no match" for a directory it cannot traverse,
+		// and its `**` walk does not descend a link. In the private copy a link
+		// that leaves the module is an inert self-loop (see CopyTree), so a
+		// schema pattern that passes THROUGH one would be dropped by gqlgen
+		// without a word and the generation would silently lose its types. The
+		// pattern's own directory is therefore resolved first, by the operating
+		// system, before gqlgen globs it.
+		patterns, err := rawSchemaPatterns(filepath.Base(configPath))
+		if err != nil {
+			return fmt.Errorf("load gqlgen config %q: %w", configPath, err)
+		}
+		if err := refuseUnresolvableSchemaDirs(patterns); err != nil {
+			return err
+		}
+
 		cfg, err = config.LoadConfig(filepath.Base(configPath))
 		if err != nil {
 			return fmt.Errorf("load gqlgen config %q: %w", configPath, err)
+		}
+		// gqlgen also accepts a configuration whose schema patterns match no
+		// file at all, and generates an API from the built-in prelude alone --
+		// which `generate` would then copy over every checked-in output. That is
+		// never a meaningful generation.
+		if len(cfg.SchemaFilename) == 0 {
+			if len(patterns) == 0 {
+				return fmt.Errorf(
+					"refusing: %q names no schema, so gqlgen would generate an empty API over the checked-in outputs",
+					configPath)
+			}
+			quoted := make([]string, len(patterns))
+			for i, p := range patterns {
+				quoted[i] = fmt.Sprintf("%q", p)
+			}
+			return fmt.Errorf(
+				"refusing: the schema patterns in %q (%s) match no file, so gqlgen would generate an empty API over the checked-in outputs",
+				configPath, strings.Join(quoted, ", "))
 		}
 
 		// gqlgen's own Check() methods apply the layout defaults and rewrite
@@ -192,6 +229,110 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	sort.Slice(plan.Outputs, func(i, j int) bool { return plan.Outputs[i].Path < plan.Outputs[j].Path })
 
 	return plan, nil
+}
+
+// rawSchemaPatterns returns the `schema` entries of the config at file exactly
+// as written, before gqlgen globs them. It decodes into gqlgen's own Config type
+// with gqlgen's own decoder settings (config.ReadConfig: yaml.v3, KnownFields),
+// so the list -- including the "schema.graphql" default when the key is absent
+// -- is gqlgen's, not a re-parse with different rules.
+func rawSchemaPatterns(file string) ([]string, error) {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("unable to read config: %w", err)
+	}
+	raw := config.DefaultConfig()
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(raw); err != nil {
+		return nil, fmt.Errorf("unable to parse config: %w", err)
+	}
+	return raw.SchemaFilename, nil
+}
+
+// globMeta are the characters filepath.Glob treats as pattern syntax on the
+// platforms this guard runs on. A component containing one is matched against
+// directory entries rather than resolved by name.
+const globMeta = `*?[\\`
+
+// refuseUnresolvableSchemaDirs walks every directory each schema pattern would
+// traverse -- exactly the traversal filepath.Glob (and gqlgen's `**` walk
+// root) performs, but with its errors KEPT instead of swallowed -- and refuses
+// a pattern whose traversal hits anything other than simple absence.
+//
+// It decides no matches; gqlgen still does that. It only makes loud what
+// gqlgen's globbing would make silent: a directory it cannot enter. In the
+// private copy that is, above all, the inert self-loop CopyTree leaves where a
+// link out of the module was, and a schema behind one would otherwise vanish
+// from the generation without a word. Absence stays gqlgen's business -- a
+// directory that does not exist matches nothing, and a configuration that
+// matches nothing overall is refused separately. A LITERAL directory component
+// that exists but is not a directory is refused too: it can match nothing, and
+// gqlgen would not say so.
+func refuseUnresolvableSchemaDirs(patterns []string) error {
+	for _, p := range patterns {
+		if err := schemaTraversalErr(p); err != nil {
+			return fmt.Errorf(
+				"refusing: schema pattern %q cannot be resolved: %w; gqlgen would skip it silently. A link out of the module is never followed -- move the schema inside the module",
+				p, err)
+		}
+	}
+	return nil
+}
+
+func schemaTraversalErr(pattern string) error {
+	comps := strings.Split(filepath.ToSlash(pattern), "/")
+	start := "."
+	if comps[0] == "" && len(comps) > 1 {
+		start, comps = "/", comps[1:]
+	}
+	dirs := []string{start}
+	// Every component but the last names a directory to pass through. The
+	// last is matched or Lstat'd by Glob itself, and a dropped link THERE is an
+	// inert self-loop that fails gqlgen's own read loudly.
+	for _, c := range comps[:len(comps)-1] {
+		var next []string
+		for _, d := range dirs {
+			if !strings.ContainsAny(c, globMeta) {
+				p := filepath.Join(d, c)
+				info, err := os.Stat(p)
+				switch {
+				case err != nil && errors.Is(err, fs.ErrNotExist):
+				case err != nil:
+					return fmt.Errorf("directory %q: %w", filepath.ToSlash(p), err)
+				case !info.IsDir():
+					return fmt.Errorf("%q is not a directory", filepath.ToSlash(p))
+				default:
+					next = append(next, p)
+				}
+				continue
+			}
+			entries, err := os.ReadDir(d)
+			if err != nil {
+				return fmt.Errorf("directory %q: %w", filepath.ToSlash(d), err)
+			}
+			for _, e := range entries {
+				ok, err := filepath.Match(c, e.Name())
+				if err != nil {
+					return fmt.Errorf("pattern component %q: %w", c, err)
+				}
+				if !ok {
+					continue
+				}
+				p := filepath.Join(d, e.Name())
+				info, err := os.Stat(p)
+				switch {
+				case err != nil && errors.Is(err, fs.ErrNotExist):
+				case err != nil:
+					return fmt.Errorf("directory %q: %w", filepath.ToSlash(p), err)
+				case info.IsDir():
+					next = append(next, p)
+				}
+			}
+		}
+		dirs = next
+	}
+	return nil
 }
 
 // withWorkingDir runs fn with the process working directory set to dir and

@@ -52,12 +52,31 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
-// buildGuard compiles the binary once for the whole package.
+// buildGuard compiles the binary once for the whole package, into a directory
+// TestMain removes when the package's tests finish.
 var (
 	guardOnce sync.Once
+	guardDir  string
 	guardPath string
 	guardErr  error
 )
+
+// TestMain exists only to remove the binary's build directory. The build is
+// shared by several tests, so no single test's t.TempDir can own it -- and an
+// os.MkdirTemp with no removal left one gqlgen-guard-bin-* directory behind in
+// TMPDIR per run (fourteen had piled up on the lane host before it was seen).
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if guardDir != "" {
+		if err := os.RemoveAll(guardDir); err != nil {
+			fmt.Fprintf(os.Stderr, "remove the guard's build directory %s: %v\n", guardDir, err)
+			if code == 0 {
+				code = 1
+			}
+		}
+	}
+	os.Exit(code)
+}
 
 func buildGuard(t *testing.T) string {
 	t.Helper()
@@ -67,6 +86,7 @@ func buildGuard(t *testing.T) string {
 			guardErr = err
 			return
 		}
+		guardDir = dir
 		guardPath = filepath.Join(dir, "gqlgen-guard")
 		cmd := exec.Command("go", "build", "-o", guardPath, "./cmd/gqlgen-guard")
 		cmd.Dir = repoRoot(t)

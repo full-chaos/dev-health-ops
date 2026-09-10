@@ -76,7 +76,12 @@
         "build_binding": "per_request"
       },
       "admits": false,
-      "why": "The load-bearing half of the mode split. /query/proof is a measurement-only handler that is never reachable from the product edge, so a proof-route receipt says the build CAN serve the operation, not that the edge DOES. Promotion to primary is promotion to served traffic and must rest on evidence that traversed the same path real traffic will."
+      "why": "The load-bearing half of the mode split. /query/proof is a measurement-only handler that is never reachable from the product edge, so a proof-route receipt says the build CAN serve the operation, not that the edge DOES. Promotion to primary is promotion to served traffic and must rest on evidence that traversed the same path real traffic will.",
+      "control": {
+        "receipt": {
+          "measurement_route": "edge"
+        }
+      }
     },
     {
       "name": "mismatch_fully_cited_edge_canary",
@@ -120,7 +125,12 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "The route rule and the citation rule are independent. Satisfying one does not buy the other."
+      "why": "The route rule and the citation rule are independent. Satisfying one does not buy the other.",
+      "control": {
+        "receipt": {
+          "measurement_route": "edge"
+        }
+      }
     },
     {
       "name": "mismatch_cited_but_defect_null_refused",
@@ -132,7 +142,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "The reason the predicate cannot just say 'differences_outside_baseline_defect = 0'. That column is NOT NULL DEFAULT 0, so a zero is ambiguous between 'computed, and every difference was cited' and 'this row predates the column and nothing ever computed it'. A non-empty baseline_defect is what tells those two apart: only a row that actually named a ticket can promote."
+      "why": "The reason the predicate cannot just say 'differences_outside_baseline_defect = 0'. That column is NOT NULL DEFAULT 0, so a zero is ambiguous between 'computed, and every difference was cited' and 'this row predates the column and nothing ever computed it'. A non-empty baseline_defect is what tells those two apart: only a row that actually named a ticket can promote.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_but_defect_empty_refused",
@@ -144,7 +161,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "Same ambiguity one step along: an EMPTY array is a writer that had the column and cited nothing. If the empty array promoted, the NULL check above could be satisfied by writing '[]' -- which is why the rule is cardinality > 0 and not merely IS NOT NULL."
+      "why": "Same ambiguity one step along: an EMPTY array is a writer that had the column and cited nothing. If the empty array promoted, the NULL check above could be satisfied by writing '[]' -- which is why the rule is cardinality > 0 and not merely IS NOT NULL.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_with_uncited_difference_refused",
@@ -158,18 +182,27 @@
         "differences_outside_baseline_defect": 1
       },
       "admits": false,
-      "why": "One difference no declared defect covers is one unexplained divergence, and a single unexplained divergence is the thing the gate exists to catch. Citing a real ticket alongside it must not launder it."
+      "why": "One difference no declared defect covers is one unexplained divergence, and a single unexplained divergence is the thing the gate exists to catch. Citing a real ticket alongside it must not launder it.",
+      "control": {
+        "receipt": {
+          "differences_outside_baseline_defect": 0
+        }
+      }
     },
     {
       "name": "match_route_null_canary_refused",
       "target_mode": "canary",
       "receipt": {
         "terminal_state": "match",
-        "measurement_route": null,
-        "build_binding": null
+        "measurement_route": null
       },
       "admits": false,
-      "why": "A pre-0128 row records no route at all. 'Any route' is not the same as 'no route': admitting an unknown provenance is the same failure shape as reading the DEFAULT 0 as an assertion. Every row in this state today is a dual_run row, so nothing legitimate is refused by this."
+      "why": "A pre-0128 row records no route at all. 'Any route' is not the same as 'no route': admitting an unknown provenance is the same failure shape as reading the DEFAULT 0 as an assertion. The row is otherwise ADMISSIBLE -- bound per_request, a match, the right key -- so the NULL route is the only thing refusing it. opus r6 P2-3: this case used to carry a NULL build_binding too, and once the binding joined the rule the binding alone refused it, so the canary NULL-route clause could be deleted from the Python predicate with every Python test green.",
+      "control": {
+        "receipt": {
+          "measurement_route": "edge"
+        }
+      }
     },
     {
       "name": "terminal_state_unsupported_refused",
@@ -179,7 +212,12 @@
         "measurement_route": "edge"
       },
       "admits": false,
-      "why": "'unsupported' is the runner saying it could not measure. A refusal must never read as a pass."
+      "why": "'unsupported' is the runner saying it could not measure. A refusal must never read as a pass.",
+      "control": {
+        "receipt": {
+          "terminal_state": "match"
+        }
+      }
     },
     {
       "name": "terminal_state_proof_failed_refused",
@@ -189,7 +227,12 @@
         "measurement_route": "edge"
       },
       "admits": false,
-      "why": "Written when the build moved mid-run, so the receipt describes a build that was not serving for all of it."
+      "why": "Written when the build moved mid-run, so the receipt describes a build that was not serving for all of it.",
+      "control": {
+        "receipt": {
+          "terminal_state": "match"
+        }
+      }
     },
     {
       "name": "terminal_state_fallback_refused",
@@ -199,7 +242,12 @@
         "measurement_route": "edge"
       },
       "admits": false,
-      "why": "The edge fell back to Python. Nothing about the Go build was established."
+      "why": "The edge fell back to Python. Nothing about the Go build was established.",
+      "control": {
+        "receipt": {
+          "terminal_state": "match"
+        }
+      }
     },
     {
       "name": "terminal_state_mismatch_uncited_by_omission_refused",
@@ -208,10 +256,17 @@
         "terminal_state": "mismatch",
         "measurement_route": "edge",
         "baseline_defect": null,
-        "differences_outside_baseline_defect": 3
+        "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "A plain, honest mismatch. Included so the mismatch arm cannot be read as 'mismatch now promotes'."
+      "why": "A mismatch that cites nothing, asked about for PRIMARY. Included so the mismatch arm cannot be read as 'mismatch now promotes': with nothing uncounted (outside = 0) and a bound edge measurement, the missing citation is the only thing refusing it. opus r6 P2-3: this case used to carry outside = 3 as well, so it was refused by two clauses and pinned neither.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "wrong_stage_dual_run_refused",
@@ -222,7 +277,12 @@
         "measurement_route": "edge"
       },
       "admits": false,
-      "why": "dual_run is a local comparison. The gate's entire subject is whether the DEPLOYED build served the operation, which is what deployed_executed means and dual_run does not."
+      "why": "dual_run is a local comparison. The gate's entire subject is whether the DEPLOYED build served the operation, which is what deployed_executed means and dual_run does not.",
+      "control": {
+        "receipt": {
+          "stage": "deployed_executed"
+        }
+      }
     },
     {
       "name": "wrong_candidate_build_refused",
@@ -235,7 +295,10 @@
         "candidate_build": "0000000000000000000000000000000000000000"
       },
       "admits": false,
-      "why": "First of the four-column controls carried over from the original predicate. A proof is evidence for ONE immutable (schema_digest, document_digest, selected_operation, candidate_build) tuple and is never carried forward across any of the four changing."
+      "why": "First of the four-column controls carried over from the original predicate. A proof is evidence for ONE immutable (schema_digest, document_digest, selected_operation, candidate_build) tuple and is never carried forward across any of the four changing.",
+      "control": {
+        "key_override": null
+      }
     },
     {
       "name": "wrong_document_digest_refused",
@@ -248,7 +311,10 @@
         "document_digest": "sha256:ffff000000000000000000000000000000000000000000000000000000000000"
       },
       "admits": false,
-      "why": "The control that caught a real defect in review: without the document digest in the key, a proof recorded against a DIFFERENT registered document could authorize this enablement."
+      "why": "The control that caught a real defect in review: without the document digest in the key, a proof recorded against a DIFFERENT registered document could authorize this enablement.",
+      "control": {
+        "key_override": null
+      }
     },
     {
       "name": "wrong_schema_digest_refused",
@@ -261,7 +327,10 @@
         "schema_digest": "sha256:eeee000000000000000000000000000000000000000000000000000000000000"
       },
       "admits": false,
-      "why": "The SDL moved. This is the exact shape that killed the routing rows on 2026-09-01."
+      "why": "The SDL moved. This is the exact shape that killed the routing rows on 2026-09-01.",
+      "control": {
+        "key_override": null
+      }
     },
     {
       "name": "wrong_operation_refused",
@@ -274,7 +343,10 @@
         "selected_operation": "hotspots"
       },
       "admits": false,
-      "why": "Proving one operation proves nothing about another."
+      "why": "Proving one operation proves nothing about another.",
+      "control": {
+        "key_override": null
+      }
     },
     {
       "name": "mismatch_cited_with_an_empty_ticket_refused",
@@ -288,7 +360,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "cardinality(ARRAY['']) is 1, so this read as fully cited and authorized a promotion while citing nothing. A citation that names nothing is not a citation (executed against real PostgreSQL: 'EMPTY-STRING CITATION admitted as enablement proof: true')."
+      "why": "cardinality(ARRAY['']) is 1, so this read as fully cited and authorized a promotion while citing nothing. A citation that names nothing is not a citation (executed against real PostgreSQL: 'EMPTY-STRING CITATION admitted as enablement proof: true').",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_whitespace_ticket_refused",
@@ -302,7 +381,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "whitespace names nothing either, which is why the predicate uses btrim rather than <> ''."
+      "why": "whitespace names nothing either, which is why the predicate uses btrim rather than <> ''.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_one_real_one_empty_ticket_refused",
@@ -317,7 +403,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "one real citation does not excuse an empty one: the array is the set of tickets said to cover every difference, and an empty element covers nothing."
+      "why": "one real citation does not excuse an empty one: the array is the set of tickets said to cover every difference, and an empty element covers nothing.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_tab_refused",
@@ -331,7 +424,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "one-argument btrim() strips the SPACE only, so a tab citation passed both predicates and promoted to primary (opus r5 P1, executed through the CLI)."
+      "why": "one-argument btrim() strips the SPACE only, so a tab citation passed both predicates and promoted to primary (opus r5 P1, executed through the CLI).",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_newline_refused",
@@ -345,7 +445,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "same gap as the tab: btrim(E'\\n') is not ''."
+      "why": "same gap as the tab: btrim(E'\\n') is not ''.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_carriage_return_refused",
@@ -359,7 +466,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "same gap."
+      "why": "same gap.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_vertical_tab_refused",
@@ -373,7 +487,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "same gap."
+      "why": "same gap.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_form_feed_refused",
@@ -387,7 +508,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "same gap."
+      "why": "same gap.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_nbsp_refused",
@@ -401,7 +529,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "NBSP is in the shared cutset because Go's TrimSpace strips it; POSIX [[:space:]] does NOT match it, which is why the rule is enumerated rather than named."
+      "why": "NBSP is in the shared cutset because Go's TrimSpace strips it; POSIX [[:space:]] does NOT match it, which is why the rule is enumerated rather than named.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_sql_null_element_refused",
@@ -415,7 +550,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "cardinality(ARRAY[NULL]) is 1 and btrim(NULL) is NULL, not '', so the NOT EXISTS arm passed and the row promoted to primary."
+      "why": "cardinality(ARRAY[NULL]) is 1 and btrim(NULL) is NULL, not '', so the NOT EXISTS arm passed and the row promoted to primary.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_real_ticket_and_a_sql_null_refused",
@@ -430,7 +572,14 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "one real citation does not excuse a NULL element."
+      "why": "one real citation does not excuse a NULL element.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_line_separator_admitted",
@@ -455,7 +604,12 @@
         "build_binding": null
       },
       "admits": false,
-      "why": "a pre-0129 row: written before the column existed, and therefore before the counting rules that make a mismatch admissible. opus r5 P2 -- such rows became PRIMARY-admissible retroactively."
+      "why": "a pre-0129 row: written before the column existed, and therefore before the counting rules that make a mismatch admissible. opus r5 P2 -- such rows became PRIMARY-admissible retroactively.",
+      "control": {
+        "receipt": {
+          "build_binding": "per_request"
+        }
+      }
     },
     {
       "name": "match_with_an_absent_build_binding_refused",
@@ -466,7 +620,12 @@
         "build_binding": "absent"
       },
       "admits": false,
-      "why": "an edge match with no per-request binding is downgraded to `unsupported` by this writer, so a stored match+absent row did not come from it."
+      "why": "an edge match with no per-request binding is downgraded to `unsupported` by this writer, so a stored match+absent row did not come from it.",
+      "control": {
+        "receipt": {
+          "build_binding": "per_request"
+        }
+      }
     },
     {
       "name": "mismatch_cited_with_a_null_build_binding_refused",
@@ -481,7 +640,63 @@
         "build_binding": null
       },
       "admits": false,
-      "why": "the retroactive case in its exact shape: mismatch, edge, outside=0, cited, binding NULL -- exactly what the base writer produced and what the new rule would otherwise admit for primary."
+      "why": "the retroactive case in its exact shape: mismatch, edge, outside=0, cited, binding NULL -- exactly what the base writer produced and what the new rule would otherwise admit for primary.",
+      "control": {
+        "receipt": {
+          "build_binding": "per_request"
+        }
+      }
+    },
+    {
+      "name": "match_with_a_whitespace_candidate_build_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "candidate_build": "   "
+      },
+      "ask_with_overridden_key": true,
+      "admits": false,
+      "why": "A build made only of spaces names no build, and `proven` is keyed on that column, so such a row looks present while matching nothing real. The question asks about the SAME blank build, so build equality holds and only the blank-build clause can refuse it -- opus r6 P3-1 found the only earlier pin asked about a DIFFERENT build and was refused by equality, leaving the clause unpinned in both languages.",
+      "control": {
+        "key_override": null
+      }
+    },
+    {
+      "name": "match_with_a_tab_candidate_build_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "candidate_build": "\t"
+      },
+      "ask_with_overridden_key": true,
+      "admits": false,
+      "why": "Same rule, a tab: the blank-build clause uses the shared cutset, not one-argument btrim(), which strips only the space.",
+      "control": {
+        "key_override": null
+      }
+    },
+    {
+      "name": "match_with_a_vertical_tab_candidate_build_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "candidate_build": "\u000b"
+      },
+      "ask_with_overridden_key": true,
+      "admits": false,
+      "why": "Same rule, a vertical tab: the character whose SQL escape meant the LETTER v on PostgreSQL 16 (opus r6 P2-1). The suites are run against every server major they are pointed at.",
+      "control": {
+        "key_override": null
+      }
     }
   ]
 }

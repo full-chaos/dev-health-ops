@@ -1,6 +1,9 @@
 package migrationmatrix
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -222,10 +225,38 @@ func liveRow(operation, mode string) OperationRow {
 		Operation:      operation,
 		Mode:           mode,
 		SchemaDigest:   "sha256:" + strings.Repeat("d", 64),
+		DocumentDigest: documentOf(operation),
 		CandidateBuild: strings.Repeat("e", 40),
 		Live:           true,
 		Proven:         NoProof,
 	}
+}
+
+// documentOf is the catalog document a test registers for operation.
+func documentOf(operation string) string {
+	sum := sha256.Sum256([]byte(operation))
+	return hex.EncodeToString(sum[:])
+}
+
+// catalogFor registers each operation at documentOf(operation) -- the
+// catalog every row built by liveRow agrees with, so a test that is not
+// about DOCUMENT_DRIFT cannot trip over it.
+func catalogFor(t *testing.T, operations ...string) Catalog {
+	t.Helper()
+	pairs := make([][2]string, 0, len(operations))
+	seen := map[string]bool{}
+	for _, operation := range operations {
+		if seen[operation] {
+			continue
+		}
+		seen[operation] = true
+		pairs = append(pairs, [2]string{operation, documentOf(operation)})
+	}
+	catalog, err := NewCatalog(pairs)
+	if err != nil {
+		t.Fatalf("build the test catalog: %v", err)
+	}
+	return catalog
 }
 
 func snapshot(rows ...OperationRow) *Render {
@@ -245,11 +276,11 @@ func TestAReachableUnprovenOperationIsRenderedNotRejected(t *testing.T) {
 	rows := []OperationRow{liveRow("investmentFull", "canary"), liveRow("hotspots", "shadow")}
 	assertClean(t, ValidateRender(snapshot(rows...)))
 
-	if got := UnprovenReachable(rows); got != 1 {
+	if got := UnprovenReachable(rows, catalogFor(t, "investmentFull", "hotspots")); got != 1 {
 		t.Fatalf("UnprovenReachable = %d, want 1 (shadow is not reachable to a real client)", got)
 	}
 
-	block := RenderOpsBlock(snapshot(rows...))
+	block := RenderOpsBlock(snapshot(rows...), catalogFor(t, "investmentFull", "hotspots"))
 	if !strings.Contains(block, "canary / **UNPROVEN**") {
 		t.Fatalf("a reachable unproven operation must be marked UNPROVEN in its mode cell; got:\n%s", block)
 	}
@@ -273,7 +304,7 @@ func TestDeadRowsAreCountedRatherThanFilteredOut(t *testing.T) {
 	if got := DeadReachable([]OperationRow{dead}); got != 1 {
 		t.Fatalf("DeadReachable = %d, want 1", got)
 	}
-	block := RenderOpsBlock(snapshot(dead))
+	block := RenderOpsBlock(snapshot(dead), catalogFor(t, "cognitiveLoad"))
 	if !strings.Contains(block, "**DEAD** (digest moved)") {
 		t.Fatalf("a row at a stale digest must render as DEAD; got:\n%s", block)
 	}
@@ -285,6 +316,169 @@ func TestDeadRowsAreCountedRatherThanFilteredOut(t *testing.T) {
 func TestTwoRowsForOneOperationAtOneDigestFail(t *testing.T) {
 	row := liveRow("investmentFull", "canary")
 	assertRule(t, ValidateRender(snapshot(row, row)), "R8-duplicate-row")
+}
+
+// opus r6 (P2-2): the DOCUMENT_DRIFT shape -- the catalog's document at
+// canary and a second, drifted document at primary, one operation, one
+// schema digest -- rendered "live, primary, proven" and -check passed. The
+// edge serves this operation at CANARY; the page said PRIMARY with proof.
+//
+// Each assertion below names what it pins, because each is a different
+// half of one state:
+//   - R8 is keyed on the TRIPLE, so the two documents are NOT a duplicate
+//     (g37 reverted R8 to (digest, operation) and survived every test);
+//   - the drifted row renders DOCUMENT_DRIFT, the catalog's row "yes";
+//   - the drifted row fails the page (R14), exactly once, naming both
+//     documents;
+//   - the drifted row is counted as drift, not as reachable-unproven.
+func TestADocumentDriftRowIsNamedCountedAndFailsThePage(t *testing.T) {
+	served := liveRow("featureFlags", "canary")
+	drifted := liveRow("featureFlags", "primary")
+	drifted.DocumentDigest = strings.Repeat("0", 64)
+	catalog := catalogFor(t, "featureFlags")
+	render := snapshot(served, drifted)
+
+	for _, violation := range ValidateRender(render) {
+		if violation.Rule == "R8-duplicate-row" {
+			t.Fatalf("two DIFFERENT documents of one operation were reported as a duplicate (%s): R8 must key on (schema, document, operation) -- keyed on (schema, operation) it fails the page for the wrong reason and hides the real one", violation.Detail)
+		}
+	}
+
+	drift := ValidateDocumentDrift(render, catalog)
+	if len(drift) != 1 || drift[0].Rule != "R14-document-drift" || drift[0].Subject != "featureFlags" {
+		t.Fatalf("want exactly one R14-document-drift on featureFlags, got %v", drift)
+	}
+	for _, want := range []string{drifted.DocumentDigest, served.DocumentDigest, "primary", "DOCUMENT_DRIFT"} {
+		if !strings.Contains(drift[0].Detail, want) {
+			t.Fatalf("the R14 detail must name %q so an operator can find the row; got: %s", want, drift[0].Detail)
+		}
+	}
+
+	block := RenderOpsBlock(render, catalog)
+	var servedLine, driftedLine string
+	for _, line := range strings.Split(block, "\n") {
+		if !strings.HasPrefix(line, "| `featureFlags` |") {
+			continue
+		}
+		if strings.Contains(line, "| primary |") {
+			driftedLine = line
+		} else {
+			servedLine = line
+		}
+	}
+	if !strings.Contains(driftedLine, "**DOCUMENT_DRIFT**") || !strings.Contains(driftedLine, "000000000000") {
+		t.Fatalf("the drifted row must render as DOCUMENT_DRIFT naming its document; got %q in:\n%s", driftedLine, block)
+	}
+	if strings.Contains(driftedLine, "UNPROVEN") {
+		t.Fatalf("a row the edge cannot dispatch is not a reachable-unproven row; got %q", driftedLine)
+	}
+	if !strings.Contains(servedLine, "| yes |") || strings.Contains(servedLine, "DOCUMENT_DRIFT") {
+		t.Fatalf("the catalog's row must render as live and served; got %q", servedLine)
+	}
+	if got := DriftedLive(render.Operations, catalog); got != 1 {
+		t.Fatalf("DriftedLive = %d, want 1", got)
+	}
+	if got := UnprovenReachable(render.Operations, catalog); got != 1 {
+		t.Fatalf("UnprovenReachable = %d, want 1: the served canary row counts, the drifted primary row does not", got)
+	}
+	if !strings.Contains(block, "(DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **1**") {
+		t.Fatalf("the drift count must be on the page; got:\n%s", block)
+	}
+
+	// Control: the catalog's row alone is clean, so R14 above is caused by
+	// the drifted row and nothing else.
+	if clean := ValidateDocumentDrift(snapshot(served), catalog); len(clean) != 0 {
+		t.Fatalf("the catalog's own row alone must not drift, got %v", clean)
+	}
+}
+
+// A live row at an operation the catalog does not register at all cannot be
+// dispatched either -- the edge has no document to resolve it by.
+func TestALiveRowAtAnOperationTheCatalogDoesNotRegisterIsDrift(t *testing.T) {
+	orphan := liveRow("retiredOperation", "canary")
+	violations := ValidateDocumentDrift(snapshot(orphan), catalogFor(t, "featureFlags"))
+	assertRule(t, violations, "R14-document-drift")
+	if !strings.Contains(violations[0].Detail, "does not register this operation at all") {
+		t.Fatalf("the detail must say the operation is unregistered, got: %s", violations[0].Detail)
+	}
+	// A DEAD row is not drift: it is already DEAD, counted by DeadReachable.
+	orphan.Live = false
+	if got := ValidateDocumentDrift(snapshot(orphan), catalogFor(t, "featureFlags")); len(got) != 0 {
+		t.Fatalf("a dead row must not also be reported as drift, got %v", got)
+	}
+}
+
+// A live row with no document digest cannot be judged. It is counted on the
+// page -- neither assumed served (the silence P2-2 found) nor assumed
+// drifted (which would fail every page rendered before the key was carried).
+func TestALiveRowWithNoDocumentDigestIsCountedAsUnjudged(t *testing.T) {
+	row := liveRow("featureFlags", "canary")
+	row.DocumentDigest = ""
+	catalog := catalogFor(t, "featureFlags")
+	if DocumentDrift(row, catalog) {
+		t.Fatal("a row with no document digest was judged drifted")
+	}
+	if got := UnjudgedLive([]OperationRow{row}); got != 1 {
+		t.Fatalf("UnjudgedLive = %d, want 1", got)
+	}
+	block := RenderOpsBlock(snapshot(row), catalog)
+	if !strings.Contains(block, "DOCUMENT_DRIFT cannot be judged for them: **1**") {
+		t.Fatalf("the unjudged count must be on the page; got:\n%s", block)
+	}
+}
+
+// Two rows sharing (schema digest, operation) differ only by document. The
+// render sorted them with sort.Slice and no document tiebreak, so the pair's
+// order was not a function of the data, and the committed page and -check's
+// re-render could disagree on identical rows.
+func TestTheOpsBlockDoesNotDependOnTheOrderRowsArriveIn(t *testing.T) {
+	a := liveRow("featureFlags", "canary")
+	b := liveRow("featureFlags", "python")
+	b.DocumentDigest = strings.Repeat("1", 64)
+	c := liveRow("featureFlags", "shadow")
+	c.DocumentDigest = strings.Repeat("2", 64)
+	catalog := catalogFor(t, "featureFlags")
+	want := RenderOpsBlock(snapshot(a, b, c), catalog)
+	for _, order := range [][]OperationRow{{c, b, a}, {b, a, c}, {c, a, b}, {a, c, b}, {b, c, a}} {
+		if got := RenderOpsBlock(snapshot(order...), catalog); got != want {
+			t.Fatalf("the rendered block depends on input order:\nwant:\n%s\ngot:\n%s", want, got)
+		}
+	}
+}
+
+func TestTheCatalogLoaderRefusesWhatThePythonLoaderRefuses(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		pairs [][2]string
+	}{
+		{"empty", nil},
+		{"empty operation", [][2]string{{"", "ab"}}},
+		{"blank digest", [][2]string{{"featureFlags", "  "}}},
+		{"one digest registered twice", [][2]string{{"featureFlags", "ab"}, {"hotspots", "ab"}}},
+	} {
+		if _, err := NewCatalog(c.pairs); err == nil {
+			t.Fatalf("%s: the catalog was accepted", c.name)
+		}
+	}
+	// Control: one operation at two documents IS a valid catalog -- both
+	// are registered, so neither is drift.
+	catalog, err := NewCatalog([][2]string{{"featureFlags", "ab"}, {"featureFlags", "cd"}})
+	if err != nil {
+		t.Fatalf("a valid catalog was refused: %v", err)
+	}
+	if !catalog.Names("featureFlags", "ab") || !catalog.Names("featureFlags", "cd") || catalog.Names("featureFlags", "ef") {
+		t.Fatal("Names does not answer from the registered pairs")
+	}
+}
+
+func TestTheCommittedCatalogLoads(t *testing.T) {
+	catalog, err := LoadCatalog(filepath.Join("..", "..", "src", "dev_health_ops", "api", "graphql", "go_api_operations.json"))
+	if err != nil {
+		t.Fatalf("the committed operation catalog does not load: %v", err)
+	}
+	if len(catalog.Documents("featureFlags")) != 1 {
+		t.Fatalf("featureFlags should be registered at exactly one document, got %v", catalog.Documents("featureFlags"))
+	}
 }
 
 func TestARenderWithNoProvenanceFails(t *testing.T) {

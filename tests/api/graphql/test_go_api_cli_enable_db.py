@@ -453,3 +453,166 @@ async def test_the_cli_passes_its_own_mode_to_the_proof_predicate(
     # And the refusal wrote nothing: the row is still canary.
     rows = await _rows(session_factory)
     assert [row.mode for row in rows] == ["canary"]
+
+
+async def _seed_receipt(factory: Any, *, document_digest: str, **columns: Any) -> None:
+    """One featureFlags receipt at BUILD, with ``columns`` set verbatim.
+
+    Direct column writes on purpose: the shapes under test (a NULL
+    build_binding, a cited mismatch) are rows the table really holds, and a
+    current writer would not produce every one of them.
+    """
+    async with factory() as session:
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=document_digest,
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+        )
+        run = await record_proof_run(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=document_digest,
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+            request_identity=f"test-{uuid.uuid4().hex[:8]}",
+            stage=ENABLEMENT_PROOF_STAGE,
+            terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+        )
+        await session.execute(
+            sa.update(ProofRun).where(ProofRun.id == run.id).values(**columns)
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_states_every_clause_of_the_rule(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """opus r6 (P2-4): the refusal printed a rule the receipt SATISFIED.
+
+    The row is a pre-0129 receipt: a mismatch, on the edge, citing a real
+    ticket, with nothing uncounted -- every condition the message used to
+    print is true of it. It is refused by the ONE condition the message did
+    not print, ``build_binding = 'per_request'`` (added for r5's P1), so the
+    operator was told a rule their receipt meets and nothing named the
+    column to check. The blank-citation and blank-build conditions were not
+    printed either. A refusal that misattributes itself is loud and wrong.
+    """
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        terminal_state="mismatch",
+        measurement_route="edge",
+        baseline_defect=["CHAOS-5448"],
+        differences_outside_baseline_defect=0,
+        build_binding=None,
+    )
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="primary"))
+            == 2
+        )
+    err = capsys.readouterr().err
+    for clause in (
+        "build_binding = 'per_request'",
+        "NULL build_binding",
+        "candidate_build",
+        "blank",
+        "baseline_defect non-empty",
+        "differences_outside_baseline_defect = 0",
+    ):
+        assert clause in err, (
+            f"the refusal does not state {clause!r}; an operator whose receipt "
+            f"is refused must be able to find the failing column from the "
+            f"message alone.\nmessage:\n{err}"
+        )
+    assert await _rows(session_factory) == []
+
+    # Control: the SAME receipt, bound per request, is admitted -- so the
+    # refusal above is the binding clause and the message is about it.
+    async with session_factory() as session:
+        await session.execute(sa.update(ProofRun).values(build_binding="per_request"))
+        await session.commit()
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="primary"))
+            == 0
+        )
+
+
+@pytest.mark.asyncio
+async def test_status_renders_a_drifted_row_with_its_proof_and_its_document(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """opus r6 (P3-4, mutants p17/p18): the r5-P3 renderer fix was unpinned.
+
+    A DOCUMENT_DRIFT row is live and IS the row in the table, so its PROOF
+    column must say ``ok``/``UNPROVEN`` -- as ``--json`` does -- not ``-``,
+    and a line must name the document actually serving. Both regressions
+    passed every test: printing ``-`` (p18) and dropping the line (p17).
+    """
+    catalog = dict(catalog_entries())
+    drifted = "0" * 64
+    await _seed_receipt(
+        session_factory,
+        document_digest=drifted,
+        measurement_route="edge",
+        build_binding="per_request",
+    )
+    async with session_factory() as session:
+        session.add(
+            RoutingState(
+                schema_digest=current_schema_digest(),
+                document_digest=drifted,
+                selected_operation="featureFlags",
+                current_candidate_build=BUILD,
+                owner="go",
+                mode="primary",
+                rollout_percentage=100,
+            )
+        )
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=catalog["featureFlags"],
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+        )
+        session.add(
+            RoutingState(
+                schema_digest=current_schema_digest(),
+                document_digest=catalog["featureFlags"],
+                selected_operation="featureFlags",
+                current_candidate_build=BUILD,
+                owner="go",
+                mode="canary",
+                rollout_percentage=100,
+            )
+        )
+        await session.commit()
+
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_status(
+                argparse.Namespace(query_api_url=url, json=False)
+            )
+            == 0
+        )
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line.startswith("featureFlags ")]
+    drift_lines = [line for line in lines if "DOCUMENT_DRIFT" in line]
+    match_lines = [line for line in lines if " MATCH " in line]
+    assert len(drift_lines) == 1 and len(match_lines) == 1, out
+    assert drift_lines[0].split()[-1] == "ok", (
+        f"the drifted row HAS an admissible receipt of its own, and its PROOF "
+        f"column printed {drift_lines[0].split()[-1]!r}: the terminal disagrees "
+        f"with --json about the one row the operator is asked to notice\n{out}"
+    )
+    assert match_lines[0].split()[-1] == "UNPROVEN", out
+    assert f"serving document {drifted}" in out, (
+        f"no line names the document actually serving the drifted row -- the "
+        f"only question DOCUMENT_DRIFT raises\n{out}"
+    )

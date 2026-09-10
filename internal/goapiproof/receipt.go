@@ -348,11 +348,47 @@ const EnablementCitedMismatchState = "mismatch"
 // agreement character by character, in-set and out.
 const blankCitationCutset = " \t\n\v\f\r\u00a0"
 
-// blankCitationSQL renders the cutset as a Postgres escape-string literal,
-// so the SQL below and the Go check above cannot drift: there is one
-// constant and the statement is generated from it.
+// blankCitationSQL renders blankCitationCutset as a Postgres escape-string
+// literal, GENERATED from the constant one rune at a time, so the SQL below
+// and the Go check above cannot drift: there is one constant.
+//
+// opus r6 (P2-1) found that sentence false of the code it described. The
+// literal was HAND-TYPED as `E' \t\n\v\f\r\u00a0'`, and `\v` in an
+// escape string is not one byte across server versions. Measured:
+//
+//	PostgreSQL 16.15  E'\v' -> 0x76  (the LETTER v)
+//	PostgreSQL 17.11  E'\v' -> 0x0b
+//	PostgreSQL 18.4   E'\v' -> 0x0b
+//
+// So on PG16 the Go readers and the migration matrix refused the letter v
+// as "names nothing" and admitted a vertical-tab citation, while Python --
+// which BINDS its cutset as a parameter -- did the opposite. Nothing
+// enforces a server version (the helm default is managed Postgres), and
+// the pin ran only on the testcontainers PG18 image, so nothing failed.
+//
+// Only the NUMERIC escapes are emitted: \xNN for ASCII, \uNNNN / \UNNNNNNNN
+// above it. Their meaning is a code point, not a name a server version
+// can learn or forget. A named escape (\t, \n, \v, ...) is never emitted,
+// even the ones that happen to be stable, so the rule is one sentence
+// with no exceptions. TestTheBlankCutsetLiteralIsGeneratedFromTheConstant
+// pins the grammar and decodes the literal back to the constant; the
+// integration suite is run against PG16, PG17 and PG18 by pointing
+// DEV_HEALTH_TEST_POSTGRES_DSN at each.
 func blankCitationSQL() string {
-	return `E' \t\n\v\f\r\u00a0'`
+	var literal strings.Builder
+	literal.WriteString("E'")
+	for _, r := range blankCitationCutset {
+		switch {
+		case r < 0x80:
+			fmt.Fprintf(&literal, `\x%02x`, r)
+		case r <= 0xFFFF:
+			fmt.Fprintf(&literal, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&literal, `\U%08x`, r)
+		}
+	}
+	literal.WriteString("'")
+	return literal.String()
 }
 
 // THE BINDING IS PART OF THE RULE, on both arms, uniformly.

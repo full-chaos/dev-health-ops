@@ -5,6 +5,7 @@ package goapiproof
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,8 +49,14 @@ type admissionCase struct {
 	Name        string        `json:"name"`
 	TargetMode  string        `json:"target_mode"`
 	KeyOverride *admissionKey `json:"key_override"`
-	Admits      bool          `json:"admits"`
-	Why         string        `json:"why"`
+	// AskWithOverriddenKey makes the QUESTION use the overridden key too.
+	// Without it a key override can only ever test "a receipt for a
+	// different key is not proof" -- refused by equality -- and a clause
+	// about the key's own VALUE (a blank candidate_build) is never
+	// reached (opus r6, P3-1).
+	AskWithOverriddenKey bool   `json:"ask_with_overridden_key"`
+	Admits               bool   `json:"admits"`
+	Why                  string `json:"why"`
 }
 
 type admissionFixture struct {
@@ -79,11 +86,10 @@ func loadAdmissionFixture(t *testing.T) admissionFixture {
 
 func TestEnablementPredicateMatchesTheSharedAdmissionTable(t *testing.T) {
 	ctx := context.Background()
-	fixture := loadAdmissionFixture(t)
-	raw := rawAdmissionCases(t)
+	runs := admissionRuns(t)
 
-	// ONE container for the whole table, truncated between cases. Twenty
-	// separate Postgres startups pushed this package past `go test`'s
+	// ONE container for the whole table, truncated between cases. One
+	// Postgres startup per case pushed this package past `go test`'s
 	// 10-minute default and the whole run failed on a timeout that said
 	// nothing about the predicate. Isolation still holds -- each case sees
 	// only its own row -- and it now costs one container rather than one
@@ -91,32 +97,28 @@ func TestEnablementPredicateMatchesTheSharedAdmissionTable(t *testing.T) {
 	pool := startRegistryPostgres(t)
 
 	var admits, refuses int
-	for i, c := range fixture.Cases {
-		c, i := c, i
-		t.Run(c.Name, func(t *testing.T) {
+	for _, run := range runs {
+		run := run
+		t.Run(run.name, func(t *testing.T) {
 			if _, err := pool.Exec(ctx,
 				`TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
 				t.Fatalf("truncate between cases: %v", err)
 			}
-			key := fixture.Key
-			if c.KeyOverride != nil {
-				key = mergeKey(key, *c.KeyOverride)
-			}
-			seedAdmissionRow(ctx, t, pool, key, mergeReceipt(t, raw[i]))
+			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
 
 			found, err := OperationsWithEnablementProof(ctx, pool,
-				fixture.Key.SchemaDigest, fixture.Key.CandidateBuild, c.TargetMode,
-				map[string]string{fixture.Key.SelectedOperation: fixture.Key.DocumentDigest})
+				run.askKey.SchemaDigest, run.askKey.CandidateBuild, run.targetMode,
+				map[string]string{run.askKey.SelectedOperation: run.askKey.DocumentDigest})
 			if err != nil {
 				t.Fatalf("OperationsWithEnablementProof: %v", err)
 			}
-			got := found[fixture.Key.SelectedOperation]
-			if got != c.Admits {
-				t.Fatalf("case %q: predicate returned admits=%v, fixture says %v.\nwhy: %s",
-					c.Name, got, c.Admits, c.Why)
+			got := found[run.askKey.SelectedOperation]
+			if got != run.admits {
+				t.Fatalf("%s: predicate returned admits=%v, fixture says %v.\nwhy: %s",
+					run.describe(), got, run.admits, run.why)
 			}
 		})
-		if c.Admits {
+		if run.admits {
 			admits++
 		} else {
 			refuses++
@@ -150,11 +152,46 @@ func TestEnablementPredicateRefusesAnUnknownTargetMode(t *testing.T) {
 	}
 }
 
-// rawAdmissionCases re-reads the fixture as generic maps, because
-// "measurement_route": null and an ABSENT measurement_route are different
-// cases and encoding/json cannot tell a typed struct which happened.
-func rawAdmissionCases(t *testing.T) []map[string]any {
+// admissionRun is one row-and-question the shared table asks: either a
+// case as written, or a refused case's CONTROL.
+type admissionRun struct {
+	name       string
+	targetMode string
+	rowKey     admissionKey // the key the seeded receipt is recorded under
+	askKey     admissionKey // the key the predicate is asked about
+	receipt    seededReceipt
+	admits     bool
+	why        string
+	control    bool
+}
+
+func (r admissionRun) describe() string {
+	if r.control {
+		return fmt.Sprintf("CONTROL of case %q (the case with its stated refusal reason removed, which must therefore be ADMITTED -- if it is refused, the case is refused for a SECOND reason and does not pin the one it names)", strings.TrimSuffix(r.name, "/control"))
+	}
+	return fmt.Sprintf("case %q", r.name)
+}
+
+// admissionRuns reads the fixture as generic maps -- "measurement_route":
+// null and an ABSENT measurement_route are different cases and
+// encoding/json cannot tell a typed struct which happened -- and returns
+// every case plus, for each refused case, its CONTROL.
+//
+// Why a control per refused case. opus r6 (P2-3) found
+// match_route_null_canary_refused carrying a NULL build_binding as well as
+// the NULL route it is named for. Once the binding became part of the rule,
+// the binding alone refused it, so the case asserted nothing about the
+// route: the Python NULL-route clause could be deleted and all 170 Python
+// tests stayed green. That is the same vacuity r5 found in a Go refusal
+// table, one level over, and a table-level "the base is admissible"
+// control cannot see it -- the base was admissible; THIS case was not
+// one-reason. So each refused case states what removes its reason, and
+// the control -- the case with exactly that removed -- must be ADMITTED
+// by the production predicate. A second hidden reason then fails the
+// control, in the case's own name.
+func admissionRuns(t *testing.T) []admissionRun {
 	t.Helper()
+	fixture := loadAdmissionFixture(t)
 	path := filepath.Join("..", "..", "tests", "fixtures", "enablement_proof_admission_cases.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -167,20 +204,85 @@ func rawAdmissionCases(t *testing.T) []map[string]any {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("parse admission fixture: %v", err)
 	}
-	out := make([]map[string]any, 0, len(doc.Cases))
-	for _, c := range doc.Cases {
+	if len(doc.Cases) != len(fixture.Cases) {
+		t.Fatalf("typed and raw reads of the fixture disagree on the case count: %d vs %d", len(fixture.Cases), len(doc.Cases))
+	}
+
+	var runs []admissionRun
+	for i, c := range fixture.Cases {
 		merged := map[string]any{}
 		for k, v := range doc.Defaults {
 			merged[k] = v
 		}
-		if override, ok := c["receipt"].(map[string]any); ok {
+		if override, ok := doc.Cases[i]["receipt"].(map[string]any); ok {
 			for k, v := range override {
 				merged[k] = v
 			}
 		}
-		out = append(out, merged)
+		rowKey := fixture.Key
+		if c.KeyOverride != nil {
+			rowKey = mergeKey(rowKey, *c.KeyOverride)
+		}
+		askKey := fixture.Key
+		if c.AskWithOverriddenKey {
+			if c.KeyOverride == nil {
+				t.Fatalf("case %q sets ask_with_overridden_key with no key_override to ask with", c.Name)
+			}
+			askKey = rowKey
+		}
+		runs = append(runs, admissionRun{
+			name: c.Name, targetMode: c.TargetMode, rowKey: rowKey, askKey: askKey,
+			receipt: mergeReceipt(t, merged), admits: c.Admits, why: c.Why,
+		})
+
+		control, hasControl := doc.Cases[i]["control"].(map[string]any)
+		if c.Admits {
+			if hasControl {
+				t.Fatalf("case %q is ADMITTED and declares a control: a control removes a refusal reason, and an admitted case has none", c.Name)
+			}
+			continue
+		}
+		if !hasControl {
+			t.Fatalf("refused case %q declares no control: without one nothing shows it is refused for the reason it names rather than for another (opus r6, P2-3)", c.Name)
+		}
+		controlReceipt := map[string]any{}
+		for k, v := range merged {
+			controlReceipt[k] = v
+		}
+		if patch, ok := control["receipt"].(map[string]any); ok {
+			for k, v := range patch {
+				controlReceipt[k] = v
+			}
+		}
+		controlRowKey := rowKey
+		controlAskKey := askKey
+		if override, present := control["key_override"]; present {
+			controlRowKey = fixture.Key
+			if override != nil {
+				encoded, err := json.Marshal(override)
+				if err != nil {
+					t.Fatalf("control of %q: key_override: %v", c.Name, err)
+				}
+				var key admissionKey
+				if err := json.Unmarshal(encoded, &key); err != nil {
+					t.Fatalf("control of %q: key_override: %v", c.Name, err)
+				}
+				controlRowKey = mergeKey(fixture.Key, key)
+			}
+			controlAskKey = fixture.Key
+			if c.AskWithOverriddenKey {
+				controlAskKey = controlRowKey
+			}
+		}
+		runs = append(runs, admissionRun{
+			name: c.Name + "/control", targetMode: c.TargetMode,
+			rowKey: controlRowKey, askKey: controlAskKey,
+			receipt: mergeReceipt(t, controlReceipt), admits: true,
+			why:     "the control must be admitted: " + c.Why,
+			control: true,
+		})
 	}
-	return out
+	return runs
 }
 
 type seededReceipt struct {
@@ -308,26 +410,21 @@ func seedAdmissionRow(ctx context.Context, t *testing.T, pool *pgxpool.Pool, key
 // enumerated reader list rather than a claim about how many there are.
 func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 	ctx := context.Background()
-	fixture := loadAdmissionFixture(t)
-	raw := rawAdmissionCases(t)
+	runs := admissionRuns(t)
 	pool := startRegistryPostgres(t)
 
-	for i, c := range fixture.Cases {
-		c, i := c, i
-		t.Run(c.Name, func(t *testing.T) {
+	for _, run := range runs {
+		run := run
+		t.Run(run.name, func(t *testing.T) {
 			if _, err := pool.Exec(ctx,
 				`TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
 				t.Fatalf("truncate between cases: %v", err)
 			}
-			key := fixture.Key
-			if c.KeyOverride != nil {
-				key = mergeKey(key, *c.KeyOverride)
-			}
-			seedAdmissionRow(ctx, t, pool, key, mergeReceipt(t, raw[i]))
+			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
 
-			clause, err := EnablementProofClause("pr", c.TargetMode)
+			clause, err := EnablementProofClause("pr", run.targetMode)
 			if err != nil {
-				t.Fatalf("EnablementProofClause(%q): %v", c.TargetMode, err)
+				t.Fatalf("EnablementProofClause(%q): %v", run.targetMode, err)
 			}
 
 			// The matrix's SHAPE: a correlated subquery keyed on the
@@ -345,17 +442,17 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 				   ORDER BY pr.observed_at DESC
 				   LIMIT 1
 				)`,
-				fixture.Key.SchemaDigest, fixture.Key.DocumentDigest,
-				fixture.Key.SelectedOperation, fixture.Key.CandidateBuild,
+				run.askKey.SchemaDigest, run.askKey.DocumentDigest,
+				run.askKey.SelectedOperation, run.askKey.CandidateBuild,
 			).Scan(&proofID)
 			if err != nil {
 				t.Fatalf("matrix-shaped query: %v", err)
 			}
 
 			got := proofID != nil && *proofID != ""
-			if got != c.Admits {
-				t.Fatalf("case %q: the migration matrix would render proven=%v, the admission table says %v.\nwhy: %s\nA status page disagreeing with the command that enforces the rule is the shape r2 found.",
-					c.Name, got, c.Admits, c.Why)
+			if got != run.admits {
+				t.Fatalf("%s: the migration matrix would render proven=%v, the admission table says %v.\nwhy: %s\nA status page disagreeing with the command that enforces the rule is the shape r2 found.",
+					run.describe(), got, run.admits, run.why)
 			}
 		})
 	}
@@ -363,7 +460,7 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 
 // The FULL input surface, not a sample.
 //
-// The shared table above is 20 chosen cases. Chosen cases are a sample,
+// The shared table above is chosen cases. Chosen cases are a sample,
 // and a sample is exactly what r1 and r2 kept finding gaps in -- an
 // instrument that enumerates only the inputs its author thought of. This
 // enumerates every value the predicate can SEE and asserts the rule over
@@ -375,8 +472,12 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 //   - terminal_state                        (all 11 legal values)
 //   - measurement_route                     (edge, proof, NULL)
 //   - differences_outside_baseline_defect   (0, 1)
-//   - baseline_defect                       (NULL, empty, non-empty)
+//   - baseline_defect                       (NULL, empty, every blank shape, real, exotic)
+//   - build_binding                         (per_request, absent, NULL)
 //   - the target mode                       (canary, primary)
+//   - candidate_build                       (swept separately, below:
+//     TestTheBlankBuildClauseOverEveryCutsetRune -- crossing it with the
+//     rest would multiply this test by the cutset for no new pairing)
 //
 // build_binding IS in that list now. It was not when this test was
 // written -- the predicate did not read the column, and this comment said
@@ -386,7 +487,7 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 // both arms, so the binding dimension is load-bearing rather than a
 // control.
 //
-// The mutant this test kills that the 20 cases do NOT, measured both ways
+// The mutant this test kills that the shared table does NOT, measured both ways
 // rather than argued from the design: admitting a NULL measurement_route
 // for the MISMATCH branch only.
 //
@@ -396,7 +497,7 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 // `terminal=mismatch route=<nil> ... predicate says true, the rule says
 // false`. That is a receipt with NO recorded provenance authorizing a
 // promotion -- the "any route is not no route" rule 0128 exists to
-// enforce. The 20 cases miss it because they cover 8 of the 33
+// enforce. The table misses it because it covers only some of the
 // terminal-state x route pairs and `mismatch x NULL` is not among them,
 // so the NULL-route rule is only ever exercised on the `match` branch.
 //
@@ -435,7 +536,14 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	// cell now, plus a SQL NULL element and a NULL mixed with a real
 	// ticket, plus two Unicode spaces OUTSIDE the cutset which both
 	// engines must treat as real citations.
-	blankTicket := []any{"", " ", "\t", "\n", "\r", "\v", "\f", "\u00a0"}
+	// Derived from the constant, one cell per rune of the cutset plus the
+	// empty string, never a hand copy of it (opus r6, P2-1: a hand copy is
+	// how the SQL literal drifted from the constant it claimed to be
+	// generated from).
+	blankTicket := []any{""}
+	for _, r := range blankCitationCutset {
+		blankTicket = append(blankTicket, string(r))
+	}
 	defects := []any{
 		nil, []string{}, []string{"CHAOS-5448"},
 		[]string{"CHAOS-5448", ""},
@@ -751,5 +859,95 @@ func TestTheBlankDefinitionIsIdenticalInBothEngines(t *testing.T) {
 				t.Fatalf("%q: both engines say blank=%v, the shared rule says %v", c.value, goSaysBlank, c.blank)
 			}
 		})
+	}
+
+	// Every single rune from U+0001 to U+00FF, plus the Unicode spaces
+	// named above and the invisible characters a citation could carry.
+	// opus r6 (P2-1): on PostgreSQL 16 the hand-typed literal's `\v` was the
+	// LETTER v, so the letter v was "blank" to Postgres and a vertical tab
+	// was not -- and the table above, which lists only spaces and one real
+	// ticket, had no cell for a letter. A letter is exactly the input
+	// nobody thinks to put in a whitespace table. The sweep has one
+	// expectation per rune, derived from the constant: blank iff the rune
+	// is in the cutset. U+0000 is skipped because a PostgreSQL text value
+	// cannot contain it.
+	sweep := []rune{0x2028, 0x2029, 0x3000, 0x200b, 0xfeff, 0x0085, 0x1680, 0x205f}
+	for r := rune(1); r <= 0xff; r++ {
+		sweep = append(sweep, r)
+	}
+	var disagree []string
+	for _, r := range sweep {
+		value := string(r)
+		goSaysBlank := strings.Trim(value, blankCitationCutset) == ""
+		var sqlSaysBlank bool
+		if err := pool.QueryRow(ctx,
+			`SELECT btrim($1, `+blankCitationSQL()+`) = ''`, value,
+		).Scan(&sqlSaysBlank); err != nil {
+			t.Fatalf("ask Postgres about U+%04X: %v", r, err)
+		}
+		inCutset := strings.ContainsRune(blankCitationCutset, r)
+		if goSaysBlank != inCutset || sqlSaysBlank != inCutset {
+			disagree = append(disagree, fmt.Sprintf("U+%04X %q: in cutset=%v Go blank=%v Postgres blank=%v", r, value, inCutset, goSaysBlank, sqlSaysBlank))
+		}
+	}
+	if len(disagree) > 0 {
+		var version string
+		_ = pool.QueryRow(ctx, `SELECT current_setting('server_version')`).Scan(&version)
+		t.Fatalf("on PostgreSQL %s the two engines, or an engine and the constant, DISAGREE on %d rune(s):\n  %s",
+			version, len(disagree), strings.Join(disagree, "\n  "))
+	}
+}
+
+// The blank-build clause over its whole input, in both modes.
+//
+// opus r6 (P3-1, mutants g08/p04 -- r5's g06/p04, carried): deleting
+// `btrim(candidate_build, <cutset>) <> ”` survived every test in both
+// languages, because the only pin asked about a DIFFERENT build than the
+// receipt named, so build EQUALITY refused it before the blank clause was
+// reached. Here every receipt is otherwise admissible and is asked about
+// by exactly the build it names, so equality always holds and the blank
+// clause is the only thing that can refuse. One cell per rune of the
+// shared cutset (derived from the constant), all of them together, and
+// three real builds -- including one made of the letter v, which the
+// hand-typed PG16 literal (P2-1) would have stripped.
+func TestTheBlankBuildClauseOverEveryCutsetRune(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	builds := []string{blankCitationCutset, "b18e56fa79cfe20ce0f75df148144b832d92be36", strings.Repeat("v", 40), "\u2028"}
+	for _, r := range blankCitationCutset {
+		builds = append(builds, string(r), string(r)+string(r))
+	}
+	const (
+		digest    = "sha256:blank-build"
+		document  = "doc-blank-build"
+		operation = "featureFlags"
+	)
+	admitted := 0
+	for _, build := range builds {
+		if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run, go_api_candidate_build CASCADE`); err != nil {
+			t.Fatalf("truncate: %v", err)
+		}
+		seedAdmissionRow(ctx, t, pool,
+			admissionKey{SchemaDigest: digest, DocumentDigest: document, SelectedOperation: operation, CandidateBuild: build},
+			seededReceipt{stage: EnablementProofStage, terminalState: EnablementProofTerminalState, route: RouteEdge,
+				binding: EdgeBuildPresent, requestIdentity: "blank-build"})
+		want := strings.Trim(build, blankCitationCutset) != ""
+		for _, mode := range []string{TargetModeCanary, TargetModePrimary} {
+			found, err := OperationsWithEnablementProof(ctx, pool, digest, build, mode, map[string]string{operation: document})
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if found[operation] != want {
+				t.Fatalf("candidate_build=%q mode=%s: predicate says admitted=%v, the rule says %v (asked about the SAME build the receipt names, so equality holds and only the blank-build clause decides)",
+					build, mode, found[operation], want)
+			}
+			if found[operation] {
+				admitted++
+			}
+		}
+	}
+	if admitted != 6 {
+		t.Fatalf("admitted %d (build, mode) cells, want exactly the three real builds x two modes = 6: a sweep with no admissions passes against a predicate that admits nothing", admitted)
 	}
 }

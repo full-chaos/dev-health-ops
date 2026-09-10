@@ -124,3 +124,70 @@ func TestWriteRefusesAReceiptWithNoBuildBinding(t *testing.T) {
 		}()
 	}
 }
+
+// opus r6 (P2-1): the SQL cutset literal was HAND-TYPED beside the
+// constant it claimed to be generated from, and one of its escapes, `\v`,
+// is the letter v on PostgreSQL 16 and a vertical tab on 17 and 18. The Go
+// readers and the Python predicate (which binds the cutset as a parameter)
+// then disagreed about "names nothing" on PG16, in both directions.
+//
+// Two properties, both needed. The literal must DECODE back to exactly
+// blankCitationCutset -- otherwise it is a second definition however it
+// was produced. And it may contain only the numeric escapes (\xNN,
+// \uNNNN, \UNNNNNNNN), whose meaning is a code point on every server
+// version, never a named escape a version can add or drop. The decode
+// below implements only that grammar, so a named escape fails the
+// decode itself rather than being interpreted by this test's guess at
+// what some server would do with it.
+func TestTheBlankCutsetLiteralIsGeneratedFromTheConstant(t *testing.T) {
+	literal := blankCitationSQL()
+	if !strings.HasPrefix(literal, "E'") || !strings.HasSuffix(literal, "'") || len(literal) < 3 {
+		t.Fatalf("blankCitationSQL() = %q: not an escape-string literal E'...'", literal)
+	}
+	body := literal[2 : len(literal)-1]
+
+	var decoded strings.Builder
+	for len(body) > 0 {
+		if body[0] != '\\' {
+			t.Fatalf("blankCitationSQL() = %q: a raw character %q is in the literal; every rune must be a numeric escape so no byte depends on how the literal was typed", literal, body[0])
+		}
+		width := 0
+		switch {
+		case strings.HasPrefix(body, `\x`):
+			width = 2
+		case strings.HasPrefix(body, `\u`):
+			width = 4
+		case strings.HasPrefix(body, `\U`):
+			width = 8
+		default:
+			t.Fatalf("blankCitationSQL() = %q: escape %q is not numeric. A named escape's meaning depends on the server version -- E'\\v' is the letter v on PostgreSQL 16 and 0x0b on 17+ -- so the literal may use only \\xNN, \\uNNNN or \\UNNNNNNNN", literal, body[:min(2, len(body))])
+		}
+		if len(body) < 2+width {
+			t.Fatalf("blankCitationSQL() = %q: truncated escape at %q", literal, body)
+		}
+		var code rune
+		for _, h := range body[2 : 2+width] {
+			var nibble rune
+			switch {
+			case h >= '0' && h <= '9':
+				nibble = h - '0'
+			case h >= 'a' && h <= 'f':
+				nibble = h - 'a' + 10
+			case h >= 'A' && h <= 'F':
+				nibble = h - 'A' + 10
+			default:
+				t.Fatalf("blankCitationSQL() = %q: %q is not a hex digit in escape %q", literal, h, body[:2+width])
+			}
+			code = code<<4 | nibble
+		}
+		if width == 2 && code >= 0x80 {
+			t.Fatalf("blankCitationSQL() = %q: \\x%02x is a raw BYTE above ASCII, which is not a code point in UTF-8; use \\u", literal, code)
+		}
+		decoded.WriteRune(code)
+		body = body[2+width:]
+	}
+
+	if decoded.String() != blankCitationCutset {
+		t.Fatalf("blankCitationSQL() decodes to %q but blankCitationCutset is %q: the SQL and Go definitions of \"names nothing\" differ, which is the defect class this change exists to close", decoded.String(), blankCitationCutset)
+	}
+}

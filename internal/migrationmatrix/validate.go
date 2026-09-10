@@ -238,19 +238,97 @@ func ValidateRender(render *Render) []Violation {
 	return out
 }
 
+// DocumentDrift reports whether a LIVE row serves a document the catalog
+// does not name: the DOCUMENT_DRIFT state `dev-hops go-api routing status`
+// reports. The edge resolves a request to an operation through the
+// catalog, so such a row can never be dispatched, whatever its mode says.
+//
+// A row with NO document digest is not judged here -- see
+// DocumentUnjudged. Only a snapshot written before the reader carried the
+// routing key can hold one: ReadRoutingState scans a NOT NULL column and
+// the offline -routing reader refuses an empty one.
+func DocumentDrift(row OperationRow, catalog Catalog) bool {
+	return row.Live && row.DocumentDigest != "" && !catalog.Names(row.Operation, row.DocumentDigest)
+}
+
+// DocumentUnjudged reports whether a LIVE row carries no document digest,
+// so whether it drifted cannot be decided from this snapshot. Counted on the
+// page rather than assumed either way: calling such a row served would be
+// the silence opus r6 (P2-2) found, and calling it drifted would fail every
+// page rendered before the key was carried.
+func DocumentUnjudged(row OperationRow) bool {
+	return row.Live && row.DocumentDigest == ""
+}
+
 // UnprovenReachable counts the rows a real client request can be served by
 // at the CURRENT schema digest with no deployed-executed proof behind them.
 // Rendered into the provenance line so the number is on the page rather than
 // spread across rows a reader has to tally by eye -- the tally nobody did for
 // six weeks.
-func UnprovenReachable(rows []OperationRow) int {
+//
+// A DOCUMENT_DRIFT row is NOT counted: the edge cannot dispatch it, so no
+// client reaches it. It has its own count (DriftedLive), because folding it
+// in here would report an undispatchable row as a served one -- the exact
+// misreading P2-2 found on this page.
+func UnprovenReachable(rows []OperationRow, catalog Catalog) int {
 	count := 0
 	for _, row := range rows {
-		if row.Live && reachableModes[row.Mode] && row.Proven == NoProof {
+		if row.Live && reachableModes[row.Mode] && row.Proven == NoProof && !DocumentDrift(row, catalog) {
 			count++
 		}
 	}
 	return count
+}
+
+// DriftedLive counts the live rows in DOCUMENT_DRIFT, in any mode.
+func DriftedLive(rows []OperationRow, catalog Catalog) int {
+	count := 0
+	for _, row := range rows {
+		if DocumentDrift(row, catalog) {
+			count++
+		}
+	}
+	return count
+}
+
+// UnjudgedLive counts the live rows whose drift cannot be judged.
+func UnjudgedLive(rows []OperationRow) int {
+	count := 0
+	for _, row := range rows {
+		if DocumentUnjudged(row) {
+			count++
+		}
+	}
+	return count
+}
+
+// ValidateDocumentDrift fails the render for every live row in
+// DOCUMENT_DRIFT (rule R14).
+//
+// Loud on purpose, and not only rendered. At the base build two rows for
+// one operation at one schema digest failed R8 and so failed the page --
+// loud, if by accident. Keying R8 on the triple (correctly) removed that,
+// and the drifted row then rendered as serving with -check green: a loud
+// failure turned into a quiet false statement (opus r6, P2-2). A row the
+// edge cannot dispatch while its mode says it serves is an operator action
+// owed (disable it, or re-enable at the catalog's document) in the same
+// way R12's moved digest is, so it fails the same way. `routing status`
+// names the row; this page names it AND refuses to be committed with it.
+func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
+	var out []Violation
+	for _, row := range render.Operations {
+		if !DocumentDrift(row, catalog) {
+			continue
+		}
+		want := "the catalog does not register this operation at all"
+		if names := catalog.Documents(row.Operation); len(names) > 0 {
+			want = "the catalog names " + strings.Join(names, ", ")
+		}
+		out = append(out, Violation{row.Operation, "R14-document-drift",
+			fmt.Sprintf("a live %s row at digest %s serves document %s, but %s: the edge resolves requests through the catalog, so this row cannot be dispatched and every request for it is served elsewhere. `dev-hops go-api routing status` reports it DOCUMENT_DRIFT. Disable it, or re-enable at the catalog's document, then re-render",
+				row.Mode, row.SchemaDigest, row.DocumentDigest, want)})
+	}
+	return out
 }
 
 // DeadReachable counts rows whose mode says a client can be served by Go but

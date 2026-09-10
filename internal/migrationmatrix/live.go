@@ -1,6 +1,7 @@
 package migrationmatrix
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -55,13 +56,31 @@ import (
 // change is built around -- the CASE selects between them, it does not
 // restate either.
 //
-// RoutingStateSQL is how an operator OBTAINS this statement. The offline
-// -routing path in cmd/dev-health-migration-matrix asks for rows "produced
-// by the SQL this reader runs"; before opus r5 that instruction named an
-// unexported function, so the only way to comply was to retype the query
-// by hand -- which is the copy-of-a-rule failure this file's header is
-// about, moved into the operator's terminal. `-print-routing-sql` prints
-// exactly what ReadRoutingState executes, because both call this.
+// RoutingStateSQL is how an operator OBTAINS this statement, and it is the
+// statement ReadRoutingState itself executes: `-print-routing-sql` prints
+// it, the operator runs it with `psql -At`, and the file psql writes is the
+// `-routing` snapshot, unedited.
+//
+// It emits the WHOLE snapshot payload -- `{"proof_run_total": n, "rows":
+// [...]}` -- as one JSON value from one statement, and ReadRoutingState
+// parses that value with ParseRoutingSnapshot, the same function the
+// offline reader uses. So the live and offline paths share not only the
+// rule but the statement, the snapshot and the parser.
+//
+// Why the whole payload (opus r6, P3-3). The r5 fix made the ROW statement
+// printable, but the -routing reader parses a JSON object: executed
+// literally, `-print-routing-sql | psql -At -f -` produced pipe-separated
+// text the reader rejected (`invalid character 'e' in literal false`), and
+// the operator still had to hand-write the JSON wrapper AND a second query
+// for proof_run_total -- the retyping this function exists to end. Emitting
+// the payload from SQL also puts proof_run_total in the SAME snapshot as
+// the rows; it used to be a second query on the connection (Trap #141's
+// shape, for the one number the page prints first).
+//
+// Before opus r5 the offline instruction named an unexported function, so
+// the only way to comply was to retype the query by hand -- which is the
+// copy-of-a-rule failure this file's header is about, moved into the
+// operator's terminal.
 func RoutingStateSQL() (string, error) {
 	primaryClause, err := goapiproof.EnablementProofClause("pr", goapiproof.TargetModePrimary)
 	if err != nil {
@@ -71,7 +90,25 @@ func RoutingStateSQL() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("build the canary enablement predicate: %w", err)
 	}
-	return routingStateQuery(primaryClause, canaryClause), nil
+	return routingSnapshotQuery(routingStateQuery(primaryClause, canaryClause)), nil
+}
+
+// routingSnapshotQuery wraps the row statement so it returns the snapshot
+// payload as ONE text value. The keys are routingSnapshot's JSON tags; the
+// column names of routingStateQuery ARE those keys, so json_agg(t) needs no
+// mapping that could drift. `coalesce(..., '[]')` so an empty table yields
+// `"rows": []`, which the offline reader then refuses BY NAME rather than
+// as a JSON null.
+func routingSnapshotQuery(rowQuery string) string {
+	return `
+SELECT json_build_object(
+         'proof_run_total', (SELECT count(*) FROM go_api_proof_run),
+         'rows', coalesce(
+                   json_agg(t ORDER BY t.schema_digest, t.selected_operation, t.document_digest),
+                   '[]'::json)
+       )::text
+FROM (` + rowQuery + `) AS t
+`
 }
 
 func routingStateQuery(primaryClause, canaryClause string) string {
@@ -96,8 +133,93 @@ SELECT rs.selected_operation,
          LIMIT 1
        ) AS proof_run_id
 FROM go_api_routing_state rs
-ORDER BY rs.schema_digest, rs.selected_operation, rs.document_digest
 `
+}
+
+// routingSnapshot is the -routing file, and the value RoutingStateSQL
+// returns: the offline equivalent of a live read, byte-for-byte the same
+// shape. It exists because the operator running -render is often on a host
+// where the compose Postgres is reachable only through `docker exec psql`,
+// and teaching a docs generator to dig a password out of a container's
+// environment is a credential-handling path it should not own.
+type routingSnapshot struct {
+	// ProofRunTotal is `SELECT count(*) FROM go_api_proof_run`, read in
+	// the same statement as the rows.
+	ProofRunTotal *int `json:"proof_run_total"`
+	Rows          []struct {
+		Operation string `json:"selected_operation"`
+		// DocumentDigest is part of the routing-state KEY, not a
+		// decoration: R8 keys rows by schema/document/operation and R14
+		// judges DOCUMENT_DRIFT by it, so a snapshot that omits it renders
+		// two distinct documents as one duplicated row and cannot say
+		// whether either is dispatchable (Trap #120).
+		DocumentDigest string `json:"document_digest"`
+		Mode           string `json:"mode"`
+		SchemaDigest   string `json:"schema_digest"`
+		CandidateBuild string `json:"current_candidate_build"`
+		// ProofRunID is the derived proof-run id; null or empty when no
+		// receipt is admissible for the row's own mode.
+		ProofRunID *string `json:"proof_run_id"`
+	} `json:"rows"`
+}
+
+// ParseRoutingSnapshot parses the payload RoutingStateSQL emits into rows,
+// deriving Live from currentDigest. ReadRoutingState and the offline
+// -routing reader both call it, so they cannot read one snapshot two ways.
+//
+// Refuses a payload with no proof_run_total, or a row without the routing
+// key's document digest: both are what a HAND-BUILT snapshot omits, and
+// both used to be read as a zero and an empty key.
+func ParseRoutingSnapshot(raw []byte, currentDigest string) ([]OperationRow, int, error) {
+	var payload routingSnapshot
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&payload); err != nil {
+		return nil, 0, fmt.Errorf("parse routing snapshot: %w (produce it with `dev-health-migration-matrix -print-routing-sql | psql -At -f -`, unedited)", err)
+	}
+	if payload.ProofRunTotal == nil {
+		return nil, 0, fmt.Errorf("routing snapshot has no proof_run_total: that number falsifies every proven cell on the page at once, so it is never assumed to be 0 -- regenerate the snapshot with `-print-routing-sql`")
+	}
+	out := make([]OperationRow, 0, len(payload.Rows))
+	for _, row := range payload.Rows {
+		if strings.TrimSpace(row.DocumentDigest) == "" {
+			return nil, 0, fmt.Errorf(
+				"routing snapshot row %q at schema %q has no document_digest; "+
+					"the routing key is (schema_digest, document_digest, selected_operation), "+
+					"so a row without one cannot be told apart from another document's row. "+
+					"Regenerate the snapshot with `-print-routing-sql`",
+				row.Operation, row.SchemaDigest)
+		}
+		proven := NoProof
+		if row.ProofRunID != nil && strings.TrimSpace(*row.ProofRunID) != "" {
+			proven = strings.TrimSpace(*row.ProofRunID)
+		}
+		out = append(out, OperationRow{
+			Operation:      row.Operation,
+			DocumentDigest: row.DocumentDigest,
+			Mode:           row.Mode,
+			SchemaDigest:   row.SchemaDigest,
+			CandidateBuild: row.CandidateBuild,
+			Live:           row.SchemaDigest == currentDigest,
+			Proven:         proven,
+		})
+	}
+
+	// Stable: two rows sharing (schema digest, operation) differ only by
+	// document, and an unstable sort would flip the render between runs on
+	// identical data (opus r5, P2). The statement already orders by the
+	// triple; a hand-assembled file need not, so the order is re-imposed
+	// here rather than trusted.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SchemaDigest != out[j].SchemaDigest {
+			return out[i].SchemaDigest < out[j].SchemaDigest
+		}
+		if out[i].Operation != out[j].Operation {
+			return out[i].Operation < out[j].Operation
+		}
+		return out[i].DocumentDigest < out[j].DocumentDigest
+	})
+	return out, *payload.ProofRunTotal, nil
 }
 
 // ReadRoutingState reads go_api_routing_state, deriving `proven` per row.
@@ -117,57 +239,16 @@ func ReadRoutingState(ctx context.Context, dsn, currentDigest string) ([]Operati
 		return nil, 0, err
 	}
 
-	rows, err := conn.Query(ctx, statement)
-	if err != nil {
+	// ONE statement, ONE value: the rows and the bare proof total come from
+	// the same snapshot. The total is reported alongside the per-row
+	// derivation on purpose -- "0 rows in go_api_proof_run" is a single
+	// number that falsifies every "proven" claim on the page at once, and
+	// it does not depend on any join being right.
+	var payload string
+	if err := conn.QueryRow(ctx, statement).Scan(&payload); err != nil {
 		return nil, 0, fmt.Errorf("read go_api_routing_state: %w", err)
 	}
-	var out []OperationRow
-	for rows.Next() {
-		var (
-			row     OperationRow
-			proofID *string
-		)
-		if err := rows.Scan(&row.Operation, &row.DocumentDigest, &row.Mode,
-			&row.SchemaDigest, &row.CandidateBuild, &proofID); err != nil {
-			rows.Close()
-			return nil, 0, fmt.Errorf("scan go_api_routing_state row: %w", err)
-		}
-		row.Live = row.SchemaDigest == currentDigest
-		row.Proven = NoProof
-		if proofID != nil && *proofID != "" {
-			row.Proven = *proofID
-		}
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, 0, fmt.Errorf("iterate go_api_routing_state: %w", err)
-	}
-	rows.Close()
-
-	// Stable: two rows sharing (schema digest, operation) differ only by
-	// document, and an unstable sort would flip the render between runs on
-	// identical data (opus r5, P2). The query already orders by the triple;
-	// this keeps that order under any later re-sort.
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].SchemaDigest != out[j].SchemaDigest {
-			return out[i].SchemaDigest < out[j].SchemaDigest
-		}
-		if out[i].Operation != out[j].Operation {
-			return out[i].Operation < out[j].Operation
-		}
-		return out[i].DocumentDigest < out[j].DocumentDigest
-	})
-
-	// The bare total is reported alongside the per-row derivation on
-	// purpose. "0 rows in go_api_proof_run" is a single number that
-	// falsifies every "proven" claim on the page at once, and it does not
-	// depend on any join being right.
-	var proofTotal int
-	if err := conn.QueryRow(ctx, `SELECT count(*) FROM go_api_proof_run`).Scan(&proofTotal); err != nil {
-		return nil, 0, fmt.Errorf("count go_api_proof_run: %w", err)
-	}
-	return out, proofTotal, nil
+	return ParseRoutingSnapshot([]byte(payload), currentDigest)
 }
 
 // SchemaDigestPin reads contracts/graphql/v1/schema-digest.json -- the pinned

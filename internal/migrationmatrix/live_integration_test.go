@@ -409,3 +409,188 @@ func TestReadRoutingStateIsOneSnapshotUnderConcurrentModeFlips(t *testing.T) {
 	stopFlipping()
 	<-flipping
 }
+
+// startMatrixPostgres starts a PostgreSQL with the routing tables, for the
+// tests below.
+func startMatrixPostgres(t *testing.T) (context.Context, *pgxpool.Pool, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	t.Cleanup(cancel)
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate Postgres: %v", err)
+		}
+	})
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, routingMatrixDDL); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	return ctx, pool, instance.URI
+}
+
+func seedMatrixRow(ctx context.Context, t *testing.T, pool *pgxpool.Pool, digest, document, operation, mode, build string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_candidate_build
+		   (schema_digest, document_digest, selected_operation, candidate_build, registered_at)
+		 VALUES ($1,$2,$3,$4, now()) ON CONFLICT DO NOTHING`,
+		digest, document, operation, build); err != nil {
+		t.Fatalf("seed candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_routing_state
+		   (schema_digest, document_digest, selected_operation, mode,
+		    current_candidate_build, rollout_percentage, owner, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,100,'go', now())`,
+		digest, document, operation, mode, build); err != nil {
+		t.Fatalf("seed routing state: %v", err)
+	}
+}
+
+// seedMatrixProof records an ADMISSIBLE receipt (for either mode: edge,
+// bound, match) for one key, and returns its id.
+func seedMatrixProof(ctx context.Context, t *testing.T, pool *pgxpool.Pool, digest, document, operation, build string) string {
+	t.Helper()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_candidate_build
+		   (schema_digest, document_digest, selected_operation, candidate_build, registered_at)
+		 VALUES ($1,$2,$3,$4, now()) ON CONFLICT DO NOTHING`,
+		digest, document, operation, build); err != nil {
+		t.Fatalf("seed candidate build: %v", err)
+	}
+	var id string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO go_api_proof_run
+		   (id, schema_digest, document_digest, selected_operation, candidate_build,
+		    request_identity, stage, terminal_state, observed_at, recorded_by,
+		    measurement_route, build_binding, differences_outside_baseline_defect)
+		 VALUES (gen_random_uuid(),$1,$2,$3,$4,'x','deployed_executed','match', now(),'test','edge','per_request',0)
+		 RETURNING id::text`,
+		digest, document, operation, build).Scan(&id); err != nil {
+		t.Fatalf("seed proof run: %v", err)
+	}
+	return id
+}
+
+// opus r6 (P3-2, mutant g35): deleting `pr.candidate_build =
+// rs.current_candidate_build` from the matrix's proof subquery survived the
+// whole package, unit and integration. What that mutant does, executed by
+// the reviewer: a routing row at build B rendered PROVEN by a receipt
+// recorded against build A. A proof is evidence for one immutable build;
+// the page must never carry it to another.
+func TestTheMatrixNeverCarriesProofAcrossBuilds(t *testing.T) {
+	ctx, pool, uri := startMatrixPostgres(t)
+	const (
+		digest    = "sha256:live"
+		document  = "doc-a"
+		operation = "featureFlags"
+		buildA    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		buildB    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	// The ONLY admissible receipt is for build A; the routing row is at B.
+	seedMatrixProof(ctx, t, pool, digest, document, operation, buildA)
+	seedMatrixRow(ctx, t, pool, digest, document, operation, "canary", buildB)
+
+	rows, _, err := ReadRoutingState(ctx, uri, digest)
+	if err != nil {
+		t.Fatalf("ReadRoutingState: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %+v", rows)
+	}
+	if rows[0].Proven != NoProof {
+		t.Fatalf("a routing row at build %s rendered proven=%q on a receipt recorded against build %s: the matrix is carrying proof across builds", buildB, rows[0].Proven, buildA)
+	}
+
+	// Control: a receipt at the row's OWN build proves it, so the refusal
+	// above is the build clause and not a predicate that proves nothing.
+	id := seedMatrixProof(ctx, t, pool, digest, document, operation, buildB)
+	rows, _, err = ReadRoutingState(ctx, uri, digest)
+	if err != nil {
+		t.Fatalf("ReadRoutingState: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Proven != id {
+		t.Fatalf("the control receipt at the row's own build did not prove it: rows=%+v want proven=%s", rows, id)
+	}
+}
+
+// opus r6 (P3-3): the offline instruction produced a file the offline reader
+// rejected. The statement -print-routing-sql prints now emits the whole
+// snapshot payload, and ReadRoutingState itself reads through it. This runs
+// the printed statement the way an operator's psql does -- one statement,
+// one text value -- and feeds that value to ParseRoutingSnapshot, the same
+// parser the -routing reader calls. The result must be ReadRoutingState's,
+// row for row, including the proof total from the same snapshot.
+func TestTheRoutingSnapshotStatementIsWhatTheOfflineReaderReads(t *testing.T) {
+	ctx, pool, uri := startMatrixPostgres(t)
+	const (
+		live  = "sha256:live"
+		dead  = "sha256:dead"
+		build = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	)
+	seedMatrixRow(ctx, t, pool, live, "doc-new", "featureFlags", "canary", build)
+	seedMatrixRow(ctx, t, pool, live, "doc-old", "featureFlags", "primary", build)
+	seedMatrixRow(ctx, t, pool, live, "doc-h", "hotspots", "shadow", build)
+	seedMatrixRow(ctx, t, pool, dead, "doc-new", "featureFlags", "canary", build)
+	proofID := seedMatrixProof(ctx, t, pool, live, "doc-new", "featureFlags", build)
+
+	statement, err := RoutingStateSQL()
+	if err != nil {
+		t.Fatalf("RoutingStateSQL: %v", err)
+	}
+	var printed string
+	if err := pool.QueryRow(ctx, statement).Scan(&printed); err != nil {
+		t.Fatalf("run the printed statement: %v", err)
+	}
+	offline, offlineTotal, err := ParseRoutingSnapshot([]byte(printed), live)
+	if err != nil {
+		t.Fatalf("the offline reader rejected the printed statement's own output: %v\noutput: %s", err, printed)
+	}
+	online, onlineTotal, err := ReadRoutingState(ctx, uri, live)
+	if err != nil {
+		t.Fatalf("ReadRoutingState: %v", err)
+	}
+	if offlineTotal != 1 || onlineTotal != 1 {
+		t.Fatalf("proof_run_total offline=%d online=%d, want 1 and 1", offlineTotal, onlineTotal)
+	}
+	if len(offline) != 4 || len(online) != 4 {
+		t.Fatalf("want all 4 rows (live and dead) from both readers, got offline=%d online=%d", len(offline), len(online))
+	}
+	for i := range online {
+		if online[i] != offline[i] {
+			t.Fatalf("row %d differs between the live and offline readers:\n online  %+v\n offline %+v", i, online[i], offline[i])
+		}
+	}
+	proven := 0
+	for _, row := range online {
+		if row.Proven != NoProof {
+			proven++
+			if row.Proven != proofID || row.DocumentDigest != "doc-new" || !row.Live {
+				t.Fatalf("the proof landed on the wrong row: %+v (want doc-new at the live digest, proof %s)", row, proofID)
+			}
+		}
+	}
+	if proven != 1 {
+		t.Fatalf("want exactly one proven row, got %d: %+v", proven, online)
+	}
+
+	// An EMPTY routing table is a real state for the live reader: zero rows,
+	// the proof total still read, no error.
+	if _, err := pool.Exec(ctx, `DELETE FROM go_api_routing_state`); err != nil {
+		t.Fatalf("empty the routing table: %v", err)
+	}
+	rows, total, err := ReadRoutingState(ctx, uri, live)
+	if err != nil || len(rows) != 0 || total != 1 {
+		t.Fatalf("an empty routing table: rows=%d total=%d err=%v, want 0, 1, nil", len(rows), total, err)
+	}
+}

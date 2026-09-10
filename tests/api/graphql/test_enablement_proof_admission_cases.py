@@ -92,16 +92,77 @@ def _merged_receipt(document: dict[str, Any], case: dict[str, Any]) -> dict[str,
 
 def _merged_key(document: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
     merged = dict(document["key"])
-    merged.update(case.get("key_override", {}))
+    merged.update(case.get("key_override") or {})
     return merged
+
+
+def _asked_key(document: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
+    """The key the predicate is ASKED about.
+
+    The fixture key, unless the case sets ``ask_with_overridden_key``: then
+    the question uses the overridden key too. Without that, a key override
+    can only test "a receipt for a different key is not proof" -- refused by
+    equality -- and a clause about the key's own VALUE (a blank
+    ``candidate_build``) is never reached (opus r6, P3-1).
+    """
+    if case.get("ask_with_overridden_key"):
+        return _merged_key(document, case)
+    return dict(document["key"])
 
 
 def _cases() -> list[dict[str, Any]]:
     return _load()["cases"]
 
 
+def _control_of(case: dict[str, Any]) -> dict[str, Any]:
+    """The refused ``case`` with exactly its stated reason removed.
+
+    opus r6 (P2-3): ``match_route_null_canary_refused`` carried a NULL
+    ``build_binding`` beside the NULL route it is named for. Once the
+    binding joined the rule, the binding alone refused it, so the case
+    pinned nothing about the route -- the canary NULL-route clause could be
+    replaced with ``sa.true()`` and every Python test stayed green. A
+    table-level "the base is admissible" control cannot see that; the base
+    WAS admissible. So every refused case names what removes its reason,
+    and this control -- the case with exactly that removed -- must be
+    ADMITTED. A hidden second reason then fails in the case's own name.
+
+    ``control.receipt`` patches the case's receipt. ``control.key_override``,
+    when present, REPLACES the case's override (``null`` = none).
+    """
+    control = case["control"]
+    derived = dict(case)
+    del derived["control"]
+    derived["name"] = case["name"] + "/control"
+    derived["admits"] = True
+    derived["why"] = (
+        "CONTROL: the case with its stated refusal reason removed must be "
+        "ADMITTED; refused means the case is refused for a SECOND reason and "
+        "does not pin the one it names. Case why: " + case["why"]
+    )
+    receipt = dict(case.get("receipt", {}))
+    receipt.update(control.get("receipt", {}))
+    derived["receipt"] = receipt
+    if "key_override" in control:
+        if control["key_override"] is None:
+            derived.pop("key_override", None)
+        else:
+            derived["key_override"] = control["key_override"]
+    return derived
+
+
+def _runs() -> list[dict[str, Any]]:
+    """Every case, plus the control of every refused case."""
+    runs: list[dict[str, Any]] = []
+    for case in _cases():
+        runs.append(case)
+        if not case["admits"]:
+            runs.append(_control_of(case))
+    return runs
+
+
 def _case_ids() -> list[str]:
-    return [case["name"] for case in _cases()]
+    return [case["name"] for case in _runs()]
 
 
 async def _seed(
@@ -147,7 +208,7 @@ async def _seed(
 
 @requires_postgres
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", _cases(), ids=_case_ids())
+@pytest.mark.parametrize("case", _runs(), ids=_case_ids())
 async def test_predicate_matches_the_shared_admission_table(
     session: AsyncSession, case: dict[str, Any]
 ) -> None:
@@ -155,7 +216,7 @@ async def test_predicate_matches_the_shared_admission_table(
     key = _merged_key(document, case)
     await _seed(session, key, _merged_receipt(document, case))
 
-    wanted = document["key"]
+    wanted = _asked_key(document, case)
     admitted = await operations_with_enablement_proof(
         session,
         schema_digest=wanted["schema_digest"],
@@ -198,3 +259,37 @@ def test_every_case_states_why() -> None:
             f"case {case['name']!r} has no 'why': the assertion message is "
             "the only place a future reader learns what the rule is for"
         )
+
+
+def test_every_refused_case_names_the_control_that_removes_its_reason() -> None:
+    """A refused case without a control can be refused for the wrong reason.
+
+    Runs without a database, so the SHAPE is enforced on every runner even
+    where the database-backed half skips. The control itself is executed
+    by ``test_predicate_matches_the_shared_admission_table`` (as
+    ``<case>/control``) and by the Go half.
+    """
+    for case in _cases():
+        if case["admits"]:
+            assert "control" not in case, (
+                f"case {case['name']!r} is ADMITTED and declares a control: a "
+                "control removes a refusal reason, and an admitted case has none"
+            )
+            continue
+        control = case.get("control")
+        assert isinstance(control, dict) and control, (
+            f"refused case {case['name']!r} declares no control, so nothing shows "
+            "it is refused for the reason it names rather than for another"
+        )
+        assert set(control) <= {"receipt", "key_override"}, (
+            f"control of {case['name']!r} has unknown keys {sorted(control)}"
+        )
+        derived = _control_of(case)
+        assert (derived.get("receipt"), derived.get("key_override")) != (
+            case.get("receipt"),
+            case.get("key_override"),
+        ), f"control of {case['name']!r} changes nothing, so it cannot remove a reason"
+        if case.get("ask_with_overridden_key"):
+            assert case.get("key_override"), (
+                f"case {case['name']!r} asks with an overridden key it does not declare"
+            )

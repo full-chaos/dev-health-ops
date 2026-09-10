@@ -1085,48 +1085,69 @@ func TestAnUncitedHeaderDifferenceAlsoCountsOutside(t *testing.T) {
 // what the Runner hands it. Hardcoding either receipt binding to `absent`
 // survived every suite.
 //
-// This drives a real run on the PROOF route -- where the binding is
-// per_request -- and asserts the RECEIPT carries what the RUN measured,
-// on both the success and the refusal path.
+// opus r6 (P3-4, mutant g22 -- r5's g16, carried): hardcoding the REFUSAL
+// receipt's binding to `per_request` then survived, because this test ran
+// only a BOUND measurement, where the hardcoded value and the measured one
+// are the same string. A pin on a copied value needs an input where the
+// copy and the constant DIFFER, so it runs both measurements: bound
+// (per_request) and unbound (absent), and asserts both the success and the
+// refusal receipt carry what THIS run measured.
+//
+// Why it matters now: since the r5-P1 fix every enablement reader requires
+// build_binding = 'per_request'. A refusal receipt is proof_failed and
+// never admissible, so a wrong binding there authorizes nothing -- but it
+// is the only record of how well that measurement knew its build, and a
+// receipt that says "per_request" for an unbound measurement is a false
+// statement in the table the rule reads.
 func TestTheReceiptCarriesTheBindingTheRunMeasured(t *testing.T) {
-	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
-	edge := &fakeEdge{
-		goBody:     body,
-		pythonBody: body,
-		goBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
-	}
-	runner := newRunner(t, edge, "canary")
+	for _, c := range []struct {
+		name    string
+		goBuild string
+		want    string
+	}{
+		{"bound: the edge passed the serving build through", "b18e56fa79cfe20ce0f75df148144b832d92be36", EdgeBuildPresent},
+		{"unbound: the edge dropped the serving-build header", "", EdgeBuildAbsent},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			edge := &fakeEdge{
+				goBody:     `{"data":{"featureFlags":[{"key":"a"}]}}`,
+				pythonBody: `{"data":{"featureFlags":[{"key":"b"}]}}`,
+				goBuild:    c.goBuild,
+			}
+			runner := newRunner(t, edge, "canary")
 
-	outcomes, _, err := runner.Run(context.Background())
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	measured := outcomes[0].EdgeBuildBinding
-	if measured != EdgeBuildPresent {
-		t.Fatalf("this test needs a BOUND measurement to discriminate, got %q", measured)
-	}
+			outcomes, _, err := runner.Run(context.Background())
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			measured := outcomes[0].EdgeBuildBinding
+			if measured != c.want {
+				t.Fatalf("this case needs a %s measurement to discriminate, got %q", c.want, measured)
+			}
 
-	receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
-	if err != nil {
-		t.Fatalf("ReceiptsFor: %v", err)
-	}
-	if len(receipts) != 1 {
-		t.Fatalf("expected one receipt, got %d", len(receipts))
-	}
-	if receipts[0].BuildBinding != measured {
-		t.Fatalf("the run measured binding=%q and the receipt says %q: the column is the only record of how well this measurement knew its build, and no enablement reader consumes it yet, so a wrong value here is invisible",
-			measured, receipts[0].BuildBinding)
-	}
+			receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
+			if err != nil {
+				t.Fatalf("ReceiptsFor: %v", err)
+			}
+			if len(receipts) != 1 {
+				t.Fatalf("expected one receipt, got %d", len(receipts))
+			}
+			if receipts[0].BuildBinding != measured {
+				t.Fatalf("the run measured binding=%q and the receipt says %q: the column is how every enablement reader decides whether this measurement can authorize anything (build_binding = 'per_request'), so a wrong value here is a wrong answer in the rule's own input",
+					measured, receipts[0].BuildBinding)
+			}
 
-	// The refusal path builds receipts too, from the same seal.
-	refusals, err := runner.RefusalReceipts(time.Unix(1757000000, 0).UTC(), "the serving build moved during the run")
-	if err != nil {
-		t.Fatalf("RefusalReceipts: %v", err)
-	}
-	if len(refusals) != 1 {
-		t.Fatalf("expected one refusal receipt, got %d", len(refusals))
-	}
-	if refusals[0].BuildBinding != measured {
-		t.Fatalf("the REFUSAL receipt says binding=%q, the run measured %q", refusals[0].BuildBinding, measured)
+			// The refusal path builds receipts too, from the same seal.
+			refusals, err := runner.RefusalReceipts(time.Unix(1757000000, 0).UTC(), "the serving build moved during the run")
+			if err != nil {
+				t.Fatalf("RefusalReceipts: %v", err)
+			}
+			if len(refusals) != 1 {
+				t.Fatalf("expected one refusal receipt, got %d", len(refusals))
+			}
+			if refusals[0].BuildBinding != measured {
+				t.Fatalf("the REFUSAL receipt says binding=%q, the run measured %q", refusals[0].BuildBinding, measured)
+			}
+		})
 	}
 }

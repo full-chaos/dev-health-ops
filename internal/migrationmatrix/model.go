@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -321,4 +322,90 @@ func LoadNativeFamilies(path string) (*NativeFamilies, error) {
 		return nil, fmt.Errorf("%s: no daily families", path)
 	}
 	return &families, nil
+}
+
+// Catalog is the registered-operation catalog,
+// src/dev_health_ops/api/graphql/go_api_operations.json: the
+// (operation, document digest) pairs the edge dispatches by. It is the SAME
+// file `dev-hops go-api routing status` reports against.
+//
+// Why the matrix reads it (opus r6, P2-2). A routing row at the LIVE schema
+// digest whose document the catalog does not name cannot be dispatched --
+// the edge resolves a request to an operation THROUGH the catalog -- and
+// `routing status` names that row DOCUMENT_DRIFT. This page had no way to:
+// its only liveness test was `schema_digest == pin`, so the drifted row
+// rendered "live, primary, proven" and -check passed, on the page whose
+// stated reason for existing is that a silent death must not look like
+// health. A reader of the page cannot tell drift from service without the
+// pairs the edge actually dispatches by, so the page reads them.
+type Catalog struct {
+	documents map[string]map[string]bool // operation -> document digests
+}
+
+// Names reports whether the catalog registers exactly this pair.
+func (c Catalog) Names(operation, documentDigest string) bool {
+	return c.documents[operation][documentDigest]
+}
+
+// Documents lists the digests the catalog registers for operation, sorted.
+func (c Catalog) Documents(operation string) []string {
+	out := make([]string, 0, len(c.documents[operation]))
+	for digest := range c.documents[operation] {
+		out = append(out, digest)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// NewCatalog builds a Catalog from (operation, document digest) pairs.
+// Refuses an empty operation or digest and a digest registered twice --
+// the same refusals the Python loader (go_api_operation_catalog._load)
+// makes, so the two readers of the file cannot accept different files.
+func NewCatalog(pairs [][2]string) (Catalog, error) {
+	catalog := Catalog{documents: map[string]map[string]bool{}}
+	owner := map[string]string{}
+	for _, pair := range pairs {
+		operation, digest := pair[0], pair[1]
+		if strings.TrimSpace(operation) == "" || strings.TrimSpace(digest) == "" {
+			return Catalog{}, fmt.Errorf("catalog entry %q/%q: operation and digest must both be non-empty", operation, digest)
+		}
+		if previous, seen := owner[digest]; seen {
+			return Catalog{}, fmt.Errorf("catalog registers digest %s twice (operations %q and %q)", digest, previous, operation)
+		}
+		owner[digest] = operation
+		if catalog.documents[operation] == nil {
+			catalog.documents[operation] = map[string]bool{}
+		}
+		catalog.documents[operation][digest] = true
+	}
+	if len(owner) == 0 {
+		return Catalog{}, fmt.Errorf("catalog is empty: a page cannot judge DOCUMENT_DRIFT against a catalog that registers nothing")
+	}
+	return catalog, nil
+}
+
+// LoadCatalog reads go_api_operations.json.
+func LoadCatalog(path string) (Catalog, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // caller-supplied repo path
+	if err != nil {
+		return Catalog{}, fmt.Errorf("read operation catalog: %w", err)
+	}
+	var entries []struct {
+		Operation string `json:"operation"`
+		Digest    string `json:"digest"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&entries); err != nil {
+		return Catalog{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	pairs := make([][2]string, 0, len(entries))
+	for _, entry := range entries {
+		pairs = append(pairs, [2]string{entry.Operation, entry.Digest})
+	}
+	catalog, err := NewCatalog(pairs)
+	if err != nil {
+		return Catalog{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return catalog, nil
 }

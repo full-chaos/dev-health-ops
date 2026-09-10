@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +26,7 @@ func TestTheCommittedMatrixSatisfiesItsOwnContract(t *testing.T) {
 		t.Fatalf("the committed migration matrix fails its own contract: %v\n\n"+
 			"Re-render with:\n"+
 			"  go run ./cmd/dev-health-migration-matrix -render -root . -routing <snapshot.json>\n"+
-			"(-routing takes a JSON dump of go_api_routing_state; see routingFilePayload.)", err)
+			"(-routing takes the `psql -At` output of -print-routing-sql, unedited.)", err)
 	}
 }
 
@@ -46,6 +48,7 @@ func TestCheckFailsWhenTheDocIsEditedByHand(t *testing.T) {
 		dailyFamiliesRelative,
 		remainingFamiliesRel,
 		jobDailyPyRelative,
+		catalogRelative,
 	} {
 		copyInto(t, filepath.Join(realRoot, relative), filepath.Join(root, relative))
 	}
@@ -216,5 +219,169 @@ func TestARoutingSnapshotWithoutTheDocumentDigestIsRefused(t *testing.T) {
 	}
 	if rows[0].Proven == rows[1].Proven {
 		t.Fatalf("both rows derived proof %q, so the digests are being read but not used", rows[0].Proven)
+	}
+}
+
+// copyContractTree copies every committed file -check reads into a fresh
+// root, so a test can alter one of them and run the real -check on it.
+func copyContractTree(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	realRoot := repoRoot(t)
+	for _, relative := range []string{
+		docRelative, statusRelative, renderRelative, nativeRelative, digestPinRelative,
+		providerMatrixRelative, dailyFamiliesRelative, remainingFamiliesRel, jobDailyPyRelative,
+		catalogRelative,
+	} {
+		copyInto(t, filepath.Join(realRoot, relative), filepath.Join(root, relative))
+	}
+	return root
+}
+
+// runCheckCapturingViolations runs the real -check and returns its error and
+// what it printed, so a test can say WHICH rule failed rather than only that
+// something did.
+func runCheckCapturingViolations(t *testing.T, root string) (error, string) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	saved := os.Stderr
+	os.Stderr = writer
+	checkErr := runCheck(root)
+	os.Stderr = saved
+	_ = writer.Close()
+	var captured bytes.Buffer
+	_, _ = io.Copy(&captured, reader)
+	return checkErr, captured.String()
+}
+
+// writeSnapshotAndPage commits `rows` as the render snapshot AND re-renders
+// the ops block from them, exactly as -render would, so the page and its
+// snapshot agree (R13 passes) and any failure is about the rows themselves.
+func writeSnapshotAndPage(t *testing.T, root string, rows []migrationmatrix.OperationRow) {
+	t.Helper()
+	snapshot, err := migrationmatrix.LoadRender(filepath.Join(root, renderRelative))
+	if err != nil {
+		t.Fatalf("load the copied snapshot: %v", err)
+	}
+	snapshot.Operations = rows
+	if err := writeJSON(filepath.Join(root, renderRelative), snapshot); err != nil {
+		t.Fatalf("write the snapshot: %v", err)
+	}
+	catalog, err := migrationmatrix.LoadCatalog(filepath.Join(root, catalogRelative))
+	if err != nil {
+		t.Fatalf("load the copied catalog: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, docRelative))
+	if err != nil {
+		t.Fatalf("read the copied doc: %v", err)
+	}
+	doc, err := migrationmatrix.ReplaceBlock(string(raw), migrationmatrix.OpsBlockBegin, migrationmatrix.OpsBlockEnd,
+		migrationmatrix.RenderOpsBlock(snapshot, catalog))
+	if err != nil {
+		t.Fatalf("re-render the ops block: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, docRelative), []byte(doc), 0o644); err != nil {
+		t.Fatalf("write the doc: %v", err)
+	}
+}
+
+// opus r6 (P2-2), through the real -check: the drifted row rendered "live,
+// primary, proven" and -check printed "migration matrix OK" with rc=0,
+// while `dev-hops go-api routing status` named the same row DOCUMENT_DRIFT.
+// The page's own reason for existing is that a silent death must not look
+// like health. Executed on the shipped binary before the fix: rc=0.
+func TestCheckFailsOnALiveRowTheCatalogCannotDispatch(t *testing.T) {
+	root := copyContractTree(t)
+	pin, err := migrationmatrix.SchemaDigestPin(filepath.Join(root, digestPinRelative))
+	if err != nil {
+		t.Fatalf("read pin: %v", err)
+	}
+	catalog, err := migrationmatrix.LoadCatalog(filepath.Join(root, catalogRelative))
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	served := migrationmatrix.OperationRow{
+		Operation: "featureFlags", Mode: "canary", SchemaDigest: pin,
+		DocumentDigest: catalog.Documents("featureFlags")[0],
+		CandidateBuild: strings.Repeat("a", 40), Live: true,
+		Proven: "742b4019-0000-4000-8000-000000000002",
+	}
+	drifted := served
+	drifted.Mode = "primary"
+	drifted.DocumentDigest = strings.Repeat("0", 64)
+	drifted.Proven = "70ab8989-0000-4000-8000-000000000001"
+
+	// Control first: the catalog's own row alone passes the real -check,
+	// so the failure below is caused by the drifted row and nothing else.
+	writeSnapshotAndPage(t, root, []migrationmatrix.OperationRow{served})
+	if err, printed := runCheckCapturingViolations(t, root); err != nil {
+		t.Fatalf("the control (the catalog's row alone) must pass -check: %v\n%s", err, printed)
+	}
+
+	writeSnapshotAndPage(t, root, []migrationmatrix.OperationRow{served, drifted})
+	err, printed := runCheckCapturingViolations(t, root)
+	if err == nil {
+		t.Fatalf("-check PASSED with a live primary row whose document the catalog does not name: the page says the operation is served at primary with proof while the edge can only dispatch it at canary.\nprinted:\n%s", printed)
+	}
+	if !strings.Contains(printed, "R14-document-drift") {
+		t.Fatalf("-check failed, but not on R14-document-drift -- the right answer for the wrong reason proves nothing:\n%s", printed)
+	}
+	if strings.Contains(printed, "R8-duplicate-row") {
+		t.Fatalf("two DIFFERENT documents were reported as a duplicate row; R8 must key on the triple:\n%s", printed)
+	}
+	page, readErr := os.ReadFile(filepath.Join(root, docRelative))
+	if readErr != nil {
+		t.Fatalf("read the page: %v", readErr)
+	}
+	if !strings.Contains(string(page), "**DOCUMENT_DRIFT**") {
+		t.Fatalf("the rendered page does not name the drifted row DOCUMENT_DRIFT")
+	}
+}
+
+// g40 (opus r6): -print-routing-sql could print anything and no test would
+// notice, because no test ran the flag's code. printRoutingSQL is that code;
+// what it prints must be exactly the statement ReadRoutingState executes,
+// and TestTheRoutingSnapshotStatementIsWhatTheOfflineReaderReads (in
+// internal/migrationmatrix, against real PostgreSQL) executes that
+// statement and feeds its value through the same parser the -routing
+// reader uses.
+func TestPrintRoutingSQLPrintsTheStatementTheReaderRuns(t *testing.T) {
+	var printed bytes.Buffer
+	if err := printRoutingSQL(&printed); err != nil {
+		t.Fatalf("printRoutingSQL: %v", err)
+	}
+	statement, err := migrationmatrix.RoutingStateSQL()
+	if err != nil {
+		t.Fatalf("RoutingStateSQL: %v", err)
+	}
+	if printed.String() != strings.TrimSpace(statement)+"\n" {
+		t.Fatalf("-print-routing-sql does not print the statement ReadRoutingState runs.\nprinted:\n%s\nstatement:\n%s", printed.String(), statement)
+	}
+}
+
+// The offline file is the unedited `psql -At` output of the printed
+// statement: one line of JSON. A file missing proof_run_total is a
+// hand-built one, and its zero would falsify every proven cell at once, so
+// it is refused rather than read as 0.
+func TestARoutingSnapshotWithoutAProofTotalIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "no-total.json")
+	if err := os.WriteFile(path, []byte(`{"rows":[{"selected_operation":"featureFlags","document_digest":"d","mode":"canary","schema_digest":"sha256:pin","current_candidate_build":"b","proof_run_id":null}]}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, _, err := readRoutingFile(path, "sha256:pin"); err == nil || !strings.Contains(err.Error(), "proof_run_total") {
+		t.Fatalf("a snapshot with no proof_run_total must be refused by name, got %v", err)
+	}
+	// Control: the same file with the total is read, and a JSON null proof
+	// id is NoProof.
+	if err := os.WriteFile(path, []byte(`{"proof_run_total":0,"rows":[{"selected_operation":"featureFlags","document_digest":"d","mode":"canary","schema_digest":"sha256:pin","current_candidate_build":"b","proof_run_id":null}]}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rows, total, err := readRoutingFile(path, "sha256:pin")
+	if err != nil || total != 0 || len(rows) != 1 || rows[0].Proven != migrationmatrix.NoProof || !rows[0].Live {
+		t.Fatalf("the control snapshot was misread: rows=%+v total=%d err=%v", rows, total, err)
 	}
 }

@@ -199,8 +199,8 @@ func readyzDependencyClass(err error) string {
 // and registering the raw handler instead, once by handing the wrapper an
 // empty build -- and both mutations left the pin green, because reading
 // source is not the same as running it.
-func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
-	mux.HandleFunc("/query", withProofProvenance(query, version.Current("query-api").Commit))
+func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc, commit string) {
+	mux.HandleFunc("/query", withProofProvenance(query, commit))
 }
 
 func main() {
@@ -255,7 +255,7 @@ func main() {
 		// The same wrapper as the proof route, deliberately: one
 		// implementation, so the two routes cannot drift into disagreeing
 		// about what they claim.
-		mountQueryRoute(mux, handlers.Query)
+		mountQueryRoute(mux, handlers.Query, version.Current("query-api").Commit)
 		// GET /registry: what THIS process registers, and the schema digest
 		// it computed. Mounted with /query, not beside /healthz, on purpose
 		// -- it describes /query's registration set, so an unconfigured

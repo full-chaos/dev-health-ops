@@ -287,3 +287,135 @@ func TestReceiptsComeOnlyFromAMeasuredRun(t *testing.T) {
 		t.Fatalf("a runner that never ran produced %d refusal receipt(s)", len(refusals))
 	}
 }
+
+// r8 P1. The scalar-root refusal was a type switch listing the scalar
+// types it knew: string, float64, bool, int, int64. The decoder produces
+// json.Number, which is not in that list, so `{"data":{"featureFlags":0}}`
+// fell through to the default and was ADMITTED -- proven against a real
+// PostgreSQL, where the resulting receipt satisfied the enablement
+// predicate.
+//
+// This is R57's own lesson inside R57's own file: a switch whose DEFAULT
+// admits is a blacklist, and json.Number is the entry nobody wrote down.
+// The switch is now inverted -- object and list are accepted, everything
+// else is refused by default -- so the next unlisted type is refused on
+// arrival rather than certified.
+func TestANumericRootIsRefused(t *testing.T) {
+	for name, data := range map[string]any{
+		"json.Number, as the decoder produces": json.Number("0"),
+		"a float":                              float64(1.5),
+		"a string":                             "featureFlags",
+		"a bool":                               true,
+		"nil inside a non-nullable root":       nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			admission := Admit(AdmissionInput{
+				Route:        RouteEdge,
+				NamedBuild:   "build-A",
+				ResponseRoot: "featureFlags",
+				Candidate:    Observation{Plane: "go", StatusCode: 200, Build: "build-A"},
+				Baseline:     Observation{Plane: "python", StatusCode: 200},
+				CandidateSnap: Snapshot{
+					DataPresent: true,
+					Data:        map[string]any{"featureFlags": data},
+				},
+				BaselineSnap: Snapshot{
+					DataPresent: true,
+					Data:        map[string]any{"featureFlags": data},
+				},
+			})
+			if admission.Admitted {
+				t.Fatalf("a %T root was admitted: no registered operation has a scalar root, and an admitted one becomes an enablement-eligible receipt", data)
+			}
+			if admission.Reason != RefusalEmptyResponseRoot {
+				t.Fatalf("expected %s, got %s", RefusalEmptyResponseRoot, admission.Reason)
+			}
+		})
+	}
+}
+
+// The control: the two shapes a real operation root actually takes are
+// still admitted, so the inversion has not refused everything.
+func TestObjectAndListRootsAreStillAdmitted(t *testing.T) {
+	for name, data := range map[string]any{
+		"an object": map[string]any{"key": "a"},
+		"a list":    []any{map[string]any{"key": "a"}},
+		"an EMPTY list -- 'no feature flags' is a real answer": []any{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			admission := Admit(AdmissionInput{
+				Route:         RouteEdge,
+				NamedBuild:    "build-A",
+				ResponseRoot:  "featureFlags",
+				Candidate:     Observation{Plane: "go", StatusCode: 200, Build: "build-A"},
+				Baseline:      Observation{Plane: "python", StatusCode: 200},
+				CandidateSnap: Snapshot{DataPresent: true, Data: map[string]any{"featureFlags": data}},
+				BaselineSnap:  Snapshot{DataPresent: true, Data: map[string]any{"featureFlags": data}},
+			})
+			if !admission.Admitted {
+				t.Fatalf("a %T root was refused (%s): %s", data, admission.Reason, admission.Detail)
+			}
+		})
+	}
+}
+
+// r8 P3: the PROOF-route build-mismatch check had no killer. Removing it
+// survived both the unit and the integration suites, because every
+// existing proof-route fixture happened to agree with the named build.
+//
+// It is the strictest binding this package has -- /query/proof stamps the
+// serving build on its own response, so a disagreement there is a
+// measured fact, not an absence -- and it was the one with nothing
+// holding it.
+func TestTheProofRouteRefusesADisagreeingBuild(t *testing.T) {
+	base := func(build string) AdmissionInput {
+		return AdmissionInput{
+			Route:         RouteProof,
+			NamedBuild:    "build-A",
+			ResponseRoot:  "featureFlags",
+			Candidate:     Observation{Plane: "go", StatusCode: 200, Build: build},
+			Baseline:      Observation{Plane: "python", StatusCode: 200},
+			CandidateSnap: Snapshot{DataPresent: true, Data: map[string]any{"featureFlags": []any{map[string]any{"key": "a"}}}},
+			BaselineSnap:  Snapshot{DataPresent: true, Data: map[string]any{"featureFlags": []any{map[string]any{"key": "a"}}}},
+		}
+	}
+
+	t.Run("a disagreeing build is refused by name", func(t *testing.T) {
+		admission := Admit(base("build-B"))
+		if admission.Admitted {
+			t.Fatal("the proof route reported build-B and the receipt would name build-A: that is the mixed-replica case, measured")
+		}
+		if admission.Reason != RefusalBuildMismatch {
+			t.Fatalf("expected %s, got %s", RefusalBuildMismatch, admission.Reason)
+		}
+		// The detail must carry BOTH builds, or an operator cannot tell
+		// which way the disagreement ran.
+		for _, want := range []string{"build-A", "build-B"} {
+			if !strings.Contains(admission.Detail, want) {
+				t.Fatalf("the refusal must name %s: %s", want, admission.Detail)
+			}
+		}
+	})
+
+	t.Run("an absent build is refused too", func(t *testing.T) {
+		// The proof route stamps the header on every response, so its
+		// absence means the response did not come from where we think.
+		admission := Admit(base(""))
+		if admission.Admitted {
+			t.Fatal("the proof route must not admit a response carrying no build header")
+		}
+		if admission.Reason != RefusalBuildUnbound {
+			t.Fatalf("expected %s, got %s", RefusalBuildUnbound, admission.Reason)
+		}
+	})
+
+	t.Run("the agreeing build is admitted, per-request", func(t *testing.T) {
+		admission := Admit(base("build-A"))
+		if !admission.Admitted {
+			t.Fatalf("an agreeing proof-route response must be admitted: %s %s", admission.Reason, admission.Detail)
+		}
+		if admission.EdgeBuildBinding != EdgeBuildPresent {
+			t.Fatalf("the proof route binds per request, got %q", admission.EdgeBuildBinding)
+		}
+	})
+}

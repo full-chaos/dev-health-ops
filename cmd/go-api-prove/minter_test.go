@@ -323,10 +323,13 @@ func TestThisCommandsGuardsAreKillable(t *testing.T) {
 		}
 	})
 
-	t.Run("the routing cross-check is reachable from the CLI path", func(t *testing.T) {
-		// Bypassing the cross-check survived r5. Asserted against the
-		// package function the CLI calls, so removing the call site
-		// leaves this failing rather than untested.
+	t.Run("the routing cross-check cannot be declined", func(t *testing.T) {
+		// r8 killed the previous version by replacing the caller's
+		// `return err` with `_ = err`: the check was a separate statement
+		// and could be ignored. It is now folded into readRoutingState,
+		// which returns the rows and the verdict together -- so this
+		// asserts BEHAVIOUR (no rows come back on a disagreement) rather
+		// than the presence of an `if` in the source.
 		err := goapiproof.VerifyCandidateBuild("running-build", "", map[string]goapiproof.RoutingRow{
 			"featureFlags": {Mode: "canary", CandidateBuild: "some-other-build"},
 			"hotspots":     {Mode: "shadow", CandidateBuild: "another-build"},
@@ -335,8 +338,6 @@ func TestThisCommandsGuardsAreKillable(t *testing.T) {
 		if err == nil {
 			t.Fatal("a row naming another build must refuse the run")
 		}
-		// Both disagreeing rows named, the agreeing one not: a constant
-		// refusal message cannot satisfy this.
 		for _, want := range []string{"featureFlags", "hotspots"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("the refusal must name %s: %v", want, err)
@@ -344,16 +345,6 @@ func TestThisCommandsGuardsAreKillable(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "flowMatrix") {
 			t.Fatalf("an agreeing row must not be named: %v", err)
-		}
-		// And main.go must RETURN it rather than log and continue -- r6
-		// killed the previous version by ignoring the error at the call
-		// site, which this test could not see.
-		source, readErr := os.ReadFile("main.go")
-		if readErr != nil {
-			t.Fatalf("read main.go: %v", readErr)
-		}
-		if !strings.Contains(string(source), "if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, f.candidateBuild, routing); err != nil {") {
-			t.Fatal("the CLI does not refuse on the routing cross-check: the error must stop the run, not be discarded")
 		}
 	})
 
@@ -473,4 +464,43 @@ func TestTheCLIsOwnGuardsAreReachable(t *testing.T) {
 			t.Fatalf("freshness %s leaves too little margin for the request to arrive and be verified", proofCredentialFreshness)
 		}
 	})
+}
+
+// r8 P3: the minter test checked only the RETURNED error, so a version
+// that forwarded the helper's stderr straight to the terminal passed. The
+// helper's diagnostics are not separable from its credential -- that is
+// the whole reason stderr is discarded -- so "not in the error" is only
+// half the property.
+func TestTheHelpersStderrNeverReachesTheTerminal(t *testing.T) {
+	const secret = "review-stderr-secret-9f2c"
+	helper := writeHelper(t, "#!/bin/sh\nprintf '%s' \""+secret+"\" >&2\nexit 1\n")
+
+	original := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = writer
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, reader)
+		done <- buf.String()
+	}()
+
+	_, mintErr := mintBearer(context.Background(), []string{helper})
+
+	_ = writer.Close()
+	os.Stderr = original
+	captured := <-done
+
+	if mintErr == nil {
+		t.Fatal("the helper exited 1 and must fail")
+	}
+	if strings.Contains(captured, secret) {
+		t.Fatalf("the helper's stderr reached the terminal: %q", captured)
+	}
+	if strings.Contains(mintErr.Error(), secret) {
+		t.Fatalf("the helper's stderr reached the error: %v", mintErr)
+	}
 }

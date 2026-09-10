@@ -254,7 +254,7 @@ func run() error {
 		defer pool.Close()
 	}
 
-	routing, err := readRoutingState(ctx, pool, registry)
+	routing, err := readRoutingState(ctx, pool, registry, f.candidateBuild)
 	if err != nil {
 		return err
 	}
@@ -264,10 +264,6 @@ func run() error {
 	// query-api replicas and an edge that drops the per-request build
 	// header, it does not. Re-pointing the rows after a deploy is an
 	// operator step, and the refusal below says so.
-	if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, f.candidateBuild, routing); err != nil {
-		return err
-	}
-
 	runner := &goapiproof.Runner{
 		Client:    client,
 		Documents: documents,
@@ -360,7 +356,15 @@ func run() error {
 // (PostgresSwitch looks up by the digest the running binary computes),
 // and treating one as current is precisely the six-day outage CHAOS-5416
 // records.
-func readRoutingState(ctx context.Context, pool *pgxpool.Pool, registry goapiproof.RegistryView) (map[string]goapiproof.RoutingRow, error) {
+// readRoutingState reads the rows AND verifies them against the running
+// build, returning both or neither.
+//
+// r8 killed the previous shape by replacing the caller's `return err` with
+// `_ = err`: the check was a separate statement, so it could be ignored,
+// and nothing failed. A guard that a caller can decline is not a guard.
+// Folding it in means the only way to obtain the rows is to have passed
+// the check -- the mutation is not detected, it is unwritable.
+func readRoutingState(ctx context.Context, pool *pgxpool.Pool, registry goapiproof.RegistryView, expectedBuild string) (map[string]goapiproof.RoutingRow, error) {
 	routing := map[string]goapiproof.RoutingRow{}
 	if pool == nil {
 		// --dry-run with no database: every operation is reported as
@@ -391,7 +395,15 @@ func readRoutingState(ctx context.Context, pool *pgxpool.Pool, registry goapipro
 		}
 		routing[operation] = goapiproof.RoutingRow{Mode: mode, CandidateBuild: candidateBuild}
 	}
-	return routing, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The rows and the verdict on them come back together, or neither
+	// does. See this function's doc comment.
+	if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, expectedBuild, routing); err != nil {
+		return nil, err
+	}
+	return routing, nil
 }
 
 type report struct {

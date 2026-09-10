@@ -280,11 +280,8 @@ func emptyRootDetail(leg, root string, nullable bool, snap Snapshot) string {
 				return fmt.Sprintf("%s returned %q carrying only __typename: no field of the operation's own result resolved", leg, root)
 			}
 		}
-	case string, float64, bool, int, int64:
-		// Every registered operation's root is an object or a connection.
-		// A scalar there is not the operation's result whatever it says
-		// (round 2's F5).
-		return fmt.Sprintf("%s returned %q as a scalar (%T): no registered operation has a scalar root", leg, root, typed)
+		// A non-empty object with real fields: admissible.
+		return ""
 	case []any:
 		// An empty LIST is a legitimate result -- "this org has no feature
 		// flags" is a real answer, and refusing it would make the
@@ -292,6 +289,23 @@ func emptyRootDetail(leg, root string, nullable bool, snap Snapshot) string {
 		// empty OBJECT is different: it means the resolver produced no
 		// fields at all.
 		return ""
+	default:
+		// EVERYTHING ELSE IS REFUSED. This case used to enumerate the
+		// scalar types it knew -- string, float64, bool, int, int64 --
+		// and json.Number was not among them, so `{"data":{"root":0}}`
+		// fell through to an admitting default. r8 proved it end to end:
+		// the run wrote a receipt that real PostgreSQL accepted for
+		// enablement.
+		//
+		// That is R57's own lesson inside R57's own file. A switch whose
+		// default admits is a blacklist, and the decoder produces
+		// json.Number precisely because decodeWithNumbers asks it to --
+		// so the one type this code was guaranteed to meet was the one
+		// type the list omitted.
+		//
+		// Every registered operation's root is an object or a list.
+		// Anything else is refused on arrival, named by its Go type, and
+		// a type nobody has imagined yet is refused too.
+		return fmt.Sprintf("%s returned %q as a %T: no registered operation has a scalar root, and only an object or a list can be one", leg, root, typed)
 	}
-	return ""
 }

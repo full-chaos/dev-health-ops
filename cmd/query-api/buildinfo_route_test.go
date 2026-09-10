@@ -241,12 +241,14 @@ func TestAnUnstampedBuildSetsNoBuildHeader(t *testing.T) {
 // reading source is not running it. mountQueryRoute exists so this test
 // can register the real route on a real mux and serve a real request.
 func TestTheProductionQueryRouteStampsTheBuild(t *testing.T) {
+	const commit = "a2a6703c1e4bb1942f1d36490c037fbd6b91b463"
+
 	mux := http.NewServeMux()
 	served := false
 	mountQueryRoute(mux, func(w http.ResponseWriter, _ *http.Request) {
 		served = true
 		w.WriteHeader(http.StatusOK)
-	})
+	}, commit)
 
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/query", nil))
@@ -254,15 +256,12 @@ func TestTheProductionQueryRouteStampsTheBuild(t *testing.T) {
 	if !served {
 		t.Fatal("the production handler did not run")
 	}
-	if recorder.Header().Get(planeHeaderName) != "go" {
-		t.Fatalf("the production /query route did not stamp the plane: %v", recorder.Header())
+	// r8: asserting only the PLANE let an empty build stamp pass. The
+	// build is the header a proof receipt is bound by; the plane is not.
+	if got := recorder.Header().Get(buildHeaderName); got != commit {
+		t.Fatalf("the production /query route stamped %q, want the running build: an empty stamp wraps the route and still leaves every measurement unbindable", got)
 	}
-	// The build comes from the binary's own stamp, which is empty in a
-	// test binary -- so this asserts the WIRING (the wrapper is reached
-	// with whatever the process reports) and the plane header proves the
-	// wrapper ran. The build value itself is asserted in
-	// TestTheNormalQueryRouteCarriesProvenanceHeaders, which passes one.
-	if _, wired := recorder.Header()[http.CanonicalHeaderKey(planeHeaderName)]; !wired {
-		t.Fatal("the wrapper was not reached at all")
+	if got := recorder.Header().Get(planeHeaderName); got != "go" {
+		t.Fatalf("plane header = %q, want go", got)
 	}
 }

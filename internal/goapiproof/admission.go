@@ -50,7 +50,29 @@ type Admission struct {
 	Admitted bool
 	Reason   string
 	Detail   string
+	// EdgeBuildBinding records whether the MEASURED response carried the
+	// serving build on itself: EdgeBuildPresent or EdgeBuildAbsent.
+	//
+	// It is recorded rather than merely checked because absence is a known
+	// deployment gap (CHAOS-5479: the Python edge rebuilds the response
+	// with only content, status and media_type and drops every header
+	// query-api sets), and a receipt that did not say whether it had that
+	// binding cannot be told apart later from one that did. Empty on a
+	// refusal.
+	EdgeBuildBinding string
 }
+
+// Whether a measured response carried the serving build on itself.
+//
+// EdgeBuildAbsent is not a failure -- it is the normal state of the edge
+// route until #2365 deletes the Python edge -- but it IS the reason the
+// routing-row cross-check has to stay a refusal: with no per-request
+// binding, nothing else distinguishes one replica from another during a
+// rolling deploy.
+const (
+	EdgeBuildPresent = "per_request"
+	EdgeBuildAbsent  = "absent"
+)
 
 func refused(reason, detail string) Admission {
 	return Admission{Reason: reason, Detail: detail}
@@ -96,9 +118,12 @@ func Admit(in AdmissionInput) Admission {
 	if a := admitPlanes(in); !a.Admitted {
 		return a
 	}
-	// 2. The build that SERVED the request, where the route can say.
-	if a := admitBuild(in); !a.Admitted {
-		return a
+	// 2. The build that SERVED the request, where the route can say. The
+	//    binding it established is carried to the final verdict so the
+	//    receipt records what was checked, not what was assumed.
+	build := admitBuild(in)
+	if !build.Admitted {
+		return build
 	}
 	// 3. HTTP success on both legs. A proof is a record of the operation
 	//    WORKING; a non-2xx is the operation not working, however
@@ -140,7 +165,7 @@ func Admit(in AdmissionInput) Admission {
 	if a := admitResponseRoot(in); !a.Admitted {
 		return a
 	}
-	return Admission{Admitted: true}
+	return Admission{Admitted: true, EdgeBuildBinding: build.EdgeBuildBinding}
 }
 
 func admitPlanes(in AdmissionInput) Admission {
@@ -183,17 +208,27 @@ func admitBuild(in AdmissionInput) Admission {
 				fmt.Sprintf("the process that served this request reports build %q, but the receipt would name %q", in.Candidate.Build, in.NamedBuild))
 		}
 	case RouteEdge:
-		// No per-request binding is available here. When a build header
-		// does arrive it is still checked -- a present-but-wrong value is
-		// evidence of a real disagreement whatever the route.
-		if in.Candidate.Build != "" && in.Candidate.Build != in.NamedBuild {
-			return refused(RefusalBuildMismatch,
-				fmt.Sprintf("the process that served this request reports build %q, but the receipt would name %q", in.Candidate.Build, in.NamedBuild))
+		// When a build header DOES arrive it is required to agree. A
+		// present-but-wrong value is evidence that the replica which
+		// served this request is not the one the receipt would name --
+		// exactly the mixed-replica case, caught here rather than
+		// certified.
+		if in.Candidate.Build != "" {
+			if in.Candidate.Build != in.NamedBuild {
+				return refused(RefusalBuildMismatch,
+					fmt.Sprintf("the process that served this request reports build %q, but the receipt would name %q", in.Candidate.Build, in.NamedBuild))
+			}
+			return Admission{Admitted: true, EdgeBuildBinding: EdgeBuildPresent}
 		}
+		// Absent. Admitted, because requiring it would refuse every
+		// legitimate canary measurement until #2365 -- but RECORDED, so a
+		// reader of the receipt can see this measurement was not bound to
+		// a replica.
+		return Admission{Admitted: true, EdgeBuildBinding: EdgeBuildAbsent}
 	default:
 		return refused(RefusalNotRouted, fmt.Sprintf("route %q is not a measurement route", in.Route))
 	}
-	return Admission{Admitted: true}
+	return Admission{Admitted: true, EdgeBuildBinding: EdgeBuildPresent}
 }
 
 func admitResponseRoot(in AdmissionInput) Admission {
@@ -245,11 +280,8 @@ func emptyRootDetail(leg, root string, nullable bool, snap Snapshot) string {
 				return fmt.Sprintf("%s returned %q carrying only __typename: no field of the operation's own result resolved", leg, root)
 			}
 		}
-	case string, float64, bool, int, int64:
-		// Every registered operation's root is an object or a connection.
-		// A scalar there is not the operation's result whatever it says
-		// (round 2's F5).
-		return fmt.Sprintf("%s returned %q as a scalar (%T): no registered operation has a scalar root", leg, root, typed)
+		// A non-empty object with real fields: admissible.
+		return ""
 	case []any:
 		// An empty LIST is a legitimate result -- "this org has no feature
 		// flags" is a real answer, and refusing it would make the
@@ -257,6 +289,23 @@ func emptyRootDetail(leg, root string, nullable bool, snap Snapshot) string {
 		// empty OBJECT is different: it means the resolver produced no
 		// fields at all.
 		return ""
+	default:
+		// EVERYTHING ELSE IS REFUSED. This case used to enumerate the
+		// scalar types it knew -- string, float64, bool, int, int64 --
+		// and json.Number was not among them, so `{"data":{"root":0}}`
+		// fell through to an admitting default. r8 proved it end to end:
+		// the run wrote a receipt that real PostgreSQL accepted for
+		// enablement.
+		//
+		// That is R57's own lesson inside R57's own file. A switch whose
+		// default admits is a blacklist, and the decoder produces
+		// json.Number precisely because decodeWithNumbers asks it to --
+		// so the one type this code was guaranteed to meet was the one
+		// type the list omitted.
+		//
+		// Every registered operation's root is an object or a list.
+		// Anything else is refused on arrival, named by its Go type, and
+		// a type nobody has imagined yet is refused too.
+		return fmt.Sprintf("%s returned %q as a %T: no registered operation has a scalar root, and only an object or a list can be one", leg, root, typed)
 	}
-	return ""
 }

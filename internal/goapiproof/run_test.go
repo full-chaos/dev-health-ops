@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeEdge stands in for the Python edge. It answers by PLANE the way the
@@ -21,7 +22,11 @@ type fakeEdge struct {
 	pythonBody string
 	goStatus   int
 	goPlane    string
-	seen       []string
+	// goBuild is the serving-build header the edge passes through
+	// (CHAOS-5479). Empty means the deployment predates the pass-through,
+	// which is what makes an edge measurement unbound.
+	goBuild string
+	seen    []string
 }
 
 func (e *fakeEdge) handler() http.HandlerFunc {
@@ -48,6 +53,9 @@ func (e *fakeEdge) handler() http.HandlerFunc {
 			status = http.StatusOK
 		}
 		w.Header().Set(planeHeader, plane)
+		if e.goBuild != "" {
+			w.Header().Set(buildHeader, e.goBuild)
+		}
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(e.goBody))
 	}
@@ -78,13 +86,23 @@ func newRunner(t *testing.T, edge *fakeEdge, mode string) *Runner {
 			Window:        DefaultWindow(),
 			PythonEdgeURL: server.URL,
 			Auth:          AuthContext{PrincipalKind: "stored_account", Audience: "query-api", KeyID: "local-dev-20260906"},
+			// The fake edge does not check credentials; these are set
+			// because Apply refuses a nil one, which is the point of
+			// CHAOS-5425's credential fix -- an unauthenticated request
+			// must never look like a rejected one.
+			EdgeCredential:  StaticCredential("Authorization", "edge access token", "Bearer edge"),
+			ProofCredential: StaticCredential("Authorization", "envelope", "Bearer envelope"),
 		},
 	}
 }
 
 func TestRunRecordsAMatchWhenBothPlanesAgree(t *testing.T) {
 	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
-	runner := newRunner(t, &fakeEdge{goBody: body, pythonBody: body}, "canary")
+	// The serving-build header is present because an edge measurement
+	// WITHOUT one can no longer produce a match -- see
+	// TestAnEdgeMeasurementWithNoBuildBindingCannotBeEnablementEligible.
+	edge := &fakeEdge{goBody: body, pythonBody: body, goBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36"}
+	runner := newRunner(t, edge, "canary")
 
 	outcomes, summary, err := runner.Run(context.Background())
 	if err != nil {
@@ -528,5 +546,162 @@ func TestServingBuildAgreementStillMatches(t *testing.T) {
 	}
 	if outcomes[0].Candidate.Build != "b18e56fa79cfe20ce0f75df148144b832d92be36" {
 		t.Fatalf("the serving build must be recorded, got %q", outcomes[0].Candidate.Build)
+	}
+}
+
+// F6: three sibling guards refuse a run whose declared relaxations matched
+// nothing. Only RefusalStaleExclusion was pinned; the other two survived
+// removal under both suites.
+//
+// They are not cosmetic. A stale declared BASELINE DEFECT is a citation
+// that no longer covers any difference -- with the refusal gone the run
+// proceeds and lands on `match` where it should have refused, which is a
+// receipt asserting parity on the strength of a ticket that no longer
+// applies. A stale Tier-B declaration means the comparison that ran is not
+// the comparison anybody declared.
+//
+// Driven through the REAL committed specs rather than a test-only hook:
+// flowMatrix declares a baseline defect and investmentBreakdown declares
+// Tier-B float paths, so identical response bodies make each declaration
+// match nothing.
+func TestRunRefusesOnEveryStaleDeclaration(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		operation string
+		document  string
+		digest    string
+		body      string
+		want      string
+	}{
+		"a baseline defect that covered no difference": {
+			operation: "flowMatrix",
+			document:  "query FlowMatrix { analytics { flowMatrix { nodes { value } } } }",
+			digest:    "aa11bb22",
+			body:      `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`,
+			want:      RefusalStaleBaselineDefect,
+		},
+		"a Tier-B float declaration that relaxed nothing": {
+			operation: "investmentBreakdown",
+			document:  "query InvestmentBreakdown { analytics { breakdowns { items { value } } } }",
+			digest:    "cc33dd44",
+			body:      `{"data":{"analytics":{"breakdowns":{"items":[{"value":1}]}}}}`,
+			want:      RefusalStaleTierB,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			edge := &fakeEdge{goBody: testCase.body, pythonBody: testCase.body}
+			runner := newRunner(t, edge, "canary")
+			edge.goBuild = runner.Registry.BuildIdentity
+			runner.Documents = map[string]string{testCase.operation: testCase.document}
+			runner.Registry.DocumentDigest = map[string]string{testCase.operation: testCase.digest}
+			runner.Routing = map[string]RoutingRow{testCase.operation: {Mode: "canary", CandidateBuild: runner.Registry.BuildIdentity}}
+
+			outcomes, _, err := runner.Run(context.Background())
+			if !errors.Is(err, ErrNothingMeasured) {
+				t.Fatalf("a declaration matching nothing must refuse the run, got %v", err)
+			}
+			if outcomes[0].RefusalReason != testCase.want {
+				t.Fatalf("expected %s, got %s (%s)", testCase.want, outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
+			}
+		})
+	}
+}
+
+// r9 F11: Run resets r.sealed so a SECOND Run cannot emit receipts for the
+// FIRST one's measurements. Deleting the reset survived every test,
+// because no test ever called Run twice -- yet the whole point of sealing
+// is that a receipt describes what THIS run measured.
+func TestASecondRunCannotEmitTheFirstRunsReceipts(t *testing.T) {
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	edge := &fakeEdge{goBody: body, pythonBody: body, goBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36"}
+	runner := newRunner(t, edge, "canary")
+	observedAt := time.Unix(1757000000, 0).UTC()
+
+	if _, _, err := runner.Run(context.Background()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	first, err := runner.ReceiptsFor(observedAt)
+	if err != nil {
+		t.Fatalf("ReceiptsFor after the first run: %v", err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("the first run must produce exactly one receipt to make this test meaningful, got %d", len(first))
+	}
+
+	if first[0].TerminalState != "match" {
+		t.Fatalf("the first run must record a match to make this test meaningful, got %q", first[0].TerminalState)
+	}
+
+	// The second run measures the SAME operation and reaches the opposite
+	// verdict: the Go plane now disagrees with Python.
+	edge.goBody = `{"data":{"featureFlags":[{"key":"b"}]}}`
+	if _, _, err := runner.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	second, err := runner.ReceiptsFor(observedAt)
+	if err != nil {
+		t.Fatalf("ReceiptsFor after the second run: %v", err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("the second run emitted %d receipts for ONE operation -- the first run's sealed measurements are still there, which is exactly the forgery sealing exists to prevent: %+v", len(second), second)
+	}
+	if second[0].TerminalState != "mismatch" {
+		t.Fatalf("the receipt describes the PREVIOUS run: terminal state %q, expected \"mismatch\"", second[0].TerminalState)
+	}
+
+	refusals, err := runner.RefusalReceipts(observedAt, "proof route unreachable")
+	if err != nil {
+		t.Fatalf("RefusalReceipts after the second run: %v", err)
+	}
+	if len(refusals) != 1 {
+		t.Fatalf("the refusal path carries the stale seal too: %d receipt(s)", len(refusals))
+	}
+}
+
+// r10 item (4), prover side: a serving-build header of "unknown" must
+// never bind a receipt.
+//
+// "unknown" is internal/platform/version's default for a build with no
+// -ldflags and no VCS stamp -- FetchBuildIdentity already refuses it from
+// /buildinfo's JSON body. This pins the HEADER route, which had no test
+// at all: `proven` is keyed on candidate_build, so a row reading
+// "unknown" can never be matched by any deployment yet LOOKS bound.
+//
+// The correct behaviour is a REFUSAL (the stamp does not name the
+// expected build), not a downgrade to "no binding" -- a downgrade would
+// still execute and still write a match. An earlier attempt at this fix
+// normalised "unknown" to "" in the header read, which loosened exactly
+// that; this test is what caught it.
+func TestAServingBuildHeaderOfUnknownIsRefusedNotBound(t *testing.T) {
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	for _, header := range []string{"unknown", "  unknown  "} {
+		edge := &fakeEdge{goBody: body, pythonBody: body, goBuild: header}
+		runner := newRunner(t, edge, "canary")
+
+		outcomes, summary, err := runner.Run(context.Background())
+		if err == nil {
+			t.Fatalf("header %q: Run succeeded; a build stamp that does not name the expected build must be refused", header)
+		}
+		if summary.Executed != 0 {
+			t.Fatalf("header %q: %d operation(s) executed on an unidentifiable serving build", header, summary.Executed)
+		}
+		for _, outcome := range outcomes {
+			if outcome.RefusalReason == "" {
+				t.Fatalf("header %q: refused with NO named reason", header)
+			}
+		}
+
+		receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
+		if err != nil {
+			t.Fatalf("header %q: ReceiptsFor: %v", header, err)
+		}
+		if len(receipts) != 0 {
+			t.Fatalf("header %q: %d receipt(s) written for an unidentifiable build: %+v", header, len(receipts), receipts)
+		}
+		for _, receipt := range receipts {
+			if strings.TrimSpace(receipt.CandidateBuild) == "unknown" {
+				t.Fatalf("header %q bound a receipt to candidate build %q -- no deployment can ever match that row", header, receipt.CandidateBuild)
+			}
+		}
 	}
 }

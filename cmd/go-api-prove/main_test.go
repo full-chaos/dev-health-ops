@@ -34,7 +34,7 @@ func TestEmitReportCarriesExplicitZeros(t *testing.T) {
 		RefusalDetail: `mode="python" is not a Go-serving mode`,
 	}}
 
-	if err := emitReport(f, registry, outcomes, summary); err != nil {
+	if err := emitReport(f, registry, outcomes, summary, nil); err != nil {
 		t.Fatalf("emitReport: %v", err)
 	}
 

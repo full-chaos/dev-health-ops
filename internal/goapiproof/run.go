@@ -128,10 +128,47 @@ type Outcome struct {
 	// without it; they are separate fields so a regression that sets
 	// Executed some other way shows up in the report rather than reading
 	// as a legitimate measurement.
-	Admitted        bool      `json:"admitted"`
-	RefusalReason   string    `json:"refusal_reason,omitempty"`
-	RefusalDetail   string    `json:"refusal_detail,omitempty"`
-	Route           string    `json:"route"`
+	Admitted bool `json:"admitted"`
+	// admitted is the SEALED form of the field above, and the one every
+	// receipt constructor actually reads.
+	//
+	// r3 found the exported bool is not a boundary: a caller in any
+	// package can build an Outcome with Admitted=true, hand it to
+	// ReceiptsFor, and get a deployed_executed/match receipt for a pair of
+	// responses that never passed Admit. R57 made Admit the only door on
+	// the PRODUCTION path; it did not make it the only door.
+	//
+	// This field is unexported, so nothing outside this package can set
+	// it, and it is written in exactly one place -- proveOne, from Admit's
+	// own verdict. The exported bool stays for the report, where it is
+	// what a human reads; this is what the code trusts.
+	admitted bool
+	// terminalState is the SEALED verdict, and the one every receipt
+	// carries. r4 showed that sealing `admitted` alone was half the job:
+	// after a real run, assigning the exported TerminalState turned an
+	// unbound `unsupported` result into a `match` receipt whose own
+	// provenance still said edge_build_binding=absent. The seal covered
+	// "this passed the gate" and left "what the gate concluded" writable.
+	//
+	// Written in exactly one place -- proveOne -- alongside `admitted`.
+	// The exported field stays for the report; this is what a receipt
+	// derives from.
+	terminalState string
+	RefusalReason string `json:"refusal_reason,omitempty"`
+	RefusalDetail string `json:"refusal_detail,omitempty"`
+	Route         string `json:"route"`
+	// EdgeBuildBinding is EdgeBuildPresent or EdgeBuildAbsent -- whether
+	// the measured response carried the serving build on itself. Taken
+	// from the admission rather than re-derived from the route, so the
+	// receipt cannot claim a binding the gate did not check.
+	EdgeBuildBinding string `json:"edge_build_binding,omitempty"`
+	// RoutingRowBuild is the build the operation's ROUTING ROW named when
+	// this measurement was taken, recorded only when it differs from the
+	// build that actually served the request. It is an observation about
+	// the enablement record, never about the receipt: the receipt names
+	// the running build by construction. See StaleRoutingRows for why
+	// this is recorded rather than refused.
+	RoutingRowBuild string    `json:"routing_row_build,omitempty"`
 	TerminalState   string    `json:"terminal_state"`
 	Findings        []Finding `json:"findings,omitempty"`
 	BaselineDefects []string  `json:"baseline_defect,omitempty"`
@@ -144,6 +181,46 @@ type Outcome struct {
 	ReceiptWritten                   bool         `json:"receipt_written"`
 }
 
+// sealedOutcome is what a measurement ACTUALLY established, captured by
+// proveOne at the moment it was established, and the only thing a receipt
+// is ever built from.
+//
+// This type exists because sealing one field at a time did not work, three
+// rounds running. r3 sealed `admitted` after a hand-built Outcome forged a
+// receipt; r4 sealed the verdict after a real outcome's TerminalState was
+// reassigned; r5 then relabelled the build, schema digest, org, document,
+// operation and route on a genuine admitted match and got
+// `receipt build=never-measured-build terminal=match`. Each fix closed the
+// field that had just been used and left the rest open, which is a
+// blacklist whose default is TRUST -- the exact shape R57 was written to
+// end on the admission side and which I rebuilt here.
+//
+// So there is no field to reassign rather than a growing list of fields
+// that may not be. Every field is unexported; the struct never leaves this
+// package; the exported Outcome is a report VIEW derived from it, and no
+// constructor, writer or receipt reads that view. TestSealedOutcomeHasNoExportedFields
+// fails if anyone adds one.
+type sealedOutcome struct {
+	operation       string
+	documentDigest  string
+	schemaDigest    string
+	candidateBuild  string
+	orgID           string
+	mode            string
+	route           string
+	edgeBinding     string
+	routingRowBuild string
+	terminalState   string
+	executed        bool
+	admitted        bool
+
+	baselineRef  string
+	candidateRef string
+
+	baselineDefects                  []string
+	differencesOutsideBaselineDefect int
+}
+
 // Summary is the explicit-zero telemetry block. Every field is printed on
 // every run, including the zeros: a run that measured nothing must be
 // impossible to mistake for a run that found nothing wrong.
@@ -152,12 +229,16 @@ type Summary struct {
 	// Admitted is serialised even when zero. "nothing passed admission"
 	// and "everything passed and nothing differed" are different facts,
 	// and a run whose admitted count is 0 measured nothing at all.
-	Admitted        int            `json:"admitted"`
-	Executed        int            `json:"executed"`
-	Refused         int            `json:"refused"`
-	ReceiptsWritten int            `json:"receipts_written"`
-	ByTerminalState map[string]int `json:"by_terminal_state"`
-	ByRefusalReason map[string]int `json:"by_refusal_reason"`
+	Admitted int `json:"admitted"`
+	Executed int `json:"executed"`
+	Refused  int `json:"refused"`
+	// StaleRoutingRows is serialised even when zero. A run in which every
+	// routing row still named an older build is a run worth looking at,
+	// and "none were stale" is a different fact from "nobody checked".
+	StaleRoutingRows int            `json:"stale_routing_rows"`
+	ReceiptsWritten  int            `json:"receipts_written"`
+	ByTerminalState  map[string]int `json:"by_terminal_state"`
+	ByRefusalReason  map[string]int `json:"by_refusal_reason"`
 }
 
 // RegistryView is what the RUNNING query-api reports about itself.
@@ -176,10 +257,28 @@ type RoutingRow struct {
 
 // Config is one prove invocation.
 type Config struct {
-	OrgID   string
-	Auth    AuthContext
-	Window  Window
-	Headers map[string]string // e.g. Authorization; values are NEVER logged
+	OrgID  string
+	Auth   AuthContext
+	Window Window
+
+	// EdgeCredential authenticates the PYTHON EDGE (/graphql) -- both
+	// every baseline leg and the candidate leg of a canary/primary
+	// operation. On the deployed stack this is an access token.
+	//
+	// EdgeCredential and ProofCredential are separate fields, not one
+	// header map, because the two planes accept DIFFERENT credential
+	// kinds: measured on the stack, an access token gets 200 on the edge
+	// and 401 on /buildinfo, and an envelope gets the reverse. One map
+	// applied to both meant every run failed on one leg or the other
+	// (JOB 4, 2026-09-09). Two fields make that a compile-time
+	// distinction rather than a runtime discovery.
+	EdgeCredential *Credential
+
+	// ProofCredential authenticates the Go plane's own routes --
+	// /buildinfo and /query/proof. On the deployed stack this is an
+	// effective-principal envelope, which expires in 60 seconds, so it is
+	// normally a MintedCredential rather than a fixed string.
+	ProofCredential *Credential
 
 	// PythonEdgeURL is the real product edge (/graphql). Both the
 	// candidate leg (for canary/primary operations) and every baseline
@@ -206,6 +305,12 @@ type Runner struct {
 	Artifacts *ArtifactStore
 	Config    Config
 	Now       func() time.Time
+
+	// sealed is what the last Run measured. Receipts are built from THIS
+	// and never from anything a caller holds -- see sealedOutcome. It is
+	// populated only by Run, so ReceiptsFor takes no outcomes at all:
+	// there is nothing to hand it and therefore nothing to forge.
+	sealed []sealedOutcome
 }
 
 // ErrNothingMeasured is returned when a run produced no executed
@@ -249,12 +354,18 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		ByRefusalReason: map[string]int{},
 	}
 	outcomes := make([]Outcome, 0, len(operations))
+	// Reset, so a second Run cannot write receipts for the first one's
+	// measurements.
+	r.sealed = make([]sealedOutcome, 0, len(operations))
 
 	for _, operation := range operations {
 		summary.Attempted++
 		outcome := r.proveOne(ctx, operation)
 		if outcome.Admitted {
 			summary.Admitted++
+		}
+		if outcome.RoutingRowBuild != "" {
+			summary.StaleRoutingRows++
 		}
 		if outcome.Executed {
 			summary.Executed++
@@ -268,6 +379,7 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 		}
 
 		outcomes = append(outcomes, outcome)
+		r.sealed = append(r.sealed, r.seal(outcome))
 	}
 
 	if summary.Executed == 0 {
@@ -289,33 +401,33 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 // hand-built outcome with Executed set and Admitted false produced a
 // receipt. Unreachable from the command, one line to make unreachable
 // everywhere.
-func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receipt, error) {
-	receipts := make([]Receipt, 0, len(outcomes))
-	for _, outcome := range outcomes {
-		if !outcome.Executed || !outcome.Admitted {
+func (r *Runner) ReceiptsFor(observedAt time.Time) ([]Receipt, error) {
+	receipts := make([]Receipt, 0, len(r.sealed))
+	for _, sealed := range r.sealed {
+		if !sealed.executed || !sealed.admitted {
 			continue
 		}
-		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
+		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, r.variablesFor(sealed.operation))
 		if err != nil {
 			return nil, err
 		}
 		receipts = append(receipts, Receipt{
-			SchemaDigest:                     r.Registry.SchemaDigest,
-			DocumentDigest:                   outcome.DocumentDigest,
-			SelectedOperation:                outcome.Operation,
-			CandidateBuild:                   r.Registry.BuildIdentity,
+			SchemaDigest:                     sealed.schemaDigest,
+			DocumentDigest:                   sealed.documentDigest,
+			SelectedOperation:                sealed.operation,
+			CandidateBuild:                   sealed.candidateBuild,
 			RequestIdentity:                  identity,
 			Stage:                            Stage,
-			TerminalState:                    outcome.TerminalState,
-			OrgID:                            r.Config.OrgID,
-			ReviewEvidence:                   r.Config.ReviewEvidence,
+			TerminalState:                    sealed.terminalState,
+			OrgID:                            sealed.orgID,
+			ReviewEvidence:                   r.reviewEvidence(sealed, "", 0, 0),
 			RecordedBy:                       r.Config.RecordedBy,
 			ObservedAt:                       observedAt,
-			BaselineResponseRef:              observationRef(outcome.Baseline),
-			CandidateResponseRef:             observationRef(outcome.Candidate),
-			MeasurementRoute:                 outcome.Route,
-			BaselineDefects:                  outcome.BaselineDefects,
-			DifferencesOutsideBaselineDefect: outcome.DifferencesOutsideBaselineDefect,
+			BaselineResponseRef:              sealed.baselineRef,
+			CandidateResponseRef:             sealed.candidateRef,
+			MeasurementRoute:                 sealed.route,
+			BaselineDefects:                  sealed.baselineDefects,
+			DifferencesOutsideBaselineDefect: sealed.differencesOutsideBaselineDefect,
 		})
 	}
 	return receipts, nil
@@ -324,10 +436,16 @@ func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receip
 // RefusalReceipts is what a run writes when the build moved underneath it.
 //
 // NO match receipt is written -- every outcome the run produced described a
-// build that was not serving for all of it. But writing nothing at all
-// would leave the run invisible, indistinguishable from one that never
-// happened, so each operation the run reached gets a `proof_failed` receipt
-// naming the cause and the counts.
+// build that was not serving for all of it. Each operation the run MEASURED
+// gets a `proof_failed` receipt naming the cause and the counts, so a run
+// that got somewhere is not indistinguishable from one that never happened.
+//
+// A run in which nothing was admitted writes nothing, and that is correct
+// rather than a gap: there is no withheld result to record, and the run's
+// own error already says it measured nothing. An earlier version of this
+// comment implied every run leaves a row; it does not, and the difference
+// is exactly the difference between "we measured and withheld" and "we
+// measured nothing".
 //
 // `proof_failed` rather than a new `refused` state: the terminal-state
 // vocabulary is fixed by the signed plan and enforced by a CHECK
@@ -336,39 +454,35 @@ func (r *Runner) ReceiptsFor(outcomes []Outcome, observedAt time.Time) ([]Receip
 // run-level row for a structural reason: go_api_proof_run carries a
 // 4-column composite FK to go_api_candidate_build, so a row that named no
 // operation could not be written without inventing one.
-func (r *Runner) RefusalReceipts(outcomes []Outcome, observedAt time.Time, cause string) ([]Receipt, error) {
+func (r *Runner) RefusalReceipts(observedAt time.Time, cause string) ([]Receipt, error) {
 	admitted := 0
-	for _, outcome := range outcomes {
-		if outcome.Executed && outcome.Admitted {
+	for _, sealed := range r.sealed {
+		if sealed.executed && sealed.admitted {
 			admitted++
 		}
 	}
-	evidence := fmt.Sprintf(
-		"run refused: %s. %d of %d operation(s) had been measured and none of their results were written; this row records that the run happened and certified nothing. Operator note: %s",
-		cause, admitted, len(outcomes), r.Config.ReviewEvidence)
-
-	receipts := make([]Receipt, 0, len(outcomes))
-	for _, outcome := range outcomes {
-		if !outcome.Executed || !outcome.Admitted {
+	receipts := make([]Receipt, 0, len(r.sealed))
+	for _, sealed := range r.sealed {
+		if !sealed.executed || !sealed.admitted {
 			continue
 		}
-		identity, err := RequestIdentity(r.Config.OrgID, r.Config.Auth, r.variablesFor(outcome.Operation))
+		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, r.variablesFor(sealed.operation))
 		if err != nil {
 			return nil, err
 		}
 		receipts = append(receipts, Receipt{
-			SchemaDigest:      r.Registry.SchemaDigest,
-			DocumentDigest:    outcome.DocumentDigest,
-			SelectedOperation: outcome.Operation,
-			CandidateBuild:    r.Registry.BuildIdentity,
+			SchemaDigest:      sealed.schemaDigest,
+			DocumentDigest:    sealed.documentDigest,
+			SelectedOperation: sealed.operation,
+			CandidateBuild:    sealed.candidateBuild,
 			RequestIdentity:   identity,
 			Stage:             Stage,
 			TerminalState:     "proof_failed",
-			OrgID:             r.Config.OrgID,
-			ReviewEvidence:    evidence,
+			OrgID:             sealed.orgID,
+			ReviewEvidence:    r.reviewEvidence(sealed, cause, admitted, len(r.sealed)),
 			RecordedBy:        r.Config.RecordedBy,
 			ObservedAt:        observedAt,
-			MeasurementRoute:  outcome.Route,
+			MeasurementRoute:  sealed.route,
 		})
 	}
 	return receipts, nil
@@ -417,11 +531,18 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	registryDigest := r.Registry.DocumentDigest[operation]
 	row := r.Routing[operation]
 	outcome := Outcome{Operation: operation, DocumentDigest: registryDigest, Mode: row.Mode}
+	// Recorded on EVERY outcome, refused or not: a refusal taken while the
+	// enablement record was stale is exactly as worth knowing as a match
+	// taken then. Empty when the row agrees with what is running.
+	if row.CandidateBuild != "" && row.CandidateBuild != r.Registry.BuildIdentity {
+		outcome.RoutingRowBuild = row.CandidateBuild
+	}
 
 	refuse := func(reason, detail string) Outcome {
 		outcome.RefusalReason = reason
 		outcome.RefusalDetail = detail
 		outcome.TerminalState = terminalStateForRefusal(reason)
+		outcome.terminalState = outcome.TerminalState
 		return outcome
 	}
 
@@ -441,12 +562,19 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	// to /graphql is served by Python and would produce a receipt claiming
 	// Go executed when it did not.
 	var candidateURL string
+	// The credential follows the URL, not the operation: /graphql checks
+	// an access token and /query/proof checks an envelope, so the leg that
+	// decides the URL decides the credential too. Keeping them in one
+	// switch is what stops the two drifting apart again.
+	var candidateCredential *Credential
 	switch row.Mode {
 	case "canary", "primary":
 		candidateURL = r.Config.PythonEdgeURL
+		candidateCredential = r.Config.EdgeCredential
 		outcome.Route = RouteEdge
 	case "shadow":
 		outcome.Route = RouteProof
+		candidateCredential = r.Config.ProofCredential
 		if r.Config.GoProofURL == "" {
 			return refuse(RefusalShadowUnmeasurable,
 				"mode=shadow: PostgresSwitch.Enabled admits canary|primary only, and this deployment exposes no measurement-only route, so the deployed Go build cannot execute this operation at all")
@@ -458,13 +586,15 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 
 	variables := spec.Variables(r.Config.OrgID, r.Config.Window)
 
-	candidate, err := r.post(ctx, candidateURL, document, variables)
+	candidate, err := r.post(ctx, candidateURL, document, candidateCredential, variables)
 	if err != nil {
 		return refuse(RefusalTransport, "candidate leg: "+err.Error())
 	}
 	outcome.Candidate = &candidate
 
-	baseline, err := r.post(ctx, r.Config.PythonEdgeURL, document+baselineComment, variables)
+	// The baseline ALWAYS goes through the Python edge, whatever route
+	// the candidate took, so it always uses the edge credential.
+	baseline, err := r.post(ctx, r.Config.PythonEdgeURL, document+baselineComment, r.Config.EdgeCredential, variables)
 	if err != nil {
 		return refuse(RefusalTransport, "baseline leg: "+err.Error())
 	}
@@ -502,6 +632,10 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		return refuse(admission.Reason, admission.Detail)
 	}
 	outcome.Admitted = true
+	outcome.admitted = true
+	// Recorded from the admission, never re-derived from the route: the
+	// receipt must state the binding that was actually checked.
+	outcome.EdgeBuildBinding = admission.EdgeBuildBinding
 
 	result := Compare(baselineSnapshot, candidateSnapshot, spec.Parity)
 	if len(result.UnusedTierB) > 0 {
@@ -552,7 +686,79 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 			})
 		}
 	}
+
+	// LAST, so nothing below can turn it back into a match: an edge
+	// measurement with no per-request build binding may never be
+	// enablement-eligible.
+	//
+	// r2 proved why with an executed test. A deployment that BEGINS during
+	// the run defeats every other defence at once: the routing row can
+	// legitimately name the running build, /buildinfo answers from the old
+	// replica before and after, and the measured request is served by the
+	// new one in between. Without a per-request header there is nothing
+	// left that can tell them apart, and the run produced a
+	// deployed_executed/match receipt naming the wrong build.
+	//
+	// So the verdict is downgraded rather than the run refused. The
+	// measurement HAPPENED and is worth recording -- terminal_state
+	// `unsupported`, which already means "the runner could not establish
+	// the claim" and is what this package uses for an errored response, an
+	// empty root and an unmeasurable shadow op. The enablement predicate
+	// admits only `match`, so the receipt is inert by construction rather
+	// than by anybody remembering to exclude it. The provenance object
+	// carries edge_build_binding=absent, which is the reason a reader
+	// needs.
+	//
+	// `binding_absent` would be more legible, and is deliberately not used:
+	// terminal_state's vocabulary is fixed by the signed plan and enforced
+	// by a CHECK constraint, and a hotfix does not widen it (team-lead
+	// ruling, 2026-09-09 -- the same trade #2395 made in choosing
+	// proof_failed over inventing `refused`).
+	//
+	// Scoped to `match` deliberately. A mismatch already authorizes
+	// nothing, and rewriting it as `unsupported` would DESTROY the
+	// divergence the run found -- turning "these planes disagree" into
+	// "we could not tell", which is a worse record and a false one. Only
+	// the enablement-eligible verdict is downgraded.
+	if outcome.TerminalState == TerminalStateMatch &&
+		outcome.Route == RouteEdge && outcome.EdgeBuildBinding == EdgeBuildAbsent {
+		outcome.TerminalState = TerminalStateUnsupported
+		outcome.Findings = append(outcome.Findings, Finding{
+			Kind:   FindingMismatch,
+			Path:   "$.http.header." + buildHeader,
+			Detail: "the measured response carried no serving-build header, so this measurement is not bound to a query-api process. A deployment beginning mid-run would be indistinguishable from a stable one, so this cannot authorize an enablement (CHAOS-5479 delivers the header; until every replica serves it, edge measurements stay unsupported)",
+		})
+	}
+	// Sealed LAST, from whatever the run concluded after every adjustment
+	// above. Assigning any exported field afterwards changes the report
+	// and cannot change a receipt.
+	outcome.terminalState = outcome.TerminalState
 	return outcome
+}
+
+// seal captures what a measurement established, at the moment it was
+// established. Every value comes from the run -- the registry the process
+// reported, the config this run was given, the outcome proveOne produced --
+// and none of it can be reached again from outside this package.
+func (r *Runner) seal(outcome Outcome) sealedOutcome {
+	return sealedOutcome{
+		operation:                        outcome.Operation,
+		documentDigest:                   outcome.DocumentDigest,
+		schemaDigest:                     r.Registry.SchemaDigest,
+		candidateBuild:                   r.Registry.BuildIdentity,
+		orgID:                            r.Config.OrgID,
+		mode:                             outcome.Mode,
+		route:                            outcome.Route,
+		edgeBinding:                      outcome.EdgeBuildBinding,
+		routingRowBuild:                  outcome.RoutingRowBuild,
+		terminalState:                    outcome.terminalState,
+		executed:                         outcome.Executed,
+		admitted:                         outcome.admitted,
+		baselineRef:                      observationRef(outcome.Baseline),
+		candidateRef:                     observationRef(outcome.Candidate),
+		baselineDefects:                  append([]string(nil), outcome.BaselineDefects...),
+		differencesOutsideBaselineDefect: outcome.DifferencesOutsideBaselineDefect,
+	}
 }
 
 // decodeLeg turns one leg's body into a Snapshot, or names why it cannot.
@@ -609,23 +815,7 @@ func terminalStateForRefusal(reason string) string {
 // and not "every header".
 var comparedHeaders = []string{contentTypeHeader}
 
-// erroredResponse reports why these two responses cannot back a proof,
-// or "" when both carry a clean, data-bearing result.
-func erroredResponse(baseline, candidate Snapshot) string {
-	switch {
-	case len(candidate.Errors) > 0 && len(baseline.Errors) > 0:
-		return fmt.Sprintf("both planes returned GraphQL errors (%d candidate, %d baseline)", len(candidate.Errors), len(baseline.Errors))
-	case len(candidate.Errors) > 0:
-		return fmt.Sprintf("the candidate returned %d GraphQL error(s)", len(candidate.Errors))
-	case len(baseline.Errors) > 0:
-		return fmt.Sprintf("the baseline returned %d GraphQL error(s)", len(baseline.Errors))
-	case !candidate.DataPresent || candidate.Data == nil:
-		return "the candidate returned no data"
-	}
-	return ""
-}
-
-func (r *Runner) post(ctx context.Context, url, document string, variables map[string]any) (Observation, error) {
+func (r *Runner) post(ctx context.Context, url, document string, credential *Credential, variables map[string]any) (Observation, error) {
 	body, err := json.Marshal(map[string]any{"query": document, "variables": variables})
 	if err != nil {
 		return Observation{}, fmt.Errorf("encode request: %w", err)
@@ -642,21 +832,23 @@ func (r *Runner) post(ctx context.Context, url, document string, variables map[s
 		return Observation{}, fmt.Errorf("build request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	for name, value := range r.Config.Headers {
-		request.Header.Set(name, value)
+	if err := credential.Apply(ctx, request); err != nil {
+		return Observation{}, err
 	}
 
-	client := r.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
+	// Wrapped so redirects are REFUSED. The measured routes are direct
+	// endpoints; following a redirect would fetch a URL the operator never
+	// supplied and this package never validated, and every redirect
+	// finding in this seam's history arrived through a Location header.
+	client := NoRedirectClient(r.Client)
 	started := time.Now()
 	response, err := client.Do(request)
 	if err != nil {
-		// The error is returned verbatim from net/http, which includes the
-		// URL but never a header value -- no credential can reach a log
-		// through this path.
-		return Observation{}, fmt.Errorf("request failed: %w", err)
+		// The transport error is DROPPED, not quoted and not scrubbed.
+		// What comes back is the endpoint label this package rebuilt and a
+		// failure class -- see TransportFailure for the four rounds of
+		// sanitising that preceded that decision.
+		return Observation{}, transportError(url, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 
@@ -683,4 +875,93 @@ func (r *Runner) post(ctx context.Context, url, document string, variables map[s
 		observation.BodyRef = ref
 	}
 	return observation, nil
+}
+
+// MaxOperatorEvidenceBytes bounds the operator's --review-evidence text.
+//
+// Same class as the 8 KiB bound on the minting helper's output, one column
+// over: an unbounded operator string flowing into a JSON document in a
+// Text column is an unbounded write nobody chose. r2 confirmed a 2 MiB note
+// stays valid JSON, which is the point -- it would be accepted, stored, and
+// read back by every future query against this table.
+//
+// Refused rather than truncated, for the reason truncation was wrong for
+// the helper: a silently shortened value looks like a whole one. 4 KiB is
+// far more than a ticket reference and a sentence, which is what this field
+// is for.
+const MaxOperatorEvidenceBytes = 4 << 10
+
+// ErrOperatorEvidenceTooLong is returned before anything is measured, so an
+// over-long note fails as a configuration error rather than after a run.
+var ErrOperatorEvidenceTooLong = errors.New("goapiproof: --review-evidence is too long")
+
+// ValidateOperatorEvidence refuses an over-long operator note.
+func ValidateOperatorEvidence(evidence string) error {
+	if len(evidence) > MaxOperatorEvidenceBytes {
+		return fmt.Errorf("%w: %d bytes, limit is %d. It is stored inside a JSON provenance object on every receipt this run writes; put the detail in the ticket and reference it here",
+			ErrOperatorEvidenceTooLong, len(evidence), MaxOperatorEvidenceBytes)
+	}
+	return nil
+}
+
+// ReceiptProvenance is what goes into go_api_proof_run.review_evidence.
+//
+// A JSON OBJECT rather than prose. r1 found the previous design appending
+// generated text to operator-authored text with a " | " separator, which
+// is ambiguous in both directions -- a reader cannot tell which half a
+// machine wrote, and an operator whose note contains the separator forges
+// the other half. The operator's words keep their own key and are never
+// modified.
+//
+// A JSON string in a Text column rather than new columns because alembic
+// 0128 has no field for any of this and a migration does not belong in a
+// hotfix. Every key here is a candidate for promotion to a real column
+// later; until then the object keeps them named, typed and parseable
+// rather than embedded in a sentence.
+type ReceiptProvenance struct {
+	// Operator is the operator's own --review-evidence text, verbatim.
+	Operator string `json:"operator,omitempty"`
+	// MeasurementRoute is RouteEdge or RouteProof.
+	MeasurementRoute string `json:"measurement_route,omitempty"`
+	// EdgeBuildBinding is EdgeBuildPresent or EdgeBuildAbsent: whether the
+	// measured response carried the serving build on itself. Absence is
+	// CHAOS-5479's known gap, recorded so a later reader does not have to
+	// assume which it was.
+	EdgeBuildBinding string `json:"edge_build_binding,omitempty"`
+	// RoutingRowBuild is the build the routing row named, when it differed
+	// from the running build. A run refuses on this today
+	// (VerifyCandidateBuild), so a receipt carrying it means the refusal
+	// was bypassed -- which is worth being able to see in the table.
+	RoutingRowBuild string `json:"routing_row_build,omitempty"`
+	// Refusal is the run-level cause, on a proof_failed receipt only.
+	Refusal string `json:"refusal,omitempty"`
+	// Measured and Attempted count the run this receipt came from, so a
+	// proof_failed row says how much work it is reporting on.
+	Measured  int `json:"measured_operations,omitempty"`
+	Attempted int `json:"attempted_operations,omitempty"`
+}
+
+// reviewEvidence renders the provenance for one receipt. ONE constructor
+// for both the success and the refusal path (r1 P2): the refusal path used
+// to build its own prose and dropped the routing-row fact entirely, so the
+// receipts that most needed provenance had the least.
+func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, attempted int) string {
+	provenance := ReceiptProvenance{
+		Operator:         r.Config.ReviewEvidence,
+		MeasurementRoute: sealed.route,
+		EdgeBuildBinding: sealed.edgeBinding,
+		RoutingRowBuild:  sealed.routingRowBuild,
+		Refusal:          refusal,
+	}
+	if refusal != "" {
+		provenance.Measured, provenance.Attempted = measured, attempted
+	}
+	encoded, err := json.Marshal(provenance)
+	if err != nil {
+		// Every field is a string or an int, so this cannot fail. If it
+		// somehow does, the operator's own words are worth more than a
+		// dropped column: return them rather than writing nothing.
+		return r.Config.ReviewEvidence
+	}
+	return string(encoded)
 }

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // ErrNoBuildIdentity reports that the running query-api did not tell us
@@ -45,6 +47,203 @@ type buildInfoBody struct {
 	Modified  bool   `json:"modified"`
 }
 
+// EndpointLabel is a safe name for an endpoint, built from parsed parts
+// only. NOTHING in this package ever prints a raw URL.
+//
+// The obvious implementation is url.Redacted(), and it is wrong. Measured:
+//
+//	url.Parse("alice:supersecret@host/registry")
+//	  scheme="alice" opaque="supersecret@host/registry" user=<nil>
+//	  Redacted() => "alice:supersecret@host/registry"
+//
+// With no "//" the parser reads the USERNAME as the scheme, the rest
+// becomes opaque, User is nil, and Redacted() has nothing to redact -- so
+// it hands back the password in full. A reviewer trying a
+// credential-carrying URL without "//" is exactly who finds that.
+//
+// So this does not redact. It REBUILDS from scheme and hostname and never
+// touches the input string. A string that cannot be parsed cannot be
+// reasoned about safely; one that can be parsed does not need redacting,
+// because its safe parts can simply be re-emitted. The scheme is
+// allowlisted to http/https for the same reason: on the no-"//" form the
+// scheme IS the username, so emitting it unchecked would be the leak.
+//
+// Ported from go_api_cli.py's _endpoint_label, which reached this shape
+// after five review rounds -- four leaks from matching the credential's
+// character class, then one more from deleting a known literal, which
+// still leaked on the no-"//" form. Credit to lane-routing-verbs for the
+// pointer; Go's parser has the same hole for the same reason.
+//
+// The port is deliberately omitted: it is one more thing that can be
+// malformed in the code whose whole job is not to fail interestingly.
+func EndpointLabel(raw string) string {
+	parsed, err := safeEndpoint(raw)
+	if err != nil {
+		return "(unparseable endpoint)"
+	}
+	return parsed.Scheme + "://" + parsed.Hostname()
+}
+
+// safeEndpoint is the ONE predicate that decides whether a URL can be
+// described, and every caller in this package goes through it -- the
+// refusal at the flag boundary, the label in an error, and the transport
+// stripper below. r4 found the previous shape's failure: the label had
+// been taught about the no-"//" form and the REFUSAL had not, because they
+// were separate checks that happened to agree until one was fixed.
+//
+// The predicate is that the URL is fully ACCOUNTED FOR, not that a
+// credential was found in the place we know to look:
+//
+//   - scheme allowlisted to http/https, because on the no-"//" form the
+//     scheme is the username;
+//   - Opaque empty. `http:SECRET@host/registry` has scheme "http", which
+//     passes an allowlist, and no User at all, which passes a userinfo
+//     check -- the credential is in the opaque part. That exact string
+//     defeated the r3 guard;
+//   - User nil, the ordinary embedded-credential form;
+//   - Host non-empty, so there is something safe left to name.
+//
+// Anything else is refused rather than described. A string this function
+// cannot fully account for is one whose safe parts cannot be identified,
+// and a guard that guesses at that is the guard we have now replaced
+// twice.
+func safeEndpoint(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, errors.New("not a valid URL")
+	}
+	switch {
+	case parsed.Scheme != "http" && parsed.Scheme != "https":
+		return nil, errors.New("scheme is not http or https")
+	case parsed.Opaque != "":
+		return nil, errors.New("URL has an opaque body, so it was written without //")
+	case parsed.User != nil:
+		return nil, ErrCredentialInURL
+	case parsed.Hostname() == "":
+		return nil, errors.New("URL has no host")
+	}
+	return parsed, nil
+}
+
+// ErrCredentialInURL is returned for a URL carrying embedded credentials.
+var ErrCredentialInURL = errors.New("goapiproof: URL carries embedded credentials")
+
+// TransportFailure describes a transport error WITHOUT its message.
+//
+// Four rounds tried to make an error message safe to print: wrap the URL,
+// strip the URL, scrub the URL, invert the matcher. Each fixed the shape
+// it was shown and the next round supplied another -- an opaque form, a
+// redirect Location, a filename-relative Location, a query-only one. The
+// text is attacker-shaped and there is no finite list of ways a secret can
+// appear in it.
+//
+// So the text is DROPPED, not sanitised. What reaches an operator is a
+// fixed message, the endpoint label this package rebuilt from parts it can
+// account for, and a CLASS. That is everything the message was ever needed
+// for -- which endpoint, and what kind of failure -- and it has no channel
+// through which an arbitrary string can travel.
+type TransportFailure struct {
+	// Endpoint is the rebuilt scheme://host label, never the raw URL.
+	Endpoint string
+	// Class is one of the constants below.
+	Class string
+}
+
+// Transport failure classes. Deliberately coarse: an operator needs to
+// know whether to look at the network, the deployment or the request, and
+// a finer taxonomy would be another place for a detail to leak.
+const (
+	TransportTimeout  = "timeout"
+	TransportRefused  = "connection_refused"
+	TransportRedirect = "redirect"
+	TransportParse    = "malformed_response"
+	TransportFailed   = "request_failed"
+)
+
+func (f TransportFailure) Error() string {
+	return fmt.Sprintf("goapiproof: %s failed (%s). The underlying error is deliberately not reported: it can contain the request URL, and a URL can carry a credential in its userinfo, path, query or fragment", f.Endpoint, f.Class)
+}
+
+// classifyTransport maps an error to a class WITHOUT reading its message
+// for anything but the redirect sentinel this package raises itself.
+func classifyTransport(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), os.IsTimeout(err):
+		return TransportTimeout
+	case errors.Is(err, errRedirectRefused):
+		return TransportRedirect
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return TransportRefused
+	}
+	return TransportFailed
+}
+
+// errRedirectRefused is returned by every client this package builds.
+//
+// The registry, /buildinfo and the measured routes are DIRECT endpoints:
+// nothing legitimate redirects. Following one means fetching a URL the
+// operator did not supply and this package never validated, and every
+// redirect finding in this file's history arrived through the Location
+// header. Refusing is both safer and more honest than sanitising what a
+// redirect produces.
+var errRedirectRefused = errors.New("goapiproof: refusing to follow a redirect")
+
+// NoRedirectClient returns a client that refuses redirects.
+func NoRedirectClient(base *http.Client) *http.Client {
+	client := &http.Client{}
+	if base != nil {
+		*client = *base
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errRedirectRefused
+	}
+	return client
+}
+
+// transportError builds the only error this package emits for a failed
+// request.
+func transportError(rawURL string, err error) error {
+	return TransportFailure{Endpoint: EndpointLabel(rawURL), Class: classifyTransport(err)}
+}
+
+// RefuseCredentialsInURL rejects an endpoint flag this package cannot
+// fully account for.
+//
+// EndpointLabel keeps a credential out of THIS program's messages; only
+// refusal keeps it off the command line, where the process table, the
+// shell history and every log that records an invocation can already read
+// it. So both: refuse at the boundary, and never print a raw URL even
+// then, because a URL can reach an error from somewhere the boundary does
+// not cover.
+//
+// It shares ONE predicate with the label, safeEndpoint, so the two cannot
+// drift: a URL that may be accepted and a URL that may be named are the
+// same question asked twice. The no-"//" form is refused as unparseable
+// rather than inspected for userinfo, because that is exactly the form
+// where User is nil while a credential is present -- checking User there
+// would wave it through.
+//
+// (The head of this comment was lost in an earlier edit that removed a
+// duplicated declaration, leaving it starting mid-sentence. Restored.)
+func RefuseCredentialsInURL(flagName, raw string) error {
+	if _, err := safeEndpoint(raw); err != nil {
+		if errors.Is(err, ErrCredentialInURL) {
+			return fmt.Errorf("%w: %s carries userinfo (its value is not printed here). An embedded credential reaches the process table and every log that records a command line -- pass it through %s or %s instead",
+				ErrCredentialInURL, flagName, edgeBearerEnvVarName, proofBearerEnvVarName)
+		}
+		return fmt.Errorf("goapiproof: %s is refused (%s). Its value is not printed here. This guard requires a URL it can fully account for -- an http/https scheme, no opaque body, no userinfo, and a host -- because a string it cannot parse into safe parts is one whose credential it cannot locate either",
+			flagName, err)
+	}
+	return nil
+}
+
+// Named here rather than imported from the command, so this package's
+// message does not depend on which binary is calling it.
+const (
+	edgeBearerEnvVarName  = "GO_API_PROVE_BEARER"
+	proofBearerEnvVarName = "GO_API_PROVE_PROOF_BEARER"
+)
+
 // FetchRegistry asks the RUNNING process what it serves.
 //
 // Never a checkout, never a checked-in mirror: the six-day outage
@@ -52,20 +251,20 @@ type buildInfoBody struct {
 // running binary computed, and every surface that could have said so was
 // reading the same stale source as the thing that was wrong.
 func FetchRegistry(ctx context.Context, client *http.Client, registryURL string) (RegistryView, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
+	// Redirects are REFUSED: /registry and /buildinfo are direct
+	// endpoints, so a redirect means fetching something nobody validated.
+	client = NoRedirectClient(client)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, registryURL, nil)
 	if err != nil {
 		return RegistryView{}, fmt.Errorf("goapiproof: build registry request: %w", err)
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return RegistryView{}, fmt.Errorf("goapiproof: read %s: %w", registryURL, err)
+		return RegistryView{}, transportError(registryURL, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		return RegistryView{}, fmt.Errorf("goapiproof: %s answered HTTP %d", registryURL, response.StatusCode)
+		return RegistryView{}, fmt.Errorf("goapiproof: %s answered HTTP %d", EndpointLabel(registryURL), response.StatusCode)
 	}
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
@@ -77,10 +276,10 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 		return RegistryView{}, fmt.Errorf("goapiproof: decode registry body: %w", err)
 	}
 	if parsed.SchemaDigest == "" {
-		return RegistryView{}, fmt.Errorf("goapiproof: %s reported an empty schema digest", registryURL)
+		return RegistryView{}, fmt.Errorf("goapiproof: %s reported an empty schema digest", EndpointLabel(registryURL))
 	}
 	if len(parsed.Operations) == 0 {
-		return RegistryView{}, fmt.Errorf("goapiproof: %s registers no operations -- there is nothing to prove", registryURL)
+		return RegistryView{}, fmt.Errorf("goapiproof: %s registers no operations -- there is nothing to prove", EndpointLabel(registryURL))
 	}
 
 	view := RegistryView{
@@ -109,31 +308,31 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 //   - a 404: the deployment predates /buildinfo. Also a refusal -- an old
 //     build that cannot identify itself is exactly the case this check
 //     exists for.
-func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL string, headers map[string]string) (string, error) {
-	if client == nil {
-		client = http.DefaultClient
-	}
+func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL string, credential *Credential) (string, error) {
+	// Redirects are REFUSED: /registry and /buildinfo are direct
+	// endpoints, so a redirect means fetching something nobody validated.
+	client = NoRedirectClient(client)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, buildInfoURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: build buildinfo request: %w", err)
 	}
-	for name, value := range headers {
-		request.Header.Set(name, value)
+	if err := credential.Apply(ctx, request); err != nil {
+		return "", err
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("goapiproof: read %s: %w", buildInfoURL, err)
+		return "", transportError(buildInfoURL, err)
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	switch response.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		return "", fmt.Errorf("%w: %s answered 404, so this deployment predates the /buildinfo route", ErrNoBuildIdentity, buildInfoURL)
+		return "", fmt.Errorf("%w: %s answered 404, so this deployment predates the /buildinfo route", ErrNoBuildIdentity, EndpointLabel(buildInfoURL))
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return "", fmt.Errorf("goapiproof: %s rejected the envelope (HTTP %d)", buildInfoURL, response.StatusCode)
+		return "", fmt.Errorf("goapiproof: %s rejected the %s credential (HTTP %d) -- /buildinfo checks the effective-principal envelope, not the edge access token", EndpointLabel(buildInfoURL), credential.Kind(), response.StatusCode)
 	default:
-		return "", fmt.Errorf("goapiproof: %s answered HTTP %d", buildInfoURL, response.StatusCode)
+		return "", fmt.Errorf("goapiproof: %s answered HTTP %d", EndpointLabel(buildInfoURL), response.StatusCode)
 	}
 
 	body, err := io.ReadAll(response.Body)
@@ -176,8 +375,8 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 // lockstep rule already forbids -- migrate and every go-* image rebuild
 // together, never staggered -- so the residual is a deployment invariant,
 // not an unexamined hole. It is stated on the report rather than assumed.
-func VerifyBuildStable(ctx context.Context, client *http.Client, buildInfoURL string, headers map[string]string, before string) error {
-	after, err := FetchBuildIdentity(ctx, client, buildInfoURL, headers)
+func VerifyBuildStable(ctx context.Context, client *http.Client, buildInfoURL string, credential *Credential, before string) error {
+	after, err := FetchBuildIdentity(ctx, client, buildInfoURL, credential)
 	if err != nil {
 		return fmt.Errorf("goapiproof: re-reading the build identity after the run failed, so the receipts cannot be shown to name the build that served them: %w", err)
 	}
@@ -204,17 +403,69 @@ func VerifyCandidateBuild(running string, expected string, routing map[string]Ro
 	if expected != "" && expected != running {
 		return fmt.Errorf("goapiproof: --candidate-build %q does not match the running build %q -- the flag is a cross-check, never the source", expected, running)
 	}
-	var disagreeing []string
+	stale := StaleRoutingRows(running, routing)
+	if len(stale) == 0 {
+		return nil
+	}
+	disagreeing := make([]string, 0, len(stale))
+	for _, operation := range sortedOperations(stale) {
+		disagreeing = append(disagreeing, fmt.Sprintf("%s points at %s", operation, stale[operation]))
+	}
+	// The remedy names the MODE-PRESERVING verb on purpose. `routing
+	// enable --candidate-build` re-points a row, but its --mode accepts
+	// canary|primary only, so pointing a SHADOW row at the running build
+	// with it also flips that row to canary -- a routing change nobody
+	// asked for, produced by following a message whose only job is to say
+	// how to clear this block safely. CHAOS-5486's `go-api-routing
+	// repoint` preserves the mode and reads the running build from
+	// /buildinfo rather than taking it on trust from an operator.
+	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point the row to the running build with `go-api-routing repoint` (mode preserved); `routing enable` would also change the mode. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
+		running, strings.Join(disagreeing, "; "))
+}
+
+// StaleRoutingRows reports which routing rows name a build the running
+// process is not, as operation -> the build the row names.
+//
+// This was briefly DEMOTED to a recorded fact, on the argument that the
+// comparison could not affect a receipt: reachability is decided by mode
+// rather than by current_candidate_build (postgres_switch.go:71-78), the
+// Python edge never reads the column, and every receipt names the identity
+// read from /buildinfo, so a stale row could not make a receipt say the
+// wrong thing.
+//
+// That argument was WRONG, and r1 broke it with an executed test. It
+// assumed /buildinfo identifies the process that served the MEASURED
+// request. It does not. query-api runs multiple replicas; a /buildinfo
+// read can be answered by replica A while the measured /graphql request is
+// served by replica B, and the Python edge's _forward_to_go rebuilds the
+// response with only content, status and media_type -- dropping the
+// per-request build header that would have told them apart. So during a
+// rolling deploy a receipt can name build A while the measurement came
+// from build B, and that receipt satisfies the four-column enablement
+// lookup exactly.
+//
+// The routing row's build is the one remaining cross-check that the fleet
+// is on ONE build, so it is a refusal again. Re-pointing the rows after a
+// deploy is an operator step (R67), not something the prover may assume
+// away. This function stays as the helper that finds them, so both the
+// refusal message and the receipt provenance name the same rows.
+func StaleRoutingRows(running string, routing map[string]RoutingRow) map[string]string {
+	stale := map[string]string{}
 	for operation, row := range routing {
 		if row.CandidateBuild != "" && row.CandidateBuild != running {
-			disagreeing = append(disagreeing, fmt.Sprintf("%s points at %s", operation, row.CandidateBuild))
+			stale[operation] = row.CandidateBuild
 		}
 	}
-	if len(disagreeing) > 0 {
-		sort.Strings(disagreeing)
-		return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s", running, strings.Join(disagreeing, "; "))
+	return stale
+}
+
+func sortedOperations(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
 	}
-	return nil
+	sort.Strings(keys)
+	return keys
 }
 
 // registrydumpDocument is one element of `registrydump -file

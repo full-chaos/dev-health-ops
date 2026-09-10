@@ -297,6 +297,52 @@ async def _build_outbound_body(
     return json.dumps(payload).encode("utf-8")
 
 
+#: Response headers copied VERBATIM from the Go response onto the
+#: reconstructed one (CHAOS-5479).
+#:
+#: This ``Response(...)`` call is a reconstruction, not a proxy: it carries
+#: content, status and media type, and every other header query-api set is
+#: dropped. That is usually harmless and in one case is not.
+#: ``x-dev-health-build`` names the query-api process that actually served
+#: this request, and it is the ONLY per-request evidence of which build
+#: answered. Without it, an operator running the proof verb against a fleet
+#: mid-rollout can read /buildinfo from replica A while this request was
+#: served by replica B, and record a receipt attributing the measurement to
+#: the wrong build -- found by review on 2026-09-09 with an executed
+#: reproduction, not argued.
+#:
+#: ``x-dev-health-plane`` is copied ONLY when
+#: ``GO_API_PLANE_HEADER_ENABLED`` is on. It is gated by that flag,
+#: default OFF by a 2026-09-01 ruling, and an unconditional copy here made
+#: the pass-through a SECOND, ungated route for the same header -- turning
+#: a documented opt-out into always-on. The build header is deliberately
+#: not gated: it is new, nothing depends on its absence, and a proof
+#: receipt cannot be bound to a process without it.
+#:
+#: A pass-through and nothing more. A header absent upstream stays absent
+#: downstream -- never defaulted, never invented. An absent build header
+#: means "this response was not bound to a build", which is a true and
+#: useful thing to say; a fabricated one would be a false claim, and the
+#: whole point of the header is to be trustworthy.
+_PASSTHROUGH_RESPONSE_HEADERS = ("x-dev-health-build", _PLANE_HEADER_NAME)
+
+
+def _passthrough_headers(upstream: Any) -> dict[str, str]:
+    """Copy the pass-through headers that are PRESENT upstream.
+
+    The plane header is subject to its own flag; the build header is not.
+    See the note above ``_PASSTHROUGH_RESPONSE_HEADERS``.
+    """
+    copied: dict[str, str] = {}
+    for name in _PASSTHROUGH_RESPONSE_HEADERS:
+        if name == _PLANE_HEADER_NAME and not _plane_header_enabled():
+            continue
+        value = upstream.get(name)
+        if value:
+            copied[name] = value
+    return copied
+
+
 class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
     """A :class:`~strawberry.fastapi.GraphQLRouter` that dispatches
     Go-eligible, Go-enabled operations to query-api before falling back to
@@ -550,6 +596,7 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
                 content=resp.content,
                 status_code=200,
                 media_type=resp.headers.get("content-type", "application/json"),
+                headers=_passthrough_headers(resp.headers),
             )
 
         if resp.status_code == 404:

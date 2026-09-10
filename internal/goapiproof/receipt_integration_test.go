@@ -4,6 +4,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -461,21 +462,16 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 	ctx := context.Background()
 	pool := startRegistryPostgres(t)
 
-	// One operation was measured and matched before the build moved.
-	outcomes := []Outcome{{
-		Operation:      "featureFlags",
-		DocumentDigest: testDocumentDigest,
-		Route:          RouteEdge,
-		Executed:       true,
-		Admitted:       true,
-		TerminalState:  TerminalStateMatch,
-	}}
-	runner := &Runner{
-		Registry: RegistryView{SchemaDigest: testSchemaDigest, BuildIdentity: testCandidateBuild},
-		Config:   Config{OrgID: "70d529e0", Window: DefaultWindow(), RecordedBy: "test", ReviewEvidence: "why"},
-	}
+	// A REAL measurement, driven through Run against a fake edge. r5
+	// found the previous version of this fixture hand-building an Outcome
+	// and setting the unexported admitted bit directly -- which the seal
+	// then made impossible to complete correctly, because it also had to
+	// know about the sealed verdict, and it did not. A fixture that has to
+	// be kept in step with an invariant is a fixture that will fall out of
+	// step with it.
+	runner := measuredRunner(t)
 
-	receipts, err := runner.RefusalReceipts(outcomes, time.Now().UTC(),
+	receipts, err := runner.RefusalReceipts(time.Now().UTC(),
 		"the serving build moved DURING the run (build-before -> build-after)")
 	if err != nil {
 		t.Fatalf("RefusalReceipts: %v", err)
@@ -507,8 +503,19 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 	if state != "proof_failed" {
 		t.Fatalf("the recorded state must say the PROOF failed, got %q", state)
 	}
-	if !strings.Contains(evidence, "moved DURING the run") || !strings.Contains(evidence, "1 of 1") {
-		t.Fatalf("the row must name the cause and the counts, got %q", evidence)
+	// review_evidence is a JSON provenance object, not prose (r1 P2), so
+	// this reads the fields rather than grepping a sentence -- which is
+	// the whole point of the change: a machine-written fact should be
+	// readable by a machine.
+	var provenance ReceiptProvenance
+	if err := json.Unmarshal([]byte(evidence), &provenance); err != nil {
+		t.Fatalf("review_evidence is not a JSON object: %q (%v)", evidence, err)
+	}
+	if !strings.Contains(provenance.Refusal, "moved DURING the run") {
+		t.Fatalf("the row must name the cause, got %q", provenance.Refusal)
+	}
+	if provenance.Measured != 1 || provenance.Attempted != 1 {
+		t.Fatalf("the row must carry the counts, got measured=%d attempted=%d", provenance.Measured, provenance.Attempted)
 	}
 }
 
@@ -519,20 +526,9 @@ func TestAStableBuildStillProducesAnEnablingReceipt(t *testing.T) {
 	ctx := context.Background()
 	pool := startRegistryPostgres(t)
 
-	outcomes := []Outcome{{
-		Operation:      "featureFlags",
-		DocumentDigest: testDocumentDigest,
-		Route:          RouteEdge,
-		Executed:       true,
-		Admitted:       true,
-		TerminalState:  TerminalStateMatch,
-	}}
-	runner := &Runner{
-		Registry: RegistryView{SchemaDigest: testSchemaDigest, BuildIdentity: testCandidateBuild},
-		Config:   Config{OrgID: "70d529e0", Window: DefaultWindow(), RecordedBy: "test", ReviewEvidence: "why"},
-	}
+	runner := measuredRunner(t)
 
-	receipts, err := runner.ReceiptsFor(outcomes, time.Now().UTC())
+	receipts, err := runner.ReceiptsFor(time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ReceiptsFor: %v", err)
 	}
@@ -554,17 +550,54 @@ func TestAStableBuildStillProducesAnEnablingReceipt(t *testing.T) {
 // run that refused everything writes nothing, because there is no
 // measurement whose result is being withheld.
 func TestRefusalReceiptsCoverOnlyMeasuredOperations(t *testing.T) {
-	runner := &Runner{
-		Registry: RegistryView{SchemaDigest: testSchemaDigest, BuildIdentity: testCandidateBuild},
-		Config:   Config{OrgID: "70d529e0", Window: DefaultWindow()},
+	// A run whose only operation was REFUSED: the fake edge answers with
+	// no plane header, so admission refuses and nothing is measured.
+	edge := &fakeEdge{goBody: `{"data":{"featureFlags":[]}}`, pythonBody: `{"data":{"featureFlags":[]}}`, goPlane: "python"}
+	runner := newRunner(t, edge, "canary")
+	runner.Registry.SchemaDigest = testSchemaDigest
+	runner.Registry.BuildIdentity = testCandidateBuild
+	runner.Registry.DocumentDigest = map[string]string{"featureFlags": testDocumentDigest}
+	runner.Routing = map[string]RoutingRow{"featureFlags": {Mode: "canary", CandidateBuild: testCandidateBuild}}
+	// Run reports that it measured nothing, which is the precondition.
+	if _, _, err := runner.Run(context.Background()); err == nil {
+		t.Fatal("precondition: this run must measure nothing")
 	}
-	receipts, err := runner.RefusalReceipts([]Outcome{
-		{Operation: "featureFlags", DocumentDigest: testDocumentDigest, Route: RouteEdge, Executed: false, RefusalReason: RefusalPlaneUnidentified},
-	}, time.Now().UTC(), "build moved")
+
+	receipts, err := runner.RefusalReceipts(time.Now().UTC(), "build moved")
 	if err != nil {
 		t.Fatalf("RefusalReceipts: %v", err)
 	}
 	if len(receipts) != 0 {
 		t.Fatalf("an unmeasured operation has no result to withhold, got %d receipt(s)", len(receipts))
 	}
+}
+
+// measuredRunner drives a REAL run against a fake edge and returns the
+// runner holding its sealed records.
+//
+// The receipt constructors read only what a run sealed, so a fixture
+// cannot hand them an outcome any more -- which is the point. It also
+// means these tests exercise the same path production does, rather than a
+// hand-assembled approximation of it that has to be re-approximated every
+// time the invariant tightens.
+func measuredRunner(t *testing.T) *Runner {
+	t.Helper()
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	edge := &fakeEdge{goBody: body, pythonBody: body}
+	runner := newRunner(t, edge, "canary")
+	// The registry identity these tests write against.
+	runner.Registry.SchemaDigest = testSchemaDigest
+	runner.Registry.BuildIdentity = testCandidateBuild
+	runner.Registry.DocumentDigest = map[string]string{"featureFlags": testDocumentDigest}
+	runner.Routing = map[string]RoutingRow{"featureFlags": {Mode: "canary", CandidateBuild: testCandidateBuild}}
+	runner.Config.RecordedBy = "test"
+	runner.Config.ReviewEvidence = "why"
+	// A bound measurement, so the run terminates `match` rather than
+	// being downgraded for an absent build binding.
+	edge.goBuild = testCandidateBuild
+
+	if _, _, err := runner.Run(context.Background()); err != nil {
+		t.Fatalf("measuredRunner: Run: %v", err)
+	}
+	return runner
 }

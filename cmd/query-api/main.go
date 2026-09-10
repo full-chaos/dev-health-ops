@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 // otelServiceName is this binary's OTEL_SERVICE_NAME fallback (CHAOS-5408) --
@@ -190,6 +191,41 @@ func readyzDependencyClass(err error) string {
 	return "dependency"
 }
 
+// runningBuild is the build identity this process stamps on /query and
+// /query/proof responses.
+//
+// A function, not an inline call, because the inline form could not be
+// tested: `mountQueryRoute(mux, handlers.Query, "")` compiled and left
+// every suite green, since the pin called mountQueryRoute itself with its
+// own constant and proved only that the HELPER stamps what it is given.
+// Nothing proved that main gives it the RUNNING build -- and an empty one
+// there is precisely the state this change exists to make impossible, with
+// a consequence (every edge measurement `unsupported`) byte-identical to
+// the documented interim state.
+//
+// Now the value has one source that a test can call and compare against
+// version.Current directly.
+func runningBuild() string {
+	return version.Current("query-api").Commit
+}
+
+// mountQueryRoute registers the production /query handler WITH provenance.
+//
+// It takes NO build argument, deliberately. The previous signature accepted
+// one so a test could assert a chosen value -- and that left
+// `mountQueryRoute(mux, handlers.Query, "")` as a call-site mutation which
+// compiled and survived every suite, because the test passed its own
+// constant and proved only that the helper stamps what it is handed.
+// Nothing proved main handed it the running build.
+//
+// With the value read inside, there is no argument at the call site to get
+// wrong: the mutation is unwritable rather than undetected. The test drives
+// this function and compares the WIRE header against runningBuild(), so the
+// two cannot disagree.
+func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
+	mux.HandleFunc("/query", withProofProvenance(query, runningBuild()))
+}
+
 func main() {
 	// CHAOS-5408: installs the process-wide OTel TracerProvider so the spans
 	// the resolvers in internal/graph already start (org-scoping-rejection
@@ -231,7 +267,18 @@ func main() {
 			log.Fatalf("query-api: build /query route: %v", buildErr)
 		}
 		defer cleanup()
-		mux.HandleFunc("/query", handlers.Query)
+		// Wrapped, not raw. The provenance headers are what let a proof
+		// receipt be bound to the process that actually served the
+		// request, and until CHAOS-5479 only /query/proof carried them --
+		// so the Python edge's pass-through forwarded a header the normal
+		// route never set, and every canary/primary measurement was
+		// unbindable. A prover cannot certify what it cannot bind, so it
+		// downgraded all of them: the gate was correct and useless.
+		//
+		// The same wrapper as the proof route, deliberately: one
+		// implementation, so the two routes cannot drift into disagreeing
+		// about what they claim.
+		mountQueryRoute(mux, handlers.Query)
 		// GET /registry: what THIS process registers, and the schema digest
 		// it computed. Mounted with /query, not beside /healthz, on purpose
 		// -- it describes /query's registration set, so an unconfigured

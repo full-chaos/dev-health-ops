@@ -189,11 +189,28 @@ func withProofProvenance(handler http.HandlerFunc, commit string) http.HandlerFu
 		// WriteHeader, the header map is already on the wire and a later
 		// write is silently dropped.
 		w.Header().Set(planeHeaderName, "go")
-		if commit != "" {
-			w.Header().Set(buildHeaderName, commit)
+		if isKnownBuild(commit) {
+			w.Header().Set(buildHeaderName, strings.TrimSpace(commit))
 		}
 		handler(w, r)
 	}
+}
+
+// isKnownBuild says whether a commit string actually identifies a build.
+//
+// The guard used to be `commit != ""`, which is the wrong value: an
+// unstamped binary does NOT produce an empty commit. version.Current
+// returns the literal "unknown" (internal/platform/version's default for
+// a build with no -ldflags and no VCS stamp), so the empty-string form
+// stamped `x-dev-health-build: unknown` on every response from an
+// unstamped process -- and the prover binds a receipt's candidate_build
+// to whatever that header says. That is an UNBINDABLE measurement
+// presented as a bound one, which is the exact failure the header exists
+// to prevent. FetchBuildIdentity already refuses "unknown" on the
+// /buildinfo route; this is the same refusal on the header route.
+func isKnownBuild(commit string) bool {
+	commit = strings.TrimSpace(commit)
+	return commit != "" && commit != "unknown"
 }
 
 func mountProofRoute(mux *http.ServeMux, handler http.HandlerFunc) {

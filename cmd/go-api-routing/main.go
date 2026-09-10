@@ -66,6 +66,29 @@ type flags struct {
 	timeout        time.Duration
 }
 
+// buildInfoCredential is the credential this command presents to
+// /buildinfo, in one place so a test can exercise the PRODUCTION
+// construction rather than rebuild it and prove only that it agrees with
+// itself.
+//
+// A Credential rather than a header map: FetchBuildIdentity's parameter
+// changed in CHAOS-5479, because one credential cannot satisfy both
+// planes -- an access token gets 200 on the Python edge and 401 on
+// /buildinfo, and the envelope gets the reverse. This command already
+// documents that at bearerEnvVar and already carries the ENVELOPE, so
+// this is the same value in the type the function now takes.
+//
+// Three things must all be right and each is independently wrong-able:
+// the header NAME (/buildinfo reads Authorization), the `Bearer ` scheme
+// prefix (without it the value is not a bearer credential at all), and
+// the `kind` string, which is what names the credential in a 401 without
+// printing it. StaticCredential also refuses an empty or whitespace-only
+// value at the moment of use, so the flag check above gains a second
+// floor rather than losing one.
+func buildInfoCredential(bearer string) *goapiproof.Credential {
+	return goapiproof.StaticCredential("Authorization", "effective-principal envelope", "Bearer "+bearer)
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "go-api-routing: %v\n", err)
@@ -141,13 +164,13 @@ func run() error {
 
 	ctx := context.Background()
 	client := &http.Client{Timeout: f.timeout}
-	headers := map[string]string{"Authorization": "Bearer " + bearer}
+	credential := buildInfoCredential(bearer)
 
 	registry, err := goapiproof.FetchRegistry(ctx, client, f.registryURL)
 	if err != nil {
 		return err
 	}
-	running, err := goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, headers)
+	running, err := goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, credential)
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
 			return fmt.Errorf("%w\n  the deployed query-api must identify its build at %s before any row can be pointed at it", err, f.buildInfoURL)

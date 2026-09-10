@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -405,7 +406,14 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	routes := []any{RouteEdge, RouteProof, nil}
 	bindings := []any{EdgeBuildPresent, EdgeBuildAbsent, nil}
 	outsides := []int{0, 1}
-	defects := []any{nil, []string{}, []string{"CHAOS-5448"}}
+	// The defect-shape dimension gained three cells when enumerating the
+	// writer's input domain found that `cardinality(ARRAY[''])` is 1, so a
+	// citation naming nothing read as fully cited. A shape the predicate
+	// must reject belongs in the dimension, not in a separate test.
+	defects := []any{
+		nil, []string{}, []string{"CHAOS-5448"},
+		[]string{""}, []string{"   "}, []string{"CHAOS-5448", ""},
+	}
 	modes := []string{TargetModeCanary, TargetModePrimary}
 
 	// The rule, in one place, derived rather than tabulated.
@@ -428,7 +436,15 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 			return true
 		case EnablementCitedMismatchState:
 			cited, ok := defect.([]string)
-			return outside == 0 && ok && len(cited) > 0
+			if !ok || outside != 0 || len(cited) == 0 {
+				return false
+			}
+			for _, ticket := range cited {
+				if strings.TrimSpace(ticket) == "" {
+					return false
+				}
+			}
+			return true
 		default:
 			return false
 		}
@@ -508,10 +524,11 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	}
 
 	// 4 stages x 11 terminal states x 3 routes x 3 bindings x 2 outside x
-	// 3 defect shapes x 2 modes. Asserted rather than commented, so a
-	// value added to any of those lists without thought fails here.
-	if combinations != 4*11*3*3*2*3*2 {
-		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 4*11*3*3*2*3*2)
+	// 6 defect shapes x 2 modes. Asserted rather than commented, so a
+	// value added to any of those lists without thought fails here --
+	// which is what moved it from 3 defect shapes to 6.
+	if combinations != 4*11*3*3*2*6*2 {
+		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 4*11*3*3*2*6*2)
 	}
 }
 

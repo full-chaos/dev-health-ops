@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
+import sqlalchemy as sa
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
@@ -550,6 +551,15 @@ def _admissible_terminal_state() -> ColumnElement[bool]:
       had the column and cited nothing, and without this the IS NOT NULL
       test could be satisfied by writing ``'{}'``.
     """
+    return and_(
+        # A whitespace-only candidate build is as unmatchable as an absent
+        # one while LOOKING present -- and ``proven`` is keyed on it.
+        sa.func.btrim(ProofRun.candidate_build) != "",
+        _terminal_state_admits(),
+    )
+
+
+def _terminal_state_admits() -> ColumnElement[bool]:
     return or_(
         ProofRun.terminal_state == ENABLEMENT_PROOF_TERMINAL_STATE,
         and_(
@@ -561,6 +571,23 @@ def _admissible_terminal_state() -> ColumnElement[bool]:
             # Both the NULL and empty-array cases are in the shared
             # admission table, so this is covered rather than argued.
             func.cardinality(ProofRun.baseline_defect) > 0,
+            # ...but ``cardinality(ARRAY[''])`` is 1, so a mismatch citing a
+            # single EMPTY ticket read as fully cited and authorized a
+            # promotion. Executed against real PostgreSQL before this
+            # clause existed: "EMPTY-STRING CITATION admitted as enablement
+            # proof: true". A citation that names nothing is not a
+            # citation, and ``btrim`` because whitespace names nothing
+            # either.
+            #
+            # Stated in BOTH implementations rather than only at the
+            # writer: rows already in the table, a future writer and a
+            # manual repair all reach the predicate. The shared admission
+            # fixture is what keeps the two statements from drifting.
+            ~sa.exists(
+                sa.select(sa.literal(1))
+                .select_from(sa.func.unnest(ProofRun.baseline_defect).alias("citation"))
+                .where(sa.func.btrim(sa.column("citation")) == "")
+            ),
         ),
     )
 

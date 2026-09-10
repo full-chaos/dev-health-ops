@@ -3,6 +3,7 @@ package goapiproof
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -143,11 +144,31 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 	if err := validateVocabulary(receipt); err != nil {
 		return uuid.Nil, err
 	}
-	if receipt.CandidateBuild == "" {
+	if strings.TrimSpace(receipt.CandidateBuild) == "" {
+		// TrimSpace, not `== ""`: `proven` is keyed on this column, and a
+		// whitespace-only build is as unmatchable as an absent one while
+		// LOOKING present in every listing. Found by enumerating the
+		// guard's input domain rather than by a failure.
 		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt with an empty candidate build")
 	}
 	if !buildBindings[receipt.BuildBinding] {
 		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt with build binding %q -- expected %q or %q", receipt.BuildBinding, EdgeBuildPresent, EdgeBuildAbsent)
+	}
+	// A citation that names nothing is not a citation. The enablement
+	// predicate admits a mismatch when `cardinality(baseline_defect) > 0`
+	// and every difference is covered -- and `cardinality(ARRAY[''])` is
+	// 1, so a receipt citing a single empty ticket was admitted as fully
+	// cited. Executed against real PostgreSQL before this guard existed:
+	// `EMPTY-STRING CITATION admitted as enablement proof: true`.
+	//
+	// Refused HERE rather than widened in SQL, because both predicates
+	// read the column and a rule stated in two places drifts -- which is
+	// the defect r2 found in this very PR. The writer is the one place
+	// that can refuse it once.
+	for _, ticket := range receipt.BaselineDefects {
+		if strings.TrimSpace(ticket) == "" {
+			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt whose baseline_defect array contains an empty citation (%d entries) -- cardinality() counts it, so the enablement predicate would read this as a fully-cited mismatch while it cites nothing", len(receipt.BaselineDefects))
+		}
 	}
 	if !measurementRoutes[receipt.MeasurementRoute] {
 		// A receipt with no route cannot be told apart from served
@@ -289,6 +310,19 @@ const EnablementCitedMismatchState = "mismatch"
 // than merely argued -- and a clause that can never change an outcome is
 // one more thing a reader has to reason about for nothing.
 //
+// A citation that names NOTHING is not a citation. `cardinality(ARRAY[”])`
+// is 1, so before the NOT EXISTS below a mismatch citing a single empty
+// ticket read as fully cited and authorized a promotion -- executed
+// against real PostgreSQL and confirmed `admitted as enablement proof:
+// true`. The writer refuses to create such a row, but the writer is not
+// the only producer the predicate will ever read: rows already in the
+// table, a future writer and a manual repair all reach it. A guard on the
+// producer alone is a guard on today's producers.
+//
+// btrim, not `<> ”`: a whitespace-only citation names nothing either, and
+// so does a whitespace-only candidate_build -- and `proven` is keyed on
+// that column, so such a row is unmatchable while looking present.
+//
 // Every value here is a package CONSTANT, never caller input, so they are
 // inlined rather than bound: that lets EnablementProofClause compose into
 // a query of any shape, which is what makes ONE predicate serve every
@@ -299,8 +333,12 @@ func enablementProofPredicate(alias string) string {
 		          ` + alias + `.terminal_state = '` + EnablementProofTerminalState + `'
 		       OR (` + alias + `.terminal_state = '` + EnablementCitedMismatchState + `'
 		           AND ` + alias + `.differences_outside_baseline_defect = 0
-		           AND cardinality(` + alias + `.baseline_defect) > 0)
-		    )`
+		           AND cardinality(` + alias + `.baseline_defect) > 0
+		           AND NOT EXISTS (
+		                 SELECT 1 FROM unnest(` + alias + `.baseline_defect) AS citation
+		                  WHERE btrim(citation) = ''))
+		    )
+		    AND btrim(` + alias + `.candidate_build) <> ''`
 }
 
 // EnablementProofClause is THE rule deciding whether a go_api_proof_run

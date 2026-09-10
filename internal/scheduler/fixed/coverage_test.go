@@ -368,8 +368,20 @@ func TestRetiredBeatEntriesStayAbsentAndExplained(t *testing.T) {
 		if _, exists := present[retired.Name]; exists {
 			t.Errorf("retired beat entry %q was reintroduced into %s", retired.Name, beatConfigRelativePath)
 		}
-		if strings.TrimSpace(retired.Reason) == "" || strings.TrimSpace(retired.Evidence) == "" {
-			t.Errorf("retired beat entry %q lacks a reviewed reason or evidence", retired.Name)
+		// CHAOS-3093 (PR2b, r1 codex review finding): a non-empty check alone
+		// lets a reason be mutated to a short placeholder (e.g. "MUTATED:")
+		// without failing. Every real reviewed reason/evidence in this file
+		// is at minimum a short cited-ticket sentence (the shortest today,
+		// "CHAOS-4026, CHAOS-4056 beat-schedule inventory (COVERED).", is 57
+		// characters) -- a minimum length comfortably below that catches a
+		// placeholder without pinning exact wording, which would make this
+		// test brittle against routine rewording.
+		const minReviewedTextLength = 40
+		if len(strings.TrimSpace(retired.Reason)) < minReviewedTextLength {
+			t.Errorf("retired beat entry %q has no reviewed reason (or one too short to be a real one)", retired.Name)
+		}
+		if len(strings.TrimSpace(retired.Evidence)) < minReviewedTextLength {
+			t.Errorf("retired beat entry %q has no reviewed evidence (or one too short to be real)", retired.Name)
 		}
 	}
 }

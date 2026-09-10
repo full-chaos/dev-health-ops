@@ -306,7 +306,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "producer": "`cmd/dev-health-worker/operational.go:144-155`",
         "trigger": "schedule",
         "gate": "`descriptor.Executable()` (route=river)",
-        "writer": "Python `system_ops.py:172 phone_home_heartbeat`",
+        "writer": "Python `system_ops.py:22 phone_home_heartbeat`",
         "tables": "Python-owned `audit_logs` row + external `TELEMETRY_ENDPOINT` POST",
         "evidence": "argued — code read; `internal/jobs/system/heartbeat.go:12-33` docstring is accurate and non-stale about this (explicitly says 'CLASSIFICATION: python_compatibility, not native Go')",
         "state": "bridge",

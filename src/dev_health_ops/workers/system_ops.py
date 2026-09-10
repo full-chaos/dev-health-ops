@@ -80,7 +80,7 @@ def phone_home_heartbeat() -> dict[str, Any]:
                     resource_id="phone_home_heartbeat",
                     description="Background phone-home heartbeat recorded",
                     changes=payload,
-                    request_metadata={"source": "celery", "endpoint": endpoint},
+                    request_metadata={"source": "http_bridge", "endpoint": endpoint},
                 )
             )
             session.flush()

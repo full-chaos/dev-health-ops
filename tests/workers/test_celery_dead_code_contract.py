@@ -20,10 +20,14 @@ CHAOS-3093 (2026-09-09, PR2a) additionally retired monitor-queue-depths and
 prune-external-ingest-batches outright: CHAOS-4065 replaced the
 ask-dev-acceptance release-blocking gate's real Celery worker+beat fleet
 (their last reason to survive) with a Go-native probe that re-executes the
-same production Go code directly. dispatch-scheduled-syncs, reconcile-sync-
-dispatch, and prune-rate-limit-observations remain flagged-surviving below
-(unchanged) -- they are CHAOS-3093's own PR2a', a separate reviewed pass with
-its own Go-invariant-parity mapping, not this PR's concern.
+same production Go code directly.
+
+CHAOS-3093's own PR2a' (2026-09-09) is the separate reviewed pass that then
+retired dispatch-scheduled-syncs, reconcile-sync-dispatch, and prune-rate-
+limit-observations too, with a one-row-per-deleted-test mapping onto
+executed internal/syncreconciler / internal/scheduler/sync Go tests in that
+PR's own TEST-EVIDENCE. No entries remain flagged-surviving after PR2a' --
+every Beat entry this file once deferred is now in _DEAD_BEAT_ENTRIES.
 
 This test imports the real ``celery_app`` (autodiscovery included) and the
 real ``beat_schedule`` and asserts the deleted task names are absent from
@@ -83,6 +87,11 @@ _DEAD_TASK_NAMES = (
     "dispatch_investment_materialize_partitioned",
     "run_membership_backfill",
     "execute_saved_report",
+    # CHAOS-3093 (PR2a'): sync_scheduler.py/sync_reconciler.py deleted
+    # outright -- see the module-level docstring addendum above.
+    "dispatch_scheduled_syncs",
+    "reconcile_sync_dispatch",
+    "prune_rate_limit_observations",
 )
 
 # Beat schedule keys that must no longer exist.
@@ -104,6 +113,10 @@ _DEAD_BEAT_ENTRIES = (
     # CHAOS-3093 (PR2a):
     "monitor-queue-depths",
     "prune-external-ingest-batches",
+    # CHAOS-3093 (PR2a'):
+    "dispatch-scheduled-syncs",
+    "reconcile-sync-dispatch",
+    "prune-rate-limit-observations",
 )
 
 # Whole modules deleted because every symbol they exported was dead
@@ -125,28 +138,12 @@ _DELETED_MODULES = (
     "metrics_daily.py",
     "work_graph_tasks.py",
     "report_task.py",
-)
-
-# Entries this PR deliberately did NOT delete -- because their removal
-# needs its own reviewed pass (flagged to team-lead: reconcile-sync-dispatch,
-# dispatch-scheduled-syncs, and prune-rate-limit-observations, which lives in
-# the same sync_reconciler.py module as reconcile-sync-dispatch). This is
-# CHAOS-3093's PR2a' (tracked separately from PR2a, which retired the other
-# three beat entries outright -- monitor-queue-depths and prune-external-
-# ingest-batches moved to _DEAD_BEAT_ENTRIES/_DEAD_TASK_NAMES above;
-# dispatch-go-external-ingest-recompute-bridge was here until CHAOS-5296 and
-# is RETIRED, guarded by test_recompute_bridge_task_is_deleted below, not
-# flagged-surviving). This tuple guards the inverse mistake: a drive-by
-# deletion of something a PR explicitly chose to keep.
-_FLAGGED_SURVIVING_BEAT_ENTRIES = (
-    "dispatch-scheduled-syncs",
-    "reconcile-sync-dispatch",
-    "prune-rate-limit-observations",
-)
-_FLAGGED_SURVIVING_TASK_NAMES = (
-    "dispatch_scheduled_syncs",
-    "reconcile_sync_dispatch",
-    "prune_rate_limit_observations",
+    # CHAOS-3093 (PR2a'): the reviewed pass the rest of this file's docstring
+    # addendum describes -- dispatch-go-external-ingest-recompute-bridge was
+    # here until CHAOS-5296 and is RETIRED, guarded by
+    # test_recompute_bridge_task_is_deleted below, not this tuple.
+    "sync_scheduler.py",
+    "sync_reconciler.py",
 )
 
 
@@ -244,35 +241,6 @@ def test_runner_cli_no_longer_boots_a_real_celery_process() -> None:
     assert "start-worker" not in registered
     assert "start-scheduler" not in registered
     assert "inspect" in registered  # control-plane read-only survives
-
-
-def test_flagged_entries_were_not_silently_dropped() -> None:
-    """The entries a PR chose to KEEP must still be there.
-
-    Guards the inverse mistake to the rest of this file: a drive-by deletion
-    of dispatch-scheduled-syncs, reconcile-sync-dispatch, or prune-rate-
-    limit-observations would break something CHAOS-3093 explicitly deferred
-    to its own reviewed pass (PR2a'), without any other test catching it.
-    """
-    from dev_health_ops.workers import tasks
-    from dev_health_ops.workers.config import beat_schedule
-
-    app = _celery_app()
-    registered = set(app.tasks)
-
-    for entry in _FLAGGED_SURVIVING_BEAT_ENTRIES:
-        assert entry in beat_schedule, (
-            f"beat_schedule[{entry!r}] is missing -- this PR (CHAOS-4026) "
-            "deliberately kept it (flagged to team-lead, not deleted)."
-        )
-    for name in _FLAGGED_SURVIVING_TASK_NAMES:
-        qualified = _qualified(name)
-        assert qualified in registered, (
-            f"{qualified!r} is not registered on the celery app -- this PR "
-            "(CHAOS-4026) deliberately kept it."
-        )
-    for name in _FLAGGED_SURVIVING_TASK_NAMES:
-        assert name in tasks.__all__
 
 
 def test_recompute_bridge_task_is_deleted() -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
@@ -19,7 +18,7 @@ from dev_health_ops.models import (
     SyncRunMode,
     SyncRunStatus,
 )
-from dev_health_ops.models.settings import JobRun, JobRunStatus, SyncConfiguration
+from dev_health_ops.models.settings import JobRun, SyncConfiguration
 from dev_health_ops.sync import planner
 from dev_health_ops.sync.execution_trigger import (
     create_sync_execution_trigger,
@@ -378,72 +377,16 @@ def test_execution_trigger_commits_terminal_disabled_outcome(
     assert db_session.query(SyncDispatchOutbox).count() == 0
 
 
-def test_scheduler_commits_pagerduty_disabled_evidence_without_enqueue(
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dev_health_ops.sync import execution_trigger
-    from dev_health_ops.workers import sync_scheduler
-
-    # Given: a due scheduled legacy PagerDuty configuration with a malformed target.
-    integration = _integration_with_verified_account(db_session)
-    config = SyncConfiguration(
-        org_id=_ORG_ID,
-        name="legacy incidents only",
-        provider="pagerduty",
-        sync_targets=["incidents"],
-        sync_options={"schedule_cron": "* * * * *"},
-        is_active=True,
-        integration_id=integration.id,
-    )
-    db_session.add(config)
-    config.last_sync_at = datetime(2026, 7, 20, 11, 58, tzinfo=timezone.utc)
-    db_session.commit()
-    dispatch = MagicMock()
-    monkeypatch.setattr(sync_scheduler, "organization_exists_sync", lambda *_args: True)
-    monkeypatch.setattr(
-        sync_scheduler,
-        "is_canonical_incident_feature_enabled_sync",
-        lambda *_args: True,
-    )
-    monkeypatch.setattr(
-        execution_trigger,
-        "require_canonical_incident_feature_sync",
-        lambda *_args: None,
-    )
-    monkeypatch.setattr(
-        "dev_health_ops.workers.sync_units.dispatch_sync_run",
-        dispatch,
-    )
-
-    # When: the scheduler evaluates the due configuration.
-    dispatched = sync_scheduler._maybe_dispatch_config(
-        db_session,
-        config,
-        datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
-    )
-
-    # Then: terminal disabled evidence persists and no executable work is enqueued.
-    assert dispatched is False
-    db_session.refresh(config)
-    assert config.is_active is False
-    job_run = db_session.query(JobRun).one()
-    assert job_run.status == JobRunStatus.FAILED.value
-    assert isinstance(job_run.result, dict)
-    assert job_run.result == {
-        "sync_run_id": job_run.result["sync_run_id"],
-        "terminal_status": "pagerduty_sync_disabled",
-        "reason": "PagerDuty sync target must be operational; malformed configs were disabled",
-        "total_units": 0,
-    }
-    sync_run = db_session.get(SyncRun, job_run.result["sync_run_id"])
-    assert sync_run is not None
-    assert sync_run.status == "failed"
-    assert sync_run.total_units == 0
-    assert sync_run.result == {"error_category": "pagerduty_sync_disabled"}
-    assert sync_run.completed_at is not None
-    assert db_session.query(SyncDispatchOutbox).count() == 0
-    dispatch.apply_async.assert_not_called()
+# CHAOS-3093 (2026-09-09, PR2a'): test_scheduler_commits_pagerduty_disabled_
+# evidence_without_enqueue tested workers/sync_scheduler.py's
+# _maybe_dispatch_config directly (the exact "PagerDuty sync target must be
+# operational; malformed configs were disabled" terminal message), deleted
+# outright along with the module. internal/scheduler/sync/materializer.go's
+# preparePagerDutyRepair/disablePagerDutyConfigs is the Go-native port of
+# this same malformed-config repair, disabling without creating units in the
+# same domain transaction --
+# internal/scheduler/sync/materializer_integration_test.go's
+# TestNativeMaterializerPagerDutyRepairAndUnitsShareDomainTransaction.
 
 
 def test_repair_leaves_other_provider_rows_untouched(db_session: Session) -> None:

@@ -25,11 +25,13 @@ Three internal-classification sites are exempted: ``_classify_error`` in
 pattern-match it against a fixed, curated vocabulary (mirroring the existing
 ``_normalized_rate_limit_reason`` allow-list precedent) and return only a
 category string -- the raw text itself is discarded, never persisted.
-``_only_unroutable`` in ``workers/sync_reconciler.py`` (CHAOS-3957) does the
+``_only_unroutable`` in ``workers/sync_reconciler.py`` (CHAOS-3957) did the
 same for one fixed substring ("paused") to choose a log level (WARNING for a
 deliberate operator pause vs. ERROR for a genuine route-store fault) -- the
-raw text is never returned, stored, or logged itself; only the two fixed
-event-name strings are.
+raw text was never returned, stored, or logged itself; only the two fixed
+event-name strings were. ``sync_reconciler.py`` was deleted outright under
+CHAOS-3093 (PR2a', internal/syncreconciler is the live Go owner), so both the
+target-file entry and this exemption are removed, not carried forward.
 
 ``api/admin/routers/sync.py`` (added for the CHAOS-2766 codex review
 finding: a Celery/broker enqueue-failure exception can embed the broker/
@@ -52,7 +54,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TARGET_FILES = (
     "src/dev_health_ops/workers/sync_units.py",
     "src/dev_health_ops/workers/reference_discovery.py",
-    "src/dev_health_ops/workers/sync_reconciler.py",
     "src/dev_health_ops/sync/dispatch_outbox.py",
     "src/dev_health_ops/sync/trigger_routing.py",
     "src/dev_health_ops/sync/execution_trigger.py",
@@ -96,7 +97,6 @@ _CLASSIFICATION_ONLY_EXEMPTIONS = {
         "src/dev_health_ops/workers/reference_discovery.py",
         "_is_retryable_discovery_error",
     ),
-    ("src/dev_health_ops/workers/sync_reconciler.py", "_only_unroutable"),
 }
 
 

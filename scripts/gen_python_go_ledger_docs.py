@@ -408,7 +408,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "config.py": {
         "category": "c",
-        "evidence": "used by queues.py, celery_app.py, sync_reconciler.py, and api/external_ingest/stream_health.py — env/config constants. queue_monitor.py and external_ingest_reconciler.py, former importers, were deleted (CHAOS-3093)",
+        "evidence": "used by queues.py, celery_app.py, and api/external_ingest/stream_health.py — env/config constants. queue_monitor.py, external_ingest_reconciler.py, and sync_reconciler.py, former importers, were deleted (CHAOS-3093)",
         "ticket": "n/a",
     },
     "feature_flag_sync.py": {
@@ -475,16 +475,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "category": "a",
         "evidence": "imported by reference_discovery.py/team_autoimport.py/sync_units.py:134; resolve_run_auth reached from dispatch_sync_run",
         "ticket": "n/a",
-    },
-    "sync_reconciler.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` x2 (L84 reconcile_sync_dispatch, L131 prune_rate_limit_observations); sole importer tasks.py. prune_rate_limit_observations's beat entry survived CHAOS-4065's ask-dev-acceptance-fleet replacement (cmd/ask-dev-jobs-probe's `retention` check now covers that cadence natively), but reconcile_sync_dispatch has a very large test surface (canonical-incident-feature gating, outbox relay, backfill-orphan cleanup, unreclaimable-dispatching sweep, ~14 test functions across test_chaos_2581_invariants.py and others) beyond what CHAOS-4056's inventory sweep verified 1:1 Go parity for -- kept for CHAOS-3093's own reviewed pass (PR2a'), which must carry a one-row-per-deleted-test mapping onto the equivalent internal/syncreconciler / internal/scheduler/sync Go test",
-        "ticket": "CHAOS-3093 (PR2a' -- deferred, needs Go-invariant-parity mapping, not a drive-by delete)",
-    },
-    "sync_scheduler.py": {
-        "category": "b",
-        "evidence": "`@celery_app.task` (L394 dispatch_scheduled_syncs); sole importer tasks.py. Deferred alongside sync_reconciler.py to the same CHAOS-3093 reviewed pass (PR2a') -- test_scheduler_timezone.py calls dispatch_scheduled_syncs directly and test_p1_bug_fixes.py/test_compose_config.py assert its beat_schedule entry, none of which CHAOS-4056's sweep verified 1:1 Go parity for",
-        "ticket": "CHAOS-3093 (PR2a' -- deferred, needs Go-invariant-parity mapping, not a drive-by delete)",
     },
     "sync_units.py": {
         "category": "a",

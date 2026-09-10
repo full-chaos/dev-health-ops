@@ -264,7 +264,21 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # deleted by this PR (CHAOS-3093's own reviewed pass, PR2a', is
     # deferred -- their large invariant-test surface needs a one-row Go-
     # parity mapping first, not a drive-by delete). Net: 77 - 20 = 57.
-    assert inventory["row_count"] == 57
+    #
+    # = 48. CHAOS-3093 (PR2a') completes the deferred pass: sync_scheduler.py
+    # and sync_reconciler.py are now deleted outright, with their Python
+    # invariant-test surface mapped onto executed internal/scheduler/sync
+    # and internal/syncreconciler Go tests (this PR's own TEST-EVIDENCE).
+    # Removed: celery_task:sync_scheduler.py:394 and
+    # celery_task:sync_reconciler.py:84/:131 (3 rows); the three
+    # call_site_getattr_indirection:sync_reconciler.py:891/909/917 rows
+    # (3 rows); and the three beat_entry:config.py rows for
+    # dispatch-scheduled-syncs, reconcile-sync-dispatch, and
+    # prune-rate-limit-observations (3 rows) -- all three move to
+    # retired_beat_entries with their evidence rather than vanishing (see
+    # test_retired_beat_entries_are_evidenced_and_absent_from_source below).
+    # Net: 57 - 9 = 48.
+    assert inventory["row_count"] == 48
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():
@@ -303,6 +317,24 @@ def test_retired_beat_entries_are_evidenced_and_absent_from_source():
             "cadence": "crontab(5,15) UTC",
             "reason": "CHAOS-4065 replaced the ask-dev-acceptance release-blocking gate's real Celery worker+beat fleet (this entry's last reason to survive) with a Go-native probe that re-executes internal/scheduler/fixed's RetentionProducer/internal/jobs/system's ExternalIngestBatchStore directly.",
             "evidence": "CHAOS-3093 (PR2a). workers/external_ingest_reconciler.py deleted outright; tests/workers/test_celery_dead_code_contract.py pins prune_external_ingest_batches/prune-external-ingest-batches absent.",
+        },
+        {
+            "name": "dispatch-scheduled-syncs",
+            "cadence": "300s",
+            "reason": "internal/scheduler/sync's coordinator/loop (Go, already the real owner of this cadence, confirmed live) owns sync dispatch now -- this is the reviewed pass a prior cleanup deferred pending a Go-invariant-parity mapping for this entry's own large test surface.",
+            "evidence": "CHAOS-3093 (PR2a'). workers/sync_scheduler.py deleted outright; tests/workers/test_celery_dead_code_contract.py pins dispatch_scheduled_syncs/dispatch-scheduled-syncs absent; the deleted Python invariant tests are mapped onto executed internal/scheduler/sync Go tests in PR2a's own TEST-EVIDENCE.",
+        },
+        {
+            "name": "reconcile-sync-dispatch",
+            "cadence": "60s",
+            "reason": "internal/syncreconciler (Go, already shipped ACTIVE) owns reconciliation now -- the same deferred reviewed pass as dispatch-scheduled-syncs above, same module (workers/sync_reconciler.py).",
+            "evidence": "CHAOS-3093 (PR2a'). workers/sync_reconciler.py deleted outright; tests/workers/test_celery_dead_code_contract.py pins reconcile_sync_dispatch/reconcile-sync-dispatch absent; the deleted Python invariant tests are mapped onto executed internal/syncreconciler Go tests in PR2a's own TEST-EVIDENCE.",
+        },
+        {
+            "name": "prune-rate-limit-observations",
+            "cadence": "crontab(5,0) UTC",
+            "reason": "internal/jobs/system's RateLimitObservationStore + internal/scheduler/fixed's RetentionProducer already own this retention cadence natively -- kept alongside reconcile-sync-dispatch only because it lived in the same sync_reconciler.py module, not because it still needed a real Celery fleet.",
+            "evidence": "CHAOS-3093 (PR2a'). workers/sync_reconciler.py deleted outright; tests/workers/test_celery_dead_code_contract.py pins prune_rate_limit_observations/prune-rate-limit-observations absent.",
         },
     ]
     assert (

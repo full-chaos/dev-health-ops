@@ -19,7 +19,9 @@ _SRC = _WORKTREE_ROOT / "src" / "dev_health_ops"
 _SCANNED_FILES = [
     _SRC / "workers" / "tasks.py",
     _SRC / "api" / "admin" / "routers" / "sync.py",
-    _SRC / "workers" / "sync_scheduler.py",
+    # sync_scheduler.py was itself deleted outright under CHAOS-3093 (PR2a') --
+    # a nonexistent file cannot contain a forbidden identifier, so it is
+    # removed from the scan list rather than scanned.
 ]
 
 _DELETED_MODULES = [

@@ -112,13 +112,11 @@ def test_celery_config_has_per_provider_sync_queues() -> None:
 # tests/workers/test_celery_dead_code_contract.py.
 
 
-def test_scheduled_sync_dispatcher_uses_scheduler_queue() -> None:
-    from dev_health_ops.workers.config import beat_schedule
-
-    entry = beat_schedule["dispatch-scheduled-syncs"]
-    assert entry["task"] == "dev_health_ops.workers.tasks.dispatch_scheduled_syncs"
-    assert entry["schedule"] == 300.0
-    assert entry["options"] == {"queue": "scheduler"}
+# CHAOS-3093 (2026-09-09): test_scheduled_sync_dispatcher_uses_scheduler_queue
+# tested the dispatch-scheduled-syncs beat entry and workers/
+# sync_scheduler.py's dispatch_scheduled_syncs task, both deleted with this
+# cleanup (internal/scheduler/sync's coordinator/loop owns this cadence
+# natively now). See tests/workers/test_celery_dead_code_contract.py.
 
 
 def test_scheduler_queue_declared_and_consumed_redundantly() -> None:

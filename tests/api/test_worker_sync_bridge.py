@@ -131,7 +131,7 @@ def test_team_autoimport_bridge_rejects_cross_org_run(monkeypatch) -> None:
             return_value=False,
         ),
         patch(
-            "dev_health_ops.api.internal.worker_sync.run_post_sync_team_autoimport.run"
+            "dev_health_ops.api.internal.worker_sync.run_post_sync_team_autoimport"
         ) as run,
     ):
         response = TestClient(app).post(

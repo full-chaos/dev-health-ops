@@ -4,10 +4,7 @@ from dev_health_ops.workers.sync_units import (
     finalize_sync_run,
     run_sync_unit,
 )
-from dev_health_ops.workers.system_tasks import (
-    health_check,
-    phone_home_heartbeat,
-)
+from dev_health_ops.workers.system_tasks import phone_home_heartbeat
 from dev_health_ops.workers.task_utils import (
     _extract_provider_token,
     _inject_provider_token,
@@ -22,7 +19,6 @@ __all__ = [
     "_invalidate_metrics_cache",
     "_resolve_env_credentials",
     "dispatch_sync_run",
-    "health_check",
     "phone_home_heartbeat",
     "finalize_sync_run",
     "run_sync_reference_discovery",

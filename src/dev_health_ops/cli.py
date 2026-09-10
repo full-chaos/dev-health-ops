@@ -283,18 +283,6 @@ def _is_help_invocation(argv: list[str] | None) -> bool:
     return any(arg in {"-h", "--help"} for arg in args)
 
 
-def _is_workers_inspect_json_invocation(argv: list[str] | None) -> bool:
-    args = sys.argv[1:] if argv is None else argv
-    if "workers" not in args or "inspect" not in args:
-        return False
-    if "--output=json" in args:
-        return True
-    return any(
-        arg == "--output" and index + 1 < len(args) and args[index + 1] == "json"
-        for index, arg in enumerate(args)
-    )
-
-
 def _is_go_api_routing_json_invocation(argv: list[str] | None) -> bool:
     """`dev-hops go-api routing status --json` must emit ONLY JSON.
 
@@ -319,9 +307,8 @@ def _is_push_invocation(argv: list[str] | None) -> bool:
     envelope JSON, `--json` mode's single JSON object) and are frequently
     piped (``push sample --all | push validate -``, CI log capture) --
     Sentry/OTel init noise and their background-exporter retry chatter
-    landing on stdout (same leak `_is_workers_inspect_json_invocation`
-    exists for) would corrupt that output, so every `push` invocation gets
-    the same quiet treatment regardless of `--json`."""
+    landing on stdout would corrupt that output, so every `push` invocation
+    gets the same quiet treatment regardless of `--json`."""
     args = sys.argv[1:] if argv is None else argv
     return bool(args) and args[0] == "push"
 
@@ -662,7 +649,6 @@ def build_parser() -> argparse.ArgumentParser:
     from dev_health_ops.providers import teams as teams_provider
     from dev_health_ops.push import cli as push_cli
     from dev_health_ops.work_graph import runner as work_graph_runner
-    from dev_health_ops.workers import runner as workers_runner
 
     parser = argparse.ArgumentParser(
         prog="dev-health-ops",
@@ -781,13 +767,17 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_mod.register_commands(sub)
 
     # ---- workers ----
-    workers_parser = sub.add_parser(
-        "workers", help="Manage background worker processes."
-    )
-    workers_subparsers = workers_parser.add_subparsers(
-        dest="workers_command", required=True
-    )
-    workers_runner.register_commands(workers_subparsers)
+    # CHAOS-3093 (PR2b): the `dev-hops workers` group used to register
+    # exactly one subcommand, `inspect` -- a Celery control-plane RPC reader
+    # (`celery_app.control.inspect`), deleted below along with this
+    # registration. Celery has had zero consumers since CHAOS-4026, and
+    # CHAOS-4065 converted the last claimed live consumer (the
+    # ask-dev-acceptance fleet's `worker`/`beat` services) to
+    # `entrypoint: ["sleep", "infinity"]` with Go healthchecks -- there is no
+    # Celery fleet left anywhere for `inspect` to read. With `inspect` gone
+    # the group has zero verbs left, so the whole top-level `workers`
+    # command is removed rather than left as a dead, always-invalid-choice
+    # subparser (same pattern as the `recommendations` removal above).
 
     maintenance_parser = sub.add_parser(
         "maintenance", help="Run maintenance operations."
@@ -902,11 +892,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"dotenv error: {exc}", file=sys.stderr)
             return 2
 
-    quiet_json_inspect = (
-        _is_workers_inspect_json_invocation(argv)
-        or _is_push_invocation(argv)
-        or _is_go_api_routing_json_invocation(argv)
-    )
+    quiet_json_inspect = _is_push_invocation(
+        argv
+    ) or _is_go_api_routing_json_invocation(argv)
     service_credentials_output = _is_service_credential_invocation(argv)
     previous_otel_enabled = os.environ.get("OTEL_ENABLED")
     if quiet_json_inspect:
@@ -950,17 +938,13 @@ def main(argv: list[str] | None = None) -> int:
             log_rate_limit_configuration,
         )
 
-        if not (
-            (
-                getattr(ns, "command", None) == "workers"
-                and getattr(ns, "workers_command", None) == "inspect"
-                and getattr(ns, "output", None) == "json"
-            )
-            # `push` never touches the in-process rate limiter (that's a
-            # server-side concern for the API `push` talks to over HTTP) and
-            # is stdout-sensitive (see _is_push_invocation) -- skip the log.
-            or getattr(ns, "command", None) == "push"
-        ):
+        # `push` never touches the in-process rate limiter (that's a
+        # server-side concern for the API `push` talks to over HTTP) and is
+        # stdout-sensitive (see _is_push_invocation) -- skip the log. The
+        # `workers inspect --output json` carve-out this condition used to
+        # need alongside it was deleted with the `workers` command itself
+        # (CHAOS-3093, PR2b): Celery has had zero consumers since CHAOS-4026.
+        if getattr(ns, "command", None) != "push":
             log_rate_limit_configuration()
 
         func = getattr(ns, "func", None)

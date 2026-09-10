@@ -65,5 +65,5 @@ async def process_heartbeat_reference(
     _authorize(authorization)
     if reference.scheduled_for.utcoffset() != timedelta(0):
         raise HTTPException(status_code=422, detail="Heartbeat occurrence must be UTC")
-    result = await run_in_threadpool(phone_home_heartbeat.run)
+    result = await run_in_threadpool(phone_home_heartbeat)
     return _bridge_result(result, success=frozenset({"ok"}))

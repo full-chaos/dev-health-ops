@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -65,26 +64,6 @@ def db_session() -> Iterator[Session]:
         seed_sync_dispatch_transport_routes(session)
         yield session
     engine.dispose()
-
-
-@contextmanager
-def _fake_session_ctx(session: Session) -> Iterator[Session]:
-    try:
-        yield session
-    except Exception:
-        session.rollback()
-        raise
-    else:
-        session.commit()
-
-
-def _patch_db_session(monkeypatch: pytest.MonkeyPatch, session: Session) -> None:
-    import dev_health_ops.db as db
-
-    session.commit()
-    monkeypatch.setattr(
-        db, "get_postgres_session_sync", lambda: _fake_session_ctx(session)
-    )
 
 
 def _aware(value: datetime) -> datetime:
@@ -197,47 +176,6 @@ def _outbox(session: Session, run: SyncRun, kind: str) -> SyncDispatchOutbox:
     return (
         session.query(SyncDispatchOutbox).filter_by(sync_run_id=run.id, kind=kind).one()
     )
-
-
-def _patch_reconciler_enqueues(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    dispatch_side_effect: Callable[..., Any] | None = None,
-    finalize_side_effect: Callable[..., Any] | None = None,
-    post_sync_side_effect: Callable[..., Any] | None = None,
-) -> tuple[list[tuple[Any, Any]], list[tuple[Any, Any]], list[dict[str, Any]]]:
-    from dev_health_ops.workers import post_sync_dispatch, sync_units
-
-    dispatches: list[tuple[Any, Any]] = []
-    finalizers: list[tuple[Any, Any]] = []
-    post_sync: list[dict[str, Any]] = []
-
-    def dispatch_apply(args=None, queue=None):
-        dispatches.append((args, queue))
-        if dispatch_side_effect is not None:
-            return dispatch_side_effect(args=args, queue=queue)
-        return None
-
-    def finalize_apply(args=None, queue=None):
-        finalizers.append((args, queue))
-        if finalize_side_effect is not None:
-            return finalize_side_effect(args=args, queue=queue)
-        return None
-
-    def dispatch_post_sync(**kwargs):
-        post_sync.append(kwargs)
-        if post_sync_side_effect is not None:
-            return post_sync_side_effect(**kwargs)
-        return None
-
-    monkeypatch.setattr(sync_units.dispatch_sync_run, "apply_async", dispatch_apply)
-    monkeypatch.setattr(sync_units.finalize_sync_run, "apply_async", finalize_apply)
-    monkeypatch.setattr(
-        post_sync_dispatch,
-        "_dispatch_post_sync_tasks",
-        dispatch_post_sync,
-    )
-    return dispatches, finalizers, post_sync
 
 
 def _dispatched_units(session: Session) -> set[str]:

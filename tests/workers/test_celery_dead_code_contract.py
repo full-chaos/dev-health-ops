@@ -92,7 +92,28 @@ _DEAD_TASK_NAMES = (
     "dispatch_scheduled_syncs",
     "reconcile_sync_dispatch",
     "prune_rate_limit_observations",
+    # CHAOS-3093 (PR2b): health_check had no dispatch site of any kind
+    # (confirmed repo-wide: no .delay/.apply_async/send_task/getattr
+    # indirection/Beat entry/CLI invocation) -- deleted outright, along with
+    # its two re-export sites (tasks.py, system_tasks.py). Unlike the other
+    # PR2b decorator strips below, this one is a full deletion, not a
+    # decorator-only removal -- see test_dead_code_contract's own comment
+    # for phone_home_heartbeat/run_post_sync_team_autoimport, which keep
+    # their function bodies and stay live via HTTP compatibility bridges.
+    "health_check",
 )
+
+# CHAOS-3093 (PR2b): phone_home_heartbeat (system_ops.py) and
+# run_post_sync_team_autoimport (team_autoimport.py) had their
+# `@celery_app.task` decorators dropped -- Celery has had zero consumers
+# since CHAOS-4026, so the decorator was dead weight around code that is
+# still genuinely needed: both remain the live compute body behind an HTTP
+# compatibility bridge (api/internal/worker_operational.py's /heartbeat,
+# api/internal/worker_sync.py's /team-autoimport), called directly now
+# instead of via `.run()`. They are deliberately NOT added to
+# _DEAD_TASK_NAMES above -- that set asserts absence from
+# `tasks.__all__`/the registered celery app, and both functions correctly
+# stay present in `tasks.__all__` (just no longer celery-registered).
 
 # Beat schedule keys that must no longer exist.
 _DEAD_BEAT_ENTRIES = (
@@ -201,6 +222,36 @@ def test_dead_task_names_are_absent_from_tasks_module_exports() -> None:
         )
 
 
+def test_decorator_stripped_tasks_are_plain_functions_still_exported() -> None:
+    """PR2b's decorator strips: live, but no longer celery-registered.
+
+    phone_home_heartbeat and run_post_sync_team_autoimport keep their
+    compute bodies (still genuinely needed behind an HTTP compatibility
+    bridge) but lost their `@celery_app.task` decorator -- a re-added
+    decorator on either fails this test. They are deliberately NOT in
+    _DEAD_TASK_NAMES above: that set asserts absence from tasks.__all__,
+    and both correctly stay exported there.
+    """
+    from dev_health_ops.workers import tasks
+
+    app = _celery_app()
+    registered = set(app.tasks)
+    for name in ("phone_home_heartbeat", "run_post_sync_team_autoimport"):
+        assert name in tasks.__all__, (
+            f"{name!r} unexpectedly missing from tasks.__all__"
+        )
+        func = getattr(tasks, name)
+        assert not hasattr(func, "run"), (
+            f"{name!r} has a .run attribute -- a @celery_app.task decorator "
+            "reappeared; Celery has had zero consumers since CHAOS-4026."
+        )
+        assert _qualified(name) not in registered, (
+            f"{_qualified(name)!r} is registered on the celery app -- a "
+            "@celery_app.task decorator reappeared on a function that is "
+            "meant to stay a plain HTTP-bridge compute body."
+        )
+
+
 def test_deleted_task_modules_are_absent() -> None:
     """Deleted fan-out-dispatcher modules must not exist in the source tree."""
     for filename in _DELETED_MODULES:
@@ -218,29 +269,43 @@ def test_runner_cli_no_longer_boots_a_real_celery_process() -> None:
     Scope addition ratified on CHAOS-4026 (2026-08-21 reconciliation sweep):
     runner.py's start-worker/start-scheduler subcommands booted a real
     ``celery worker``/``celery beat`` process and were the last CLI-level
-    way to falsify CUT-18 (CHAOS-3931). ``inspect`` survives deliberately --
-    it only reads Celery's control-plane RPC (useful for the still-live
-    ask-dev-acceptance Celery fleet) and cannot itself start a process.
+    way to falsify CUT-18 (CHAOS-3931). ``inspect`` survived that sweep
+    deliberately -- it only read Celery's control-plane RPC (useful for the
+    then-still-live ask-dev-acceptance Celery fleet) and could not itself
+    start a process.
+
+    CHAOS-3093 (PR2b) finished the job: CHAOS-4065 already converted that
+    ask-dev-acceptance fleet to `entrypoint: ["sleep", "infinity"]` with Go
+    healthchecks, leaving `inspect` with zero live Celery fleet anywhere to
+    read -- the whole module (and the `dev-hops workers` CLI group that
+    existed only to host it) is deleted outright.
     """
-    source = (_WORKERS_SRC / "runner.py").read_text(encoding="utf-8")
-    assert 'add_parser("start-worker"' not in source
-    assert "add_parser('start-worker'" not in source
-    assert 'add_parser("start-scheduler"' not in source
-    assert "add_parser('start-scheduler'" not in source
-    assert "_cmd_start_worker" not in source
-    assert "_cmd_start_scheduler" not in source
+    assert not (_WORKERS_SRC / "runner.py").exists(), (
+        "workers/runner.py reappeared -- its sole subcommand (`inspect`, a "
+        "Celery control-plane RPC reader) has no Celery fleet left anywhere "
+        "to read (CHAOS-3093, PR2b)."
+    )
 
-    import argparse
+    import os
+    import subprocess
+    import sys
 
-    from dev_health_ops.workers.runner import register_commands
-
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers()
-    register_commands(subparsers)
-    registered = set(subparsers.choices)
-    assert "start-worker" not in registered
-    assert "start-scheduler" not in registered
-    assert "inspect" in registered  # control-plane read-only survives
+    env = os.environ.copy()
+    env["DISABLE_DOTENV"] = "1"
+    env["PYTHONPATH"] = "src"
+    result = subprocess.run(
+        [sys.executable, "-m", "dev_health_ops.cli", "workers", "--help"],
+        check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+        cwd=_REPO_ROOT,
+    )
+    assert result.returncode != 0, (
+        "`dev-hops workers` reappeared as a top-level command -- it existed "
+        "only to host `inspect`, which is deleted (CHAOS-3093, PR2b)."
+    )
+    assert "invalid choice: 'workers'" in result.stderr
 
 
 def test_recompute_bridge_task_is_deleted() -> None:
@@ -319,3 +384,16 @@ def test_provider_unit_dispatch_has_no_celery_fallthrough() -> None:
         "dispatch_sync_run publishes run_sync_unit again -- the Celery "
         "fallthrough this dispatcher had is deleted (CHAOS-4054 step 4)."
     )
+    # CHAOS-3093 (PR2b, r2 codex review finding): the literal-name check above
+    # is lexical, not behavioral -- a reintroduced fallthrough built from a
+    # concatenated string (e.g. `celery_app.send_task("run_" + "sync_unit",
+    # ...)`) would dodge it while still publishing. `send_task`/`apply_async`
+    # are the two ways anything gets published to a Celery-shaped transport at
+    # all; their absence as literal call-site tokens is a second, independent
+    # signal that doesn't depend on the target name being spelled out.
+    for banned_dispatch_call in ("send_task", "apply_async"):
+        assert banned_dispatch_call not in dispatch, (
+            f"dispatch_sync_run calls `.{banned_dispatch_call}` again -- the "
+            "Celery fallthrough this dispatcher had is deleted (CHAOS-4054 "
+            "step 4), regardless of what name it would target."
+        )

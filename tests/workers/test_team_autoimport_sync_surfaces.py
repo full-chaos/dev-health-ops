@@ -3,7 +3,6 @@ from __future__ import annotations
 import uuid
 from contextlib import contextmanager
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,9 +17,7 @@ from dev_health_ops.models import (
 )
 from dev_health_ops.models.settings import IntegrationCredential, SyncConfiguration
 from dev_health_ops.workers import team_autoimport
-from dev_health_ops.workers.post_sync_dispatch import _dispatch_post_sync_tasks
 
-_TEAM_AUTOIMPORT_TASK = "dev_health_ops.workers.tasks.run_post_sync_team_autoimport"
 _ORG = "team-autoimport-sync-org"
 
 
@@ -46,70 +43,16 @@ _ORG = "team-autoimport-sync-org"
 # ---------------------------------------------------------------------------
 # Regular-sync surface (CHAOS-2647): the unitized post-sync path must restore
 # the per-config-run team auto-import that the deleted legacy worker performed.
+#
+# CHAOS-3093 (PR2b): the three tests that used to live here
+# (test_post_sync_dispatch_enqueues_team_autoimport_when_enabled,
+# _skips_..._when_disabled, _skips_..._without_sync_run_id) drove
+# _dispatch_post_sync_tasks's `auto_import_teams`/`sync_run_id`-gated
+# `celery_app.send_task` dispatch decision -- deleted outright along with
+# that whole decision (dead-into-the-void, zero Celery consumers since
+# CHAOS-4026; the REAL live trigger for run_post_sync_team_autoimport today
+# is the HTTP compatibility bridge exercised directly by the tests below).
 # ---------------------------------------------------------------------------
-
-
-@contextmanager
-def _patched_post_sync_dispatch():
-    """Patch celery_app.send_task so _dispatch_post_sync_tasks never hits a broker.
-
-    Mirrors tests/test_post_sync_dora_dispatch.py. CHAOS-3093: the investment
-    chain (``chain``/``signature``) this used to also stub was deleted
-    outright (dead-into-the-void, no consumer since 2026-08-19) --
-    ``run_post_sync_team_autoimport`` was never part of it, it has always
-    been a standalone ``celery_app.send_task(...)`` call.
-    """
-    with patch(
-        "dev_health_ops.workers.post_sync_dispatch.celery_app.send_task"
-    ) as mock_send_task:
-        yield mock_send_task
-
-
-def _team_autoimport_calls(mock_send_task):
-    return [
-        call
-        for call in mock_send_task.call_args_list
-        if call.args and call.args[0] == _TEAM_AUTOIMPORT_TASK
-    ]
-
-
-def test_post_sync_dispatch_enqueues_team_autoimport_when_enabled() -> None:
-    with _patched_post_sync_dispatch() as mock_send_task:
-        _dispatch_post_sync_tasks(
-            provider="github",
-            sync_targets=["work-items"],
-            org_id="org-1",
-            auto_import_teams=True,
-            sync_run_id="run-1",
-        )
-    calls = _team_autoimport_calls(mock_send_task)
-    assert len(calls) == 1
-    assert calls[0].kwargs["kwargs"] == {"sync_run_id": "run-1"}
-    assert calls[0].kwargs["queue"] == "sync"
-
-
-def test_post_sync_dispatch_skips_team_autoimport_when_disabled() -> None:
-    with _patched_post_sync_dispatch() as mock_send_task:
-        _dispatch_post_sync_tasks(
-            provider="github",
-            sync_targets=["work-items"],
-            org_id="org-1",
-            auto_import_teams=False,
-            sync_run_id="run-1",
-        )
-    assert _team_autoimport_calls(mock_send_task) == []
-
-
-def test_post_sync_dispatch_skips_team_autoimport_without_sync_run_id() -> None:
-    with _patched_post_sync_dispatch() as mock_send_task:
-        _dispatch_post_sync_tasks(
-            provider="github",
-            sync_targets=["work-items"],
-            org_id="org-1",
-            auto_import_teams=True,
-            sync_run_id=None,
-        )
-    assert _team_autoimport_calls(mock_send_task) == []
 
 
 @pytest.fixture

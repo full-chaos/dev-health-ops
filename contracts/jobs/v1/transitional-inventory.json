@@ -2,7 +2,7 @@
   "schema_version": 1,
   "$comment": "CUT-01 transitional workload inventory contract (CHAOS-3073). Maps every legacy Celery/Beat/API/registry/stream surface discovered in the Wave-0 audit to a target owner or explicit removal. See docs/architecture/transitional-workload-inventory.md for the update procedure and CI gate (ci/check_transitional_inventory.py).",
   "source_audit": "Wave-0 inventory audit, 147 surfaces (docs/plans/go-worker-cutover-implementation-plan.md CUT-01; TRD sec 6, 8.3)",
-  "row_count": 48,
+  "row_count": 41,
   "ownership_model": {
     "owner_role": "'primary' rows are the exclusive canonical claimant of a target_kind_id (a Beat entry, registry kind, stream, transport route, or a standalone celery task with no other owning row). 'contributor' rows are dispatch/trigger call sites, or implementation bodies, that feed an existing primary row and may freely share a target_owner value with other contributors.",
     "exclusivity_rule": "At most one row may be owner_role=primary for any given target_kind_id. CI enforces this; it does not require target_owner.value itself to be unique, since many contributor rows legitimately share one coarse target process description."
@@ -125,78 +125,6 @@
       "notes": "transport-routes.json kind finalize_sync_run, route=river, rollback_route=celery; the deployed sync_dispatch_transport_routes row is transport='river', paused=false, generation=2 (a production dump on 2026-08-22 under CHAOS-4082 disproved this note's earlier claim that it was still 'celery'; 0049 seeds 'celery' and no migration flips it, but an operator applied it with `dev-health-workerctl routes apply`), so the native Go coordinator is the RUNNING route, not merely the checked-in one"
     },
     {
-      "id": "celery_task:src/dev_health_ops/workers/team_autoimport.py:358",
-      "surface": "run_post_sync_team_autoimport",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/team_autoimport.py",
-        "line": 358
-      },
-      "queue_or_cadence": "sync",
-      "dispatches": "self",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "sync.team_autoimport"
-      },
-      "target_kind_id": "kind:sync.team_autoimport",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "Implements the compute body invoked by the registry kind's HTTP compatibility bridge.",
-      "deletion_evidence_requirement": "Deleted once registry kind `sync.team_autoimport` no longer routes through the HTTP compatibility bridge.",
-      "acceptance_test_id": "tests/workers/job_contracts/test_registry.py",
-      "notes": "registry kind sync.team_autoimport"
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:13",
-      "surface": "health_check",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/system_ops.py",
-        "line": 13
-      },
-      "queue_or_cadence": "default (implicit)",
-      "dispatches": "n/a",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "primary",
-      "target_owner": {
-        "type": "explicit_removal",
-        "value": "Go health/readiness/metrics and operator APIs"
-      },
-      "target_kind_id": "task:health_check",
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "None. Celery `inspect`/ping tooling only; no application code paths call it.",
-      "deletion_evidence_requirement": "Confirmed repo-wide (grep for `.delay(`, `.apply_async(`, `send_task(`, the `getattr(x, \"apply_async\"|\"delay\"|\"send_task\")` indirection form, Beat entries, and CLI/admin invocations) that no dispatch site of any kind references `health_check`; task decorator and its two re-export sites (tasks.py, system_tasks.py) deleted in the same PR as the removal evidence.",
-      "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": "no dispatch call site found anywhere (not .delay/apply_async/getattr/Beat) - likely celery inspect only, confirm intent | Verified during CUT-01: repo-wide search for .delay/apply_async/send_task/getattr-indirection/Beat/CLI finds zero dispatch sites for health_check (only the task decorator and two `__all__`/import re-exports exist). Celery `inspect`/`ping` commands are the only conceivable callers and are being replaced by Go health/readiness/metrics endpoints (CUT-04)."
-    },
-    {
-      "id": "celery_task:src/dev_health_ops/workers/system_ops.py:22",
-      "surface": "phone_home_heartbeat",
-      "class": "celery_task",
-      "source": {
-        "file": "src/dev_health_ops/workers/system_ops.py",
-        "line": 22
-      },
-      "queue_or_cadence": "default",
-      "dispatches": "invoked by api/internal/worker_operational.py::process_heartbeat_reference via phone_home_heartbeat.run() (HTTP bridge, not Beat)",
-      "dispatch_mechanism": "celery_task_decorator",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_kind",
-        "value": "system.heartbeat"
-      },
-      "target_kind_id": "kind:system.heartbeat",
-      "current_implementation_state": "python_compatibility",
-      "verification_status": "verified",
-      "compatibility_dependency": "HTTP compatibility bridge (api/internal/worker_operational.py's /api/internal/worker-operational/heartbeat route) invoking this task's body synchronously via .run() -- not a Celery Beat dispatch. CHAOS-4026 (2026-08-21) deleted the phone-home-heartbeat Beat entry and its celery_task decorator's only prior dispatcher; this task survives solely as the bridge's compute body.",
-      "deletion_evidence_requirement": "Deleted alongside Beat entry `phone-home-heartbeat` once its native replacement is proven.",
-      "acceptance_test_id": "tests/workers/test_go_worker_deployment_contract.py",
-      "notes": "Formerly fed the phone-home-heartbeat Beat entry (crontab(0,0) UTC); that entry was deleted under CHAOS-4026 (2026-08-21) -- Go's own heartbeat cadence now calls this task's body via the worker_operational.py HTTP bridge instead. Re-anchored to the system.heartbeat registry_kind primary row (registry_kind:contracts/jobs/v1/registry.json:684), which this row already fed."
-    },
-    {
       "id": "celery_task:src/dev_health_ops/workers/reference_discovery.py:53",
       "surface": "run_sync_reference_discovery",
       "class": "celery_task",
@@ -245,30 +173,6 @@
       "notes": "CHAOS-4924: this row replaces the old chain(daily_sig,build_sig).apply_async() at the old line 368 -- run_work_graph_build was deleted outright, so the per-repo dispatch collapsed from a 2-signature chain into a single plain send_task for run_daily_metrics alone. See workers/post_sync_dispatch.py's identical fold for the reasoning."
     },
     {
-      "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:636",
-      "surface": "celery_app.send_task(flush_external_ingest_recompute)",
-      "class": "call_site_literal",
-      "source": {
-        "file": "src/dev_health_ops/external_ingest/recompute.py",
-        "line": 636
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "flush_external_ingest_recompute",
-      "dispatch_mechanism": "literal_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "implicit under 6.1/12"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_external_ingest_recompute_debounce.py",
-      "notes": "CHAOS-3093: workers/external_ingest_recompute.py was deleted (no Celery consumer since 2026-08-19); this debounced countdown dispatch was retargeted from a direct-import apply_async to a named send_task, same void-dispatch pattern as the other retired call sites in this PR."
-    },
-    {
       "id": "call_site_literal:src/dev_health_ops/api/admin/routers/teams.py:401",
       "surface": "celery_app.signature('sync_team_drift').apply_async",
       "class": "call_site_literal",
@@ -291,30 +195,6 @@
       "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
       "acceptance_test_id": "tests/test_sync_units.py",
       "notes": "POST /teams/trigger-drift-sync; dynamic name-based dispatch, TODO CHAOS-2653 to replace with concrete import"
-    },
-    {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:222",
-      "surface": "celery_app.send_task",
-      "class": "call_site_literal",
-      "source": {
-        "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 222
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "run_complexity_job",
-      "dispatch_mechanism": "literal_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "post_sync (transport-routes.json)"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": "CHAOS-3093: was celery_app.signature() feeding the now-deleted materialize/complexity chain at line 266; dispatch_investment_materialize_partitioned was dead-into-the-void (no Celery consumer since 2026-08-19, investment.materialize is river-only) and its signature/chain call site is deleted -- complexity now dispatches standalone via send_task, same net effect, nobody consumes either."
     },
     {
       "id": "call_site_literal:src/dev_health_ops/external_ingest/recompute.py:366",
@@ -355,54 +235,6 @@
       "target_owner": {
         "type": "native_process",
         "value": "remove; native external recompute"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": ""
-    },
-    {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:254",
-      "surface": "celery_app.send_task",
-      "class": "call_site_literal",
-      "source": {
-        "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 254
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "dynamic (post-sync fan-out)",
-      "dispatch_mechanism": "literal_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "post_sync (transport-routes.json)"
-      },
-      "target_kind_id": null,
-      "current_implementation_state": "celery_only",
-      "verification_status": "verified",
-      "compatibility_dependency": "Dispatch/trigger site only; inherits the compatibility dependency of the task or kind it invokes.",
-      "deletion_evidence_requirement": "Deleted or rewritten once the surface(s) it dispatches to are natively owned in Go.",
-      "acceptance_test_id": "tests/test_sync_units.py",
-      "notes": ""
-    },
-    {
-      "id": "call_site_literal:src/dev_health_ops/workers/post_sync_dispatch.py:277",
-      "surface": "celery_app.send_task",
-      "class": "call_site_literal",
-      "source": {
-        "file": "src/dev_health_ops/workers/post_sync_dispatch.py",
-        "line": 277
-      },
-      "queue_or_cadence": "n/a",
-      "dispatches": "dynamic (post-sync fan-out)",
-      "dispatch_mechanism": "literal_dispatch_call",
-      "owner_role": "contributor",
-      "target_owner": {
-        "type": "native_process",
-        "value": "post_sync (transport-routes.json)"
       },
       "target_kind_id": null,
       "current_implementation_state": "celery_only",

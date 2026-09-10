@@ -208,17 +208,22 @@ def test_go_handoff_never_intercepts_an_ordinary_scheduled_cron_tick(
     sqlite_session, monkeypatch
 ):
     """Codex review (gate round 9, P1): create_sync_execution_trigger is
-    also the ordinary scheduled-cron path's call target --
-    create_scheduled_sync_execution_trigger (sync_scheduler.py) passes
-    triggered_by="schedule" straight through. Before this fix, the Go
-    hand-off branch checked only config.planner_managed and the rollout
-    flag, with no check on triggered_by at all -- flipping the flag on for
-    an org would ALSO route every regular scheduled cron tick for a
+    also the ordinary scheduled-cron path's call target -- when
+    sync_scheduler.py existed (deleted outright under CHAOS-3093, PR2a'),
+    its create_scheduled_sync_execution_trigger (itself deleted outright
+    under CHAOS-3093, PR2b -- zero callers remained once sync_scheduler.py
+    was gone) passed triggered_by="schedule" straight through. Before this
+    fix, the Go hand-off branch checked only config.planner_managed and the
+    rollout flag, with no check on triggered_by at all -- flipping the flag
+    on for an org would ALSO route every regular scheduled cron tick for a
     planner-managed config into the Go hand-off, which writes
     triggered_by verbatim into sync_manual_triggers.triggered_by, a value
     the CHECK constraint (settings.py, 'manual'/'backfill' only) rejects
     outright. This must take the legacy in-process path instead, exactly
-    like the flag-off case, regardless of the flag."""
+    like the flag-off case, regardless of the flag. The guard in
+    create_sync_execution_trigger stays load-bearing regardless of whether
+    anything still calls it with triggered_by="schedule" today -- it is the
+    one function every trigger path funnels through."""
     monkeypatch.setenv("SYNC_GO_MANUAL_BACKFILL_PLANNER_ENABLED", "true")
     config = _seed_planner_managed_config(sqlite_session)
 

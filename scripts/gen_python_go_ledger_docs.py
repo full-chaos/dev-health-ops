@@ -306,7 +306,7 @@ KIND_LEDGER: dict[str, dict[str, str]] = {
         "producer": "`cmd/dev-health-worker/operational.go:144-155`",
         "trigger": "schedule",
         "gate": "`descriptor.Executable()` (route=river)",
-        "writer": "Python `system_ops.py:172 phone_home_heartbeat`",
+        "writer": "Python `system_ops.py:22 phone_home_heartbeat`",
         "tables": "Python-owned `audit_logs` row + external `TELEMETRY_ENDPOINT` POST",
         "evidence": "argued — code read; `internal/jobs/system/heartbeat.go:12-33` docstring is accurate and non-stale about this (explicitly says 'CLASSIFICATION: python_compatibility, not native Go')",
         "state": "bridge",
@@ -426,11 +426,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "resolve_worker_job_route called sync_units.py:999, inside dispatch_sync_run",
         "ticket": "n/a",
     },
-    "org_guard.py": {
-        "category": "c",
-        "evidence": "corrected 2026-08-28 per codex review (a 3rd caller exists, but is itself dead): `organization_exists_sync` is also called at `sync/execution_trigger.py:325`, inside `_require_locked_scheduled_eligibility` — but that function's ONLY caller is `create_scheduled_sync_execution_trigger` (`execution_trigger.py:74`), whose ONLY caller is `sync_scheduler.py:318` (dead, category b below). `create_sync_execution_trigger` (the function the LIVE admin router `api/admin/routers/sync.py` calls) does NOT reach this eligibility check. Do not delete without re-verifying this chain at delete time — a future refactor could make `create_scheduled_sync_execution_trigger` live again",
-        "ticket": "CHAOS-4439 (re-verify chain before deleting)",
-    },
     "post_sync_dispatch.py": {
         "category": "a",
         "evidence": "build_post_sync_dispatch_payload called sync_units.py:2274, inside finalize_sync_run (live via worker_sync.py:26)",
@@ -466,11 +461,6 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
         "evidence": "imported directly worker_sync.py:22-25; served by /reference-discovery and /reference-discovery-populate routes",
         "ticket": "n/a",
     },
-    "runner.py": {
-        "category": "c",
-        "evidence": "used by src/dev_health_ops/cli.py:728,842 (register_commands) — operator CLI for Celery queue inspection, not the Go bridge",
-        "ticket": "n/a",
-    },
     "sync_bootstrap.py": {
         "category": "a",
         "evidence": "imported by reference_discovery.py/team_autoimport.py/sync_units.py:134; resolve_run_auth reached from dispatch_sync_run",
@@ -488,7 +478,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "system_tasks.py": {
         "category": "c",
-        "evidence": "corrected 2026-09-06 (CHAOS-5320): NOT a dead shim, but for a different reason than before — `api/webhooks/router.py`'s `process_webhook_event` import and `api/billing/router.py`'s `send_billing_notification`/`.delay(...)` call site (both gated behind `route_requires_celery`) are DELETED; `route_requires_celery` itself is deleted (job_routes.py). CHAOS-5353 then deleted `send_billing_notification` itself, so this shim now re-exports only `health_check` and `phone_home_heartbeat`. `system_tasks.py`'s only remaining live importer is `workers/tasks.py`'s barrel re-export, which registers its `@celery_app.task`-decorated functions with the Celery app at import time for the worker process — unrelated to whether any router still dispatches to them.",
+        "evidence": "corrected 2026-09-06 (CHAOS-5320): NOT a dead shim, but for a different reason than before — `api/webhooks/router.py`'s `process_webhook_event` import and `api/billing/router.py`'s `send_billing_notification`/`.delay(...)` call site (both gated behind `route_requires_celery`) are DELETED; `route_requires_celery` itself is deleted (job_routes.py). CHAOS-5353 then deleted `send_billing_notification` itself, so this shim re-exported only `health_check` and `phone_home_heartbeat`. CHAOS-3093 (PR2b) deleted `health_check` outright (no dispatch site of any kind) and dropped `phone_home_heartbeat`'s `@celery_app.task` decorator (Celery has had zero consumers since CHAOS-4026) -- this shim now re-exports only `phone_home_heartbeat`, a plain function. `system_tasks.py`'s only remaining live importer is `workers/tasks.py`'s barrel re-export.",
         "ticket": "CHAOS-4439 (dead worker modules) -- the router-coordination caveat from the prior entry no longer applies",
     },
     "task_utils.py": {

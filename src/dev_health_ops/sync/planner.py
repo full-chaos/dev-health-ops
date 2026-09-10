@@ -1866,7 +1866,9 @@ def map_datasets_to_legacy_targets(
 
     ``finalize_sync_run`` (CHAOS-2512) calls this to translate the dataset keys
     of successful units back into the legacy ``sync_targets`` vocabulary that
-    ``_dispatch_post_sync_tasks`` understands, so metrics fan-out stays unchanged.
+    ``build_post_sync_dispatch_payload`` carries in its result (the
+    now-deleted ``_dispatch_post_sync_tasks`` -- CHAOS-3093, PR2b -- used to
+    read this same vocabulary; the mapping itself is unchanged).
     Registry-owned mapping — do NOT hand-roll string mapping in finalize.
     """
 

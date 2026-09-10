@@ -624,25 +624,17 @@ def schedule_or_coalesce(
             )
 
         if acquired:
-            # CHAOS-3093: workers/external_ingest_recompute.py (the
+            # CHAOS-3093 (PR2a): workers/external_ingest_recompute.py (the
             # flush_external_ingest_recompute task) was deleted -- it has had
             # no Celery consumer since 2026-08-19 (rollback_route=none), so
-            # this send_task is dead-into-the-void the same way the other
-            # retired dispatch sites in this PR are. Kept as a named
-            # send_task (not deleted outright) because the debounce/guard
-            # bookkeeping above it is still live and unrelated to this
-            # dispatch's own liveness; see CHAOS-4065/4026 for the
-            # Go-drain-visibility follow-up on this seam.
-            celery_app.send_task(
-                "dev_health_ops.workers.external_ingest_recompute."
-                "flush_external_ingest_recompute",
-                kwargs={
-                    "org_id": org_id,
-                    "source_system": source_system,
-                    "source_instance": source_instance,
-                },
-                countdown=seconds,
-            )
+            # this send_task was dead-into-the-void. CHAOS-3093 (PR2b)
+            # deletes the dispatch site too: the debounce/guard bookkeeping
+            # above it (the WATCH/MULTI pending-blob merge and the SETNX
+            # guard acquisition) is still live and unrelated to this
+            # dispatch's own liveness -- see CHAOS-4065/4026 for the
+            # Go-drain-visibility follow-up on this seam. `acquired` stays
+            # the guard this block still checks, now a deliberate no-op.
+            pass
     except Exception:
         logger.exception(
             "external_ingest.recompute.valkey_error_sync_fallback "

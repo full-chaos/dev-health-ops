@@ -278,7 +278,33 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # retired_beat_entries with their evidence rather than vanishing (see
     # test_retired_beat_entries_are_evidenced_and_absent_from_source below).
     # Net: 57 - 9 = 48.
-    assert inventory["row_count"] == 48
+    #
+    # = 45. CHAOS-3093 (PR2b): health_check (system_ops.py) had no dispatch
+    # site of any kind and is deleted outright -- its celery_task row is
+    # removed, -1. phone_home_heartbeat (system_ops.py) and
+    # run_post_sync_team_autoimport (team_autoimport.py) keep their function
+    # bodies (still genuinely needed behind an HTTP compatibility bridge)
+    # but lose their `@celery_app.task` decorator -- each one's celery_task
+    # row is removed (the decorator/discovery surface is gone), -2, while
+    # their separate registry_kind rows (system.heartbeat,
+    # sync.team_autoimport) are untouched, since the kind-level compatibility
+    # dependency they track is unaffected by the decorator coming off. Net:
+    # 48 - 3 = 45.
+    #
+    # = 41. CHAOS-3093 (PR2b), send_task site cleanup: flush_external_ingest_
+    # recompute (external_ingest/recompute.py:636) and run_complexity_job/
+    # run_dora_metrics/run_post_sync_team_autoimport (workers/
+    # post_sync_dispatch.py:222/254/277) were all already dead-into-the-void
+    # (zero Celery consumers since CHAOS-4026, and three of the four targets
+    # -- run_complexity_job, run_dora_metrics, and flush_external_ingest_
+    # recompute's own task -- were already deleted as celery_task
+    # definitions under earlier tickets) -- their call_site_literal rows are
+    # removed, -4. `dispatch_investment_materialize_partitioned`
+    # (recompute.py:384) and the two run_daily_metrics sites (recompute.py:
+    # 347/366, deferred to CHAOS-4427) are untouched -- deleting the former
+    # would change dispatch_recompute's caller-visible status/jobs return
+    # value, flagged to team-lead rather than papered over. Net: 45 - 4 = 41.
+    assert inventory["row_count"] == 41
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

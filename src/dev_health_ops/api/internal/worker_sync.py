@@ -275,7 +275,7 @@ async def team_autoimport_reference(
     if not _current_sync_run_reference(reference):
         return {"status": "stale"}
     result = await run_in_threadpool(
-        run_post_sync_team_autoimport.run, str(reference.sync_run_id)
+        run_post_sync_team_autoimport, str(reference.sync_run_id)
     )
     return _result(
         result,

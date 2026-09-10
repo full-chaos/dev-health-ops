@@ -378,7 +378,7 @@ var operationSpecs = map[string]OperationSpec{
 	// If the divergence recurs, this row reads `mismatch` honestly instead
 	// of being silently excused.
 	"workGraphEdges": {ResponseRoot: "workGraphEdges", Variables: workGraphVariables},
-	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
+	"workGraphFlow":  {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
 }
 
 // investmentVariables builds investmentBreakdown's request only.

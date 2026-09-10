@@ -53,28 +53,26 @@ def _reconciler(path: str) -> dict:
     return _yaml(path)["services"]["go-reconciler"]
 
 
-def test_go_workers_compose_overlay_ships_the_sweep_active() -> None:
-    """The overlay configures through ``environment:``, like its siblings.
-
-    Unlike the two surfaces below it is not bound by CHAOS-4020's
-    credentials-only rule -- it already sets OPERATIONAL_ORDERING_CONTRACT the
-    same way, and it is a hand-edited local overlay rather than a rendered
-    deployment surface.
-    """
-    environment = _reconciler("deploy/go-workers/compose-go-workers.yml")["environment"]
-    assert environment[SWEEP_KEY] == f"${{{SWEEP_KEY}:-{ACTIVE}}}"
-
-
 def test_docker_compose_and_swarm_go_worker_stacks_ship_the_sweep_active() -> None:
-    """A FLAG on these two, not an environment entry.
+    """A FLAG on these three, not an environment entry.
 
     CHAOS-4020's contract (tests/workers/test_go_worker_cli_contract.py) is that
     only credentials render through ``environment:`` here; every other setting
     is visible in ``command:``, where ``docker compose config`` shows the
     deployed configuration. The interpolated default keeps the operator override
     the environment form would have given.
+
+    CHAOS-3088 folded a copy of this fleet into root compose.yml and deleted
+    deploy/go-workers/compose-go-workers.yml (formerly covered here as a
+    fourth, ``environment:``-based surface -- that file's go-reconciler was
+    the one place the sweep rendered through ``environment:`` rather than
+    ``command:``; it had no other consumer of the distinction once deleted).
+    Root compose.yml's copy follows the same flag-not-environment shape as
+    the two below, so it joins this loop rather than getting a separate
+    ``environment:`` assertion.
     """
     for path in (
+        "compose.yml",
         "deploy/docker-compose/compose.go-workers.yml",
         "deploy/docker-swarm/stack.go-workers.yml",
     ):

@@ -21,10 +21,13 @@ lifecycle: active
 current production schedule.** Every Python Celery worker and Beat service has
 been stopped in production since 2026-08-19 (CHAOS-4026): they remain defined
 in `compose.yml` for local-dev parity and as historical evidence of the
-pre-cutover vocabulary, but nothing in production consumes them. Configure and
-operate the Go worker groups and the Go scheduler described below; read the
-Celery section only to understand a queue name you find in an old issue,
-runbook, or `rollback_route` value.
+pre-cutover vocabulary, but nothing in production consumes them. Since
+CHAOS-3088, root `compose.yml` itself no longer starts them by default either
+-- the Go/River fleet is that file's unconditional default, and the five
+Celery services are an explicit opt-in behind `profiles: [celery-legacy]`.
+Configure and operate the Go worker groups and the Go scheduler described
+below; read the Celery section only to understand a queue name you find in an
+old issue, runbook, or `rollback_route` value.
 {: .fc-page-lede }
 
 For worker-group semantics (identity vs. routing), the two-plane
@@ -34,15 +37,18 @@ this page does not repeat that content.
 
 ## Historical Celery topology (dormant)
 
-**ARCHIVED (CHAOS-4164, 2026-08-23):** every checked-in compose surface that
-still defines the `worker`/`worker-ingest`/`worker-external-ingest`/
-`worker-heavy`/`beat` Celery services -- `compose.yml`,
+**ARCHIVED (CHAOS-4164, 2026-08-23; gated CHAOS-3088):** every checked-in
+compose surface that still defines the `worker`/`worker-ingest`/
+`worker-external-ingest`/`worker-heavy`/`beat` Celery services -- `compose.yml`,
 `deploy/docker-compose/compose.production.yml`, and
-`deploy/docker-swarm/stack.yml` -- now carries an ARCHIVED banner comment at
-the service definition itself, so a reader of the compose file alone (not
-just this doc) sees that the fleet is not live topology. Nothing below
-changes what those files run; this only makes their own text match what this
-page already said.
+`deploy/docker-swarm/stack.yml` -- carries an ARCHIVED banner comment at the
+service definition itself, so a reader of the compose file alone (not just
+this doc) sees that the fleet is not live topology. Root `compose.yml` also
+gates the fleet behind `profiles: [celery-legacy]` as of CHAOS-3088, so a
+plain `docker compose up -d` from that file no longer starts it at all;
+`compose.production.yml` and `stack.yml` are unchanged by that PR and still
+start the archived fleet unconditionally (their own, separately tracked
+archival note says so).
 
 Kept for context, not for operation. Before 2026-08-19 these were configured together:
 

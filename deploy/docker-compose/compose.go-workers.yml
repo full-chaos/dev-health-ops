@@ -1,5 +1,10 @@
 # Additive Go/River worker topology. This file is intentionally not included by
-# compose.yml or compose.production.yml: operators must opt in explicitly.
+# compose.production.yml: operators must opt in explicitly via the overlay
+# below. CHAOS-3088 folded an independently maintained COPY of this fleet
+# directly into root compose.yml (as that file's unconditional default,
+# Celery moved behind `profiles: [celery-legacy]` there) -- this file still
+# exists for compose.production.yml's own opt-in path and is not included by
+# it automatically either; the two copies are edited separately.
 #
 # Coexistence:
 #   docker compose -f compose.production.yml -f compose.go-workers.yml \

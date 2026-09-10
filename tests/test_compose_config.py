@@ -180,7 +180,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 _LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
-_GO_WORKER_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-workers.yml"
 _GO_CONFIG_PACKAGE = _REPO_ROOT / "internal" / "platform" / "config"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
@@ -610,12 +609,12 @@ def test_init_extra_dbs_sh_is_only_reachable_through_postgres_container_init() -
         "init-extra-dbs.sh must be mounted into /docker-entrypoint-initdb.d/ (initdb-only, never re-run against an existing volume)"
     )
 
-    # A comment cross-referencing the filename (deploy/go-workers/
-    # compose-go-workers.yml does this, explaining why go-river-provision
-    # exists at all) is documentation, not a reachability path -- check each
-    # service's actual volumes/entrypoint/command fields, the only places a
-    # compose file can make Postgres execute a script, not the raw file text.
-    for other_compose in (_PROD_COMPOSE, _SWARM_STACK, _GO_WORKER_OVERLAY):
+    # A comment cross-referencing the filename (root compose.yml's
+    # go-river-provision comment does this) is documentation, not a
+    # reachability path -- check each service's actual
+    # volumes/entrypoint/command fields, the only places a compose file can
+    # make Postgres execute a script, not the raw file text.
+    for other_compose in (_PROD_COMPOSE, _SWARM_STACK, _SPLIT_COMPOSE_OVERLAY):
         other_services = _load_yaml(other_compose).get("services") or {}
         for name, service in other_services.items():
             for field in ("volumes", "entrypoint", "command"):
@@ -1402,13 +1401,20 @@ def test_go_config_package_declares_no_route_switches() -> None:
 def test_compose_declares_no_provider_route_switches() -> None:
     """Ticket step-5 acceptance: the rendered compose config contains ZERO
     ``WORKER_*_ENABLED`` keys anywhere -- not on the shared Celery env
-    anchor, not on worker/beat, not on the additive Go profile. The route
-    switch plane is deleted, not defaulted off.
+    anchor, not on worker/beat, not on the go-* fleet. The route switch
+    plane is deleted, not defaulted off.
 
     The GitHub work-item route's two file-path configs are NOT switches
     (``WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH`` /
     ``..._INVESTMENT_CONFIG_PATH``) and must still be present, unset by
-    default.
+    default, on the Python side. CHAOS-3088 deleted deploy/go-workers/
+    compose-go-workers.yml, whose go-worker service used to carry these two
+    keys too (pass-through, unset) -- the folded-in go-* fleet (copied from
+    deploy/docker-compose/compose.go-workers.yml) never has, since that file
+    relies on the worker image's own packaged /app/config default instead;
+    that is a pre-existing difference between the two overlays, not
+    something this PR changes, so only the negative (no switches) half
+    extends to the go-* fleet below.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
 
@@ -1421,15 +1427,12 @@ def test_compose_declares_no_provider_route_switches() -> None:
     for name in _PROVIDER_ROUTE_CONFIG_NAMES:
         assert shared_env[name] == f"${{{name}:-}}"
 
-    go_worker_env = _load_yaml(_GO_WORKER_OVERLAY)["services"]["go-worker"][
-        "environment"
-    ]
-    matched = [
-        key for key in go_worker_env if _WORKER_ENABLED_SWITCH_PATTERN.fullmatch(key)
-    ]
-    assert not matched, f"go-worker still declares route switches: {sorted(matched)}"
-    for name in _PROVIDER_ROUTE_CONFIG_NAMES:
-        assert go_worker_env[name] == f"${{{name}:-}}"
+    for name, spec in services.items():
+        if not name.startswith("go-"):
+            continue
+        env = spec.get("environment") or {}
+        matched = [key for key in env if _WORKER_ENABLED_SWITCH_PATTERN.fullmatch(key)]
+        assert not matched, f"{name} still declares route switches: {sorted(matched)}"
 
 
 def test_provider_route_env_example_declares_no_route_switches() -> None:
@@ -1451,28 +1454,34 @@ def test_provider_route_env_example_declares_no_route_switches() -> None:
 
 
 def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
-    """CHAOS-3142/CHAOS-3143: no `go-*` service may `depends_on` the Python
-    `migrate` service.
+    """CHAOS-3142/CHAOS-3143: no long-running `go-*` worker/reconciler/
+    scheduler/stream process may `depends_on` the Python `migrate` service.
 
-    `depends_on` pulls a service in regardless of profile. The application
-    migrator defers 0066 by default, but an environment carrying the explicit
-    cutover authorization would still flip routes before the downstream Go
-    runtimes can start, violating 0066's ordering contract.
-
-    Standing up the Go observation path must never be able to move real traffic
-    as a side effect, so the Python schema stays an explicitly authorized
-    prerequisite (`migrate postgres --revision 0065`) rather than a compose
-    dependency edge.
+    `depends_on` pulls a service in regardless of profile. On the now-deleted
+    deploy/go-workers/compose-go-workers.yml overlay (CHAOS-3088 superseded
+    it), `migrate` was NOT part of the default/unconditional service set, so
+    this edge would have forced Alembic to run -- including 0066, the actual
+    Celery->River route cutover -- on a plain `--profile go up -d`, before the
+    downstream Go runtimes could even start. That overlay's fix was to never
+    take the edge at all (a documented manual `migrate postgres upgrade 0065`
+    step instead); this file's `migrate` has no profile of its own and already
+    runs on every plain `up`, Go or not, so that specific risk does not apply
+    to the one-shot provisioning chain here (go-river-provision legitimately
+    waits on it, by design -- see that service's own comment). The invariant
+    this test still enforces: no LONG-RUNNING Go process may carry that edge.
 
     Mutation coverage (manually verified): re-adding
     `migrate: {condition: service_completed_successfully}` to
-    go-worker-migrate's depends_on fails this test.
+    go-worker-heavy's depends_on fails this test.
     """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    one_shot_setup = {"go-river-provision", "go-river-migrate", "go-contractcheck"}
     go_services = {
-        name: spec for name, spec in services.items() if name.startswith("go-")
+        name: spec
+        for name, spec in services.items()
+        if name.startswith("go-") and name not in one_shot_setup
     }
-    assert go_services, "the overlay must define the go-* services it exists to carry"
+    assert go_services, "compose.yml must define the go-* services it exists to carry"
 
     for name, spec in go_services.items():
         depends_on = spec.get("depends_on") or {}
@@ -1487,62 +1496,86 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
         )
 
 
-def test_go_profile_overlay_services_are_all_profile_gated() -> None:
-    """CHAOS-3142: every service the overlay adds must be gated behind the `go`
-    profile, so a default `docker compose up` brings up the unchanged Celery
-    stack and nothing else.
+def test_go_services_are_unconditional_and_celery_is_profile_gated() -> None:
+    """CHAOS-3088: the premise flipped. Go is now this file's unconditional
+    default; the archived Celery fleet is the opt-in.
 
-    This is what makes the overlay safe to leave in place permanently -- the
-    developer opts in per-invocation (`--profile go`) or via COMPOSE_PROFILES in
-    the root `.env`, and forgetting to opt in costs nothing.
+    Before CHAOS-3088, deploy/go-workers/compose-go-workers.yml gated every
+    `go-*` service behind `profiles: ["go"]` so a default `docker compose up`
+    brought up the unchanged Celery stack and nothing else -- that overlay is
+    now deleted. Root compose.yml's own `go-*` fleet (folded in from
+    deploy/docker-compose/compose.go-workers.yml) must declare NO `profiles`
+    key at all, and the five archived Celery services must declare
+    `profiles: ["celery-legacy"]` -- the exact inverse of the old contract.
 
-    Mutation coverage (manually verified): deleting `profiles: ["go"]` from any
-    go-* service fails this test.
+    Mutation coverage (manually verified): adding `profiles: ["go"]` to any
+    go-* service, or removing `profiles: [celery-legacy]` from `worker`,
+    fails this test.
     """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
-    for name, spec in services.items():
-        assert spec.get("profiles") == ["go"], (
-            f'{name} must declare profiles: ["go"] so a default `up` never starts it'
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    go_services = {
+        name: spec for name, spec in services.items() if name.startswith("go-")
+    }
+    assert go_services, "compose.yml must define the go-* services it exists to carry"
+    for name, spec in go_services.items():
+        assert "profiles" not in spec, (
+            f"{name} must not declare profiles: -- the go-* fleet is this "
+            "file's unconditional default, not an opt-in"
+        )
+
+    celery_services = (
+        "worker",
+        "worker-ingest",
+        "worker-external-ingest",
+        "worker-heavy",
+        "beat",
+    )
+    for name in celery_services:
+        assert services[name].get("profiles") == ["celery-legacy"], (
+            f'{name} must declare profiles: ["celery-legacy"] so a default '
+            "`up` never starts the archived Celery fleet"
         )
 
 
-def test_go_profile_overlay_worker_selects_manifest_queues_without_runtime_profile() -> (
-    None
-):
-    """CHAOS-3851: the local River worker uses the registered sync queues.
+def test_go_workers_select_manifest_queues_without_runtime_profile() -> None:
+    """CHAOS-3851: every queue-bearing River worker group uses exactly its
+    registered queues.
 
-    Compose's `go` activation profile is a deployment opt-in and is unrelated
-    to the worker's removed runtime profile contract.
+    Compose has no activation profile to opt into any more (CHAOS-3088): the
+    go-* fleet is unconditional, folded into root compose.yml from
+    deploy/docker-compose/compose.go-workers.yml. The now-deleted
+    deploy/go-workers/compose-go-workers.yml only ever covered the `sync`
+    group as a single `go-worker` service; this file splits sync and
+    sync-provider out (and heavy/ops besides), so this checks all four
+    queue-bearing groups against their deployment.json process entries.
     """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
-    worker = services["go-worker"]
-    environment = worker["environment"]
-    assert "DEV_HEALTH_PROFILE" not in environment
-    assert "DEV_HEALTH_QUEUES" not in environment
-    assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
-    assert "DEV_HEALTH_WORKER_GROUP" not in environment
-    arguments = _go_worker_arguments(worker)
-    sync_queues = next(
-        process["queues"]
-        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
-            "processes"
-        ]
-        if process["name"] == "sync"
-    )
-    assert arguments["--queues"] == ",".join(sync_queues)
-    sync_process = next(
-        process
-        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
-            "processes"
-        ]
-        if process["name"] == "sync"
-    )
-    assert arguments["--queue-concurrency"] == ",".join(
-        f"{entry['queue']}={entry['max_workers']}"
-        for entry in sync_process["queue_workers"]
-    )
-    assert arguments["--worker-group"] == "sync"
-    assert worker["profiles"] == ["go"]
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    processes_by_name = {
+        process["name"]: process
+        for process in _load_yaml(_DEPLOYMENT_JSON)["processes"]
+    }
+    group_to_service = {
+        "heavy": "go-worker-heavy",
+        "ops": "go-worker-ops",
+        "sync": "go-worker-sync",
+        "sync-provider": "go-worker-sync-provider",
+    }
+    for group, service_name in group_to_service.items():
+        worker = services[service_name]
+        environment = worker["environment"]
+        assert "DEV_HEALTH_PROFILE" not in environment
+        assert "DEV_HEALTH_QUEUES" not in environment
+        assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+        assert "DEV_HEALTH_WORKER_GROUP" not in environment
+        arguments = _go_worker_arguments(worker)
+        process = processes_by_name[group]
+        assert arguments["--queues"] == ",".join(process["queues"]), service_name
+        assert arguments["--queue-concurrency"] == ",".join(
+            f"{entry['queue']}={entry['max_workers']}"
+            for entry in process["queue_workers"]
+        ), service_name
+        assert arguments["--worker-group"] == group, service_name
+        assert "profiles" not in worker
 
 
 def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
@@ -1640,15 +1673,22 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
     subcommand (cmd/dev-health-reconciler/main.go), never a CMD-SHELL
     one-liner that could not run in this image at all.
 
-    No other service in this overlay declares a healthcheck to match
-    interval/timeout/retries against -- this asserts the reconciler's own
-    values are present and sane, not copied from a sibling.
+    No other `go-*` service in root compose.yml declares a healthcheck to
+    match interval/timeout/retries against -- this asserts the reconciler's
+    own values are present and sane, not copied from a sibling. (Other,
+    non-Go services in this file -- clickhouse, api, metrics-api,
+    billing-edge -- declare their own unrelated healthchecks; this test only
+    claims uniqueness within the go-* fleet.) Ported from the now-deleted
+    deploy/go-workers/compose-go-workers.yml (CHAOS-3088) -- that file was
+    the only place this healthcheck was defined before being folded into
+    root compose.yml; deploy/docker-compose/compose.go-workers.yml never had
+    it.
 
     Mutation coverage (manually verified): deleting the `healthcheck` key,
     or changing `test` to a CMD-SHELL form, or to a command other than the
     binary's own `healthcheck` subcommand, each fail this test.
     """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
     healthcheck = services["go-reconciler"].get("healthcheck")
     assert healthcheck is not None, "go-reconciler must declare a healthcheck"
 
@@ -1677,12 +1717,12 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
     }
 
     for other_name, other_spec in services.items():
-        if other_name == "go-reconciler":
+        if other_name == "go-reconciler" or not other_name.startswith("go-"):
             continue
         assert "healthcheck" not in other_spec, (
             f"{other_name} declares a healthcheck too, but this test's "
-            "docstring claims go-reconciler's is the only one in this "
-            "overlay -- update the docstring if that changed on purpose"
+            "docstring claims go-reconciler's is the only one in the go-* "
+            "fleet -- update the docstring if that changed on purpose"
         )
 
 
@@ -1728,16 +1768,23 @@ def test_go_worker_process_registry_matches_ordering_contract_coverage_maps() ->
 def test_split_compose_and_swarm_go_workers_wire_operational_ordering_contract() -> (
     None
 ):
-    """The fully split compose overlay and its Swarm equivalent each carry
-    all nine registry processes as distinct services -- assert every one
-    resolves OPERATIONAL_ORDERING_CONTRACT in its rendered (post-YAML-merge)
+    """The fully split compose overlay, its Swarm equivalent, and root
+    compose.yml's own folded-in copy (CHAOS-3088) each carry all nine
+    registry processes as distinct services -- assert every one resolves
+    OPERATIONAL_ORDERING_CONTRACT in its rendered (post-YAML-merge)
     environment.
 
     Red on origin/main 2b3032b63: neither file's shared env anchor sets the
     key, so every service is reported missing.
+
+    CHAOS-3088 deleted deploy/go-workers/compose-go-workers.yml, the single-
+    machine overlay that only ever implemented two of these nine processes
+    (`sync` as `go-worker`, and `reconciler`) and had its own, narrower test
+    here -- removed as redundant now that root compose.yml carries the full
+    nine-process split fleet this test already covers.
     """
     processes = [p["name"] for p in _load_yaml(_DEPLOYMENT_JSON)["processes"]]
-    for manifest in (_SPLIT_COMPOSE_OVERLAY, _SWARM_GO_WORKER_OVERLAY):
+    for manifest in (_LEGACY_COMPOSE, _SPLIT_COMPOSE_OVERLAY, _SWARM_GO_WORKER_OVERLAY):
         services = _load_yaml(manifest)["services"]
         for process in processes:
             service_name = _SPLIT_COMPOSE_SERVICE_BY_PROCESS[process]
@@ -1746,24 +1793,6 @@ def test_split_compose_and_swarm_go_workers_wire_operational_ordering_contract()
                 f"{manifest.name}:{service_name} (registry process "
                 f"{process!r}) is missing OPERATIONAL_ORDERING_CONTRACT"
             )
-
-
-def test_single_machine_go_overlay_wires_operational_ordering_contract() -> None:
-    """compose-go-workers.yml (`_GO_WORKER_OVERLAY`) is the single
-    hand-maintained local-machine topology described in its own header
-    comment -- it implements only the `sync` (as service `go-worker`) and
-    `reconciler` registry processes, not the full split fleet. Assert those
-    two, not the nine-process registry that the split overlay above covers.
-
-    Red on origin/main 2b3032b63: neither service's environment sets the
-    key.
-    """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
-    for service_name in ("go-worker", "go-reconciler"):
-        env = services[service_name].get("environment") or {}
-        assert "OPERATIONAL_ORDERING_CONTRACT" in env, (
-            f"{service_name} is missing OPERATIONAL_ORDERING_CONTRACT"
-        )
 
 
 def test_kubernetes_go_workers_wire_operational_ordering_contract() -> None:

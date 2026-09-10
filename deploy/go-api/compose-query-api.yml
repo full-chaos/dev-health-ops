@@ -1,11 +1,10 @@
 # query-api compose overlay. Default OFF — a bare `docker compose up -d`
 # does not create this service.
 #
-# Same pattern as deploy/go-workers/compose-go-workers.yml: the canonical
-# local stack is the repo-root /dev-health/compose.yml (outside any git
-# repo), so this file is the reviewed, versioned source of truth for the
-# service definition below, either pasted into the root file or layered as
-# an overlay:
+# The canonical local stack is the repo-root /dev-health/compose.yml
+# (outside any git repo), so this file is the reviewed, versioned source of
+# truth for the service definition below, either pasted into the root file
+# or layered as an overlay:
 #
 #   cd /path/to/dev-health
 #   docker compose -f compose.yml \
@@ -111,9 +110,9 @@ services:
     # No container healthcheck: the runtime image
     # (gcr.io/distroless/static-debian12:nonroot, docker/query-api.Dockerfile)
     # has no shell and no wget/curl -- a CMD-SHELL test cannot run here
-    # (see deploy/go-workers/compose-go-workers.yml's go-reconciler service
-    # for the same constraint, solved there by a binary-native `healthcheck`
-    # subcommand this binary does not have). Also would not be sufficient by
+    # (see root compose.yml's go-reconciler service for the same constraint,
+    # solved there by a binary-native `healthcheck` subcommand this binary
+    # does not have). Also would not be sufficient by
     # itself: `/readyz` returns HTTP 200 for BOTH "ready" and "ready: /query
     # not configured" (CHAOS-4512), so a status-code-only probe cannot tell
     # "container process is up" from "this lane's six env vars are all

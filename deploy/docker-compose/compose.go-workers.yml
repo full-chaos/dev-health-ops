@@ -247,7 +247,11 @@ services:
       metrics-api:
         condition: service_healthy
     deploy: &go-worker-resources
-      replicas: 0
+      # CHAOS-5541: matches deployment.json's go_default desired_replicas.
+      # This is a checked-in renderer for compose.production.yml's opt-in
+      # `--profile go-workers` path, not a live deploy action -- `up`
+      # against this profile is what actually starts anything.
+      replicas: 1
       resources:
         limits: {cpus: "1.0", memory: 1G}
         reservations: {cpus: "0.25", memory: 256M}

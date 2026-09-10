@@ -930,7 +930,8 @@ def test_kubernetes_app_deployments_wait_for_migrations() -> None:
     current (`dev-hops migrate clickhouse status --check`) and never runs
     DDL itself. The Go worker groups in go-workers.yaml (CHAOS-4195, which
     replaced the Celery worker.yaml this test used to also parametrize over)
-    deploy at replicas: 0 and carry no such initContainer of their own."""
+    carry no such initContainer of their own -- migration readiness for
+    them is a Job dependency (go-river-migrate), not an initContainer."""
     deployment = next(d for d in _k8s_docs("api.yaml") if d.get("kind") == "Deployment")
     pod_spec = deployment["spec"]["template"]["spec"]
     waiter = next(
@@ -997,8 +998,9 @@ def test_deploy_stacks_keep_celery_beat_singleton() -> None:
     Deployment), which is a singleton by operational convention ("Run exactly
     one active production scheduler", docs/operate/configure/
     workers-and-schedules.md) rather than a machine-checked replica pin --
-    like every group it deploys at replicas: 0 until an operator scales it,
-    so there is no static "always exactly 1" invariant left to assert here."""
+    CHAOS-5541: like every group it now deploys at replicas: 1 by default
+    (deployment.json's go_default posture), still with no static "always
+    exactly 1" invariant machine-checked here."""
     for stack in (_REPO_ROOT / "compose.yml", _PROD_COMPOSE, _SWARM_STACK):
         _assert_compose_beat_singleton(stack)
 

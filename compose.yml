@@ -47,19 +47,28 @@ x-go-worker-flag:
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
 x-go-worker-env-base: &go-worker-env-base
-  # codex review (r1, P1): these three used `:?required` in
-  # deploy/docker-compose/compose.go-workers.yml, a fair demand when that
-  # file was an opt-in overlay an operator explicitly activated. Folded in
-  # as this file's UNCONDITIONAL default (CHAOS-3088), `:?` made
-  # `docker compose config`/`up` fail outright for every use of this file,
-  # including one with no interest in Go workers at all -- api, postgres,
-  # and the celery-legacy profile included. Empty-default instead, matching
-  # this file's own existing SETTINGS_ENCRYPTION_KEY convention on `api`
-  # below: an unset credential now fails closed at the Go binary's own
-  # startup validation (inside the affected container only), not at
-  # compose-parse time (for every container in the file).
-  POSTGRES_URI: ${POSTGRES_URI:?transaction-pooler domain PostgreSQL URI is required}
-  WORKER_DATABASE_URI: ${WORKER_DATABASE_URI:-}
+  # codex review (r1 P1 + r2 P1): `POSTGRES_URI` here used to be
+  # `:?required` (deploy/docker-compose/compose.go-workers.yml's shape,
+  # fine for an opt-in overlay) and then just empty-default -- but the
+  # container env var the Go binary reads (`POSTGRES_URI`, hardcoded in
+  # internal/platform/config/config.go) is the SAME NAME `.env.example`
+  # already uses for unrelated host-side Python tooling
+  # (`postgresql+asyncpg://postgres:postgres@localhost:5555/postgres`,
+  # meaningless inside a container -- `localhost` there is the worker
+  # itself). An empty-default on that exact name never even applied: the
+  # shell variable IS set, just to the wrong thing, so the Go domain
+  # connection silently failed closed (`queue_control_config`... no,
+  # `domain_postgres` -- confirmed executed against this exact value).
+  # Fixed by reading a DEDICATED shell variable instead, same pattern as
+  # `go-river-migrate`'s `GO_WORKER_MIGRATION_DATABASE_URI` below, with a
+  # computed default through the dedicated poolers folded in above (domain
+  # via the existing `pgbouncer`, queue-control via `pgbouncer-river-queue`)
+  # -- adapted from the proven design already running the shared bigboy
+  # stack (compose/compose.go.workers.yml, untracked, outside this repo),
+  # to this file's own postgres identity (superuser/database `postgres`,
+  # not that stack's `devhealth`).
+  POSTGRES_URI: ${GO_WORKER_POSTGRES_URI:-postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-postgres}}
+  WORKER_DATABASE_URI: ${GO_WORKER_QUEUE_DATABASE_URI:-postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-postgres}}
   # Port 9000 is the NATIVE protocol, not 8123 -- the Go worker speaks the
   # native wire protocol through clickhouse-go and eagerly Ping()s at
   # construction (CHAOS-3872, deploy/go-workers/README.md).
@@ -73,7 +82,26 @@ x-go-worker-env-base: &go-worker-env-base
   # the value stays byte-identical between the two runtimes whenever it is
   # actually set.
   SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
-  WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
+  # codex review (r2, P1 -- found executing the required readyz proof, not
+  # by inspection): go-worker/go-worker-heavy/go-worker-ops claim
+  # work_graph_execution_requests rows via a coordinator-role connection
+  # (matches the bigboy overlay's own CHAOS-5133 comment) -- without this
+  # in the shared base, sync crash-looped with "worker family builder
+  # failed... syncCoordinator... worker readiness dependency is
+  # unavailable" instead of the expected live-but-unready shape. Default
+  # here, not just on go-reconciler/go-scheduler; the three stream
+  # services neutralize it back to empty below, same as the overlay this
+  # was folded from.
+  COORDINATOR_DATABASE_URI: ${GO_WORKER_COORDINATOR_DATABASE_URI:-postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-postgres}}
+  # codex review (r2, P1 -- found executing the required readyz proof):
+  # internal/syncdispatchruntime.NewHTTPBridge rejects an empty bearer
+  # token outright (pure validation, no network call) -- sync/ops/heavy
+  # construct this bridge unconditionally, so an empty default here made
+  # EVERY worker family fail to compose at all ("worker readiness
+  # dependency is unavailable"), not the live-but-unready shape the other
+  # empty-defaults produce. Matches the bigboy overlay's own fix exactly:
+  # a non-empty local placeholder, not a credential.
+  WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
   AUTO_RUN_MIGRATIONS: "false"
   # CHAOS-4587: see `migrate`'s own comment on this variable below -- must
   # move with the migrate export in the same deploy pass; see
@@ -201,6 +229,86 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  # codex review (r2, P1): the Go worker fleet below needs two more
+  # dedicated poolers -- queue-control and coordinator -- that this file
+  # never defined; folded in from the proven design already running the
+  # shared bigboy stack (/home/ubuntu/devhealth/compose/compose.go.workers.yml),
+  # adapted to this file's own postgres identity (superuser `postgres`,
+  # database `postgres` -- not that stack's `devhealth`/`devhealth`).
+  # `pgbouncer` above already lets devhealth_domain/devhealth_queue/
+  # devhealth_coordinator authenticate through it with no changes: edoburu/
+  # pgbouncer's AUTH_TYPE != trust wires an implicit auth_query against
+  # pg_shadow using DB_USER (a real superuser here, same as the bigboy
+  # stack's), so any role docker/init-extra-dbs.sh created passes through
+  # -- confirmed by inspecting a live, multi-day-running go-worker container
+  # on that stack, whose resolved POSTGRES_URI uses devhealth_domain through
+  # that exact single-role-configured pgbouncer. ADMIN_USERS is deliberately
+  # NOT widened; that setting is unrelated to this mechanism.
+  #
+  # Session mode pins one server connection per client session for the life
+  # of that session, so DEFAULT_POOL_SIZE is a hard ceiling on how many
+  # worker replicas can start, not a throughput knob -- this default (40)
+  # is the bigboy file's own general-purpose value ("covers 3 replicas of
+  # every worker group plus headroom" per its comment), NOT bigboy's own
+  # further-tuned override (100, applied there only because that stack runs
+  # at a measured 4 replicas per group -- see
+  # .remember/lanes/lane-stack-owner/river-queue-pool-override.yml). This
+  # file defaults every Go process to 1 replica, comfortably inside 40.
+  pgbouncer-river-queue:
+    image: edoburu/pgbouncer:latest
+    container_name: pgbouncer-river-queue
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      DB_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      DB_NAME: ${POSTGRES_DB:-postgres}
+      LISTEN_PORT: "6433"
+      POOL_MODE: session
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN:-128}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-40}
+      PGPASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "psql", "-w", "-h", "localhost", "-p", "6433", "-U", "${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}", "-d", "${POSTGRES_DB:-postgres}", "-c", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Coordinators hold locks across statements, so they receive their own
+  # bounded session pool rather than the transaction-mode domain endpoint
+  # above (same rationale as the bigboy file this was folded from).
+  pgbouncer-river-coordinator:
+    image: edoburu/pgbouncer:latest
+    container_name: pgbouncer-river-coordinator
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      DB_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      DB_NAME: ${POSTGRES_DB:-postgres}
+      LISTEN_PORT: "6434"
+      POOL_MODE: session
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "32"
+      DEFAULT_POOL_SIZE: "10"
+      PGPASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "psql", "-w", "-h", "localhost", "-p", "6434", "-U", "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}", "-d", "${POSTGRES_DB:-postgres}", "-c", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   clickhouse:
     image: clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5
@@ -808,7 +916,24 @@ services:
         condition: service_completed_successfully
 
   go-worker-heavy: &go-worker
+    # codex review (r3 -- team-lead): a bare `docker compose up` built
+    # go-river-provision/migrate locally but PULLED this image, so migrate
+    # and the worker fleet could come from different trees and
+    # CHAOS-5437's posture-manifest digest lockstep refuses readiness by
+    # design, deterministically, on every from-scratch bring-up -- proven
+    # by the readyz proof in TEST-EVIDENCE. `build:` makes this file build
+    # the same tree's image by default, same as every other Go service
+    # here; `image:` stays so `DEV_HEALTH_GO_WORKER_IMAGE` can still pin an
+    # already-published tag instead (compose only rebuilds when that tag
+    # isn't already present locally).
     image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: worker
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: heavy
     restart: unless-stopped
@@ -837,6 +962,17 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      # codex review (r2, P1): every go-* service reads POSTGRES_URI
+      # (domain) and WORKER_DATABASE_URI (queue-control) from
+      # go-worker-env-base -- gate on both poolers' healthchecks, not just
+      # container-started, so a worker doesn't attempt its first connection
+      # before the pooler it targets can actually serve one.
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
       # this group's --operational-bridge-url points at metrics-api, a
       # separate service with no other dependency edge into it -- gating on
       # its healthcheck (not just container-started) means this worker
@@ -876,6 +1012,12 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 960s
@@ -904,6 +1046,12 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 960s
@@ -935,6 +1083,12 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
     environment:
       <<: *go-worker-env-base
     stop_grace_period: 960s
@@ -942,6 +1096,13 @@ services:
   go-reconciler:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: reconciler
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: reconciler
     # CHAOS-3092 made "no Celery consumer serves provider units" true of
@@ -965,12 +1126,14 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
     environment:
       <<: *go-worker-env-base
-      # codex review (r1, P1): same empty-default fix as go-worker-env-base
-      # above, same reason -- `:?` here blocked `docker compose config` for
-      # the whole file, not just this service.
-      COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:-}
     stop_grace_period: 60s
     # Ported from the now-deleted deploy/go-workers/compose-go-workers.yml
     # (CHAOS-3142) rather than dropped: per-stage budgets and the
@@ -993,6 +1156,13 @@ services:
   go-scheduler:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: scheduler
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: scheduler
     command:
@@ -1010,17 +1180,26 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
     environment:
       <<: *go-worker-env-base
-      # codex review (r1, P1): same empty-default fix as go-worker-env-base
-      # above, same reason -- `:?` here blocked `docker compose config` for
-      # the whole file, not just this service.
-      COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:-}
     stop_grace_period: 60s
 
   go-stream-external:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: stream-runner
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: stream-external
     command:
@@ -1039,13 +1218,29 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
     environment:
       <<: *go-worker-env-base
+      # codex review (r2, P1): not a River-queue consumer, no
+      # coordinator-claim path -- neutralize the shared base's coordinator
+      # wiring rather than inherit it (same pattern the bigboy overlay this
+      # was folded from uses for its own stream services).
+      COORDINATOR_DATABASE_URI: ""
     stop_grace_period: 60s
 
   go-stream-ingest:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: stream-runner
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: stream-ingest
     command:
@@ -1064,8 +1259,17 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
     environment:
       <<: *go-worker-env-base
+      # codex review (r2, P1): not a River-queue consumer, no
+      # coordinator-claim path -- neutralize the shared base's coordinator
+      # wiring rather than inherit it (same pattern the bigboy overlay this
+      # was folded from uses for its own stream services).
+      COORDINATOR_DATABASE_URI: ""
     stop_grace_period: 60s
 
   # PagerDuty webhook delivery is independently routable from dataset sync,
@@ -1074,6 +1278,13 @@ services:
   go-stream-pagerduty:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: stream-runner
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: stream-pagerduty
     command:
@@ -1092,8 +1303,17 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
     environment:
       <<: *go-worker-env-base
+      # codex review (r2, P1): not a River-queue consumer, no
+      # coordinator-claim path -- neutralize the shared base's coordinator
+      # wiring rather than inherit it (same pattern the bigboy overlay this
+      # was folded from uses for its own stream services).
+      COORDINATOR_DATABASE_URI: ""
     stop_grace_period: 60s
 
   # ---------------------------------------------------------------------------

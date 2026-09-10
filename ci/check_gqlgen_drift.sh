@@ -54,8 +54,16 @@ tar -C "${ROOT}" \
   --exclude=./node_modules --exclude=./.uv --exclude=./site \
   -cf - . | tar -C "${WORK}" -xf -
 
+# The generator is injectable ONLY so this script's own behaviour can be
+# tested. Review round r5 showed every assertion here was textual: mutations
+# that added an early exit, skipped the digest comparison, or replaced the
+# wrapper with a no-op passed all ten wiring tests, because nothing ever ran
+# the guard and checked what it DID. A fake generator makes that testable in
+# milliseconds instead of a 10s gqlgen run per case. The wiring test asserts
+# CI never sets this, which is the other half of the safety.
+GENERATE_CMD="${GQLGEN_DRIFT_GENERATE_CMD:-go run github.com/99designs/gqlgen generate --config gqlgen.yml}"
 set +e
-( cd "${WORK}/cmd/query-api" && go run github.com/99designs/gqlgen generate --config gqlgen.yml ) >"${WORK}/.gen.log" 2>&1
+( cd "${WORK}/cmd/query-api" && eval "${GENERATE_CMD}" ) >"${WORK}/.gen.log" 2>&1
 rc=$?
 set -e
 if [ "${rc}" -ne 0 ]; then
@@ -97,6 +105,28 @@ fi
 # `diff` is used directly rather than `git diff`: the copy is not a
 # repository, and a git-based comparison silently treats an untracked file as
 # clean, which is a trap this repo has hit.
+# gqlgen writes wherever its config points, so comparing only the three listed
+# files is not the same as comparing the generated output. A resolver stanza
+# aimed at a new path produced a file the guard never diffed, and the guard
+# still reported "all documented" -- review round r5 executed exactly that.
+# The generated directories are compared as SETS first, so an output that
+# nobody listed fails here instead of passing invisibly.
+for d in cmd/query-api/internal/graph cmd/query-api/internal/graph/model; do
+  ( cd "${ROOT}/${d}" 2>/dev/null && find . -maxdepth 1 -type f -name '*.go' -print ) | sort >"${WORK}/.set-root"
+  ( cd "${WORK}/${d}" 2>/dev/null && find . -maxdepth 1 -type f -name '*.go' -print ) | sort >"${WORK}/.set-gen"
+  if ! diff -q "${WORK}/.set-root" "${WORK}/.set-gen" >/dev/null; then
+    echo "check_gqlgen_drift: regeneration changed which FILES exist in ${d}." >&2
+    echo "  only in a fresh generation (untracked generator output):" >&2
+    comm -13 "${WORK}/.set-root" "${WORK}/.set-gen" | sed 's|^\./|    |' >&2
+    echo "  only in the checked-in tree (generation no longer produces it):" >&2
+    comm -23 "${WORK}/.set-root" "${WORK}/.set-gen" | sed 's|^\./|    |' >&2
+    echo "  A file the guard does not diff is a file whose hand-edits are" >&2
+    echo "  unprotected. Add it to GENERATED_FILES here and in" >&2
+    echo "  ci/gqlgen_generate.sh, or fix the gqlgen.yml stanza." >&2
+    exit 1
+  fi
+done
+
 actual="${WORK}/.actual"
 : >"${actual}"
 for rel in "${GENERATED_FILES[@]}"; do

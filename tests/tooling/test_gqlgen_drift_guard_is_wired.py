@@ -19,7 +19,9 @@ actually triggers the workflow that runs it.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -40,6 +42,10 @@ GENERATOR_INPUTS = (
     "cmd/query-api/gqlgen.yml",
     "contracts/graphql/v1/schema.graphql",
     "contracts/gqlgen/v1/expected-drift.allowlist",
+    # r5: the digest was checked for existence and shape but never for
+    # reachability, so a path-filter mutation that made it non-Go-relevant
+    # passed pytest while ci/go_relevance.py said relevant=false.
+    "contracts/gqlgen/v1/expected-drift.sha256",
     "cmd/query-api/internal/graph/generated.go",
     "cmd/query-api/internal/graph/model/models_gen.go",
     "tools.go",
@@ -375,3 +381,82 @@ def test_the_guards_comment_count_matches_the_allowlist() -> None:
         "the allowlist), because that count is the stated reason the entry "
         "format carries a declaration at all."
     )
+
+
+def _run_guard_with_fake_generator(script: str) -> subprocess.CompletedProcess[str]:
+    """Run the real guard, substituting a fake generator for gqlgen.
+
+    Everything else is the real script: the tree copy, the file-set check, the
+    diff, the digest, the allowlist comparison and the exit status.
+    """
+    env = dict(os.environ, GQLGEN_DRIFT_GENERATE_CMD=script)
+    return subprocess.run(
+        ["bash", str(GUARD)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+
+def test_the_guard_fails_when_every_hand_edit_is_reverted() -> None:
+    """The behavioural test the text assertions could not be.
+
+    Round r5 mutated the guard to exit early, to skip the digest comparison,
+    and to be a no-op, and all ten of the assertions here still passed --
+    because none of them ran the guard and looked at what it DID. A generator
+    that writes nothing leaves the regenerated copy identical to the tree, so
+    every documented hand-edit reads as REVERTED. A guard that does not fail
+    here is not guarding.
+    """
+    result = _run_guard_with_fake_generator("true")
+    assert result.returncode != 0, (
+        "the guard exited 0 when every documented hand-edit had vanished. It is "
+        "not comparing anything -- an early exit, a skipped comparison or a "
+        f"swallowed status.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "LOST drift" in result.stderr, (
+        "the guard failed, but not for the right reason: it should report LOST "
+        f"drift when hand-edits disappear.\nstderr:\n{result.stderr}"
+    )
+
+
+def test_the_guard_fails_on_generator_output_it_does_not_track() -> None:
+    """An untracked output is an unguarded file, not a harmless extra.
+
+    Round r5 pointed a resolver stanza at a new path; generation succeeded, the
+    guard diffed only its three listed files and reported everything documented,
+    and the extra file broke the build with a redeclared Resolver.
+    """
+    result = _run_guard_with_fake_generator(
+        "printf 'package graph\\n' > internal/graph/zz_untracked_output.go"
+    )
+    assert result.returncode != 0, (
+        "generation wrote a file the guard does not track and the guard passed. "
+        "Hand-edits in such a file would be unprotected, and the file itself can "
+        f"break the build.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "zz_untracked_output.go" in result.stderr, (
+        f"the guard failed but never named the untracked output.\n{result.stderr}"
+    )
+
+
+def test_ci_neither_re_blesses_the_allowlist_nor_fakes_the_generator() -> None:
+    """Two ways to make the CI step pass while checking nothing."""
+    for _job, step in _drift_guard_steps():
+        run = step["run"]
+        assert "--update" not in run, (
+            "the CI step runs the guard with --update, which REWRITES the "
+            "allowlist to match whatever was generated. It then always passes, "
+            "and the hand-edit contract is silently re-blessed on every run."
+        )
+        assert "GQLGEN_DRIFT_GENERATE_CMD" not in run, (
+            "the CI step overrides the generator. That hook exists so this file "
+            "can test the guard's behaviour; in CI it means the guard is checking "
+            "output that gqlgen never produced."
+        )
+        assert "GQLGEN_DRIFT_GENERATE_CMD" not in str(step.get("env", "")), (
+            "the CI step sets GQLGEN_DRIFT_GENERATE_CMD in its env, so the guard "
+            "runs against a fake generator."
+        )

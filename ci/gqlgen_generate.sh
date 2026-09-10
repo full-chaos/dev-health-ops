@@ -69,6 +69,7 @@ on_signal() {
   local sig="$1"
   echo "gqlgen_generate: ${sig} received mid-run; restoring before exit." >&2
   restore || true
+  restore_area || true
   purge_unexpected || true
   cleanup
   trap - EXIT
@@ -103,36 +104,77 @@ done
 # three then leaves that orphan behind -- a redeclared Resolver that breaks the
 # build, from a command whose whole purpose is to be safe to run. Record the
 # directory contents so anything new can be identified and removed.
-GENERATED_DIRS=()
-for rel in "${GENERATED_FILES[@]}"; do
-  GENERATED_DIRS+=("$(dirname "${ROOT}/${rel}")")
-done
-list_generated_dirs() {
-  local d
-  for d in $(printf '%s\n' "${GENERATED_DIRS[@]}" | sort -u); do
-    [ -d "${d}" ] || continue
-    find "${d}" -maxdepth 1 -type f -name '*.go' -print
-  done | sort
+# THE UNIT OF PROTECTION IS THE AREA, NOT A FILE LIST.
+#
+# An earlier version of this script snapshotted three named files and compared
+# directory file SETS. Review round r6 broke both halves at once: pointing
+# exec.filename at the existing, hand-written internal/graph/resolver.go made
+# gqlgen OVERWRITE it, and a set comparison cannot see a content change to a
+# file that already existed -- so restore put the three listed files back,
+# reported "restored to their pre-run content", and left resolver.go destroyed
+# with the build broken. A nested output escaped entirely, because the scan was
+# maxdepth 1.
+#
+# So everything under the generated root is snapshotted BY CONTENT, whether or
+# not this script generates it. gqlgen can be pointed at any path in here;
+# protecting only the paths it is pointed at today means the next config key
+# re-opens the hole. resolver.go and telemetry.go are hand-written and are
+# protected for exactly that reason.
+GENERATED_ROOT="${ROOT}/cmd/query-api/internal/graph"
+list_generated_area() {
+  [ -d "${GENERATED_ROOT}" ] || return 0
+  ( cd "${GENERATED_ROOT}" && find . -type f -name '*.go' -print ) | sort
 }
-list_generated_dirs >"${SNAPSHOT}/.files-before"
+list_generated_area >"${SNAPSHOT}/.files-before"
+mkdir -p "${SNAPSHOT}/area"
+while IFS= read -r rel; do
+  [ -n "${rel}" ] || continue
+  mkdir -p "${SNAPSHOT}/area/$(dirname "${rel}")"
+  cp -p "${GENERATED_ROOT}/${rel}" "${SNAPSHOT}/area/${rel}"
+done <"${SNAPSHOT}/.files-before"
 
 purge_unexpected() {
-  # Only ever removes files that did NOT exist before this run. A file that
-  # predates the run is someone else's, and is left alone even if it is
-  # unexpected -- deleting it would be a worse failure than the one being
-  # recovered from.
+  # Files CREATED by the failed run are removed; files that predate it are
+  # never removed, only restored. Deleting someone else's file would be a
+  # worse failure than the one being recovered from.
   local f rc=0
-  list_generated_dirs >"${SNAPSHOT}/.files-after" 2>/dev/null || return 0
+  list_generated_area >"${SNAPSHOT}/.files-after" 2>/dev/null || return 0
   while IFS= read -r f; do
     [ -n "${f}" ] || continue
-    echo "gqlgen_generate: removing ${f#"${ROOT}/"}, created by the failed run and not a tracked output." >&2
-    rm -f "${f}" || rc=1
+    echo "gqlgen_generate: removing ${f#./}, created by the failed run and not present before it." >&2
+    rm -f "${GENERATED_ROOT}/${f}" || rc=1
   done < <(comm -13 "${SNAPSHOT}/.files-before" "${SNAPSHOT}/.files-after")
   return "${rc}"
 }
 
+restore_area() {
+  # Restores CONTENT, not just presence. This is what a file-set comparison
+  # could not do: an overwritten resolver.go still exists, so it looked fine.
+  local rel rc=0
+  while IFS= read -r rel; do
+    [ -n "${rel}" ] || continue
+    if ! cmp -s "${SNAPSHOT}/area/${rel}" "${GENERATED_ROOT}/${rel}" 2>/dev/null; then
+      mkdir -p "$(dirname "${GENERATED_ROOT}/${rel}")"
+      if cp -p "${SNAPSHOT}/area/${rel}" "${GENERATED_ROOT}/${rel}"; then
+        echo "gqlgen_generate: restored ${rel#./} (the run had modified or removed it)." >&2
+      else
+        echo "gqlgen_generate: RESTORE FAILED for ${rel#./} -- recover with: git checkout -- cmd/query-api/internal/graph" >&2
+        rc=1
+      fi
+    fi
+  done <"${SNAPSHOT}/.files-before"
+  return "${rc}"
+}
+
+# Injectable ONLY so this script's own recovery behaviour is testable. Round
+# r6 found that nothing executed this wrapper at all, so an `exit 0` stub,
+# a disabled restore, removed signal traps and a disabled missing-output check
+# all survived the test suite. A fake generator makes each of those a
+# millisecond test instead of a 10s real generation. The wiring test asserts
+# CI sets neither this nor the guard's equivalent.
+GENERATE_CMD="${GQLGEN_GENERATE_CMD:-go run github.com/99designs/gqlgen generate --config gqlgen.yml}"
 set +e
-( cd "${QUERY_API}" && go run github.com/99designs/gqlgen generate --config gqlgen.yml )
+( cd "${QUERY_API}" && eval "${GENERATE_CMD}" )
 rc=$?
 set -e
 
@@ -147,6 +189,7 @@ if [ "${rc}" -ne 0 ]; then
   echo "  Note gqlgen can exit non-zero with NO message at all; an empty" >&2
   echo "  error above is its own known behaviour, not a lost log." >&2
   restore || exit 1
+  restore_area || exit 1
   purge_unexpected || exit 1
   echo "gqlgen_generate: generated files restored to their pre-run content." >&2
   exit "${rc}"
@@ -160,6 +203,8 @@ for rel in "${GENERATED_FILES[@]}"; do
   if [ ! -f "${ROOT}/${rel}" ]; then
     echo "gqlgen_generate: generation reported success but ${rel} is MISSING." >&2
     restore || exit 1
+    restore_area || exit 1
+    purge_unexpected || exit 1
     echo "gqlgen_generate: generated files restored; treat the success as false." >&2
     exit 1
   fi
@@ -168,10 +213,21 @@ done
 # Generation succeeded, but if it wrote a file this script does not track then
 # the config and this list have diverged, and every later run -- including the
 # drift guard -- is blind to that file. Fail here, where the cause is obvious.
-list_generated_dirs >"${SNAPSHOT}/.files-after"
-if [ -s "$(comm -13 "${SNAPSHOT}/.files-before" "${SNAPSHOT}/.files-after" >"${SNAPSHOT}/.new"; echo "${SNAPSHOT}/.new")" ]; then
-  echo "gqlgen_generate: generation wrote files this script does not track:" >&2
-  sed "s|^${ROOT}/|  |" "${SNAPSHOT}/.new" >&2
+list_generated_area >"${SNAPSHOT}/.files-after"
+comm -13 "${SNAPSHOT}/.files-before" "${SNAPSHOT}/.files-after" >"${SNAPSHOT}/.new"
+# A CHANGE to a file this script does not generate is the same defect as a new
+# one: gqlgen was pointed somewhere it should not be. Checked by content, since
+# an overwritten file is still present and a set comparison sees nothing.
+: >"${SNAPSHOT}/.touched"
+while IFS= read -r rel; do
+  [ -n "${rel}" ] || continue
+  case " ${GENERATED_FILES[*]} " in *" cmd/query-api/internal/graph/${rel#./} "*) continue ;; esac
+  cmp -s "${SNAPSHOT}/area/${rel}" "${GENERATED_ROOT}/${rel}" || printf '%s\n' "${rel#./}" >>"${SNAPSHOT}/.touched"
+done <"${SNAPSHOT}/.files-before"
+if [ -s "${SNAPSHOT}/.new" ] || [ -s "${SNAPSHOT}/.touched" ]; then
+  echo "gqlgen_generate: generation wrote outside the files this script tracks:" >&2
+  sed 's|^\./|  created: |' "${SNAPSHOT}/.new" >&2
+  sed 's|^|  overwritten: |' "${SNAPSHOT}/.touched" >&2
   echo "  Add them to GENERATED_FILES here AND in ci/check_gqlgen_drift.sh, or" >&2
   echo "  fix the gqlgen.yml stanza that put them there. They are left in place" >&2
   echo "  because generation SUCCEEDED -- this is a scope mismatch, not a crash." >&2

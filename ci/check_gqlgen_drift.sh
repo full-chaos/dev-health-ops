@@ -62,6 +62,17 @@ tar -C "${ROOT}" \
 # milliseconds instead of a 10s gqlgen run per case. The wiring test asserts
 # CI never sets this, which is the other half of the safety.
 GENERATE_CMD="${GQLGEN_DRIFT_GENERATE_CMD:-go run github.com/99designs/gqlgen generate --config gqlgen.yml}"
+# Marker for detecting writes ANYWHERE in the copy, not only under the graph
+# root: a stanza pointed at internal/foo/ must be a finding, not an escape,
+# and checking only where output is EXPECTED cannot see output that is not.
+# `git status --porcelain` is unavailable here -- the copy deliberately
+# excludes .git -- so a timestamp marker plus `find -newer` gives the same
+# answer for one stat pass.
+#
+# `.outside` is excluded because the shell creates a redirect's target BEFORE
+# running the command that writes it, so the results file is always newer than
+# the marker and the check reports itself. Found by it failing on a clean tree.
+touch "${WORK}/.gen-marker"
 set +e
 ( cd "${WORK}/cmd/query-api" && eval "${GENERATE_CMD}" ) >"${WORK}/.gen.log" 2>&1
 rc=$?
@@ -105,27 +116,64 @@ fi
 # `diff` is used directly rather than `git diff`: the copy is not a
 # repository, and a git-based comparison silently treats an untracked file as
 # clean, which is a trap this repo has hit.
-# gqlgen writes wherever its config points, so comparing only the three listed
-# files is not the same as comparing the generated output. A resolver stanza
-# aimed at a new path produced a file the guard never diffed, and the guard
-# still reported "all documented" -- review round r5 executed exactly that.
-# The generated directories are compared as SETS first, so an output that
-# nobody listed fails here instead of passing invisibly.
-for d in cmd/query-api/internal/graph cmd/query-api/internal/graph/model; do
-  ( cd "${ROOT}/${d}" 2>/dev/null && find . -maxdepth 1 -type f -name '*.go' -print ) | sort >"${WORK}/.set-root"
-  ( cd "${WORK}/${d}" 2>/dev/null && find . -maxdepth 1 -type f -name '*.go' -print ) | sort >"${WORK}/.set-gen"
-  if ! diff -q "${WORK}/.set-root" "${WORK}/.set-gen" >/dev/null; then
-    echo "check_gqlgen_drift: regeneration changed which FILES exist in ${d}." >&2
-    echo "  only in a fresh generation (untracked generator output):" >&2
-    comm -13 "${WORK}/.set-root" "${WORK}/.set-gen" | sed 's|^\./|    |' >&2
-    echo "  only in the checked-in tree (generation no longer produces it):" >&2
-    comm -23 "${WORK}/.set-root" "${WORK}/.set-gen" | sed 's|^\./|    |' >&2
-    echo "  A file the guard does not diff is a file whose hand-edits are" >&2
-    echo "  unprotected. Add it to GENERATED_FILES here and in" >&2
-    echo "  ci/gqlgen_generate.sh, or fix the gqlgen.yml stanza." >&2
-    exit 1
+find "${WORK}" -type f -newer "${WORK}/.gen-marker" \
+  -not -path "${WORK}/cmd/query-api/internal/graph/*" \
+  -not -name '.gen-marker' -not -name '.gen.log' -not -name '.outside' \
+  -not -path "${WORK}/.git/*" -print | sed "s|^${WORK}/||" | sort >"${WORK}/.outside"
+if [ -s "${WORK}/.outside" ]; then
+  echo "check_gqlgen_drift: generation wrote OUTSIDE the generated root:" >&2
+  sed 's|^|    |' "${WORK}/.outside" >&2
+  echo "  Only cmd/query-api/internal/graph is snapshotted, restored and diffed." >&2
+  echo "  A generated file anywhere else is unprotected by every check here." >&2
+  exit 1
+fi
+
+# THE UNIT OF COMPARISON IS THE AREA, NOT THE FILE LIST.
+#
+# Comparing only the three listed files is not the same as comparing the
+# generated output. Round r5 pointed a resolver stanza at a new path and the
+# guard still said "all documented"; round r6 went further and showed a file
+# SET comparison is not enough either -- generation that OVERWRITES an
+# existing, hand-written file (internal/graph/resolver.go) leaves the set
+# unchanged, and a nested output escaped the maxdepth-1 scan entirely.
+#
+# So every .go file under the generated root is compared, recursively, by
+# content. The three tracked files produce allowlist entries as before; ANY
+# other file differing means generation wrote somewhere it must not, and that
+# is a hard failure rather than a drift line -- there is no such thing as a
+# documented hand-edit in a file gqlgen is not supposed to write.
+GEN_ROOT="cmd/query-api/internal/graph"
+( cd "${ROOT}/${GEN_ROOT}" 2>/dev/null && find . -type f -name '*.go' -print ) | sort >"${WORK}/.set-root"
+( cd "${WORK}/${GEN_ROOT}" 2>/dev/null && find . -type f -name '*.go' -print ) | sort >"${WORK}/.set-gen"
+if ! diff -q "${WORK}/.set-root" "${WORK}/.set-gen" >/dev/null; then
+  echo "check_gqlgen_drift: regeneration changed WHICH FILES exist under ${GEN_ROOT}." >&2
+  echo "  only in a fresh generation (untracked generator output):" >&2
+  comm -13 "${WORK}/.set-root" "${WORK}/.set-gen" | sed 's|^\./|    |' >&2
+  echo "  only in the checked-in tree (generation no longer produces it):" >&2
+  comm -23 "${WORK}/.set-root" "${WORK}/.set-gen" | sed 's|^\./|    |' >&2
+  echo "  A file the guard does not diff is a file whose contents are unprotected." >&2
+  exit 1
+fi
+
+untracked_changed=0
+while IFS= read -r rel; do
+  [ -n "${rel}" ] || continue
+  full="${GEN_ROOT}/${rel#./}"
+  case " ${GENERATED_FILES[*]} " in *" ${full} "*) continue ;; esac
+  if ! cmp -s "${ROOT}/${full}" "${WORK}/${full}"; then
+    if [ "${untracked_changed}" -eq 0 ]; then
+      echo "check_gqlgen_drift: regeneration MODIFIED files it does not generate:" >&2
+    fi
+    echo "    ${full}" >&2
+    untracked_changed=1
   fi
-done
+done <"${WORK}/.set-root"
+if [ "${untracked_changed}" -ne 0 ]; then
+  echo "  These are hand-written. Generation overwriting one destroys it, and a" >&2
+  echo "  file-set check cannot see it because the file still exists. Fix the" >&2
+  echo "  gqlgen.yml stanza that points generation at them." >&2
+  exit 1
+fi
 
 actual="${WORK}/.actual"
 : >"${actual}"

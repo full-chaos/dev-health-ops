@@ -253,7 +253,12 @@ func TestTheProductionQueryRouteIsRegisteredWithProvenance(t *testing.T) {
 	if !strings.Contains(text, `mux.HandleFunc("/query", withProofProvenance(`) {
 		t.Fatal("the production /query route is not registered through withProofProvenance: without it no canary or primary operation can be proven, and the Python edge forwards a header that is never set")
 	}
-	// And the proof route keeps its own wrapper.
+	// r6 killed the previous version by passing an EMPTY build to the
+	// wrapper: the registration matched, the header was never set, and the
+	// pin passed. So the commit argument is checked too.
+	if !strings.Contains(text, `withProofProvenance(handlers.Query, version.Current("query-api").Commit)`) {
+		t.Fatal("the production /query wrapper is not given the running build: an empty commit sets no header, so the route is wrapped and still unbindable")
+	}
 	if !strings.Contains(text, `/query`) {
 		t.Fatal("no /query registration found at all -- this test has stopped reading what it thinks it reads")
 	}

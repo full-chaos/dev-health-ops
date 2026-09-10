@@ -168,26 +168,70 @@ func unwrapOperation(err error) string {
 	return err.Error()
 }
 
-// urlToken matches anything URL-SHAPED, with or without "//": a scheme,
-// a colon, and a run of non-space characters. Deliberately greedy about
-// what counts as a URL -- over-scrubbing an error message costs
-// legibility, under-scrubbing costs a credential.
-var urlToken = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*:[^\s"']+`)
+// The sanitizer's two matchers.
+//
+// urlToken catches anything with a scheme -- `http://host/x`, and the
+// no-"//" form `http:SECRET@host/x` that defeated two earlier fixes.
+//
+// quotedToken catches what r6 found the first one missing: a RELATIVE
+// URL. A redirect's Location header is routinely a path, and Go quotes it
+// into the error verbatim -- `failed to parse Location header
+// "/REVIEW_SECRET/%zz"`. There is no scheme to key on, so the match is on
+// the quoting instead.
+var (
+	urlToken    = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*:[^\s"']+`)
+	quotedToken = regexp.MustCompile(`"[^"]*"`)
+)
 
-// scrubURLs replaces every URL-shaped token with its allowlisted rebuild,
-// or with a placeholder when it cannot be rebuilt safely.
+// scrubURLs removes every URL-shaped thing from a rendered error.
+//
+// A rebuilt endpoint keeps its SCHEME AND HOST ONLY. The path is dropped,
+// which is a correction to the first version of this function: r6 showed a
+// credential living in the path of an otherwise valid URL, so re-emitting
+// the path re-emits the secret. Host and scheme are enough to tell an
+// operator which endpoint failed, which is the whole job.
 func scrubURLs(message string) string {
+	// Quoted first: Go's own errors quote the offending value, and a
+	// quoted relative path has no scheme for urlToken to find.
+	message = quotedToken.ReplaceAllStringFunc(message, func(quoted string) string {
+		inner := quoted[1 : len(quoted)-1]
+		if !looksLikeALocation(inner) {
+			return quoted
+		}
+		if rebuilt, ok := rebuildEndpoint(inner); ok {
+			return `"` + rebuilt + `"`
+		}
+		return `"(redacted url)"`
+	})
 	return urlToken.ReplaceAllStringFunc(message, func(token string) string {
 		trimmed := strings.TrimRight(token, `.,;:)]}"'`)
 		suffix := token[len(trimmed):]
-		parsed, err := safeEndpoint(trimmed)
-		if err != nil {
-			return "(redacted url)" + suffix
+		if rebuilt, ok := rebuildEndpoint(trimmed); ok {
+			return rebuilt + suffix
 		}
-		// Scheme, host and PATH only -- never userinfo, query or fragment,
-		// each of which has carried a credential in a real finding.
-		return parsed.Scheme + "://" + parsed.Host + parsed.Path + suffix
+		return "(redacted url)" + suffix
 	})
+}
+
+// looksLikeALocation reports whether a quoted string might be a URL or a
+// path. Deliberately generous: over-scrubbing an error message costs
+// legibility, under-scrubbing costs a credential, and this file exists
+// because that trade was made the other way three times.
+func looksLikeALocation(value string) bool {
+	return strings.HasPrefix(value, "/") ||
+		strings.Contains(value, "://") ||
+		urlToken.MatchString(value)
+}
+
+// rebuildEndpoint returns scheme://host for a URL this package can fully
+// account for. Everything else is unrebuildable, including every relative
+// path -- a path alone has no safe part to keep.
+func rebuildEndpoint(raw string) (string, bool) {
+	parsed, err := safeEndpoint(raw)
+	if err != nil {
+		return "", false
+	}
+	return parsed.Scheme + "://" + parsed.Host, true
 }
 
 // credential is present -- checking User there would wave it through.

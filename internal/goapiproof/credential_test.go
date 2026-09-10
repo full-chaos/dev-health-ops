@@ -96,13 +96,21 @@ func TestEachPlaneReceivesItsOwnCredential(t *testing.T) {
 	servers := newTwoPlaneServers(t, `{"data":{"featureFlags":[{"key":"a"}]}}`,
 		func() string { return envelope })
 
-	runner := newTwoPlaneRunner(t, servers,
-		StaticCredential("Authorization", "edge access token", servers.edgeOK),
-		StaticCredential("Authorization", "envelope", envelope),
-		"shadow")
-
-	if _, _, err := runner.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
+	// BOTH modes, not just shadow. r6 killed the shadow-only version by
+	// sending the proof credential on a CANARY candidate leg: that leg
+	// goes to the edge, the fixture never exercised it, and the mutation
+	// survived.
+	for _, mode := range []string{"shadow", "canary"} {
+		runner := newTwoPlaneRunner(t, servers,
+			StaticCredential("Authorization", "edge access token", servers.edgeOK),
+			StaticCredential("Authorization", "envelope", envelope),
+			mode)
+		if _, _, err := runner.Run(context.Background()); err != nil && mode == "shadow" {
+			t.Fatalf("Run(%s): %v", mode, err)
+		}
+		if got := servers.credentialSeenBy("edge"); got != servers.edgeOK {
+			t.Fatalf("mode=%s: the edge received %q, not the access token", mode, got)
+		}
 	}
 
 	if got := servers.credentialSeenBy("edge"); got != servers.edgeOK {

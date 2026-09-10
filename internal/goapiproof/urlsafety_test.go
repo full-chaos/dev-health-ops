@@ -147,3 +147,44 @@ func TestSanitizingNilStaysNil(t *testing.T) {
 		t.Fatal("SanitizeError(nil) must be nil")
 	}
 }
+
+// r6 P1: a RELATIVE redirect location. Go quotes it into the error
+// verbatim -- `failed to parse Location header "/REVIEW_SECRET/%zz"` --
+// and there is no scheme for a scheme-keyed matcher to find. The earlier
+// version also re-emitted the PATH of a URL it could account for, which
+// re-emits a secret living in that path.
+func TestTheSanitizerRemovesRelativeAndPathCredentials(t *testing.T) {
+	const secret = "REVIEW_SECRET"
+
+	for name, err := range map[string]error{
+		"relative location": errors.New(
+			`Get "http://query-api.test/registry": failed to parse Location header "/` + secret + `/%zz"`),
+		"credential in the path of a valid URL": errors.New(
+			`Get "http://query-api.test/` + secret + `/registry": dial tcp`),
+		"relative location, no quotes around the outer": errors.New(
+			`failed to parse Location header "/` + secret + `"`),
+		"protocol-relative": errors.New(
+			`Get "//alice:` + secret + `@host/registry": dial tcp`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			sanitized := SanitizeError(err).Error()
+			if strings.Contains(sanitized, secret) {
+				t.Fatalf("the credential survived: %s", sanitized)
+			}
+		})
+	}
+}
+
+// And a rebuilt endpoint keeps scheme and host and NOTHING else, so a
+// future edit cannot reintroduce the path.
+func TestARebuiltEndpointCarriesNoPath(t *testing.T) {
+	sanitized := SanitizeError(errors.New(
+		`Get "http://query-api.test:8090/registry/v2": connection refused`)).Error()
+
+	if !strings.Contains(sanitized, "query-api.test") {
+		t.Fatalf("the host must survive, or an operator cannot tell which endpoint failed: %s", sanitized)
+	}
+	if strings.Contains(sanitized, "/registry") {
+		t.Fatalf("the path must NOT survive -- a credential can live in it: %s", sanitized)
+	}
+}

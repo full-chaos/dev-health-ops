@@ -623,10 +623,7 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 	// WaitDelay bounds the wait on the OUTPUT PIPE, which Cancel does not
 	// reach. r4: a helper whose parent exits while a CHILD inherited
 	// stdout leaves the write end open, and cmd.Run() blocks reading it
-	// long after the group has been signalled -- measured 2.0s against a
-	// 100ms deadline. Killing the group is necessary and not sufficient,
-	// because the thing being waited on is the descriptor, not the
-	// process.
+	// long after the group has been signalled.
 	cmd.WaitDelay = time.Second
 
 	var stdout bytes.Buffer
@@ -638,6 +635,14 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 	cmd.Stderr = io.Discard
 
 	err := cmd.Run()
+	// r6: WaitDelay bounds the WAIT, not the descendants. The parent can
+	// exit, mintBearer can return, and a grandchild the helper spawned is
+	// still running -- observed `State: S (sleeping)` after the deadline
+	// error was already returned. So the group is killed unconditionally
+	// and REAPED here, whatever Run reported: a helper is a process tree,
+	// and returning while part of it lives is reporting a termination that
+	// did not happen.
+	killHelperGroup(cmd)
 	// Overflow is checked FIRST. r3 found the specific message never
 	// fired: a helper that overruns the limit also makes cmd.Run() return
 	// an error, so the run-failure branch classified it as "could not be
@@ -702,3 +707,34 @@ func labelledProofURL(proofURL string) string {
 	}
 	return goapiproof.EndpointLabel(proofURL)
 }
+
+// killHelperGroup signals the helper's whole process group and waits for
+// it to actually be gone.
+//
+// Called on EVERY path, success included: a helper that spawned a
+// background child and exited 0 has still left that child holding
+// whatever it inherited. The kill is best-effort -- an already-dead group
+// gives ESRCH, which is the outcome we want -- and the wait is bounded, so
+// a process this program cannot kill (a different owner, an unkillable
+// state) delays it by helperReapTimeout and no longer.
+func killHelperGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	pgid := cmd.Process.Pid
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+
+	deadline := time.Now().Add(helperReapTimeout)
+	for time.Now().Before(deadline) {
+		// Signal 0 probes for existence without delivering anything.
+		if err := syscall.Kill(-pgid, 0); err != nil {
+			return // the group is gone
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// helperReapTimeout bounds the wait for the helper's group to die. Short:
+// this runs after the helper has already been SIGKILLed, and anything
+// still alive after it is not going to be killed by waiting longer.
+const helperReapTimeout = 2 * time.Second

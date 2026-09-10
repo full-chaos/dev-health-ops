@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -278,7 +280,7 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(printed, "envelope mints = 3") {
+	if !strings.Contains(printed, "envelope mints = 3") { // 3, so neither 0 nor 1 can pass
 		t.Fatalf("the mint COUNT must reach the report -- a run that minted once will fail at the closing build check, and this line is the only warning:\n%s", printed)
 	}
 	if !strings.Contains(printed, "build binding "+goapiproof.EdgeBuildAbsent+" = 1") {
@@ -327,31 +329,107 @@ func TestThisCommandsGuardsAreKillable(t *testing.T) {
 		// leaves this failing rather than untested.
 		err := goapiproof.VerifyCandidateBuild("running-build", "", map[string]goapiproof.RoutingRow{
 			"featureFlags": {Mode: "canary", CandidateBuild: "some-other-build"},
+			"hotspots":     {Mode: "shadow", CandidateBuild: "another-build"},
+			"flowMatrix":   {Mode: "canary", CandidateBuild: "running-build"},
 		})
 		if err == nil {
 			t.Fatal("a row naming another build must refuse the run")
+		}
+		// Both disagreeing rows named, the agreeing one not: a constant
+		// refusal message cannot satisfy this.
+		for _, want := range []string{"featureFlags", "hotspots"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the refusal must name %s: %v", want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "flowMatrix") {
+			t.Fatalf("an agreeing row must not be named: %v", err)
+		}
+		// And main.go must RETURN it rather than log and continue -- r6
+		// killed the previous version by ignoring the error at the call
+		// site, which this test could not see.
+		source, readErr := os.ReadFile("main.go")
+		if readErr != nil {
+			t.Fatalf("read main.go: %v", readErr)
+		}
+		if !strings.Contains(string(source), "if err := goapiproof.VerifyCandidateBuild(registry.BuildIdentity, f.candidateBuild, routing); err != nil {") {
+			t.Fatal("the CLI does not refuse on the routing cross-check: the error must stop the run, not be discarded")
 		}
 	})
 
 	t.Run("the binding line is counted, not hardcoded", func(t *testing.T) {
 		// Hardcoding `absent=1` survived r5, so this drives a PRESENT
 		// binding and asserts the report says so.
-		outcomes := []goapiproof.Outcome{{
-			Operation: "featureFlags", Route: goapiproof.RouteEdge,
-			Executed: true, Admitted: true,
-			EdgeBuildBinding: goapiproof.EdgeBuildPresent,
-			TerminalState:    "match",
-		}}
+		// THREE outcomes across TWO bindings. r6 killed the single-element
+		// version by hardcoding the counter to 1: a fixture with one
+		// element cannot tell a count from a constant.
+		outcomes := []goapiproof.Outcome{
+			{Operation: "featureFlags", Route: goapiproof.RouteEdge, Executed: true, Admitted: true,
+				EdgeBuildBinding: goapiproof.EdgeBuildPresent, TerminalState: "match"},
+			{Operation: "hotspots", Route: goapiproof.RouteEdge, Executed: true, Admitted: true,
+				EdgeBuildBinding: goapiproof.EdgeBuildPresent, TerminalState: "match"},
+			{Operation: "flowMatrix", Route: goapiproof.RouteEdge, Executed: true, Admitted: true,
+				EdgeBuildBinding: goapiproof.EdgeBuildAbsent, TerminalState: "unsupported"},
+		}
 		printed := captureStdout(t, func() {
 			_ = emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
 				goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"},
 				outcomes, goapiproof.Summary{Attempted: 1, Admitted: 1, Executed: 1}, nil)
 		})
-		if !strings.Contains(printed, "build binding "+goapiproof.EdgeBuildPresent+" = 1") {
-			t.Fatalf("the binding line did not follow the outcomes:\n%s", printed)
+		// 2 present, 1 absent -- neither number is 1, so a constant
+		// cannot satisfy both.
+		if !strings.Contains(printed, "build binding "+goapiproof.EdgeBuildPresent+" = 2") {
+			t.Fatalf("the present count did not follow the outcomes:\n%s", printed)
 		}
-		if strings.Contains(printed, goapiproof.EdgeBuildAbsent+" = 1") {
-			t.Fatalf("the binding line was hardcoded to absent:\n%s", printed)
+		if !strings.Contains(printed, "build binding "+goapiproof.EdgeBuildAbsent+" = 1") {
+			t.Fatalf("the absent count did not follow the outcomes:\n%s", printed)
 		}
 	})
+}
+
+// r6 P1: the previous test asserted ELAPSED TIME, which the WaitDelay fix
+// satisfied while the helper's grandchild kept running -- a test that
+// measured the symptom I picked rather than the property that matters.
+//
+// This asserts the property: after mintBearer returns, nothing from the
+// helper's process group is alive.
+func TestNoHelperDescendantSurvivesTheDeadline(t *testing.T) {
+	// The parent spawns a long-lived child, writes its pid, and exits --
+	// so the parent is gone before the deadline and the child is not.
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	helper := writeHelper(t, "#!/bin/sh\nsleep 120 &\necho $! > \"$1\"\nexit 0\n")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, _ = mintBearer(ctx, []string{helper, pidFile})
+
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Skipf("helper did not record its child pid: %v", err)
+	}
+	childPid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("unreadable child pid %q: %v", raw, err)
+	}
+
+	// Signal 0 probes for existence without delivering anything.
+	if err := syscall.Kill(childPid, 0); err == nil {
+		// Do not leave it running whatever the verdict.
+		_ = syscall.Kill(childPid, syscall.SIGKILL)
+		t.Fatalf("helper child %d survived mintBearer: the deadline reported a termination that did not happen", childPid)
+	}
+}
+
+// The control: a helper that exits cleanly is still reaped, and the
+// credential it printed is still returned. Reaping must not break the
+// happy path.
+func TestACleanHelperStillReturnsItsCredential(t *testing.T) {
+	helper := writeHelper(t, "#!/bin/sh\nprintf 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln'\n")
+	minted, err := mintBearer(context.Background(), []string{helper})
+	if err != nil {
+		t.Fatalf("mintBearer: %v", err)
+	}
+	if !strings.HasPrefix(minted, "Bearer eyJhbGci") {
+		t.Fatalf("got %q", minted)
+	}
 }

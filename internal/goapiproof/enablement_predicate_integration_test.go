@@ -347,3 +347,148 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 		})
 	}
 }
+
+// The FULL input surface, not a sample.
+//
+// The shared table above is 20 chosen cases. Chosen cases are a sample,
+// and a sample is exactly what r1 and r2 kept finding gaps in -- an
+// instrument that enumerates only the inputs its author thought of. This
+// enumerates every value the predicate can SEE and asserts the rule over
+// the whole cross-product, with `want` DERIVED from the rule as stated in
+// prose rather than listed per case.
+//
+// What the predicate reads, and nothing else:
+//   - stage                                 (fixed: deployed_executed)
+//   - terminal_state                        (all 11 legal values)
+//   - measurement_route                     (edge, proof, NULL)
+//   - differences_outside_baseline_defect   (0, 1)
+//   - baseline_defect                       (NULL, empty, non-empty)
+//   - the target mode                       (canary, primary)
+//
+// build_binding is deliberately NOT in that list, and every combination is
+// written once per binding so that stays checkable rather than asserted.
+//
+// The mutant this test kills that the 20 cases do NOT, measured both ways
+// rather than argued from the design: admitting a NULL measurement_route
+// for the MISMATCH branch only.
+//
+//	routeClause = "(p.measurement_route IS NOT NULL OR p.terminal_state = 'mismatch')"
+//
+// Both fixture-driven tests PASS under that mutation; this one fails with
+// `terminal=mismatch route=<nil> ... predicate says true, the rule says
+// false`. That is a receipt with NO recorded provenance authorizing a
+// promotion -- the "any route is not no route" rule 0128 exists to
+// enforce. The 20 cases miss it because they cover 8 of the 33
+// terminal-state x route pairs and `mismatch x NULL` is not among them,
+// so the NULL-route rule is only ever exercised on the `match` branch.
+//
+// (An earlier version of this comment claimed the fixture would not catch
+// a predicate that started reading build_binding. It does -- both Go
+// readers fail. The claim was made from this test's design instead of
+// from running it, which is the same defect class as a comment asserting
+// two implementations are "deliberately the same predicate".)
+func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	allTerminalStates := []string{
+		"match", "mismatch", "auth_rejected", "validation_rejected",
+		"dependency_failed", "timeout", "cancelled", "resource_exhausted",
+		"fallback", "unsupported", "proof_failed",
+	}
+	routes := []any{RouteEdge, RouteProof, nil}
+	bindings := []any{EdgeBuildPresent, EdgeBuildAbsent, nil}
+	outsides := []int{0, 1}
+	defects := []any{nil, []string{}, []string{"CHAOS-5448"}}
+	modes := []string{TargetModeCanary, TargetModePrimary}
+
+	// The rule, in one place, derived rather than tabulated.
+	want := func(terminal string, route any, outside int, defect any, mode string) bool {
+		switch mode {
+		case TargetModePrimary:
+			if route != RouteEdge {
+				return false
+			}
+		default:
+			if route == nil {
+				return false
+			}
+		}
+		switch terminal {
+		case EnablementProofTerminalState:
+			return true
+		case EnablementCitedMismatchState:
+			cited, ok := defect.([]string)
+			return outside == 0 && ok && len(cited) > 0
+		default:
+			return false
+		}
+	}
+
+	key := admissionKey{
+		SchemaDigest:      "sha256:surface",
+		DocumentDigest:    "doc-surface",
+		SelectedOperation: "featureFlags",
+		CandidateBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_candidate_build
+		   (schema_digest, document_digest, selected_operation, candidate_build, registered_at)
+		 VALUES ($1,$2,$3,$4, now()) ON CONFLICT DO NOTHING`,
+		key.SchemaDigest, key.DocumentDigest, key.SelectedOperation, key.CandidateBuild,
+	); err != nil {
+		t.Fatalf("register the candidate build: %v", err)
+	}
+
+	combinations := 0
+	for _, terminal := range allTerminalStates {
+		for _, route := range routes {
+			for _, binding := range bindings {
+				for _, outside := range outsides {
+					for _, defect := range defects {
+						if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run`); err != nil {
+							t.Fatalf("truncate: %v", err)
+						}
+						if _, err := pool.Exec(ctx,
+							`INSERT INTO go_api_proof_run
+							   (id, schema_digest, document_digest, selected_operation,
+							    candidate_build, request_identity, stage, terminal_state,
+							    observed_at, org_id, recorded_by, measurement_route,
+							    build_binding, differences_outside_baseline_defect,
+							    baseline_defect)
+							 VALUES ($1,$2,$3,$4,$5,'surface',$6,$7, now(),'70d529e0','surface',$8,$9,$10,$11)`,
+							uuid.New(), key.SchemaDigest, key.DocumentDigest, key.SelectedOperation,
+							key.CandidateBuild, EnablementProofStage, terminal,
+							route, binding, outside, defect,
+						); err != nil {
+							t.Fatalf("seed %s/%v/%v/%d/%v: %v", terminal, route, binding, outside, defect, err)
+						}
+
+						for _, mode := range modes {
+							combinations++
+							found, err := OperationsWithEnablementProof(ctx, pool,
+								key.SchemaDigest, key.CandidateBuild, mode,
+								map[string]string{key.SelectedOperation: key.DocumentDigest})
+							if err != nil {
+								t.Fatalf("read: %v", err)
+							}
+							got := found[key.SelectedOperation]
+							expected := want(terminal, route, outside, defect, mode)
+							if got != expected {
+								t.Fatalf("terminal=%s route=%v binding=%v outside=%d defect=%v mode=%s: predicate says %v, the rule says %v",
+									terminal, route, binding, outside, defect, mode, got, expected)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 11 terminal states x 3 routes x 3 bindings x 2 outside x 3 defect
+	// shapes x 2 modes. Asserted rather than commented, so a value added
+	// to any of those lists without thought fails here.
+	if combinations != 11*3*3*2*3*2 {
+		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 11*3*3*2*3*2)
+	}
+}

@@ -277,7 +277,7 @@ var operationSpecs = map[string]OperationSpec{
 	// before (lane-goapi-parity, CHAOS-5451).
 	"investmentFull": {
 		ResponseRoot: "analytics",
-		Variables:    investmentVariables,
+		Variables:    investmentFullVariables,
 		Parity: Options{FloatTierB: map[string]string{
 			"data.analytics.breakdowns.items.value": "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Rule-derived, not observed (CHAOS-5451)",
 			"data.analytics.sankey.nodes.value":     "CompileSankey calls the same dbExpression as breakdowns, so on the investment path this is the same SUM(subcategory_kv.2) float sum; subcategory_kv ARRAY JOINs a Map(String, Float64) column (investment.go:514, migration 017:12). Rule-derived, not observed (CHAOS-5451)",
@@ -363,19 +363,36 @@ var operationSpecs = map[string]OperationSpec{
 		},
 	},
 	"workGraphArtifacts": {Variables: workGraphVariables, ResponseRoot: "workGraphArtifacts"},
-	"workGraphEdges": {
-		ResponseRoot: "workGraphEdges",
-		Variables:    workGraphVariables,
-		Parity: Options{BaselineDefects: []BaselineDefect{{
-			Ticket: "CHAOS-5449",
-			Reason: "Python's un-deduped read returned 1000 rows carrying only 738 distinct edgeIds; Go's argMax dedup returned 1000 distinct edges and is a strict superset. Go is correct. Evidence: /var/lib/oci-cache/lane-scratch/lane-goapi-parity/5449/analysis.txt",
-			Paths:  []string{"data.workGraphEdges.edges"},
-		}}},
-	},
+	// The 5449 BaselineDefect this entry used to carry (Python's
+	// un-deduped read undercounting distinct edgeIds against Go's argMax
+	// dedup) was MERGE-STATE DEPENDENT, not a permanent defect, and the
+	// first deployed-executed run correctly REFUSED it as vacuous:
+	// measured live at 12:59Z 2026-09-10 (JOB 5), ClickHouse's
+	// work_graph_edges held 17,005 rows / 11,606 distinct edge_id, yet the
+	// first 1000 rows by the shared ORDER BY carried zero duplicates on
+	// EITHER plane (1000 edges / 1000 distinct edgeIds, Python and Go
+	// alike) -- the declared path `data.workGraphEdges.edges` matched
+	// nothing to excuse. Removed rather than re-measured: a blanket
+	// declaration here would mask any FUTURE regression on this
+	// operation, which is exactly what the vacuity guard exists to catch.
+	// If the divergence recurs, this row reads `mismatch` honestly instead
+	// of being silently excused.
+	"workGraphEdges": {ResponseRoot: "workGraphEdges", Variables: workGraphVariables},
 	"workGraphFlow": {Variables: workGraphVariables, ResponseRoot: "workGraphFlow"},
 }
 
-// investmentVariables is shared by investmentBreakdown and investmentFull.
+// investmentVariables builds investmentBreakdown's request only.
+//
+// It used to be shared with investmentFull, which was the bug: this
+// function's batch carries a `breakdowns` sub-request and nothing else, so
+// on investmentFull -- whose registered document
+// (query_route.go's registeredInvestmentFullDocument) also selects
+// `analytics.sankey.nodes.value` / `.edges.value` -- `batch.Sankey` stayed
+// nil, `resolveSankey` never ran (resolve.go:194), and both planes
+// answered null. The first deployed-executed run correctly REFUSED the
+// two declared FloatTierB sankey paths as vacuous rather than reporting a
+// match having measured nothing (JOB 5, 12:56Z 2026-09-10). See
+// investmentFullVariables below for investmentFull's own request.
 //
 // `useInvestment` is a field of AnalyticsRequestInput, NOT of
 // BreakdownRequestInput (whose fields are exactly dimension, measure,
@@ -389,6 +406,44 @@ func investmentVariables(orgID string, w Window) map[string]any {
 			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
 			"topN":      10,
 		}},
+		"useInvestment": true,
+	}}
+}
+
+// investmentFullVariables builds investmentFull's request: the same
+// `breakdowns` sub-request as investmentVariables above, PLUS a `sankey`
+// sub-request -- the registered document selects both subtrees
+// (registeredInvestmentFullDocument), so both must actually be asked for,
+// or the unrequested one resolves to null on both planes and any
+// declaration under it is vacuous by construction.
+//
+// path/measure/maxNodes/maxEdges mirror
+// web/src/lib/graphql/investmentFetchers.ts's own default sankey batch
+// (getInvestmentFlowViaGraphQL's team_category_repo mode -- the real
+// client's default flow_mode): ["TEAM", "THEME", "REPO"], COUNT, 50/200.
+// Three dimensions rather than the schema's >= 2 minimum
+// (validateSankeyPath, sankey.go) because that is the shape a real
+// request actually sends, not an arbitrary minimal one -- go-api-prove
+// exists to measure the request traffic makes. `useInvestment: true` only
+// at the batch level: resolveSankey reads `batch.UseInvestment`
+// (resolve.go:195), not SankeyRequestInput's own optional field, so
+// setting the batch-level flag is what actually selects the investment
+// path CompileSankey's Tier-B declarations describe.
+func investmentFullVariables(orgID string, w Window) map[string]any {
+	dateRange := map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate}
+	return map[string]any{"orgId": orgID, "batch": map[string]any{
+		"breakdowns": []any{map[string]any{
+			"dimension": "WORK_TYPE", "measure": "COUNT",
+			"dateRange": dateRange,
+			"topN":      10,
+		}},
+		"sankey": map[string]any{
+			"path":      []any{"TEAM", "THEME", "REPO"},
+			"measure":   "COUNT",
+			"dateRange": dateRange,
+			"maxNodes":  50,
+			"maxEdges":  200,
+		},
 		"useInvestment": true,
 	}}
 }

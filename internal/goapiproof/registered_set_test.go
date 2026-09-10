@@ -199,3 +199,53 @@ func TestPrDeclaresTheIdentifierItCannotSupply(t *testing.T) {
 		}
 	}
 }
+
+// r1 P3: the guard above enumerates the map LITERAL, so an operation
+// added at runtime -- `digestByOperation["futureOperation"] = ...` after
+// the literal -- is invisible to it. The reviewer demonstrated exactly
+// that, and query-api's own mounted-route test caught it there (18 logged
+// vs 17 in the catalog), but this package would have gone on believing
+// its coverage was complete.
+//
+// Static analysis cannot follow a runtime insertion. What it CAN do is
+// refuse to let one exist unnoticed: the literal is the only place the
+// map is allowed to gain entries, so any later index assignment to it
+// fails here with a pointer at this test. That is the honest boundary --
+// the guard does not claim to enumerate runtime state, it claims the
+// route table has no runtime state to enumerate, and checks it.
+func TestTheRouteTableGainsOperationsOnlyInItsLiteral(t *testing.T) {
+	path, err := filepath.Abs(queryRouteSource)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", queryRouteSource, err)
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	var offenders []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			index, ok := lhs.(*ast.IndexExpr)
+			if !ok {
+				continue
+			}
+			ident, ok := index.X.(*ast.Ident)
+			if !ok || ident.Name != digestByOperationVar {
+				continue
+			}
+			offenders = append(offenders, fset.Position(assign.Pos()).String())
+		}
+		return true
+	})
+
+	if len(offenders) > 0 {
+		t.Fatalf("%s is assigned by index at %v: TestOperationSpecsCoverExactlyWhatQueryAPIRegisters reads the map LITERAL, so an operation registered this way is invisible to it and go-api-prove would refuse the run in production instead. Put the operation in the literal, or teach that test to follow this",
+			digestByOperationVar, offenders)
+	}
+}

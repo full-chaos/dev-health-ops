@@ -326,3 +326,52 @@ func repoRootFromTest(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// r1 P3: TestEverySpecBuildsVariables only requires a non-empty,
+// JSON-encodable object, so mutating featureFlagEvents' limit from 1000 to
+// 100 passed every test. The value is not arbitrary -- the registered
+// document requires the variable, and 1000 is the SDL's own default for
+// the argument (`limit: Int! = 1000`), which is what a client omitting it
+// gets. A different value silently measures a different request than the
+// one real traffic makes, and parity evidence gathered over a shorter page
+// is incomplete evidence that reads as complete.
+func TestFeatureFlagEventsAsksForTheSDLDefaultPage(t *testing.T) {
+	spec, err := SpecFor("featureFlagEvents")
+	if err != nil {
+		t.Fatalf("SpecFor: %v", err)
+	}
+	variables := spec.Variables("70d529e0", DefaultWindow())
+
+	if got := variables["limit"]; got != 1000 {
+		t.Fatalf("featureFlagEvents limit = %v, want 1000 -- the SDL declares `limit: Int! = 1000`, so any other value measures a request no client makes", got)
+	}
+	// The document declares $orgId and $limit as required and $flagKey /
+	// $environment as nullable; all four are sent, so the request shape
+	// stays readable beside the document.
+	for _, name := range []string{"orgId", "flagKey", "environment", "limit"} {
+		if _, ok := variables[name]; !ok {
+			t.Fatalf("featureFlagEvents omits $%s: the registered document declares it", name)
+		}
+	}
+	if got := variables["orgId"]; got != "70d529e0" {
+		t.Fatalf("featureFlagEvents orgId = %v, want the run's org", got)
+	}
+}
+
+// The SDL is the authority for that default, so it is read rather than
+// trusted: if someone changes `limit: Int! = 1000` in the schema, the
+// spec above is measuring the wrong page and this says so.
+func TestTheFeatureFlagEventsLimitMatchesTheSDLDefault(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "contracts", "graphql", "v1", "schema.graphql"))
+	if err != nil {
+		t.Fatalf("read the SDL: %v", err)
+	}
+	declaration := regexp.MustCompile(`featureFlagEvents\([^)]*limit:\s*Int!\s*=\s*(\d+)`)
+	match := declaration.FindSubmatch(source)
+	if match == nil {
+		t.Fatal("could not find featureFlagEvents' limit default in the SDL: the declaration changed shape and this guard stopped guarding")
+	}
+	if string(match[1]) != "1000" {
+		t.Fatalf("the SDL now defaults limit to %s, but the spec sends 1000: go-api-prove is measuring a different page than a client that omits the argument", match[1])
+	}
+}

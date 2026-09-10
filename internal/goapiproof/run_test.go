@@ -734,11 +734,26 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 	if len(outcomes) != 1 {
 		t.Fatalf("expected one outcome, got %d", len(outcomes))
 	}
-	if outcomes[0].RefusalReason != RefusalNeedsInstanceID {
-		t.Fatalf("refusal reason = %q, want %q -- the run must SAY why, not report a generic failure", outcomes[0].RefusalReason, RefusalNeedsInstanceID)
+	// r1 P3: comparing against the constant under test is a tautology --
+	// renaming RefusalNeedsInstanceID passed this assertion. The WIRE
+	// string is what a reader of ByRefusalReason or review_evidence sees,
+	// so that is what is pinned.
+	if outcomes[0].RefusalReason != "operation_needs_an_instance_identifier" {
+		t.Fatalf("refusal reason = %q, want %q -- the run must SAY why, not report a generic failure", outcomes[0].RefusalReason, "operation_needs_an_instance_identifier")
+	}
+	if RefusalNeedsInstanceID != "operation_needs_an_instance_identifier" {
+		t.Fatalf("the constant moved to %q: refusal reasons are read from stored receipts, so renaming one silently reclassifies every row already written", RefusalNeedsInstanceID)
 	}
 	if !strings.Contains(outcomes[0].RefusalDetail, "$id") {
 		t.Fatalf("the refusal must NAME the variable it cannot supply, got %q", outcomes[0].RefusalDetail)
+	}
+
+	// r1 P3: the point of refusing BEFORE the request is that no request
+	// happens. Without this, moving the refusal below both HTTP legs left
+	// every assertion above green -- the run would have sent an invented
+	// id to both planes and merely declined to record the result.
+	if len(edge.seen) != 0 {
+		t.Fatalf("the refusal fired but %d request(s) still went out: %v -- an operation whose identifier cannot be built must never reach the wire", len(edge.seen), edge.seen)
 	}
 
 	// And no receipt is produced from it.

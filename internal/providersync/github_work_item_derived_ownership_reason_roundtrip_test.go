@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -251,23 +252,28 @@ func TestGitHubWorkItemTeamAttributionRowNoExportedFieldReadsBackZero(t *testing
 type ownershipReasonWriteConn struct {
 	driver.Conn
 	batch *ownershipReasonWriteBatch
+	// SendErr, when set, is returned by every batch this conn prepares --
+	// used to prove counting only happens AFTER a successful Send (codex
+	// round 5, P3).
+	SendErr error
 }
 
 func (conn *ownershipReasonWriteConn) PrepareBatch(
 	context.Context, string, ...driver.PrepareBatchOption,
 ) (driver.Batch, error) {
 	if conn.batch == nil {
-		conn.batch = &ownershipReasonWriteBatch{}
+		conn.batch = &ownershipReasonWriteBatch{SendErr: conn.SendErr}
 	}
 	return conn.batch, nil
 }
 
 type ownershipReasonWriteBatch struct {
 	driver.Batch
+	SendErr error
 }
 
 func (batch *ownershipReasonWriteBatch) Append(...any) error { return nil }
-func (batch *ownershipReasonWriteBatch) Send() error         { return nil }
+func (batch *ownershipReasonWriteBatch) Send() error         { return batch.SendErr }
 func (batch *ownershipReasonWriteBatch) Abort() error        { return nil }
 
 // TestWriteGitHubWorkItemEffectCountsOwnershipCheckedOnEveryMembershipRow is
@@ -459,6 +465,72 @@ func TestRejectedMembershipsAreCountedByOwnershipChecked(t *testing.T) {
 	}
 }
 
+// TestRejectedRowsWithIdenticalSortingKeyCountOnceNotTwice is CHAOS-4320's
+// red-first pin for codex round 5's second P1 (NOT CLEAN, executed repro):
+// persistedRows go through githubWorkItemDerivedSortingKeyDedupe before
+// anything counts them, so two candidates that resolve to an identical
+// (repo, work item, team, source) key collapse to ONE row before the
+// "owned"/membership-layer counters ever see them -- exactly the identity
+// this destination's ReplacingMergeTree engine itself uses. rejectedRows
+// did NOT get the same treatment: two rejection events sharing that
+// identical key counted as TWO ownership_checked samples, so the same kind
+// of duplicate meant a different count depending on which outcome (owned
+// vs rejected) it had.
+//
+// This test writes two rejected marker rows that share an IDENTICAL
+// sorting key (same repo, work item, team, source) through the real
+// WriteGitHubWorkItemEffect and asserts exactly ONE repo_not_owned sample,
+// matching what the equivalent duplicate would do on the granted path.
+func TestRejectedRowsWithIdenticalSortingKeyCountOnceNotTwice(t *testing.T) {
+	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
+	teamID := "nonowner"
+	teamName := "Nonowner"
+	duplicateRejection := githubWorkItemTeamAttributionRow{
+		WorkItemID: "gh:acme/api#5", Provider: "github", Source: "assignee_membership",
+		IsPrimary: 0, Confidence: "none", Evidence: "ownership_rejected",
+		ComputedAt: time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
+		RepoID:     &repoID, TeamID: &teamID, TeamName: &teamName,
+		OrgID: "org-acme", OwnershipReason: "repo_not_owned", Rejected: true,
+	}
+	// Same sorting key (repo, work item, team, source) as the row above --
+	// only Evidence/ComputedAt differ, mirroring the resolver-recomputation
+	// case the existing collision tests for GRANTED rows already cover
+	// (e.g. two ownership facts naming one team differently).
+	sameKeyLaterRejection := duplicateRejection
+	sameKeyLaterRejection.ComputedAt = duplicateRejection.ComputedAt.Add(time.Second)
+	rows := []githubWorkItemTeamAttributionRow{duplicateRejection, sameKeyLaterRejection}
+
+	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: "org-acme", Provider: "github", Destination: githubTeamAttributionsDestination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+	metrics := providerfoundation.NewMetrics()
+	sink := GitHubWorkItemTeamAttributionsClickHouseEffects{
+		Conn:    &ownershipReasonWriteConn{},
+		Lease:   providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Metrics: metrics,
+	}
+	if err := sink.WriteGitHubWorkItemEffect(context.Background(), identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="repo_not_owned"} 1`) {
+		t.Fatalf(
+			"two rejected rows sharing an identical sorting key were counted separately instead of "+
+				"collapsing to one, like the equivalent granted-row duplicate does:\n%s",
+			rendered,
+		)
+	}
+}
+
 // assertNoExportedFieldIsZero fails the test naming every exported field of
 // value that reflect.Value.IsZero reports as unset.
 func assertNoExportedFieldIsZero(t *testing.T, label string, value any) {
@@ -477,5 +549,65 @@ func assertNoExportedFieldIsZero(t *testing.T, label string, value any) {
 	}
 	if len(zeroFields) > 0 {
 		t.Fatalf("%s githubWorkItemTeamAttributionRow has zero-valued exported field(s): %v -- either the fixture forgot to populate them (fix the fixture) or the effects JSON round trip silently dropped them (check for a json:\"-\" tag)", label, zeroFields)
+	}
+}
+
+// TestWriteGitHubWorkItemEffectDoesNotCountOnAFailedSend is CHAOS-4320's
+// pin for codex round 5's third P3: every other fake-conn test in this file
+// uses a Send that always succeeds, so a mutation that moved ownership
+// counting to BEFORE Send() (instead of after, where the surrounding
+// comments already say it must happen -- CHAOS-4244's own double-count-on-
+// retry reasoning, extended to ownership_checked by round 4) survived every
+// committed test. A caller that retries a batch whose Send failed would
+// double-count both a granted AND a rejected row's ownership_checked
+// sample if counting ever ran before Send.
+//
+// This test forces Send to fail and asserts WriteGitHubWorkItemEffect
+// propagates the error AND that NO ownership_checked sample (granted or
+// rejected) was recorded -- proving the counting genuinely gates on a
+// successful Send rather than merely being placed after the Append loop
+// in source order.
+func TestWriteGitHubWorkItemEffectDoesNotCountOnAFailedSend(t *testing.T) {
+	sendErr := errors.New("send failed")
+	rows := []githubWorkItemTeamAttributionRow{
+		{
+			WorkItemID: "gh:acme/api#1", Provider: "github", Source: "assignee_membership",
+			IsPrimary: 0, Confidence: "high", Evidence: "assignee=dev@example.com",
+			OrgID: "org-acme", OwnershipReason: "ownership_unknown",
+		},
+		{
+			WorkItemID: "gh:acme/api#1", Provider: "github", Source: "author_membership",
+			IsPrimary: 0, Confidence: "none", Evidence: "ownership_rejected",
+			OrgID: "org-acme", OwnershipReason: "repo_not_owned", Rejected: true,
+		},
+	}
+	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: "org-acme", Provider: "github", Destination: githubTeamAttributionsDestination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+	metrics := providerfoundation.NewMetrics()
+	sink := GitHubWorkItemTeamAttributionsClickHouseEffects{
+		Conn:    &ownershipReasonWriteConn{SendErr: sendErr},
+		Lease:   providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Metrics: metrics,
+	}
+	if err := sink.WriteGitHubWorkItemEffect(context.Background(), identity, effect); !errors.Is(err, sendErr) {
+		t.Fatalf("err = %v, want the Send failure to propagate", err)
+	}
+	var output strings.Builder
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	if strings.Contains(rendered, "dev_health_team_attribution_ownership_checked_total{reason=") {
+		t.Fatalf(
+			"a failed Send still recorded an ownership_checked sample -- a retry of this batch "+
+				"would double-count it:\n%s",
+			rendered,
+		)
 	}
 }

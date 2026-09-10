@@ -683,6 +683,73 @@ WHERE org_id = ? AND work_item_id = ?`, githubDerivedIntegrationOrg, "acme/api#3
 	}
 }
 
+// TestGitHubWorkItemTeamAttributionsRejectionMarkerReadbackStaysExact is
+// CHAOS-4320's red-first pin for codex round 5's first P1 (NOT CLEAN,
+// executed repro): WriteGitHubWorkItemEffect deliberately excludes a
+// Rejected marker row from the INSERT (round 4's own fix -- it must never
+// persist), but InspectGitHubWorkItemEffect did not know that and queried
+// ClickHouse expecting to find one anyway. A single absent marker row
+// dragged inspectGitHubWorkItemDerivedRows' weakest-verdict rule down to
+// EffectAbsent for the WHOLE effect, even though every row that was
+// actually supposed to persist did. Recovery would then treat an
+// already-durably-written effect as never written and replay it forever --
+// re-recording the same rejection's ownership_checked sample on every
+// single recovery pass, not just once.
+//
+// This test writes a REAL row and a Rejected marker row through the real
+// WriteGitHubWorkItemEffect against a real ClickHouse container, then
+// inspects the SAME effect and asserts EffectExact -- the marker row's
+// absence from storage must not read as the whole effect being absent.
+func TestGitHubWorkItemTeamAttributionsRejectionMarkerReadbackStaysExact(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	conn := githubDerivedIntegrationConn(t, ctx)
+	sink := GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: githubDerivedIntegrationLease()}
+
+	repoID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	ownerTeamID, ownerTeamName := "team-owner", "Owner Team"
+	rejectedTeamID, rejectedTeamName := "team-outsider", "Outsider Team"
+	real := githubWorkItemTeamAttributionRow{
+		WorkItemID: "acme/api#9", Provider: "github", Source: "repo_ownership",
+		IsPrimary: 1, Confidence: "high", Evidence: "repo:acme/api",
+		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC),
+		RepoID:     &repoID, TeamID: &ownerTeamID, TeamName: &ownerTeamName,
+		OrgID: githubDerivedIntegrationOrg,
+	}
+	rejected := githubWorkItemTeamAttributionRow{
+		WorkItemID: "acme/api#9", Provider: "github", Source: "assignee_membership",
+		IsPrimary: 0, Confidence: "none", Evidence: "ownership_rejected",
+		ComputedAt: time.Date(2026, 8, 5, 0, 30, 0, 123456789, time.UTC),
+		RepoID:     &repoID, TeamID: &rejectedTeamID, TeamName: &rejectedTeamName,
+		OrgID: githubDerivedIntegrationOrg, OwnershipReason: "repo_not_owned",
+		Rejected: true,
+	}
+
+	rows := []githubWorkItemTeamAttributionRow{real, rejected}
+	effect := githubDerivedIntegrationEffect(t, githubTeamAttributionsDestination, rows)
+	identity := githubDerivedIntegrationIdentity(githubTeamAttributionsDestination, len(rows))
+
+	if err := sink.WriteGitHubWorkItemEffect(ctx, identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	if inspection, err := sink.InspectGitHubWorkItemEffect(ctx, identity, effect); err != nil || inspection != EffectExact {
+		t.Fatalf(
+			"inspection = %v, err = %v, want EffectExact -- the rejected marker row's "+
+				"absence from storage must not read as the whole effect being absent",
+			inspection, err,
+		)
+	}
+	var stored uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_team_attributions FINAL
+WHERE org_id = ? AND work_item_id = ? AND team_id = ?`,
+		githubDerivedIntegrationOrg, "acme/api#9", rejectedTeamID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 0 {
+		t.Fatalf("rejected marker row was persisted: stored count = %d, want 0", stored)
+	}
+}
+
 // Each readback fences the FULL sorting key, and until now every readback test
 // wrote a single row per natural key -- so dropping any one fence still
 // selected exactly that row, `found` stayed 1, and the verdict stayed Exact.

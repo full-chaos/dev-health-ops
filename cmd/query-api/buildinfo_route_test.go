@@ -270,6 +270,8 @@ func TestAnUnstampedBuildSetsNoBuildHeader(t *testing.T) {
 // reading source is not running it. mountQueryRoute exists so this test
 // can register the real route on a real mux and serve a real request.
 func TestTheProductionQueryRouteStampsTheBuild(t *testing.T) {
+	commit := stampedBuild(t)
+
 	mux := http.NewServeMux()
 	served := false
 	mountQueryRoute(mux, func(w http.ResponseWriter, _ *http.Request) {
@@ -285,8 +287,8 @@ func TestTheProductionQueryRouteStampsTheBuild(t *testing.T) {
 	}
 	// r8: asserting only the PLANE let an empty build stamp pass. The
 	// build is the header a proof receipt is bound by; the plane is not.
-	if got := recorder.Result().Header.Get(buildHeaderName); got != wantBuildStamp() {
-		t.Fatalf("the production /query route stamped %q, want %q: a stamp that does not name the running build leaves every measurement unbindable", got, wantBuildStamp())
+	if got := recorder.Result().Header.Get(buildHeaderName); got != commit {
+		t.Fatalf("the production /query route stamped %q, want the running build %q: a route that stamps anything else leaves every measurement unbindable", got, commit)
 	}
 	if got := recorder.Result().Header.Get(planeHeaderName); got != "go" {
 		t.Fatalf("plane header = %q, want go", got)
@@ -308,6 +310,8 @@ func TestTheProductionQueryRouteStampsTheBuild(t *testing.T) {
 //
 // This test cannot be fooled that way, because there is no recorder.
 func TestProvenanceHeadersReachTheWire(t *testing.T) {
+	commit := stampedBuild(t)
+
 	mux := http.NewServeMux()
 	mountQueryRoute(mux, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -323,8 +327,8 @@ func TestProvenanceHeadersReachTheWire(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = response.Body.Close() })
 
-	if got := response.Header.Get(buildHeaderName); got != wantBuildStamp() {
-		t.Fatalf("ON THE WIRE the build header is %q, want %q -- the header must be set before the handler writes, or it never leaves the process", got, wantBuildStamp())
+	if got := response.Header.Get(buildHeaderName); got != commit {
+		t.Fatalf("ON THE WIRE the build header is %q, want %q -- the header must be set before the handler writes, or it never leaves the process", got, commit)
 	}
 	if got := response.Header.Get(planeHeaderName); got != "go" {
 		t.Fatalf("ON THE WIRE the plane header is %q, want go", got)
@@ -340,6 +344,8 @@ func TestProvenanceHeadersReachTheWire(t *testing.T) {
 // mounts with THAT value and that it is the process's own identity, so
 // substituting a literal at the call site fails here.
 func TestTheProductionRouteMountsWithTheRunningBuild(t *testing.T) {
+	commit := stampedBuild(t)
+
 	if runningBuild() != version.Current("query-api").Commit {
 		t.Fatalf("runningBuild() = %q, want the process's own commit", runningBuild())
 	}
@@ -357,14 +363,16 @@ func TestTheProductionRouteMountsWithTheRunningBuild(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = response.Body.Close() })
 
-	// In a test binary version.Current's Commit is the literal "unknown"
-	// -- a real state (an unstamped build), in which the route must stamp
-	// NOTHING rather than a placeholder a receipt could be bound to.
-	// Either way the WIRE must agree with what the process can honestly
-	// say about itself, which is the property main depends on.
+	// The WIRE must carry the process's OWN identity. Comparing against
+	// runningBuild() is the whole point -- substituting a literal at the
+	// call site fails here -- but only while runningBuild() is something
+	// a wrong value could differ from, which is what stampedBuild buys.
 	got := response.Header.Get(buildHeaderName)
-	if got != wantBuildStamp() {
-		t.Fatalf("the mounted route stamped %q but the process reports %q (stampable: %q)", got, runningBuild(), wantBuildStamp())
+	if got != commit {
+		t.Fatalf("the mounted route stamped %q but the process reports %q", got, commit)
+	}
+	if got != runningBuild() {
+		t.Fatalf("the mounted route stamped %q but runningBuild() says %q: main mounts a value that is not this process's identity", got, runningBuild())
 	}
 }
 
@@ -379,21 +387,83 @@ func TestTheProductionRouteMountsWithTheRunningBuild(t *testing.T) {
 // `x-dev-health-build: unknown` on every response.
 const unstampedBuild = "unknown"
 
-// wantBuildStamp is the build header the wire must carry for THIS process:
-// the running build when it is knowable, and nothing at all when it is
-// not. The three wire pins used to compare against runningBuild() raw,
-// which asserted the header should read "unknown" in a test binary -- the
-// exact value that must never be stamped.
-func wantBuildStamp() string {
-	if !isKnownBuild(runningBuild()) {
-		return ""
+// stampedBuild makes THIS process report a known build for the duration of
+// one test, and returns it.
+//
+// r11 S2: the three wire pins compared the header against runningBuild(),
+// which in an ordinary `go test` binary is "unknown" -- so once the route
+// correctly suppressed that value, every pin was asserting the header is
+// ABSENT. `withProofProvenance(query, "")` at the real call site then
+// survived all three again, and the pins only regained teeth when the
+// suite happened to be built with `-ldflags -X ...version.Commit=<sha>`.
+// A test must not depend on a build flag to be able to fail.
+//
+// version.Commit is the same package variable -ldflags writes, so setting
+// it here drives the production read path (runningBuild -> version.Current)
+// rather than bypassing it. No production lever is added: mountQueryRoute
+// still takes no build argument.
+func stampedBuild(t *testing.T) string {
+	t.Helper()
+	const commit = "a2a6703c1e4bb1942f1d36490c037fbd6b91b463"
+	previous := version.Commit
+	version.Commit = commit
+	t.Cleanup(func() { version.Commit = previous })
+
+	// Guard the seam itself: if version.Current ever stops reading this
+	// variable, every pin below would silently go back to asserting
+	// absence.
+	if got := runningBuild(); got != commit {
+		t.Fatalf("runningBuild() = %q after stamping %q: the pins below can no longer tell a real stamp from a missing one", got, commit)
 	}
-	return runningBuild()
+	return commit
 }
 
 func TestTheUnstampedDefaultIsWhatVersionActuallyReturns(t *testing.T) {
 	// If this ever fails, the two pins above are testing a fiction again.
 	if got := version.Current("query-api").Commit; got != unstampedBuild && len(got) != 40 {
 		t.Fatalf("version.Current(...).Commit = %q in a test binary: the unknowable-build pins are keyed on %q, so they no longer describe the real default", got, unstampedBuild)
+	}
+}
+
+// The /query/proof registration has the same lever the /query one had, at
+// buildinfo_route.go's mountProofRoute: it passes the build to
+// withProofProvenance itself, so `withProofProvenance(handler, "")` there
+// is a writable mutation. It survived the whole suite, because every
+// proof-route pin called withProofProvenance DIRECTLY with its own
+// constant and so proved only that the helper stamps what it is handed --
+// exactly the gap r11 named on the routing command's credential.
+//
+// This drives the real registration over a real server instead.
+func TestTheProofRouteMountsWithTheRunningBuild(t *testing.T) {
+	commit := stampedBuild(t)
+	t.Setenv(proofRouteEnabledEnv, "true")
+	t.Setenv(deploymentEnvEnv, "local")
+
+	mux := http.NewServeMux()
+	served := false
+	mountProofRoute(mux, func(w http.ResponseWriter, _ *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	response, err := server.Client().Post(server.URL+"/query/proof", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /query/proof: %v", err)
+	}
+	t.Cleanup(func() { _ = response.Body.Close() })
+
+	if !served {
+		t.Fatal("the proof handler did not run")
+	}
+	if got := response.Header.Get(buildHeaderName); got != commit {
+		t.Fatalf("ON THE WIRE /query/proof stamped %q, want the running build %q: a proof-route receipt is bound by this header, so a wrong or missing stamp makes every proof-route measurement unbindable", got, commit)
+	}
+	if got := response.Header.Get(buildHeaderName); got != runningBuild() {
+		t.Fatalf("/query/proof stamped %q but runningBuild() says %q: the registration mounts a value that is not this process's identity", got, runningBuild())
+	}
+	if got := response.Header.Get(planeHeaderName); got != "go" {
+		t.Fatalf("ON THE WIRE the plane header is %q, want go", got)
 	}
 }

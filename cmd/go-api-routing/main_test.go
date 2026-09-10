@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -62,16 +62,26 @@ func TestBearerEnvVarIsDistinctFromTheProveEdgeToken(t *testing.T) {
 }
 
 // CHAOS-5479 changed FetchBuildIdentity's credential parameter, and this
-// command's call site had to change with it. The credential KIND is the
-// part worth pinning: /buildinfo checks the effective-principal envelope
-// and 401s an edge access token, so passing the wrong one is a defect that
-// only shows up against a real stack.
+// command's call site had to change with it.
 //
-// This asserts the value this command sends is the envelope from its own
-// env var, and that the credential refuses to be empty -- the second floor
-// under the explicit check above it.
+// r11 S3: this test used to BUILD its own StaticCredential with the same
+// three arguments the production line uses, which proved only that the
+// test agrees with itself -- every wrong-argument mutation at the real
+// call site survived it. It now calls buildInfoCredential, the one-line
+// constructor `runCommand` uses, so each of the three independently
+// wrong-able arguments has a killer:
+//
+//   - the header NAME: /buildinfo reads Authorization; anything else
+//     arrives unauthenticated and 401s for the wrong reason.
+//   - the `Bearer ` scheme prefix: without it the value is not a bearer
+//     credential at all.
+//   - the `kind` string: /buildinfo checks the effective-principal
+//     envelope and 401s an edge access token, so this is the word that
+//     tells an operator WHICH credential was refused. Passing the wrong
+//     one is a defect that only shows up against a real stack.
 func TestTheBuildInfoReadCarriesTheEnvelope(t *testing.T) {
-	credential := goapiproof.StaticCredential("Authorization", "effective-principal envelope", "Bearer eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln")
+	const bearer = "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln"
+	credential := buildInfoCredential(bearer)
 
 	request, err := http.NewRequest(http.MethodGet, "http://query-api.test/buildinfo", nil)
 	if err != nil {
@@ -80,21 +90,41 @@ func TestTheBuildInfoReadCarriesTheEnvelope(t *testing.T) {
 	if err := credential.Apply(context.Background(), request); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if got := request.Header.Get("Authorization"); got != "Bearer eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln" {
-		t.Fatalf("the /buildinfo read carried %q", got)
+
+	// The header NAME, and the `Bearer ` prefix, exactly as /buildinfo
+	// expects them. Asserting the whole value covers both at once.
+	if got := request.Header.Get("Authorization"); got != "Bearer "+bearer {
+		t.Fatalf("the /buildinfo read carried Authorization=%q, want %q", got, "Bearer "+bearer)
 	}
+	// ...and no OTHER header carries it, which is what a wrong header name
+	// would look like.
+	for name, values := range request.Header {
+		if name == "Authorization" {
+			continue
+		}
+		for _, value := range values {
+			if strings.Contains(value, bearer) {
+				t.Fatalf("the credential was installed as %s: /buildinfo reads Authorization and would see this request as unauthenticated", name)
+			}
+		}
+	}
+
 	// The kind reaches a 401 message so an operator learns WHICH credential
 	// was refused, without its value.
 	if credential.Kind() != "effective-principal envelope" {
 		t.Fatalf("credential kind = %q; a 401 must name the kind /buildinfo actually checks", credential.Kind())
 	}
+	// Specifically NOT the edge access token: that is the wrong-credential
+	// swap this pin exists for, and it 401s against a real stack.
+	if strings.Contains(strings.ToLower(credential.Kind()), "access token") {
+		t.Fatalf("credential kind = %q -- /buildinfo checks the envelope and 401s an edge access token", credential.Kind())
+	}
 
 	// Empty and whitespace-only are refused at use, whatever the caller's
-	// own checks do.
-	for _, bad := range []string{"", "   ", "Bearer    "} {
-		empty := goapiproof.StaticCredential("Authorization", "effective-principal envelope", bad)
-		if err := empty.Apply(context.Background(), request); err == nil {
-			t.Fatalf("credential %q was installed", bad)
+	// own checks do -- the second floor under runCommand's explicit check.
+	for _, bad := range []string{"", "   "} {
+		if err := buildInfoCredential(bad).Apply(context.Background(), request); err == nil {
+			t.Fatalf("buildInfoCredential(%q) was installed", bad)
 		}
 	}
 }

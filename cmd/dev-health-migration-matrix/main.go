@@ -72,10 +72,24 @@ func main() {
 		check      = flag.Bool("check", false, "validate the committed doc against the committed sources")
 		dsn        = flag.String("dsn", os.Getenv("POSTGRES_URI"), "Postgres DSN for the go_api_registry tables (default $POSTGRES_URI)")
 		fleet      = flag.String("fleet", "docker", `how to read the fleet: "docker", "none", or a path to a JSON {container: revision} file`)
-		routing    = flag.String("routing", "", "path to a JSON routing snapshot, INSTEAD of -dsn (for hosts where the operator has no DSN; see readRoutingFile)")
+		routing    = flag.String("routing", "", "path to a JSON routing snapshot, INSTEAD of -dsn (for hosts where the operator has no DSN; build it with -print-routing-sql)")
 		containers = flag.String("containers", strings.Join(defaultFleetContainers, ","), "comma-separated container names to inspect")
+		printSQL   = flag.Bool("print-routing-sql", false, "print the exact statement ReadRoutingState runs, for building a -routing snapshot by hand, and exit")
 	)
 	flag.Parse()
+
+	// Printing the statement is not a render or a check, so it is answered
+	// before the -render/-check exclusivity rule: an operator asking how to
+	// produce a routing snapshot has neither yet.
+	if *printSQL {
+		statement, err := migrationmatrix.RoutingStateSQL()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(strings.TrimSpace(statement))
+		return
+	}
 
 	if *render == *check {
 		fmt.Fprintln(os.Stderr, "exactly one of -render or -check is required")
@@ -414,15 +428,31 @@ func applyFleet(ledger *migrationmatrix.StatusLedger, reading *migrationmatrix.F
 // where the compose Postgres is reachable only through `docker exec psql`,
 // and the alternative -- teaching this tool to dig a password out of a
 // container's environment -- is a credential-handling path no docs generator
-// should own. The rows must be produced by the SQL in
-// internal/migrationmatrix/live.go's routingStateQuery so the `proven`
-// derivation is the same one the enablement command uses.
+// should own.
+//
+// The rows MUST be produced by the statement this same binary prints:
+//
+//	dev-health-migration-matrix -print-routing-sql
+//
+// piped into psql with `\\gset`-free plain output, e.g.
+// `docker exec -i <pg> psql -At -f -`. That flag returns
+// migrationmatrix.RoutingStateSQL(), which is the identical string
+// ReadRoutingState executes -- so an offline snapshot cannot derive
+// `proven` by a different rule than the live reader. Before opus r5 this
+// comment named an UNEXPORTED function instead, which left retyping the
+// query by hand as the only way to comply.
 type routingFilePayload struct {
 	// ProofRunTotal is `SELECT count(*) FROM go_api_proof_run`.
 	ProofRunTotal int `json:"proof_run_total"`
 	Rows          []struct {
-		Operation      string `json:"selected_operation"`
-		Mode           string `json:"mode"`
+		Operation string `json:"selected_operation"`
+		Mode      string `json:"mode"`
+		// DocumentDigest is part of the routing-state KEY, not a
+		// decoration: ValidateRender's R8 rule keys rows by
+		// schema/document/operation, so a snapshot that omits it
+		// renders two distinct documents as one duplicated row
+		// (Trap #120, offline half).
+		DocumentDigest string `json:"document_digest"`
 		SchemaDigest   string `json:"schema_digest"`
 		CandidateBuild string `json:"current_candidate_build"`
 		// ProofRunID is the derived proof-run id, empty when none matches.
@@ -449,8 +479,17 @@ func readRoutingFile(path, currentDigest string) ([]migrationmatrix.OperationRow
 		if strings.TrimSpace(row.ProofRunID) != "" {
 			proven = strings.TrimSpace(row.ProofRunID)
 		}
+		if strings.TrimSpace(row.DocumentDigest) == "" {
+			return nil, 0, fmt.Errorf(
+				"routing file %s: row %q at schema %q has no document_digest; "+
+					"the routing key is (schema_digest, document_digest, selected_operation), "+
+					"so a row without one cannot be told apart from another document's row. "+
+					"Regenerate the snapshot with `-print-routing-sql`",
+				path, row.Operation, row.SchemaDigest)
+		}
 		out = append(out, migrationmatrix.OperationRow{
 			Operation:      row.Operation,
+			DocumentDigest: row.DocumentDigest,
 			Mode:           row.Mode,
 			SchemaDigest:   row.SchemaDigest,
 			CandidateBuild: row.CandidateBuild,

@@ -30,7 +30,7 @@
     "stage": "deployed_executed",
     "terminal_state": "match",
     "measurement_route": "edge",
-    "build_binding": "absent",
+    "build_binding": "per_request",
     "baseline_defect": null,
     "differences_outside_baseline_defect": 0,
     "request_identity": "go-api-prove/5484-fixture"
@@ -318,6 +318,170 @@
       },
       "admits": false,
       "why": "one real citation does not excuse an empty one: the array is the set of tickets said to cover every difference, and an empty element covers nothing."
+    },
+    {
+      "name": "mismatch_cited_with_a_tab_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\t"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "one-argument btrim() strips the SPACE only, so a tab citation passed both predicates and promoted to primary (opus r5 P1, executed through the CLI)."
+    },
+    {
+      "name": "mismatch_cited_with_a_newline_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\n"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "same gap as the tab: btrim(E'\\n') is not ''."
+    },
+    {
+      "name": "mismatch_cited_with_a_carriage_return_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\r"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "same gap."
+    },
+    {
+      "name": "mismatch_cited_with_a_vertical_tab_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\u000b"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "same gap."
+    },
+    {
+      "name": "mismatch_cited_with_a_form_feed_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\f"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "same gap."
+    },
+    {
+      "name": "mismatch_cited_with_a_nbsp_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          " "
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "NBSP is in the shared cutset because Go's TrimSpace strips it; POSIX [[:space:]] does NOT match it, which is why the rule is enumerated rather than named."
+    },
+    {
+      "name": "mismatch_cited_with_a_sql_null_element_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          null
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "cardinality(ARRAY[NULL]) is 1 and btrim(NULL) is NULL, not '', so the NOT EXISTS arm passed and the row promoted to primary."
+    },
+    {
+      "name": "mismatch_real_ticket_and_a_sql_null_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "CHAOS-5448",
+          null
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "one real citation does not excuse a NULL element."
+    },
+    {
+      "name": "mismatch_cited_with_a_line_separator_admitted",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          " "
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": true,
+      "why": "U+2028 is OUTSIDE the shared cutset, so BOTH engines must treat it as a real citation -- the direction that proves the rule is enumerated, not 'any whitespace'."
+    },
+    {
+      "name": "match_with_a_null_build_binding_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "build_binding": null
+      },
+      "admits": false,
+      "why": "a pre-0129 row: written before the column existed, and therefore before the counting rules that make a mismatch admissible. opus r5 P2 -- such rows became PRIMARY-admissible retroactively."
+    },
+    {
+      "name": "match_with_an_absent_build_binding_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "build_binding": "absent"
+      },
+      "admits": false,
+      "why": "an edge match with no per-request binding is downgraded to `unsupported` by this writer, so a stored match+absent row did not come from it."
+    },
+    {
+      "name": "mismatch_cited_with_a_null_build_binding_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "CHAOS-5448"
+        ],
+        "differences_outside_baseline_defect": 0,
+        "build_binding": null
+      },
+      "admits": false,
+      "why": "the retroactive case in its exact shape: mismatch, edge, outside=0, cited, binding NULL -- exactly what the base writer produced and what the new rule would otherwise admit for primary."
     }
   ]
 }

@@ -222,7 +222,7 @@ async def test_status_reports_missing_for_operations_never_enabled(
 
 
 async def _record_measurement_provenance(
-    session: AsyncSession, *, route: str = "edge", binding: str = "absent"
+    session: AsyncSession, *, route: str = "edge", binding: str = "per_request"
 ) -> None:
     """Stamp measurement provenance on every proof run seeded so far.
 
@@ -233,6 +233,14 @@ async def _record_measurement_provenance(
     ``cmd/go-api-prove``), so these tests stamp it explicitly. Without
     this the rows below would be refused for a reason unrelated to what
     each test is actually about.
+
+    The default binding is ``per_request`` for the SAME reason, since
+    opus r5's P1 made a BOUND measurement part of admissibility too. It
+    defaulted to ``absent`` until then, which is a value the rule now
+    refuses -- so every test here would have gone on passing while
+    proving nothing, or (for the admitting ones) failed for a reason
+    none of them names. A default that the rule refuses is a default
+    that makes the whole file vacuous.
     """
     await session.execute(
         sa.update(ProofRun).values(measurement_route=route, build_binding=binding)
@@ -435,7 +443,7 @@ async def test_status_proves_a_primary_row_on_edge_evidence(
         stage=ENABLEMENT_PROOF_STAGE,
         terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
     )
-    await _record_measurement_provenance(session, route="edge", binding="absent")
+    await _record_measurement_provenance(session, route="edge", binding="per_request")
     await session.commit()
 
     statuses = await routing_status_rows(
@@ -445,6 +453,24 @@ async def test_status_proves_a_primary_row_on_edge_evidence(
     assert by_operation[operation].proven is True, (
         "a PRIMARY row with EDGE evidence was not proven: the strict rule "
         "is refusing what it is supposed to admit"
+    )
+
+    # The other direction, on the SAME row: unbind it and the primary row
+    # stops being proven. Without this the test above passes for a row
+    # that would also pass unbound, and "edge evidence proves primary"
+    # would be indistinguishable from "anything proves primary" (opus
+    # r5, P1 -- reproduced as `primary enable rc=0` on an unbound row).
+    await _record_measurement_provenance(session, route="edge", binding="absent")
+    await session.commit()
+    unbound = {
+        s.operation: s
+        for s in await routing_status_rows(
+            session, live_schema_digest=LIVE, catalog=CATALOG
+        )
+    }
+    assert unbound[operation].proven is False, (
+        "an UNBOUND edge measurement proved a PRIMARY row: nothing in that "
+        "receipt says which replica served the response it measured"
     )
 
 
@@ -715,4 +741,64 @@ async def test_proof_never_transfers_between_documents_of_one_operation(
         "the drifted row owns that proof and must still report it -- "
         "otherwise this test would also pass with proof reporting broken "
         "for everything, which is a different defect"
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_documents_under_one_build_and_mode_each_keep_their_proof(
+    session: AsyncSession,
+) -> None:
+    """opus r5 P2: the proof GROUPING still collapsed on the operation.
+
+    Every earlier test here differs the MODE between the two documents,
+    which puts them in different groups and hides the defect. This one
+    differs neither: same live schema digest, same candidate build, same
+    mode ``canary``, two documents, and **each with its own fully
+    admissible receipt**. Both must read proven.
+
+    With the document outside the group key, one overwrote the other
+    before the query was built and only one document was ever asked
+    about -- and which survived was the Postgres scan order. Executed
+    through the CLI, the catalog's document reported ``proven: False``
+    with its own receipt sitting in the table.
+    """
+    operation, catalog_document = CATALOG[0]
+    drifted_document = "0" * 64
+
+    for document in (catalog_document, drifted_document):
+        await enable_operation(
+            session,
+            schema_digest=LIVE,
+            document_digest=document,
+            selected_operation=operation,
+            candidate_build=BUILD,
+            mode="canary",
+        )
+        await record_proof_run(
+            session,
+            schema_digest=LIVE,
+            document_digest=document,
+            selected_operation=operation,
+            candidate_build=BUILD,
+            request_identity="test",
+            stage=ENABLEMENT_PROOF_STAGE,
+            terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+        )
+    await _record_measurement_provenance(session)
+    await session.commit()
+
+    statuses = await routing_status_rows(
+        session, live_schema_digest=LIVE, catalog=CATALOG
+    )
+    rows = {s.document_digest: s for s in statuses if s.operation == operation}
+    assert set(rows) == {catalog_document, drifted_document}
+
+    assert rows[catalog_document].proven is True, (
+        "the CATALOG's document is not proven while its own receipt is in "
+        "go_api_proof_run: the grouping collapsed the two documents and "
+        "only asked about one of them"
+    )
+    assert rows[drifted_document].proven is True, (
+        "the DRIFTED document is not proven while its own receipt is in "
+        "go_api_proof_run: same collapse, the other way round"
     )

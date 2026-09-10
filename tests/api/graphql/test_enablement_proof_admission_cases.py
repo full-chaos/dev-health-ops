@@ -48,7 +48,16 @@ from dev_health_ops.models.go_api_registry import CandidateBuild, ProofRun
 
 POSTGRES_TEST_URI = os.environ.get("DEV_HEALTH_POSTGRES_TEST_URI")
 
-pytestmark = pytest.mark.skipif(
+#: Applied to the DATABASE-BACKED tests only, by decorating them.
+#:
+#: It used to be ``pytestmark``, i.e. module-level, which took the
+#: data-only assertions down with them: on a runner without the URI the
+#: whole cross-language guarantee evaporated with a green run of 25 skips
+#: (opus r5, P3). The fixture-shape checks read a JSON file and need no
+#: database, so they now run everywhere -- a malformed or unexplained case
+#: is caught on any runner, and only the rows-against-Postgres half is
+#: conditional.
+requires_postgres = pytest.mark.skipif(
     not POSTGRES_TEST_URI,
     reason=(
         "Requires DEV_HEALTH_POSTGRES_TEST_URI: the admission predicate uses "
@@ -136,6 +145,7 @@ async def _seed(
     await session.commit()
 
 
+@requires_postgres
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", _cases(), ids=_case_ids())
 async def test_predicate_matches_the_shared_admission_table(

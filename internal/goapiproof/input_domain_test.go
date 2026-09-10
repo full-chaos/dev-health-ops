@@ -12,9 +12,11 @@ import (
 // take, not a sample of the shapes its author thought of.
 //
 // This is the shape dimension. The vocabulary dimension lives in
-// TestTheEnablementRuleOverItsWholeInputSurface (4752 combinations against
-// real PostgreSQL); neither is sufficient alone, because a guard can be
-// right about every legal value and wrong about a nil slice.
+// TestTheEnablementRuleOverItsWholeInputSurface, which crosses every
+// stage x terminal state x route x binding x outside-count x citation
+// shape x target mode against real PostgreSQL. That test asserts its own
+// size from the slices it iterates, so no count is written down here --
+// a hand-copied number is what went stale three times (opus r5, P3).
 //
 // WHY SOME CELLS ARE ABSENT RATHER THAN FAILING. Go's type system makes
 // several cells UNREPRESENTABLE, and a test asserting them would not

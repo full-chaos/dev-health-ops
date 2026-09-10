@@ -213,9 +213,21 @@ func mergeReceipt(t *testing.T, m map[string]any) seededReceipt {
 	case nil:
 		out.baselineDefect = nil
 	case []any:
-		tickets := make([]string, 0, len(v))
+		// Kept as []any, NOT flattened to []string. A JSON `null` element
+		// is a SQL NULL citation, and coercing every item with
+		// `item.(string)` panicked on it -- so the loader itself could not
+		// REPRESENT the case that opus r5 found promoting to primary. A
+		// harness that cannot express an input cannot test it.
+		tickets := make([]any, 0, len(v))
 		for _, item := range v {
-			tickets = append(tickets, item.(string))
+			switch value := item.(type) {
+			case nil:
+				tickets = append(tickets, nil)
+			case string:
+				tickets = append(tickets, value)
+			default:
+				t.Fatalf("fixture baseline_defect element must be a string or null, got %#v", item)
+			}
 		}
 		out.baselineDefect = tickets
 	default:
@@ -366,8 +378,13 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 //   - baseline_defect                       (NULL, empty, non-empty)
 //   - the target mode                       (canary, primary)
 //
-// build_binding is deliberately NOT in that list, and every combination is
-// written once per binding so that stays checkable rather than asserted.
+// build_binding IS in that list now. It was not when this test was
+// written -- the predicate did not read the column, and this comment said
+// so -- and opus r5 (P2) showed what that cost: every row the OLD writer
+// produced with mismatch/edge/outside=0/cited became primary-admissible
+// under the new counting rules. The predicate now requires per_request on
+// both arms, so the binding dimension is load-bearing rather than a
+// control.
 //
 // The mutant this test kills that the 20 cases do NOT, measured both ways
 // rather than argued from the design: admitting a NULL measurement_route
@@ -410,15 +427,38 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	// writer's input domain found that `cardinality(ARRAY[''])` is 1, so a
 	// citation naming nothing read as fully cited. A shape the predicate
 	// must reject belongs in the dimension, not in a separate test.
+	// opus r5 (P1): this dimension held only the space character, so a
+	// tab / newline / CR / VT / FF / NBSP / SQL-NULL citation passed both
+	// predicates while the writer refused it -- and the reviewer showed
+	// that adding ONE cell here, with no production change, fails the
+	// test in its own words. Every character of the shared cutset is a
+	// cell now, plus a SQL NULL element and a NULL mixed with a real
+	// ticket, plus two Unicode spaces OUTSIDE the cutset which both
+	// engines must treat as real citations.
+	blankTicket := []any{"", " ", "\t", "\n", "\r", "\v", "\f", "\u00a0"}
 	defects := []any{
 		nil, []string{}, []string{"CHAOS-5448"},
-		[]string{""}, []string{"   "}, []string{"CHAOS-5448", ""},
+		[]string{"CHAOS-5448", ""},
+		// a SQL NULL element, and one beside a real ticket
+		[]any{nil}, []any{"CHAOS-5448", nil},
+		// outside the cutset: REAL citations, both engines
+		[]string{"\u2028"}, []string{"\u3000"},
+	}
+	for _, blank := range blankTicket {
+		defects = append(defects, []string{blank.(string)})
 	}
 	modes := []string{TargetModeCanary, TargetModePrimary}
 
 	// The rule, in one place, derived rather than tabulated.
-	want := func(stage, terminal string, route any, outside int, defect any, mode string) bool {
+	want := func(stage, terminal string, route any, binding any, outside int, defect any, mode string) bool {
 		if stage != EnablementProofStage {
+			return false
+		}
+		// The binding is part of the rule now, on both arms. A NULL is a
+		// pre-0129 row written under different counting semantics; an
+		// `absent` row is one this writer would have downgraded or
+		// counted. Neither is proof (opus r5, P2).
+		if binding != EdgeBuildPresent {
 			return false
 		}
 		switch mode {
@@ -435,16 +475,37 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 		case EnablementProofTerminalState:
 			return true
 		case EnablementCitedMismatchState:
-			cited, ok := defect.([]string)
-			if !ok || outside != 0 || len(cited) == 0 {
+			if outside != 0 {
 				return false
 			}
-			for _, ticket := range cited {
-				if strings.TrimSpace(ticket) == "" {
+			// The rule uses the SHARED cutset, never strings.TrimSpace:
+			// deriving `want` from a definition the predicate does not
+			// use is exactly how the whitespace gap survived this test.
+			switch cited := defect.(type) {
+			case []string:
+				if len(cited) == 0 {
 					return false
 				}
+				for _, ticket := range cited {
+					if strings.Trim(ticket, blankCitationCutset) == "" {
+						return false
+					}
+				}
+				return true
+			case []any:
+				if len(cited) == 0 {
+					return false
+				}
+				for _, ticket := range cited {
+					text, isText := ticket.(string)
+					if !isText || strings.Trim(text, blankCitationCutset) == "" {
+						return false // a SQL NULL element names nothing
+					}
+				}
+				return true
+			default:
+				return false
 			}
-			return true
 		default:
 			return false
 		}
@@ -510,7 +571,7 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 									t.Fatalf("read: %v", err)
 								}
 								got := found[key.SelectedOperation]
-								expected := want(stage, terminal, route, outside, defect, mode)
+								expected := want(stage, terminal, route, binding, outside, defect, mode)
 								if got != expected {
 									t.Fatalf("stage=%s terminal=%s route=%v binding=%v outside=%d defect=%v mode=%s: predicate says %v, the rule says %v",
 										stage, terminal, route, binding, outside, defect, mode, got, expected)
@@ -524,11 +585,11 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	}
 
 	// 4 stages x 11 terminal states x 3 routes x 3 bindings x 2 outside x
-	// 6 defect shapes x 2 modes. Asserted rather than commented, so a
-	// value added to any of those lists without thought fails here --
-	// which is what moved it from 3 defect shapes to 6.
-	if combinations != 4*11*3*3*2*6*2 {
-		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 4*11*3*3*2*6*2)
+	// len(defects) shapes x 2 modes, asserted from the slice itself so
+	// the number cannot go stale the way the three hand-written copies of
+	// it did (opus r5, P3).
+	if combinations != 4*11*3*3*2*len(defects)*2 {
+		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 4*11*3*3*2*len(defects)*2)
 	}
 }
 
@@ -560,6 +621,13 @@ func TestTheProofKeyPairsOperationWithItsOwnDocument(t *testing.T) {
 
 	// The ONLY receipt: operation A measured against document B. Neither
 	// requested pair is (opA, docB), so nothing may be proven.
+	//
+	// build_binding is stated on BOTH seeds here (opus r5, P1 made a bound
+	// measurement part of the rule). It matters most for the CONTROL at
+	// the end: without it the control row is refused for its binding, and
+	// the refusals above would then be indistinguishable from a predicate
+	// that admits nothing at all -- which is the exact failure mode this
+	// control was written to rule out. It caught it.
 	for _, pair := range [][2]string{{opA, docB}, {opA, docA}, {opB, docB}} {
 		if _, err := pool.Exec(ctx,
 			`INSERT INTO go_api_candidate_build
@@ -573,8 +641,8 @@ func TestTheProofKeyPairsOperationWithItsOwnDocument(t *testing.T) {
 		`INSERT INTO go_api_proof_run
 		   (id, schema_digest, document_digest, selected_operation, candidate_build,
 		    request_identity, stage, terminal_state, observed_at, org_id, recorded_by,
-		    measurement_route, differences_outside_baseline_defect)
-		 VALUES ($1,$2,$3,$4,$5,'pairs',$6,$7, now(),'70d529e0','pairs','edge',0)`,
+		    measurement_route, build_binding, differences_outside_baseline_defect)
+		 VALUES ($1,$2,$3,$4,$5,'pairs',$6,$7, now(),'70d529e0','pairs','edge','per_request',0)`,
 		uuid.New(), digest, docB, opA, build,
 		EnablementProofStage, EnablementProofTerminalState,
 	); err != nil {
@@ -603,8 +671,8 @@ func TestTheProofKeyPairsOperationWithItsOwnDocument(t *testing.T) {
 		`INSERT INTO go_api_proof_run
 		   (id, schema_digest, document_digest, selected_operation, candidate_build,
 		    request_identity, stage, terminal_state, observed_at, org_id, recorded_by,
-		    measurement_route, differences_outside_baseline_defect)
-		 VALUES ($1,$2,$3,$4,$5,'pairs',$6,$7, now(),'70d529e0','pairs','edge',0)`,
+		    measurement_route, build_binding, differences_outside_baseline_defect)
+		 VALUES ($1,$2,$3,$4,$5,'pairs',$6,$7, now(),'70d529e0','pairs','edge','per_request',0)`,
 		uuid.New(), digest, docA, opA, build,
 		EnablementProofStage, EnablementProofTerminalState,
 	); err != nil {
@@ -620,5 +688,68 @@ func TestTheProofKeyPairsOperationWithItsOwnDocument(t *testing.T) {
 	}
 	if found[opB] {
 		t.Fatalf("%s proved off %s's receipt", opB, opA)
+	}
+}
+
+// The two engines agree on "names nothing", character by character.
+//
+// opus r5 (P1): the change shipped TWO definitions -- the writer's
+// strings.TrimSpace and the predicates' one-argument btrim() -- which
+// disagree on every whitespace character except the space itself. A tab,
+// newline, CR, VT, FF or NBSP citation was refused by the writer and
+// ADMITTED by both predicates, and promoted to primary through the
+// shipped CLI.
+//
+// They cannot share Unicode's definition: measured on this Postgres, the
+// explicit cutset strips NBSP but not U+2028, POSIX [[:space:]] is the
+// exact reverse, and unicode.IsSpace strips both. So the shared rule is
+// ENUMERATED, the SQL definition is the authority, and Go implements it.
+//
+// This asserts that, per character, INCLUDING characters outside the set:
+// there, both sides must agree the value is a REAL citation. A test that
+// only checked the in-set characters would pass with Go still using
+// TrimSpace, which is how the original gap survived.
+func TestTheBlankDefinitionIsIdenticalInBothEngines(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	for _, c := range []struct {
+		name  string
+		value string
+		blank bool // the shared rule says this "names nothing"
+	}{
+		{"space", " ", true},
+		{"tab", "\t", true},
+		{"newline", "\n", true},
+		{"carriage return", "\r", true},
+		{"vertical tab", "\v", true},
+		{"form feed", "\f", true},
+		{"NBSP", " ", true},
+		{"all of them together", " \t\n\r\v\f ", true},
+		// OUTSIDE the set on purpose: both sides must call these real.
+		{"line separator U+2028", " ", false},
+		{"ideographic space U+3000", "　", false},
+		{"a real ticket", "CHAOS-5448", false},
+		{"a ticket with padding", "  CHAOS-5448  ", false},
+	} {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			goSaysBlank := strings.Trim(c.value, blankCitationCutset) == ""
+
+			var sqlSaysBlank bool
+			if err := pool.QueryRow(ctx,
+				`SELECT btrim($1, `+blankCitationSQL()+`) = ''`, c.value,
+			).Scan(&sqlSaysBlank); err != nil {
+				t.Fatalf("ask Postgres: %v", err)
+			}
+
+			if goSaysBlank != sqlSaysBlank {
+				t.Fatalf("the two engines DISAGREE on %q: Go says blank=%v, Postgres says blank=%v -- two definitions of \"names nothing\" is the defect class this PR exists to fix",
+					c.value, goSaysBlank, sqlSaysBlank)
+			}
+			if goSaysBlank != c.blank {
+				t.Fatalf("%q: both engines say blank=%v, the shared rule says %v", c.value, goSaysBlank, c.blank)
+			}
+		})
 	}
 }

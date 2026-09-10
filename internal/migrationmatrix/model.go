@@ -135,6 +135,13 @@ type OperationRow struct {
 	// SchemaDigest is the row's schema_digest. A row at a digest other than
 	// the current pin is DEAD -- it can never be matched by the router.
 	SchemaDigest string `json:"schema_digest"`
+	// DocumentDigest is the registered document this row routes.
+	//
+	// Carried because two rows can share (schema_digest, operation) and
+	// differ only here -- the DOCUMENT_DRIFT shape the Python status
+	// surface names. Without it the two are indistinguishable in the
+	// render and R8 reports a duplicate (opus r5, P2).
+	DocumentDigest string `json:"document_digest"`
 	// CandidateBuild is current_candidate_build.
 	CandidateBuild string `json:"candidate_build"`
 	// Live is false when SchemaDigest != the current SDL pin.

@@ -4,6 +4,7 @@ package migrationmatrix
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -82,11 +83,17 @@ func TestReadRoutingStateAppliesTheModesOwnRouteRule(t *testing.T) {
 			t.Fatalf("seed routing state: %v", err)
 		}
 		if _, err := pool.Exec(ctx,
+			// build_binding is stated, not defaulted: the column is
+			// nullable, and CHAOS-5484 made 'per_request' a
+			// REQUIREMENT of the rule. A seed that omits it is a row
+			// no rule can admit, which would make this test pass by
+			// refusing everything -- for a reason that has nothing to
+			// do with the route split it exists to measure.
 			`INSERT INTO go_api_proof_run
 			   (id, schema_digest, document_digest, selected_operation, candidate_build,
 			    request_identity, stage, terminal_state, observed_at, recorded_by,
-			    measurement_route, differences_outside_baseline_defect)
-			 VALUES (gen_random_uuid(),$1,$2,$3,$4,'x','deployed_executed','match', now(),'test',$5,0)`,
+			    measurement_route, build_binding, differences_outside_baseline_defect)
+			 VALUES (gen_random_uuid(),$1,$2,$3,$4,'x','deployed_executed','match', now(),'test',$5,'per_request',0)`,
 			digest, seed.document, seed.operation, build, seed.route); err != nil {
 			t.Fatalf("seed proof run: %v", err)
 		}
@@ -113,6 +120,112 @@ func TestReadRoutingStateAppliesTheModesOwnRouteRule(t *testing.T) {
 	}
 	if got := byOperation["canaryOp"]; got.Proven == NoProof {
 		t.Fatalf("canaryOp rendered UNPROVEN on proof-route evidence: the matrix is judging every row by the primary rule, which marks a legitimately-proven shadow or canary row unproven -- the other half of the same defect")
+	}
+}
+
+// Trap #120, read back out of the database rather than out of the SQL text.
+//
+// opus r5 (P2c) asked for the offline -routing path to name a real query;
+// pinning "the statement selects the document digest" by substring turned out
+// to be VACUOUS -- the join predicate mentions the same identifier, so
+// deleting the output column left the substring in place and the unit test
+// green (measured; the mutant survived). The column can only be pinned by
+// reading a value back, so this seeds the one shape that needs it: TWO
+// documents of ONE operation, with OPPOSITE proof outcomes.
+//
+// Every intermediate keyed on the operation alone -- the reader's rows, the
+// renderer's grouping, ValidateRender's R8 duplicate key -- collapses these
+// two into one, and whichever survives carries the other's proof.
+func TestReadRoutingStateKeepsTwoDocumentsOfOneOperationApart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate Postgres: %v", err)
+		}
+	})
+
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, routingMatrixDDL); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+
+	const (
+		digest    = "sha256:live"
+		build     = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+		operation = "featureFlags"
+	)
+	// Same schema digest, same operation, same build. The ONLY difference
+	// is the document -- and one of them has no proof at all.
+	for _, seed := range []struct {
+		document, mode string
+		proven         bool
+	}{
+		{"doc-new", "canary", true},
+		{"doc-old", "canary", false},
+	} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO go_api_candidate_build
+			   (schema_digest, document_digest, selected_operation, candidate_build, registered_at)
+			 VALUES ($1,$2,$3,$4, now())`,
+			digest, seed.document, operation, build); err != nil {
+			t.Fatalf("seed candidate build: %v", err)
+		}
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO go_api_routing_state
+			   (schema_digest, document_digest, selected_operation, mode,
+			    current_candidate_build, rollout_percentage, owner, updated_at)
+			 VALUES ($1,$2,$3,$4,$5,100,'go', now())`,
+			digest, seed.document, operation, seed.mode, build); err != nil {
+			t.Fatalf("seed routing state: %v", err)
+		}
+		if !seed.proven {
+			continue
+		}
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO go_api_proof_run
+			   (id, schema_digest, document_digest, selected_operation, candidate_build,
+			    request_identity, stage, terminal_state, observed_at, recorded_by,
+			    measurement_route, build_binding, differences_outside_baseline_defect)
+			 VALUES (gen_random_uuid(),$1,$2,$3,$4,'x','deployed_executed','match', now(),'test','proof','per_request',0)`,
+			digest, seed.document, operation, build); err != nil {
+			t.Fatalf("seed proof run: %v", err)
+		}
+	}
+
+	rows, _, err := ReadRoutingState(ctx, instance.URI, digest)
+	if err != nil {
+		t.Fatalf("ReadRoutingState: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected both documents of %s, got %d rows: %+v", operation, len(rows), rows)
+	}
+	byDocument := map[string]OperationRow{}
+	for _, row := range rows {
+		if row.DocumentDigest == "" {
+			t.Fatalf("row %+v came back with an EMPTY document digest: the reader is not selecting the routing key, so nothing downstream can tell these two rows apart", row)
+		}
+		byDocument[row.DocumentDigest] = row
+	}
+	if len(byDocument) != 2 {
+		t.Fatalf("both rows carry document digest %v; the two documents collapsed into one", byDocument)
+	}
+	if got := byDocument["doc-new"]; got.Proven == NoProof {
+		t.Fatal("doc-new has a deployed-executed match on its own document and rendered UNPROVEN")
+	}
+	if got := byDocument["doc-old"]; got.Proven != NoProof {
+		t.Fatalf("doc-old has NO proof run of its own and rendered proven=%q: it is wearing doc-new's evidence, which is exactly the promotion Trap #120 authorizes", got.Proven)
 	}
 }
 
@@ -189,3 +302,110 @@ CREATE TABLE go_api_proof_run (
 		CHECK (measurement_route IS NULL OR measurement_route IN ('edge', 'proof'))
 );
 `
+
+// ReadRoutingState under a concurrent mode flip: ONE snapshot, always.
+//
+// opus r5 (P2): the target-mode split briefly made this two queries on one
+// connection with no enclosing transaction, partitioned by
+// `WHERE (rs.mode = 'primary') = $1`. Two queries are two snapshots, so a
+// row whose mode changed between them came back TWICE (primary -> canary)
+// or NOT AT ALL (canary -> primary). Measured by the reviewer with 60 rows
+// and a concurrent updater: 60 duplicate reads, 4 missing reads.
+//
+// That is not cosmetic. cmd/dev-health-migration-matrix assigns these rows
+// straight into the render, and ValidateRender's R8-duplicate-row rule
+// fails it -- on the page whose stated reason for existing is that twelve
+// silently dead canary rows should not have looked like health.
+//
+// A concurrent `enable`/`disable` is the ORDINARY case for this page, so
+// this drives exactly that: an updater flipping modes while the reader
+// runs, repeatedly. Every read must return each operation exactly once.
+func TestReadRoutingStateIsOneSnapshotUnderConcurrentModeFlips(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate Postgres: %v", err)
+		}
+	})
+
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, routingMatrixDDL); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+
+	const (
+		digest = "sha256:snap"
+		build  = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+		rows   = 60
+	)
+	for i := 0; i < rows; i++ {
+		operation := fmt.Sprintf("op%02d", i)
+		document := fmt.Sprintf("doc%02d", i)
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO go_api_candidate_build
+			   (schema_digest, document_digest, selected_operation, candidate_build, registered_at)
+			 VALUES ($1,$2,$3,$4, now())`, digest, document, operation, build); err != nil {
+			t.Fatalf("seed candidate build: %v", err)
+		}
+		mode := "canary"
+		if i%2 == 0 {
+			mode = "primary"
+		}
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO go_api_routing_state
+			   (schema_digest, document_digest, selected_operation, mode,
+			    current_candidate_build, rollout_percentage, owner, updated_at)
+			 VALUES ($1,$2,$3,$4,$5,100,'go', now())`,
+			digest, document, operation, mode, build); err != nil {
+			t.Fatalf("seed routing state: %v", err)
+		}
+	}
+
+	// An updater flipping every row's mode, continuously.
+	flipCtx, stopFlipping := context.WithCancel(ctx)
+	defer stopFlipping()
+	flipping := make(chan struct{})
+	go func() {
+		defer close(flipping)
+		for flipCtx.Err() == nil {
+			_, _ = pool.Exec(flipCtx,
+				`UPDATE go_api_routing_state
+				    SET mode = CASE mode WHEN 'primary' THEN 'canary' ELSE 'primary' END
+				  WHERE schema_digest = $1`, digest)
+		}
+	}()
+
+	for attempt := 0; attempt < 25; attempt++ {
+		out, _, err := ReadRoutingState(ctx, instance.URI, digest)
+		if err != nil {
+			t.Fatalf("attempt %d: ReadRoutingState: %v", attempt, err)
+		}
+		counts := map[string]int{}
+		for _, row := range out {
+			counts[row.Operation]++
+		}
+		if len(out) != rows {
+			t.Fatalf("attempt %d: read %d rows, want %d -- two unsynchronised passes return a row twice or not at all when its mode changes between them",
+				attempt, len(out), rows)
+		}
+		for operation, n := range counts {
+			if n != 1 {
+				t.Fatalf("attempt %d: operation %q returned %d times -- the read is not one snapshot", attempt, operation, n)
+			}
+		}
+	}
+	stopFlipping()
+	<-flipping
+}

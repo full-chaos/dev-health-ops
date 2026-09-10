@@ -195,12 +195,22 @@ func ValidateRender(render *Render) []Violation {
 		out = append(out, Violation{"render", "R7-fleet-source", "fleet_source must name how the fleet was read"})
 	}
 
+	// Keyed on the TRIPLE, because go_api_routing_state is: two rows for
+	// one operation at one schema digest, differing only by document, are
+	// a real and named state -- the Python status surface calls it
+	// DOCUMENT_DRIFT. Keyed on (digest, operation) this rule reported the
+	// legitimate shape as a duplicate and failed the render (opus r5, P2),
+	// which is the same silence one level down: the page whose job is to
+	// show a row nobody noticed refused to show two.
+	//
+	// A genuine duplicate -- the SAME document twice -- is still a
+	// violation, and still says so.
 	seen := map[string]bool{}
 	for _, row := range render.Operations {
-		key := row.SchemaDigest + "/" + row.Operation
+		key := row.SchemaDigest + "/" + row.DocumentDigest + "/" + row.Operation
 		if seen[key] {
 			out = append(out, Violation{row.Operation, "R8-duplicate-row",
-				fmt.Sprintf("two rows for operation %q at digest %s", row.Operation, row.SchemaDigest)})
+				fmt.Sprintf("two rows for operation %q at digest %s document %s", row.Operation, row.SchemaDigest, row.DocumentDigest)})
 		}
 		seen[key] = true
 

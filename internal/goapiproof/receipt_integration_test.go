@@ -160,11 +160,18 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
-		BuildBinding:      EdgeBuildAbsent,
-		OrgID:             "70d529e0",
-		RecordedBy:        "lane-5425-prove",
-		ReviewEvidence:    "CHAOS-5425 integration test",
-		ObservedAt:        time.Now().UTC(),
+		// per_request, not absent. Since opus r5's P1 the rule requires
+		// a BOUND measurement on both arms, so a receipt written with
+		// `absent` is refused for its BINDING -- which would make every
+		// assertion below hold for a reason that has nothing to do with
+		// what the assertion says. The unbound case is the second half
+		// of this test, asserted as a refusal rather than smuggled in
+		// as the base.
+		BuildBinding:   EdgeBuildPresent,
+		OrgID:          "70d529e0",
+		RecordedBy:     "lane-5425-prove",
+		ReviewEvidence: "CHAOS-5425 integration test",
+		ObservedAt:     time.Now().UTC(),
 	}
 	if _, err := Write(ctx, pool, receipt); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -199,8 +206,30 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 	if storedBinding == nil {
 		t.Fatal("build_binding was written as NULL: the run KNEW the binding and the row does not say so, and no reader will ever flag it")
 	}
-	if *storedBinding != EdgeBuildAbsent {
-		t.Fatalf("build_binding read back as %q, want %q -- the row must carry the binding the run established, not another one", *storedBinding, EdgeBuildAbsent)
+	if *storedBinding != EdgeBuildPresent {
+		t.Fatalf("build_binding read back as %q, want %q -- the row must carry the binding the run established, not another one", *storedBinding, EdgeBuildPresent)
+	}
+
+	// The other half of the same seam (opus r5, P1). An UNBOUND
+	// measurement is a real, recorded observation of a response nobody
+	// can attribute to a replica -- so it is written, and it authorizes
+	// nothing. Asserting only the admitting direction is how the hole
+	// survived: `primary enable` returned rc=0 on exactly this row.
+	unbound := receipt
+	unbound.SelectedOperation = "hotspots"
+	unbound.BuildBinding = EdgeBuildAbsent
+	if _, err := Write(ctx, pool, unbound); err != nil {
+		t.Fatalf("Write the unbound receipt: %v", err)
+	}
+	for _, mode := range []string{TargetModeCanary, TargetModePrimary} {
+		admitted, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
+			mode, map[string]string{"hotspots": testDocumentDigest})
+		if err != nil {
+			t.Fatalf("OperationsWithEnablementProof(%s): %v", mode, err)
+		}
+		if admitted["hotspots"] {
+			t.Fatalf("an UNBOUND deployed_executed/match receipt authorized %s: the response was never attributed to a serving build, so nothing here says WHICH replica was measured", mode)
+		}
 	}
 }
 
@@ -221,9 +250,42 @@ func TestEnablementPredicateRejectsEveryWrongKeyColumn(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
-		BuildBinding:      EdgeBuildAbsent,
-		ObservedAt:        time.Now().UTC(),
+		// Admissible in every respect EXCEPT the column each subtest
+		// changes. With `absent` here (as this base had until opus r5's
+		// P1 landed) every subtest would pass on the BINDING, and the
+		// key columns it claims to pin would be doing no work at all.
+		BuildBinding: EdgeBuildPresent,
+		ObservedAt:   time.Now().UTC(),
 	}
+
+	// The control: the UNMUTATED base IS admitted. Without it, "the base
+	// is admissible" is an assumption, and this whole table can go
+	// vacuous again the next time the rule gains a requirement -- which
+	// is exactly what happened when opus r5's P1 added the binding
+	// requirement to a base written with `absent`.
+	//
+	// It is written under its OWN operation, and asked about under that
+	// operation. Writing the base at `featureFlags` would leave an
+	// admitting row in this shared pool, and every subtest below asks
+	// about `featureFlags` -- the control would then make all four of
+	// them fail for its reason instead of passing for theirs. (Measured:
+	// it did.) The table is append-only by design, so there is nothing
+	// to undo afterwards; the fix is to not collide in the first place.
+	t.Run("the unmutated base is admitted", func(t *testing.T) {
+		control := base
+		control.SelectedOperation = "controlOperation"
+		if _, err := Write(ctx, pool, control); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
+			TargetModeCanary, map[string]string{"controlOperation": testDocumentDigest})
+		if err != nil {
+			t.Fatalf("OperationsWithEnablementProof: %v", err)
+		}
+		if !found["controlOperation"] {
+			t.Fatal("the base receipt is not admitted, so every refusal below proves nothing about the key column it names")
+		}
+	})
 
 	for name, mutate := range map[string]func(Receipt) Receipt{
 		"different candidate build": func(r Receipt) Receipt { r.CandidateBuild = "0000000000000000000000000000000000000000"; return r },
@@ -263,8 +325,10 @@ func TestMismatchReceiptIsRecordedButAuthorizesNothing(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     TerminalStateMismatch,
 		MeasurementRoute:  RouteProof,
-		BuildBinding:      EdgeBuildAbsent,
-		ObservedAt:        time.Now().UTC(),
+		// Bound, so the refusal below is about the UNCITED MISMATCH this
+		// test is named for and not about the binding (opus r5, P1).
+		BuildBinding: EdgeBuildPresent,
+		ObservedAt:   time.Now().UTC(),
 	}
 	if _, err := Write(ctx, pool, receipt); err != nil {
 		t.Fatalf("Write: %v", err)

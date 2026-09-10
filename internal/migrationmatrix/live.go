@@ -37,13 +37,47 @@ import (
 // table is rendered at all: on 2026-09-01 a digest move killed twelve canary
 // rows silently, and it was found six days later. A page that shows only the
 // live rows would have shown nothing wrong.
-// routingStateQuery is built per target mode, because CHAOS-5484 made
-// admissibility depend on where the row IS: a row at `primary` serves real
-// traffic and needs EDGE evidence, a row anywhere else is admissible on any
-// recorded route. One query for both would report one of them wrongly.
-func routingStateQuery(clause string) string {
+// routingStateQuery is ONE statement, and that is the point.
+//
+// CHAOS-5484 briefly made it two -- one per target mode, partitioned by
+// `WHERE (rs.mode = 'primary') = $1` -- because admissibility depends on
+// where the row IS. opus r5 (P2) showed what that cost: two queries on
+// one connection with no enclosing transaction are two snapshots, so a
+// row whose mode changes between them is returned TWICE or NOT AT ALL.
+// Measured with 60 rows and a concurrent updater: 60 duplicate reads, 4
+// missing reads. Downstream that is not cosmetic -- ValidateRender's
+// R8-duplicate-row rule fails the render, on the one page whose stated
+// reason for existing is that a silent death should not look like health.
+//
+// The mode rule lives in a CASE instead, so every row is judged by its
+// own mode inside a single snapshot. Both arms are
+// goapiproof.EnablementProofClause, which is the one source the whole
+// change is built around -- the CASE selects between them, it does not
+// restate either.
+//
+// RoutingStateSQL is how an operator OBTAINS this statement. The offline
+// -routing path in cmd/dev-health-migration-matrix asks for rows "produced
+// by the SQL this reader runs"; before opus r5 that instruction named an
+// unexported function, so the only way to comply was to retype the query
+// by hand -- which is the copy-of-a-rule failure this file's header is
+// about, moved into the operator's terminal. `-print-routing-sql` prints
+// exactly what ReadRoutingState executes, because both call this.
+func RoutingStateSQL() (string, error) {
+	primaryClause, err := goapiproof.EnablementProofClause("pr", goapiproof.TargetModePrimary)
+	if err != nil {
+		return "", fmt.Errorf("build the primary enablement predicate: %w", err)
+	}
+	canaryClause, err := goapiproof.EnablementProofClause("pr", goapiproof.TargetModeCanary)
+	if err != nil {
+		return "", fmt.Errorf("build the canary enablement predicate: %w", err)
+	}
+	return routingStateQuery(primaryClause, canaryClause), nil
+}
+
+func routingStateQuery(primaryClause, canaryClause string) string {
 	return `
 SELECT rs.selected_operation,
+       rs.document_digest,
        rs.mode,
        rs.schema_digest,
        rs.current_candidate_build,
@@ -54,13 +88,15 @@ SELECT rs.selected_operation,
            AND pr.document_digest = rs.document_digest
            AND pr.selected_operation = rs.selected_operation
            AND pr.candidate_build = rs.current_candidate_build
-           AND ` + clause + `
+           AND CASE WHEN rs.mode = '` + goapiproof.TargetModePrimary + `'
+                    THEN (` + primaryClause + `)
+                    ELSE (` + canaryClause + `)
+               END
          ORDER BY pr.observed_at DESC
          LIMIT 1
        ) AS proof_run_id
 FROM go_api_routing_state rs
-WHERE (rs.mode = '` + goapiproof.TargetModePrimary + `') = $1
-ORDER BY rs.schema_digest, rs.selected_operation
+ORDER BY rs.schema_digest, rs.selected_operation, rs.document_digest
 `
 }
 
@@ -73,53 +109,54 @@ func ReadRoutingState(ctx context.Context, dsn, currentDigest string) ([]Operati
 	}
 	defer func() { _ = conn.Close(ctx) }()
 
-	// Two passes, one per target mode, each carrying that mode's own route
-	// rule. Splitting here rather than deriving `proven` in Go keeps the
-	// rule in SQL where enablement evaluates it -- the two must agree, and
-	// the only way to be sure is to run the same clause.
-	var out []OperationRow
-	for _, pass := range []struct {
-		targetMode string
-		isPrimary  bool
-	}{
-		{goapiproof.TargetModePrimary, true},
-		{goapiproof.TargetModeCanary, false},
-	} {
-		clause, err := goapiproof.EnablementProofClause("pr", pass.targetMode)
-		if err != nil {
-			return nil, 0, fmt.Errorf("build the enablement predicate: %w", err)
-		}
-		rows, err := conn.Query(ctx, routingStateQuery(clause), pass.isPrimary)
-		if err != nil {
-			return nil, 0, fmt.Errorf("read go_api_routing_state: %w", err)
-		}
-		for rows.Next() {
-			var (
-				row     OperationRow
-				proofID *string
-			)
-			if err := rows.Scan(&row.Operation, &row.Mode, &row.SchemaDigest, &row.CandidateBuild, &proofID); err != nil {
-				rows.Close()
-				return nil, 0, fmt.Errorf("scan go_api_routing_state row: %w", err)
-			}
-			row.Live = row.SchemaDigest == currentDigest
-			row.Proven = NoProof
-			if proofID != nil && *proofID != "" {
-				row.Proven = *proofID
-			}
-			out = append(out, row)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, 0, fmt.Errorf("iterate go_api_routing_state: %w", err)
-		}
-		rows.Close()
+	// The SAME call the -print-routing-sql flag makes: an operator's
+	// offline rows and this reader's rows cannot be produced by different
+	// statements, because there is only one statement.
+	statement, err := RoutingStateSQL()
+	if err != nil {
+		return nil, 0, err
 	}
-	sort.Slice(out, func(i, j int) bool {
+
+	rows, err := conn.Query(ctx, statement)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read go_api_routing_state: %w", err)
+	}
+	var out []OperationRow
+	for rows.Next() {
+		var (
+			row     OperationRow
+			proofID *string
+		)
+		if err := rows.Scan(&row.Operation, &row.DocumentDigest, &row.Mode,
+			&row.SchemaDigest, &row.CandidateBuild, &proofID); err != nil {
+			rows.Close()
+			return nil, 0, fmt.Errorf("scan go_api_routing_state row: %w", err)
+		}
+		row.Live = row.SchemaDigest == currentDigest
+		row.Proven = NoProof
+		if proofID != nil && *proofID != "" {
+			row.Proven = *proofID
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, 0, fmt.Errorf("iterate go_api_routing_state: %w", err)
+	}
+	rows.Close()
+
+	// Stable: two rows sharing (schema digest, operation) differ only by
+	// document, and an unstable sort would flip the render between runs on
+	// identical data (opus r5, P2). The query already orders by the triple;
+	// this keeps that order under any later re-sort.
+	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].SchemaDigest != out[j].SchemaDigest {
 			return out[i].SchemaDigest < out[j].SchemaDigest
 		}
-		return out[i].Operation < out[j].Operation
+		if out[i].Operation != out[j].Operation {
+			return out[i].Operation < out[j].Operation
+		}
+		return out[i].DocumentDigest < out[j].DocumentDigest
 	})
 
 	// The bare total is reported alongside the per-row derivation on

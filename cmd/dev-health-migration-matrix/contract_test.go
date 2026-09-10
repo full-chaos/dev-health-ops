@@ -3,7 +3,11 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
 )
 
 // TestTheCommittedMatrixSatisfiesItsOwnContract runs the real -check against
@@ -125,5 +129,92 @@ func repoRoot(t *testing.T) string {
 			t.Fatal("could not find the module root above the test's working directory")
 		}
 		dir = parent
+	}
+}
+
+// The offline -routing path exists so an operator without a DSN can still
+// render the page. opus r5 (P2c) showed its instruction was unfollowable: it
+// named an unexported function, so "produce rows with the reader's SQL" meant
+// retyping the SQL. These two tests pin the two halves of the fix -- that the
+// statement is reachable, and that a snapshot missing the routing KEY is
+// refused instead of silently collapsing two documents into one row.
+
+func TestTheOperatorCanObtainTheExactStatementTheReaderRuns(t *testing.T) {
+	statement, err := migrationmatrix.RoutingStateSQL()
+	if err != nil {
+		t.Fatalf("build the routing statement: %v", err)
+	}
+	// Not a substring check: the whole point is that the offline rows and
+	// the live rows come from the SAME text, so anything less than
+	// equality with both mode arms of the shared predicate would let the
+	// two derivations drift apart again.
+	for _, mode := range []string{goapiproof.TargetModePrimary, goapiproof.TargetModeCanary} {
+		clause, err := goapiproof.EnablementProofClause("pr", mode)
+		if err != nil {
+			t.Fatalf("build the %s predicate: %v", mode, err)
+		}
+		if !strings.Contains(statement, clause) {
+			t.Fatalf("the printed statement does not contain the %s enablement clause;\nstatement:\n%s\n\nclause:\n%s", mode, statement, clause)
+		}
+	}
+	// Deliberately NOT asserted here: that the statement SELECTS the
+	// document digest. A `strings.Contains(statement, "rs.document_digest")`
+	// looks like that assertion and is not one -- the join predicate
+	// mentions the same identifier, so deleting the output column leaves
+	// the substring in place and the test green. Measured: that exact
+	// mutation survived. The column is pinned where it can only be pinned
+	// honestly -- by reading it back out of PostgreSQL, in
+	// TestReadRoutingStateKeepsTwoDocumentsOfOneOperationApart.
+}
+
+func TestARoutingSnapshotWithoutTheDocumentDigestIsRefused(t *testing.T) {
+	dir := t.TempDir()
+
+	// Two DIFFERENT documents of one operation at one schema digest -- the
+	// exact shape Trap #120 is about. Accepting them without their digests
+	// makes them indistinguishable, and ValidateRender's R8 rule then
+	// reports a duplicate row on a page whose reason for existing is that
+	// a silent death should not look like health.
+	withoutDigest := filepath.Join(dir, "no-document-digest.json")
+	if err := os.WriteFile(withoutDigest, []byte(`{
+	  "proof_run_total": 2,
+	  "rows": [
+	    {"selected_operation":"featureFlags","mode":"primary","schema_digest":"sha256:pin","current_candidate_build":"b1","proof_run_id":"p1"},
+	    {"selected_operation":"featureFlags","mode":"python","schema_digest":"sha256:pin","current_candidate_build":"b1","proof_run_id":""}
+	  ]
+	}`), 0o600); err != nil {
+		t.Fatalf("write the snapshot: %v", err)
+	}
+	_, _, err := readRoutingFile(withoutDigest, "sha256:pin")
+	if err == nil {
+		t.Fatal("a routing snapshot with no document_digest was accepted; two documents of one operation are then one row")
+	}
+	if !strings.Contains(err.Error(), "document_digest") || !strings.Contains(err.Error(), "print-routing-sql") {
+		t.Fatalf("the refusal must name the missing field AND how to regenerate the snapshot, got: %v", err)
+	}
+
+	// The control: the SAME two rows, with their digests, are two rows.
+	withDigest := filepath.Join(dir, "with-document-digest.json")
+	if err := os.WriteFile(withDigest, []byte(`{
+	  "proof_run_total": 2,
+	  "rows": [
+	    {"selected_operation":"featureFlags","document_digest":"doc-new","mode":"primary","schema_digest":"sha256:pin","current_candidate_build":"b1","proof_run_id":"p1"},
+	    {"selected_operation":"featureFlags","document_digest":"doc-old","mode":"python","schema_digest":"sha256:pin","current_candidate_build":"b1","proof_run_id":""}
+	  ]
+	}`), 0o600); err != nil {
+		t.Fatalf("write the snapshot: %v", err)
+	}
+	rows, total, err := readRoutingFile(withDigest, "sha256:pin")
+	if err != nil {
+		t.Fatalf("a complete snapshot was refused: %v", err)
+	}
+	if total != 2 || len(rows) != 2 {
+		t.Fatalf("expected 2 rows and a total of 2, got %d rows and %d", len(rows), total)
+	}
+	if rows[0].DocumentDigest == rows[1].DocumentDigest {
+		t.Fatalf("both rows carry document digest %q; the two documents collapsed", rows[0].DocumentDigest)
+	}
+	if rows[0].Proven == rows[1].Proven {
+		t.Fatalf("both rows derived proof %q, so the digests are being read but not used", rows[0].Proven)
 	}
 }

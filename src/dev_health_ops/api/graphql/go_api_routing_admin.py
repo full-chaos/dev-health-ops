@@ -554,9 +554,45 @@ def _admissible_terminal_state() -> ColumnElement[bool]:
     return and_(
         # A whitespace-only candidate build is as unmatchable as an absent
         # one while LOOKING present -- and ``proven`` is keyed on it.
-        sa.func.btrim(ProofRun.candidate_build) != "",
+        sa.func.btrim(ProofRun.candidate_build, _BLANK_CUTSET) != "",
+        # The binding is part of the rule, on both arms, uniformly.
+        #
+        # This change added two counting rules proveOne did not have at
+        # the base build -- an $.http.* difference and an unbound edge
+        # mismatch now count into differences_outside_baseline_defect --
+        # so every row the OLD writer wrote with mismatch/edge/outside=0
+        # and a citation became PRIMARY-admissible retroactively, tied to
+        # no replica and possibly carrying an uncited HTTP difference.
+        # Those are the pre-0129 rows: build_binding IS NULL.
+        #
+        # per_request excludes exactly them and nothing this writer
+        # produces: the proof route always binds per request, an edge
+        # match without the header is downgraded to `unsupported`, and an
+        # edge mismatch without it already has outside >= 1.
+        ProofRun.build_binding == BUILD_BINDING_PER_REQUEST,
         _terminal_state_admits(),
     )
+
+
+#: THE definition of "names nothing", identical to
+#: goapiproof.blankCitationCutset by construction: space, tab, newline,
+#: vertical tab, form feed, carriage return, NBSP.
+#:
+#: Explicit rather than Unicode's space class because the two engines
+#: cannot share that definition. Measured on this Postgres (UTF8):
+#: ``btrim(E'\u00a0', <this set>) = ''`` is TRUE while
+#: ``E'\u00a0' ~ '^[[:space:]]+$'`` is FALSE, and U+2028 is the exact
+#: reverse -- the explicit set and POSIX ``[[:space:]]`` have opposite
+#: gaps, and neither equals Go's ``unicode.IsSpace``.
+#:
+#: The SQL definition is the authority and Go implements it, because SQL
+#: reads rows from producers Go has never seen. Pinned character by
+#: character by ``TestTheBlankDefinitionIsIdenticalInBothEngines``.
+_BLANK_CUTSET = " \t\n\v\f\r\xa0"
+
+#: The only binding a receipt from the current writer can carry on an
+#: admissible row. See the comment at the clause for why both arms.
+BUILD_BINDING_PER_REQUEST = "per_request"
 
 
 def _terminal_state_admits() -> ColumnElement[bool]:
@@ -586,7 +622,16 @@ def _terminal_state_admits() -> ColumnElement[bool]:
             ~sa.exists(
                 sa.select(sa.literal(1))
                 .select_from(sa.func.unnest(ProofRun.baseline_defect).alias("citation"))
-                .where(sa.func.btrim(sa.column("citation")) == "")
+                .where(
+                    sa.or_(
+                        # A SQL NULL element: cardinality() counts it and
+                        # one-argument btrim(NULL) is NULL, not '', so it
+                        # passed BOTH predicates and promoted to primary
+                        # (opus r5 P1, executed through the CLI).
+                        sa.column("citation").is_(None),
+                        sa.func.btrim(sa.column("citation"), _BLANK_CUTSET) == "",
+                    )
+                )
             ),
         ),
     )
@@ -745,7 +790,21 @@ async def routing_status_rows(
     # to the lookup and back: the result set below is keyed by the same
     # (operation, document) pair the query asked about, never by name.
     proven: set[tuple[str, str]] = set()
-    grouped: dict[tuple[str, str], dict[str, str]] = {}
+    # Keyed by (build, target mode, DOCUMENT). opus r5 found the document
+    # missing from this key while the two downstream halves were already
+    # fixed: `grouped[...][operation] = document` collapsed two live
+    # documents of one operation that shared a build and a mode, BEFORE
+    # the query was built, so only one was ever asked about -- and which
+    # one survived was dictionary insertion order, i.e. the Postgres scan
+    # order. Executed through the CLI, the catalog's document reported
+    # `proven: False` with its own receipt sitting in go_api_proof_run.
+    #
+    # `operations_with_enablement_proof` takes a mapping of operation to
+    # document, so one call can only ever ask about ONE document per
+    # operation. The document therefore belongs in the GROUP key, not in
+    # the value: a map cannot hold the pair the query needs to distinguish.
+    # That is why re-keying the other two maps was not enough.
+    grouped: dict[tuple[str, str, str], dict[str, str]] = {}
     for (operation, document), row in live_by_document.items():
         target_mode = (
             ENABLEMENT_TARGET_MODE_EDGE_ONLY
@@ -755,10 +814,10 @@ async def routing_status_rows(
         # The row's OWN document_digest, not the catalog's: a row whose
         # document has drifted from the catalog must not borrow the
         # catalog's proof, and vice versa.
-        grouped.setdefault((row.current_candidate_build, target_mode), {})[
+        grouped.setdefault((row.current_candidate_build, target_mode, document), {})[
             operation
         ] = document
-    for (build, target_mode), operations in sorted(grouped.items()):
+    for (build, target_mode, _document), operations in sorted(grouped.items()):
         found = await operations_with_enablement_proof(
             session,
             schema_digest=live_schema_digest,

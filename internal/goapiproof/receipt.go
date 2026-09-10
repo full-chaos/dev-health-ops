@@ -144,8 +144,9 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 	if err := validateVocabulary(receipt); err != nil {
 		return uuid.Nil, err
 	}
-	if strings.TrimSpace(receipt.CandidateBuild) == "" {
-		// TrimSpace, not `== ""`: `proven` is keyed on this column, and a
+	if strings.Trim(receipt.CandidateBuild, blankCitationCutset) == "" {
+		// Trimmed with blankCitationCutset, not `== ""`: `proven` is
+		// keyed on this column, and a
 		// whitespace-only build is as unmatchable as an absent one while
 		// LOOKING present in every listing. Found by enumerating the
 		// guard's input domain rather than by a failure.
@@ -166,7 +167,7 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 	// the defect r2 found in this very PR. The writer is the one place
 	// that can refuse it once.
 	for _, ticket := range receipt.BaselineDefects {
-		if strings.TrimSpace(ticket) == "" {
+		if strings.Trim(ticket, blankCitationCutset) == "" {
 			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt whose baseline_defect array contains an empty citation (%d entries) -- cardinality() counts it, so the enablement predicate would read this as a fully-cited mismatch while it cites nothing", len(receipt.BaselineDefects))
 		}
 	}
@@ -310,6 +311,78 @@ const EnablementCitedMismatchState = "mismatch"
 // than merely argued -- and a clause that can never change an outcome is
 // one more thing a reader has to reason about for nothing.
 //
+// blankCitationCutset is THE definition of "names nothing", and it is
+// deliberately an explicit character set rather than Unicode's space class.
+//
+// opus r5 (P1) found the change shipping TWO definitions: the writer used
+// strings.TrimSpace, the predicates used one-argument btrim(). Measured,
+// they disagree on every whitespace character except the space itself --
+// a tab, newline, CR, vertical tab, form feed or NBSP citation was
+// refused by the writer and ADMITTED by both predicates, and promoted to
+// primary through the shipped CLI.
+//
+// They cannot share Unicode's definition. Measured against this Postgres
+// (UTF8):
+//
+//	btrim(E'\u00a0', <this set>) = ''   -> true    unicode.IsSpace -> true
+//	btrim(E'\u2028', <this set>) = ''   -> false   unicode.IsSpace -> true
+//	E'\u00a0' ~ '^[[:space:]]+$'        -> false
+//	E'\u2028' ~ '^[[:space:]]+$'        -> true
+//
+// So the explicit set and POSIX [[:space:]] have OPPOSITE gaps, and
+// neither equals unicode.IsSpace, which is open-ended by design. A shared
+// definition therefore has to be enumerated, not named.
+//
+// DIRECTION, stated because it matters: the SQL definition is the
+// authority and Go implements exactly it. SQL is the side that reads rows
+// from producers Go has never seen -- rows already in the table, a future
+// writer, a manual repair -- so the engine that must be right about a
+// stored row owns the rule, and the writer conforms. Go therefore uses
+// strings.Trim with this cutset, NEVER strings.TrimSpace.
+//
+// Characters outside the set (U+2028, U+3000, ...) are treated as REAL
+// citation text by BOTH sides. That is the trade: a ticket identifier made
+// only of exotic Unicode spacing is not a case worth a definition the two
+// engines cannot share, and both agreeing matters more than either being
+// maximal. TestTheBlankDefinitionIsIdenticalInBothEngines pins the
+// agreement character by character, in-set and out.
+const blankCitationCutset = " \t\n\v\f\r\u00a0"
+
+// blankCitationSQL renders the cutset as a Postgres escape-string literal,
+// so the SQL below and the Go check above cannot drift: there is one
+// constant and the statement is generated from it.
+func blankCitationSQL() string {
+	return `E' \t\n\v\f\r\u00a0'`
+}
+
+// THE BINDING IS PART OF THE RULE, on both arms, uniformly.
+//
+// opus r5 (P2) found the new admission rule being applied retroactively
+// to rows the OLD writer produced under different counting semantics. At
+// the base build, proveOne did NOT count an $.http.* difference and did
+// NOT count an unbound edge mismatch into
+// differences_outside_baseline_defect -- both increments are this
+// change's. Before it, a mismatch authorized nothing, so that did not
+// matter; it does now. Every row the base build wrote with
+// mismatch/edge/outside=0/cited became PRIMARY-admissible, including rows
+// whose real difference set held an uncited HTTP status difference and
+// rows tied to no replica. Those are exactly the pre-0129 rows:
+// build_binding IS NULL.
+//
+// Requiring per_request excludes precisely them and NOTHING the current
+// writer produces, which is why it is stated once for both arms rather
+// than only on the mismatch arm:
+//
+//   - proof route          -> per_request always
+//   - edge WITH the header -> per_request
+//   - edge WITHOUT it, match    -> downgraded to `unsupported`, never proof
+//   - edge WITHOUT it, mismatch -> outside >= 1, so already excluded
+//
+// So "match or cited mismatch, from this writer" already implies
+// per_request. Saying it out loud costs nothing and closes the retroactive
+// window; a NULL binding now means what it is, a row written before the
+// column existed.
+//
 // A citation that names NOTHING is not a citation. `cardinality(ARRAY[”])`
 // is 1, so before the NOT EXISTS below a mismatch citing a single empty
 // ticket read as fully cited and authorized a promotion -- executed
@@ -336,9 +409,11 @@ func enablementProofPredicate(alias string) string {
 		           AND cardinality(` + alias + `.baseline_defect) > 0
 		           AND NOT EXISTS (
 		                 SELECT 1 FROM unnest(` + alias + `.baseline_defect) AS citation
-		                  WHERE btrim(citation) = ''))
+		                  WHERE citation IS NULL
+		                     OR btrim(citation, ` + blankCitationSQL() + `) = ''))
 		    )
-		    AND btrim(` + alias + `.candidate_build) <> ''`
+		    AND btrim(` + alias + `.candidate_build, ` + blankCitationSQL() + `) <> ''
+		    AND ` + alias + `.build_binding = '` + EdgeBuildPresent + `'`
 }
 
 // EnablementProofClause is THE rule deciding whether a go_api_proof_run

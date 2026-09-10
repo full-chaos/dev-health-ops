@@ -739,18 +739,25 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
     else:
         print("  (table is empty -- nothing is enabled for Go)")
     print()
-    print(f"{'OPERATION':<24} {'DIGEST':<8} {'MODE':<10} {'ROLLOUT':<8} PROOF")
+    print(f"{'OPERATION':<24} {'DIGEST':<14} {'MODE':<10} {'ROLLOUT':<8} PROOF")
     for status in statuses:
         mode = status.mode or "-"
         rollout = (
             "-" if status.rollout_percentage is None else str(status.rollout_percentage)
         )
-        if status.digest_state == "MATCH":
+        # A DOCUMENT_DRIFT row is LIVE, is the row actually in the table,
+        # and this command computes `proven` for it -- the JSON says so.
+        # Printing `-` here told the operator nothing about the one row
+        # they are being asked to notice, and the terminal disagreed with
+        # `--json` on the same run (opus r5, P3).
+        if status.digest_state in ("MATCH", "DOCUMENT_DRIFT"):
             proof = "ok" if status.proven else "UNPROVEN"
         else:
             proof = "-"
+        # Width 14, not 8: DOCUMENT_DRIFT is 14 characters, so an 8-wide
+        # column shifted MODE / ROLLOUT / PROOF right on exactly that row.
         print(
-            f"{status.operation:<24} {status.digest_state:<8} {mode:<10} "
+            f"{status.operation:<24} {status.digest_state:<14} {mode:<10} "
             f"{rollout:<8} {proof}"
         )
         if status.digest_state == "STALE":

@@ -47,6 +47,15 @@ func TestInvestmentFullRepoCoverage_CapturedBodiesMatchOnlyWithDeclaration(t *te
 		t.Fatalf("with the registered FloatTierB declarations: terminal_state = %q, findings = %d: %+v",
 			withDeclaration.TerminalState, len(withDeclaration.Findings), withDeclaration.Findings)
 	}
+	// IsMatch() alone only asserts no FindingMismatch-kind entry -- a
+	// non-mismatch kind (error_message_drift, watermark_drift/missing)
+	// can still coexist with terminal_state=match (compare.go:336-341).
+	// Assert zero findings outright so a stray non-blocking finding on
+	// this exact comparison cannot hide behind IsMatch().
+	if len(withDeclaration.Findings) != 0 {
+		t.Fatalf("with the registered FloatTierB declarations: IsMatch() true but %d non-mismatch finding(s) present: %+v",
+			len(withDeclaration.Findings), withDeclaration.Findings)
+	}
 	for _, unused := range withDeclaration.UnusedTierB {
 		if unused == teamPath || unused == repoPath {
 			t.Fatalf("vacuity guard fired for %s -- the declaration matched nothing, but the field is present in both captured bodies", unused)

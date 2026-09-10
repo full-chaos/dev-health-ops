@@ -79,7 +79,7 @@
     },
     {
       "name": "membership_backfill",
-      "python_sources": ["src/dev_health_ops/workers/work_graph_tasks.py", "src/dev_health_ops/work_graph/investment/backfill.py"],
+      "python_sources": ["src/dev_health_ops/work_graph/investment/backfill.py"],
       "writes": ["work_unit_membership", "work_unit_membership_runs"],
       "max_concurrency": 1,
       "clickhouse_read_budget": 2,

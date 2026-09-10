@@ -224,10 +224,19 @@ func TestBeatScheduleParserFindsTheCheckedInventory(t *testing.T) {
 	// then would have silently dropped every external-ingest-triggered
 	// recompute. That condition is now gone -- internal/externalrecompute/
 	// drain.go reads those rows natively -- so the entry and its Celery task
-	// are deleted and recorded in RetiredBeatInventory. The live table now
-	// has five unconditional rows and zero optional rows.
-	if unconditional != 5 {
-		t.Fatalf("parsed %d unconditional beat entries, want 5", unconditional)
+	// are deleted and recorded in RetiredBeatInventory.
+	//
+	// 5 -> 3 under CHAOS-3093 (2026-09-09): CHAOS-4065 replaced the
+	// ask-dev-acceptance release-blocking gate's real Celery worker+beat
+	// fleet -- the last reason monitor-queue-depths and prune-external-
+	// ingest-batches survived CHAOS-4026's sweep -- with a Go-native probe
+	// that re-executes the same production Go code directly. Both entries
+	// and their sole Python modules (workers/queue_monitor.py, workers/
+	// external_ingest_reconciler.py) are deleted and recorded in
+	// RetiredBeatInventory. The live table now has three unconditional rows
+	// and zero optional rows.
+	if unconditional != 3 {
+		t.Fatalf("parsed %d unconditional beat entries, want 3", unconditional)
 	}
 	if optional != 0 {
 		t.Fatalf("parsed %d optional beat entries, want 0", optional)

@@ -375,9 +375,19 @@ const blankCitationCutset = " \t\n\v\f\r\u00a0"
 // integration suite is run against PG16, PG17 and PG18 by pointing
 // DEV_HEALTH_TEST_POSTGRES_DSN at each.
 func blankCitationSQL() string {
+	return escapeStringLiteral(blankCitationCutset)
+}
+
+// escapeStringLiteral renders value as a PostgreSQL escape-string literal
+// in which EVERY rune is a numeric escape. Because nothing is emitted raw,
+// a quote or a backslash in value cannot end or bend the literal (they
+// become \x27 and \x5c), and no byte depends on a server version's list
+// of named escapes. Invalid UTF-8 in value is ranged as U+FFFD, as Go
+// ranges it, so the literal is always valid UTF-8.
+func escapeStringLiteral(value string) string {
 	var literal strings.Builder
 	literal.WriteString("E'")
-	for _, r := range blankCitationCutset {
+	for _, r := range value {
 		switch {
 		case r < 0x80:
 			fmt.Fprintf(&literal, `\x%02x`, r)

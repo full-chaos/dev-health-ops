@@ -37,7 +37,9 @@ Two commands, and the split between them is deliberate:
     already broken -- including when query-api is down, which it reports
     as ``UNREACHABLE`` rather than failing. It prints both planes'
     digests and, per registered operation, whether that operation's row
-    is ``MATCH`` / ``STALE`` / ``MISSING`` and whether it is ``UNPROVEN``.
+    is ``MATCH`` / ``STALE`` / ``MISSING`` and whether it is ``UNPROVEN`` --
+    plus, as a row of its own, any live row serving a document the catalog
+    does not name (``DOCUMENT_DRIFT``).
 
 HTTP here is ``urllib.request`` from the standard library, not ``httpx``:
 this is one small JSON GET, and keeping the module free of the web stack

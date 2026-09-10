@@ -3,6 +3,7 @@ package migrationmatrix
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -564,5 +565,127 @@ func TestAFamilyWithNoStatusRowStillRendersVisibly(t *testing.T) {
 	block := RenderFamilyBlock(ledger, families())
 	if !strings.Contains(block, "**NO STATUS ROW**") {
 		t.Fatalf("want a visible NO STATUS ROW marker, got:\n%s", block)
+	}
+}
+
+// LoadCatalog over its whole input domain, one cell per shape a
+// go_api_operations.json can take. The contract: refuse everything the
+// Python loader refuses, plus blank names and unknown keys; accept the
+// canonical file and one operation at two documents.
+func TestLoadCatalogOverItsInputDomain(t *testing.T) {
+	dir := t.TempDir()
+	d1, d2 := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	for _, c := range []struct {
+		name   string
+		body   string
+		accept bool
+	}{
+		{"canonical", `[{"operation":"featureFlags","digest":"` + d1 + `"}]`, true},
+		{"one operation at two documents", `[{"operation":"featureFlags","digest":"` + d1 + `"},{"operation":"featureFlags","digest":"` + d2 + `"}]`, true},
+		{"absent (empty file)", ``, false},
+		{"null", `null`, false},
+		{"empty container", `[]`, false},
+		{"wrong container type (object)", `{"operation":"featureFlags","digest":"` + d1 + `"}`, false},
+		{"entry of wrong type (string)", `["featureFlags"]`, false},
+		{"entry null", `[null]`, false},
+		{"operation absent", `[{"digest":"` + d1 + `"}]`, false},
+		{"digest absent", `[{"operation":"featureFlags"}]`, false},
+		{"operation empty", `[{"operation":"","digest":"` + d1 + `"}]`, false},
+		{"digest blank", `[{"operation":"featureFlags","digest":"  "}]`, false},
+		{"digest wrong scalar type (number)", `[{"operation":"featureFlags","digest":7}]`, false},
+		{"digest null", `[{"operation":"featureFlags","digest":null}]`, false},
+		{"duplicate digest, two operations", `[{"operation":"featureFlags","digest":"` + d1 + `"},{"operation":"hotspots","digest":"` + d1 + `"}]`, false},
+		{"out-of-vocabulary key", `[{"operation":"featureFlags","digest":"` + d1 + `","document":"x"}]`, false},
+	} {
+		path := filepath.Join(dir, strings.ReplaceAll(c.name, " ", "_")+".json")
+		if err := os.WriteFile(path, []byte(c.body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", c.name, err)
+		}
+		_, err := LoadCatalog(path)
+		if (err == nil) != c.accept {
+			t.Fatalf("%s: accepted=%v, the contract says %v (err=%v)", c.name, err == nil, c.accept, err)
+		}
+	}
+}
+
+// ParseRoutingSnapshot over its whole input domain. The payload is what
+// RoutingStateSQL emits; anything else is a hand-built file, and each field
+// a hand-built file can get wrong is a cell here.
+func TestParseRoutingSnapshotOverItsInputDomain(t *testing.T) {
+	row := func(extra string) string {
+		return `{"selected_operation":"featureFlags","document_digest":"d","mode":"canary","schema_digest":"sha256:pin","current_candidate_build":"b","proof_run_id":null` + extra + `}`
+	}
+	for _, c := range []struct {
+		name   string
+		body   string
+		accept bool
+		rows   int
+		total  int
+		proven string
+	}{
+		{"canonical, no proof", `{"proof_run_total":0,"rows":[` + row("") + `]}`, true, 1, 0, NoProof},
+		{"canonical, proven", `{"proof_run_total":3,"rows":[` + strings.Replace(row(""), `"proof_run_id":null`, `"proof_run_id":"p-1234567"`, 1) + `]}`, true, 1, 3, "p-1234567"},
+		{"proof id empty string", `{"proof_run_total":0,"rows":[` + strings.Replace(row(""), `"proof_run_id":null`, `"proof_run_id":""`, 1) + `]}`, true, 1, 0, NoProof},
+		{"proof id whitespace", `{"proof_run_total":0,"rows":[` + strings.Replace(row(""), `"proof_run_id":null`, `"proof_run_id":"  "`, 1) + `]}`, true, 1, 0, NoProof},
+		{"rows null (empty table)", `{"proof_run_total":0,"rows":null}`, true, 0, 0, ""},
+		{"rows empty container", `{"proof_run_total":0,"rows":[]}`, true, 0, 0, ""},
+		{"absent (empty input)", ``, false, 0, 0, ""},
+		{"null payload", `null`, false, 0, 0, ""},
+		{"wrong container type (array)", `[` + row("") + `]`, false, 0, 0, ""},
+		{"total absent", `{"rows":[` + row("") + `]}`, false, 0, 0, ""},
+		{"total null", `{"proof_run_total":null,"rows":[` + row("") + `]}`, false, 0, 0, ""},
+		{"total wrong scalar type", `{"proof_run_total":"1","rows":[` + row("") + `]}`, false, 0, 0, ""},
+		{"total fractional", `{"proof_run_total":1.5,"rows":[` + row("") + `]}`, false, 0, 0, ""},
+		{"rows wrong container type", `{"proof_run_total":0,"rows":{}}`, false, 0, 0, ""},
+		{"document digest absent", `{"proof_run_total":0,"rows":[{"selected_operation":"featureFlags","mode":"canary","schema_digest":"sha256:pin","current_candidate_build":"b","proof_run_id":null}]}`, false, 0, 0, ""},
+		{"document digest blank", `{"proof_run_total":0,"rows":[` + strings.Replace(row(""), `"document_digest":"d"`, `"document_digest":" "`, 1) + `]}`, false, 0, 0, ""},
+		{"out-of-vocabulary key", `{"proof_run_total":0,"rows":[` + row(`,"proven":true`) + `]}`, false, 0, 0, ""},
+		{"out-of-vocabulary top-level key", `{"proof_run_total":0,"rows":[],"extra":1}`, false, 0, 0, ""},
+		{"psql -At text, not JSON (the r6 P3-3 file)", `featureFlags|d|canary|sha256:pin|b|`, false, 0, 0, ""},
+	} {
+		rows, total, err := ParseRoutingSnapshot([]byte(c.body), "sha256:pin")
+		if (err == nil) != c.accept {
+			t.Fatalf("%s: accepted=%v, the contract says %v (err=%v)", c.name, err == nil, c.accept, err)
+		}
+		if !c.accept {
+			continue
+		}
+		if len(rows) != c.rows || total != c.total {
+			t.Fatalf("%s: got %d rows total %d, want %d rows total %d", c.name, len(rows), total, c.rows, c.total)
+		}
+		if c.rows == 1 && (rows[0].Proven != c.proven || !rows[0].Live) {
+			t.Fatalf("%s: row %+v, want proven=%q live=true", c.name, rows[0], c.proven)
+		}
+	}
+}
+
+// DocumentDrift over every shape a row can take against a catalog.
+func TestDocumentDriftOverItsInputDomain(t *testing.T) {
+	catalog := catalogFor(t, "featureFlags", "hotspots")
+	for _, c := range []struct {
+		name            string
+		mutate          func(*OperationRow)
+		drift, unjudged bool
+	}{
+		{"live, the catalog's pair", func(*OperationRow) {}, false, false},
+		{"live, another document", func(r *OperationRow) { r.DocumentDigest = strings.Repeat("0", 64) }, true, false},
+		{"live, a document the catalog registers for ANOTHER operation", func(r *OperationRow) { r.DocumentDigest = documentOf("hotspots") }, true, false},
+		{"live, an operation the catalog does not register", func(r *OperationRow) { r.Operation = "retired" }, true, false},
+		{"live, no document digest", func(r *OperationRow) { r.DocumentDigest = "" }, false, true},
+		{"dead, another document", func(r *OperationRow) { r.Live = false; r.DocumentDigest = strings.Repeat("0", 64) }, false, false},
+		{"dead, no document digest", func(r *OperationRow) { r.Live = false; r.DocumentDigest = "" }, false, false},
+		{"live, the catalog's document with different case", func(r *OperationRow) { r.DocumentDigest = strings.ToUpper(r.DocumentDigest) }, true, false},
+	} {
+		row := liveRow("featureFlags", "canary")
+		c.mutate(&row)
+		if got := DocumentDrift(row, catalog); got != c.drift {
+			t.Fatalf("%s: DocumentDrift=%v, want %v", c.name, got, c.drift)
+		}
+		if got := DocumentUnjudged(row); got != c.unjudged {
+			t.Fatalf("%s: DocumentUnjudged=%v, want %v", c.name, got, c.unjudged)
+		}
+		if got := len(ValidateDocumentDrift(snapshot(row), catalog)); got != map[bool]int{true: 1, false: 0}[c.drift] {
+			t.Fatalf("%s: %d R14 violations, want drift=%v", c.name, got, c.drift)
+		}
 	}
 }

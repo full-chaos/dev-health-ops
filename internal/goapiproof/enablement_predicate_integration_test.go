@@ -951,3 +951,34 @@ func TestTheBlankBuildClauseOverEveryCutsetRune(t *testing.T) {
 		t.Fatalf("admitted %d (build, mode) cells, want exactly the three real builds x two modes = 6: a sweep with no admissions passes against a predicate that admits nothing", admitted)
 	}
 }
+
+// The generator's output, decoded by the SERVER, is the value it was given.
+//
+// The unit test pins the grammar against this test's own decoder; this pins
+// it against PostgreSQL's, on whichever server major the suite is pointed
+// at. The values include the ones that could end or bend a literal (a quote,
+// a backslash followed by a named-escape letter), the letters PG16 and PG17
+// disagree about after a backslash, and every plane the generator has a
+// branch for.
+func TestTheGeneratedLiteralRoundTripsThroughPostgres(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+	ascii := make([]byte, 0, 127)
+	for b := byte(1); b < 0x80; b++ {
+		ascii = append(ascii, b)
+	}
+	for _, value := range []string{
+		blankCitationCutset, string(ascii), "a'b", `a\vb`, "v", "\v",
+		"\u00a0\u2028\u3000\ufeff", "\U0001F600", "",
+	} {
+		var got string
+		if err := pool.QueryRow(ctx, `SELECT `+escapeStringLiteral(value)).Scan(&got); err != nil {
+			t.Fatalf("PostgreSQL rejected escapeStringLiteral(%q) = %s: %v", value, escapeStringLiteral(value), err)
+		}
+		if got != value {
+			var version string
+			_ = pool.QueryRow(ctx, `SELECT current_setting('server_version')`).Scan(&version)
+			t.Fatalf("on PostgreSQL %s, escapeStringLiteral(%q) = %s decodes to %q", version, value, escapeStringLiteral(value), got)
+		}
+	}
+}

@@ -358,9 +358,16 @@ func (c Catalog) Documents(operation string) []string {
 }
 
 // NewCatalog builds a Catalog from (operation, document digest) pairs.
-// Refuses an empty operation or digest and a digest registered twice --
-// the same refusals the Python loader (go_api_operation_catalog._load)
-// makes, so the two readers of the file cannot accept different files.
+//
+// Its refusals are a strict SUPERSET of the Python loader's
+// (go_api_operation_catalog._load): every file Python refuses -- not an
+// array, empty, an entry missing a key or not an object, a digest
+// registered twice -- this refuses too, so the page can never judge drift
+// against a catalog the edge itself could not load. It additionally
+// refuses a blank, null or non-string name and (in LoadCatalog) an unknown
+// key, all of which Python loads: judging drift against a malformed catalog
+// would be a silent wrong answer, and refusing it is a loud one.
+// TestLoadCatalogOverItsInputDomain executes every cell.
 func NewCatalog(pairs [][2]string) (Catalog, error) {
 	catalog := Catalog{documents: map[string]map[string]bool{}}
 	owner := map[string]string{}

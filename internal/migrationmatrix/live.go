@@ -96,16 +96,19 @@ func RoutingStateSQL() (string, error) {
 // routingSnapshotQuery wraps the row statement so it returns the snapshot
 // payload as ONE text value. The keys are routingSnapshot's JSON tags; the
 // column names of routingStateQuery ARE those keys, so json_agg(t) needs no
-// mapping that could drift. `coalesce(..., '[]')` so an empty table yields
-// `"rows": []`, which the offline reader then refuses BY NAME rather than
-// as a JSON null.
+// mapping that could drift.
+//
+// An empty table yields `"rows": null`, and that is left alone on purpose:
+// a JSON null and `[]` decode to the same empty slice, so a coalesce() here
+// was measured to change no outcome (the mutant removing it survived every
+// test, and could only survive) -- and a clause that cannot change an
+// outcome is one more thing a reader has to reason about for nothing. The
+// offline reader refuses an empty snapshot BY NAME either way.
 func routingSnapshotQuery(rowQuery string) string {
 	return `
 SELECT json_build_object(
          'proof_run_total', (SELECT count(*) FROM go_api_proof_run),
-         'rows', coalesce(
-                   json_agg(t ORDER BY t.schema_digest, t.selected_operation, t.document_digest),
-                   '[]'::json)
+         'rows', json_agg(t ORDER BY t.schema_digest, t.selected_operation, t.document_digest)
        )::text
 FROM (` + rowQuery + `) AS t
 `

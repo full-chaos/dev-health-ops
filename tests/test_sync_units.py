@@ -12,9 +12,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from dev_health_ops.api.services.sync_coverage import (
-    SYNC_COVERAGE_PROJECTION_VERSION,
-)
 from dev_health_ops.models import (
     BackfillJob,
     Base,
@@ -28,7 +25,6 @@ from dev_health_ops.models import (
     SyncComputeCheckpointStatus,
     SyncComputeType,
     SyncConfiguration,
-    SyncCoverageProjection,
     SyncDispatchOutbox,
     SyncRun,
     SyncRunMode,
@@ -44,7 +40,6 @@ from dev_health_ops.models import (
 from dev_health_ops.sync.dispatch_outbox import (
     OUTBOX_KIND_FINALIZE,
     OUTBOX_KIND_POST_SYNC,
-    OUTBOX_STATUS_DISPATCHED,
     OUTBOX_STATUS_PENDING,
 )
 from dev_health_ops.sync.error_sanitize import REDACTION_MARKER
@@ -1984,68 +1979,6 @@ def test_run_sync_unit_skips_duplicate_delivery_with_live_running_lease(
     assert finalize_calls == []
 
 
-def test_finalize_once_only_dispatches_metrics_once(db_session, monkeypatch):
-    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
-
-    run, unit = _seed_run(db_session)
-    config = SyncConfiguration(
-        org_id=run.org_id,
-        name="canonical",
-        provider="github",
-        sync_targets=["git"],
-        integration_id=run.integration_id,
-    )
-    db_session.add(config)
-    db_session.flush()
-    projection = SyncCoverageProjection(
-        org_id=run.org_id,
-        sync_config_id=config.id,
-        history_lookback_days=3650,
-        projection_version=SYNC_COVERAGE_PROJECTION_VERSION,
-        generated_at=datetime.now(timezone.utc),
-        payload={},
-    )
-    db_session.add(projection)
-    unit.status = SyncRunUnitStatus.SUCCESS.value
-    db_session.flush()
-    _patch_db_session(monkeypatch, db_session)
-    dispatches = []
-    monkeypatch.setattr(
-        post_sync_dispatch,
-        "_dispatch_post_sync_tasks",
-        lambda **kwargs: dispatches.append(kwargs),
-    )
-
-    first = sync_units.finalize_sync_run(str(run.id))
-    second = sync_units.finalize_sync_run(str(run.id))
-    relay_first = sync_reconciler.reconcile_sync_dispatch(limit=10)
-    relay_second = sync_reconciler.reconcile_sync_dispatch(limit=10)
-
-    db_session.refresh(run)
-    db_session.refresh(config)
-    db_session.refresh(projection)
-    assert first["status"] == "finalized"
-    assert second["status"] == "already_dispatched"
-    assert run.status == SyncRunStatus.SUCCESS.value
-    assert db_session.query(SyncRunPostDispatch).count() == 1
-    post_sync_outbox = (
-        db_session.query(SyncDispatchOutbox)
-        .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_POST_SYNC)
-        .one()
-    )
-    db_session.refresh(post_sync_outbox)
-    assert post_sync_outbox.status == OUTBOX_STATUS_DISPATCHED
-    assert relay_first["relayed_post_sync"] == 1
-    assert relay_second["relayed_post_sync"] == 0
-    assert len(dispatches) == 1
-    assert dispatches[0]["sync_targets"] == ["git"]
-    assert config.last_sync_at is not None
-    assert config.last_sync_success is True
-    assert config.last_sync_error is None
-    assert config.last_sync_stats == {"completed_units": 1, "failed_units": 0}
-    assert projection.invalidated_at is not None
-
-
 def test_finalize_aggregates_partial_failed(db_session, monkeypatch):
     from dev_health_ops.workers import sync_units
 
@@ -2706,76 +2639,6 @@ def test_finalize_sync_run_sanitizes_copied_run_error_into_observer_columns(
         assert fixture_value not in persisted_text
         assert "Bearer" not in persisted_text
         assert REDACTION_MARKER in persisted_text
-
-
-def test_reconciler_repairs_stale_observer_for_older_terminal_run_with_limit(
-    db_session, monkeypatch
-):
-    from dev_health_ops.workers import sync_reconciler
-
-    active_run, active_unit = _seed_run(db_session)
-    older_run, older_unit = _seed_run(db_session)
-    newer_run, newer_unit = _seed_run(db_session)
-    active_unit.status = SyncRunUnitStatus.RUNNING.value
-    active_run.status = SyncRunStatus.RUNNING.value
-    older_unit.status = SyncRunUnitStatus.FAILED.value
-    older_run.status = SyncRunStatus.FAILED.value
-    older_run.completed_at = datetime.now(timezone.utc) - timedelta(days=1)
-    older_run.error = "provider auth failed"
-    older_run.failed_units = 1
-    newer_unit.status = SyncRunUnitStatus.SUCCESS.value
-    newer_run.status = SyncRunStatus.SUCCESS.value
-    newer_run.completed_at = datetime.now(timezone.utc)
-    newer_run.completed_units = 1
-    active_scheduled = ScheduledJob(
-        org_id=active_run.org_id,
-        name=f"sync-config-{uuid.uuid4()}",
-        job_type="sync",
-        provider="github",
-        schedule_cron="0 * * * *",
-        job_config={},
-        sync_config_id=uuid.uuid4(),
-        tz="UTC",
-        status=1,
-    )
-    scheduled = ScheduledJob(
-        org_id=older_run.org_id,
-        name=f"sync-config-{uuid.uuid4()}",
-        job_type="sync",
-        provider="github",
-        schedule_cron="0 * * * *",
-        job_config={},
-        sync_config_id=uuid.uuid4(),
-        tz="UTC",
-        status=1,
-    )
-    db_session.add_all([active_scheduled, scheduled])
-    db_session.flush()
-    active_job_run = JobRun(
-        job_id=active_scheduled.id,
-        triggered_by="manual",
-        status=JobRunStatus.RUNNING.value,
-    )
-    active_job_run.result = {"sync_run_id": str(active_run.id)}
-    active_job_run.created_at = datetime.now(timezone.utc) - timedelta(days=2)
-    job_run = JobRun(
-        job_id=scheduled.id,
-        triggered_by="manual",
-        status=JobRunStatus.RUNNING.value,
-    )
-    job_run.result = {"sync_run_id": str(older_run.id)}
-    job_run.created_at = datetime.now(timezone.utc) - timedelta(days=1)
-    db_session.add_all([active_job_run, job_run])
-    db_session.flush()
-    _patch_db_session(monkeypatch, db_session)
-
-    result = sync_reconciler.reconcile_sync_dispatch(limit=1)
-
-    db_session.refresh(job_run)
-    assert result["observer_repairs"] == 1
-    assert job_run.status == JobRunStatus.FAILED.value
-    assert job_run.error == "provider auth failed"
-    assert job_run.completed_at == older_run.completed_at
 
 
 def test_dispatch_sync_run_redispatches_only_planned_units(db_session, monkeypatch):
@@ -3903,97 +3766,6 @@ def test_dispatch_sync_run_continues_accepted_run_after_planner_config_pause(
     assert config.last_sync_error is None
 
 
-def test_paused_config_with_running_and_planned_units_dispatches_planned(
-    db_session, monkeypatch
-):
-    from dev_health_ops.workers import sync_reconciler, sync_units
-
-    run, running = _seed_run(db_session)
-    now = datetime.now(timezone.utc)
-    running.status = SyncRunUnitStatus.RUNNING.value
-    running.attempts = 1
-    running.lease_owner = "worker-live"
-    running.lease_expires_at = now + timedelta(minutes=5)
-    running.last_heartbeat_at = now
-    planned = SyncRunUnit(
-        org_id=run.org_id,
-        sync_run_id=run.id,
-        integration_id=running.integration_id,
-        source_id=running.source_id,
-        provider="github",
-        dataset_key="prs",
-        cost_class="medium",
-        mode=SyncRunMode.INCREMENTAL.value,
-        status=SyncRunUnitStatus.PLANNED.value,
-        attempts=0,
-        processor_flags={"sync_prs": True},
-    )
-    config = SyncConfiguration(
-        org_id=run.org_id,
-        name="paused-with-running",
-        provider="github",
-        sync_targets=["git", "prs"],
-        sync_options={},
-        integration_id=run.integration_id,
-        is_active=False,
-    )
-    run.status = SyncRunStatus.DISPATCHING.value
-    run.total_units = 2
-    db_session.add_all([planned, config])
-    db_session.flush()
-    _patch_db_session(monkeypatch, db_session)
-    dispatch_calls, finalize_calls = _patch_worker_enqueues(monkeypatch)
-    dispatch_result = sync_units.dispatch_sync_run(str(run.id))
-
-    db_session.refresh(run)
-    db_session.refresh(running)
-    db_session.refresh(planned)
-    db_session.refresh(config)
-    assert dispatch_result == {"status": "dispatched", "queued_units": 1}
-    assert run.status not in {
-        SyncRunStatus.SUCCESS.value,
-        SyncRunStatus.PARTIAL_FAILED.value,
-        SyncRunStatus.FAILED.value,
-    }
-    assert run.completed_at is None
-    assert config.last_sync_at is None
-    assert planned.status == SyncRunUnitStatus.DISPATCHING.value
-    assert planned.error is None
-    assert running.status == SyncRunUnitStatus.RUNNING.value
-    assert running.lease_owner == "worker-live"
-    assert dispatch_calls == []
-    assert finalize_calls == []
-    assert _outbox_unit_keys(db_session) == {f"sync.provider_unit:{planned.id}"}
-
-    running.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-    db_session.flush()
-
-    reconcile_result = sync_reconciler.reconcile_sync_dispatch(limit=10)
-
-    db_session.refresh(running)
-    assert reconcile_result["expired_units"] == 1
-    assert running.status == SyncRunUnitStatus.FAILED.value
-    assert finalize_calls == []
-    planned.status = SyncRunUnitStatus.SUCCESS.value
-    planned.updated_at = datetime.now(timezone.utc)
-    db_session.flush()
-
-    finalize_result = sync_units.finalize_sync_run(str(run.id))
-
-    db_session.refresh(run)
-    units = (
-        db_session.query(SyncRunUnit).filter(SyncRunUnit.sync_run_id == run.id).all()
-    )
-    assert finalize_result["status"] == "finalized"
-    assert all(
-        unit.status in {SyncRunUnitStatus.SUCCESS.value, SyncRunUnitStatus.FAILED.value}
-        for unit in units
-    )
-    assert run.status == SyncRunStatus.PARTIAL_FAILED.value
-    assert run.completed_at is not None
-    assert run.failed_units == 1
-
-
 def test_paused_config_with_stale_dispatching_reclaims_accepted_work(
     db_session, monkeypatch
 ):
@@ -4796,121 +4568,6 @@ def test_run_sync_unit_success_stamps_watermark_for_full_resync(
     # full_resync must stamp the watermark so the next incremental doesn't cold-start
     watermark = db_session.query(SyncWatermark).one()
     assert watermark.dataset_key == "commits"
-
-
-def test_post_sync_dispatch_includes_window(db_session, monkeypatch):
-    """finalize_sync_run threads min(since_at)/max(before_at) of successful units
-    into _dispatch_post_sync_tasks (CHAOS-2577).
-    """
-    from datetime import date
-
-    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
-
-    run, unit = _seed_run(db_session)
-    config = SyncConfiguration(
-        org_id=run.org_id,
-        name="canonical-window",
-        provider="github",
-        sync_targets=["git"],
-        integration_id=run.integration_id,
-    )
-    db_session.add(config)
-    # Give the unit explicit window bounds.
-    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    before = datetime(2026, 6, 7, 23, 59, tzinfo=timezone.utc)
-    unit.since_at = since
-    unit.before_at = before
-    unit.status = SyncRunUnitStatus.SUCCESS.value
-    db_session.flush()
-    _patch_db_session(monkeypatch, db_session)
-    dispatches = []
-    monkeypatch.setattr(
-        post_sync_dispatch,
-        "_dispatch_post_sync_tasks",
-        lambda **kwargs: dispatches.append(kwargs),
-    )
-
-    result = sync_units.finalize_sync_run(str(run.id))
-    relay_result = sync_reconciler.reconcile_sync_dispatch(limit=10)
-
-    assert result["status"] == "finalized"
-    assert relay_result["relayed_post_sync"] == 1
-    assert len(dispatches) == 1
-    kwargs = dispatches[0]
-    # The covered window must be threaded through.
-    assert kwargs.get("from_date") == date(2026, 6, 1).isoformat()
-    assert kwargs.get("to_date") == date(2026, 6, 7).isoformat()
-
-
-def test_post_sync_dispatch_none_window_unit_unbounds_lower(db_session, monkeypatch):
-    """Mixed run: one NONE-window unit (since_at=None) + one bounded unit.
-
-    The aggregate lower bound must be unbounded (from_date=None and
-    work_graph_from_date=None), not the bounded unit's date (CHAOS-2577 fix).
-    """
-    from dev_health_ops.workers import post_sync_dispatch, sync_reconciler, sync_units
-
-    # Seed the run with the first unit (bounded).
-    run, unit_bounded = _seed_run(db_session)
-    since_bounded = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    before_bounded = datetime(2026, 6, 7, 23, 59, tzinfo=timezone.utc)
-    unit_bounded.since_at = since_bounded
-    unit_bounded.before_at = before_bounded
-    unit_bounded.status = SyncRunUnitStatus.SUCCESS.value
-
-    # Add a second unit with since_at=None (NONE-window / unbounded lower).
-    unit_none = SyncRunUnit(
-        org_id=run.org_id,
-        sync_run_id=run.id,
-        integration_id=run.integration_id,
-        source_id=unit_bounded.source_id,
-        provider="github",
-        dataset_key="work-item-labels",
-        cost_class="low",
-        mode=run.mode,
-        since_at=None,  # NONE-window: unbounded lower
-        before_at=before_bounded,
-        status=SyncRunUnitStatus.SUCCESS.value,
-        attempts=1,
-        processor_flags={},
-    )
-    db_session.add(unit_none)
-
-    config = SyncConfiguration(
-        org_id=run.org_id,
-        name="mixed-window",
-        provider="github",
-        sync_targets=["git"],
-        integration_id=run.integration_id,
-    )
-    db_session.add(config)
-    db_session.flush()
-    _patch_db_session(monkeypatch, db_session)
-
-    dispatches: list[dict] = []
-    monkeypatch.setattr(
-        post_sync_dispatch,
-        "_dispatch_post_sync_tasks",
-        lambda **kwargs: dispatches.append(kwargs),
-    )
-
-    result = sync_units.finalize_sync_run(str(run.id))
-    relay_result = sync_reconciler.reconcile_sync_dispatch(limit=10)
-
-    assert result["status"] == "finalized"
-    assert relay_result["relayed_post_sync"] == 1
-    assert len(dispatches) == 1
-    kwargs = dispatches[0]
-    # The NONE-window unit makes the lower bound unbounded.
-    assert kwargs.get("from_date") is None, (
-        f"expected from_date=None (unbounded), got {kwargs.get('from_date')!r}"
-    )
-    assert kwargs.get("work_graph_from_date") is None, (
-        f"expected work_graph_from_date=None (unbounded), got {kwargs.get('work_graph_from_date')!r}"
-    )
-    # Upper bound: both units have before_at set, so to_date must be non-None.
-    assert kwargs.get("to_date") is not None
-    assert kwargs.get("work_graph_to_date") is not None
 
 
 def test_fail_stale_dispatching_does_not_overwrite_concurrent_claim(tmp_path):

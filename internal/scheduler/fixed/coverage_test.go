@@ -233,10 +233,16 @@ func TestBeatScheduleParserFindsTheCheckedInventory(t *testing.T) {
 	// that re-executes the same production Go code directly. Both entries
 	// and their sole Python modules (workers/queue_monitor.py, workers/
 	// external_ingest_reconciler.py) are deleted and recorded in
-	// RetiredBeatInventory. The live table now has three unconditional rows
-	// and zero optional rows.
-	if unconditional != 3 {
-		t.Fatalf("parsed %d unconditional beat entries, want 3", unconditional)
+	// RetiredBeatInventory.
+	//
+	// 3 -> 0 under CHAOS-3093 (2026-09-09, PR2a'): the last three entries
+	// (dispatch-scheduled-syncs, reconcile-sync-dispatch, prune-rate-limit-
+	// observations) and their sole Python modules (workers/sync_scheduler.py,
+	// workers/sync_reconciler.py) are deleted outright. config.py's
+	// beat_schedule is now the empty dict; the live table has zero
+	// unconditional rows and zero optional rows.
+	if unconditional != 0 {
+		t.Fatalf("parsed %d unconditional beat entries, want 0", unconditional)
 	}
 	if optional != 0 {
 		t.Fatalf("parsed %d optional beat entries, want 0", optional)

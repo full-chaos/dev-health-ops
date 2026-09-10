@@ -74,18 +74,15 @@ class TestActiveReposUnion:
         assert len(active_repos) == 1
 
 
-class TestBeatScheduleMetrics:
-    """Daily metrics stays explicitly scheduled after the obsolete sweep retires.
-
-    CHAOS-4026 (2026-08-21): test_beat_schedule_contains_daily_metrics,
-    test_obsolete_metrics_dispatcher_is_retired, and
-    test_daily_metrics_uses_crontab tested the run-daily-metrics beat entry
-    and dispatch_daily_metrics_for_all_orgs/metrics_tasks, all deleted with
-    this cleanup (Go's daily_metrics_fanout fixed schedule now owns the
-    periodic cadence). See tests/workers/test_celery_dead_code_contract.py.
-    """
-
-    def test_beat_schedule_retains_sync_dispatcher(self):
-        from dev_health_ops.workers.config import beat_schedule
-
-        assert "dispatch-scheduled-syncs" in beat_schedule
+# CHAOS-4026 (2026-08-21): test_beat_schedule_contains_daily_metrics,
+# test_obsolete_metrics_dispatcher_is_retired, and
+# test_daily_metrics_uses_crontab tested the run-daily-metrics beat entry
+# and dispatch_daily_metrics_for_all_orgs/metrics_tasks, all deleted with
+# this cleanup (Go's daily_metrics_fanout fixed schedule now owns the
+# periodic cadence).
+#
+# CHAOS-3093 (2026-09-09): TestBeatScheduleMetrics.
+# test_beat_schedule_retains_sync_dispatcher tested the dispatch-scheduled-
+# syncs beat entry (workers/sync_scheduler.py), also deleted outright --
+# internal/scheduler/sync's coordinator/loop owns this cadence natively now.
+# See tests/workers/test_celery_dead_code_contract.py.

@@ -309,10 +309,16 @@ func checkedInSchedules() []Schedule {
 				"occurrence from being reported as if it were the current day.",
 		},
 		{
-			ID:              "prune_rate_limit_observations",
-			LegacyBeatEntry: "prune-rate-limit-observations",
-			Cadence:         DailyAt(5, 0),
-			Timezone:        inventoryTimezone,
+			ID: "prune_rate_limit_observations",
+			// CHAOS-3093 (2026-09-09, PR2a'): the legacy Beat entry
+			// "prune-rate-limit-observations" (and workers/sync_reconciler.py,
+			// its sole Python source) was deleted outright -- this is the
+			// reviewed pass a prior cleanup deferred pending a Go-invariant-
+			// parity mapping for sync_reconciler.py's large test surface.
+			// Native now; see RetiredBeatInventory.
+			Native:   true,
+			Cadence:  DailyAt(5, 0),
+			Timezone: inventoryTimezone,
 			// Retention is cumulative: the next night deletes everything the
 			// missed night would have, so replay adds nothing.
 			CatchUp:          CatchUpSkip,
@@ -672,6 +678,50 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 				"probe's retention check proves it live against real Postgres.",
 			Evidence: "CHAOS-3093; cmd/ask-dev-jobs-probe's retention check (CHAOS-4065, #2418).",
 		},
+		// CHAOS-3093 (2026-09-09, PR2a'): the last three LegacyBeatInventory
+		// entries and their sole Python sources (workers/sync_scheduler.py,
+		// workers/sync_reconciler.py) were deleted outright. LegacyBeatInventory
+		// is now empty.
+		{
+			Name:    "dispatch-scheduled-syncs",
+			Cadence: EveryInterval(300 * time.Second),
+			Reason: "internal/scheduler/sync's coordinator/loop owns this cadence natively: " +
+				"database-backed product schedule, tenant cron expressions, canonical-incident " +
+				"feature gate ported in eligibility_gate_integration_test.go (cites " +
+				"sync_scheduler.py:206-207/:415-421), PagerDuty account-identity repair in " +
+				"materializer.go's preparePagerDutyRepair/disablePagerDutyConfigs. Python's " +
+				"recheck-before-enqueue TOCTOU guard has no Go analogue because " +
+				"occurrence_reconciler.go's reconcileOne commits the feature decision and the " +
+				"materialization in one pool.Begin transaction -- a stronger invariant via a " +
+				"different mechanism, not a gap.",
+			Evidence: "CHAOS-3093; internal/scheduler/sync package (coordinator.go, loop.go, " +
+				"materializer.go, occurrence_reconciler.go, eligibility_gate_integration_test.go, " +
+				"canonical_incident_decision_integration_test.go, scheduler_test.go, " +
+				"transaction_test.go), all passing.",
+		},
+		{
+			Name:    "reconcile-sync-dispatch",
+			Cadence: EveryInterval(60 * time.Second),
+			Reason: "internal/syncreconciler owns this cadence natively, shipped ACTIVE " +
+				"(SweepModeActive): publish/claim/lease mutation semantics in kernel_test.go, " +
+				"stale-dispatching-vs-fresh-rows sweep in unreclaimable_sweep_integration_test.go, " +
+				"and lease_repair_sql_test.go's TestExpiredLeaseRetryStampClearsEveryEpisodeColumn " +
+				"explicitly cites \"its Python analogue (workers/sync_reconciler.py's RETRYING " +
+				"stamp)\" as the port source.",
+			Evidence: "CHAOS-3093; internal/syncreconciler package (kernel_test.go, " +
+				"unreclaimable_sweep_integration_test.go, lease_repair_sql_test.go), all passing.",
+		},
+		{
+			Name:    "prune-rate-limit-observations",
+			Cadence: DailyAt(5, 0),
+			Reason: "internal/scheduler/fixed's own prune_rate_limit_observations FixedSchedule " +
+				"entry is now Native -- the same RetentionProducer mechanism already covering " +
+				"prune-external-ingest-batches above. No Go test surface was needed for this one: " +
+				"it is a fixed-cadence retention cleanup with no sync_scheduler/sync_reconciler " +
+				"logic of its own.",
+			Evidence: "CHAOS-3093; prune_rate_limit_observations's FixedSchedule entry in " +
+				"Schedules() (Native: true).",
+		},
 	}
 }
 
@@ -679,30 +729,7 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 // entry. It is the single place a reviewer reads to answer "who owns this
 // now?", and the coverage test proves it stays equal to the Python source.
 func LegacyBeatInventory() []LegacyEntry {
-	return []LegacyEntry{
-		{
-			Name:     "dispatch-scheduled-syncs",
-			Cadence:  EveryInterval(300 * time.Second),
-			Owner:    OwnerProductScheduler,
-			OwnerRef: "internal/scheduler/sync",
-			Note: "Database-backed product schedule with tenant cron expressions. Owned by " +
-				"the sync scheduler loop and its materializing coordinator, not by a fixed cadence.",
-		},
-		{
-			Name:     "reconcile-sync-dispatch",
-			Cadence:  EveryInterval(60 * time.Second),
-			Owner:    OwnerReconciler,
-			OwnerRef: "internal/syncreconciler",
-			Note: "The reconciler runs its own bounded loop. Re-expressing it as a queued " +
-				"job would put lease repair behind the queue it repairs.",
-		},
-		{
-			Name:     "prune-rate-limit-observations",
-			Cadence:  DailyAt(5, 0),
-			Owner:    OwnerFixedSchedule,
-			OwnerRef: "prune_rate_limit_observations",
-		},
-	}
+	return []LegacyEntry{}
 }
 
 // LegacyBeatInventoryIndex returns the inventory keyed by Beat entry name.

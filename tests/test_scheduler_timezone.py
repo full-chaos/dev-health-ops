@@ -14,22 +14,12 @@ on the wrong wall-clock slots and looked like it "never ran". These tests pin:
 
 from __future__ import annotations
 
-import uuid
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-
-from dev_health_ops.models.git import Base
 
 # Importing these at module load registers their tables on the shared ``Base``
 # metadata so ``create_all`` builds them for the in-memory SQLite fixture.
-from dev_health_ops.models.settings import (
-    ScheduledJob,
-    SyncConfiguration,
-)
 from dev_health_ops.utils.datetime import validate_timezone_name
 from dev_health_ops.workers.task_utils import cron_next_run
 
@@ -114,85 +104,22 @@ class TestCronNextRun:
         assert result == datetime(2026, 3, 8, 10, 30, tzinfo=timezone.utc)
 
 
-@contextmanager
-def _session_ctx(session):
-    yield session
-
-
-class TestDispatchersForwardSelectedTimezone:
-    """Each dispatcher must pass the job's stored timezone into the cron eval.
-
-    The spy returns a far-future occurrence so dispatch short-circuits as
-    "not due" before any enqueue/planner work, while still capturing the
-    ``tz_name`` the dispatcher forwarded.
-    """
-
-    @pytest.fixture
-    def db_session(self):
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        with Session(engine) as session:
-            yield session
-        engine.dispose()
-
-    @staticmethod
-    def _call(task) -> dict:
-        task.push_request(id=str(uuid.uuid4()))
-        try:
-            return task()
-        finally:
-            task.pop_request()
-
-    def test_sync_dispatch_forwards_timezone(self, monkeypatch, db_session):
-        from dev_health_ops.workers import sync_scheduler
-
-        now = datetime.now(timezone.utc)
-        config = SyncConfiguration(
-            name="linear",
-            provider="linear",
-            org_id="default",
-            sync_targets=["work-items"],
-            sync_options={"schedule_cron": "0 */6 * * *", "timezone": LA},
-            is_active=True,
-        )
-        config.last_sync_at = now - timedelta(hours=2)
-        db_session.add(config)
-        db_session.flush()
-        job = ScheduledJob(
-            name=f"sync-config-{config.id}",
-            job_type="sync",
-            schedule_cron="0 */6 * * *",
-            org_id="default",
-            provider="linear",
-            sync_config_id=config.id,
-            tz=LA,
-        )
-        db_session.add(job)
-        db_session.flush()
-
-        seen: dict[str, str | None] = {}
-
-        def spy(cron_expr, base, tz_name=None):
-            seen["tz"] = tz_name
-            return now + timedelta(hours=99)  # far future => not due
-
-        monkeypatch.setattr(sync_scheduler, "cron_next_run", spy)
-        monkeypatch.setattr(
-            "dev_health_ops.db.get_postgres_session_sync",
-            lambda: _session_ctx(db_session),
-        )
-        monkeypatch.setattr(
-            sync_scheduler, "organization_exists_sync", lambda _s, _o: True
-        )
-
-        result = self._call(sync_scheduler.dispatch_scheduled_syncs)
-        assert result["dispatched"] == []
-        assert seen["tz"] == LA
-
-    # CHAOS-4026 (2026-08-21): test_report_dispatch_forwards_timezone tested
-    # report_scheduler.dispatch_scheduled_reports, deleted with this cleanup
-    # (Go's report.execute_scheduled fixed schedule now owns the periodic
-    # scan). See tests/workers/test_celery_dead_code_contract.py.
+# CHAOS-3093 (2026-09-09): TestDispatchersForwardSelectedTimezone tested
+# workers/sync_scheduler.py's dispatch_scheduled_syncs, deleted outright --
+# internal/scheduler/sync's coordinator/loop (Go, already live per
+# config.py's beat_schedule comment history) owns this cadence now, and its
+# own timezone-forwarding invariant is pinned by
+# internal/scheduler/sync/scheduler_test.go's
+# TestEvaluatePreservesPythonTimezoneFallbackSemantics. See
+# tests/workers/test_celery_dead_code_contract.py.
+#
+# TestSyncDispatchDstFold (a single method, test_fall_back_slot_dispatches_
+# once) tested sync_scheduler.py's _maybe_dispatch_config, also deleted. The
+# same invariant -- a DST fall-back wall-clock slot fires exactly once -- is
+# pinned on the Go side by a different mechanism (deterministic occurrence
+# identity rather than a stored next-run marker):
+# internal/scheduler/sync/transaction_test.go's
+# TestOccurrenceIdentityIsDeterministicForConfigAndCronOccurrence.
 
 
 class TestTimezoneValidation:
@@ -212,84 +139,3 @@ class TestTimezoneValidation:
     def test_rejects_invalid_zone(self, bad):
         with pytest.raises(ValueError, match="Invalid timezone"):
             validate_timezone_name(bad)
-
-
-class TestSyncDispatchDstFold:
-    """The real sync due/marker path fires a DST fall-back fold slot only once."""
-
-    @pytest.fixture
-    def db_session(self):
-        engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine)
-        with Session(engine) as session:
-            yield session
-        engine.dispose()
-
-    def test_fall_back_slot_dispatches_once(self, monkeypatch, db_session):
-        from unittest.mock import MagicMock
-
-        from dev_health_ops.sync.execution_trigger import SyncExecutionTriggerResult
-        from dev_health_ops.workers import sync_scheduler
-
-        # 2026-11-01 America/Los_Angeles fall-back: 01:30 occurs at 08:30Z (PDT)
-        # and again at 09:30Z (PST).
-        first_fold = datetime(2026, 11, 1, 8, 30, tzinfo=timezone.utc)
-        second_fold = datetime(2026, 11, 1, 9, 30, tzinfo=timezone.utc)
-
-        config = SyncConfiguration(
-            name="linear",
-            provider="linear",
-            org_id="default",
-            sync_targets=["work-items"],
-            sync_options={"schedule_cron": "30 1 * * *", "timezone": LA},
-            is_active=True,
-        )
-        config.last_sync_at = datetime(2026, 11, 1, 6, 0, tzinfo=timezone.utc)
-        db_session.add(config)
-        db_session.flush()
-        job = ScheduledJob(
-            name=f"sync-config-{config.id}",
-            job_type="sync",
-            schedule_cron="30 1 * * *",
-            org_id="default",
-            provider="linear",
-            sync_config_id=config.id,
-            tz=LA,
-        )
-        db_session.add(job)
-        db_session.flush()
-
-        trigger_mock = MagicMock(
-            return_value=SyncExecutionTriggerResult(
-                sync_run_id="00000000-0000-4000-8000-000000000101",
-                job_run_id="00000000-0000-4000-8000-000000000102",
-                total_units=1,
-            )
-        )
-        monkeypatch.setattr(
-            sync_scheduler, "organization_exists_sync", lambda *_a: True
-        )
-        monkeypatch.setattr(
-            "dev_health_ops.sync.execution_trigger.create_sync_execution_trigger",
-            trigger_mock,
-        )
-
-        # First fold instant: due -> planned exactly once for outbox publication.
-        assert (
-            sync_scheduler._maybe_dispatch_config(db_session, config, first_fold)
-            is True
-        )
-        assert trigger_mock.call_count == 1
-        # The marker advanced past the repeated hour to the next day's slot.
-        marker = job.next_run_at
-        assert marker is not None
-        if marker.tzinfo is None:
-            marker = marker.replace(tzinfo=timezone.utc)
-        assert marker == datetime(2026, 11, 2, 9, 30, tzinfo=timezone.utc)
-
-        # Second fold instant (same wall-clock 01:30): must NOT plan again.
-        assert (
-            sync_scheduler._maybe_dispatch_config(db_session, config, second_fold)
-            is False
-        )
-        assert trigger_mock.call_count == 1

@@ -755,6 +755,15 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
         )
         if status.digest_state == "STALE":
             print(f"    stale rows at: {', '.join(status.stale_digests)}")
+        # A branch per state, so a new one cannot be silently unrendered:
+        # DOCUMENT_DRIFT reached this renderer with nothing printed about
+        # WHICH document is in the table, which is the only question it
+        # raises.
+        if status.digest_state == "DOCUMENT_DRIFT":
+            print(
+                f"    serving document {status.document_digest} -- the catalog "
+                "does not name it, so the edge cannot dispatch this row"
+            )
     return 0
 
 

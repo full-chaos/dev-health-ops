@@ -489,24 +489,30 @@ async def test_status_reads_the_catalogs_document_not_whichever_row_is_last(
     statuses = await routing_status_rows(
         session, live_schema_digest=LIVE, catalog=CATALOG
     )
-    by_operation = {s.operation: s for s in statuses}
+    # Keyed by (operation, state): this list now holds more than one row
+    # per operation by design, and a map keyed on the operation alone
+    # would repeat the very collapsing under test.
+    by_state = {(s.operation, s.digest_state): s for s in statuses}
 
-    assert by_operation[operation].digest_state == "MATCH"
-    assert by_operation[operation].mode == "canary", (
+    assert by_state[(operation, "MATCH")].document_digest == catalog_document
+    assert by_state[(operation, "MATCH")].mode == "canary", (
         "status reported the mode of a row the catalog does not name: the "
         "live map is keyed by operation alone, so two documents under one "
         "schema collapse onto whichever row the scan returned last"
     )
-    # And the other document is NAMED rather than silently dropped.
-    assert by_operation[operation].drifted_document_digests == (old_document,), (
-        "a live-schema row at a non-catalog document vanished from status: "
-        "count_rows_by_schema_digest groups by SCHEMA digest only, so "
-        "nothing else would have named it either"
+    # And the other document is its OWN row, named rather than dropped:
+    # count_rows_by_schema_digest groups by SCHEMA digest alone, so nothing
+    # else in the system would have named it either.
+    drift = by_state[(operation, "DOCUMENT_DRIFT")]
+    assert drift.document_digest == old_document
+    assert drift.mode == "python", (
+        "the drifted row must carry ITS OWN mode -- an operator seeing this "
+        "state needs to know what that row is set to"
     )
 
 
 @pytest.mark.asyncio
-async def test_status_reports_a_drifted_document_as_stale_not_match(
+async def test_status_reports_a_drifted_document_by_name_not_as_match(
     session: AsyncSession,
 ) -> None:
     """The catalog's document has NO row; only a drifted one exists.
@@ -514,7 +520,10 @@ async def test_status_reports_a_drifted_document_as_stale_not_match(
     Before the fix this reported ``MATCH`` with the drifted row's mode --
     an operator reads it as serving when the edge cannot dispatch it at
     all, because the edge resolves a request to an operation through the
-    catalog. ``STALE`` is the honest label: rows exist, none reachable.
+    catalog. Now the catalog's document reports ``MISSING`` (there is no
+    row for it) and the row that DOES exist gets its own
+    ``DOCUMENT_DRIFT`` line carrying its digest and mode. Neither half is
+    silent, which is the whole point.
     """
     operation, catalog_document = CATALOG[0]
     old_document = "0" * 64
@@ -532,17 +541,27 @@ async def test_status_reports_a_drifted_document_as_stale_not_match(
     statuses = await routing_status_rows(
         session, live_schema_digest=LIVE, catalog=CATALOG
     )
-    by_operation = {s.operation: s for s in statuses}
+    catalog_row = next(
+        s
+        for s in statuses
+        if s.operation == operation and s.document_digest == catalog_document
+    )
+    assert catalog_row.digest_state == "MISSING", (
+        f"the CATALOG's document has no row, so its state is MISSING, got "
+        f"{catalog_row.digest_state!r} -- reporting MATCH here is the r2 "
+        "defect: an operator reads it as serving when the edge cannot "
+        "dispatch it at all"
+    )
+    assert catalog_row.mode is None
 
-    assert by_operation[operation].digest_state == "STALE", (
-        f"a row the edge cannot dispatch was reported "
-        f"{by_operation[operation].digest_state!r}: it carries a document "
-        "digest the catalog does not name"
+    drift = [s for s in statuses if s.digest_state == "DOCUMENT_DRIFT"]
+    assert len(drift) == 1, f"expected one DOCUMENT_DRIFT row, got {drift}"
+    assert drift[0].document_digest == old_document
+    assert drift[0].mode == "canary", (
+        "the drifted row is the one actually in the table: its mode is what "
+        "an operator needs to see, and MISSING alone would have shown "
+        "nothing at all"
     )
-    assert by_operation[operation].mode is None, (
-        "a STALE row must not report a mode: there is no reachable row to have one"
-    )
-    assert by_operation[operation].drifted_document_digests == (old_document,)
 
 
 @pytest.mark.asyncio

@@ -169,16 +169,21 @@ class OperationStatus:
       the rows look present in ``psql`` and are unreachable in fact.
     * ``MISSING``  -- no row at any digest. Never enabled, or cleaned up.
 
-    A row at the LIVE schema digest whose DOCUMENT digest the catalog no
-    longer names is reported ``STALE`` too, with those digests in
-    ``drifted_document_digests``. It is the same silent-death shape one
-    level down: the edge resolves a request to an operation through the
-    catalog, so such a row cannot be dispatched, and it used to be
-    reported ``MATCH`` under the catalog's digest -- a row an operator
-    reads as serving that in fact serves nothing (codex r2, P1).
-    Reporting it ``MISSING`` instead would be the other half of the same
-    error: ``count_rows_by_schema_digest`` groups by SCHEMA digest only,
-    so the row is folded into the live total and named nowhere.
+    * ``DOCUMENT_DRIFT`` -- a row exists at the LIVE schema digest but
+      carries a DOCUMENT digest the catalog no longer names. It gets its
+      OWN status row, carrying its own ``document_digest`` and ``mode``,
+      so the operator sees which digest is actually in the table.
+
+    ``DOCUMENT_DRIFT`` is the silent-death shape one level down: the edge
+    resolves a request to an operation through the catalog, so such a row
+    cannot be dispatched. It used to be reported ``MATCH`` under the
+    CATALOG's digest -- a row an operator reads as serving that in fact
+    serves nothing (codex r2, P1). Folding it into ``STALE`` would widen
+    what STALE means (rows at other SCHEMA digests), and reporting it
+    ``MISSING`` would be the other half of the original error:
+    ``count_rows_by_schema_digest`` groups by schema digest alone, so the
+    row would be named nowhere at all. Never silent, so it gets a name
+    (team-lead ruling, 2026-09-10).
 
     ``proven`` is separate from and orthogonal to ``digest_state``: a row
     can be live and reachable while nothing ever proved the deployed
@@ -197,9 +202,6 @@ class OperationStatus:
     owner: str | None = None
     updated_at: datetime | None = None
     stale_digests: tuple[str, ...] = ()
-    #: Document digests this operation has LIVE-schema rows at which the
-    #: catalog does not name. Empty in the ordinary case.
-    drifted_document_digests: tuple[str, ...] = ()
     proven: bool = False
 
     @property
@@ -731,11 +733,6 @@ async def routing_status_rows(
         # operation name.
         live_row = live_by_document.get((operation, document_digest))
         stale = tuple(sorted(stale_digests_by_operation.get(operation, ())))
-        drifted = tuple(
-            sorted(
-                live_documents_by_operation.get(operation, set()) - {document_digest}
-            )
-        )
         if live_row is not None:
             statuses.append(
                 OperationStatus(
@@ -748,25 +745,16 @@ async def routing_status_rows(
                     owner=live_row.owner,
                     updated_at=live_row.updated_at,
                     stale_digests=stale,
-                    drifted_document_digests=drifted,
                     proven=operation in proven,
                 )
             )
-        elif stale or drifted:
-            # `drifted` belongs here and not under MISSING: rows DO exist
-            # for this operation at the live schema digest, they just
-            # carry a document the catalog no longer names, so they cannot
-            # be dispatched. That is the STALE shape exactly -- present in
-            # psql, unreachable in fact -- and calling it MISSING would
-            # hide a row that count_rows_by_schema_digest also does not
-            # distinguish, because it groups by schema digest alone.
+        elif stale:
             statuses.append(
                 OperationStatus(
                     operation=operation,
                     document_digest=document_digest,
                     digest_state="STALE",
                     stale_digests=stale,
-                    drifted_document_digests=drifted,
                 )
             )
         else:
@@ -775,6 +763,32 @@ async def routing_status_rows(
                     operation=operation,
                     document_digest=document_digest,
                     digest_state="MISSING",
+                )
+            )
+
+        # A live-schema row this operation has at a document the catalog
+        # does NOT name gets its own row, after the catalog's. Its own
+        # digest and mode are on it, because "which digest is actually
+        # serving" is the question an operator has when they see this.
+        #
+        # Emitted per drifted document rather than as a list on the
+        # catalog's row: two drifted documents are two rows in the table
+        # and reading them as one would repeat, one level down, the
+        # collapsing this whole change exists to stop.
+        for drifted_digest in sorted(
+            live_documents_by_operation.get(operation, set()) - {document_digest}
+        ):
+            drifted_row = live_by_document[(operation, drifted_digest)]
+            statuses.append(
+                OperationStatus(
+                    operation=operation,
+                    document_digest=drifted_digest,
+                    digest_state="DOCUMENT_DRIFT",
+                    mode=drifted_row.mode,
+                    current_candidate_build=drifted_row.current_candidate_build,
+                    rollout_percentage=drifted_row.rollout_percentage,
+                    owner=drifted_row.owner,
+                    updated_at=drifted_row.updated_at,
                 )
             )
     return statuses

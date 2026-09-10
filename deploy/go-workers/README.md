@@ -117,21 +117,21 @@ not reset these rows manually or broaden the recovery predicate.
 
 ## CHAOS-3052 deployment runbook
 
-The deployment artifacts are additive. `compose.yml` remains untouched; the
-existing Celery workers, singleton Beat, and Valkey database 0 remain present
-in every deployment. `deployment_state` (CHAOS-5541) is now `go_default`:
-`deployment.json`'s Go processes declare `enabled_by_default: true` with
-`desired_replicas: 1` (`sync-provider` stays disabled at 0 -- nothing in
-compose runs it). This is a **declaration of intent** in the checked-in
-manifest, not a live scale. The static renderer files under this directory
-(Compose, Swarm, Kubernetes, Helm) stay pinned to `min_replicas` (0 for every
-process, in both `deployment_state` values), so generating or applying a
-topology from them never auto-starts a live pod on its own -- scaling from 0
-is still a deliberate follow-on action (the live dev stack reaches its own
-`desired_replicas: 1` via a separate `worker-scale-override.yml` overlay, not
-an edit to these checked-in files). Rendering or scaling a Go workload does
-**not** transfer a job, queue, or scheduler marker to Go on its own either --
-that is governed separately (`contracts/jobs/v1/migration-state.json`'s
+`deployment_state` (CHAOS-5541) is now `go_default`: `deployment.json`'s nine
+Go processes all declare `enabled_by_default: true` with
+`desired_replicas: 1`, matching the production topology `compose.yml` (root)
+already runs unconditionally. This is a **declaration of intent** in the
+checked-in manifest, not by itself a live scale.
+
+The Swarm/Kubernetes/Helm renderers in this directory tree now default to
+`replicas: 1` for every group too, matching `desired_replicas` -- but they
+remain checked-in renderer files, not a deploy action: applying one to a
+real cluster is what actually starts anything, and no production target runs
+these today (prod rebuild is deferred to k8s). `deploy/docker-compose/compose.go-workers.yml`
+(the separate, opt-in overlay for `compose.production.yml`, edited apart from
+root `compose.yml`) is unaffected by this PR. Rendering or scaling a Go
+workload does **not** transfer a job, queue, or scheduler marker to Go on its
+own either -- that is governed separately (`contracts/jobs/v1/migration-state.json`'s
 per-kind route, and `internal/scheduler/sync/ownership.go`'s own, unrelated
 `coexistence_disabled` scheduler-owner mode).
 

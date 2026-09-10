@@ -319,9 +319,11 @@ def _kubernetes_pagerduty_containers(path: Path) -> dict[str, dict]:
 def test_go_worker_groups_are_enabled_by_default_under_go_default_state() -> None:
     # CHAOS-5541: the manifest moved from coexistence_disabled (every process
     # off by default) to go_default (Go processes on by default, Celery
-    # legacy/opt-in). Only sync-provider stays off -- compose does not run it
-    # (verified: `docker ps` on the live stack shows one container each for
-    # every other process, none for sync-provider).
+    # legacy/opt-in). Every one of the nine processes is enabled at
+    # desired_replicas 1, matching the intended production topology (#2429's
+    # compose.yml runs the nine-process fleet, including sync-provider, at
+    # deploy.replicas: 1 each -- CHAOS-3087's deployment.json leaving every
+    # process disabled was tracked there as this ticket's own gap).
     manifest = _load_json(_DEPLOYMENT)
 
     assert manifest["deployment_state"] == "go_default"
@@ -330,15 +332,10 @@ def test_go_worker_groups_are_enabled_by_default_under_go_default_state() -> Non
         "RIVER_DOMAIN_DATABASE_ROLE",
         "RIVER_QUEUE_DATABASE_ROLE",
     ]
-    disabled_processes = {"sync-provider"}
     for process in manifest["processes"]:
         assert process["min_replicas"] == 0
-        if process["name"] in disabled_processes:
-            assert not process["enabled_by_default"]
-            assert process["desired_replicas"] == 0
-        else:
-            assert process["enabled_by_default"]
-            assert process["desired_replicas"] == 1
+        assert process["enabled_by_default"]
+        assert process["desired_replicas"] == 1
     for process in manifest["processes"]:
         assert [item["queue"] for item in process["queue_workers"]] == process["queues"]
         assert all(item["max_workers"] > 0 for item in process["queue_workers"])
@@ -407,14 +404,17 @@ def test_go_worker_image_packages_lifecycle_route_operator() -> None:
     ) in dockerfile
 
 
-def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() -> None:
-    """CHAOS-3052: every supported deploy surface renders an inert, hardened
-    topology -- every group/service still defaults replicas: 0, so merely
-    being present or (Helm/Kubernetes, CHAOS-4195) being the default-rendered
-    topology never puts a live Go pod up on its own. Compose/Swarm stay
-    additive beside the unchanged Celery/Beat/Valkey services there; Helm and
-    Kubernetes no longer have a Celery/Beat baseline to stay additive to --
-    they render only this topology.
+def test_go_deployment_surfaces_are_additive_and_group_complete() -> None:
+    """CHAOS-3052: every supported deploy surface renders a complete,
+    hardened topology for the nine processes. CHAOS-5541: the Swarm/
+    Kubernetes/Helm renderers now default to replicas: 1, matching
+    deployment.json's go_default posture -- these are checked-in renderer
+    files, not a live deploy action; applying one to a real cluster is what
+    actually starts anything (no production deploy target runs these tonight
+    -- prod rebuild is deferred to k8s). Compose stays additive beside the
+    unchanged Celery/Beat/Valkey services there; Helm and Kubernetes no
+    longer have a Celery/Beat baseline to stay additive to -- they render
+    only this topology.
     """
     expected_profiles = {
         process["name"] for process in _load_json(_DEPLOYMENT)["processes"]
@@ -487,7 +487,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
             )
             == "true"
         )
-        assert service["deploy"]["replicas"] == 0
+        assert service["deploy"]["replicas"] == 1
         assert service["deploy"]["update_config"]["order"] == "start-first"
 
     deployments = {
@@ -497,7 +497,7 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
     }
     assert len(deployments) == len(expected_profiles)
     for deployment in deployments.values():
-        assert deployment["spec"]["replicas"] == 0
+        assert deployment["spec"]["replicas"] == 1
         pod_security = deployment["spec"]["template"]["spec"]["securityContext"]
         assert pod_security["runAsNonRoot"] is True
         container = deployment["spec"]["template"]["spec"]["containers"][0]
@@ -516,8 +516,8 @@ def test_go_deployment_surfaces_are_additive_default_off_and_group_complete() ->
     values = _load_yaml(_HELM_CHART / "values.yaml")
     # CHAOS-4195: the Celery Helm templates/values keys and Kubernetes
     # manifests were deleted, so goWorkers is the only topology left and
-    # defaults to enabled=true (each group still defaults replicas: 0, so
-    # a fresh install stays inert until an operator scales one).
+    # defaults to enabled=true. CHAOS-5541: each group now defaults to
+    # replicas: 1, matching deployment.json's go_default posture.
     assert values["goWorkers"]["enabled"] is True
     assert "profiles" not in values["goWorkers"]
     assert "groups" in values["goWorkers"]
@@ -665,15 +665,6 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
 
 
 def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
-    # CHAOS-5541: under go_default, desired_replicas is the manifest's
-    # declared intent for what SHOULD run -- decoupled from the static
-    # renderer files, which stay pinned to min_replicas (0 for every process,
-    # in both deployment_state values) so that rendering or applying a
-    # topology never auto-starts a live pod on its own. Scaling from 0 is a
-    # deliberate follow-on action (exactly how the live dev stack reaches its
-    # own desired_replicas=1: a separate worker-scale-override.yml overlay,
-    # not an edit to this checked-in file). Compare renderer replicas against
-    # min_replicas, not desired_replicas.
     manifest = {
         process["name"]: process for process in _load_json(_DEPLOYMENT)["processes"]
     }
@@ -706,13 +697,13 @@ def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
     }
     for profile, service_name in services.items():
         contract = manifest[profile]
-        rendered_replicas = contract["min_replicas"]
+        desired = contract["desired_replicas"]
         grace = contract["shutdown_grace_seconds"]
-        assert compose[service_name]["deploy"]["replicas"] == rendered_replicas
+        assert compose[service_name]["deploy"]["replicas"] == desired
         assert compose[service_name]["stop_grace_period"] == f"{grace}s"
-        assert swarm[service_name]["deploy"]["replicas"] == rendered_replicas
+        assert swarm[service_name]["deploy"]["replicas"] == desired
         assert swarm[service_name]["stop_grace_period"] == f"{grace}s"
-        assert kubernetes[profile]["spec"]["replicas"] == rendered_replicas
+        assert kubernetes[profile]["spec"]["replicas"] == desired
         pod_spec = kubernetes[profile]["spec"]["template"]["spec"]
         assert pod_spec["terminationGracePeriodSeconds"] == grace
         if contract["runtime"] == "river":
@@ -745,7 +736,7 @@ def test_group_replica_and_drain_contract_matches_every_renderer() -> None:
                 _process_arguments(pod_spec["containers"][0])["--shutdown-timeout"]
                 == f"{grace}s"
             )
-        assert helm[profile]["replicas"] == rendered_replicas
+        assert helm[profile]["replicas"] == desired
         assert helm[profile]["terminationGracePeriodSeconds"] == grace
         if contract["runtime"] == "river":
             target = kubernetes[profile]["metadata"]["name"]

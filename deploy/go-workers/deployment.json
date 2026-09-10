@@ -324,9 +324,9 @@
       "name": "sync-provider",
       "binary": "dev-health-worker",
       "runtime": "river",
-      "enabled_by_default": false,
+      "enabled_by_default": true,
       "min_replicas": 0,
-      "desired_replicas": 0,
+      "desired_replicas": 1,
       "max_replicas": 2,
       "shutdown_grace_seconds": 960,
       "queues": [

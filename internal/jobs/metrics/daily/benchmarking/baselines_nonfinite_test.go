@@ -233,3 +233,45 @@ func TestComputeInternalBaselinesMeanOverflowNullsNotInf(t *testing.T) {
 		t.Errorf("finite.Count(%s,%s,positive_infinity) did not increase (before=%d after=%d) -- an overflowed Mean result must be counted", finiteBaselineFamily, metricName, beforeInf, afterInf)
 	}
 }
+
+// TestComputeInternalBaselinesAllNonFiniteCrossSectionNullsPercentilesNotZero
+// is the red-first proof for codex round chaos-4806-r2 P1: when EVERY
+// scope's current value is non-finite, DropNonFinite leaves crossSection
+// EMPTY, and Percentile(nil, pct) returns its own documented 0.0-for-
+// empty-input default -- a perfectly finite number nullableRound4 cannot
+// tell apart from a genuinely computed 0.0, so it was written as real
+// data. An empty cross-section means no scope in this window has any
+// usable value at all, which is undefined, never 0.0.
+func TestComputeInternalBaselinesAllNonFiniteCrossSectionNullsPercentilesNotZero(t *testing.T) {
+	asOf := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	metricName := "test_all_nonfinite_cross_section_metric"
+
+	series := map[string][]MetricPoint{
+		"scope-a": {{Day: asOf, Value: math.NaN()}},
+		"scope-b": {{Day: asOf, Value: math.Inf(1)}},
+	}
+
+	beforeUndefined := finite.Count(finiteBaselineFamily, metricName, finite.ReasonUndefinedInput)
+
+	baselines := ComputeInternalBaselines(
+		metricName, ScopeRepo, series, asOf, asOf, []int{30}, "org-nonfinite",
+	)
+	if len(baselines) == 0 {
+		t.Fatal("expected at least one row (both scopes' own windows still write)")
+	}
+	for _, row := range baselines {
+		for name, ptr := range map[string]*float64{
+			"P25Value": row.P25Value, "P50Value": row.P50Value,
+			"P75Value": row.P75Value, "P90Value": row.P90Value,
+		} {
+			if ptr != nil {
+				t.Errorf("%s = %v for scope %q, want nil (every cross-section entry was non-finite -- there is no cohort to take a percentile of)", name, *ptr, row.ScopeKey)
+			}
+		}
+	}
+
+	afterUndefined := finite.Count(finiteBaselineFamily, metricName, finite.ReasonUndefinedInput)
+	if afterUndefined <= beforeUndefined {
+		t.Errorf("finite.Count(%s,%s,undefined_input) did not increase (before=%d after=%d) -- an empty cross-section must be counted", finiteBaselineFamily, metricName, beforeUndefined, afterUndefined)
+	}
+}

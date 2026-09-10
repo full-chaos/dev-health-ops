@@ -382,6 +382,23 @@ func pyRound(value float64, ndigits int) float64 {
 	return rounded
 }
 
+// nullablePyRound is this file's R73 write boundary (CHAOS-4806, codex
+// round chaos-4806-r2 P1) for a scalar numeric row field, analogous to
+// benchmarking.nullableRound4: finite -> a pointer to its pyRound'd value;
+// non-finite (NaN, or an infinity from an unconstrained Nullable(Float64)
+// source column such as median_duration_seconds/avg_queue_seconds) -> the
+// trip is recorded (family/field, the real reason) and nil is returned,
+// for a Nullable(Float64) column to write ClickHouse NULL instead of the
+// raw non-finite value.
+func nullablePyRound(family, field string, value float64, ndigits int) *float64 {
+	safe := finite.NullIfNonFinite(family, field, value)
+	if safe == nil {
+		return nil
+	}
+	rounded := pyRound(*safe, ndigits)
+	return &rounded
+}
+
 // pyMin2 and pyMax2 replicate CPython's two-argument min()/max() comparison
 // order exactly: the FIRST argument is the running candidate, and it is
 // replaced only on a strict "less than" (min) / "greater than" (max)
@@ -642,14 +659,21 @@ type testopsReleaseConfidenceRow struct {
 	ComputedAt            time.Time
 }
 
+// DragHours/FailureReworkHours/FlakeInvestigationHours/QueueWaitHours/
+// RetryOverheadHours are *float64, nil meaning undefined (CHAOS-4806,
+// ruling R73, codex round chaos-4806-r2 P1 -- see migration
+// 091_testops_quality_drag_nullable_fields.sql): median_duration_seconds
+// and avg_queue_seconds are unconstrained Nullable(Float64) source
+// columns, so a NaN/+-Inf reaching computeQualityDrag's own arithmetic is
+// real, reachable input.
 type testopsQualityDragRow struct {
 	RepoID                  uuid.UUID
 	Day                     time.Time
-	DragHours               float64
-	FailureReworkHours      float64
-	FlakeInvestigationHours float64
-	QueueWaitHours          float64
-	RetryOverheadHours      float64
+	DragHours               *float64
+	FailureReworkHours      *float64
+	FlakeInvestigationHours *float64
+	QueueWaitHours          *float64
+	RetryOverheadHours      *float64
 	FactorsJSON             string
 	TeamID                  *string
 	ServiceID               *string
@@ -799,11 +823,11 @@ func computeQualityDrag(
 
 	row := &testopsQualityDragRow{
 		RepoID: repoID, Day: day,
-		DragHours:               pyRound(dragHours, 4),
-		FailureReworkHours:      pyRound(failureReworkHours, 4),
-		FlakeInvestigationHours: pyRound(flakeInvestigationHours, 4),
-		QueueWaitHours:          pyRound(queueWaitHours, 4),
-		RetryOverheadHours:      pyRound(retryOverheadHours, 4),
+		DragHours:               nullablePyRound("testops_quality_drag", "drag_hours", dragHours, 4),
+		FailureReworkHours:      nullablePyRound("testops_quality_drag", "failure_rework_hours", failureReworkHours, 4),
+		FlakeInvestigationHours: nullablePyRound("testops_quality_drag", "flake_investigation_hours", flakeInvestigationHours, 4),
+		QueueWaitHours:          nullablePyRound("testops_quality_drag", "queue_wait_hours", queueWaitHours, 4),
+		RetryOverheadHours:      nullablePyRound("testops_quality_drag", "retry_overhead_hours", retryOverheadHours, 4),
 		FactorsJSON:             factors,
 		ComputedAt:              computedAt,
 	}
@@ -899,8 +923,12 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 		ComputedAt:             computedAt,
 	}
 	if medianRecovery != nil {
-		v := pyRound(*medianRecovery, 2)
-		row.MedianRecoveryTimeSeconds = &v
+		// CHAOS-4806 / ruling R73, codex round chaos-4806-r2 P1: median()
+		// over durations pulled straight from ci_pipeline_runs.
+		// median_duration_seconds (unconstrained Nullable(Float64)) can
+		// itself be non-finite -- this column was ALREADY Nullable, but
+		// nothing validated the computed value before taking its address.
+		row.MedianRecoveryTimeSeconds = nullablePyRound("testops_pipeline_stability", "median_recovery_time_seconds", *medianRecovery, 2)
 	}
 	return row
 }

@@ -136,10 +136,24 @@ func ComputeInternalBaselines(
 	// above cannot catch it). Percentile's own RESULT is validated here too,
 	// same as every other scalar this file writes -- nullableRound4 records
 	// the trip and nils the field rather than writing +-Inf.
-	p25 := nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 25.0))
-	p50 := nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 50.0))
-	p75 := nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 75.0))
-	p90 := nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 90.0))
+	//
+	// codex round chaos-4806-r2 P1 (executed repro: when EVERY cross-
+	// section value was non-finite, crossSection is empty here, and
+	// Percentile(nil, pct) returns its own documented 0.0-for-empty-input
+	// default -- a perfectly finite number, so nullableRound4 could not
+	// tell it apart from a genuinely computed 0.0 and wrote it as real
+	// data. Checked explicitly: an empty cross-section means "no scope in
+	// this metric window has a usable value at all," which is undefined,
+	// not zero.
+	var p25, p50, p75, p90 *float64
+	if len(crossSection) == 0 {
+		finite.Undefined(finiteBaselineFamily, metricName)
+	} else {
+		p25 = nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 25.0))
+		p50 = nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 50.0))
+		p75 = nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 75.0))
+		p90 = nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 90.0))
+	}
 
 	var results []BenchmarkBaselineRecord
 	for _, scopeKey := range scopeKeys {

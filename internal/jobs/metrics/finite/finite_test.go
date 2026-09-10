@@ -1,6 +1,7 @@
 package finite
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -166,8 +167,21 @@ func TestDropNonFiniteAllBadReturnsEmptyNotNil(t *testing.T) {
 	}
 }
 
+// TestWritePrometheusIncludesObservedCounters is the red-first proof for
+// codex round chaos-4806-r2 P3: the original version of this test asserted
+// only that the metric name and labels appeared in the output, never the
+// printed COUNT -- a mutation that always writes `0` (or any other wrong
+// count) for an observed series would have passed it. This version derives
+// the expected line from Count() (the same source of truth the writer
+// itself reads) and matches the FULL line, count included.
 func TestWritePrometheusIncludesObservedCounters(t *testing.T) {
-	NullIfNonFinite("t_family_prom", "t_field_prom", math.NaN())
+	family, field, reason := "t_family_prom", "t_field_prom", ReasonNaN
+	before := Count(family, field, reason)
+	NullIfNonFinite(family, field, math.NaN())
+	after := Count(family, field, reason)
+	if after != before+1 {
+		t.Fatalf("Count(%s,%s,%s) = %d, want %d", family, field, reason, after, before+1)
+	}
 
 	var buf strings.Builder
 	if err := MetricsSource().WritePrometheus(&buf); err != nil {
@@ -177,8 +191,12 @@ func TestWritePrometheusIncludesObservedCounters(t *testing.T) {
 	if !strings.Contains(out, "dev_health_metrics_finite_boundary_nonfinite_total") {
 		t.Fatalf("WritePrometheus output missing metric name: %q", out)
 	}
-	if !strings.Contains(out, `family="t_family_prom"`) || !strings.Contains(out, `field="t_field_prom"`) || !strings.Contains(out, `reason="nan"`) {
-		t.Fatalf("WritePrometheus output missing observed labels: %q", out)
+	wantLine := fmt.Sprintf(
+		`dev_health_metrics_finite_boundary_nonfinite_total{family=%q,field=%q,reason=%q} %d`,
+		family, field, reason, after,
+	)
+	if !strings.Contains(out, wantLine) {
+		t.Fatalf("WritePrometheus output missing exact line %q (a mutation that prints the wrong count, or 0, would only be caught by matching the full line, not just the labels)\ngot: %q", wantLine, out)
 	}
 }
 

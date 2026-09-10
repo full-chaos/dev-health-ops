@@ -221,8 +221,11 @@ func TestComputeQualityDragNegativeZeroDurationMatchesPython(t *testing.T) {
 	if row == nil {
 		t.Fatal("computeQualityDrag returned nil")
 	}
-	if math.Signbit(row.FailureReworkHours) {
-		t.Errorf("FailureReworkHours retained a negative sign bit from -0.0 duration: %v", row.FailureReworkHours)
+	if row.FailureReworkHours == nil {
+		t.Fatal("FailureReworkHours is nil, want a finite (non-nil) value -- a -0.0 duration is finite, never undefined")
+	}
+	if math.Signbit(*row.FailureReworkHours) {
+		t.Errorf("FailureReworkHours retained a negative sign bit from -0.0 duration: %v", *row.FailureReworkHours)
 	}
 	for _, want := range []string{`"median_duration_seconds": 0.0`, `"avg_queue_seconds": 0.0`} {
 		if !strings.Contains(row.FactorsJSON, want) {
@@ -231,5 +234,80 @@ func TestComputeQualityDragNegativeZeroDurationMatchesPython(t *testing.T) {
 		if strings.Contains(row.FactorsJSON, strings.Replace(want, "0.0", "-0.0", 1)) {
 			t.Errorf("factors_json retained a negative-zero sign bit Python's `or 0.0` idiom would have normalized away\ngot: %s", row.FactorsJSON)
 		}
+	}
+}
+
+// TestComputeQualityDragNonFiniteDurationNullsNumericFieldsNotRawNaN is the
+// red-first proof for codex round chaos-4806-r2 P1: computeQualityDrag's
+// factorsJSON already went through the finite boundary (CHAOS-4806 PR1),
+// but the ROW'S OWN numeric columns (DragHours, FailureReworkHours,
+// QueueWaitHours, RetryOverheadHours) did not -- a NaN/+-Inf
+// median_duration_seconds or avg_queue_seconds (both unconstrained
+// Nullable(Float64) source columns) reached these plain float64 fields
+// raw. Migration 091 widens the affected columns to Nullable(Float64);
+// this pins the Go-side null-out.
+func TestComputeQualityDragNonFiniteDurationNullsNumericFieldsNotRawNaN(t *testing.T) {
+	repoID := uuid.New()
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	nan := math.NaN()
+
+	pipe := &testops.PipelineMetric{
+		RepoID: repoID, OrgID: "org",
+		MedianDurationSeconds: &nan,
+		AvgQueueSeconds:       &nan,
+		FailureCount:          1,
+		PipelinesCount:        1,
+	}
+	test := &testops.TestMetric{RepoID: repoID, OrgID: "org"}
+
+	row := computeQualityDrag(repoID, day, pipe, test, day)
+	if row == nil {
+		t.Fatal("computeQualityDrag returned nil")
+	}
+	for name, ptr := range map[string]*float64{
+		"DragHours":          row.DragHours,
+		"FailureReworkHours": row.FailureReworkHours,
+		"QueueWaitHours":     row.QueueWaitHours,
+		"RetryOverheadHours": row.RetryOverheadHours,
+	} {
+		if ptr != nil {
+			t.Errorf("%s = %v, want nil (median_duration_seconds/avg_queue_seconds were NaN)", name, *ptr)
+		}
+	}
+	// FlakeInvestigationHours has no dependency on medianDur/avgQueue here
+	// (test is nil-flake-rate), so it stays a real, finite, non-nil zero --
+	// proving the fix is per-field, not a whole-row refusal.
+	if row.FlakeInvestigationHours == nil {
+		t.Error("FlakeInvestigationHours = nil, want a finite value -- its own inputs were never non-finite, this field must still compute")
+	}
+}
+
+// TestComputePipelineStabilityNonFiniteMedianDurationNullsRecoveryTime is
+// the red-first proof for the second half of the same finding:
+// computePipelineStability's median() over durations pulled straight from
+// median_duration_seconds could carry a NaN/+-Inf through to
+// MedianRecoveryTimeSeconds -- a field that was ALREADY *float64
+// (Nullable in the schema) but never validated before taking its address.
+func TestComputePipelineStabilityNonFiniteMedianDurationNullsRecoveryTime(t *testing.T) {
+	repoID := uuid.New()
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	nan := math.NaN()
+
+	entries := []testops.PipelineMetric{
+		{
+			RepoID:                repoID,
+			OrgID:                 "org",
+			MedianDurationSeconds: &nan,
+			FailureCount:          1,
+			SuccessRate:           0.5,
+		},
+	}
+
+	row := computePipelineStability(repoID, day, entries, day)
+	if row == nil {
+		t.Fatal("computePipelineStability returned nil")
+	}
+	if row.MedianRecoveryTimeSeconds != nil {
+		t.Errorf("MedianRecoveryTimeSeconds = %v, want nil (median_duration_seconds was NaN)", *row.MedianRecoveryTimeSeconds)
 	}
 }

@@ -705,3 +705,63 @@ func TestAServingBuildHeaderOfUnknownIsRefusedNotBound(t *testing.T) {
 		}
 	}
 }
+
+// The refusal itself, at the one place it can actually fire: an
+// operation that IS routed to Go but whose request needs an identifier
+// the table cannot supply.
+//
+// Today `pr` is unrouted, so a real run reports it as not_routed -- the
+// operative fact about it, and the honest one. This pins what happens on
+// the day someone routes it: a NAMED refusal, never a request built with
+// an invented id whose null-vs-null comparison would read as a match.
+func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
+	body := `{"data":{"pr":null}}`
+	edge := &fakeEdge{goBody: body, pythonBody: body, goBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36"}
+	runner := newRunner(t, edge, "canary")
+
+	// Route `pr` to Go, which is the state this refusal exists for.
+	runner.Documents = map[string]string{"pr": "query PrDetail($orgId: String!, $id: ID!) { pr(orgId: $orgId, id: $id) { id } }"}
+	runner.Registry.DocumentDigest = map[string]string{"pr": "06ca28a0"}
+	runner.Routing = map[string]RoutingRow{"pr": {Mode: "canary", CandidateBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36"}}
+
+	outcomes, summary, err := runner.Run(context.Background())
+	if err == nil {
+		t.Fatal("a routed operation needing an instance identifier must be refused, not measured with an invented one")
+	}
+	if summary.Executed != 0 {
+		t.Fatalf("%d operation(s) executed with an invented identifier", summary.Executed)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("expected one outcome, got %d", len(outcomes))
+	}
+	// r1 P3: comparing against the constant under test is a tautology --
+	// renaming RefusalNeedsInstanceID passed this assertion. The WIRE
+	// string is what a reader of ByRefusalReason or review_evidence sees,
+	// so that is what is pinned.
+	if outcomes[0].RefusalReason != "operation_needs_an_instance_identifier" {
+		t.Fatalf("refusal reason = %q, want %q -- the run must SAY why, not report a generic failure", outcomes[0].RefusalReason, "operation_needs_an_instance_identifier")
+	}
+	if RefusalNeedsInstanceID != "operation_needs_an_instance_identifier" {
+		t.Fatalf("the constant moved to %q: refusal reasons are read from stored receipts, so renaming one silently reclassifies every row already written", RefusalNeedsInstanceID)
+	}
+	if !strings.Contains(outcomes[0].RefusalDetail, "$id") {
+		t.Fatalf("the refusal must NAME the variable it cannot supply, got %q", outcomes[0].RefusalDetail)
+	}
+
+	// r1 P3: the point of refusing BEFORE the request is that no request
+	// happens. Without this, moving the refusal below both HTTP legs left
+	// every assertion above green -- the run would have sent an invented
+	// id to both planes and merely declined to record the result.
+	if len(edge.seen) != 0 {
+		t.Fatalf("the refusal fired but %d request(s) still went out: %v -- an operation whose identifier cannot be built must never reach the wire", len(edge.seen), edge.seen)
+	}
+
+	// And no receipt is produced from it.
+	receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 0 {
+		t.Fatalf("%d receipt(s) written for an operation that was never measured", len(receipts))
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,10 +134,10 @@ func TestProofRouteStampsPlaneAndBuild(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler(recorder, httptest.NewRequest(http.MethodPost, "/query/proof", nil))
 
-	if got := recorder.Header().Get(planeHeaderName); got != "go" {
+	if got := recorder.Result().Header.Get(planeHeaderName); got != "go" {
 		t.Fatalf("proof responses must name their plane, got %q", got)
 	}
-	if got := recorder.Header().Get(buildHeaderName); got != "b18e56fa79cfe20ce0f75df148144b832d92be36" {
+	if got := recorder.Result().Header.Get(buildHeaderName); got != "b18e56fa79cfe20ce0f75df148144b832d92be36" {
 		t.Fatalf("proof responses must name their build, got %q", got)
 	}
 }
@@ -149,10 +150,10 @@ func TestProofRouteOmitsAnUnknowableBuild(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler(recorder, httptest.NewRequest(http.MethodPost, "/query/proof", nil))
 
-	if _, present := recorder.Header()[http.CanonicalHeaderKey(buildHeaderName)]; present {
+	if _, present := recorder.Result().Header[http.CanonicalHeaderKey(buildHeaderName)]; present {
 		t.Fatal("an unknown build must be absent, not an empty header")
 	}
-	if got := recorder.Header().Get(planeHeaderName); got != "go" {
+	if got := recorder.Result().Header.Get(planeHeaderName); got != "go" {
 		t.Fatalf("the plane is still knowable, got %q", got)
 	}
 }
@@ -205,10 +206,10 @@ func TestTheNormalQueryRouteCarriesProvenanceHeaders(t *testing.T) {
 	if !served {
 		t.Fatal("the wrapped handler must still run")
 	}
-	if got := recorder.Header().Get(buildHeaderName); got != commit {
+	if got := recorder.Result().Header.Get(buildHeaderName); got != commit {
 		t.Fatalf("the serving build must be on a NORMAL /query response, got %q -- without it no canary or primary operation can ever be proven", got)
 	}
-	if got := recorder.Header().Get(planeHeaderName); got != "go" {
+	if got := recorder.Result().Header.Get(planeHeaderName); got != "go" {
 		t.Fatalf("plane header = %q, want go", got)
 	}
 	if recorder.Code != http.StatusOK {
@@ -226,7 +227,7 @@ func TestAnUnstampedBuildSetsNoBuildHeader(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	handler(recorder, httptest.NewRequest(http.MethodPost, "/query", nil))
 
-	if _, present := recorder.Header()[http.CanonicalHeaderKey(buildHeaderName)]; present {
+	if _, present := recorder.Result().Header[http.CanonicalHeaderKey(buildHeaderName)]; present {
 		t.Fatal("an unstamped build must set NO build header rather than an empty one")
 	}
 }
@@ -248,7 +249,7 @@ func TestTheProductionQueryRouteStampsTheBuild(t *testing.T) {
 	mountQueryRoute(mux, func(w http.ResponseWriter, _ *http.Request) {
 		served = true
 		w.WriteHeader(http.StatusOK)
-	}, commit)
+	})
 
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/query", nil))
@@ -258,10 +259,86 @@ func TestTheProductionQueryRouteStampsTheBuild(t *testing.T) {
 	}
 	// r8: asserting only the PLANE let an empty build stamp pass. The
 	// build is the header a proof receipt is bound by; the plane is not.
-	if got := recorder.Header().Get(buildHeaderName); got != commit {
-		t.Fatalf("the production /query route stamped %q, want the running build: an empty stamp wraps the route and still leaves every measurement unbindable", got)
+	if got := recorder.Result().Header.Get(buildHeaderName); got != runningBuild() {
+		t.Fatalf("the production /query route stamped %q, want the running build %q: an empty stamp wraps the route and still leaves every measurement unbindable", got, runningBuild())
 	}
-	if got := recorder.Header().Get(planeHeaderName); got != "go" {
+	if got := recorder.Result().Header.Get(planeHeaderName); got != "go" {
 		t.Fatalf("plane header = %q, want go", got)
+	}
+}
+
+// F1, the strongest form: a real server and a real client, so the
+// assertion is over headers as RECEIVED rather than over any recorder
+// view of them.
+//
+// `withProofProvenance` sets the headers BEFORE calling the wrapped
+// handler, and must: once the handler calls WriteHeader the map is on the
+// wire and a later write is silently dropped. Every pin for that ordering
+// read `recorder.Header()` -- the recorder's LIVE map, which keeps
+// accepting writes after WriteHeader -- so moving the two Set calls after
+// `handler(w, r)` left the whole suite green while the header vanished in
+// production. The two views diverge exactly under that mutant:
+// `recorder.Header()` shows the build, `recorder.Result().Header` does not.
+//
+// This test cannot be fooled that way, because there is no recorder.
+func TestProvenanceHeadersReachTheWire(t *testing.T) {
+	const commit = "6f89d2bc3ed3fc6f8b15e872aab5d665805a4e70"
+
+	mux := http.NewServeMux()
+	mountQueryRoute(mux, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"featureFlags":[]}}`))
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	response, err := server.Client().Post(server.URL+"/query", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /query: %v", err)
+	}
+	t.Cleanup(func() { _ = response.Body.Close() })
+
+	if got := response.Header.Get(buildHeaderName); got != runningBuild() {
+		t.Fatalf("ON THE WIRE the build header is %q, want %q -- the header must be set before the handler writes, or it never leaves the process", got, runningBuild())
+	}
+	if got := response.Header.Get(planeHeaderName); got != "go" {
+		t.Fatalf("ON THE WIRE the plane header is %q, want go", got)
+	}
+}
+
+// F1b: main's CALL is what stamps the build, and it was untested --
+// `mountQueryRoute(mux, handlers.Query, "")` compiled and left the suite
+// green, because the pin passed its own constant and proved only that the
+// helper stamps what it is handed.
+//
+// `runningBuild()` gives that value one named source. This asserts main
+// mounts with THAT value and that it is the process's own identity, so
+// substituting a literal at the call site fails here.
+func TestTheProductionRouteMountsWithTheRunningBuild(t *testing.T) {
+	if runningBuild() != version.Current("query-api").Commit {
+		t.Fatalf("runningBuild() = %q, want the process's own commit", runningBuild())
+	}
+
+	mux := http.NewServeMux()
+	mountQueryRoute(mux, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	response, err := server.Client().Post(server.URL+"/query", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /query: %v", err)
+	}
+	t.Cleanup(func() { _ = response.Body.Close() })
+
+	// In a test binary version.Current's Commit may be empty -- that is a
+	// real state (an unstamped build) and the route must then stamp
+	// nothing rather than an empty header. Either way the WIRE must agree
+	// with runningBuild(), which is the property main depends on.
+	got := response.Header.Get(buildHeaderName)
+	if got != runningBuild() {
+		t.Fatalf("the mounted route stamped %q but the process reports %q", got, runningBuild())
 	}
 }

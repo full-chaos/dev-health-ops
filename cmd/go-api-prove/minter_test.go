@@ -273,7 +273,13 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 	summary := goapiproof.Summary{Attempted: 1, Admitted: 1, Executed: 1}
 
 	printed := captureStdout(t, func() {
-		if err := emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
+		// F5: the previous fixture used "http://edge.test/graphql", which is
+		// IDENTICAL under the rebuilt label and the raw string -- so no
+		// assertion on that line could have distinguished them. The URL now
+		// carries a secret in its QUERY and its PATH -- both of which
+		// safeEndpoint accepts at flag parse by design, and both of which the
+		// rebuilt label strips -- so the two forms now differ.
+		if err := emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql?token=s3cret-happy-path", proofURL: "http://proof.test/query/proof/s3cret-proof"},
 			goapiproof.RegistryView{SchemaDigest: "sha256:x", BuildIdentity: "b"},
 			outcomes, summary, credential); err != nil {
 			t.Fatalf("emitReport: %v", err)
@@ -289,6 +295,17 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 	// And it must never print the credential itself.
 	if strings.Contains(printed, "eyJhbGciOiJFZERTQSJ9") {
 		t.Fatalf("the report printed the credential:\n%s", printed)
+	}
+	// F5: the endpoint line is printed on EVERY successful run and is what
+	// gets pasted into a ticket. It must carry the rebuilt label, never the
+	// operator's raw URL.
+	for _, secret := range []string{"s3cret-happy-path", "s3cret-proof"} {
+		if strings.Contains(printed, secret) {
+			t.Fatalf("the happy-path endpoint line leaked %q:\n%s", secret, printed)
+		}
+	}
+	if !strings.Contains(printed, "edge=http://edge.test") {
+		t.Fatalf("the endpoint must still be NAMED, or an operator cannot tell which one ran:\n%s", printed)
 	}
 }
 

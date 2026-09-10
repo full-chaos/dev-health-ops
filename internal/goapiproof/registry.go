@@ -206,7 +206,25 @@ func transportError(rawURL string, err error) error {
 	return TransportFailure{Endpoint: EndpointLabel(rawURL), Class: classifyTransport(err)}
 }
 
-// credential is present -- checking User there would wave it through.
+// RefuseCredentialsInURL rejects an endpoint flag this package cannot
+// fully account for.
+//
+// EndpointLabel keeps a credential out of THIS program's messages; only
+// refusal keeps it off the command line, where the process table, the
+// shell history and every log that records an invocation can already read
+// it. So both: refuse at the boundary, and never print a raw URL even
+// then, because a URL can reach an error from somewhere the boundary does
+// not cover.
+//
+// It shares ONE predicate with the label, safeEndpoint, so the two cannot
+// drift: a URL that may be accepted and a URL that may be named are the
+// same question asked twice. The no-"//" form is refused as unparseable
+// rather than inspected for userinfo, because that is exactly the form
+// where User is nil while a credential is present -- checking User there
+// would wave it through.
+//
+// (The head of this comment was lost in an earlier edit that removed a
+// duplicated declaration, leaving it starting mid-sentence. Restored.)
 func RefuseCredentialsInURL(flagName, raw string) error {
 	if _, err := safeEndpoint(raw); err != nil {
 		if errors.Is(err, ErrCredentialInURL) {

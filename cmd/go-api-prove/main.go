@@ -49,11 +49,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"reflect"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
@@ -359,14 +361,48 @@ func run() error {
 // readRoutingState reads the rows AND verifies them against the running
 // build, returning both or neither.
 //
-// r8 killed the previous shape by replacing the caller's `return err` with
-// `_ = err`: the check was a separate statement, so it could be ignored,
-// and nothing failed. A guard that a caller can decline is not a guard.
-// Folding it in means the only way to obtain the rows is to have passed
-// the check -- the mutation is not detected, it is unwritable.
-func readRoutingState(ctx context.Context, pool *pgxpool.Pool, registry goapiproof.RegistryView, expectedBuild string) (map[string]goapiproof.RoutingRow, error) {
+// r8 killed the previous shape by replacing the CALLER's `return err` with
+// `_ = err`: the check was a separate statement in run(), so it could be
+// ignored, and nothing failed. Folding it in means a caller cannot obtain
+// the rows without the check having run.
+//
+// It does NOT make the mutation unwritable -- an earlier version of this
+// comment claimed that, and the opus round disproved it with the exact
+// mutation the comment named: `if err := VerifyCandidateBuild(...); err
+// != nil { _ = err }` compiles here just as well as it did one level up.
+// What changed is that the guard now lives with the data it guards, and
+// it is under test: TestReadRoutingStateRefusesAndFilters drives this
+// function against a fake Querier.
+//
+// A comment asserting a guarantee the code does not have is worse than no
+// comment, so this one now says what is true.
+// routingRowSource is the narrow slice of pgx readRoutingState needs, so
+// a test can drive it without a database. Extracted for exactly that
+// reason: the function had zero tests, and both of its guards survived
+// removal.
+type routingRowSource interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// isNilSource reports whether the source is absent, including the
+// typed-nil-in-an-interface case the --dry-run path produces.
+func isNilSource(source routingRowSource) bool {
+	if source == nil {
+		return true
+	}
+	value := reflect.ValueOf(source)
+	switch value.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return value.IsNil()
+	}
+	return false
+}
+
+func readRoutingState(ctx context.Context, pool routingRowSource, registry goapiproof.RegistryView, expectedBuild string) (map[string]goapiproof.RoutingRow, error) {
 	routing := map[string]goapiproof.RoutingRow{}
-	if pool == nil {
+	// A typed-nil *pgxpool.Pool in an interface is not == nil, and
+	// reflect.IsNil panics on a non-pointer kind, so both are handled.
+	if isNilSource(pool) {
 		// --dry-run with no database: every operation is reported as
 		// unrouted and refused BY NAME. It never silently assumes canary.
 		return routing, nil

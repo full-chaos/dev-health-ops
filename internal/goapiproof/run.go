@@ -436,10 +436,16 @@ func (r *Runner) ReceiptsFor(observedAt time.Time) ([]Receipt, error) {
 // RefusalReceipts is what a run writes when the build moved underneath it.
 //
 // NO match receipt is written -- every outcome the run produced described a
-// build that was not serving for all of it. But writing nothing at all
-// would leave the run invisible, indistinguishable from one that never
-// happened, so each operation the run reached gets a `proof_failed` receipt
-// naming the cause and the counts.
+// build that was not serving for all of it. Each operation the run MEASURED
+// gets a `proof_failed` receipt naming the cause and the counts, so a run
+// that got somewhere is not indistinguishable from one that never happened.
+//
+// A run in which nothing was admitted writes nothing, and that is correct
+// rather than a gap: there is no withheld result to record, and the run's
+// own error already says it measured nothing. An earlier version of this
+// comment implied every run leaves a row; it does not, and the difference
+// is exactly the difference between "we measured and withheld" and "we
+// measured nothing".
 //
 // `proof_failed` rather than a new `refused` state: the terminal-state
 // vocabulary is fixed by the signed plan and enforced by a CHECK
@@ -808,22 +814,6 @@ func terminalStateForRefusal(reason string) string {
 // of the observable response. See Observation.Headers for why it is a set
 // and not "every header".
 var comparedHeaders = []string{contentTypeHeader}
-
-// erroredResponse reports why these two responses cannot back a proof,
-// or "" when both carry a clean, data-bearing result.
-func erroredResponse(baseline, candidate Snapshot) string {
-	switch {
-	case len(candidate.Errors) > 0 && len(baseline.Errors) > 0:
-		return fmt.Sprintf("both planes returned GraphQL errors (%d candidate, %d baseline)", len(candidate.Errors), len(baseline.Errors))
-	case len(candidate.Errors) > 0:
-		return fmt.Sprintf("the candidate returned %d GraphQL error(s)", len(candidate.Errors))
-	case len(baseline.Errors) > 0:
-		return fmt.Sprintf("the baseline returned %d GraphQL error(s)", len(baseline.Errors))
-	case !candidate.DataPresent || candidate.Data == nil:
-		return "the candidate returned no data"
-	}
-	return ""
-}
 
 func (r *Runner) post(ctx context.Context, url, document string, credential *Credential, variables map[string]any) (Observation, error) {
 	body, err := json.Marshal(map[string]any{"query": document, "variables": variables})

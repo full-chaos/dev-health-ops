@@ -167,3 +167,76 @@ func TestATransportFailureCarriesNoUnderlyingText(t *testing.T) {
 		t.Fatalf("the message must SAY the underlying error was dropped, or a reader will think it was lost: %s", rendered)
 	}
 }
+
+// F2/F3: `Runner.post` is the only place the operator's -edge-url and
+// -proof-url are actually dialled, and it was the one transport call site
+// with no URL-safety test. Both its guards survived removal:
+//
+//   - replacing transportError(url, err) with a wrap of the raw URL, and
+//   - replacing NoRedirectClient(r.Client) with r.Client.
+//
+// The first leaks: safeEndpoint checks scheme, opaque body, userinfo and
+// host -- NOT path, query or fragment -- so a secret in a query string is
+// accepted at flag parse by design, and then reaches Outcome.RefusalDetail,
+// which emitReport prints to stdout AND writes into the report JSON.
+//
+// The second is worse than a leak: with redirects followed, the run
+// measures a host the operator never supplied and still writes a receipt.
+func TestTheMeasuredLegNeverLeaksItsURL(t *testing.T) {
+	const secret = "s3cret-in-the-query-string-91af"
+
+	// A closed port: the connection fails and the error is built by post.
+	closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	edgeURL := closed.URL + "/graphql?token=" + secret
+	closed.Close()
+
+	runner := newRunner(t, &fakeEdge{goBody: `{"data":{}}`, pythonBody: `{"data":{}}`}, "canary")
+	runner.Config.PythonEdgeURL = edgeURL
+
+	outcomes, _, _ := runner.Run(context.Background())
+	if len(outcomes) != 1 {
+		t.Fatalf("expected one outcome, got %d", len(outcomes))
+	}
+	if strings.Contains(outcomes[0].RefusalDetail, secret) {
+		t.Fatalf("the measured leg leaked its URL into RefusalDetail, which is printed to stdout and written to the report JSON: %s", outcomes[0].RefusalDetail)
+	}
+	if strings.Contains(outcomes[0].RefusalReason, secret) {
+		t.Fatalf("the refusal reason leaked the URL: %s", outcomes[0].RefusalReason)
+	}
+}
+
+// F3: an edge that redirects must be REFUSED, not followed. A followed
+// redirect measures a host nobody supplied; the reviewer showed it writing
+// a receipt, caught only by the absent-build downgrade as a second line of
+// defence -- and a redirect target that stamps the expected build would
+// produce `match`.
+func TestTheMeasuredLegRefusesARedirect(t *testing.T) {
+	const secret = "s3cret-redirect-target-4b7d"
+
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(planeHeader, "go")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"featureFlags":[{"key":"a"}]}}`))
+	}))
+	t.Cleanup(elsewhere.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", elsewhere.URL+"/"+secret)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirector.Close)
+
+	runner := newRunner(t, &fakeEdge{goBody: `{"data":{}}`, pythonBody: `{"data":{}}`}, "canary")
+	runner.Config.PythonEdgeURL = redirector.URL
+
+	outcomes, _, _ := runner.Run(context.Background())
+	if outcomes[0].Executed {
+		t.Fatal("a redirecting edge was FOLLOWED: the run measured a host the operator never supplied and would write a receipt for it")
+	}
+	if strings.Contains(outcomes[0].RefusalDetail, secret) {
+		t.Fatalf("the redirect target leaked into the refusal: %s", outcomes[0].RefusalDetail)
+	}
+	if !strings.Contains(outcomes[0].RefusalDetail, TransportRedirect) {
+		t.Fatalf("a refused redirect must be NAMED as one, or an operator debugs the network instead of the deployment: %s", outcomes[0].RefusalDetail)
+	}
+}

@@ -191,16 +191,39 @@ func readyzDependencyClass(err error) string {
 	return "dependency"
 }
 
+// runningBuild is the build identity this process stamps on /query and
+// /query/proof responses.
+//
+// A function, not an inline call, because the inline form could not be
+// tested: `mountQueryRoute(mux, handlers.Query, "")` compiled and left
+// every suite green, since the pin called mountQueryRoute itself with its
+// own constant and proved only that the HELPER stamps what it is given.
+// Nothing proved that main gives it the RUNNING build -- and an empty one
+// there is precisely the state this change exists to make impossible, with
+// a consequence (every edge measurement `unsupported`) byte-identical to
+// the documented interim state.
+//
+// Now the value has one source that a test can call and compare against
+// version.Current directly.
+func runningBuild() string {
+	return version.Current("query-api").Commit
+}
+
 // mountQueryRoute registers the production /query handler WITH provenance.
 //
-// A function rather than an inline registration so a test can drive the
-// real mux and assert the header arrives. r7 defeated the previous
-// source-text pin twice -- once by wrapping the registration in `if false`
-// and registering the raw handler instead, once by handing the wrapper an
-// empty build -- and both mutations left the pin green, because reading
-// source is not the same as running it.
-func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc, commit string) {
-	mux.HandleFunc("/query", withProofProvenance(query, commit))
+// It takes NO build argument, deliberately. The previous signature accepted
+// one so a test could assert a chosen value -- and that left
+// `mountQueryRoute(mux, handlers.Query, "")` as a call-site mutation which
+// compiled and survived every suite, because the test passed its own
+// constant and proved only that the helper stamps what it is handed.
+// Nothing proved main handed it the running build.
+//
+// With the value read inside, there is no argument at the call site to get
+// wrong: the mutation is unwritable rather than undetected. The test drives
+// this function and compares the WIRE header against runningBuild(), so the
+// two cannot disagree.
+func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
+	mux.HandleFunc("/query", withProofProvenance(query, runningBuild()))
 }
 
 func main() {
@@ -255,7 +278,7 @@ func main() {
 		// The same wrapper as the proof route, deliberately: one
 		// implementation, so the two routes cannot drift into disagreeing
 		// about what they claim.
-		mountQueryRoute(mux, handlers.Query, version.Current("query-api").Commit)
+		mountQueryRoute(mux, handlers.Query)
 		// GET /registry: what THIS process registers, and the schema digest
 		// it computed. Mounted with /query, not beside /healthz, on purpose
 		// -- it describes /query's registration set, so an unconfigured

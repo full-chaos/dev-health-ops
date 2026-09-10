@@ -324,7 +324,6 @@ async def _build_outbound_body(
 #: means "this response was not bound to a build", which is a true and
 #: useful thing to say; a fabricated one would be a false claim, and the
 #: whole point of the header is to be trustworthy.
-_PLANE_HEADER_NAME = "x-dev-health-plane"
 _PASSTHROUGH_RESPONSE_HEADERS = ("x-dev-health-build", _PLANE_HEADER_NAME)
 
 

@@ -547,3 +547,60 @@ func TestServingBuildAgreementStillMatches(t *testing.T) {
 		t.Fatalf("the serving build must be recorded, got %q", outcomes[0].Candidate.Build)
 	}
 }
+
+// F6: three sibling guards refuse a run whose declared relaxations matched
+// nothing. Only RefusalStaleExclusion was pinned; the other two survived
+// removal under both suites.
+//
+// They are not cosmetic. A stale declared BASELINE DEFECT is a citation
+// that no longer covers any difference -- with the refusal gone the run
+// proceeds and lands on `match` where it should have refused, which is a
+// receipt asserting parity on the strength of a ticket that no longer
+// applies. A stale Tier-B declaration means the comparison that ran is not
+// the comparison anybody declared.
+//
+// Driven through the REAL committed specs rather than a test-only hook:
+// flowMatrix declares a baseline defect and investmentBreakdown declares
+// Tier-B float paths, so identical response bodies make each declaration
+// match nothing.
+func TestRunRefusesOnEveryStaleDeclaration(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		operation string
+		document  string
+		digest    string
+		body      string
+		want      string
+	}{
+		"a baseline defect that covered no difference": {
+			operation: "flowMatrix",
+			document:  "query FlowMatrix { analytics { flowMatrix { nodes { value } } } }",
+			digest:    "aa11bb22",
+			body:      `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`,
+			want:      RefusalStaleBaselineDefect,
+		},
+		"a Tier-B float declaration that relaxed nothing": {
+			operation: "investmentBreakdown",
+			document:  "query InvestmentBreakdown { analytics { breakdowns { items { value } } } }",
+			digest:    "cc33dd44",
+			body:      `{"data":{"analytics":{"breakdowns":{"items":[{"value":1}]}}}}`,
+			want:      RefusalStaleTierB,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			edge := &fakeEdge{goBody: testCase.body, pythonBody: testCase.body}
+			runner := newRunner(t, edge, "canary")
+			edge.goBuild = runner.Registry.BuildIdentity
+			runner.Documents = map[string]string{testCase.operation: testCase.document}
+			runner.Registry.DocumentDigest = map[string]string{testCase.operation: testCase.digest}
+			runner.Routing = map[string]RoutingRow{testCase.operation: {Mode: "canary", CandidateBuild: runner.Registry.BuildIdentity}}
+
+			outcomes, _, err := runner.Run(context.Background())
+			if !errors.Is(err, ErrNothingMeasured) {
+				t.Fatalf("a declaration matching nothing must refuse the run, got %v", err)
+			}
+			if outcomes[0].RefusalReason != testCase.want {
+				t.Fatalf("expected %s, got %s (%s)", testCase.want, outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
+			}
+		})
+	}
+}

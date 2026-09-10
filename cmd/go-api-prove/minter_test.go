@@ -521,3 +521,73 @@ func TestTheHelpersStderrNeverReachesTheTerminal(t *testing.T) {
 		t.Fatalf("the helper's stderr reached the error: %v", mintErr)
 	}
 }
+
+// r9 F7: the one place in the shipped binary where the shape validator is
+// JOINED to the minted credential had no killer. ValidateEnvelopeShape is
+// well pinned and MintedCredential(...).WithShapeValidator(...) is
+// exercised, but dropping `.WithShapeValidator(...)` from credentials()
+// survived -- and without it a helper printing a usage line is installed
+// as an Authorization header.
+func TestTheMintedProofCredentialIsShapeValidated(t *testing.T) {
+	helper := writeHelper(t, "#!/bin/sh\nprintf 'usage: mint-envelope [--org ORG]'\n")
+	argv, err := json.Marshal([]string{helper})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(edgeBearerEnvVar, "edge-token")
+	_, proof, err := credentials(flags{proofBearerExec: string(argv)})
+	if err != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+
+	request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/buildinfo", nil)
+	if err := proof.Apply(context.Background(), request); err == nil {
+		t.Fatal("a helper printing a usage line was installed as a credential: the shape validator is not wired to the minted credential")
+	}
+	if request.Header.Get("Authorization") != "" {
+		t.Fatal("a malformed credential reached the request")
+	}
+}
+
+// r9 F8: mintBearer's TrimSpace had no killer, and the happy-path fixture
+// deliberately avoided the case that guards it. `echo` -- the NORMAL way a
+// shell script writes a value -- appends a newline, and a header value
+// containing one makes Go's transport reject the request outright.
+func TestAHelperUsingEchoStillYieldsAUsableHeader(t *testing.T) {
+	helper := writeHelper(t, "#!/bin/sh\necho 'eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln'\n")
+	minted, err := mintBearer(context.Background(), []string{helper})
+	if err != nil {
+		t.Fatalf("mintBearer: %v", err)
+	}
+	if strings.ContainsAny(minted, "\r\n") {
+		t.Fatalf("the credential carries a newline (%q): net/http rejects such a header, so every request fails for a reason unrelated to the credential", minted)
+	}
+	// And it must still be usable as a header.
+	request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/buildinfo", nil)
+	request.Header.Set("Authorization", minted)
+	if request.Header.Get("Authorization") != minted {
+		t.Fatal("the minted value is not a valid header value")
+	}
+}
+
+// r9 F9: the explicit-zero doctrine is pinned in the JSON report but not on
+// STDOUT, which is the surface an operator reads and the one the comments
+// are attached to. Dropping admitted= / stale_routing_rows= from the
+// summary line, or the "build binding: none" line, survived every test.
+func TestTheStdoutSummaryCarriesItsExplicitZeros(t *testing.T) {
+	printed := captureStdout(t, func() {
+		_ = emitReport(flags{orgID: "o", edgeURL: "http://edge.test/graphql"},
+			goapiproof.RegistryView{SchemaDigest: "s", BuildIdentity: "b"},
+			nil, goapiproof.Summary{Attempted: 3}, nil)
+	})
+
+	for _, want := range []string{"admitted=0", "stale_routing_rows=0", "attempted=3"} {
+		if !strings.Contains(printed, want) {
+			t.Fatalf("the stdout summary must carry %q even at zero -- \"measured nothing\" and \"found nothing wrong\" must not read alike:\n%s", want, printed)
+		}
+	}
+	if !strings.Contains(printed, "build binding: none") {
+		t.Fatalf("a run that admitted nothing must SAY so on stdout:\n%s", printed)
+	}
+}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
@@ -104,4 +105,35 @@ func TestReadRoutingStateRefusesAndFilters(t *testing.T) {
 			t.Fatalf("expected one row, got %v", rows)
 		}
 	})
+}
+
+// isNilSource is a real guard with no test: --dry-run passes a nil
+// *pgxpool.Pool, which inside an interface is NOT == nil, and
+// reflect.Value.IsNil panics on a non-pointer kind. Reverting it to a bare
+// `pool == nil` makes the dry-run path panic instead of returning an empty
+// routing map.
+func TestReadRoutingStateHandlesATypedNilPool(t *testing.T) {
+	// Exactly what run() passes under --dry-run: a nil *pgxpool.Pool
+	// carried in the interface.
+	var pool *pgxpool.Pool
+	rows, err := readRoutingState(context.Background(), pool, goapiproof.RegistryView{}, "")
+	if err != nil {
+		t.Fatalf("a dry run must not fail: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("a dry run has no rows to read, got %v", rows)
+	}
+
+	// And an untyped nil, which is the other way a caller can express it.
+	rows, err = readRoutingState(context.Background(), nil, goapiproof.RegistryView{}, "")
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("an absent source must yield an empty map: %v %v", rows, err)
+	}
+
+	// A real source is NOT treated as absent -- otherwise the guard could
+	// pass by declaring everything nil.
+	source := fakeQuerier{rows: &fakeRoutingRows{}}
+	if isNilSource(source) {
+		t.Fatal("a live source was treated as absent")
+	}
 }

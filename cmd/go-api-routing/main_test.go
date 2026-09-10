@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"net/http"
 	"reflect"
 	"testing"
 )
@@ -55,5 +58,43 @@ func TestBearerEnvVarIsDistinctFromTheProveEdgeToken(t *testing.T) {
 	}
 	if bearerEnvVar == "" {
 		t.Fatal("the credential must come from a named environment variable, never a flag: a flag value reaches ps and shell history")
+	}
+}
+
+// CHAOS-5479 changed FetchBuildIdentity's credential parameter, and this
+// command's call site had to change with it. The credential KIND is the
+// part worth pinning: /buildinfo checks the effective-principal envelope
+// and 401s an edge access token, so passing the wrong one is a defect that
+// only shows up against a real stack.
+//
+// This asserts the value this command sends is the envelope from its own
+// env var, and that the credential refuses to be empty -- the second floor
+// under the explicit check above it.
+func TestTheBuildInfoReadCarriesTheEnvelope(t *testing.T) {
+	credential := goapiproof.StaticCredential("Authorization", "effective-principal envelope", "Bearer eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln")
+
+	request, err := http.NewRequest(http.MethodGet, "http://query-api.test/buildinfo", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := credential.Apply(context.Background(), request); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := request.Header.Get("Authorization"); got != "Bearer eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1LTEifQ.c2ln" {
+		t.Fatalf("the /buildinfo read carried %q", got)
+	}
+	// The kind reaches a 401 message so an operator learns WHICH credential
+	// was refused, without its value.
+	if credential.Kind() != "effective-principal envelope" {
+		t.Fatalf("credential kind = %q; a 401 must name the kind /buildinfo actually checks", credential.Kind())
+	}
+
+	// Empty and whitespace-only are refused at use, whatever the caller's
+	// own checks do.
+	for _, bad := range []string{"", "   ", "Bearer    "} {
+		empty := goapiproof.StaticCredential("Authorization", "effective-principal envelope", bad)
+		if err := empty.Apply(context.Background(), request); err == nil {
+			t.Fatalf("credential %q was installed", bad)
+		}
 	}
 }

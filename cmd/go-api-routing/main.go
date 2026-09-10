@@ -141,13 +141,24 @@ func run() error {
 
 	ctx := context.Background()
 	client := &http.Client{Timeout: f.timeout}
-	headers := map[string]string{"Authorization": "Bearer " + bearer}
+	// A Credential rather than a header map: FetchBuildIdentity's parameter
+	// changed in CHAOS-5479, because one credential cannot satisfy both
+	// planes -- an access token gets 200 on the Python edge and 401 on
+	// /buildinfo, and the envelope gets the reverse. This command already
+	// documents that at bearerEnvVar and already carries the ENVELOPE, so
+	// this is the same value in the type the function now takes.
+	//
+	// StaticCredential also refuses an empty or whitespace-only value at
+	// the moment of use, so the check above gains a second floor rather
+	// than losing one, and its `kind` names the credential in a 401
+	// without printing it.
+	credential := goapiproof.StaticCredential("Authorization", "effective-principal envelope", "Bearer "+bearer)
 
 	registry, err := goapiproof.FetchRegistry(ctx, client, f.registryURL)
 	if err != nil {
 		return err
 	}
-	running, err := goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, headers)
+	running, err := goapiproof.FetchBuildIdentity(ctx, client, f.buildInfoURL, credential)
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
 			return fmt.Errorf("%w\n  the deployed query-api must identify its build at %s before any row can be pointed at it", err, f.buildInfoURL)

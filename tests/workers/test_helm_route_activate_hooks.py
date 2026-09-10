@@ -557,18 +557,23 @@ def test_route_dsn_script_builds_dsns_from_parts_and_never_from_a_dsn_value(
 # that can appear in a generated password is exercised here, in ONE pass.
 
 
+_RFC3986_GEN_DELIMS = list(":/?#[]@")
+_RFC3986_SUB_DELIMS = list("!$&'()*+,;=")
+
 _URI_SPECIAL_PASSWORD_CASES = [
     ("simple", "plainpassword123"),
-    ("hash-fragment", "pw#with#hash"),
-    ("at-sign", "pw@with@at"),
-    ("colon", "pw:with:colon"),
-    ("slash", "pw/with/slash"),
     ("percent", "pw%with%percent"),
-    ("question-mark", "pw?with?query"),
-    ("ampersand-equals", "pw&a=b&c=d"),
     ("space", "pw with space"),
     ("unicode", "pw☃snowman"),
     ("empty", ""),
+    ("all-gen-delims-combined", "".join(_RFC3986_GEN_DELIMS)),
+    ("all-sub-delims-combined", "".join(_RFC3986_SUB_DELIMS)),
+] + [
+    (f"gen-delim-{ord(c)}-{c!r}", f"pw{c}with{c}char")
+    for c in _RFC3986_GEN_DELIMS
+] + [
+    (f"sub-delim-{ord(c)}-{c!r}", f"pw{c}with{c}char")
+    for c in _RFC3986_SUB_DELIMS
 ]
 
 

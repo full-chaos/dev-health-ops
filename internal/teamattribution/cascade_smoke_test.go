@@ -422,3 +422,64 @@ func TestCandidateOwnershipReasonDistinguishesOwnedFromUnknownPassthrough(t *tes
 		t.Fatalf("owned and ownership_unknown candidates must carry DIFFERENT OwnershipReason values, both got %q", ownedReason)
 	}
 }
+
+// TestCascadeGateChecksOwnershipByRepositoryNameWhenNoRepoIDMatches is
+// CHAOS-4320's mutation-resistant pin for codex round 4's P3: every other
+// gate test in this file sets subject.RepoID, so teamOwnsSubjectRepo's
+// repoByID lookup alone accounts for every one of them -- removing ONLY the
+// repoByName lookup (leaving repoByID untouched) passed the complete
+// teamattribution AND providersync suites (executed, round 4). This test
+// gives the subject NO RepoID at all, matching a repo ownership fact by
+// ProjectID/RepoFullName alone -- the SAME repoByName lookup repo_ownership
+// itself already depends on for a name-only subject -- so only THAT lookup
+// can produce the result either assertion below checks.
+func TestCascadeGateChecksOwnershipByRepositoryNameWhenNoRepoIDMatches(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+
+	facts := GithubWorkItemDerivationFacts{
+		Repos: []GithubWorkItemDerivationRepoFact{{
+			Provider: "github", TeamID: "team-repo", TeamName: "Repository Team",
+			RepoFullName: "acme/api", IsPrimary: 1, Specificity: 70, UpdatedAt: now,
+		}},
+		Members: []GithubWorkItemDerivationMemberFact{
+			{
+				Provider: "github", TeamID: "team-repo", TeamName: "Repository Team",
+				MemberID: "owner-dev@example.com", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+			},
+			{
+				Provider: "github", TeamID: "team-other", TeamName: "Other Team",
+				MemberID: "other-dev@example.com", IsPrimary: 1, Specificity: 50, UpdatedAt: now,
+			},
+		},
+	}
+	derived := NewGitHubWorkItemDerivationContext(facts)
+
+	// Case 1: the assignee's team MATCHES the name-resolved owner -- granted.
+	granted := GithubWorkItemDerivationSubject{
+		WorkItemID: "gh:acme/api#20", Provider: "github", ProjectID: GithubWorkItemDerivationStringPointer("acme/api"),
+		Assignees: []string{"owner-dev@example.com"}, OrgID: "org-acme",
+	}
+	_, _, grantedCandidates := derived.Resolve(granted)
+	var grantedMembership *GithubWorkItemDerivationCandidate
+	for index := range grantedCandidates {
+		if grantedCandidates[index].Source == "assignee_membership" {
+			grantedMembership = &grantedCandidates[index]
+		}
+	}
+	if grantedMembership == nil {
+		t.Fatalf("candidates = %+v, want an assignee_membership row (team-repo owns acme/api by NAME)", grantedCandidates)
+	}
+
+	// Case 2: the assignee's team does NOT match the name-resolved owner --
+	// rejected, exactly like the RepoID-keyed gate tests above.
+	rejected := GithubWorkItemDerivationSubject{
+		WorkItemID: "gh:acme/api#21", Provider: "github", ProjectID: GithubWorkItemDerivationStringPointer("acme/api"),
+		Assignees: []string{"other-dev@example.com"}, OrgID: "org-acme",
+	}
+	_, _, rejectedCandidates := derived.Resolve(rejected)
+	for _, candidate := range rejectedCandidates {
+		if candidate.Source == "assignee_membership" {
+			t.Fatalf("candidates = %+v, want NO assignee_membership row (team-other does not own acme/api by NAME)", rejectedCandidates)
+		}
+	}
+}

@@ -564,10 +564,50 @@ func NormalizedDerivationTime(value time.Time) time.Time {
 	return value.UTC()
 }
 
+// GithubWorkItemDerivationRejectedMembership is one repo-ownership-gate
+// REJECTION event (CHAOS-4320 round 4, P1): Source is "assignee_membership"
+// or "author_membership", Reason is teamOwnsSubjectRepo's raw reason for
+// the rejection -- currently always MembershipOwnershipReasonNotOwned in
+// practice, since ownershipUnknownBlocksMembership is R74-decided false
+// (kept generic, not hardcoded, so a future policy flip stays correct with
+// no change here). A rejected candidate never becomes part of Resolve()'s
+// returned candidate list -- it falls through the cascade exactly like a
+// non-member would -- so without carrying this out separately, the gate
+// actually firing is completely unobservable: no row, no counter sample,
+// nothing. Carried as DATA ONLY: teamattribution stays pure here, same
+// discipline as OwnershipReason on GithubWorkItemDerivationCandidate --
+// RecordTeamAttributionOwnershipChecked is called from
+// WriteGitHubWorkItemEffect, never from this package.
+type GithubWorkItemDerivationRejectedMembership struct {
+	Source   string
+	Reason   string
+	TeamID   *string
+	TeamName *string
+}
+
 func (derived GithubWorkItemDerivationContext) Resolve(
 	subject GithubWorkItemDerivationSubject,
 ) (*string, *string, []GithubWorkItemDerivationCandidate) {
+	teamID, teamName, candidates, _ := derived.resolve(subject)
+	return teamID, teamName, candidates
+}
+
+// ResolveWithMembershipRejections is Resolve, plus every repo-ownership-gate
+// rejection event this resolution produced (CHAOS-4320 round 4, P1). Used
+// ONLY by buildGitHubWorkItemTeamAttributions, which turns these into
+// non-persisted marker rows the write boundary can count; every other
+// caller of Resolve() has no use for them and stays on the 3-value form.
+func (derived GithubWorkItemDerivationContext) ResolveWithMembershipRejections(
+	subject GithubWorkItemDerivationSubject,
+) (*string, *string, []GithubWorkItemDerivationCandidate, []GithubWorkItemDerivationRejectedMembership) {
+	return derived.resolve(subject)
+}
+
+func (derived GithubWorkItemDerivationContext) resolve(
+	subject GithubWorkItemDerivationSubject,
+) (*string, *string, []GithubWorkItemDerivationCandidate, []GithubWorkItemDerivationRejectedMembership) {
 	bySource := map[string][]GithubWorkItemDerivationCandidate{}
+	rejections := []GithubWorkItemDerivationRejectedMembership{}
 	if candidate := derived.NativeTeamCandidate(subject); candidate != nil {
 		bySource[candidate.Source] = append(bySource[candidate.Source], *candidate)
 	}
@@ -638,6 +678,10 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 				bySource["assignee_membership"] = append(bySource["assignee_membership"], assigneeCandidates...)
 			} else {
 				membershipSkipReasons[ownershipReason] = struct{}{}
+				rejections = append(rejections, GithubWorkItemDerivationRejectedMembership{
+					Source: "assignee_membership", Reason: ownershipReason,
+					TeamID: assigneeCandidates[0].TeamID, TeamName: assigneeCandidates[0].TeamName,
+				})
 			}
 		} else if reason != "" {
 			membershipSkipReasons[reason] = struct{}{}
@@ -670,6 +714,10 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 				)
 				if !owns {
 					membershipSkipReasons[ownershipReason] = struct{}{}
+					rejections = append(rejections, GithubWorkItemDerivationRejectedMembership{
+						Source: "author_membership", Reason: ownershipReason,
+						TeamID: reporterCandidates[0].TeamID, TeamName: reporterCandidates[0].TeamName,
+					})
 				} else {
 					// Source AND Evidence are rewritten (not passed through
 					// verbatim): reporterCandidates come from the SAME
@@ -809,7 +857,7 @@ func (derived GithubWorkItemDerivationContext) Resolve(
 		}
 		marked[index] = candidate
 	}
-	return primary.TeamID, primary.TeamName, marked
+	return primary.TeamID, primary.TeamName, marked, rejections
 }
 
 func (derived GithubWorkItemDerivationContext) NativeTeamCandidate(

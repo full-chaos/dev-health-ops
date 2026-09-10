@@ -1862,7 +1862,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CarriesOwnershipReasonFromTheRealResolver (a mutation-resistant pin
     # that the real builder, not a hand-built row, carries OwnershipReason
     # through) are both in-memory, non-integration tests.
-    assert len(expected_provider_tests) == 1341
+    # CHAOS-4320 round 4 (one codex P1 fix, three P3 test-strength fixes):
+    # +2 ordinary top-level (1341 -> 1343), integration-tagged UNCHANGED at
+    # 153. TestRejectedMembershipsAreCountedByOwnershipChecked (a gate
+    # REJECTION must reach ownership_checked -- it never became a row at
+    # all, so it was completely unobservable before this) and
+    # TestBuildGitHubWorkItemTeamAttributionsCarriesOwnershipReasonForAuthor-
+    # FromTheRealResolver (the author/reporter path's sibling of the
+    # existing assignee-path pin above) are both in-memory, non-integration
+    # tests.
+    assert len(expected_provider_tests) == 1343
 
     assert len(expected_integration_tests) == 153
     assert expected_integration_tests < expected_provider_tests
@@ -1880,7 +1889,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1341
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1343
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -1982,7 +1991,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1341
+    assert len(selected_tests) == len(set(selected_tests)) == 1343
     assert set(selected_tests) == expected_tests
 
 

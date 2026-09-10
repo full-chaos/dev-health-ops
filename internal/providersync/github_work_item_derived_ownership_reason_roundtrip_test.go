@@ -78,6 +78,61 @@ func TestBuildGitHubWorkItemTeamAttributionsCarriesOwnershipReasonFromTheRealRes
 	}
 }
 
+// TestBuildGitHubWorkItemTeamAttributionsCarriesOwnershipReasonForAuthorFromTheRealResolver
+// is the author-path sibling of the test above (codex round 4, P3, executed
+// mutation-survival finding "05-isolated": erasing cascade.go's author-branch
+// `candidate.OwnershipReason = GithubWorkItemDerivationOwnershipCheckedLabel(...)`
+// assignment passed the full committed teamattribution AND providersync
+// suites, because no test went through the REAL resolver on the author/
+// reporter path specifically -- the assignee sibling above does not exercise
+// it, and every writer-level test constructs an author_membership row by
+// hand. Item type is "pr": the author-gate only applies to pull/merge-
+// request types (GithubWorkItemDerivationIsPullOrMergeRequestType), so an
+// "issue" fixture like the assignee test above would never reach the
+// reporter branch at all.
+func TestBuildGitHubWorkItemTeamAttributionsCarriesOwnershipReasonForAuthorFromTheRealResolver(t *testing.T) {
+	claim := githubWorkItemOracleClaim()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	facts := teamattribution.GithubWorkItemDerivationFacts{
+		Members: []teamattribution.GithubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "team-reporter", TeamName: "Reporter Team",
+			MemberID: "alice@example.com", RawProviderUserID: stringPointer("alice"),
+			IdentityFacets: []string{"alice"}, IsPrimary: 1, Specificity: 50,
+			UpdatedAt: now,
+		}},
+	}
+	rows := githubWorkItemRows{WorkItems: []githubWorkItemRow{{
+		WorkItemID: "acme/api#2", Provider: "github", Title: "t", Type: "pr",
+		Status: "todo", ProjectID: stringPointer("acme/api"),
+		Reporter:  stringPointer("alice"),
+		CreatedAt: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: now, OrgID: claim.OrgID,
+	}}}
+	attributions, err := buildGitHubWorkItemTeamAttributions(
+		claim, rows, now, teamattribution.NewGitHubWorkItemDerivationContext(facts),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var membership *githubWorkItemTeamAttributionRow
+	for index := range attributions {
+		if attributions[index].Source == "author_membership" {
+			membership = &attributions[index]
+		}
+	}
+	if membership == nil {
+		t.Fatalf("no author_membership row in %+v", attributions)
+	}
+	if membership.OwnershipReason != teamattribution.MembershipOwnershipReasonUnknown {
+		t.Fatalf(
+			"OwnershipReason = %q, want %q (the real resolver's R74 pass-through reason on "+
+				"the AUTHOR path) -- either cascade.go's author branch dropped "+
+				"candidate.OwnershipReason, or the resolver's reason changed",
+			membership.OwnershipReason, teamattribution.MembershipOwnershipReasonUnknown,
+		)
+	}
+}
+
 // TestGitHubWorkItemTeamAttributionRowSurvivesTheEffectsJSONRoundTrip is
 // CHAOS-4320's red-first pin for codex round 2's P1 (NOT CLEAN, executed
 // repro): githubWorkItemTeamAttributionRow does not go directly from
@@ -157,6 +212,7 @@ func TestGitHubWorkItemTeamAttributionRowNoExportedFieldReadsBackZero(t *testing
 		ComputedAt: time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC),
 		RepoID:     &repoID, TeamID: &teamID, TeamName: &teamName,
 		OrgID: "org-acme", Priority: 10, OwnershipReason: "ownership_unknown",
+		Rejected: true,
 	}
 
 	// Sanity control: EVERY exported field on the original must itself be
@@ -227,11 +283,17 @@ func (batch *ownershipReasonWriteBatch) Abort() error        { return nil }
 // tell the two apart on a plain string) was defaulted to "owned", asserting
 // a confidence the code does not actually have.
 //
-// This test writes THREE rows through the real WriteGitHubWorkItemEffect,
+// This test writes FOUR rows through the real WriteGitHubWorkItemEffect,
 // using a fake ClickHouse conn/batch (Append/Send are no-ops) and a real
 // providerfoundation.Metrics sink: a primary repo_ownership row (unrelated
 // to either bug), a NON-PRIMARY assignee_membership row with a real
-// OwnershipReason (must now be counted despite losing primary), and a
+// OwnershipReason (must now be counted despite losing primary), a
+// NON-PRIMARY author_membership row with a real OwnershipReason (codex
+// round 4, P3: the author source specifically, not just assignee, must be
+// counted -- an earlier version of this test only exercised the author
+// path via the empty-reason/skip case below, so removing "author_membership"
+// from the writer's membershipRows predicate, or erasing the resolver's
+// author OwnershipReason assignment, both passed the full suite), and a
 // NON-PRIMARY author_membership row with an EMPTY OwnershipReason (must be
 // skipped, not silently mislabeled "owned").
 func TestWriteGitHubWorkItemEffectCountsOwnershipCheckedOnEveryMembershipRow(t *testing.T) {
@@ -244,6 +306,11 @@ func TestWriteGitHubWorkItemEffectCountsOwnershipCheckedOnEveryMembershipRow(t *
 			WorkItemID: "gh:acme/api#1", Provider: "github", Source: "assignee_membership",
 			IsPrimary: 0, Confidence: "high", Evidence: "assignee=dev@example.com",
 			OrgID: "org-acme", OwnershipReason: "ownership_unknown",
+		},
+		{
+			WorkItemID: "gh:acme/api#2", Provider: "github", Source: "author_membership",
+			IsPrimary: 0, Confidence: "high", Evidence: "reporter=bob",
+			OrgID: "org-acme", OwnershipReason: "owned",
 		},
 		{
 			WorkItemID: "gh:acme/api#1", Provider: "github", Source: "author_membership",
@@ -277,8 +344,118 @@ func TestWriteGitHubWorkItemEffectCountsOwnershipCheckedOnEveryMembershipRow(t *
 	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="ownership_unknown"} 1`) {
 		t.Fatalf("non-primary assignee_membership row was not counted by ownership_checked:\n%s", rendered)
 	}
-	if strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="owned"} 1`) {
-		t.Fatalf("the empty-OwnershipReason row was counted as owned instead of skipped:\n%s", rendered)
+	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="owned"} 1`) {
+		t.Fatalf("the granted author_membership row was not counted by ownership_checked (author source excluded from recording?):\n%s", rendered)
+	}
+	// codex round 4, P3: the earlier version of this assertion only forbade
+	// `reason="owned"} 1` -- with the empty-reason row now sharing a
+	// fixture with a GENUINELY owned author row, disabling the empty-reason
+	// skip bumps "owned" to 2, which that phrasing would have missed
+	// entirely. Count every ownership_checked sample line instead: exactly
+	// 2 (the ownership_unknown assignee row and the real owned author row)
+	// -- an erroneous THIRD sample under ANY label (owned, other, or a
+	// vocabulary this test does not name) fails this, not just the one
+	// label an earlier version of this test happened to check for.
+	sampleCount := strings.Count(rendered, "dev_health_team_attribution_ownership_checked_total{reason=")
+	if sampleCount != 2 {
+		t.Fatalf(
+			"ownership_checked_total has %d reason samples, want exactly 2 -- the empty-OwnershipReason row must be skipped entirely, not recorded under any label:\n%s",
+			sampleCount, rendered,
+		)
+	}
+}
+
+// TestRejectedMembershipsAreCountedByOwnershipChecked is CHAOS-4320's
+// red-first pin for codex round 4's P1 (NOT CLEAN, executed repro): a
+// repo-ownership-gate REJECTION (a resolved assignee_membership/
+// author_membership candidate whose team does NOT own the repo) never
+// becomes a candidate at all -- Resolve() drops it before returning, exactly
+// as intended, so the row-based recording every earlier round built (round
+// 3's membershipRows loop included) can only ever see rows that SURVIVED
+// the gate. The instrument advertises a "repo_not_owned" label
+// (metricTeamAttributionOwnershipCheckedVocabulary in budget.go) that, before
+// this fix, could NEVER actually be emitted in production: the outcome was
+// completely unobservable, indistinguishable from "nobody was ever gated at
+// all."
+//
+// This test goes through the REAL end-to-end path -- the real derivation
+// context, the real resolver (via buildGitHubWorkItemTeamAttributions), the
+// real EffectBatch JSON round trip, the real validator, and the real
+// WriteGitHubWorkItemEffect -- with only the ClickHouse Conn/Batch faked, so
+// it fails the way production actually fails. One work item has BOTH a
+// non-owning assignee and a non-owning reporter (same identity, "alice"),
+// mirroring the review's own repro: the repo is owned by "owner", but
+// "alice" belongs only to "nonowner" -- so both the assignee_membership and
+// author_membership candidates for alice are gate-rejected, and the ONLY
+// surviving candidate is repo_ownership itself.
+func TestRejectedMembershipsAreCountedByOwnershipChecked(t *testing.T) {
+	claim := githubWorkItemOracleClaim()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
+	repoIDString := repoID.String()
+	facts := teamattribution.GithubWorkItemDerivationFacts{
+		Repos: []teamattribution.GithubWorkItemDerivationRepoFact{{
+			Provider: "github", TeamID: "owner", TeamName: "Owner",
+			RepoID: &repoIDString, RepoFullName: "acme/api", IsPrimary: 1,
+			Specificity: 70, UpdatedAt: now,
+		}},
+		Members: []teamattribution.GithubWorkItemDerivationMemberFact{{
+			Provider: "github", TeamID: "nonowner", TeamName: "Nonowner",
+			MemberID: "alice", RawProviderUserID: stringPointer("alice"),
+			IdentityFacets: []string{"alice"}, IsPrimary: 1, Specificity: 60,
+			UpdatedAt: now,
+		}},
+	}
+	rows := githubWorkItemRows{WorkItems: []githubWorkItemRow{{
+		WorkItemID: "acme/api#1", Provider: "github", Type: "pr", Title: "t",
+		Status: "todo", ProjectID: stringPointer("acme/api"), RepoID: &repoID,
+		Assignees: []string{"alice"}, Reporter: stringPointer("alice"),
+		CreatedAt: now, UpdatedAt: now, OrgID: claim.OrgID,
+	}}}
+	attributions, err := buildGitHubWorkItemTeamAttributions(
+		claim, rows, now, teamattribution.NewGitHubWorkItemDerivationContext(facts),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range attributions {
+		if row.Source == "assignee_membership" || row.Source == "author_membership" {
+			if !row.Rejected {
+				t.Fatalf(
+					"got a real (non-rejected) %s row for a non-owning candidate: %+v",
+					row.Source, row,
+				)
+			}
+		}
+	}
+
+	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired, attributions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: claim.OrgID, Provider: "github", Destination: githubTeamAttributionsDestination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+	metrics := providerfoundation.NewMetrics()
+	sink := GitHubWorkItemTeamAttributionsClickHouseEffects{
+		Conn:    &ownershipReasonWriteConn{},
+		Lease:   providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Metrics: metrics,
+	}
+	if err := sink.WriteGitHubWorkItemEffect(context.Background(), identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="repo_not_owned"} 2`) {
+		t.Fatalf(
+			"two executed gate rejections (assignee + author) produced no repo_not_owned counter sample:\n%s",
+			rendered,
+		)
 	}
 }
 

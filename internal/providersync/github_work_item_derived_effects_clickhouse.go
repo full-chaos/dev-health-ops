@@ -450,6 +450,38 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	if len(rows) == 0 {
 		return nil
 	}
+	// CHAOS-4320 round 4, P1: split out REJECTION marker rows (Rejected ==
+	// true, see the field's doc comment on githubWorkItemTeamAttributionRow)
+	// before anything else touches `rows` -- they must never reach the
+	// sorting-key dedupe, the CH INSERT, or primaryRows/membershipRows
+	// below (all of which are about rows this destination actually
+	// persists), but they DO need to reach this write boundary's Metrics,
+	// which is the entire reason they were carried this far in the first
+	// place: a repo-ownership-gate rejection never becomes a real
+	// candidate (Resolve() drops it before returning), so without this
+	// split there is no other path left for the outcome to ever become
+	// observable.
+	persistedRows := make([]githubWorkItemTeamAttributionRow, 0, len(rows))
+	rejectedRows := make([]githubWorkItemTeamAttributionRow, 0)
+	for _, row := range rows {
+		if row.Rejected {
+			rejectedRows = append(rejectedRows, row)
+			continue
+		}
+		persistedRows = append(persistedRows, row)
+	}
+	if len(persistedRows) == 0 {
+		// No real candidate survived for this batch (every candidate the
+		// resolver considered was gate-rejected and there is, unusually,
+		// no "unassigned" fallback row either) -- nothing to insert, but
+		// the rejections themselves are not gated on a Send() that never
+		// happens: record them now rather than losing the observation.
+		for _, row := range rejectedRows {
+			recordGitHubWorkItemTeamAttributionOwnershipChecked(sink.Metrics, row.OwnershipReason)
+		}
+		return nil
+	}
+	rows = persistedRows
 	// Collisions are GENUINELY REACHABLE here, unlike the two map-derived
 	// destinations: the resolver emits one candidate per ownership fact, so two
 	// facts naming the same team differently produce two rows with an identical
@@ -545,24 +577,34 @@ is_primary, confidence, evidence, computed_at)`)
 	// rather than collapsing both to "owned" the way an earlier version of
 	// this code did.
 	for _, row := range membershipRows {
-		reason := row.OwnershipReason
-		if reason == "" {
-			// round 3, P1, fixed: this is NOT "unreachable, default to
-			// owned" the way an earlier version of this code assumed --
-			// EffectBatch rows are a durable, replay-able outbox payload, so
-			// a row enqueued by a PRIOR binary build (before OwnershipReason
-			// existed, or before it was actually surviving the JSON round
-			// trip) can genuinely reach this code with the field absent --
-			// json.Unmarshal cannot distinguish "absent" from "explicitly
-			// empty" on a plain string. Guessing "owned" for a value we
-			// cannot actually attest is worse than not counting it: skip,
-			// rather than assert a specific reason we do not have evidence
-			// for.
-			continue
-		}
-		sink.Metrics.RecordTeamAttributionOwnershipChecked(reason)
+		recordGitHubWorkItemTeamAttributionOwnershipChecked(sink.Metrics, row.OwnershipReason)
+	}
+	// CHAOS-4320 round 4, P1: rejectedRows carry the gate's OTHER outcome --
+	// a candidate that did NOT survive at all. Recorded here, after Send()
+	// succeeds, for the same double-count-on-retry reason primaryRows/
+	// membershipRows above are staged and recorded post-Send rather than
+	// inline in the Append loop: these rows travel through the SAME
+	// durable, replay-able EffectBatch, so a retried delivery of this batch
+	// would otherwise double-count a rejection the first attempt already
+	// recorded.
+	for _, row := range rejectedRows {
+		recordGitHubWorkItemTeamAttributionOwnershipChecked(sink.Metrics, row.OwnershipReason)
 	}
 	return nil
+}
+
+// recordGitHubWorkItemTeamAttributionOwnershipChecked is the shared skip-
+// don't-guess guard (codex round 3, P1) for both membershipRows (a survived
+// candidate) and rejectedRows (CHAOS-4320 round 4, P1: a gate rejection) --
+// an empty OwnershipReason means this exact row cannot be attested (a
+// pre-migration replay of a durable EffectBatch payload that predates the
+// field, which json.Unmarshal cannot distinguish from "explicitly empty" on
+// a plain string), so it is skipped rather than guessed at.
+func recordGitHubWorkItemTeamAttributionOwnershipChecked(metrics *providerfoundation.Metrics, reason string) {
+	if reason == "" {
+		return
+	}
+	metrics.RecordTeamAttributionOwnershipChecked(reason)
 }
 
 // githubWorkItemTeamAttributionMetricSource maps a written row onto

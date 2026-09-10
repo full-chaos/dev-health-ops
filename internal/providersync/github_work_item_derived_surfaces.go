@@ -104,6 +104,35 @@ type githubWorkItemTeamAttributionRow struct {
 	// Resolve()/buildGitHubWorkItemTeamAttributions directly and skips the
 	// effects/outbox JSON round-trip.
 	OwnershipReason string `json:"ownership_reason"`
+	// Rejected marks a NON-PERSISTED observation row (CHAOS-4320 round 4,
+	// P1): a repo-ownership-gate REJECTION of an assignee_membership/
+	// author_membership candidate never becomes a real attribution row --
+	// it is dropped before Resolve() even returns it, so it correctly never
+	// reaches work_item_team_attributions -- but that also made the gate
+	// actually firing completely unobservable: no row, no counter sample,
+	// nothing. buildGitHubWorkItemTeamAttributions appends one of these
+	// marker rows per rejection (OwnershipReason set to the raw rejection
+	// reason, e.g. "repo_not_owned") so it can ride the SAME EffectBatch/
+	// outbox round trip real candidate rows already use and reach
+	// WriteGitHubWorkItemEffect, which records it via
+	// RecordTeamAttributionOwnershipChecked and then EXCLUDES it from the
+	// actual ClickHouse INSERT (both the column list and
+	// newGitHubTeamAttributionColumns's oracle-comparison projection are
+	// explicit field/column lists, same non-leaking guarantee Priority's
+	// doc comment above already establishes for this exact mechanism).
+	//
+	// A REAL json tag (same reasoning as Priority/OwnershipReason above):
+	// `json:"-"` would silently read back false regardless of what was set,
+	// which would make every rejection marker row indistinguishable from a
+	// real candidate row after the round trip -- reproducing the exact
+	// defect class round 2 fixed, for a brand new field.
+	//
+	// Never true for a row Python could have produced: Python's
+	// compute_work_items.py has no repo-ownership gate at all (the
+	// CHAOS-4320 baseline_defect), so it never rejects a membership
+	// candidate and this field is always false on anything the live-
+	// python-oracle or byte-identical parity tests compare.
+	Rejected bool `json:"rejected"`
 }
 
 // githubWorkItemStateDurationDailyRow mirrors
@@ -340,7 +369,9 @@ func buildGitHubWorkItemTeamAttributions(
 		if err := assertGitHubWorkItemDerivedTenancy(claim, item); err != nil {
 			return nil, err
 		}
-		_, _, candidates := derived.Resolve(githubWorkItemDerivationSubjectFromRow(item))
+		_, _, candidates, rejections := derived.ResolveWithMembershipRejections(
+			githubWorkItemDerivationSubjectFromRow(item),
+		)
 		for _, candidate := range candidates {
 			// Python emits candidate.team_id / team_name UNNORMALISED here --
 			// unlike every other derived surface, which routes them through
@@ -364,6 +395,39 @@ func buildGitHubWorkItemTeamAttributions(
 				TeamID:   candidate.TeamID,
 				TeamName: candidate.TeamName,
 				OrgID:    item.OrgID,
+			})
+		}
+		// CHAOS-4320 round 4, P1: a repo-ownership-gate rejection never
+		// produces a candidate above -- Resolve() drops it before the
+		// candidate list is even built, exactly as intended (the row must
+		// never persist to work_item_team_attributions). Without this,
+		// though, the gate actually firing was completely unobservable: no
+		// row, no counter sample, nothing distinguishes "the gate rejected
+		// someone" from "nobody was ever gated at all." Append a NON-
+		// PERSISTED marker row per rejection instead -- Rejected=true keeps
+		// it out of the real ClickHouse INSERT and out of every existing
+		// row-count-based assertion (recordTeamAttributionRows already
+		// skips non-primary rows; this is also non-primary), while still
+		// letting it ride the same EffectBatch/outbox round trip so
+		// WriteGitHubWorkItemEffect -- the actual metrics-capable write
+		// boundary -- can count it before dropping it.
+		for _, rejection := range rejections {
+			result = append(result, githubWorkItemTeamAttributionRow{
+				WorkItemID: item.WorkItemID,
+				Provider:   item.Provider,
+				Source:     rejection.Source,
+				IsPrimary:  0,
+				Confidence: "none",
+				Evidence:   "ownership_rejected",
+				ComputedAt: githubWorkItemDerivedStamp(
+					computedAt, githubTeamAttributionStampPrecision,
+				),
+				RepoID:          item.RepoID,
+				TeamID:          rejection.TeamID,
+				TeamName:        rejection.TeamName,
+				OrgID:           item.OrgID,
+				OwnershipReason: rejection.Reason,
+				Rejected:        true,
 			})
 		}
 	}

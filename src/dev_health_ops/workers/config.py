@@ -31,13 +31,13 @@ task_soft_time_limit = 3300  # Soft limit at 55 minutes
 task_acks_late = False
 task_reject_on_worker_lost = False
 
-late_ack_excluded_tasks = (
+late_ack_excluded_tasks: tuple[str, ...] = (
     # CHAOS-4026: the daily-metrics partitioned dispatch chain,
     # dispatch_capacity_forecast, dispatch_complexity_job,
     # dispatch_release_impact, dispatch_membership_backfill, and
     # dispatch_scheduled_reports were deleted -- Go now owns these cadences
     # and Celery Beat has not scheduled them since the 2026-08-19 stop.
-    "dev_health_ops.workers.tasks.phone_home_heartbeat",
+    #
     # CHAOS-3093: dispatch_investment_materialize_partitioned (workers/
     # work_graph_tasks.py) and flush_external_ingest_recompute (workers/
     # external_ingest_recompute.py) were both deleted outright -- dead-into-
@@ -46,6 +46,11 @@ late_ack_excluded_tasks = (
     # PR2a' deleted dispatch_scheduled_syncs (workers/sync_scheduler.py) the
     # same way -- internal/scheduler/sync's coordinator/loop owns this
     # cadence natively now.
+    #
+    # PR2b dropped phone_home_heartbeat's own `@celery_app.task` decorator
+    # (Celery has had zero consumers since CHAOS-4026) -- it no longer
+    # registers with the Celery app, so its exclusion entry is removed too.
+    # This tuple is now empty.
 )
 task_annotations = {
     task_name: {"acks_late": False, "reject_on_worker_lost": False}

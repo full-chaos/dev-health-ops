@@ -5,24 +5,21 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from dev_health_ops.workers.celery_app import celery_app
-
 logger = logging.getLogger(__name__)
 
+# CHAOS-3093 (PR2b): the `@celery_app.task` decorators on both functions this
+# module used to define are retired -- Celery has had zero consumers since
+# 2026-08-19 (CHAOS-4026). `health_check` had no dispatch site of any kind
+# (confirmed repo-wide: no `.delay`/`.apply_async`/`send_task`/getattr
+# indirection/Beat entry/CLI invocation referenced it) and is deleted
+# outright, along with its two re-export sites (tasks.py, system_tasks.py).
+# `phone_home_heartbeat` stays -- its kind (system.heartbeat) is
+# celery_removed/rollback_route=none per migration-state.json, and
+# api/internal/worker_operational.py's HTTP compatibility bridge still calls
+# this function's body directly (now a plain call, not `.run()`).
 
-@celery_app.task(bind=True, name="dev_health_ops.workers.tasks.health_check")
-def health_check(self) -> dict:
-    """Simple health check task to verify worker is running."""
-    return {
-        "status": "healthy",
-        "worker_id": self.request.id,
-    }
 
-
-@celery_app.task(
-    bind=True, queue="default", name="dev_health_ops.workers.tasks.phone_home_heartbeat"
-)
-def phone_home_heartbeat(self) -> dict[str, Any]:
+def phone_home_heartbeat() -> dict[str, Any]:
     import hashlib
     import time
 

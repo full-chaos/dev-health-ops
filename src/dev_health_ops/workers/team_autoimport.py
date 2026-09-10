@@ -10,7 +10,6 @@ from dev_health_ops.metrics.prometheus import (
     record_team_autoimport_reference_category_outcome,
 )
 from dev_health_ops.providers.team_capabilities import team_provider_capabilities
-from dev_health_ops.workers.celery_app import celery_app
 from dev_health_ops.workers.team_autoimport_categories import (
     import_categories_from_sync_options,
 )
@@ -35,9 +34,13 @@ _IMPORTER_MODULES = {
 # provider=linear:
 #   - HTTP bridge (worker_sync.py), all reachable with WORKER_OPERATIONAL_
 #     BRIDGE_TOKEN and no provider scoping of their own:
-#       * POST /team-autoimport -> run_post_sync_team_autoimport.run() ->
+#       * POST /team-autoimport -> run_post_sync_team_autoimport() ->
 #         run_team_autoimport (proved live-local: HTTP 200, recreated the
-#         pseudo-project, before this guard existed).
+#         pseudo-project, before this guard existed). CHAOS-3093 (PR2b)
+#         dropped the `@celery_app.task` decorator that used to wrap this
+#         call (Celery has had zero consumers since CHAOS-4026); the bridge
+#         now calls the plain function directly instead of its former
+#         `.run()`.
 #       * POST /reference-discovery-populate ->
 #         run_reference_discovery_populate_for_sync_run ->
 #         run_reference_discovery_populate_strict -> run_team_autoimport_strict.
@@ -64,8 +67,10 @@ _IMPORTER_MODULES = {
 #     strict in-process for any provider; it arms the same ledger/outbox
 #     row sync-time dispatch uses and goes through the identical
 #     TeamCatalogDiscoveryExecutor chain above.
-#   - Celery: retired (CHAOS-4026) -- no consumer drains `apply_async`;
-#     only the three `.run()` bridge call sites above execute synchronously.
+#   - Celery: retired (CHAOS-4026) -- no consumer drains `apply_async`; the
+#     bridge call sites above execute synchronously (team-autoimport's own
+#     `@celery_app.task` decorator is gone too, CHAOS-3093 PR2b -- it is now
+#     a plain function call, not `.run()`).
 #
 # So every live and dead-but-reachable path funnels through this module's
 # _resolve_populator/run_team_autoimport(_strict). Refuse at the lowest
@@ -355,10 +360,6 @@ def run_team_autoimport_strict(
     }
 
 
-@celery_app.task(
-    queue="sync",
-    name="dev_health_ops.workers.tasks.run_post_sync_team_autoimport",
-)
 def run_post_sync_team_autoimport(sync_run_id: str) -> dict[str, Any]:
     """Refresh team/project/member attribution after a successful sync run.
 

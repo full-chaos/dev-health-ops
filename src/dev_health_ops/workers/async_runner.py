@@ -1,23 +1,26 @@
-"""Shared async execution helper for Celery tasks.
+"""Shared async execution helper for synchronous Python compatibility-bridge
+task bodies.
 
-Celery tasks are synchronous by default. This module provides a single,
-consistent way to run coroutines from within a Celery task body without
-creating nested event loops or conflicting with any existing loop.
+These functions run synchronously by default (invoked directly, or via a
+Celery `Task.run()`-shaped call from a Go HTTP compatibility bridge -- see
+CHAOS-3093, PR2b: the `@celery_app.task` decorator that used to wrap these
+bodies is retired along with it). This module provides a single, consistent
+way to run coroutines from within such a synchronous body without creating
+nested event loops or conflicting with any existing loop.
 
 Usage
 -----
     from dev_health_ops.workers.async_runner import run_async
 
-    @celery_app.task(bind=True)
-    def my_task(self):
+    def my_task_body():
         result = run_async(my_coroutine())
         return result
 
 Why not just asyncio.run()?
 ----------------------------
-`asyncio.run()` is correct inside Celery tasks (each task runs in a
-synchronous worker thread with no pre-existing event loop).  However,
-scattered bare `asyncio.run()` calls make it hard to:
+`asyncio.run()` is correct here (each call runs in a synchronous thread with
+no pre-existing event loop).  However, scattered bare `asyncio.run()` calls
+make it hard to:
 - swap the execution strategy (e.g. uvloop, thread-pool runners)
 - add uniform logging/tracing around async boundaries
 - mock/patch in tests
@@ -37,10 +40,10 @@ T = TypeVar("T")
 
 
 def run_async(coro: Coroutine[Any, Any, T]) -> T:
-    """Run a coroutine synchronously from within a Celery task.
+    """Run a coroutine synchronously from within a compatibility-bridge task body.
 
     Creates a fresh event loop for each call, matching the semantics of
-    ``asyncio.run()``.  Safe to call from Celery worker threads that have
+    ``asyncio.run()``.  Safe to call from a synchronous worker thread that has
     no pre-existing event loop.
 
     Args:

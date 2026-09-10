@@ -120,16 +120,13 @@ def test_worker_late_ack_exclusions_are_explicit() -> None:
     assert config.task_reject_on_worker_lost is False
     assert celery_app.conf.task_acks_late is False
     assert celery_app.conf.task_reject_on_worker_lost is False
-    assert (
-        "dev_health_ops.workers.tasks.phone_home_heartbeat"
-        in config.late_ack_excluded_tasks
-    )
-    assert config.task_annotations[
-        "dev_health_ops.workers.tasks.phone_home_heartbeat"
-    ] == {"acks_late": False, "reject_on_worker_lost": False}
-    assert celery_app.conf.task_annotations[
-        "dev_health_ops.workers.tasks.phone_home_heartbeat"
-    ] == {"acks_late": False, "reject_on_worker_lost": False}
+    # PR2b (CHAOS-3093) dropped phone_home_heartbeat's `@celery_app.task`
+    # decorator -- the last remaining entry -- so this tuple (and the
+    # annotations dict derived from it) is now empty. No per-task late-ack
+    # exclusion survives; if one is ever added back, pin its exact name and
+    # annotation here again rather than widening this assertion.
+    assert config.late_ack_excluded_tasks == ()
+    assert config.task_annotations == {}
 
 
 def test_worker_late_ack_exclusions_match_registered_tasks(monkeypatch) -> None:

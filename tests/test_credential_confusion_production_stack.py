@@ -209,7 +209,7 @@ class TestWorkerBridgeRouteRejectsForeignCredentialClasses:
     ) -> None:
         monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "the-real-bridge-secret")
         with patch(
-            "dev_health_ops.api.internal.worker_operational.phone_home_heartbeat.run",
+            "dev_health_ops.api.internal.worker_operational.phone_home_heartbeat",
             return_value={"status": "ok"},
         ):
             response = client.post(

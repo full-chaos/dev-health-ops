@@ -278,7 +278,19 @@ def test_inventory_is_non_empty_and_matches_audit_row_count():
     # retired_beat_entries with their evidence rather than vanishing (see
     # test_retired_beat_entries_are_evidenced_and_absent_from_source below).
     # Net: 57 - 9 = 48.
-    assert inventory["row_count"] == 48
+    #
+    # = 45. CHAOS-3093 (PR2b): health_check (system_ops.py) had no dispatch
+    # site of any kind and is deleted outright -- its celery_task row is
+    # removed, -1. phone_home_heartbeat (system_ops.py) and
+    # run_post_sync_team_autoimport (team_autoimport.py) keep their function
+    # bodies (still genuinely needed behind an HTTP compatibility bridge)
+    # but lose their `@celery_app.task` decorator -- each one's celery_task
+    # row is removed (the decorator/discovery surface is gone), -2, while
+    # their separate registry_kind rows (system.heartbeat,
+    # sync.team_autoimport) are untouched, since the kind-level compatibility
+    # dependency they track is unaffected by the decorator coming off. Net:
+    # 48 - 3 = 45.
+    assert inventory["row_count"] == 45
 
 
 def test_retired_beat_entries_are_evidenced_and_absent_from_source():

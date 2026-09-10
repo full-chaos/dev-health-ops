@@ -34,6 +34,7 @@ from dev_health_ops.api.graphql.go_api_routing_admin import (
     count_rows_by_schema_digest,
     enable_operation,
     operations_with_enablement_proof,
+    plan_disable,
     routing_status_rows,
 )
 from dev_health_ops.models.go_api_registry import (
@@ -444,4 +445,148 @@ async def test_status_proves_a_primary_row_on_edge_evidence(
     assert by_operation[operation].proven is True, (
         "a PRIMARY row with EDGE evidence was not proven: the strict rule "
         "is refusing what it is supposed to admit"
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_reads_the_catalogs_document_not_whichever_row_is_last(
+    session: AsyncSession,
+) -> None:
+    """r2 P1 / Trap #120: keying by operation alone collapses documents.
+
+    ``go_api_routing_state`` is keyed by ``(schema_digest,
+    document_digest, selected_operation)``. A map keyed on the operation
+    ALONE keeps whichever row the scan returned last, which is not
+    deterministic -- so the same data can report differently between
+    runs, and the reviewer reproduced exactly that live: the wrong row's
+    mode.
+
+    Here the catalog names ``doc-new``, which is ``canary``, while a row
+    for the same operation at ``doc-old`` is ``python``. Status must
+    report the CATALOG's row, whichever order the scan hands them over.
+    """
+    operation, catalog_document = CATALOG[0]
+    old_document = "0" * 64
+
+    await enable_operation(
+        session,
+        schema_digest=LIVE,
+        document_digest=old_document,
+        selected_operation=operation,
+        candidate_build=BUILD,
+        mode="python",
+    )
+    await enable_operation(
+        session,
+        schema_digest=LIVE,
+        document_digest=catalog_document,
+        selected_operation=operation,
+        candidate_build=BUILD,
+        mode="canary",
+    )
+    await session.commit()
+
+    statuses = await routing_status_rows(
+        session, live_schema_digest=LIVE, catalog=CATALOG
+    )
+    by_operation = {s.operation: s for s in statuses}
+
+    assert by_operation[operation].digest_state == "MATCH"
+    assert by_operation[operation].mode == "canary", (
+        "status reported the mode of a row the catalog does not name: the "
+        "live map is keyed by operation alone, so two documents under one "
+        "schema collapse onto whichever row the scan returned last"
+    )
+    # And the other document is NAMED rather than silently dropped.
+    assert by_operation[operation].drifted_document_digests == (old_document,), (
+        "a live-schema row at a non-catalog document vanished from status: "
+        "count_rows_by_schema_digest groups by SCHEMA digest only, so "
+        "nothing else would have named it either"
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_reports_a_drifted_document_as_stale_not_match(
+    session: AsyncSession,
+) -> None:
+    """The catalog's document has NO row; only a drifted one exists.
+
+    Before the fix this reported ``MATCH`` with the drifted row's mode --
+    an operator reads it as serving when the edge cannot dispatch it at
+    all, because the edge resolves a request to an operation through the
+    catalog. ``STALE`` is the honest label: rows exist, none reachable.
+    """
+    operation, catalog_document = CATALOG[0]
+    old_document = "0" * 64
+
+    await enable_operation(
+        session,
+        schema_digest=LIVE,
+        document_digest=old_document,
+        selected_operation=operation,
+        candidate_build=BUILD,
+        mode="canary",
+    )
+    await session.commit()
+
+    statuses = await routing_status_rows(
+        session, live_schema_digest=LIVE, catalog=CATALOG
+    )
+    by_operation = {s.operation: s for s in statuses}
+
+    assert by_operation[operation].digest_state == "STALE", (
+        f"a row the edge cannot dispatch was reported "
+        f"{by_operation[operation].digest_state!r}: it carries a document "
+        "digest the catalog does not name"
+    )
+    assert by_operation[operation].mode is None, (
+        "a STALE row must not report a mode: there is no reachable row to have one"
+    )
+    assert by_operation[operation].drifted_document_digests == (old_document,)
+
+
+@pytest.mark.asyncio
+async def test_disable_plans_against_the_catalogs_document(
+    session: AsyncSession,
+) -> None:
+    """The same Trap #120 defect in ``plan_disable``.
+
+    A rollback plan naming the wrong row's ``current_mode`` is a plan an
+    operator cannot check -- and rollback is the verb you reach for when
+    something is already wrong.
+    """
+    operation, catalog_document = CATALOG[0]
+    old_document = "0" * 64
+
+    await enable_operation(
+        session,
+        schema_digest=LIVE,
+        document_digest=old_document,
+        selected_operation=operation,
+        candidate_build=BUILD,
+        mode="python",
+    )
+    await enable_operation(
+        session,
+        schema_digest=LIVE,
+        document_digest=catalog_document,
+        selected_operation=operation,
+        candidate_build=BUILD,
+        mode="canary",
+    )
+    await session.commit()
+
+    changes, problems = await plan_disable(
+        session,
+        schema_digest=LIVE,
+        operations={operation: catalog_document},
+        new_mode="disabled",
+    )
+    assert problems == []
+    assert len(changes) == 1
+    change = changes[0]
+    assert change.document_digest == catalog_document
+    assert change.current_mode == "canary", (
+        f"the rollback plan reported current_mode={change.current_mode!r} "
+        "-- the mode of a row the caller did not name"
     )

@@ -11,27 +11,38 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
-// enablementProofStage/TerminalState mirror
-// src/dev_health_ops/api/graphql/go_api_routing_admin.py's
-// ENABLEMENT_PROOF_STAGE / ENABLEMENT_PROOF_TERMINAL_STATE. "proven" is
-// DERIVED from go_api_proof_run, never stored as a column -- so this is the
-// only place the derivation lives on the Go side, and it is deliberately the
-// same predicate the enablement command uses: a proof is evidence for one
-// immutable (schema_digest, document_digest, selected_operation,
-// candidate_build) tuple and is never carried forward across any of the four.
-const (
-	enablementProofStage         = "deployed_executed"
-	enablementProofTerminalState = "match"
-)
+// "proven" is DERIVED from go_api_proof_run, never stored as a column: a
+// proof is evidence for one immutable (schema_digest, document_digest,
+// selected_operation, candidate_build) tuple and is never carried forward
+// across any of the four.
+//
+// The rule itself is NOT restated here. It used to be -- a local
+// stage/terminal-state pair with a comment claiming it was "deliberately
+// the same predicate the enablement command uses". That was true when
+// written and false the moment CHAOS-5484 split the rule by target mode,
+// and nothing failed: this page went on rendering a primary proof-route
+// receipt PROVEN while enablement refused it, and a canary cited mismatch
+// UNPROVEN while enablement accepted it (codex r2, P1, reproduced against
+// live PostgreSQL).
+//
+// A copy of a rule is a copy that will drift. goapiproof.EnablementProofClause
+// is the one source; this file composes it.
 
 // routingStateQuery reads every routing row -- live AND dead. Dead rows (rows
 // at a schema digest other than the current pin) are the whole reason this
 // table is rendered at all: on 2026-09-01 a digest move killed twelve canary
 // rows silently, and it was found six days later. A page that shows only the
 // live rows would have shown nothing wrong.
-const routingStateQuery = `
+// routingStateQuery is built per target mode, because CHAOS-5484 made
+// admissibility depend on where the row IS: a row at `primary` serves real
+// traffic and needs EDGE evidence, a row anywhere else is admissible on any
+// recorded route. One query for both would report one of them wrongly.
+func routingStateQuery(clause string) string {
+	return `
 SELECT rs.selected_operation,
        rs.mode,
        rs.schema_digest,
@@ -43,14 +54,15 @@ SELECT rs.selected_operation,
            AND pr.document_digest = rs.document_digest
            AND pr.selected_operation = rs.selected_operation
            AND pr.candidate_build = rs.current_candidate_build
-           AND pr.stage = $1
-           AND pr.terminal_state = $2
+           AND ` + clause + `
          ORDER BY pr.observed_at DESC
          LIMIT 1
        ) AS proof_run_id
 FROM go_api_routing_state rs
+WHERE (rs.mode = '` + goapiproof.TargetModePrimary + `') = $1
 ORDER BY rs.schema_digest, rs.selected_operation
 `
+}
 
 // ReadRoutingState reads go_api_routing_state, deriving `proven` per row.
 // currentDigest decides which rows are Live.
@@ -61,31 +73,54 @@ func ReadRoutingState(ctx context.Context, dsn, currentDigest string) ([]Operati
 	}
 	defer func() { _ = conn.Close(ctx) }()
 
-	rows, err := conn.Query(ctx, routingStateQuery, enablementProofStage, enablementProofTerminalState)
-	if err != nil {
-		return nil, 0, fmt.Errorf("read go_api_routing_state: %w", err)
-	}
-	defer rows.Close()
-
+	// Two passes, one per target mode, each carrying that mode's own route
+	// rule. Splitting here rather than deriving `proven` in Go keeps the
+	// rule in SQL where enablement evaluates it -- the two must agree, and
+	// the only way to be sure is to run the same clause.
 	var out []OperationRow
-	for rows.Next() {
-		var (
-			row     OperationRow
-			proofID *string
-		)
-		if err := rows.Scan(&row.Operation, &row.Mode, &row.SchemaDigest, &row.CandidateBuild, &proofID); err != nil {
-			return nil, 0, fmt.Errorf("scan go_api_routing_state row: %w", err)
+	for _, pass := range []struct {
+		targetMode string
+		isPrimary  bool
+	}{
+		{goapiproof.TargetModePrimary, true},
+		{goapiproof.TargetModeCanary, false},
+	} {
+		clause, err := goapiproof.EnablementProofClause("pr", pass.targetMode)
+		if err != nil {
+			return nil, 0, fmt.Errorf("build the enablement predicate: %w", err)
 		}
-		row.Live = row.SchemaDigest == currentDigest
-		row.Proven = NoProof
-		if proofID != nil && *proofID != "" {
-			row.Proven = *proofID
+		rows, err := conn.Query(ctx, routingStateQuery(clause), pass.isPrimary)
+		if err != nil {
+			return nil, 0, fmt.Errorf("read go_api_routing_state: %w", err)
 		}
-		out = append(out, row)
+		for rows.Next() {
+			var (
+				row     OperationRow
+				proofID *string
+			)
+			if err := rows.Scan(&row.Operation, &row.Mode, &row.SchemaDigest, &row.CandidateBuild, &proofID); err != nil {
+				rows.Close()
+				return nil, 0, fmt.Errorf("scan go_api_routing_state row: %w", err)
+			}
+			row.Live = row.SchemaDigest == currentDigest
+			row.Proven = NoProof
+			if proofID != nil && *proofID != "" {
+				row.Proven = *proofID
+			}
+			out = append(out, row)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, 0, fmt.Errorf("iterate go_api_routing_state: %w", err)
+		}
+		rows.Close()
 	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("iterate go_api_routing_state: %w", err)
-	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SchemaDigest != out[j].SchemaDigest {
+			return out[i].SchemaDigest < out[j].SchemaDigest
+		}
+		return out[i].Operation < out[j].Operation
+	})
 
 	// The bare total is reported alongside the per-row derivation on
 	// purpose. "0 rows in go_api_proof_run" is a single number that

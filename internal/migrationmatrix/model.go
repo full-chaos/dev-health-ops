@@ -139,9 +139,16 @@ type OperationRow struct {
 	CandidateBuild string `json:"candidate_build"`
 	// Live is false when SchemaDigest != the current SDL pin.
 	Live bool `json:"live"`
-	// Proven is DERIVED, never a column: the id of a deployed_executed/match
-	// proof run for this exact (schema_digest, document_digest, operation,
-	// candidate_build), or NoProof.
+	// Proven is DERIVED, never a column: the id of a proof run that
+	// satisfies goapiproof.EnablementProofClause for this exact
+	// (schema_digest, document_digest, operation, candidate_build) and for
+	// THIS row's mode, or NoProof.
+	//
+	// Deliberately not restated here. This comment used to say
+	// "deployed_executed/match", which stopped being the rule when
+	// CHAOS-5484 admitted a fully-cited mismatch and split admission by
+	// target mode -- and a comment describing a rule it does not own is
+	// how the copy in live.go drifted unnoticed (codex r2, P1).
 	Proven string `json:"proven"`
 	// ParityTicket is the open parity ticket for this operation, if any.
 	ParityTicket string `json:"parity_ticket,omitempty"`

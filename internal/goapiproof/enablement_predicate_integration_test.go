@@ -273,3 +273,77 @@ func seedAdmissionRow(ctx context.Context, t *testing.T, pool *pgxpool.Pool, key
 		t.Fatalf("seed proof run: %v", err)
 	}
 }
+
+// The THIRD reader, pinned to the same table.
+//
+// r2 (P1) found internal/migrationmatrix carrying its own copy of this
+// rule, written before CHAOS-5484 split it by target mode. Its comment
+// said it was "deliberately the same predicate the enablement command
+// uses" -- true when written, false the moment the rule moved, and
+// nothing failed. The migration-status page rendered a primary
+// proof-route receipt PROVEN while enablement refused it, and a canary
+// cited mismatch UNPROVEN while enablement accepted it.
+//
+// The copy is gone: goapiproof.EnablementProofClause is the one source
+// and the matrix composes it. This drives that clause over the SAME table
+// the two implementations above are pinned to, in the matrix's own query
+// SHAPE -- a correlated subquery per routing row, not a JOIN unnest --
+// so a change that works in one shape and not the other fails here.
+//
+// A shared truth table pins the implementations it knows about. It cannot
+// pin one nobody enumerated, which is why the PR body now carries the
+// enumerated reader list rather than a claim about how many there are.
+func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
+	ctx := context.Background()
+	fixture := loadAdmissionFixture(t)
+	raw := rawAdmissionCases(t)
+	pool := startRegistryPostgres(t)
+
+	for i, c := range fixture.Cases {
+		c, i := c, i
+		t.Run(c.Name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx,
+				`TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+				t.Fatalf("truncate between cases: %v", err)
+			}
+			key := fixture.Key
+			if c.KeyOverride != nil {
+				key = mergeKey(key, *c.KeyOverride)
+			}
+			seedAdmissionRow(ctx, t, pool, key, mergeReceipt(t, raw[i]))
+
+			clause, err := EnablementProofClause("pr", c.TargetMode)
+			if err != nil {
+				t.Fatalf("EnablementProofClause(%q): %v", c.TargetMode, err)
+			}
+
+			// The matrix's SHAPE: a correlated subquery keyed on the
+			// routing row's own four columns, selecting a proof id.
+			var proofID *string
+			err = pool.QueryRow(ctx, `
+				SELECT (
+				  SELECT pr.id::text
+				    FROM go_api_proof_run pr
+				   WHERE pr.schema_digest = $1
+				     AND pr.document_digest = $2
+				     AND pr.selected_operation = $3
+				     AND pr.candidate_build = $4
+				     AND `+clause+`
+				   ORDER BY pr.observed_at DESC
+				   LIMIT 1
+				)`,
+				fixture.Key.SchemaDigest, fixture.Key.DocumentDigest,
+				fixture.Key.SelectedOperation, fixture.Key.CandidateBuild,
+			).Scan(&proofID)
+			if err != nil {
+				t.Fatalf("matrix-shaped query: %v", err)
+			}
+
+			got := proofID != nil && *proofID != ""
+			if got != c.Admits {
+				t.Fatalf("case %q: the migration matrix would render proven=%v, the admission table says %v.\nwhy: %s\nA status page disagreeing with the command that enforces the rule is the shape r2 found.",
+					c.Name, got, c.Admits, c.Why)
+			}
+		})
+	}
+}

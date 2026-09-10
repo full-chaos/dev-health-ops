@@ -169,6 +169,17 @@ class OperationStatus:
       the rows look present in ``psql`` and are unreachable in fact.
     * ``MISSING``  -- no row at any digest. Never enabled, or cleaned up.
 
+    A row at the LIVE schema digest whose DOCUMENT digest the catalog no
+    longer names is reported ``STALE`` too, with those digests in
+    ``drifted_document_digests``. It is the same silent-death shape one
+    level down: the edge resolves a request to an operation through the
+    catalog, so such a row cannot be dispatched, and it used to be
+    reported ``MATCH`` under the catalog's digest -- a row an operator
+    reads as serving that in fact serves nothing (codex r2, P1).
+    Reporting it ``MISSING`` instead would be the other half of the same
+    error: ``count_rows_by_schema_digest`` groups by SCHEMA digest only,
+    so the row is folded into the live total and named nowhere.
+
     ``proven`` is separate from and orthogonal to ``digest_state``: a row
     can be live and reachable while nothing ever proved the deployed
     build serves it (see :data:`ENABLEMENT_PROOF_STAGE`). ``status``
@@ -186,6 +197,9 @@ class OperationStatus:
     owner: str | None = None
     updated_at: datetime | None = None
     stale_digests: tuple[str, ...] = ()
+    #: Document digests this operation has LIVE-schema rows at which the
+    #: catalog does not name. Empty in the ordinary case.
+    drifted_document_digests: tuple[str, ...] = ()
     proven: bool = False
 
     @property
@@ -354,12 +368,25 @@ async def plan_disable(
     result = await session.execute(
         select(RoutingState).where(RoutingState.schema_digest == schema_digest)
     )
-    live = {row.selected_operation: row for row in result.scalars().all()}
+    # Keyed by (operation, document digest), because that is how
+    # go_api_routing_state is keyed -- (schema_digest, document_digest,
+    # selected_operation). Keying by operation alone collapses two
+    # document versions under one schema onto whichever row the scan
+    # returned last, and r2 reproduced the consequence live: a rollback
+    # plan that named the wrong row's mode. A disable verb reporting the
+    # wrong current_mode is a verb an operator cannot check.
+    live = {
+        (row.selected_operation, row.document_digest): row
+        for row in result.scalars().all()
+    }
 
     changes: list[ModeChange] = []
     problems: list[str] = []
     for operation, document_digest in sorted(operations.items()):
-        row = live.get(operation)
+        # The CATALOG's document digest, not any row that happens to
+        # carry this operation name: the caller asked to disable a
+        # specific registered document.
+        row = live.get((operation, document_digest))
         if row is not None and expected_candidate_build is not None:
             if row.current_candidate_build != expected_candidate_build:
                 problems.append(
@@ -645,11 +672,21 @@ async def routing_status_rows(
     result = await session.execute(select(RoutingState))
     rows = list(result.scalars().all())
 
-    live_by_operation: dict[str, RoutingState] = {}
+    # Trap #120: go_api_routing_state is keyed by (schema_digest,
+    # document_digest, selected_operation). A map keyed on the operation
+    # ALONE collapses two document versions under one schema onto
+    # whichever row the scan returned last -- nondeterministically, so the
+    # answer changes between runs against the same data. r2 reproduced it
+    # live: status reported the wrong row's mode.
+    live_by_document: dict[tuple[str, str], RoutingState] = {}
+    live_documents_by_operation: dict[str, set[str]] = {}
     stale_digests_by_operation: dict[str, set[str]] = {}
     for row in rows:
         if row.schema_digest == live_schema_digest:
-            live_by_operation[row.selected_operation] = row
+            live_by_document[(row.selected_operation, row.document_digest)] = row
+            live_documents_by_operation.setdefault(row.selected_operation, set()).add(
+                row.document_digest
+            )
         else:
             stale_digests_by_operation.setdefault(row.selected_operation, set()).add(
                 row.schema_digest
@@ -666,7 +703,7 @@ async def routing_status_rows(
     # cannot be measured on the edge at all.
     proven: frozenset[str] = frozenset()
     grouped: dict[tuple[str, str], dict[str, str]] = {}
-    for operation, row in live_by_operation.items():
+    for (operation, _document), row in live_by_document.items():
         target_mode = (
             ENABLEMENT_TARGET_MODE_EDGE_ONLY
             if row.mode == ENABLEMENT_TARGET_MODE_EDGE_ONLY
@@ -690,8 +727,15 @@ async def routing_status_rows(
 
     statuses: list[OperationStatus] = []
     for operation, document_digest in catalog:
-        live_row = live_by_operation.get(operation)
+        # The catalog's EXACT document, never whichever row carries this
+        # operation name.
+        live_row = live_by_document.get((operation, document_digest))
         stale = tuple(sorted(stale_digests_by_operation.get(operation, ())))
+        drifted = tuple(
+            sorted(
+                live_documents_by_operation.get(operation, set()) - {document_digest}
+            )
+        )
         if live_row is not None:
             statuses.append(
                 OperationStatus(
@@ -704,16 +748,25 @@ async def routing_status_rows(
                     owner=live_row.owner,
                     updated_at=live_row.updated_at,
                     stale_digests=stale,
+                    drifted_document_digests=drifted,
                     proven=operation in proven,
                 )
             )
-        elif stale:
+        elif stale or drifted:
+            # `drifted` belongs here and not under MISSING: rows DO exist
+            # for this operation at the live schema digest, they just
+            # carry a document the catalog no longer names, so they cannot
+            # be dispatched. That is the STALE shape exactly -- present in
+            # psql, unreachable in fact -- and calling it MISSING would
+            # hide a row that count_rows_by_schema_digest also does not
+            # distinguish, because it groups by schema digest alone.
             statuses.append(
                 OperationStatus(
                     operation=operation,
                     document_digest=document_digest,
                     digest_state="STALE",
                     stale_digests=stale,
+                    drifted_document_digests=drifted,
                 )
             )
         else:

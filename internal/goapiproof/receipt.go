@@ -285,13 +285,53 @@ const EnablementCitedMismatchState = "mismatch"
 // `mismatch_cited_but_defect_empty_refused`), so this is covered rather
 // than merely argued -- and a clause that can never change an outcome is
 // one more thing a reader has to reason about for nothing.
-const enablementProofPredicate = `p.stage = $3
+//
+// Every value here is a package CONSTANT, never caller input, so they are
+// inlined rather than bound: that lets EnablementProofClause compose into
+// a query of any shape, which is what makes ONE predicate serve every
+// reader (r2 P1 found a third reader that had drifted).
+func enablementProofPredicate(alias string) string {
+	return alias + `.stage = '` + EnablementProofStage + `'
 		    AND (
-		          p.terminal_state = $6
-		       OR (p.terminal_state = $7
-		           AND p.differences_outside_baseline_defect = 0
-		           AND cardinality(p.baseline_defect) > 0)
+		          ` + alias + `.terminal_state = '` + EnablementProofTerminalState + `'
+		       OR (` + alias + `.terminal_state = '` + EnablementCitedMismatchState + `'
+		           AND ` + alias + `.differences_outside_baseline_defect = 0
+		           AND cardinality(` + alias + `.baseline_defect) > 0)
 		    )`
+}
+
+// EnablementProofClause is THE rule deciding whether a go_api_proof_run
+// row is enablement proof for targetMode, as a SQL fragment over `alias`.
+//
+// It exists because r2 (P1) found a THIRD reader of this rule --
+// internal/migrationmatrix's routingStateQuery -- carrying its own copy
+// that predated CHAOS-5484's route split. That copy still hardcoded
+// `terminal_state = 'match'` with no route clause at all, so the
+// migration-status page rendered a primary proof-route receipt PROVEN
+// while enablement correctly refused it, and rendered a canary cited
+// mismatch UNPROVEN while enablement accepted it. Its own comment claimed
+// it was "deliberately the same predicate the enablement command uses" --
+// true when written, false the moment the rule moved, and nothing failed.
+//
+// A shared truth table pins the implementations it knows about. It cannot
+// pin one nobody enumerated, so the rule now has ONE source and callers
+// compose it rather than restate it.
+func EnablementProofClause(alias, targetMode string) (string, error) {
+	var routeClause string
+	switch targetMode {
+	case TargetModePrimary:
+		routeClause = alias + ".measurement_route = '" + RouteEdge + "'"
+	case TargetModeCanary:
+		// Recorded, not merely anything. A NULL is a pre-0128 row that
+		// says nothing about how it was measured, and "any route" is not
+		// "no route" -- admitting unknown provenance is the same failure
+		// shape as reading a DEFAULT 0 as an assertion.
+		routeClause = alias + ".measurement_route IS NOT NULL"
+	default:
+		return "", fmt.Errorf("goapiproof: unknown enablement target mode %q -- expected %q or %q; refusing to build a predicate whose route rule is undefined", targetMode, TargetModeCanary, TargetModePrimary)
+	}
+	return enablementProofPredicate(alias) + "\n\t\t    AND " + routeClause, nil
+}
 
 // OperationsWithEnablementProof is the Go reader for the exact predicate
 // `enable`'s preflight uses (go_api_routing_admin.build_enablement_proof_select).
@@ -316,18 +356,9 @@ func OperationsWithEnablementProof(
 	targetMode string,
 	documentDigestByOperation map[string]string,
 ) (map[string]bool, error) {
-	var routeClause string
-	switch targetMode {
-	case TargetModePrimary:
-		routeClause = "p.measurement_route = '" + RouteEdge + "'"
-	case TargetModeCanary:
-		// Recorded, not merely anything. A NULL is a pre-0128 row that
-		// says nothing about how it was measured, and "any route" is not
-		// "no route" -- admitting unknown provenance is the same failure
-		// shape as reading a DEFAULT 0 as an assertion.
-		routeClause = "p.measurement_route IS NOT NULL"
-	default:
-		return nil, fmt.Errorf("goapiproof: unknown enablement target mode %q -- expected %q or %q; refusing to read a predicate whose route rule is undefined", targetMode, TargetModeCanary, TargetModePrimary)
+	clause, err := EnablementProofClause("p", targetMode)
+	if err != nil {
+		return nil, err
 	}
 
 	found := map[string]bool{}
@@ -345,16 +376,13 @@ func OperationsWithEnablementProof(
 	rows, err := db.Query(ctx,
 		`SELECT DISTINCT p.selected_operation
 		   FROM go_api_proof_run AS p
-		   JOIN unnest($4::text[], $5::text[]) AS want(operation, document_digest)
+		   JOIN unnest($3::text[], $4::text[]) AS want(operation, document_digest)
 		     ON want.operation = p.selected_operation
 		    AND want.document_digest = p.document_digest
 		  WHERE p.schema_digest = $1
 		    AND p.candidate_build = $2
-		    AND `+enablementProofPredicate+`
-		    AND `+routeClause,
-		schemaDigest, candidateBuild, EnablementProofStage,
-		operations, digests, EnablementProofTerminalState,
-		EnablementCitedMismatchState,
+		    AND `+clause,
+		schemaDigest, candidateBuild, operations, digests,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("goapiproof: read enablement proof: %w", err)

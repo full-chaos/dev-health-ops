@@ -736,23 +736,43 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	// the status comparison stays a parity finding. Same for content type:
 	// identical bodies served under different types are not parity, because
 	// the client is told to interpret the same bytes differently.
-	if candidate.StatusCode != baseline.StatusCode {
+	//
+	// Each of these ALSO increments DifferencesOutsideBaselineDefect, and
+	// that is not bookkeeping -- it is what stops CHAOS-5484's fully-cited
+	// mismatch rule from admitting an UNcited one.
+	//
+	// r2 (P1) reproduced the hole end to end: these findings were appended
+	// AFTER the counter was copied from the body comparison, so a cited
+	// body defect plus an uncited HTTP 200-vs-202 produced
+	// terminal_state=mismatch with outside=0 -- which the enablement
+	// predicate reads as "every difference here is a known Python defect"
+	// and admits. Before 5484 a mismatch was never enablement-eligible at
+	// all, so the ordering did not matter; the new rule is precisely what
+	// makes it matter.
+	//
+	// They count as OUTSIDE by construction, never by omission: a
+	// BaselineDefect declares dotted BODY field paths (see
+	// BaselineDefect.Paths), so no declaration can cite `$.http.status` or
+	// `$.http.header.*` even in principle. A citation mechanism that
+	// cannot express these differences must not be read as covering them.
+	httpDifference := func(path, detail string) {
 		outcome.TerminalState = TerminalStateMismatch
 		outcome.Findings = append(outcome.Findings, Finding{
 			Kind:   FindingMismatch,
-			Path:   "$.http.status",
-			Detail: fmt.Sprintf("baseline %d != candidate %d", baseline.StatusCode, candidate.StatusCode),
+			Path:   path,
+			Detail: detail,
 		})
+		outcome.DifferencesOutsideBaselineDefect++
+	}
+	if candidate.StatusCode != baseline.StatusCode {
+		httpDifference("$.http.status",
+			fmt.Sprintf("baseline %d != candidate %d", baseline.StatusCode, candidate.StatusCode))
 	}
 	for _, header := range comparedHeaders {
 		baselineValue, candidateValue := baseline.Headers[header], candidate.Headers[header]
 		if baselineValue != candidateValue {
-			outcome.TerminalState = TerminalStateMismatch
-			outcome.Findings = append(outcome.Findings, Finding{
-				Kind:   FindingMismatch,
-				Path:   "$.http.header." + header,
-				Detail: fmt.Sprintf("baseline %q != candidate %q", baselineValue, candidateValue),
-			})
+			httpDifference("$.http.header."+header,
+				fmt.Sprintf("baseline %q != candidate %q", baselineValue, candidateValue))
 		}
 	}
 

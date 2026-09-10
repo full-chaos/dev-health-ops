@@ -849,3 +849,113 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 		t.Fatalf("%d receipt(s) written for an operation that was never measured", len(receipts))
 	}
 }
+
+// flowMatrixRunner drives the ONE operation whose committed spec declares
+// a baseline defect, which is what makes a fully-cited mismatch reachable
+// at all.
+func flowMatrixRunner(t *testing.T, edge *fakeEdge) *Runner {
+	t.Helper()
+	runner := newRunner(t, edge, "canary")
+	runner.Documents = map[string]string{"flowMatrix": "query FlowMatrix { analytics { flowMatrix { nodes { value } } } }"}
+	runner.Registry.DocumentDigest = map[string]string{"flowMatrix": "06ca28a0"}
+	runner.Routing = map[string]RoutingRow{"flowMatrix": {
+		Mode: "canary", CandidateBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36",
+	}}
+	return runner
+}
+
+// r2 P1: an HTTP-level difference must count as OUTSIDE the cited
+// baseline defect.
+//
+// The counter was copied from the BODY comparison and the status/header
+// findings were appended after it, so a cited body defect plus an UNCITED
+// HTTP 200-vs-202 produced terminal_state=mismatch with
+// differences_outside_baseline_defect=0 -- which CHAOS-5484's predicate
+// reads as "every difference here is a known Python defect" and admits.
+// The receipt would have authorized an enablement on a divergence nobody
+// ever cited.
+//
+// They are outside by CONSTRUCTION, not by omission: a BaselineDefect
+// declares dotted BODY field paths, so no declaration can cite
+// `$.http.status` even in principle. A citation mechanism that cannot
+// express a difference must never be read as covering it.
+func TestAnHTTPDifferenceCountsOutsideTheCitedBaselineDefect(t *testing.T) {
+	// The body difference IS cited: nodes.value is CHAOS-5448's path.
+	baseline := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":2}]}}}}`
+	candidate := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`
+
+	edge := &fakeEdge{
+		goBody:     candidate,
+		pythonBody: baseline,
+		goBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
+		goStatus:   http.StatusAccepted, // 202 against the baseline's 200 -- UNcited
+	}
+	runner := flowMatrixRunner(t, edge)
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("expected one outcome, got %d", len(outcomes))
+	}
+	outcome := outcomes[0]
+
+	if outcome.TerminalState != TerminalStateMismatch {
+		t.Fatalf("terminal state = %q, want mismatch", outcome.TerminalState)
+	}
+	if len(outcome.BaselineDefects) == 0 {
+		t.Fatal("the body difference must be CITED for this test to mean anything: without a citation the receipt is refused for a different reason and the hole stays hidden")
+	}
+	if outcome.DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("differences_outside_baseline_defect = %d with an UNCITED HTTP status difference present (%+v): this receipt claims every difference is a known Python defect and is enablement-eligible",
+			outcome.DifferencesOutsideBaselineDefect, outcome.Findings)
+	}
+
+	// And the receipt carries it, since that column is what the predicate
+	// actually reads.
+	receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 1 {
+		t.Fatalf("expected one receipt, got %d", len(receipts))
+	}
+	if receipts[0].DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("the RECEIPT says outside=%d: the enablement predicate reads this column, so a zero here admits the run",
+			receipts[0].DifferencesOutsideBaselineDefect)
+	}
+}
+
+// The control: without the HTTP difference the same cited mismatch is
+// still fully cited. Without this, the assertion above would also pass if
+// every mismatch were counted as outside, which would make the
+// fully-cited rule unreachable -- a different defect reading as a fix.
+func TestACitedMismatchWithNoHTTPDifferenceStaysFullyCited(t *testing.T) {
+	baseline := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":2}]}}}}`
+	candidate := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`
+
+	edge := &fakeEdge{
+		goBody:     candidate,
+		pythonBody: baseline,
+		goBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
+	}
+	runner := flowMatrixRunner(t, edge)
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outcome := outcomes[0]
+
+	if outcome.TerminalState != TerminalStateMismatch {
+		t.Fatalf("terminal state = %q, want mismatch", outcome.TerminalState)
+	}
+	if len(outcome.BaselineDefects) == 0 {
+		t.Fatal("the body difference must be cited")
+	}
+	if outcome.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("differences_outside_baseline_defect = %d on a fully-cited mismatch (%+v): the fully-cited rule is now unreachable, which refuses legitimate evidence rather than admitting bad evidence -- the opposite defect",
+			outcome.DifferencesOutsideBaselineDefect, outcome.Findings)
+	}
+}

@@ -1,11 +1,17 @@
 package daily
 
 import (
+	"encoding/json"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 )
 
 // TestPythonFloatJSONMatchesLivePythonJSONDumps pins pythonFloatJSON against
@@ -130,6 +136,224 @@ func TestFactorsJSONNonFiniteFieldsCountedByFamilyAndField(t *testing.T) {
 	if after := finite.Count(family, "inf_field", finite.ReasonPositiveInf); after != beforeInf+1 {
 		t.Errorf("finite.Count(inf_field, +inf) = %d, want %d", after, beforeInf+1)
 	}
+}
+
+// reflectedFloatField is one float64 (or *float64) field discovered by
+// reflecting over a real production record type, paired with a setter that
+// injects a value into THAT field only.
+type reflectedFloatField struct {
+	name   string
+	inject func(value float64) (restore func())
+}
+
+// reflectedFloatFields enumerates every float64/*float64 field on
+// structPtr (a pointer to a production input record, e.g.
+// *testops.PipelineMetric) by reflection, dynamically -- the field list a
+// mutation sweep exercises is therefore whatever fields the record type
+// ACTUALLY has, not a hand-picked subset a test author chose to remember.
+// A future field added to one of these structs is picked up automatically,
+// with no test edit required. A nil *float64 field is given a real backing
+// value first so the sweep can still drive it.
+func reflectedFloatFields(t *testing.T, structPtr any) []reflectedFloatField {
+	t.Helper()
+	v := reflect.ValueOf(structPtr).Elem()
+	typ := v.Type()
+	var fields []reflectedFloatField
+	for i := 0; i < typ.NumField(); i++ {
+		field := v.Field(i)
+		name := typ.Field(i).Name
+		switch {
+		case field.Kind() == reflect.Float64:
+			field := field
+			fields = append(fields, reflectedFloatField{
+				name: name,
+				inject: func(value float64) func() {
+					original := field.Float()
+					field.SetFloat(value)
+					return func() { field.SetFloat(original) }
+				},
+			})
+		case field.Kind() == reflect.Ptr && field.Type().Elem().Kind() == reflect.Float64:
+			if field.IsNil() {
+				backing := 0.0
+				field.Set(reflect.ValueOf(&backing))
+			}
+			ptr := field.Interface().(*float64)
+			fields = append(fields, reflectedFloatField{
+				name: name,
+				inject: func(value float64) func() {
+					original := *ptr
+					*ptr = value
+					return func() { *ptr = original }
+				},
+			})
+		}
+	}
+	if len(fields) == 0 {
+		t.Fatalf("reflectedFloatFields(%T) found zero float64/*float64 fields -- the reflection walk itself is broken, this sweep would silently test nothing", structPtr)
+	}
+	return fields
+}
+
+// assertFactorsJSONSurvivesNonFinite calls produce() (a real production
+// compute* function invoked with the mutated record already in scope via
+// closure) and proves the ONE write/serialization boundary (R73,
+// CHAOS-4806) held: never a forbidden NaN/Infinity wire token, and always
+// syntactically valid JSON -- not just "doesn't contain the substring",
+// since a truncated/malformed literal could dodge the substring check while
+// still being invalid JSON.
+func assertFactorsJSONSurvivesNonFinite(t *testing.T, label string, factorsJSON string) {
+	t.Helper()
+	for _, bad := range []string{"NaN", "Infinity"} {
+		if strings.Contains(factorsJSON, bad) {
+			t.Errorf("%s: factors_json contains forbidden wire token %q: %s", label, bad, factorsJSON)
+		}
+	}
+	if !json.Valid([]byte(factorsJSON)) {
+		t.Errorf("%s: factors_json is not valid JSON: %s", label, factorsJSON)
+	}
+}
+
+// baselineTestopsInputs builds one fully-populated, all-finite
+// PipelineMetric/TestMetric/CoverageMetric triple -- realistic values in
+// their real domains (rates in [0,1], durations/queues positive seconds,
+// non-zero counts) -- as the shared starting point every reflected-field
+// injection below mutates ONE field of, one at a time.
+func baselineTestopsInputs() (*testops.PipelineMetric, *testops.TestMetric, *testops.CoverageMetric) {
+	repoID := uuid.New()
+	medianDur, p95Dur, avgQueue, p95Queue := 120.0, 300.0, 15.0, 60.0
+	suiteP50, suiteP95 := 8.0, 20.0
+	lineCov, branchCov, covDelta := 82.5, 70.0, 1.5
+	pipe := &testops.PipelineMetric{
+		RepoID: repoID, PipelinesCount: 40, SuccessCount: 36, FailureCount: 3, CancelledCount: 1,
+		SuccessRate: 0.9, FailureRate: 0.075, CancelRate: 0.025, RerunRate: 0.1,
+		MedianDurationSeconds: &medianDur, P95DurationSeconds: &p95Dur,
+		AvgQueueSeconds: &avgQueue, P95QueueSeconds: &p95Queue, OrgID: "org-reflect-sweep",
+	}
+	test := &testops.TestMetric{
+		RepoID: repoID, TotalCases: 500, PassedCount: 470, FailedCount: 20, SkippedCount: 10, QuarantinedCount: 2,
+		PassRate: 0.94, FailureRate: 0.04, FlakeRate: 0.02, RetryDependencyRate: 0.01, TotalSuites: 25,
+		SuiteDurationP50Seconds: &suiteP50, SuiteDurationP95Seconds: &suiteP95,
+		FailureRecurrence: 0.05, OrgID: "org-reflect-sweep",
+	}
+	cov := &testops.CoverageMetric{
+		RepoID: repoID, LineCoveragePct: &lineCov, BranchCoveragePct: &branchCov,
+		CoverageDeltaPct: &covDelta, OrgID: "org-reflect-sweep",
+	}
+	return pipe, test, cov
+}
+
+// TestComputeReleaseConfidenceFactorsJSONSurvivesEveryReflectedFloatField is
+// the P3 fix (codex round 3b, prompt-of-record finding): a hand-picked
+// field list only proves the boundary catches the fields a test author
+// thought to inject -- it does not prove EVERY field of the real
+// production input record is covered. This sweeps every float64/*float64
+// field testops.PipelineMetric/TestMetric/CoverageMetric actually has (via
+// reflection, so a field added to either struct later is swept
+// automatically with no test edit), injects NaN and both infinities into
+// each ONE AT A TIME against the real computeReleaseConfidence, and proves
+// the resulting row's real FactorsJSON never regresses to a raw
+// NaN/Infinity wire token and always stays valid JSON.
+func TestComputeReleaseConfidenceFactorsJSONSurvivesEveryReflectedFloatField(t *testing.T) {
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	computedAt := day.Add(time.Hour)
+	nonFiniteValues := []float64{math.NaN(), math.Inf(1), math.Inf(-1)}
+
+	for _, source := range []struct {
+		label string
+		ptr   any
+	}{
+		{"PipelineMetric", func() *testops.PipelineMetric { p, _, _ := baselineTestopsInputs(); return p }()},
+		{"TestMetric", func() *testops.TestMetric { _, tm, _ := baselineTestopsInputs(); return tm }()},
+		{"CoverageMetric", func() *testops.CoverageMetric { _, _, c := baselineTestopsInputs(); return c }()},
+	} {
+		for _, field := range reflectedFloatFields(t, source.ptr) {
+			for _, nonFinite := range nonFiniteValues {
+				pipe, test, cov := baselineTestopsInputs()
+				var injectTarget any
+				switch source.label {
+				case "PipelineMetric":
+					injectTarget = pipe
+				case "TestMetric":
+					injectTarget = test
+				case "CoverageMetric":
+					injectTarget = cov
+				}
+				// Re-resolve the field setter against THIS iteration's own
+				// fresh struct instance (not source.ptr's shared one) so
+				// injections never leak across sub-cases.
+				thisField := fieldByName(t, injectTarget, field.name)
+				restore := thisField.inject(nonFinite)
+
+				row := computeReleaseConfidence(pipe.RepoID, day, pipe, test, cov, computedAt)
+				restore()
+
+				if row == nil {
+					t.Fatalf("%s.%s=%v: computeReleaseConfidence returned nil -- one non-finite field must not refuse the whole row", source.label, field.name, nonFinite)
+				}
+				assertFactorsJSONSurvivesNonFinite(t, source.label+"."+field.name, row.FactorsJSON)
+			}
+		}
+	}
+}
+
+// TestComputeQualityDragFactorsJSONSurvivesEveryReflectedFloatField is
+// TestComputeReleaseConfidenceFactorsJSONSurvivesEveryReflectedFloatField's
+// sibling for computeQualityDrag's own two input records (coverage is not
+// an input here -- compute_quality_drag never reads it, see
+// computeQualityDrag's doc comment).
+func TestComputeQualityDragFactorsJSONSurvivesEveryReflectedFloatField(t *testing.T) {
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	computedAt := day.Add(time.Hour)
+	nonFiniteValues := []float64{math.NaN(), math.Inf(1), math.Inf(-1)}
+
+	for _, source := range []struct {
+		label string
+		ptr   any
+	}{
+		{"PipelineMetric", func() *testops.PipelineMetric { p, _, _ := baselineTestopsInputs(); return p }()},
+		{"TestMetric", func() *testops.TestMetric { _, tm, _ := baselineTestopsInputs(); return tm }()},
+	} {
+		for _, field := range reflectedFloatFields(t, source.ptr) {
+			for _, nonFinite := range nonFiniteValues {
+				pipe, test, _ := baselineTestopsInputs()
+				var injectTarget any
+				switch source.label {
+				case "PipelineMetric":
+					injectTarget = pipe
+				case "TestMetric":
+					injectTarget = test
+				}
+				thisField := fieldByName(t, injectTarget, field.name)
+				restore := thisField.inject(nonFinite)
+
+				row := computeQualityDrag(pipe.RepoID, day, pipe, test, computedAt)
+				restore()
+
+				if row == nil {
+					t.Fatalf("%s.%s=%v: computeQualityDrag returned nil -- one non-finite field must not refuse the whole row", source.label, field.name, nonFinite)
+				}
+				assertFactorsJSONSurvivesNonFinite(t, source.label+"."+field.name, row.FactorsJSON)
+			}
+		}
+	}
+}
+
+// fieldByName re-resolves one named reflectedFloatField against a FRESH
+// struct instance -- reflectedFloatFields' closures are bound to the
+// specific struct value they were built from, so each sub-case (which
+// deliberately starts from its own fresh baselineTestopsInputs() to avoid
+// cross-case leakage) must look its setter up again by name rather than
+// reusing the outer loop's original closure.
+func fieldByName(t *testing.T, structPtr any, name string) reflectedFloatField {
+	t.Helper()
+	for _, field := range reflectedFloatFields(t, structPtr) {
+		if field.name == name {
+			return field
+		}
+	}
+	t.Fatalf("fieldByName: no field %q found on %T", name, structPtr)
+	return reflectedFloatField{}
 }
 
 // TestClampUnitMatchesPythonClampSemantics pins clampUnit against Python's

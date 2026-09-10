@@ -128,7 +128,23 @@ func ComputeInternalBaselines(
 	// observing it, per R73's explicit "correctness over parity" ruling
 	// (Python parity is not required here; see Percentile's own doc comment
 	// for why its raw NaN-ordering behavior is deliberately left untouched).
-	crossSection = finite.DropNonFinite(finiteBaselineFamily, metricName, crossSection)
+	// codex round chaos-4806-r3b P3 (mutation-tested finding): every call in
+	// this function used the bare metricName as its finite.* field tag, so
+	// all four undefined_input call sites below were indistinguishable
+	// telemetry -- deleting any ONE of them left every test's `finite.Count`
+	// assertion satisfied by the other three firing for the same fixture.
+	// Suffix the field per DISTINCT boundary so each is independently
+	// observable (both in production telemetry and in tests, which can now
+	// assert an exact count on their own specific field instead of a
+	// same-key total).
+	crossSectionField := metricName + ":cross_section"
+	percentileValuesField := metricName + ":percentile_values"
+	currentValueField := metricName + ":current_value"
+	percentileRankField := metricName + ":percentile_rank"
+	windowField := metricName + ":window"
+	baselineValueField := metricName + ":baseline_value"
+
+	crossSection = finite.DropNonFinite(finiteBaselineFamily, crossSectionField, crossSection)
 
 	// CHAOS-4806 / ruling R73, codex round chaos-4806-r1 P1 (executed repro:
 	// a cross-section of finite MaxFloat64-magnitude values produces a +Inf
@@ -147,12 +163,12 @@ func ComputeInternalBaselines(
 	// not zero.
 	var p25, p50, p75, p90 *float64
 	if len(crossSection) == 0 {
-		finite.Undefined(finiteBaselineFamily, metricName)
+		finite.Undefined(finiteBaselineFamily, percentileValuesField)
 	} else {
-		p25 = nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 25.0))
-		p50 = nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 50.0))
-		p75 = nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 75.0))
-		p90 = nullableRound4(finiteBaselineFamily, metricName, Percentile(crossSection, 90.0))
+		p25 = nullableRound4(finiteBaselineFamily, percentileValuesField, Percentile(crossSection, 25.0))
+		p50 = nullableRound4(finiteBaselineFamily, percentileValuesField, Percentile(crossSection, 50.0))
+		p75 = nullableRound4(finiteBaselineFamily, percentileValuesField, Percentile(crossSection, 75.0))
+		p90 = nullableRound4(finiteBaselineFamily, percentileValuesField, Percentile(crossSection, 90.0))
 	}
 
 	var results []BenchmarkBaselineRecord
@@ -169,7 +185,7 @@ func ComputeInternalBaselines(
 		// 090_testops_baselines_nullable_fields.sql) -- keep the row, null
 		// ONLY this one field via nullableRound4, which records the actual
 		// reason through finite.Check.
-		currentValue := nullableRound4(finiteBaselineFamily, metricName, latestValue)
+		currentValue := nullableRound4(finiteBaselineFamily, currentValueField, latestValue)
 		// codex round chaos-4806-r3b P1 (executed repro): PercentileRank
 		// was computed from the RAW latestValue even when currentValue
 		// above came back nil -- safe for a NaN comparison value (every
@@ -184,13 +200,14 @@ func ComputeInternalBaselines(
 		// the real rank when currentValue survived the check above.
 		var percentileRank *float64
 		if currentValue == nil {
-			finite.Undefined(finiteBaselineFamily, metricName)
-		} else if len(crossSection) > 0 {
-			percentileRank = nullableRound4(finiteBaselineFamily, metricName, PercentileRank(crossSection, latestValue))
+			finite.Undefined(finiteBaselineFamily, percentileRankField)
 		} else {
-			// Empty cross-section: no cohort to rank against at all,
-			// independent of whether THIS scope's own value is finite.
-			finite.Undefined(finiteBaselineFamily, metricName)
+			// currentValue != nil means latestValue passed the same finite
+			// check DropNonFinite used to build crossSection above, so THIS
+			// scope's own value necessarily survived into it -- crossSection
+			// is therefore non-empty here by construction (it contains at
+			// least this scope's own entry), never the empty-cohort case.
+			percentileRank = nullableRound4(finiteBaselineFamily, percentileRankField, PercentileRank(crossSection, latestValue))
 		}
 		points := seriesByScope[scopeKey]
 		for _, windowDays := range windows {
@@ -206,7 +223,7 @@ func ComputeInternalBaselines(
 			// BaselineValue is now Nullable(Float64) too. This window had
 			// real points, so the row still gets written regardless of
 			// what's left after filtering.
-			values = finite.DropNonFinite(finiteBaselineFamily, metricName, values)
+			values = finite.DropNonFinite(finiteBaselineFamily, windowField, values)
 			// CHAOS-4806 / ruling R73, codex round chaos-4806-r1 P1
 			// (executed repro: an all-non-finite window fell through to
 			// Mean(nil)'s own documented 0.0-for-empty-input default --
@@ -217,9 +234,9 @@ func ComputeInternalBaselines(
 			// asking Mean to answer a question it has no data for.
 			var baselineValue *float64
 			if len(values) == 0 {
-				finite.Undefined(finiteBaselineFamily, metricName)
+				finite.Undefined(finiteBaselineFamily, baselineValueField)
 			} else {
-				baselineValue = nullableRound4(finiteBaselineFamily, metricName, Mean(values))
+				baselineValue = nullableRound4(finiteBaselineFamily, baselineValueField, Mean(values))
 			}
 			periodStart := asOfDay.AddDate(0, 0, -(windowDays - 1))
 			results = append(results, BenchmarkBaselineRecord{

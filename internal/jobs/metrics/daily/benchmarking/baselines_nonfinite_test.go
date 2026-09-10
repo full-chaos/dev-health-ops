@@ -30,7 +30,15 @@ func TestComputeInternalBaselinesDropsNonFiniteCrossSectionEntries(t *testing.T)
 		"scope-nan":    {{Day: asOf, Value: math.NaN()}},
 	}
 
-	beforeDropped := finite.Count(finiteBaselineFamily, metricName, finite.ReasonNaN)
+	// codex round chaos-4806-r3b P3 (mutation-tested finding): this file's
+	// finite.Undefined/DropNonFinite calls now tag a per-CONCERN field
+	// suffix (":cross_section", ":current_value", etc.) instead of the
+	// bare metricName, so this counter check is exact to the ONE call site
+	// under test -- deleting that specific call's field/reason no longer
+	// leaves the assertion satisfied by an unrelated call sharing the same
+	// key.
+	crossSectionField := metricName + ":cross_section"
+	beforeDropped := finite.Count(finiteBaselineFamily, crossSectionField, finite.ReasonNaN)
 
 	baselines := ComputeInternalBaselines(
 		metricName, ScopeRepo, series, asOf, computedAt, []int{30}, "org-nonfinite",
@@ -85,9 +93,9 @@ func TestComputeInternalBaselinesDropsNonFiniteCrossSectionEntries(t *testing.T)
 		t.Fatal("expected a row for scope-nan (with CurrentValue nulled, not the whole row dropped)")
 	}
 
-	afterDropped := finite.Count(finiteBaselineFamily, metricName, finite.ReasonNaN)
-	if afterDropped <= beforeDropped {
-		t.Errorf("finite.Count(%s,%s,nan) did not increase (before=%d after=%d) -- the boundary trip must be counted", finiteBaselineFamily, metricName, beforeDropped, afterDropped)
+	afterDropped := finite.Count(finiteBaselineFamily, crossSectionField, finite.ReasonNaN)
+	if afterDropped != beforeDropped+1 {
+		t.Errorf("finite.Count(%s,%s,nan) = %d, want %d -- exactly one cross-section drop (scope-nan's own entry)", finiteBaselineFamily, crossSectionField, afterDropped, beforeDropped+1)
 	}
 }
 
@@ -142,7 +150,8 @@ func TestComputeInternalBaselinesAllNonFiniteWindowNullsNotZero(t *testing.T) {
 		},
 	}
 
-	beforeUndefined := finite.Count(finiteBaselineFamily, metricName, finite.ReasonUndefinedInput)
+	baselineValueField := metricName + ":baseline_value"
+	beforeUndefined := finite.Count(finiteBaselineFamily, baselineValueField, finite.ReasonUndefinedInput)
 
 	baselines := ComputeInternalBaselines(
 		metricName, ScopeRepo, series, asOf, asOf, []int{30}, "org-nonfinite",
@@ -160,9 +169,9 @@ func TestComputeInternalBaselinesAllNonFiniteWindowNullsNotZero(t *testing.T) {
 	// -- by the CurrentValue path tested elsewhere); nothing further to
 	// assert about it in this test, which targets BaselineValue only.
 
-	afterUndefined := finite.Count(finiteBaselineFamily, metricName, finite.ReasonUndefinedInput)
-	if afterUndefined <= beforeUndefined {
-		t.Errorf("finite.Count(%s,%s,undefined_input) did not increase (before=%d after=%d) -- the all-non-finite-window trip must be counted", finiteBaselineFamily, metricName, beforeUndefined, afterUndefined)
+	afterUndefined := finite.Count(finiteBaselineFamily, baselineValueField, finite.ReasonUndefinedInput)
+	if afterUndefined != beforeUndefined+1 {
+		t.Errorf("finite.Count(%s,%s,undefined_input) = %d, want %d -- exactly the one all-non-finite-window trip", finiteBaselineFamily, baselineValueField, afterUndefined, beforeUndefined+1)
 	}
 }
 
@@ -184,7 +193,14 @@ func TestComputeInternalBaselinesPercentileOverflowNullsNotInf(t *testing.T) {
 		"scope-max": {{Day: asOf, Value: math.MaxFloat64}},
 	}
 
-	beforeInf := finite.Count(finiteBaselineFamily, metricName, finite.ReasonPositiveInf)
+	// With exactly 2 cross-section entries (-MaxFloat64, +MaxFloat64), every
+	// one of p25/p50/p75/p90's interpolation steps compares the SAME pair
+	// (lower=0, upper=1 for any percentile strictly between 0 and 100 over
+	// 2 points) -- the subtraction (upperValue-lowerValue) alone already
+	// overflows, before the weight is even applied, so all FOUR percentile
+	// points overflow, not just one.
+	percentileValuesField := metricName + ":percentile_values"
+	beforeInf := finite.Count(finiteBaselineFamily, percentileValuesField, finite.ReasonPositiveInf)
 
 	baselines := ComputeInternalBaselines(
 		metricName, ScopeRepo, series, asOf, asOf, []int{30}, "org-nonfinite",
@@ -203,9 +219,9 @@ func TestComputeInternalBaselinesPercentileOverflowNullsNotInf(t *testing.T) {
 		}
 	}
 
-	afterInf := finite.Count(finiteBaselineFamily, metricName, finite.ReasonPositiveInf)
-	if afterInf <= beforeInf {
-		t.Errorf("finite.Count(%s,%s,positive_infinity) did not increase (before=%d after=%d) -- an overflowed percentile result must be counted", finiteBaselineFamily, metricName, beforeInf, afterInf)
+	afterInf := finite.Count(finiteBaselineFamily, percentileValuesField, finite.ReasonPositiveInf)
+	if afterInf != beforeInf+4 {
+		t.Errorf("finite.Count(%s,%s,positive_infinity) = %d, want %d -- all four of p25/p50/p75/p90 overflow with only 2 cross-section entries", finiteBaselineFamily, percentileValuesField, afterInf, beforeInf+4)
 	}
 }
 
@@ -225,7 +241,12 @@ func TestComputeInternalBaselinesMeanOverflowNullsNotInf(t *testing.T) {
 		},
 	}
 
-	beforeInf := finite.Count(finiteBaselineFamily, metricName, finite.ReasonPositiveInf)
+	// Only ONE scope, so crossSection has exactly 1 entry -- Percentile
+	// over a single-element slice returns that element directly (no
+	// interpolation, no overflow risk), keeping this test isolated to
+	// Mean's own overflow, not percentile's.
+	baselineValueField := metricName + ":baseline_value"
+	beforeInf := finite.Count(finiteBaselineFamily, baselineValueField, finite.ReasonPositiveInf)
 
 	baselines := ComputeInternalBaselines(
 		metricName, ScopeRepo, series, asOf, asOf, []int{30}, "org-nonfinite",
@@ -238,9 +259,9 @@ func TestComputeInternalBaselinesMeanOverflowNullsNotInf(t *testing.T) {
 		t.Fatalf("BaselineValue = %v, want nil or finite -- Mean's overflowed sum reached the wire", *row.BaselineValue)
 	}
 
-	afterInf := finite.Count(finiteBaselineFamily, metricName, finite.ReasonPositiveInf)
-	if afterInf <= beforeInf {
-		t.Errorf("finite.Count(%s,%s,positive_infinity) did not increase (before=%d after=%d) -- an overflowed Mean result must be counted", finiteBaselineFamily, metricName, beforeInf, afterInf)
+	afterInf := finite.Count(finiteBaselineFamily, baselineValueField, finite.ReasonPositiveInf)
+	if afterInf != beforeInf+1 {
+		t.Errorf("finite.Count(%s,%s,positive_infinity) = %d, want %d -- exactly the one Mean overflow", finiteBaselineFamily, baselineValueField, afterInf, beforeInf+1)
 	}
 }
 
@@ -261,7 +282,12 @@ func TestComputeInternalBaselinesAllNonFiniteCrossSectionNullsPercentilesNotZero
 		"scope-b": {{Day: asOf, Value: math.Inf(1)}},
 	}
 
-	beforeUndefined := finite.Count(finiteBaselineFamily, metricName, finite.ReasonUndefinedInput)
+	// The empty-cross-section undefined trip fires ONCE for the whole
+	// metric call (it is outside the per-scope loop), never once per scope
+	// -- distinct from percentileRankField, which fires once PER non-finite
+	// scope (tested separately below).
+	percentileValuesField := metricName + ":percentile_values"
+	beforeUndefined := finite.Count(finiteBaselineFamily, percentileValuesField, finite.ReasonUndefinedInput)
 
 	baselines := ComputeInternalBaselines(
 		metricName, ScopeRepo, series, asOf, asOf, []int{30}, "org-nonfinite",
@@ -280,9 +306,9 @@ func TestComputeInternalBaselinesAllNonFiniteCrossSectionNullsPercentilesNotZero
 		}
 	}
 
-	afterUndefined := finite.Count(finiteBaselineFamily, metricName, finite.ReasonUndefinedInput)
-	if afterUndefined <= beforeUndefined {
-		t.Errorf("finite.Count(%s,%s,undefined_input) did not increase (before=%d after=%d) -- an empty cross-section must be counted", finiteBaselineFamily, metricName, beforeUndefined, afterUndefined)
+	afterUndefined := finite.Count(finiteBaselineFamily, percentileValuesField, finite.ReasonUndefinedInput)
+	if afterUndefined != beforeUndefined+1 {
+		t.Errorf("finite.Count(%s,%s,undefined_input) = %d, want %d -- the empty-cross-section trip fires exactly once, not once per scope", finiteBaselineFamily, percentileValuesField, afterUndefined, beforeUndefined+1)
 	}
 }
 
@@ -305,9 +331,21 @@ func TestComputeInternalBaselinesInfiniteScopeDoesNotRankAsFullyConfident(t *tes
 		"scope-high": {{Day: asOf, Value: 75.0}},
 	}
 
+	// scope-inf is the ONLY non-finite scope, so percentileRankField's B
+	// branch (this scope's own CurrentValue is undefined) fires exactly
+	// once -- scope-mid/scope-high both have finite values and a non-empty
+	// cross-section, so neither trips it.
+	percentileRankField := metricName + ":percentile_rank"
+	beforeUndefinedRank := finite.Count(finiteBaselineFamily, percentileRankField, finite.ReasonUndefinedInput)
+
 	baselines := ComputeInternalBaselines(
 		metricName, ScopeRepo, series, asOf, asOf, []int{30}, "org-nonfinite",
 	)
+
+	afterUndefinedRank := finite.Count(finiteBaselineFamily, percentileRankField, finite.ReasonUndefinedInput)
+	if afterUndefinedRank != beforeUndefinedRank+1 {
+		t.Errorf("finite.Count(%s,%s,undefined_input) = %d, want %d -- exactly scope-inf's own rank trip", finiteBaselineFamily, percentileRankField, afterUndefinedRank, beforeUndefinedRank+1)
+	}
 
 	sawInfScope := false
 	for _, row := range baselines {

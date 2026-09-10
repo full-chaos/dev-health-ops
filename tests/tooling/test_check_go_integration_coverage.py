@@ -176,10 +176,19 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # integration file (config_integration_test.go: a DSN assembled from
     # discrete components reaching a real PostgreSQL and a real ClickHouse
     # with reserved characters intact). 55 -> 56.
-    # CURRENT TOTAL: 56. Adding one -tags=integration package bumps every
+    # CHAOS-5486 added cmd/go-api-routing's first //go:build integration
+    # file (verbs_integration_test.go: the enable/disable/status verb ports'
+    # end-to-end preflight, digest-agreement and warning-emission tests
+    # against a real Postgres container). 56 -> 57. This is the SAME package
+    # test_go_integration_sharding.py's EXPECTED_PACKAGES already counted --
+    # a second literal in a second file, missed when that one was bumped, is
+    # exactly the Trap #105 shape this comment block exists to prevent a
+    # recurrence of: name every pin that carries this count, not just the
+    # nearest one.
+    # CURRENT TOTAL: 57. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "56 package(s) discovered, 0 denylisted, 56 will run" in result.stdout
+    assert "57 package(s) discovered, 0 denylisted, 57 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
@@ -188,4 +197,5 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     assert "  RUN  internal/platform/config" in result.stdout
     assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
     assert "  RUN  cmd/query-api/internal/featureflags" in result.stdout
+    assert "  RUN  cmd/go-api-routing" in result.stdout
     assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

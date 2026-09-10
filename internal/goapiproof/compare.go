@@ -536,14 +536,15 @@ func sortIdentities(ids [][2]string) {
 
 // --- Structural JSON comparison (parity rules 2, 3, 5) -----------------
 
-// listIndexSuffix matches ANY single bracketed suffix a comparator path
-// segment can carry: a positional index ("[0]") or an OrderInsensitiveList
-// pairing key ("[key=\"feature_delivery.build\"]"). It is stripped from
-// the WHOLE path BEFORE splitting on "." -- not per already-split segment
-// -- because a pairing key can itself contain a literal "." (e.g. a
-// SUBCATEGORY node id like "feature_delivery.build"), which would
-// otherwise be misread as a path-segment boundary and corrupt every
-// Tier-B/volatile-field lookup for fields nested inside that element.
+// listIndexSuffix matches a bracketed list-index suffix a comparator path
+// segment can carry ("[0]", "[42]") -- ALWAYS a plain ordinal, never a
+// raw data value (compareListByKey's pairing key is deliberately kept
+// OUT of the path string entirely -- see its own doc comment -- so a key
+// value containing "." or "]" can never reach here and corrupt this
+// stripping or the "." split below it). Stripped from the WHOLE path
+// BEFORE splitting on "." (not per already-split segment): harmless for
+// today's digit-only content, but keeps this function correct even if a
+// future bracket form ever carries a "." inside it again.
 var listIndexSuffix = regexp.MustCompile(`\[[^\[\]]*\]`)
 
 // tieredPath normalises a concrete comparator path ("$.data.edges[0].score")
@@ -855,10 +856,19 @@ func orderInsensitiveKey(element any, keyFields []string) (string, bool) {
 // reported per-key rather than collapsed into one length mismatch.
 //
 // If ANY element on EITHER side does not carry every declared key field,
-// the declaration does not describe this data: the whole list is refused
-// (tracked, never silently downgraded to a finding) rather than guessing
-// a partial pairing that could hide a real divergence behind a comparison
-// nobody actually asked for.
+// OR two elements on the SAME side share the same key, the declaration
+// does not describe this data: the whole list is refused (tracked, never
+// silently downgraded to a finding) rather than guessing a partial
+// pairing that could hide a real divergence behind a comparison nobody
+// actually asked for. CHAOS-5546 r1 finding: a naive `byKey[key] =
+// element` silently let a LATER duplicate overwrite an EARLIER one,
+// which can make a materially different candidate compare as a clean
+// match (construction: baseline [{id:a,v:1},{id:a,v:2}], candidate
+// [{id:a,v:999},{id:a,v:2}] -- both collapse to key "a" -> {v:2} and
+// compare equal, discarding the v:1/v:999 divergence entirely). A
+// duplicate key means KeyFields does not uniquely identify elements in
+// THIS data, which is exactly the same "declaration doesn't describe
+// this data" failure the missing-key-field guard already covers.
 func compareListByKey(baseline, candidate []any, path string, decl OrderInsensitiveList, opts Options, track *tracker) []Finding {
 	index := func(elements []any, side string) (map[string]any, bool) {
 		byKey := make(map[string]any, len(elements))
@@ -868,6 +878,12 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 				track.orderInsensitiveKeyMissing = append(track.orderInsensitiveKeyMissing, fmt.Sprintf(
 					"order-insensitive list %q (ticket %s): a %s element at %s is missing one of the declared key field(s) %v",
 					decl.Path, decl.Ticket, side, path, decl.KeyFields))
+				return nil, false
+			}
+			if _, duplicate := byKey[key]; duplicate {
+				track.orderInsensitiveKeyMissing = append(track.orderInsensitiveKeyMissing, fmt.Sprintf(
+					"order-insensitive list %q (ticket %s): the %s side has two elements at %s sharing key %q -- KeyFields %v does not uniquely identify elements in this data",
+					decl.Path, decl.Ticket, side, path, key, decl.KeyFields))
 				return nil, false
 			}
 			byKey[key] = element
@@ -896,19 +912,34 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 	sort.Strings(keys)
 
 	var findings []Finding
-	for _, key := range keys {
-		elementPath := fmt.Sprintf("%s[key=%q]", path, key)
+	for i, key := range keys {
+		// elementPath uses an OPAQUE ORDINAL (the key's position in the
+		// sorted, deduplicated key list), never the raw key value.
+		// CHAOS-5546 r1 finding: embedding the key literally
+		// (`[key="..."]`) let a key value containing `]` defeat
+		// tieredPath's bracket-stripping regex, which stops at the FIRST
+		// `]` it finds -- an embedded `]` inside the key closes the
+		// match early and leaves the real closing bracket unstripped,
+		// corrupting the FloatTierB/VolatileFields lookup for every
+		// field nested inside that element. A plain digit index matches
+		// the SAME `[N]` shape ordinary positional list elements already
+		// use, so it needs no special-casing in tieredPath at all. The
+		// human-readable key still appears in every finding's Detail.
+		elementPath := fmt.Sprintf("%s[%d]", path, i)
 		baselineElement, inBaseline := baselineByKey[key]
 		candidateElement, inCandidate := candidateByKey[key]
 		if inBaseline != inCandidate {
-			detail := "present in baseline, absent in candidate"
+			detail := fmt.Sprintf("key %q present in baseline, absent in candidate", key)
 			if !inBaseline {
-				detail = "present in candidate, absent in baseline"
+				detail = fmt.Sprintf("key %q present in candidate, absent in baseline", key)
 			}
 			findings = append(findings, Finding{Kind: FindingMismatch, Path: elementPath, Detail: detail})
 			continue
 		}
-		findings = append(findings, compareJSON(baselineElement, candidateElement, elementPath, opts, nil, track)...)
+		for _, finding := range compareJSON(baselineElement, candidateElement, elementPath, opts, nil, track) {
+			finding.Detail = fmt.Sprintf("[key=%q] %s", key, finding.Detail)
+			findings = append(findings, finding)
+		}
 	}
 	return findings
 }

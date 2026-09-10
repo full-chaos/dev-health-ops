@@ -606,6 +606,90 @@ func TestRunRefusesOnEveryStaleDeclaration(t *testing.T) {
 	}
 }
 
+// withOverriddenParity temporarily replaces operation's registered Parity
+// for the duration of the test, restoring the original via t.Cleanup.
+// Used below to isolate OrderInsensitiveList's two refusal guards from
+// investmentFull's OWN FloatTierB declarations on the same sankey.nodes/
+// edges paths -- those would otherwise ALSO read as stale the moment the
+// sankey list is absent/malformed, and run.go checks UnusedTierB first,
+// masking the exact guard these tests exist to pin.
+func withOverriddenParity(t *testing.T, operation string, parity Options) {
+	t.Helper()
+	original, err := SpecFor(operation)
+	if err != nil {
+		t.Fatalf("SpecFor(%s): %v", operation, err)
+	}
+	overridden := original
+	overridden.Parity = parity
+	operationSpecs[operation] = overridden
+	t.Cleanup(func() { operationSpecs[operation] = original })
+}
+
+// TestRunRefusesOnAnOrderInsensitiveListDeclarationMatchingNothing is
+// CHAOS-5546 r1's P3 fix pin, first half: OrderInsensitiveList's stale-
+// declaration guard (run.go) must actually terminate the run as a
+// refusal, not just populate a Result field nothing reads. Deleting the
+// guard (`if len(result.UnusedOrderInsensitiveLists) > 0 { return
+// refuse(...) }`) left the full `internal/goapiproof` package green
+// before this test existed.
+func TestRunRefusesOnAnOrderInsensitiveListDeclarationMatchingNothing(t *testing.T) {
+	withOverriddenParity(t, "investmentFull", Options{
+		OrderInsensitiveLists: []OrderInsensitiveList{
+			{Path: "data.analytics.sankey.nodes", KeyFields: []string{"id"}, Reason: "test", Ticket: "CHAOS-0000"},
+		},
+	})
+
+	// No "sankey" key at all -- the declared path matches nothing, and
+	// (with the override above) nothing else in Parity could make this
+	// stale for any other reason.
+	body := `{"data":{"analytics":{"breakdowns":{"items":[{"value":1}]}}}}`
+	edge := &fakeEdge{goBody: body, pythonBody: body}
+	runner := newRunner(t, edge, "canary")
+	edge.goBuild = runner.Registry.BuildIdentity
+	runner.Documents = map[string]string{"investmentFull": "query InvestmentFull { analytics { breakdowns { items { value } } } }"}
+	runner.Registry.DocumentDigest = map[string]string{"investmentFull": "ee55ff66"}
+	runner.Routing = map[string]RoutingRow{"investmentFull": {Mode: "canary", CandidateBuild: runner.Registry.BuildIdentity}}
+
+	outcomes, _, err := runner.Run(context.Background())
+	if !errors.Is(err, ErrNothingMeasured) {
+		t.Fatalf("a declaration matching nothing must refuse the run, got %v", err)
+	}
+	if outcomes[0].RefusalReason != RefusalStaleOrderInsensitiveList {
+		t.Fatalf("expected %s, got %s (%s)", RefusalStaleOrderInsensitiveList, outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
+	}
+}
+
+// TestRunRefusesOnAnOrderInsensitiveListElementMissingItsKeyField is
+// CHAOS-5546 r1's P3 fix pin, second half: the missing-key-field guard
+// must also actually terminate the run. Deleting it (`if
+// len(result.OrderInsensitiveListRefusals) > 0 { return refuse(...) }`)
+// left the full package green before this test existed.
+func TestRunRefusesOnAnOrderInsensitiveListElementMissingItsKeyField(t *testing.T) {
+	withOverriddenParity(t, "investmentFull", Options{
+		OrderInsensitiveLists: []OrderInsensitiveList{
+			{Path: "data.analytics.sankey.nodes", KeyFields: []string{"id"}, Reason: "test", Ticket: "CHAOS-0000"},
+		},
+	})
+
+	// The sole sankey.nodes element carries no "id" -- the declared
+	// KeyFields ["id"] cannot pair it.
+	body := `{"data":{"analytics":{"breakdowns":{"items":[{"value":1}]},"sankey":{"nodes":[{"value":1}]}}}}`
+	edge := &fakeEdge{goBody: body, pythonBody: body}
+	runner := newRunner(t, edge, "canary")
+	edge.goBuild = runner.Registry.BuildIdentity
+	runner.Documents = map[string]string{"investmentFull": "query InvestmentFull { analytics { breakdowns { items { value } } sankey { nodes { value } } } }"}
+	runner.Registry.DocumentDigest = map[string]string{"investmentFull": "ee55ff67"}
+	runner.Routing = map[string]RoutingRow{"investmentFull": {Mode: "canary", CandidateBuild: runner.Registry.BuildIdentity}}
+
+	outcomes, _, err := runner.Run(context.Background())
+	if !errors.Is(err, ErrNothingMeasured) {
+		t.Fatalf("a missing key field must refuse the run, got %v", err)
+	}
+	if outcomes[0].RefusalReason != RefusalOrderInsensitiveListKeyMissing {
+		t.Fatalf("expected %s, got %s (%s)", RefusalOrderInsensitiveListKeyMissing, outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
+	}
+}
+
 // r9 F11: Run resets r.sealed so a SECOND Run cannot emit receipts for the
 // FIRST one's measurements. Deleting the reset survived every test,
 // because no test ever called Run twice -- yet the whole point of sealing

@@ -253,6 +253,41 @@ func TestExecuteSankeyQueries_NodeOrderPreservesQueryRowOrder(t *testing.T) {
 	}
 }
 
+// TestExecuteSankeyQueries_EdgeOrderPreservesQueryRowOrder is
+// CHAOS-5546 r1's P3 fix pin: the same completion-order-independence
+// claim as the node test above, but for edges -- there IS more than one
+// edges query per real request (one per path hop, CompileSankey's own
+// doc comment), so a hop's SQL finishing before an EARLIER hop's must
+// not reorder the concatenated edge list. edgesResults is written by
+// INDEX exactly like nodesResults; before this test, reversing the
+// concatenation loop (edgesErrs range order) still passed every existing
+// edge test, because none of them varied completion timing.
+func TestExecuteSankeyQueries_EdgeOrderPreservesQueryRowOrder(t *testing.T) {
+	slow := &fakeRowScanner{rows: [][]any{{"TEAM", "REPO", "team-a", "repo-x", float64(1)}}}
+	fast := &fakeRowScanner{rows: [][]any{{"REPO", "WORK_TYPE", "repo-x", "bug", float64(2)}}}
+	client := &orderedDelayClient{
+		byStatement: map[string]*fakeRowScanner{
+			"slow-hop-query": slow,
+			"fast-hop-query": fast,
+		},
+		delay: map[string]time.Duration{
+			"slow-hop-query": 30 * time.Millisecond,
+			"fast-hop-query": 0,
+		},
+	}
+	edgesQ := []compiledQuery{
+		{sql: "slow-hop-query"}, // hop 0 (TEAM->REPO) -- must stay first
+		{sql: "fast-hop-query"}, // hop 1 (REPO->WORK_TYPE), even though it returns first
+	}
+	_, edges, err := ExecuteSankeyQueries(context.Background(), client, nil, edgesQ)
+	if err != nil {
+		t.Fatalf("ExecuteSankeyQueries error = %v", err)
+	}
+	if len(edges) != 2 || edges[0].Source != "TEAM:team-a" || edges[1].Source != "REPO:repo-x" {
+		t.Fatalf("edge order = %+v, want hop 0 (TEAM:team-a->...) before hop 1 (REPO:repo-x->...), index order not completion order", edges)
+	}
+}
+
 // orderedDelayClient dispatches by exact statement match after an
 // artificial per-statement delay, so the SLOWEST query is queued FIRST
 // and must still land at its own index in the result.

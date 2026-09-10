@@ -131,12 +131,68 @@ func TestOrderInsensitiveList_MissingElementIsStillAFinding(t *testing.T) {
 	}
 	found := false
 	for _, finding := range result.Findings {
-		if finding.Kind == FindingMismatch && finding.Detail == "present in baseline, absent in candidate" {
+		if finding.Kind == FindingMismatch && finding.Detail == `key "b" present in baseline, absent in candidate` {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected a 'present in baseline, absent in candidate' finding for key %q, got: %+v", "b", result.Findings)
+		t.Fatalf("expected a 'key %q present in baseline, absent in candidate' finding, got: %+v", "b", result.Findings)
+	}
+}
+
+// TestOrderInsensitiveList_DuplicateKeyOnOneSideRefuses is CHAOS-5546 r1's
+// P1 fix pin: two elements on the SAME side sharing a key means KeyFields
+// does not uniquely identify elements in this data. Before the fix,
+// `byKey[key] = element` silently let the LATER element overwrite the
+// earlier one -- constructed here so a materially different candidate
+// (999 vs the baseline's 1) would otherwise compare as a clean MATCH,
+// both sides collapsing to the shared, non-discriminating tail value 2.
+func TestOrderInsensitiveList_DuplicateKeyOnOneSideRefuses(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":{"items":[{"id":"a","value":1},{"id":"a","value":2}]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[{"id":"a","value":999},{"id":"a","value":2}]}}`)
+
+	opts := Options{OrderInsensitiveLists: []OrderInsensitiveList{
+		{Path: "data.items", KeyFields: []string{"id"}, Reason: "test", Ticket: "CHAOS-0000"},
+	}}
+	result := Compare(baseline, candidate, opts)
+	// Compare() itself does not fold OrderInsensitiveListRefusals into
+	// TerminalState -- same pattern as UnusedTierB/StaleBaselineDefects
+	// (see Compare's own doc comment): the refusal is a caller-facing
+	// signal that run.go's post-hoc check turns into an actual REFUSAL
+	// (RefusalOrderInsensitiveListKeyMissing), never a silent match.
+	// TestRunRefusesOnDuplicateOrderInsensitiveKey below pins that half.
+	if len(result.OrderInsensitiveListRefusals) == 0 {
+		t.Fatalf("expected OrderInsensitiveListRefusals to be non-empty on a duplicate key within one side, got: %+v", result)
+	}
+}
+
+// TestOrderInsensitiveList_SameKeyDifferentValueIsAFinding is CHAOS-5546
+// r1's P3 fix pin: pairing by key must still compare the PAIRED elements'
+// OTHER fields, not just their presence. Two elements sharing the same
+// key but disagreeing on "value" must produce a mismatch finding --
+// mutation-resistant proof that the paired compareJSON call is load-bearing
+// (the round mutated it to a no-op and this exact shape still passed
+// without this test, because the existing fixtures only ever reorder
+// elements, never change a value under the same key).
+func TestOrderInsensitiveList_SameKeyDifferentValueIsAFinding(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":{"items":[{"id":"a","value":1},{"id":"b","value":2}]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[{"id":"b","value":2},{"id":"a","value":42}]}}`) // reordered AND "a"'s value changed
+
+	opts := Options{OrderInsensitiveLists: []OrderInsensitiveList{
+		{Path: "data.items", KeyFields: []string{"id"}, Reason: "test", Ticket: "CHAOS-0000"},
+	}}
+	result := Compare(baseline, candidate, opts)
+	if result.IsMatch() {
+		t.Fatal("a same-key value divergence must mismatch even though the list is also reordered")
+	}
+	found := false
+	for _, finding := range result.Findings {
+		if finding.Kind == FindingMismatch && strings.Contains(finding.Detail, `[key="a"]`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf(`expected a finding whose Detail names key "a", got: %+v`, result.Findings)
 	}
 }
 
@@ -197,5 +253,35 @@ func TestOrderInsensitiveList_KeyValueContainingADotDoesNotCorruptTieredPath(t *
 	}
 	if len(result.UnusedTierB) != 0 {
 		t.Fatalf("FloatTierB declaration for data.items.value must be seen as used even through a dotted key: unused = %v", result.UnusedTierB)
+	}
+}
+
+// TestOrderInsensitiveList_KeyValueContainingCloseBracketDoesNotCorruptTieredPath
+// is CHAOS-5546 r1's second P1 fix pin: a key value containing a literal
+// `]` must not corrupt the nested Tier-B/volatile-field lookup either.
+// Before the fix, the pairing key was embedded literally in the element's
+// comparator path (`[key="x]y"]`) -- listIndexSuffix's bracket-stripping
+// regex stops at the FIRST `]` it finds, which lands INSIDE the key
+// value, leaving the real closing bracket (and everything after it up to
+// the next ".") unstripped and defeating the Tier-B lookup for "value".
+// The fix keeps the raw key OUT of the path entirely (an opaque ordinal
+// is used instead), so this construction can no longer reach tieredPath
+// at all -- this test proves that end-to-end, not just at the regex.
+func TestOrderInsensitiveList_KeyValueContainingCloseBracketDoesNotCorruptTieredPath(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":{"items":[{"id":"x]y","value":1.0000000001}]}}`)
+	candidate := snapshotFromJSON(t, `{"data":{"items":[{"id":"x]y","value":1.0000000002}]}}`)
+
+	opts := Options{
+		OrderInsensitiveLists: []OrderInsensitiveList{
+			{Path: "data.items", KeyFields: []string{"id"}, Reason: "test", Ticket: "CHAOS-0000"},
+		},
+		FloatTierB: map[string]string{"data.items.value": "test tolerance"},
+	}
+	result := Compare(baseline, candidate, opts)
+	if !result.IsMatch() {
+		t.Fatalf("a Tier-B float within tolerance, reached through a ']'-carrying pairing key, must still match: %+v", result.Findings)
+	}
+	if len(result.UnusedTierB) != 0 {
+		t.Fatalf("FloatTierB declaration for data.items.value must be seen as used even through a ']'-carrying key: unused = %v", result.UnusedTierB)
 	}
 }

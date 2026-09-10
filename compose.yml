@@ -47,8 +47,19 @@ x-go-worker-flag:
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
 x-go-worker-env-base: &go-worker-env-base
+  # codex review (r1, P1): these three used `:?required` in
+  # deploy/docker-compose/compose.go-workers.yml, a fair demand when that
+  # file was an opt-in overlay an operator explicitly activated. Folded in
+  # as this file's UNCONDITIONAL default (CHAOS-3088), `:?` made
+  # `docker compose config`/`up` fail outright for every use of this file,
+  # including one with no interest in Go workers at all -- api, postgres,
+  # and the celery-legacy profile included. Empty-default instead, matching
+  # this file's own existing SETTINGS_ENCRYPTION_KEY convention on `api`
+  # below: an unset credential now fails closed at the Go binary's own
+  # startup validation (inside the affected container only), not at
+  # compose-parse time (for every container in the file).
   POSTGRES_URI: ${POSTGRES_URI:?transaction-pooler domain PostgreSQL URI is required}
-  WORKER_DATABASE_URI: ${WORKER_DATABASE_URI:?session-pooler queue-control PostgreSQL URI is required}
+  WORKER_DATABASE_URI: ${WORKER_DATABASE_URI:-}
   # Port 9000 is the NATIVE protocol, not 8123 -- the Go worker speaks the
   # native wire protocol through clickhouse-go and eagerly Ping()s at
   # construction (CHAOS-3872, deploy/go-workers/README.md).
@@ -57,8 +68,11 @@ x-go-worker-env-base: &go-worker-env-base
   # deploy/go-workers/deployment.json requires this for the sync group, and
   # provider-sync handler construction fails closed without it. Shared with
   # the Python services so both runtimes decrypt the same provider
-  # credentials.
-  SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?provider credential encryption key is required}
+  # credentials -- same empty-default shape as `api`'s own
+  # SETTINGS_ENCRYPTION_KEY below, reading the identical shell variable, so
+  # the value stays byte-identical between the two runtimes whenever it is
+  # actually set.
+  SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
   WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
   AUTO_RUN_MIGRATIONS: "false"
   # CHAOS-4587: see `migrate`'s own comment on this variable below -- must
@@ -682,7 +696,14 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      # codex review (r1, P1): the root `postgres` service above creates the
+      # superuser identity postgres/postgres/postgres (container_name:
+      # postgres, lines ~97-102) -- NOT a `devhealth` role or database.
+      # (A)'s defaults assumed compose.production.yml's postgres identity,
+      # which this file does not share. Match `migrate`'s own
+      # POSTGRES_URI default (line ~252) instead of inventing a second
+      # convention.
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
       RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
@@ -695,8 +716,8 @@ services:
       - |
         exec psql \
           --host="${POSTGRES_HOST:-postgres}" \
-          --username="${POSTGRES_USER:-devhealth}" \
-          --dbname="${POSTGRES_DB:-devhealth}" \
+          --username="${POSTGRES_USER:-postgres}" \
+          --dbname="${POSTGRES_DB:-postgres}" \
           --set=domain_role="$$RIVER_DOMAIN_DATABASE_ROLE" \
           --set=queue_role="$$RIVER_QUEUE_DATABASE_ROLE" \
           --set=coordinator_role="$$RIVER_COORDINATOR_DATABASE_ROLE" \
@@ -736,10 +757,13 @@ services:
         && dev-health-worker-migrate --check
     environment:
       MIGRATION_DATABASE_URI: ${GO_WORKER_MIGRATION_DATABASE_URI:-}
+      # codex review (r1, P1): same fix as go-river-provision above -- the
+      # root `postgres` service's superuser identity is postgres/postgres,
+      # not `devhealth`.
       POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
-      POSTGRES_USER: ${POSTGRES_USER:-devhealth}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
-      POSTGRES_DB: ${POSTGRES_DB:-devhealth}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
@@ -928,7 +952,10 @@ services:
         condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
-      COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}
+      # codex review (r1, P1): same empty-default fix as go-worker-env-base
+      # above, same reason -- `:?` here blocked `docker compose config` for
+      # the whole file, not just this service.
+      COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:-}
     stop_grace_period: 60s
     # Ported from the now-deleted deploy/go-workers/compose-go-workers.yml
     # (CHAOS-3142) rather than dropped: per-stage budgets and the
@@ -970,7 +997,10 @@ services:
         condition: service_completed_successfully
     environment:
       <<: *go-worker-env-base
-      COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:?session-pooler coordinator PostgreSQL URI is required}
+      # codex review (r1, P1): same empty-default fix as go-worker-env-base
+      # above, same reason -- `:?` here blocked `docker compose config` for
+      # the whole file, not just this service.
+      COORDINATOR_DATABASE_URI: ${COORDINATOR_DATABASE_URI:-}
     stop_grace_period: 60s
 
   go-stream-external:

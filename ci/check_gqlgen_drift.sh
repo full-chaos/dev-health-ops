@@ -73,6 +73,9 @@ tar -C "${ROOT}" \
 # exactly the asymmetry that made it exploitable. Same check, same function,
 # both scripts, run BEFORE anything is generated.
 # shellcheck source=ci/gqlgen_output_scope.sh
+# shellcheck disable=SC1091  # resolved at runtime from SCRIPT_DIR; the
+# canonical lint runs without -x, so following the source is not available
+# to it. The path is asserted by the wiring test instead.
 . "${SCRIPT_DIR}/gqlgen_output_scope.sh"
 if ! gqlgen_output_scope_check "${WORK}/cmd/query-api" "${WORK}/cmd/query-api/internal/graph"; then
   echo "check_gqlgen_drift: REFUSING -- gqlgen.yml writes outside the generated root (above)." >&2

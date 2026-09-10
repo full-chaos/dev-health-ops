@@ -118,6 +118,13 @@ FILES=(
   # which is the guard-file-is-not-guarded shape one level up.
   "${ROOT}/ci/shellcheck_pinned.sh"
   "${ROOT}/ci/check_shellcheck_pin.sh"
+  # CHAOS-5489: the gqlgen wrapper, the drift guard and the output-scope
+  # check they share. They were not enrolled when written, so the canonical
+  # lint did not cover the scripts whose whole job is refusing unsafe
+  # generation -- the same guard-file-is-not-guarded shape noted above.
+  "${ROOT}/ci/gqlgen_generate.sh"
+  "${ROOT}/ci/check_gqlgen_drift.sh"
+  "${ROOT}/ci/gqlgen_output_scope.sh"
   "${ROOT}/ci/check_migration_matrix.sh"
   "${ROOT}/ci/check_migration_matrix_test.sh"
   # CHAOS-4922: the single source of truth for PYTHON_BASE_IMAGE.

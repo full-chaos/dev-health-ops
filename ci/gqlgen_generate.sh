@@ -38,25 +38,12 @@ GENERATED_FILES=(
 
 SNAPSHOT="$(mktemp -d "${TMPDIR:-/tmp}/gqlgen-snapshot-XXXXXX")"
 
-restore() {
-  # Restore is best-effort by necessity -- we are already on a failure path --
-  # but it must never report success it did not achieve. Each copy is checked,
-  # and a failure to restore is louder than the failure that caused it, since
-  # it is the difference between "the run failed" and "your tree is broken".
-  local failed=0 rel
-  for rel in "${GENERATED_FILES[@]}"; do
-    [ -f "${SNAPSHOT}/$(basename "${rel}")" ] || continue
-    if ! cp -p "${SNAPSHOT}/$(basename "${rel}")" "${ROOT}/${rel}"; then
-      echo "gqlgen_generate: RESTORE FAILED for ${rel} -- recover with: git checkout -- ${rel}" >&2
-      failed=1
-    fi
-  done
-  if [ "${failed}" -ne 0 ]; then
-    echo "gqlgen_generate: the working tree may be INCOMPLETE. Do not commit until 'git status' is clean or deliberate." >&2
-    return 1
-  fi
-  return 0
-}
+# NOTE: a separate restore() for the three named files used to live here. It
+# was a strict SUBSET of restore_area() -- same files, same snapshot, weaker
+# comparison -- so a mutation run disabling it changed nothing observable and
+# it survived every test. Two mechanisms covering the same files is not depth,
+# it is one of them being untested by construction. Deleted; restore_area()
+# restores every .go under the generated root by content.
 
 cleanup() { rm -rf "${SNAPSHOT}"; }
 
@@ -68,7 +55,6 @@ cleanup() { rm -rf "${SNAPSHOT}"; }
 on_signal() {
   local sig="$1"
   echo "gqlgen_generate: ${sig} received mid-run; restoring before exit." >&2
-  restore || true
   restore_area || true
   restore_modules || true
   purge_unexpected || true
@@ -96,6 +82,9 @@ trap cleanup EXIT
 # needs exactly the same answer, and r8 proved that a check only one of them
 # has is a check the other one is missing.
 # shellcheck source=ci/gqlgen_output_scope.sh
+# shellcheck disable=SC1091  # resolved at runtime from SCRIPT_DIR; the
+# canonical lint runs without -x, so following the source is not available
+# to it. The path is asserted by the wiring test instead.
 . "${SCRIPT_DIR}/gqlgen_output_scope.sh"
 if ! gqlgen_output_scope_check "${QUERY_API}" "${ROOT}/cmd/query-api/internal/graph"; then
   echo "gqlgen_generate: REFUSING -- gqlgen.yml writes outside the protected area (above)." >&2
@@ -232,7 +221,6 @@ if [ "${rc}" -ne 0 ]; then
   echo "  restore them on failure, so they were reverted from a snapshot." >&2
   echo "  Note gqlgen can exit non-zero with NO message at all; an empty" >&2
   echo "  error above is its own known behaviour, not a lost log." >&2
-  restore || exit 1
   restore_area || exit 1
   restore_modules || exit 1
   purge_unexpected || exit 1
@@ -247,7 +235,6 @@ fi
 for rel in "${GENERATED_FILES[@]}"; do
   if [ ! -f "${ROOT}/${rel}" ]; then
     echo "gqlgen_generate: generation reported success but ${rel} is MISSING." >&2
-    restore || exit 1
     restore_area || exit 1
     restore_modules || exit 1
     purge_unexpected || exit 1

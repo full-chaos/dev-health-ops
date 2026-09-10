@@ -883,3 +883,164 @@ def test_the_wrapper_restores_modules_on_a_false_success(tree_copy: Path) -> Non
     assert restored, (
         "the false-success branch restored the generated area but left go.mod modified."
     )
+
+
+def test_the_wrapper_restores_when_interrupted_mid_generation(tree_copy: Path) -> None:
+    """Signal handling, executed rather than asserted.
+
+    The generator deletes its outputs before writing them, so an interrupt in
+    that window is the moment the tree is most destructible. With only an EXIT
+    trap, cleanup removed the snapshot WITHOUT restoring first, leaving neither
+    the files nor the means to recover them. A mutation run removing the signal
+    traps survived the whole suite until this test existed: the behaviour was
+    proven by hand and by nothing that runs on its own.
+
+    SIGTERM is used because it is what CI cancellation sends; the INT and HUP
+    handlers share the one code path.
+    """
+    import hashlib
+    import signal as signalmod
+    import time
+
+    area = tree_copy / GENERATED_AREA_REL
+    before = {
+        str(p.relative_to(area)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(area.rglob("*.go"))
+    }
+    watched = area / "generated.go"
+    assert watched.exists(), "generated.go is the file whose deletion opens the window"
+
+    proc = subprocess.Popen(
+        ["bash", str(tree_copy / "ci" / "gqlgen_generate.sh")],
+        cwd=tree_copy,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        text=True,
+    )
+    deleted = False
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        if not watched.exists():
+            deleted = True
+            break
+        if proc.poll() is not None:
+            break
+        time.sleep(0.02)
+    if deleted:
+        os.killpg(os.getpgid(proc.pid), signalmod.SIGTERM)
+    output = proc.communicate(timeout=180)[0]
+
+    after = {
+        str(p.relative_to(area)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(area.rglob("*.go"))
+    }
+    assert deleted, (
+        "the generator never deleted its output, so the interrupt window this test "
+        "exists for was never open and the test proved nothing."
+    )
+    assert after == before, (
+        "the wrapper did not restore the generated area after being interrupted "
+        "mid-generation. Both the files and the snapshot are gone.\n"
+        f"changed: {sorted(k for k in before if before.get(k) != after.get(k))}\n"
+        f"missing: {sorted(set(before) - set(after))}\n{output[-800:]}"
+    )
+
+
+# Restored after being deleted by a refactor of this file. It existed at
+# f228f8ca1, went missing at b069e6f6b when the behavioural section was
+# rewritten, and its absence was invisible for two commits -- a mutation run
+# reported "CI reblesses drift SURVIVED" and the reason was that its killer
+# had been removed, not that it had ever been weak. Deleting a test is a
+# silent change to what is guaranteed.
+def test_ci_neither_re_blesses_the_allowlist_nor_fakes_the_generator() -> None:
+    """Two ways to make the CI step pass while checking nothing."""
+    for _job, step in _drift_guard_steps():
+        run = step["run"]
+        assert "--update" not in run, (
+            "the CI step runs the guard with --update, which REWRITES the "
+            "allowlist to match whatever was generated. It then always passes, "
+            "and the hand-edit contract is silently re-blessed on every run."
+        )
+        assert "GQLGEN_GENERATE_CMD" not in run, (
+            "the CI step overrides the generator. That hook exists so this file "
+            "can test the guard's behaviour; in CI it means the guard is checking "
+            "output that gqlgen never produced."
+        )
+        # Step-level env is not the only place an override can live: a
+        # job-level (or workflow-level) env reaches the step just as well, and
+        # round r6 escaped the step-only assertion that way.
+        for scope, holder in (("step", step), ("job", _job)):
+            env_text = str(holder.get("env", ""))
+            for hook in ("GQLGEN_DRIFT_GENERATE_CMD", "GQLGEN_GENERATE_CMD"):
+                assert hook not in env_text, (
+                    f"{hook} is set in the guard's {scope}-level env, so the guard "
+                    "runs against a fake generator instead of gqlgen."
+                )
+
+
+def test_the_guard_reports_a_module_file_the_generator_changed(tree_copy: Path) -> None:
+    """A tidy is a real generator side effect, and must be reported not swallowed."""
+    with _pristine_area(tree_copy):
+        result = _run_in(
+            tree_copy,
+            "check_gqlgen_drift.sh",
+            GQLGEN_DRIFT_GENERATE_CMD='printf "\\n" >> ../../go.sum',
+        )
+    assert result.returncode != 0 and "CHANGED go.sum" in result.stderr, (
+        "the generator rewrote go.sum and the guard did not report it. That is the "
+        f"module state drifting under the generated code.\n{result.stderr}"
+    )
+
+
+def test_the_guard_reports_a_file_the_generation_added(tree_copy: Path) -> None:
+    """The file-SET half: a new output is drift even with every content match."""
+    with _pristine_area(tree_copy):
+        result = _run_in(
+            tree_copy,
+            "check_gqlgen_drift.sh",
+            GQLGEN_DRIFT_GENERATE_CMD=(
+                "mkdir -p internal/graph/nested && printf 'package nested\\n' "
+                "> internal/graph/nested/generated.go"
+            ),
+        )
+    assert result.returncode != 0 and "changed WHICH FILES" in result.stderr, (
+        f"generation added a file and the guard did not notice.\n{result.stderr}"
+    )
+
+
+def test_the_wrapper_refuses_to_start_with_an_output_already_missing(
+    tree_copy: Path,
+) -> None:
+    """Refuse rather than snapshot a hole.
+
+    If a previous failed run already deleted an output, snapshotting the tree
+    captures its absence -- and "restore" then faithfully restores nothing.
+    """
+    target = tree_copy / GENERATED_AREA_REL / "generated.go"
+    saved = target.read_bytes()
+    target.unlink()
+    try:
+        result = _run_in(tree_copy, "gqlgen_generate.sh")
+    finally:
+        target.write_bytes(saved)
+    assert result.returncode == 2 and "REFUSING" in result.stderr, (
+        "the wrapper ran with an output already missing, so its snapshot recorded "
+        f"the hole as the state to restore.\n{result.stderr}"
+    )
+
+
+def test_the_wrapper_fails_a_success_that_wrote_outside_its_tracked_files(
+    tree_copy: Path,
+) -> None:
+    """Generation SUCCEEDING out of scope is a scope mismatch, not a bonus file."""
+    with _pristine_area(tree_copy):
+        result = _run_in(
+            tree_copy,
+            "gqlgen_generate.sh",
+            GQLGEN_GENERATE_CMD="printf '\\n' >> internal/graph/telemetry.go; true",
+        )
+    assert result.returncode != 0, (
+        "generation succeeded while modifying a file the wrapper does not track, and "
+        f"the wrapper reported success.\n{result.stdout}\n{result.stderr}"
+    )

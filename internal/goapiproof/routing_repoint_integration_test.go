@@ -5,6 +5,7 @@ package goapiproof
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -262,5 +263,46 @@ func TestRepointRefusesWhenNothingMatches(t *testing.T) {
 		RecordedBy: "t", ReviewEvidence: "e",
 	}); !errors.Is(err, ErrRepointNoRows) {
 		t.Fatalf("Repoint on an empty registry = %v, want ErrRepointNoRows", err)
+	}
+}
+
+// r2 mutation ledger (M29, SURVIVED): the post-write re-read exists to
+// PROVE Repoint never touches reachability, because the UPDATE's own SET
+// list carries no `mode` column -- but the package comment names the
+// residual this defends against: "a trigger, a rule or a later edit to
+// [the] statement could" still move it. Nothing in either suite ever put
+// one there. This does, standing in for "anything other than this verb's
+// own UPDATE": a trigger that flips mode on any UPDATE to the row,
+// firing precisely because Repoint's own (provenance-only) UPDATE still
+// touches the row.
+func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
+	ctx := t.Context()
+	pool := startRegistryPostgres(t)
+	seedRow(t, ctx, "flowMatrix", testDocumentDigest, "canary", testCandidateBuild, pool)
+
+	if _, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION test_drift_mode_on_update() RETURNS trigger AS $$
+		BEGIN
+			NEW.mode := CASE WHEN OLD.mode = 'canary' THEN 'shadow' ELSE 'canary' END;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER test_drift_mode BEFORE UPDATE ON go_api_routing_state
+			FOR EACH ROW EXECUTE FUNCTION test_drift_mode_on_update();
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Repoint(ctx, pool, RepointRequest{
+		SchemaDigest:   testSchemaDigest,
+		RunningBuild:   repointRunningBuild,
+		RecordedBy:     "lane-routing-verbs",
+		ReviewEvidence: "r2 M29 killer",
+	})
+	if err == nil {
+		t.Fatal("repoint must refuse when mode moved during the write -- its whole contract is that it never touches reachability")
+	}
+	if !strings.Contains(err.Error(), "mode changed") {
+		t.Fatalf("refused for a different reason, so the mode-drift assertion is not what caught it: %v", err)
 	}
 }

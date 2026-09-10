@@ -174,6 +174,63 @@ func TestFetchRegistryRefusesAnEmptyRegistration(t *testing.T) {
 	}
 }
 
+// r2 P1 (reproduced, CHAOS-5524 folded in per team-lead ruling): a
+// /registry response naming the same operation twice, under CONFLICTING
+// document digests, used to collapse last-wins -- whichever entry
+// happened to come last silently decided which digest a routing row got
+// written with. The Python verb refuses outright
+// (`GoPlaneUnavailable ... lists operation 'X' more than once`); this
+// must too, and it must refuse regardless of which duplicate would have
+// "won" the old collapse.
+func TestFetchRegistryRefusesConflictingDuplicateOperations(t *testing.T) {
+	for name, order := range map[string][2]string{
+		"catalog-matching digest first": {"77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+		"catalog-matching digest last":  {"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"schema_digest": "sha256:abc",
+				"operations": []map[string]string{
+					{"operation": "flowMatrix", "document_digest": order[0]},
+					{"operation": "flowMatrix", "document_digest": order[1]},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write(body)
+			}))
+			t.Cleanup(server.Close)
+			_, err = FetchRegistry(context.Background(), server.Client(), server.URL)
+			if err == nil {
+				t.Fatal("a registry naming one operation twice under conflicting digests must refuse -- ordering must not decide which digest wins")
+			}
+			if !strings.Contains(err.Error(), "flowMatrix") || !strings.Contains(err.Error(), "more than once") {
+				t.Fatalf("the refusal must name the duplicated operation, got %v", err)
+			}
+		})
+	}
+}
+
+// A duplicate operation naming the IDENTICAL digest twice is still a
+// malformed registry -- the guard is on the SHAPE (an operation listed
+// more than once), not on whether the two entries happen to agree, so a
+// tampered or buggy registry cannot escape the refusal by duplicating
+// consistently.
+func TestFetchRegistryRefusesAnIdenticalDuplicateOperationToo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[
+			{"operation":"flowMatrix","document_digest":"abc"},
+			{"operation":"flowMatrix","document_digest":"abc"}
+		]}`))
+	}))
+	t.Cleanup(server.Close)
+	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+		t.Fatal("an operation listed twice must refuse even when both entries agree")
+	}
+}
+
 // A build that moves DURING a run invalidates every receipt the run wrote,
 // because each names the build read before it started.
 func TestVerifyBuildStableRefusesAMovedBuild(t *testing.T) {

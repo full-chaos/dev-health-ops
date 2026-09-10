@@ -32,6 +32,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // DefaultCatalogPath is where the checked-in catalog lives, relative to
@@ -164,6 +165,22 @@ func LoadOperationCatalog(path string) (map[string]string, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // operator-supplied path to the checked-in catalog
 	if err != nil {
 		return nil, fmt.Errorf("%w: read %s: %w", ErrCatalogUnusable, path, err)
+	}
+	// r2 P1 (reproduced): the Python edge loads this file with
+	// `Path.read_text()`, which decodes the WHOLE file as UTF-8 and raises
+	// UnicodeDecodeError on the FIRST bad byte anywhere in it --
+	// `catalog_loaded_successfully=False`, the operation undispatchable.
+	// `encoding/json` has no opinion on byte validity inside a JSON string;
+	// it happily decodes invalid UTF-8 (0xFF, a lone continuation byte, an
+	// overlong encoding, a surrogate) into a Go string, which let `enable`
+	// write a row the edge's own loader could never produce. The check is
+	// over the RAW FILE, not per-field after decode: Python rejects the
+	// whole file on one bad byte anywhere in it, including in a key this
+	// program never even reads, so per-value validation after JSON decode
+	// would silently accept invalid bytes Python's reader never gets past.
+	if !utf8.Valid(raw) {
+		return nil, fmt.Errorf("%w: %s is not valid UTF-8 -- the Python edge loader decodes this file as text and refuses the WHOLE file on one bad byte anywhere in it, so a Go reader that decoded past it would write rows nothing can dispatch",
+			ErrCatalogUnusable, path)
 	}
 	var rawEntries []map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rawEntries); err != nil {

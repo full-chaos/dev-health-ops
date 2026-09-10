@@ -170,13 +170,17 @@ cmd/dev-health-workerctl	13
 # suppressed, and an ORDER BY tiebreak dropped -- all survived the whole
 # suite at 53.2% command coverage, because nothing ever ran a verb end to
 # end. Two of the four need a real database to kill.
-# TWO Testcontainers-backed tests, each taking a fresh Postgres container
-# so the real FK and the mode CHECK are exercised against a clean
-# database. MEASURED on bigboy 2026-09-10, whole package, -count=1: 8.009s
-# and 7.926s. Rounded up to 10 for CI headroom, the same treatment the
-# other per-test-container packages in this file get. Re-time if it gains
-# tests.
-cmd/go-api-routing	10
+# SEVEN Testcontainers-backed tests as of r2's fix round (up from two):
+# each takes a fresh Postgres container so the real FK and the mode CHECK
+# are exercised against a clean database. r2 added five -- a held-lock
+# `status` deadline test, the two preflight-3 halves (not-registered,
+# digest-divergent), the -expect-build cross-check, and a two-operation
+# unproven-warning test -- closing five mutants (M20-M23, M80) that the
+# original two tests' single-operation, no-concurrency shape could not
+# reach. MEASURED on bigboy 2026-09-10, whole package, -count=1: 23.129s.
+# Rounded up to 25 for CI headroom, the same treatment the other
+# per-test-container packages in this file get. Re-time if it gains tests.
+cmd/go-api-routing	25
 cmd/query-api	110
 cmd/query-api/internal/analytics	22
 # cmd/query-api/internal/featureflags (CHAOS-5523, 2026-09-09): TWO
@@ -195,7 +199,7 @@ cmd/query-api/internal/routeswitch	5
 cmd/query-api/internal/workgraph	60
 internal/cacheinvalidation	2
 internal/externalrecompute	30
-internal/goapiproof	120
+internal/goapiproof	135
 internal/joboperator	13
 internal/joboutbox	12
 internal/jobrescue	5
@@ -249,6 +253,15 @@ internal/migrationmatrix	5
 # under prose explaining 90. ci/check_go.sh sums the numbers and never reads
 # the prose, so no test could have failed. If you resolve a conflict here,
 # read the result rather than the diff.
+#
+# RAISED 120 -> 135, r2's fix round (2026-09-10): one new test
+# (TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite, a killer
+# for the M29 mutation ledger entry -- a trigger driving the row's mode
+# out from under a re-point, standing in for "anything other than this
+# verb's own UPDATE"), one more Testcontainers Postgres. Measured on
+# bigboy 2026-09-10, whole package, -count=1: 130.89s -- above the 120
+# ceiling this time, not just close to it, so the weight moves. Rounded
+# up to 135 for the same shard-balance headroom the prior raises used.
 # internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
 # measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run),
 # rounded up one further second to 35 for shard-balance headroom -- combined

@@ -363,8 +363,11 @@ are tightenings. Anything else that differs is a defect, not a decision:
   Python derives `recorded_by` from `$DEV_HOPS_OPERATOR` / `$SUDO_USER` /
   `$USER` and falls back to the literal `unknown`, and it permits an
   absent reason for a proven enablement. A rollout decision attributed to
-  `unknown` with no reason is the state this whole surface exists to end,
-  and every write now also lands an append-only audit row carrying both.
+  `unknown` with no reason is the state this whole surface exists to end.
+  This PR writes both durably on the current row's own provenance
+  columns; an append-only audit row carrying the same two fields on every
+  write, independent of the current row, arrives with CHAOS-5505 (the
+  audit PR that follows this one).
 
 `disable` also turns off **every** row an operation has at the live
 digest, not one of them. The routing primary key is `(schema_digest,

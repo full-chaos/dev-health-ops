@@ -240,6 +240,177 @@ func TestEnableWarnsOnEveryUnprovenRowItActuallyWrites(t *testing.T) {
 	}
 }
 
+// r2 P3 (reproduced): the whole reason status.go:155 covers the census
+// AND the classification with one deadline is r1's F10 -- a diagnostic
+// that never returns is worse than one that returns bad news. r2's M23
+// replaced that `context.WithTimeout` with a cancellation-only context
+// and BOTH suites stayed green, because nothing in either suite ever put
+// a real lock on the table and measured how long `status` took. Executed
+// against a real `LOCK TABLE go_api_routing_state IN ACCESS EXCLUSIVE
+// MODE` held by another session: original `status -timeout 100ms -json`
+// returned in ~0.1s with a timeout report; M23's mutant returned nothing
+// until the external 2s test-harness cutoff.
+func TestStatusReturnsWithinItsTimeoutUnderAHeldLock(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: "1111111111111111111111111111111111111111111111111111111111111111"})
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: "1111111111111111111111111111111111111111111111111111111111111111"})
+
+	ctx := context.Background()
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = holder.Rollback(ctx) })
+	if _, err := holder.Exec(ctx, `LOCK TABLE public.go_api_routing_state IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	out, _, err := captureVerb(t,
+		"status",
+		"-registry-url", server.URL+"/registry",
+		"-postgres-uri", dsn,
+		"-catalog", catalogPath,
+		"-timeout", "300ms",
+	)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("status must NEVER refuse, even with the database blocked: %v", err)
+	}
+	// The bound is the verb's OWN -timeout, not the test harness's external
+	// cutoff. Comfortably above 300ms to absorb scheduling jitter, and
+	// nowhere near the 2s the mutant needed to be caught at.
+	if elapsed > 2*time.Second {
+		t.Fatalf("status took %s under a held lock with -timeout 300ms -- the deadline is not bounding the blocked query", elapsed)
+	}
+	// The HALF that needs no database -- this binary's own digest and the
+	// live comparison against /registry -- must still print. r2 R2-04's
+	// whole point: one failure must not erase a fact that already succeeded.
+	if !strings.Contains(out, "local schema_digest") || !strings.Contains(out, "go plane schema_digest") {
+		t.Fatalf("the DB-independent half did not print under a held lock:\n%s", out)
+	}
+	if !strings.Contains(out, "registry database") || !strings.Contains(out, "UNREACHABLE") {
+		t.Fatalf("a query blocked past its deadline must be reported as UNREACHABLE, not silently dropped:\n%s", out)
+	}
+}
+
+// r2 mutation ledger (M20, SURVIVED): preflight 3's "does the running
+// process register every named operation" half, at its real call site.
+// Nothing in either suite ever drove `enable` against a registry that is
+// missing the requested operation entirely -- as opposed to registering
+// it under a DIFFERENT document digest, which is the digest-divergence
+// half covered by TestEnableRefusesADocumentDigestDivergentFromTheCatalog
+// below.
+func TestEnableRefusesAnOperationTheRunningProcessDoesNotRegister(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "2222222222222222222222222222222222222222222222222222222222222222"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	// The running process registers SOME operation, agreeing on the
+	// schema digest -- but not the one this run asks for. Without at
+	// least one operation, FetchRegistry itself would refuse first
+	// ("registers no operations"), which would prove nothing about
+	// preflight 3.
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{"someOtherOperation": "3333333333333333333333333333333333333333333333333333333333333333"})
+
+	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
+	if err == nil {
+		t.Fatal("enable wrote a row for an operation the running query-api does not register at all")
+	}
+	if !strings.Contains(err.Error(), "does not register") {
+		t.Fatalf("refused for a different reason, so preflight 3's not-registered half is not what stopped it: %v", err)
+	}
+	assertNoRows(t, dsn)
+}
+
+// r2 mutation ledger (M21, explicitly reported P3): preflight 3's OTHER
+// half -- the running process registers the operation, but under a
+// document digest that diverges from the edge's catalog. A row written
+// with the catalog's digest here would never be looked up by the
+// deployed binary.
+func TestEnableRefusesADocumentDigestDivergentFromTheCatalog(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	catalogDigest := "4444444444444444444444444444444444444444444444444444444444444444"
+	registryDigest := "5555555555555555555555555555555555555555555555555555555555555555"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: catalogDigest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: registryDigest})
+
+	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
+	if err == nil {
+		t.Fatal("enable wrote a row while the catalog's document digest diverged from what the running process registers")
+	}
+	if !strings.Contains(err.Error(), "document digest MISMATCH") {
+		t.Fatalf("refused for a different reason, so preflight 3's digest-divergence half is not what stopped it: %v", err)
+	}
+	assertNoRows(t, dsn)
+}
+
+// r2 mutation ledger (M22, explicitly reported P3): `-expect-build` is a
+// CROSS-CHECK on the build read from /buildinfo, at its real call site in
+// runEnable -- never the source of the value written (team-lead ruling
+// R51). A mismatch must refuse before anything is written.
+func TestEnableExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "6666666666666666666666666666666666666666666666666666666666666666"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-expect-build", "0000000000000000000000000000000000000000")...)
+	if err == nil {
+		t.Fatal("enable wrote a row while -expect-build did not match the running build")
+	}
+	if !strings.Contains(err.Error(), "-expect-build") || !strings.Contains(err.Error(), "does not match the running build") {
+		t.Fatalf("refused for a different reason, so the -expect-build cross-check is not what stopped it: %v", err)
+	}
+	assertNoRows(t, dsn)
+
+	// The SAME build passed as -expect-build must not be refused: this is
+	// a cross-check, not an extra unconditional refusal.
+	_, _, err = captureVerb(t, enableArgs(server, dsn, catalogPath, "-expect-build", verbTestBuild, "-acknowledge-unproven", "-dry-run")...)
+	if err != nil {
+		t.Fatalf("a MATCHING -expect-build must not be refused: %v", err)
+	}
+}
+
+// r2 mutation ledger (M80, explicitly reported P3): the warning loop's
+// own test supplies only ONE unproven row, so a mutation that stops the
+// warning/count loop after its first iteration is indistinguishable from
+// correct there. Two operations discriminate: M80 would print/mark only
+// the first.
+func TestEnableWarnsOnEveryUnprovenRowAcrossMultipleOperations(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	const secondOperation = "hotspots"
+	digestA := "7777777777777777777777777777777777777777777777777777777777777777"
+	digestB := "8888888888888888888888888888888888888888888888888888888888888888"
+	catalogPath := writeCatalog(t, map[string]string{
+		verbTestOperation: digestA,
+		secondOperation:   digestB,
+	})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{
+		verbTestOperation: digestA,
+		secondOperation:   digestB,
+	})
+
+	out, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath,
+		"-operations", verbTestOperation+","+secondOperation,
+		"-acknowledge-unproven")...)
+	if err != nil {
+		t.Fatalf("enable -acknowledge-unproven: %v", err)
+	}
+	for _, op := range []string{verbTestOperation, secondOperation} {
+		want := "operation=" + op
+		if !strings.Contains(errOut, want) {
+			t.Fatalf("the unproven warning for %s is missing -- the warning loop must not stop after the first operation.\nstderr:\n%s", op, errOut)
+		}
+	}
+	if got := strings.Count(out, "(UNPROVEN)"); got != 2 {
+		t.Fatalf("want both rows reported UNPROVEN, got %d marker(s):\n%s", got, out)
+	}
+}
+
 func assertNoRows(t *testing.T, dsn string) {
 	t.Helper()
 	var count int

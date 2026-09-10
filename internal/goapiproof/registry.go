@@ -282,6 +282,30 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 		return RegistryView{}, fmt.Errorf("goapiproof: %s registers no operations -- there is nothing to prove", EndpointLabel(registryURL))
 	}
 
+	// r2 P1 (reproduced, CHAOS-5524 folded in per team-lead ruling): this
+	// map used to be a last-write-wins CONVERSION -- two `/registry`
+	// entries naming the same operation under different document digests
+	// collapsed silently, and whichever happened to come last decided
+	// which digest a routing row got written with. The Python verb refuses
+	// outright (`GoPlaneUnavailable ... lists operation 'X' more than
+	// once`); this now matches, BEFORE the map is built, so a malformed or
+	// tampered registry can never decide anything by ordering.
+	seen := make(map[string]bool, len(parsed.Operations))
+	var duplicates []string
+	for _, operation := range parsed.Operations {
+		if seen[operation.Operation] {
+			duplicates = append(duplicates, operation.Operation)
+			continue
+		}
+		seen[operation.Operation] = true
+	}
+	if len(duplicates) > 0 {
+		sort.Strings(duplicates)
+		duplicates = dedupeSorted(duplicates)
+		return RegistryView{}, fmt.Errorf("goapiproof: %s lists operation(s) more than once: %v -- a malformed or tampered registry must not decide which document digest a routing row is written with",
+			EndpointLabel(registryURL), duplicates)
+	}
+
 	view := RegistryView{
 		SchemaDigest:   parsed.SchemaDigest,
 		DocumentDigest: make(map[string]string, len(parsed.Operations)),
@@ -291,6 +315,19 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	}
 
 	return view, nil
+}
+
+// dedupeSorted collapses adjacent equal strings in an already-sorted
+// slice, so a name repeated more than twice is named once in a refusal
+// rather than once per repeat.
+func dedupeSorted(sorted []string) []string {
+	out := sorted[:0]
+	for i, s := range sorted {
+		if i == 0 || sorted[i-1] != s {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // FetchBuildIdentity asks the RUNNING process which build it is, via the

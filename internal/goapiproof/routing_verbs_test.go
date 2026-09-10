@@ -30,6 +30,16 @@ func TestLoadOperationCatalogRefusesEveryUnusableShape(t *testing.T) {
 		"an entry with no operation": `[{"operation":"","digest":"b"}]`,
 		"a duplicate operation":      `[{"operation":"a","digest":"b"},{"operation":"a","digest":"c"}]`,
 		"a duplicate digest":         `[{"operation":"a","digest":"b"},{"operation":"c","digest":"b"}]`,
+		// r2 P1 (reproduced): a byte the Python edge's `Path.read_text()`
+		// cannot decode anywhere in the file, including in a key this
+		// program never reads -- the edge rejects the WHOLE file, so this
+		// must too, or Go would write a row nothing can dispatch.
+		"invalid UTF-8, lone 0xFF":                             "[{\"operation\":\"a\",\"digest\":\"b\",\"ignored\":\"\xff\"}]",
+		"invalid UTF-8, lone continuation byte 0x80":           "[{\"operation\":\"a\",\"digest\":\"b\",\"ignored\":\"\x80\"}]",
+		"invalid UTF-8, overlong encoding":                     "[{\"operation\":\"a\",\"digest\":\"b\",\"ignored\":\"\xc0\xaf\"}]",
+		"invalid UTF-8, UTF-16 surrogate":                      "[{\"operation\":\"a\",\"digest\":\"b\",\"ignored\":\"\xed\xa0\x80\"}]",
+		"invalid UTF-8, above the Unicode code point limit":    "[{\"operation\":\"a\",\"digest\":\"b\",\"ignored\":\"\xf4\x90\x80\x80\"}]",
+		"invalid UTF-8 in the operation KEY, not just a value": "[{\"operation\":\"\xff\",\"digest\":\"b\"}]",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -251,6 +261,56 @@ func TestDisableRequestRequiresProvenanceOnlyToApply(t *testing.T) {
 	request.ReviewEvidence = "why"
 	if err := request.validate(); err != nil {
 		t.Fatalf("a fully-provenanced apply must validate: %v", err)
+	}
+}
+
+// r2 mutation ledger (M40, M42, M44, all SURVIVED): the test above always
+// mutates the SAME `request` in sequence, so by the time RecordedBy is
+// checked, ReviewEvidence has already been filled -- and by the time
+// ReviewEvidence is checked, RecordedBy has already been filled. Neither
+// case ever isolates ONE missing field with every other field present,
+// so a guard covering only that one field can be deleted without failing
+// anything. This is DisableRequest's sibling of
+// TestEnableRequestRefusesAWriteWithNoDurableRecord: one base request,
+// one field mutated to empty at a time.
+func TestDisableRequestRefusesEachMissingFieldInIsolation(t *testing.T) {
+	base := DisableRequest{
+		SchemaDigest:   "sha256:x",
+		Operations:     []string{"a"},
+		NewMode:        "python",
+		RecordedBy:     "who",
+		ReviewEvidence: "why",
+		Apply:          true,
+	}
+	if err := base.validate(); err != nil {
+		t.Fatalf("a fully-provenanced apply must validate: %v", err)
+	}
+	for name, mutate := range map[string]func(*DisableRequest){
+		"no schema digest":          func(r *DisableRequest) { r.SchemaDigest = "" },
+		"no operations":             func(r *DisableRequest) { r.Operations = nil },
+		"no recorded-by, apply":     func(r *DisableRequest) { r.RecordedBy = "" },
+		"no review-evidence, apply": func(r *DisableRequest) { r.ReviewEvidence = "" },
+	} {
+		request := base
+		mutate(&request)
+		if err := request.validate(); err == nil {
+			t.Fatalf("disable must refuse: %s", name)
+		}
+	}
+	// SchemaDigest and Operations are required even on a DRY RUN (no
+	// -apply): a plan with no schema digest or no operations to plan
+	// against is not a smaller plan, it is not a plan at all.
+	dryRun := base
+	dryRun.Apply = false
+	for name, mutate := range map[string]func(*DisableRequest){
+		"no schema digest, dry run": func(r *DisableRequest) { r.SchemaDigest = "" },
+		"no operations, dry run":    func(r *DisableRequest) { r.Operations = nil },
+	} {
+		request := dryRun
+		mutate(&request)
+		if err := request.validate(); err == nil {
+			t.Fatalf("disable must refuse even on a dry run: %s", name)
+		}
 	}
 }
 

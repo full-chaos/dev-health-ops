@@ -141,8 +141,23 @@ spec:
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
+        {{- /*
+        codex review (r1, P1 -- executed): the ops-runtime container (UID
+        10001) writes the token/DSN files, the operator container (UID
+        65532, distroless, no shell to chown/chmod with even if it wanted
+        to) only reads them -- with no fsGroup, Kubernetes mounts a fresh
+        emptyDir root:root and the WRITER'S OWN non-root UID cannot create
+        files in it either (reproduced: "Permission denied"). fsGroup makes
+        every container in this pod a supplementary member of GID 65532 and
+        chowns/chmods each volume to that group, so both the writer and the
+        distroless reader can use the SAME emptyDirs regardless of their
+        differing primary UIDs.
+        */}}
+        fsGroup: 65532
       volumes:
         - name: operator-token
+          emptyDir: {}
+        - name: route-dsn
           emptyDir: {}
       initContainers:
         - name: operator-credential
@@ -177,32 +192,52 @@ spec:
               mountPath: /run/go-worker-operator
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
-        {{- range $kind := $routeKinds }}
-        - name: route-activate-{{ $kind | replace "_" "-" }}
-          image: {{ $operatorImage }}
-          imagePullPolicy: {{ $operatorPullPolicy }}
+        - name: route-dsn
+          {{- /*
+          codex review (r1, P1 -- executed) found TWO defects this step
+          exists to fix:
+
+          1. The operator image (docker/go-worker.Dockerfile's `operator`
+          target) is built FROM gcr.io/distroless/static-debian12:nonroot --
+          confirmed: no /bin/sh at all, so every route-activate container
+          below invoking `/bin/sh -ec` failed outright
+          (`exec: "/bin/sh": stat /bin/sh: no such file or directory`). DSN
+          construction therefore cannot happen INSIDE those containers --
+          it happens HERE, in the ops runtime image (which has a shell and
+          python3), and is handed to the operator containers as plain files
+          via the existing `_FILE`-suffix convention
+          (internal/platform/secrets, already used by
+          WORKER_OPERATOR_TOKEN_FILE) -- no shell needed in the distroless
+          containers at all.
+
+          2. The prior in-shell DSN interpolated RIVER_*_DATABASE_PASSWORD
+          directly into a postgresql:// URI with no percent-encoding --
+          confirmed: a password containing `#` produced
+          `{"error":{"code":"database_unavailable"}}` from workerctl,
+          because `#` starts a URI fragment and everything after it (the
+          rest of the password, `@host:port/db`) was silently dropped from
+          the parsed authority. python3's `urllib.parse.quote` (present in
+          the ops runtime image, which already runs the Python CLI) is the
+          correct percent-encoder for a URI's userinfo component; a POSIX
+          shell has no equivalent built in.
+          */}}
+          image: {{ include "dev-health.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
-          {{- /*
-          Full DSNs are built in-shell from separate parts (role/host/port/
-          database as plain env, password via secretKeyRef) rather than
-          templated as one Secret value, so this renders correctly whether
-          goWorkers.pgbouncer.secret.create is true (chart-owned passwords)
-          or false (an operator-managed external Secret this chart never
-          reads plaintext from) -- same reasoning as provision-roles.yaml's
-          own PARTS-based connection.
-          */}}
           command:
             - /bin/sh
             - -ec
             - |
-              export POSTGRES_URI="postgresql://${RIVER_DOMAIN_DATABASE_ROLE}:${RIVER_DOMAIN_DATABASE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
-              export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_DATABASE_ROLE}:${RIVER_QUEUE_DATABASE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
-              export COORDINATOR_DATABASE_URI="postgresql://${RIVER_COORDINATOR_DATABASE_ROLE}:${RIVER_COORDINATOR_DATABASE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
-              exec dev-health-workerctl routes apply \
-                --reason helm_release_start \
-                --correlation-id "{{ $.Release.Name }}-route-activate-{{ $kind | replace "_" "-" }}" \
-                {{ $kind }}
+              encode() {
+                python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+              }
+              domain_pw=$(encode "$RIVER_DOMAIN_DATABASE_PASSWORD")
+              queue_pw=$(encode "$RIVER_QUEUE_DATABASE_PASSWORD")
+              coordinator_pw=$(encode "$RIVER_COORDINATOR_DATABASE_PASSWORD")
+              printf '%s' "postgresql://${RIVER_DOMAIN_DATABASE_ROLE}:${domain_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" > /run/route-dsn/POSTGRES_URI
+              printf '%s' "postgresql://${RIVER_QUEUE_DATABASE_ROLE}:${queue_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" > /run/route-dsn/WORKER_DATABASE_URI
+              printf '%s' "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE}:${coordinator_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" > /run/route-dsn/COORDINATOR_DATABASE_URI
           env:
             - name: POSTGRES_HOST
               value: {{ $postgresHost | quote }}
@@ -216,8 +251,6 @@ spec:
               value: {{ $.Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
             - name: RIVER_COORDINATOR_DATABASE_ROLE
               value: {{ $.Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
-            - name: RIVER_DATABASE_SCHEMA
-              value: {{ $.Values.config.RIVER_DATABASE_SCHEMA | default "river" | quote }}
             - name: RIVER_DOMAIN_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -233,11 +266,54 @@ spec:
                 secretKeyRef:
                   name: {{ $routeActivateSecretName }}
                   key: RIVER_COORDINATOR_DATABASE_PASSWORD
+          volumeMounts:
+            - name: route-dsn
+              mountPath: /run/route-dsn
+          resources:
+            {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
+        {{- range $kind := $routeKinds }}
+        - name: route-activate-{{ $kind | replace "_" "-" }}
+          {{- /*
+          No `command:` override -- the operator image's own ENTRYPOINT
+          (dev-health-workerctl) runs directly with these args, since the
+          image has no shell to run a wrapper script in anyway (see the
+          route-dsn step's comment above).
+          */}}
+          image: {{ $operatorImage }}
+          imagePullPolicy: {{ $operatorPullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          args:
+            - routes
+            - apply
+            - --reason
+            - helm_release_start
+            - --correlation-id
+            - "{{ $.Release.Name }}-route-activate-{{ $kind | replace "_" "-" }}"
+            - {{ $kind }}
+          env:
+            - name: RIVER_DATABASE_SCHEMA
+              value: {{ $.Values.config.RIVER_DATABASE_SCHEMA | default "river" | quote }}
+            - name: RIVER_DOMAIN_DATABASE_ROLE
+              value: {{ $.Values.config.RIVER_DOMAIN_DATABASE_ROLE | quote }}
+            - name: RIVER_QUEUE_DATABASE_ROLE
+              value: {{ $.Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
+            - name: RIVER_COORDINATOR_DATABASE_ROLE
+              value: {{ $.Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
+            - name: POSTGRES_URI_FILE
+              value: /run/route-dsn/POSTGRES_URI
+            - name: WORKER_DATABASE_URI_FILE
+              value: /run/route-dsn/WORKER_DATABASE_URI
+            - name: COORDINATOR_DATABASE_URI_FILE
+              value: /run/route-dsn/COORDINATOR_DATABASE_URI
             - name: WORKER_OPERATOR_TOKEN_FILE
               value: /run/go-worker-operator/token
           volumeMounts:
             - name: operator-token
               mountPath: /run/go-worker-operator
+              readOnly: true
+            - name: route-dsn
+              mountPath: /run/route-dsn
               readOnly: true
           resources:
             {{- toYaml $.Values.migrations.hook.resources | nindent 12 }}

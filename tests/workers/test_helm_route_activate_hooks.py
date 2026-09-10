@@ -173,7 +173,11 @@ def test_all_four_kinds_are_present_as_ordered_initcontainers() -> None:
     init_containers = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
     names = [c["name"] for c in init_containers]
     assert names[0] == "operator-credential", names
-    route_names = names[1:]
+    assert names[1] == "route-dsn", (
+        "the DSN-building step (ops runtime image, has a shell) must run "
+        f"before any route-activate-* step (distroless, no shell): {names}"
+    )
+    route_names = names[2:]
     assert route_names == [f"route-activate-{k.replace('_', '-')}" for k in _KINDS], (
         f"the four routes must run in Compose's own serialized order: {route_names}"
     )
@@ -181,19 +185,25 @@ def test_all_four_kinds_are_present_as_ordered_initcontainers() -> None:
 
 @pytest.mark.parametrize("kind", _KINDS)
 def test_each_kind_invokes_routes_apply_with_that_exact_kind(kind: str) -> None:
+    """No `command:` override on these containers -- the operator image has
+    no shell (see the distroless test below), so the args are passed
+    straight to its own ENTRYPOINT (dev-health-workerctl)."""
     jobs = _jobs(*_FULL_CHAIN_ON)
     init_containers = {
         c["name"]: c
         for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
     }
     container = init_containers[f"route-activate-{kind.replace('_', '-')}"]
-    command = " ".join(container["command"])
-    assert "dev-health-workerctl routes apply" in command
-    assert command.rstrip().endswith(kind), (
-        f"the kind argument must be {kind!r}, not fused with another: {command!r}"
+    assert "command" not in container, (
+        f"this container has no shell to run a command script in: {container.get('command')}"
     )
-    assert "--reason" in command and "--correlation-id" in command, (
-        f"routes apply requires both flags: {command!r}"
+    args = container["args"]
+    assert args[:2] == ["routes", "apply"], args
+    assert args[-1] == kind, (
+        f"the kind argument must be {kind!r}, not fused with another: {args!r}"
+    )
+    assert "--reason" in args and "--correlation-id" in args, (
+        f"routes apply requires both flags: {args!r}"
     )
 
 
@@ -226,6 +236,58 @@ def test_operator_credential_uses_the_ops_image_that_carries_the_cli() -> None:
     )
 
 
+def test_route_dsn_uses_the_ops_image_that_has_a_shell_and_python(tmp_path: Path) -> None:
+    """codex review (r1, P1 -- executed): the operator image is built FROM
+    gcr.io/distroless/static-debian12:nonroot and has no /bin/sh at all --
+    confirmed executing `docker run --entrypoint /bin/sh <operator image>`,
+    `exec: "/bin/sh": stat /bin/sh: no such file or directory`. DSN
+    construction (which needs a shell plus python3 for percent-encoding)
+    must therefore run in the ops runtime image, never the operator image."""
+    jobs = _jobs(*_FULL_CHAIN_ON)
+    init_containers = {
+        c["name"]: c
+        for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
+    }
+    dsn_image = init_containers["route-dsn"]["image"]
+    migrate_image = jobs[_MIGRATE]["spec"]["template"]["spec"]["containers"][0]["image"]
+    assert dsn_image == migrate_image, (
+        f"route-dsn must use the ops runtime image, not the operator image: "
+        f"{dsn_image} != {migrate_image}"
+    )
+
+
+@pytest.mark.parametrize("kind", _KINDS)
+def test_route_activate_containers_never_invoke_a_shell(kind: str) -> None:
+    """Regression pin for the P1 above: no route-activate-* container may
+    have a `command:` at all (a shell invocation), since the operator image
+    has none to run it with."""
+    jobs = _jobs(*_FULL_CHAIN_ON)
+    init_containers = {
+        c["name"]: c
+        for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
+    }
+    container = init_containers[f"route-activate-{kind.replace('_', '-')}"]
+    assert "command" not in container, container.get("command")
+    assert not any(
+        arg in ("/bin/sh", "/bin/bash", "sh", "bash") for arg in container.get("args", [])
+    ), container["args"]
+
+
+def test_pod_sets_fsgroup_so_non_root_containers_share_emptydirs() -> None:
+    """codex review (r1, P1 -- executed): a fresh emptyDir is root:root by
+    default; without fsGroup, the non-root writer (operator-credential /
+    route-dsn, ops image UID 10001) cannot create files in it either --
+    confirmed executing the real image against a fresh emptyDir-equivalent
+    volume: `cannot create /run/go-worker-operator/token: Permission
+    denied`. fsGroup makes every container in the pod (regardless of its
+    own primary UID) a supplementary member of that GID, and Kubernetes
+    chowns/chmods each mounted volume to it."""
+    jobs = _jobs(*_FULL_CHAIN_ON)
+    pod_security_context = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["securityContext"]
+    assert pod_security_context.get("fsGroup") is not None, pod_security_context
+    assert pod_security_context["runAsNonRoot"] is True
+
+
 # --- CHAOS-4455: EXPECTED_WORKER_GROUPS and the deployed groups agree -------
 
 
@@ -248,25 +310,66 @@ def test_expected_worker_groups_and_deployments_are_consistent() -> None:
         )
 
 
-# --- credentials never reach the rendered manifest or argv ------------------
+# --- credentials never reach the JOB spec or the route-activate containers -
+#
+# codex review (r1, P3): the ORIGINAL version of this test's name/docstring
+# overclaimed "never appear in the rendered manifest" -- a Secret's own
+# `stringData` legitimately DOES carry the plaintext value at render time
+# (that is what a Kubernetes Secret object IS; `helm template --set
+# goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD=...`
+# renders it at deploy/helm/dev-health/templates/go-pgbouncer.yaml and this
+# file's own route-activate-secrets Secret, both already-established chart
+# patterns unrelated to this PR). What this test actually verifies, made
+# explicit below: the password reaches only ONE Secret object (never a
+# second copy anywhere else) and only via secretKeyRef in the JOB spec --
+# never inlined into a container's own `env[].value`, `args`, or `command`.
+# The post-fix design is now STRICTER than before: route-activate-* containers
+# carry no password env at all (moved to the route-dsn step), so the
+# Job-spec assertion covers the whole Job, not just one container.
 
 
-def test_role_passwords_never_appear_in_the_rendered_manifest() -> None:
-    jobs = _jobs(
+def test_role_passwords_reach_only_the_route_activate_secret_via_secretkeyref() -> None:
+    docs = _render(
         *_FULL_CHAIN_ON,
         "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD=s3cret-route",
     )
-    rendered = yaml.safe_dump(jobs[_ROUTE_ACTIVATE])
-    assert "s3cret-route" not in rendered
+    jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
+    secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+
+    job_rendered = yaml.safe_dump(jobs[_ROUTE_ACTIVATE])
+    assert "s3cret-route" not in job_rendered, (
+        "the plaintext password must never be inlined into the Job spec itself"
+    )
+
+    holders = [name for name, s in secrets.items() if "s3cret-route" in yaml.safe_dump(s)]
+    assert holders == [_ROUTE_ACTIVATE_SECRETS] or set(holders) == {
+        _ROUTE_ACTIVATE_SECRETS,
+        f"{_RELEASE}-dev-health-provision-roles-secrets",
+        f"{_RELEASE}-dev-health-go-pgbouncer",
+    }, (
+        "the password must reach only the chart's own established Secret "
+        f"objects for this value, never an extra copy: {holders}"
+    )
+
     init_containers = {
         c["name"]: c
         for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
     }
-    env = {
-        item["name"]: item
-        for item in init_containers["route-activate-dispatch-sync-run"]["env"]
-    }
-    assert "secretKeyRef" in env["RIVER_DOMAIN_DATABASE_PASSWORD"]["valueFrom"]
+    dsn_env = {item["name"]: item for item in init_containers["route-dsn"]["env"]}
+    assert "secretKeyRef" in dsn_env["RIVER_DOMAIN_DATABASE_PASSWORD"]["valueFrom"]
+    for kind in _KINDS:
+        route_env_names = {
+            item["name"]
+            for item in init_containers[f"route-activate-{kind.replace('_', '-')}"]["env"]
+        }
+        assert not route_env_names & {
+            "RIVER_DOMAIN_DATABASE_PASSWORD",
+            "RIVER_QUEUE_DATABASE_PASSWORD",
+            "RIVER_COORDINATOR_DATABASE_PASSWORD",
+        }, (
+            f"route-activate-{kind} must not carry password env at all -- "
+            f"DSN construction moved to route-dsn: {route_env_names}"
+        )
 
 
 def test_route_activate_secret_is_created_before_the_job_that_reads_it() -> None:
@@ -292,10 +395,7 @@ def test_route_activate_accepts_a_pre_created_external_secret() -> None:
         c["name"]: c
         for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
     }
-    env = {
-        item["name"]: item
-        for item in init_containers["route-activate-dispatch-sync-run"]["env"]
-    }
+    env = {item["name"]: item for item in init_containers["route-dsn"]["env"]}
     for key in (
         "RIVER_DOMAIN_DATABASE_PASSWORD",
         "RIVER_QUEUE_DATABASE_PASSWORD",
@@ -389,64 +489,106 @@ def test_operator_credential_script_mints_only_once(tmp_path: Path) -> None:
     )
 
 
-def test_route_activate_script_builds_dsns_from_parts_and_never_from_a_dsn_value(
-    tmp_path: Path,
-) -> None:
-    """DSNs are built in-shell from role/host/port/db + a secretKeyRef'd
-    password -- never templated as one plaintext Secret value -- so the
-    script must actually construct them at runtime. Execute it against a
-    recording `dev-health-workerctl` stub."""
+def _run_route_dsn_script(tmp_path: Path, **env: str) -> Path:
+    """Execute the real route-dsn script (ops image: has /bin/sh AND
+    python3) and return the directory it wrote POSTGRES_URI/
+    WORKER_DATABASE_URI/COORDINATOR_DATABASE_URI into."""
     jobs = _jobs(*_FULL_CHAIN_ON)
     init_containers = {
         c["name"]: c
         for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
     }
-    container = init_containers["route-activate-dispatch-sync-run"]
+    container = init_containers["route-dsn"]
     command = container["command"]
     assert command[:2] == ["/bin/sh", "-ec"], command
     script = command[2]
 
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log = tmp_path / "workerctl.log"
-    stub = bin_dir / "dev-health-workerctl"
-    stub.write_text(
-        "#!/bin/sh\n"
-        'printf "%s|%s|%s|%s\\n" "$POSTGRES_URI" "$WORKER_DATABASE_URI"'
-        ' "$COORDINATOR_DATABASE_URI" "$*" >> "$LOG"\n'
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
+    out_dir = tmp_path / "run" / "route-dsn"
+    out_dir.mkdir(parents=True)
+    script = script.replace("/run/route-dsn", str(out_dir))
 
+    base_env = {
+        "PATH": os.environ["PATH"],
+        "POSTGRES_HOST": "postgres.internal",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_DB": "devhealth",
+        "RIVER_DOMAIN_DATABASE_ROLE": "devhealth_domain",
+        "RIVER_QUEUE_DATABASE_ROLE": "devhealth_queue",
+        "RIVER_COORDINATOR_DATABASE_ROLE": "devhealth_coordinator",
+        "RIVER_DOMAIN_DATABASE_PASSWORD": "d-pw",
+        "RIVER_QUEUE_DATABASE_PASSWORD": "q-pw",
+        "RIVER_COORDINATOR_DATABASE_PASSWORD": "c-pw",
+    }
+    base_env.update(env)
     completed = subprocess.run(
-        ["/bin/sh", "-ec", script],
-        capture_output=True,
-        text=True,
-        env={
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "LOG": str(log),
-            "POSTGRES_HOST": "postgres.internal",
-            "POSTGRES_PORT": "5432",
-            "POSTGRES_DB": "devhealth",
-            "RIVER_DOMAIN_DATABASE_ROLE": "devhealth_domain",
-            "RIVER_QUEUE_DATABASE_ROLE": "devhealth_queue",
-            "RIVER_COORDINATOR_DATABASE_ROLE": "devhealth_coordinator",
-            "RIVER_DOMAIN_DATABASE_PASSWORD": "d-pw",
-            "RIVER_QUEUE_DATABASE_PASSWORD": "q-pw",
-            "RIVER_COORDINATOR_DATABASE_PASSWORD": "c-pw",
-        },
+        ["/bin/sh", "-ec", script], capture_output=True, text=True, env=base_env
     )
     assert completed.returncode == 0, completed.stderr
-    line = log.read_text(encoding="utf-8").strip()
-    postgres_uri, worker_uri, coordinator_uri, argv = line.split("|", 3)
+    return out_dir
+
+
+def test_route_dsn_script_builds_dsns_from_parts_and_never_from_a_dsn_value(
+    tmp_path: Path,
+) -> None:
+    """DSNs are built in-shell from role/host/port/db + a secretKeyRef'd
+    password -- never templated as one plaintext Secret value -- so the
+    script must actually construct them at runtime, into files the
+    distroless route-activate-* containers read via the `_FILE` convention
+    (they have no shell to build a DSN in themselves)."""
+    out_dir = _run_route_dsn_script(tmp_path)
+    postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
+    worker_uri = (out_dir / "WORKER_DATABASE_URI").read_text(encoding="utf-8")
+    coordinator_uri = (out_dir / "COORDINATOR_DATABASE_URI").read_text(encoding="utf-8")
     assert postgres_uri == "postgresql://devhealth_domain:d-pw@postgres.internal:5432/devhealth"
     assert worker_uri == "postgresql://devhealth_queue:q-pw@postgres.internal:5432/devhealth"
     assert (
         coordinator_uri
         == "postgresql://devhealth_coordinator:c-pw@postgres.internal:5432/devhealth"
     )
-    assert argv.endswith("dispatch_sync_run"), argv
+
+
+# --- input-domain: passwords containing URI-special characters -------------
+#
+# codex review (r1, P1 -- executed): an unencoded `#` in a password truncates
+# the URI at the fragment delimiter, dropping everything after it (including
+# the host/port/db) -- confirmed against the real `dev-health-workerctl`
+# binary: `{"error":{"code":"database_unavailable"}}` with the raw password,
+# success once percent-encoded. Every RFC 3986 reserved/sub-delim character
+# that can appear in a generated password is exercised here, in ONE pass.
+
+
+_URI_SPECIAL_PASSWORD_CASES = [
+    ("simple", "plainpassword123"),
+    ("hash-fragment", "pw#with#hash"),
+    ("at-sign", "pw@with@at"),
+    ("colon", "pw:with:colon"),
+    ("slash", "pw/with/slash"),
+    ("percent", "pw%with%percent"),
+    ("question-mark", "pw?with?query"),
+    ("ampersand-equals", "pw&a=b&c=d"),
+    ("space", "pw with space"),
+    ("unicode", "pw☃snowman"),
+    ("empty", ""),
+]
+
+
+@pytest.mark.parametrize(("case_id", "password"), _URI_SPECIAL_PASSWORD_CASES)
+def test_route_dsn_script_percent_encodes_every_uri_special_password(
+    tmp_path: Path, case_id: str, password: str
+) -> None:
+    import urllib.parse
+
+    out_dir = _run_route_dsn_script(tmp_path, RIVER_DOMAIN_DATABASE_PASSWORD=password)
+    postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
+    expected_pw = urllib.parse.quote(password, safe="")
+    expected = f"postgresql://devhealth_domain:{expected_pw}@postgres.internal:5432/devhealth"
+    assert postgres_uri == expected, (case_id, postgres_uri, expected)
+
+    # The written URI must actually PARSE to the original password -- the
+    # real proof the encoding round-trips, not just that some encoding ran.
+    parsed = urllib.parse.urlsplit(postgres_uri)
+    assert urllib.parse.unquote(parsed.username or "") == "devhealth_domain"
+    assert urllib.parse.unquote(parsed.password or "") == password, (case_id, postgres_uri)
 
 
 # --- input-domain table: migrations.hook.routeActivate.enabled -------------

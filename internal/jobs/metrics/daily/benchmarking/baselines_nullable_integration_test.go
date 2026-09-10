@@ -33,14 +33,14 @@ func TestWriteBaselinesNullFieldsRoundTripAsRealClickHouseNull(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// Minimal schema for the one table under test, matching migration
-	// 090_testops_baselines_nullable_fields.sql's post-migration shape
-	// exactly (current_value/baseline_value/p25-90_value Nullable, per-
-	// column, percentile_rank required).
+	// Minimal schema for the one table under test, matching migrations
+	// 090_testops_baselines_nullable_fields.sql and
+	// 092_testops_percentile_rank_nullable_field.sql's post-migration
+	// shape exactly (every one of these six columns Nullable, per-column).
 	if err := conn.Exec(ctx, `CREATE TABLE testops_metric_baselines (
     metric_name LowCardinality(String), scope_type LowCardinality(String), scope_key String,
     period_start Date, period_end Date, rolling_window_days UInt16,
-    current_value Nullable(Float64), baseline_value Nullable(Float64), percentile_rank Float64,
+    current_value Nullable(Float64), baseline_value Nullable(Float64), percentile_rank Nullable(Float64),
     p25_value Nullable(Float64), p50_value Nullable(Float64), p75_value Nullable(Float64), p90_value Nullable(Float64),
     sample_size UInt32, org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
 ) ENGINE MergeTree PARTITION BY toYYYYMM(period_end)
@@ -62,7 +62,7 @@ func TestWriteBaselinesNullFieldsRoundTripAsRealClickHouseNull(t *testing.T) {
 			// R73's actual shape: only SOME fields on the row are
 			// undefined -- CurrentValue and P25Value are nil, everything
 			// else is a real, present value. The row still writes.
-			CurrentValue: nil, BaselineValue: &finiteValue, PercentileRank: 55.5,
+			CurrentValue: nil, BaselineValue: &finiteValue, PercentileRank: &finiteValue,
 			P25Value: nil, P50Value: &finiteValue, P75Value: &finiteValue, P90Value: &finiteValue,
 			SampleSize: 3, ComputedAt: day, OrgID: "org-null-roundtrip",
 		},

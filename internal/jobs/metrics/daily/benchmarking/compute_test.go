@@ -309,7 +309,7 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 			got.MetricName, got.ScopeType, got.ScopeKey, isoDay(got.PeriodStart), isoDay(got.PeriodEnd),
 			got.RollingWindowDays,
 			mustFinite(t, "CurrentValue", got.CurrentValue), mustFinite(t, "BaselineValue", got.BaselineValue),
-			got.PercentileRank,
+			mustFinite(t, "PercentileRank", got.PercentileRank),
 			mustFinite(t, "P25Value", got.P25Value), mustFinite(t, "P50Value", got.P50Value),
 			mustFinite(t, "P75Value", got.P75Value), mustFinite(t, "P90Value", got.P90Value),
 			got.SampleSize,

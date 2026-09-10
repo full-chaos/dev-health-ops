@@ -44,10 +44,17 @@ func TestComputeInternalBaselinesDropsNonFiniteCrossSectionEntries(t *testing.T)
 	for _, row := range baselines {
 		if row.ScopeKey == "scope-nan" {
 			// codex round chaos-4806-r1 P1 fix: the row is NOT dropped --
-			// only its own CurrentValue field is nulled.
+			// only its own CurrentValue field is nulled. codex round
+			// chaos-4806-r3b P1 fix: PercentileRank must ALSO be nil for
+			// this scope -- ranking a NaN/+-Inf CurrentValue against the
+			// (unrelated, still-real) cross-section produced a misleading
+			// finite rank otherwise.
 			sawNaNScope = true
 			if row.CurrentValue != nil {
 				t.Errorf("scope-nan row CurrentValue = %v, want nil", *row.CurrentValue)
+			}
+			if row.PercentileRank != nil {
+				t.Errorf("scope-nan row PercentileRank = %v, want nil (CurrentValue is undefined, so its rank is too)", *row.PercentileRank)
 			}
 		}
 		if row.P25Value == nil || row.P50Value == nil || row.P75Value == nil || row.P90Value == nil {
@@ -56,11 +63,14 @@ func TestComputeInternalBaselinesDropsNonFiniteCrossSectionEntries(t *testing.T)
 		if math.IsNaN(*row.P25Value) || math.IsNaN(*row.P50Value) || math.IsNaN(*row.P75Value) || math.IsNaN(*row.P90Value) {
 			t.Fatalf("row for scope %q has a NaN percentile field: %+v -- the dropped scope-nan value leaked into the cross-section percentile", row.ScopeKey, row)
 		}
-		if math.IsNaN(row.PercentileRank) {
-			t.Fatalf("row for scope %q has a NaN PercentileRank: %+v", row.ScopeKey, row)
-		}
 		if row.ScopeKey == "scope-good-b" {
 			sawGoodScope = true
+			if row.PercentileRank == nil {
+				t.Fatalf("scope-good-b PercentileRank = nil, want a real rank (its own CurrentValue is finite)")
+			}
+			if math.IsNaN(*row.PercentileRank) {
+				t.Fatalf("row for scope %q has a NaN PercentileRank: %+v", row.ScopeKey, row)
+			}
 			// Cross-section after dropping the NaN is {10, 20, 30}; p50 of
 			// that is 20.
 			if *row.P50Value != 20.0 {
@@ -273,5 +283,66 @@ func TestComputeInternalBaselinesAllNonFiniteCrossSectionNullsPercentilesNotZero
 	afterUndefined := finite.Count(finiteBaselineFamily, metricName, finite.ReasonUndefinedInput)
 	if afterUndefined <= beforeUndefined {
 		t.Errorf("finite.Count(%s,%s,undefined_input) did not increase (before=%d after=%d) -- an empty cross-section must be counted", finiteBaselineFamily, metricName, beforeUndefined, afterUndefined)
+	}
+}
+
+// TestComputeInternalBaselinesInfiniteScopeDoesNotRankAsFullyConfident is
+// the red-first proof for codex round chaos-4806-r3b P1: PercentileRank
+// used to be computed from the RAW latestValue even when CurrentValue came
+// back nil -- safe for NaN (every comparison against NaN is false, so the
+// ratio-of-counts result is always 0), but NOT for +-Inf: every finite
+// candidate genuinely compares less-than +Inf, so an undefined scope could
+// still rank a fully confident 100 (a scope whose own data is undefined
+// reading as "leading," top of the field). A NON-empty cohort (two other
+// real scopes) makes this distinct from the empty-cross-section case above.
+func TestComputeInternalBaselinesInfiniteScopeDoesNotRankAsFullyConfident(t *testing.T) {
+	asOf := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	metricName := "test_infinite_scope_rank_metric"
+
+	series := map[string][]MetricPoint{
+		"scope-inf":  {{Day: asOf, Value: math.Inf(1)}},
+		"scope-mid":  {{Day: asOf, Value: 50.0}},
+		"scope-high": {{Day: asOf, Value: 75.0}},
+	}
+
+	baselines := ComputeInternalBaselines(
+		metricName, ScopeRepo, series, asOf, asOf, []int{30}, "org-nonfinite",
+	)
+
+	sawInfScope := false
+	for _, row := range baselines {
+		if row.ScopeKey != "scope-inf" {
+			continue
+		}
+		sawInfScope = true
+		if row.CurrentValue != nil {
+			t.Errorf("scope-inf CurrentValue = %v, want nil", *row.CurrentValue)
+		}
+		if row.PercentileRank != nil {
+			t.Errorf("scope-inf PercentileRank = %v, want nil -- a scope whose own value is +Inf (undefined) must not rank at all, let alone at a fully confident 100", *row.PercentileRank)
+		}
+	}
+	if !sawInfScope {
+		t.Fatal("expected a row for scope-inf")
+	}
+}
+
+// TestClassifyMaturityBandsSkipsUndefinedRank proves the second half of the
+// same fix: a baseline row with a nil PercentileRank produces NO maturity-
+// band row at all -- there is nothing to classify without a rank, so this
+// is a "nothing to derive" skip, never a band/confidence computed from an
+// undefined rank.
+func TestClassifyMaturityBandsSkipsUndefinedRank(t *testing.T) {
+	definedRank := 62.5
+	baselines := []BenchmarkBaselineRecord{
+		{ScopeKey: "scope-undefined", PercentileRank: nil},
+		{ScopeKey: "scope-defined", PercentileRank: &definedRank},
+	}
+	bands := ClassifyMaturityBands(baselines)
+	if len(bands) != 1 {
+		t.Fatalf("ClassifyMaturityBands returned %d rows, want 1 (only the defined-rank scope)", len(bands))
+	}
+	if bands[0].ScopeKey != "scope-defined" {
+		t.Errorf("ClassifyMaturityBands emitted a row for %q, want scope-defined only", bands[0].ScopeKey)
 	}
 }

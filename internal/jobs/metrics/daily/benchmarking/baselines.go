@@ -168,13 +168,30 @@ func ComputeInternalBaselines(
 		// CurrentValue is now Nullable(Float64) (migration
 		// 090_testops_baselines_nullable_fields.sql) -- keep the row, null
 		// ONLY this one field via nullableRound4, which records the actual
-		// reason through finite.Check. Every window for this scope still
-		// gets its own row; PercentileRank(crossSection, latestValue) stays
-		// safe even when latestValue is non-finite (every comparison
-		// against NaN/+-Inf is false by construction, so the ratio-of-
-		// counts result is always a bounded, finite 0-100 -- see
-		// PercentileRank's own doc comment).
+		// reason through finite.Check.
 		currentValue := nullableRound4(finiteBaselineFamily, metricName, latestValue)
+		// codex round chaos-4806-r3b P1 (executed repro): PercentileRank
+		// was computed from the RAW latestValue even when currentValue
+		// above came back nil -- safe for a NaN comparison value (every
+		// comparison against NaN is false, so PercentileRank(cs, NaN)
+		// always lands at 0), but NOT for +-Inf: every finite candidate
+		// genuinely compares less-than +Inf (greater-than -Inf), so an
+		// undefined scope could still rank a fully confident 100 (or 0)
+		// -- "leading" maturity, 1.0 confidence, for data that is
+		// undefined. If this scope's own value is non-finite, its
+		// PercentileRank is undefined too (migration
+		// 092_testops_percentile_rank_nullable_field.sql); only compute
+		// the real rank when currentValue survived the check above.
+		var percentileRank *float64
+		if currentValue == nil {
+			finite.Undefined(finiteBaselineFamily, metricName)
+		} else if len(crossSection) > 0 {
+			percentileRank = nullableRound4(finiteBaselineFamily, metricName, PercentileRank(crossSection, latestValue))
+		} else {
+			// Empty cross-section: no cohort to rank against at all,
+			// independent of whether THIS scope's own value is finite.
+			finite.Undefined(finiteBaselineFamily, metricName)
+		}
 		points := seriesByScope[scopeKey]
 		for _, windowDays := range windows {
 			values := windowValues(points, asOfDay, windowDays)
@@ -214,7 +231,7 @@ func ComputeInternalBaselines(
 				RollingWindowDays: windowDays,
 				CurrentValue:      currentValue,
 				BaselineValue:     baselineValue,
-				PercentileRank:    round4(PercentileRank(crossSection, latestValue)),
+				PercentileRank:    percentileRank,
 				P25Value:          p25,
 				P50Value:          p50,
 				P75Value:          p75,
@@ -284,6 +301,18 @@ func ClassifyMaturityBands(baselines []BenchmarkBaselineRecord) []MaturityBandRe
 	}
 	records := make([]MaturityBandRecord, 0, len(baselines))
 	for _, baseline := range baselines {
+		// CHAOS-4806 / ruling R73, codex round chaos-4806-r3b P1: a nil
+		// PercentileRank means "no cohort to rank against" or "this
+		// scope's own value is undefined" -- there is no band/confidence
+		// to classify without a rank, so this baseline row produces no
+		// maturity-band row at all (the baseline row itself still wrote,
+		// with PercentileRank correctly NULL -- this is a "nothing to
+		// derive" skip, the same shape as windowValues' own empty-window
+		// skip elsewhere in this file, not a silent substitution).
+		if baseline.PercentileRank == nil {
+			continue
+		}
+		rank := *baseline.PercentileRank
 		records = append(records, MaturityBandRecord{
 			MetricName:     baseline.MetricName,
 			ScopeType:      baseline.ScopeType,
@@ -291,9 +320,9 @@ func ClassifyMaturityBands(baselines []BenchmarkBaselineRecord) []MaturityBandRe
 			PeriodStart:    baseline.PeriodStart,
 			PeriodEnd:      baseline.PeriodEnd,
 			Value:          baseline.CurrentValue,
-			PercentileRank: baseline.PercentileRank,
-			MaturityBand:   bandForPercentile(baseline.PercentileRank),
-			Confidence:     confidenceForPercentile(baseline.PercentileRank),
+			PercentileRank: rank,
+			MaturityBand:   bandForPercentile(rank),
+			Confidence:     confidenceForPercentile(rank),
 			ComputedAt:     baseline.ComputedAt,
 			OrgID:          baseline.OrgID,
 		})

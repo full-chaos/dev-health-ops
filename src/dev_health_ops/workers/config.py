@@ -152,7 +152,7 @@ task_queues: dict[str, dict[str, Any]] = {
 # workers/sync_scheduler.py and workers/sync_reconciler.py are deleted
 # outright. All three entries are pinned absent by
 # tests/workers/test_celery_dead_code_contract.py.
-beat_schedule = {}
+beat_schedule: dict[str, Any] = {}
 
 # Result settings
 result_expires = 86400  # Results expire after 24 hours

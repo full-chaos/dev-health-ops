@@ -1,0 +1,53 @@
+query PrDetail($orgId: String!, $id: ID!) {
+  pr(orgId: $orgId, id: $id) {
+    id
+    orgId
+    repoId
+    repoName
+    number
+    title
+    body
+    state
+    authorName
+    authorEmail
+    createdAt
+    mergedAt
+    closedAt
+    headBranch
+    baseBranch
+    additions
+    deletions
+    changedFiles
+    firstReviewAt
+    firstCommentAt
+    changesRequestedCount
+    reviewsCount
+    commentsCount
+    reviews {
+      reviewId
+      reviewer
+      state
+      submittedAt
+      __typename
+    }
+    commits {
+      hash
+      message
+      authorName
+      authorEmail
+      authorWhen
+      confidence
+      provenance
+      evidence
+      __typename
+    }
+    linkedIssues {
+      workItemId
+      confidence
+      provenance
+      evidence
+      __typename
+    }
+    __typename
+  }
+}

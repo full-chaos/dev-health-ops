@@ -2,7 +2,9 @@ package remaining
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -49,6 +51,46 @@ func TestFamilyScopesRejectUnknownFieldsAndBounds(t *testing.T) {
 		if _, err := validateFamilyScope(test.family, json.RawMessage(test.raw)); err == nil {
 			t.Fatalf("%s accepted %s", test.family, test.raw)
 		}
+	}
+}
+
+// TestDORAScopeRejectsUnknownMetricName pins CHAOS-5395: before this fix, a
+// typo'd metric name in a "dora" scope's Metrics field (e.g.
+// "lead_time_for_change" instead of "lead_time_for_changes") passed
+// validateFamilyScope unchanged -- boundedOptional only checked the string's
+// LENGTH, never its content against defaultDORAMetrics -- and reached
+// metricFilter (dora_native.go) as a `wanted` set matching nothing
+// ComputeDORA ever names, silently writing 0 rows with no error surfaced
+// here and no log line (logPartitionDay is gated on written>0). The
+// EXPECTATION pinned below is the CORRECT one (refuse loudly at validation
+// time), not the defective one a green-first test would have encoded.
+func TestDORAScopeRejectsUnknownMetricName(t *testing.T) {
+	raw := `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"auto","interval":"daily","metrics":"deployment_frequency,lead_time_for_change"}`
+	_, err := validateFamilyScope("dora", json.RawMessage(raw))
+	if err == nil {
+		t.Fatal("dora scope with a typo'd metric name was accepted, want a refusal")
+	}
+	if !errors.Is(err, ErrUnknownDORAMetricName) {
+		t.Fatalf("err = %v, want errors.Is(_, ErrUnknownDORAMetricName)", err)
+	}
+	if !strings.Contains(err.Error(), "lead_time_for_change") {
+		t.Fatalf("err = %v, want it to name the offending metric", err)
+	}
+}
+
+// TestDORAScopeAcceptsEveryDefaultMetricNameAndEmptyMetrics is the paired
+// green control for TestDORAScopeRejectsUnknownMetricName: every name
+// defaultDORAMetrics actually contains, and an absent Metrics field (the
+// production default -- "compute everything"), must both still validate.
+func TestDORAScopeAcceptsEveryDefaultMetricNameAndEmptyMetrics(t *testing.T) {
+	base := `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"auto","interval":"daily"}`
+	if _, err := validateFamilyScope("dora", json.RawMessage(base)); err != nil {
+		t.Fatalf("scope with no metrics field: %v", err)
+	}
+	withAll := `{"version":1,"day":"2026-07-23","backfill_days":1,"sink":"auto","interval":"daily","metrics":"` +
+		strings.Join(defaultDORAMetrics, ",") + `"}`
+	if _, err := validateFamilyScope("dora", json.RawMessage(withAll)); err != nil {
+		t.Fatalf("scope naming every default metric: %v", err)
 	}
 }
 

@@ -44,6 +44,8 @@ var (
 	capacityForecastsOutcomeCounter    = mustCounter("devhealth_query_api_capacity_forecasts_outcome_total", "capacityForecasts resolver outcomes, by result")
 	throughputForecastCallCounter      = mustCounter("devhealth_query_api_throughput_forecast_calls_total", "throughputForecast resolver invocations")
 	throughputForecastOutcomeCounter   = mustCounter("devhealth_query_api_throughput_forecast_outcome_total", "throughputForecast resolver outcomes, by result")
+	featureFlagEventsCallCounter       = mustCounter("devhealth_query_api_feature_flag_events_calls_total", "featureFlagEvents resolver invocations")
+	featureFlagEventsOutcomeCounter    = mustCounter("devhealth_query_api_feature_flag_events_outcome_total", "featureFlagEvents resolver outcomes, by result")
 
 	tracer = otel.Tracer("github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph")
 )
@@ -105,6 +107,35 @@ func startFeatureFlagsSpan(ctx context.Context) (context.Context, func(outcome s
 // rejection), or "error".
 func recordFeatureFlagsOutcome(outcome string) {
 	featureFlagsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+}
+
+// startFeatureFlagEventsSpan is startFeatureFlagsSpan's counterpart for
+// the featureFlagEvents resolver (CHAOS-5523) -- same "span starts before
+// the ClickHouse query, and before the authorization guard, so a
+// rejected request is counted rather than producing no span at all"
+// contract featureFlags/CapacityForecast's org-scoping sweep established.
+func startFeatureFlagEventsSpan(ctx context.Context) (context.Context, func(outcome string, extra ...attribute.KeyValue)) {
+	featureFlagEventsCallCounter.Add(ctx, 1)
+	spanCtx, span := tracer.Start(ctx, "query-api.featureFlagEvents")
+	return spanCtx, func(outcome string, extra ...attribute.KeyValue) {
+		span.SetAttributes(attribute.String("outcome", outcome))
+		if len(extra) > 0 {
+			span.SetAttributes(extra...)
+		}
+		if outcome == "error" {
+			span.SetStatus(codes.Error, "featureFlagEvents resolver error")
+		}
+		span.End()
+		recordFeatureFlagEventsOutcome(outcome)
+	}
+}
+
+// recordFeatureFlagEventsOutcome increments the outcome counter. outcome
+// is one of "ok" (a real, non-degraded result), "degraded" (the
+// FEATURE_FLAG_EVENT_NOT_MATERIALIZED path), "denied" (an org-scoping
+// rejection), or "error" -- same outcome vocabulary as featureFlags.
+func recordFeatureFlagEventsOutcome(outcome string) {
+	featureFlagEventsOutcomeCounter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 }
 
 // startReviewEdgesSpan is startFeatureFlagsSpan's counterpart for the

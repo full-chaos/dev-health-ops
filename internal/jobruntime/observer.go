@@ -140,6 +140,16 @@ type RemainingMetricsManualBackfillObserver interface {
 	ObserveRemainingMetricsManualBackfill(family, outcome string) error
 }
 
+// RemainingMetricsScopeRefusalObserver is the narrow capability the
+// remaining-metrics store depends on (CHAOS-5395) when
+// normalizeStartRunRequest refuses a StartRunRequest's scope -- e.g. a
+// "dora" scope naming a metric outside defaultDORAMetrics. Generic runtime
+// middleware cannot infer this: only the store that just rejected the scope
+// knows a refusal happened at all, and which bounded reason it was.
+type RemainingMetricsScopeRefusalObserver interface {
+	ObserveRemainingMetricsScopeRefused(family, reason string) error
+}
+
 // ReportDedupGuardObserver is the narrow capability the weekly-report query
 // adapter depends on after running a chart read over an append-only daily
 // rollup through its dedup guard (CHAOS-4140). Generic runtime middleware

@@ -418,8 +418,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "external_ingest_reconciler.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` (L59 prune_external_ingest_batches); sole Python importer tasks.py:2-4 -- but CHAOS-4439 found (config.py:164-167) this task is still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod. Not deletable until that fleet stops running it",
-        "ticket": "CHAOS-4439 (kept -- ask-dev acceptance fleet dependency)",
+        "evidence": "`@celery_app.task` (L59 prune_external_ingest_batches); sole Python importer tasks.py:2-4 -- CHAOS-4439 had found (config.py:164-167) this task was still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod; CHAOS-4065 (this PR) replaced that fleet with cmd/ask-dev-jobs-probe, which calls internal/jobs/system.ExternalIngestBatchStore directly -- the acceptance-fleet blocker is gone, deletion is CHAOS-3093's scope",
+        "ticket": "CHAOS-3093 (delete)",
     },
     "feature_flag_sync.py": {
         "category": "a",
@@ -463,8 +463,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "queue_monitor.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` (L84 monitor_queue_depths); Python importers celery_app.py (comment only) + tasks.py:5; no route caller -- but CHAOS-4439 found (config.py:164-167) this task is still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod. Not deletable until that fleet stops running it",
-        "ticket": "CHAOS-4439 (kept -- ask-dev acceptance fleet dependency)",
+        "evidence": "`@celery_app.task` (L84 monitor_queue_depths); Python importers celery_app.py (comment only) + tasks.py:5; no route caller -- CHAOS-4439 had found (config.py:164-167) this task was still exercised by a REAL Celery worker+beat fleet in tests/acceptance/compose.ask-dev.yml's release-blocking gate, independent of prod; already fully superseded in prod by cmd/dev-health-worker/queue_health.go's queueHealthMonitor (CHAOS-3040 P2, landed #1738), and CHAOS-4065 (this PR) replaced the acceptance fleet's probe with cmd/ask-dev-jobs-probe's `queue-depth` check against the same River table -- the acceptance-fleet blocker is gone, deletion is CHAOS-3093's scope",
+        "ticket": "CHAOS-3093 (delete)",
     },
     "queues.py": {
         "category": "c",
@@ -503,8 +503,8 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "sync_reconciler.py": {
         "category": "b",
-        "evidence": "`@celery_app.task` x2 (L84 reconcile_sync_dispatch, L131 prune_rate_limit_observations); sole importer tasks.py:11-13",
-        "ticket": "CHAOS-4439 (dead worker modules)",
+        "evidence": "`@celery_app.task` x2 (L84 reconcile_sync_dispatch, L131 prune_rate_limit_observations); sole importer tasks.py:11-13; prune_rate_limit_observations was also a beat_schedule entry the ask-dev acceptance fleet's real Celery worker+beat boot kept alive independent of prod (workers/config.py:182-186) -- CHAOS-4065 (this PR) replaced that fleet's probe with cmd/ask-dev-jobs-probe's `retention` check against internal/jobs/system.RateLimitObservationStore directly, so nothing in this repo still needs a live fleet for it",
+        "ticket": "CHAOS-3093 (delete)",
     },
     "sync_scheduler.py": {
         "category": "b",

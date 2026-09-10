@@ -459,6 +459,14 @@ func buildSyncCoordinatorWorker(
 	if openDayZeroRowObserver, ok := observer.(remaining.OpenDayZeroRowObserver); ok {
 		remainingStore.SetOpenDayZeroRowObserver(openDayZeroRowObserver)
 	}
+	// CHAOS-5395: this remainingStore is the one whose StartRunTx actually
+	// calls normalizeStartRunRequest (both the post-sync fanout path and
+	// StartManualBackfillRun/startManualTriggerRun), so it is the correct --
+	// and only -- place to wire the scope-refusal observer, same reasoning
+	// as the CHAOS-4384 comment just above.
+	if scopeRefusalObserver, ok := observer.(remaining.ScopeRefusalObserver); ok {
+		remainingStore.SetScopeRefusalObserver(scopeRefusalObserver)
+	}
 	remainingPublisher, remainingPublisherErr := remaining.NewPostgresPublisher(postgresDatabase.pools.Domain, registry)
 	producer, producerErr := joboutbox.NewProducer(postgresDatabase.pools.Domain, registry)
 	workGraphWriter, workGraphWriterErr := workgraph.NewRequestWriter(registry)

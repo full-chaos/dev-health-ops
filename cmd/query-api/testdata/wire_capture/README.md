@@ -57,3 +57,92 @@ query-api to accept a real client's request.
 
 Captured: 2026-09-01T01:40:06.129Z, ops tip at capture time: see the
 lane's PR description for the exact SHA this was verified against.
+
+# featureFlagEvents wire-capture fixture (CHAOS-5523)
+
+`featureflagevents_captured.graphql` is the RAW `query` text captured off
+a real HTTP request, produced the same way as `featureflags_captured.
+graphql` above: this repo's own UNMODIFIED `graphqlFetch`
+(`src/lib/graphql/server.ts`) calling the real `@urql/core` client's
+exchange chain against a real local HTTP listener, with the real
+`FEATURE_FLAG_EVENTS_QUERY` export (`src/lib/feature-flags/queries.ts`)
+as input variables.
+
+Capture mechanism: a same-shape variant of
+`scripts/capture-graphql-wire-fixture.ts`, retargeted at
+`FEATURE_FLAG_EVENTS_QUERY` (that script itself hardcodes the
+featureFlags query only) -- run once from an unmodified `dev-health-web`
+checkout with absolute imports pointing at that checkout's own
+`src/lib/graphql/server` and `src/lib/feature-flags/queries`, so the
+graphqlFetch code path exercised is byte-for-byte the repo's real,
+unmodified one; not committed anywhere as a script (single-use, deleted
+after the capture ran).
+
+**Transport observed: `GET`** (same `within-url-limit` default as
+featureFlags above; featureFlagEvents's variable set is also short
+enough to stay under the 2047-character threshold).
+
+## Digests
+
+| digest of | value |
+| --- | --- |
+| `FEATURE_FLAG_EVENTS_QUERY` (web source text, unprinted) | `4a3e3f98adb538466e4a7963af6ba88bc1b1fbcc4c08c56895f838c1d00210b9` |
+| this captured fixture (real wire bytes) | `e5e5fd3aba6d00c5413407046dfa68acadeb72c6ff1bb5f40b983bd0ddc3b632` |
+
+Same CHAOS-4696-class divergence as featureFlags: `cacheExchange`'s
+`formatDocument` injects `__typename` into every non-root selection set,
+and `fetchExchange`'s real `print()` reflows the `featureFlagEvents(...)`
+field's argument list onto its own lines. `cmd/query-api/query_route.go`'s
+`registeredFeatureFlagEventsDocument` const must digest to
+`e5e5fd3aba6d00c5413407046dfa68acadeb72c6ff1bb5f40b983bd0ddc3b632`, not
+`4a3e3f98adb538466e4a7963af6ba88bc1b1fbcc4c08c56895f838c1d00210b9`, for
+query-api to accept a real client's request --
+`query_route_wire_capture_test.go`'s
+`TestRegisteredFeatureFlagEventsDocument_MatchesCapturedWireFixture`
+enforces this on every run, independent of this README's own claim.
+
+Captured: 2026-09-09T19:34:39Z, ops tip at capture time: fe03a111bee2
+(this lane's worktree base).
+
+# pr wire-capture fixture (CHAOS-4991)
+
+`pr_captured.graphql` is the wire-form `query` text for the `pr`
+operation (`PR_DETAIL_QUERY`, `web/src/lib/graphql/queries.ts:94-138`,
+operation name `PrDetail`). Unlike `featureflags_captured.graphql`
+above, this fixture was NOT captured off a live HTTP listener -- it was
+produced by IMPORTING the web repo's own, live, pinned
+`scripts/graphql-wire-parity.ts` export `wireForm()` (the exact function
+that repo's own CI wire-parity gate calls) and invoking it directly
+against the real `PR_DETAIL_QUERY` export, via `tsx` so `@urql/core`
+resolved from the web repo's own pinned `node_modules`:
+
+```
+tsx <script importing wireForm from web/scripts/graphql-wire-parity.ts
+     and PR_DETAIL_QUERY from web/src/lib/graphql/queries.ts>
+```
+
+`wireForm()` itself calls the SAME three real, pinned functions in the
+SAME order `featureflags_captured.graphql`'s live-HTTP capture exercised
+(`createRequest` -> `formatDocument` -> `stringifyDocument`, see that
+function's own doc comment in `graphql-wire-parity.ts`) -- the only
+difference from a live-HTTP capture is that no HTTP request/listener was
+actually built around it. This was the AVAILABLE, verified path in this
+environment (Node + this repo's own `tsx`/`@urql/core` were present and
+used directly, not reconstructed or hand-reflowed) -- not the
+"hand-apply the two known transforms" fallback CHAOS-4991's brief
+describes as the last resort when no tool is available.
+
+## Digest
+
+| digest of | value |
+| --- | --- |
+| this captured fixture (wireForm(PR_DETAIL_QUERY)) | `564852769ff2397df5c7c0364ee6d1cf7ef0172e62566d575c2b9d5c9e77d577` |
+
+`cmd/query-api/query_route.go`'s `registeredPrDetailDocument` const must
+digest to `564852769ff2397df5c7c0364ee6d1cf7ef0172e62566d575c2b9d5c9e77d577`
+-- verified equal by
+`query_route_wire_capture_test.go`'s
+`TestRegisteredPrDetailDocument_MatchesCapturedWireFixture`.
+
+Captured: 2026-09-09T19:41Z, ops tip at capture time:
+fe03a111bee28542293b34ba8c72bb16e9579858 (this lane's worktree base).

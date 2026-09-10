@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	chproto "github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -44,6 +45,35 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			*ptr = row[i].(uint32)
 		case *float64:
 			*ptr = row[i].(float64)
+		case *time.Time:
+			*ptr = row[i].(time.Time)
+		// The following pointer-to-pointer/pointer-to-slice cases stand in
+		// for the real driver's Nullable(T) scan convention (a nullable
+		// ClickHouse column scans into a **T -- see featureflags.go's
+		// archivedAt precedent): FetchPRCoreRow/ResolveCommits (pr.go) pass
+		// &someNillableVar where someNillableVar is itself a pointer, so
+		// the dest arriving here is **string/**time.Time/**uint32. A nil
+		// row[i] entry (untyped nil, i.e. the test seeded "no value") is
+		// left as the zero value (nil pointer) rather than a failed type
+		// assertion, matching a real NULL scan.
+		case **string:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				*ptr = row[i].(*string)
+			}
+		case **time.Time:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				*ptr = row[i].(*time.Time)
+			}
+		case **uint32:
+			if row[i] == nil {
+				*ptr = nil
+			} else {
+				*ptr = row[i].(*uint32)
+			}
 		default:
 			return errors.New("workgraph test: unsupported scan destination")
 		}

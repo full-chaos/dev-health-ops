@@ -59,7 +59,16 @@
                 { "const": ["post-install", "pre-upgrade"] }
               ]
             },
-            "localBundledPostgres": { "type": "boolean" }
+            "localBundledPostgres": { "type": "boolean" },
+            "routeActivate": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Gates the CHAOS-4272/CHAOS-4455 route-activate hook Job. Helm's own --set coercion accepts any truthy/falsy value on an untyped key (codex review, r2 P3 -- executed: `--set-string …enabled=maybe` rendered clean); this key is boolean-only."
+                }
+              }
+            }
           }
         }
       }

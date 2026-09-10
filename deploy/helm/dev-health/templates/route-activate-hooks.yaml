@@ -64,8 +64,32 @@ resources exist, that guard has already passed. No need to repeat it.
 {{- $postgresPort := include "dev-health.goPgbouncerPostgresPort" . }}
 {{- $postgresDatabase := include "dev-health.goPgbouncerPostgresDatabase" . }}
 {{- $operatorImage := .Values.migrations.hook.routeActivate.image | default "ghcr.io/full-chaos/dev-health-go-operator:latest" }}
-{{- $operatorPullPolicy := .Values.migrations.hook.routeActivate.pullPolicy | default .Values.image.pullPolicy }}
+{{- /*
+codex review (r2, P2 -- executed): defaulting to .Values.image.pullPolicy
+pulled in a local kind/kiac profile's Never (set for the side-loaded
+APPLICATION image only) and produced ErrImageNeverPull on the operator
+image -- a REGISTRY image, never side-loaded. Same class of bug, same fix, as
+goWorkers.imagePullPolicy (values.yaml:218-226): its own dedicated default,
+IfNotPresent, independent of image.pullPolicy.
+*/}}
+{{- $operatorPullPolicy := .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}
 {{- $routeKinds := list "dispatch_sync_run" "finalize_sync_run" "post_sync" "reference_discovery" }}
+{{- /*
+codex review (r2, P1 -- executed): this Secret was created and read
+UNCONDITIONALLY, ignoring secrets.create=false. river-migrate
+(river-hooks.yaml:245-260) faces the identical fork and resolves it the same
+way this now does: when the chart owns the Secret (secrets.create=true) it
+mints its own hook-scoped copy from riverMigrationDSN; when an operator owns
+it (secrets.create=false + migrations.hook.externalSecretName) the chart
+mints NOTHING and reads the operator's existing Secret directly instead --
+riverMigrationDSN resolves from Helm VALUES (migrations.hook.secretData /
+secrets.data), which are empty in the external-secret path by design (the
+DSN lives only in the operator's own Secret, never in the release's values),
+so minting from it there produced an empty DATABASE_URI and the credential
+mint failed "missing required input(s)".
+*/}}
+{{- $riverDSN := include "dev-health.riverMigrationDSN" . }}
+{{- $credentialSecretName := ternary (printf "%s-route-activate-credential-secrets" (include "dev-health.fullname" .)) (default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName) .Values.secrets.create }}
 {{- if $poolerSecret.create }}
 ---
 apiVersion: v1
@@ -85,6 +109,18 @@ stringData:
   RIVER_QUEUE_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD is required when migrations.hook.routeActivate.enabled=true" $poolerSecret.data.RIVER_QUEUE_DATABASE_PASSWORD | quote }}
   RIVER_COORDINATOR_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD is required when migrations.hook.routeActivate.enabled=true" $poolerSecret.data.RIVER_COORDINATOR_DATABASE_PASSWORD | quote }}
 {{- end }}
+{{- /*
+codex review (r2, P1 -- executed, fixed): mint this hook-scoped Secret ONLY
+when the chart owns Secrets at all (secrets.create=true) -- same fork
+river-migrate's own dedicated Secret already makes (river-hooks.yaml:246-247,
+"{{- if .Values.secrets.create }}{{- if $riverDSN }}"). With
+secrets.create=false the operator's externally-managed Secret is read
+directly below instead (envFrom $credentialSecretName), the same way
+river-migrate and the weight-0 migrate Job already do
+(migrate-job.yaml:167,189; river-hooks.yaml:339).
+*/}}
+{{- if .Values.secrets.create }}
+{{- if $riverDSN }}
 ---
 {{- /*
 The one-shot operator-credential mint reuses the SAME elevated DSN
@@ -100,7 +136,7 @@ provably still present by the time a LATER weight tier's Job starts.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "dev-health.fullname" . }}-route-activate-credential-secrets
+  name: {{ $credentialSecretName }}
   namespace: {{ include "dev-health.namespace" . }}
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "route-activate" "context" $) | nindent 4 }}
@@ -110,7 +146,9 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 type: Opaque
 stringData:
-  DATABASE_URI: {{ include "dev-health.riverMigrationDSN" . | quote }}
+  DATABASE_URI: {{ $riverDSN | quote }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -179,6 +217,20 @@ spec:
             - |
               token=/run/go-worker-operator/token
               if [ ! -s "$token" ]; then
+                # codex review (r2, P1 -- executed, fixed): the external-Secret
+                # path (secrets.create=false) hands this container the SAME
+                # Secret river-migrate/migrate-job read, which carries the DSN
+                # under MIGRATION_DATABASE_URI (or its POSTGRES_URI/DATABASE_URI
+                # compatibility aliases) -- never a key named exactly what
+                # `dev-hops` looks for. `dev-hops` itself only recognises
+                # POSTGRES_URI/DATABASE_URI (cli.py:542-543), so map the
+                # elevated-DSN alias across, same fallback river-migrate's own
+                # command already runs in the other direction
+                # (river-hooks.yaml:284-289).
+                if [ -z "${POSTGRES_URI:-}" ] && [ -z "${DATABASE_URI:-}" ] && [ -n "${MIGRATION_DATABASE_URI:-}" ]; then
+                  POSTGRES_URI="$MIGRATION_DATABASE_URI"
+                  export POSTGRES_URI
+                fi
                 dev-hops service-credentials create \
                   --service worker-operator \
                   --scope workers:read \
@@ -186,7 +238,7 @@ spec:
               fi
           envFrom:
             - secretRef:
-                name: {{ include "dev-health.fullname" . }}-route-activate-credential-secrets
+                name: {{ $credentialSecretName }}
           volumeMounts:
             - name: operator-token
               mountPath: /run/go-worker-operator

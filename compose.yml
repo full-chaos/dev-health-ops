@@ -689,7 +689,22 @@ services:
   # grants see every current semantic table, including an already
   # initialized local volume.
   go-river-provision:
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
+    # codex review (r2, P2): `image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/...}`
+    # is an unpullable placeholder (confirmed: `docker compose run --pull
+    # never` fails "No such image") -- fine for a production renderer where
+    # an operator always sets DEV_HEALTH_IMAGE, wrong as this file's local
+    # default. This service's own comment above says it needs "the Ops
+    # runtime image... not a bare postgres client image" -- that is exactly
+    # what `worker`'s own build block below produces locally; build it the
+    # same way instead of assuming a registry pull.
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: runner
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     restart: "no"
     read_only: true
     cap_drop: [ALL]

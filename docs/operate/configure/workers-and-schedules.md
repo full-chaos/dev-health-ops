@@ -122,13 +122,17 @@ a bug and re-discover it from scratch.
 
 - **Worker topology naming.** Prod splits `go-worker-sync` (`--queues=sync`)
   and `go-worker-sync-provider` (`--queues=sync_provider`) as two services.
-  Local merges both into one service named `go-worker`
-  (`--queues=sync,sync_provider`, `compose.yml`, with
-  `PROVIDER_SYNC_QUEUES_ENABLED: "true"`). Queue *coverage* is equivalent --
-  `sync_provider` has a consumer locally, so this is not a missing-consumer
-  bug -- but process isolation differs (one saturated queue can starve the
-  other locally) and anything keying off service *name* (dashboards, alert
-  `job` regexes, runbooks) cannot match both shapes at once.
+  The local host stack merges both into one service named `go-worker`
+  (`--queues=sync,sync_provider`, with `PROVIDER_SYNC_QUEUES_ENABLED:
+  "true"`). Queue *coverage* is equivalent -- `sync_provider` has a
+  consumer locally, so this is not a missing-consumer bug -- but process
+  isolation differs (one saturated queue can starve the other locally) and
+  anything keying off service *name* (dashboards, alert `job` regexes,
+  runbooks) cannot match both shapes at once. This repo's own root
+  `compose.yml` is a separate thing again: as of the Go-default cutover it
+  folds in the split `go-worker-sync`/`go-worker-sync-provider` shape
+  (matching prod's naming, not the local host stack's merged one) as its
+  unconditional default.
 - **Profile gating.** Prod's `go-*` services sit behind the `go-workers`
   compose profile, which is why bringing the fleet up on the prod host is a
   two-pass `pull` then `up --profile go-workers`: a plain `pull` before the

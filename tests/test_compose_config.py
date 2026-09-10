@@ -1537,6 +1537,60 @@ def test_go_services_are_unconditional_and_celery_is_profile_gated() -> None:
         )
 
 
+def test_go_workers_run_at_one_replica_by_default() -> None:
+    """CHAOS-3088: existing unconditionally is not enough -- the nine
+    long-running Go processes must actually run on a bare `docker compose
+    up`, not merely be buildable and scalable.
+
+    codex review (r2, P3): this property was asserted nowhere -- mutating
+    `replicas: 1` to `replicas: 0` on the shared `&go-worker-resources`
+    anchor survived the full focused suite (55 passed). Pin it directly.
+
+    The one-shot setup chain (go-river-provision/go-river-migrate/
+    go-contractcheck) has no `deploy:`/replica concept at all
+    (`restart: "no"`) and is deliberately excluded.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    for process, service_name in _SPLIT_COMPOSE_SERVICE_BY_PROCESS.items():
+        deploy = services[service_name].get("deploy") or {}
+        assert deploy.get("replicas") == 1, (
+            f"{service_name} (registry process {process!r}) must default to "
+            f"deploy.replicas: 1, got {deploy.get('replicas')!r}"
+        )
+
+
+def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
+    """codex review (r2, P1/fixed): go-river-provision and go-river-migrate
+    defaulted their Postgres connection to devhealth/devhealth, inherited
+    unchanged from deploy/docker-compose/compose.go-workers.yml (which
+    assumes compose.production.yml's postgres identity). Root compose.yml's
+    own `postgres` service is postgres/postgres/postgres -- matching
+    `migrate`'s own POSTGRES_URI default already in this file.
+
+    Mutation coverage (manually verified): changing either service's
+    username default back to `devhealth` survived the full focused suite
+    before this test existed (55 passed) -- pin it directly so it cannot
+    regress silently again.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    postgres_env = services["postgres"]["environment"]
+    assert postgres_env["POSTGRES_USER"] == "postgres"
+    assert postgres_env["POSTGRES_PASSWORD"] == "postgres"
+    assert postgres_env["POSTGRES_DB"] == "postgres"
+
+    provision_entrypoint = _container_command_string(services["go-river-provision"])
+    assert '--username="${POSTGRES_USER:-postgres}"' in provision_entrypoint
+    assert '--dbname="${POSTGRES_DB:-postgres}"' in provision_entrypoint
+    assert services["go-river-provision"]["environment"]["PGPASSWORD"] == (
+        "${POSTGRES_PASSWORD:-postgres}"
+    )
+
+    migrate_env = services["go-river-migrate"]["environment"]
+    assert migrate_env["POSTGRES_USER"] == "${POSTGRES_USER:-postgres}"
+    assert migrate_env["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD:-postgres}"
+    assert migrate_env["POSTGRES_DB"] == "${POSTGRES_DB:-postgres}"
+
+
 def test_go_workers_select_manifest_queues_without_runtime_profile() -> None:
     """CHAOS-3851: every queue-bearing River worker group uses exactly its
     registered queues.

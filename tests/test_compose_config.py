@@ -1712,7 +1712,14 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
         assert "@pgbouncer-river-queue:6433/" in environment["WORKER_DATABASE_URI"]
         assert environment["WORKER_DATABASE_MODE"] == "session"
         assert "COORDINATOR_DATABASE_URI" not in environment
-    for service_name in ("go-reconciler", "go-scheduler", "go-worker-route-activate"):
+    # go-worker-route-activate is a top-level `x-` template (codex r4, P1:
+    # a bare `up` must never instantiate it directly), not a service --
+    # check one of its real instances instead.
+    for service_name in (
+        "go-reconciler",
+        "go-scheduler",
+        "go-sync-dispatch-route-activate",
+    ):
         environment = services[service_name]["environment"]
         assert "@pgbouncer-river-queue:6433/" in environment["WORKER_DATABASE_URI"]
         assert (

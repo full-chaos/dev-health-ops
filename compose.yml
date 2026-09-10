@@ -24,6 +24,31 @@ x-worker-operational-bridge-token:
   token: &worker-operational-bridge-token
     WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
 
+# codex review (r4, P1): an empty SETTINGS_ENCRYPTION_KEY default crash-loops
+# every Go worker family that constructs a provider-credential decryptor
+# (sync/ops/heavy) on a bare bring-up -- reproduced: "worker family builder
+# failed", three stream runners 503. Same single-anchor convention as the
+# bridge token above, so api/metrics-api and the Go fleet stay byte-identical
+# on the same local-only placeholder rather than two independent empty
+# defaults that happen to agree only when an operator sets the real value.
+x-settings-encryption-key:
+  token: &settings-encryption-key
+    SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-local-dev-settings-encryption-key}
+
+# codex review (r4, P1): api's org-id-extraction middleware
+# (get_authenticated_user_from_headers, src/dev_health_ops/api/middleware/__init__.py)
+# runs for every request carrying an Authorization header -- including the
+# Go-worker bridge's bearer calls -- and unconditionally constructs
+# AuthService(), which raises RuntimeError("JWT_SECRET_KEY is required") with
+# no default anywhere in this file. Reproduced: heartbeat 500s with both the
+# correct and a wrong bridge token, so the claimed 200/401 behavior never
+# actually ran. Pre-existing gap (not introduced by this PR), but this PR is
+# what makes it block a default bring-up for the first time. One local-only
+# placeholder default, same convention as above.
+x-jwt-secret-key:
+  token: &jwt-secret-key
+    JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key}
+
 # Go/River worker topology (CHAOS-3142, folded in at CHAOS-3088 from
 # deploy/docker-compose/compose.go-workers.yml -- that file keeps its own
 # copy for compose.production.yml's separate `--profile go-workers` overlay
@@ -88,12 +113,8 @@ x-go-worker-env-base: &go-worker-env-base
   VALKEY_URI: redis://valkey:6379/1
   # deploy/go-workers/deployment.json requires this for the sync group, and
   # provider-sync handler construction fails closed without it. Shared with
-  # the Python services so both runtimes decrypt the same provider
-  # credentials -- same empty-default shape as `api`'s own
-  # SETTINGS_ENCRYPTION_KEY below, reading the identical shell variable, so
-  # the value stays byte-identical between the two runtimes whenever it is
-  # actually set.
-  SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+  # the Python services via the `x-settings-encryption-key` anchor above, so
+  # the value stays byte-identical between the two runtimes.
   # codex review (r2, P1 -- found executing the required readyz proof, not
   # by inspection): go-worker/go-worker-heavy/go-worker-ops claim
   # work_graph_execution_requests rows via a coordinator-role connection
@@ -116,12 +137,55 @@ x-go-worker-env-base: &go-worker-env-base
   # default, so every bridge call 401'd. Merged from the single shared
   # `x-worker-operational-bridge-token` anchor above instead of a second
   # literal here.
-  <<: *worker-operational-bridge-token
+  <<: [*worker-operational-bridge-token, *settings-encryption-key]
   AUTO_RUN_MIGRATIONS: "false"
   # CHAOS-4587: see `migrate`'s own comment on this variable below -- must
   # move with the migrate export in the same deploy pass; see
   # deploy/go-workers/README.md's rollout note before changing this value.
   OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
+
+# codex review (r4, P1): this template was a real entry under `services:`
+# with no `command:` of its own -- a bare `up` (no explicit service list)
+# instantiated it directly and it crashed ({"error":{"code":"invalid_request"}},
+# exited 1) instead of never running at all. A shared template that every
+# consumer overrides via `<<:` belongs at the top level next to every other
+# `x-` anchor in this file, not inside `services:`, exactly like
+# `x-go-worker-env-base` above. `routes apply` itself is idempotent
+# (confirmed by reading internal/syncroute -- the mutation path compares
+# current to declared and returns cleanly when they already match), so a
+# second `up` after the first activation run is safe and exits 0 without
+# changing anything.
+x-go-worker-route-activate:
+  template: &go-worker-route-activate
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      <<: *go-worker-env-base
+      WORKER_OPERATOR_TOKEN_FILE: /run/go-worker-operator/token
+    volumes:
+      - go_worker_operator_token:/run/go-worker-operator:ro
+    depends_on:
+      go-worker-operator-credential:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
 
 volumes:
   postgres_data:
@@ -432,7 +496,20 @@ services:
       # incoming Go operational-bridge calls against; this must read the
       # exact same shell variable and default as the Go-worker side below
       # (x-worker-operational-bridge-token), never a second literal.
-      <<: *worker-operational-bridge-token
+      #
+      # codex review (r4, P1): JWT_SECRET_KEY had no default anywhere in this
+      # file -- the global org-id-extraction middleware's AuthService()
+      # construction raised on every request carrying an Authorization
+      # header, including Go-worker bridge calls, so the claimed heartbeat
+      # 200/401 proof never actually exercised the real default path. See
+      # `x-jwt-secret-key` above. codex review (r4, P1, same pass): same gap
+      # for SETTINGS_ENCRYPTION_KEY's empty default -- see
+      # `x-settings-encryption-key` above. YAML forbids more than one `<<`
+      # key in the same mapping, hence the single list-form merge below.
+      <<:
+        - *worker-operational-bridge-token
+        - *jwt-secret-key
+        - *settings-encryption-key
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
       PYTHONPATH: /app/src
       # GraphQL analytics endpoint available at /graphql
@@ -449,12 +526,9 @@ services:
       # override ever reached any container -- provider credential
       # decryption (src/dev_health_ops/core/encryption.py, read by
       # workers/task_utils.py for every provider) silently had no key in
-      # local dev. The Go worker's `sync` profile decrypts the same stored
-      # credentials with the same variable name
-      # (SETTINGS_ENCRYPTION_KEY, deploy/go-workers/deployment.json) wherever
-      # it runs, so this value stays byte-identical to whatever a Go
-      # topology alongside this stack is given.
-      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+      # local dev. codex review (r4, P1): an empty default crash-looped the
+      # Go fleet on a bare bring-up -- now merged via `x-settings-encryption-key`
+      # in the single list-form `<<:` above, byte-identical between runtimes.
       # CHAOS-2299: route sync dispatch to per-provider queues. Safe to enable
       # here because the worker -Q lists below consume sync.<provider> in the
       # SAME change. Bare-image deployments must follow the two-phase rollout
@@ -830,7 +904,13 @@ services:
     # default. This service's own comment above says it needs "the Ops
     # runtime image... not a bare postgres client image" -- that is exactly
     # what `worker`'s own build block below produces locally; build it the
-    # same way instead of assuming a registry pull.
+    # same way instead of assuming a registry pull. codex review (JOB 6
+    # re-render, P1): no `image:` here means `pull_policy` is moot for the
+    # pull-vs-build choice, but compose still reuses a previously built
+    # local image tagged under this service's own generated name without
+    # rebuilding by default -- `pull_policy: build` forces a fresh build of
+    # this tree every time, same hardening as the Go worker fleet below.
+    pull_policy: build
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -882,6 +962,10 @@ services:
   # independently check that the resulting schema is current. Neither DSN
   # nor this binary is exposed to a long-running Go service.
   go-river-migrate:
+    # codex review (JOB 6 re-render, P1): same `pull_policy: build` hardening
+    # as go-river-provision above -- force a fresh build of this tree
+    # rather than reusing a previously built local image tag.
+    pull_policy: build
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -916,6 +1000,15 @@ services:
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      # codex review (r4, P1): this service never forwarded the coordinator
+      # role/password, unlike go-river-provision just above it -- overriding
+      # RIVER_COORDINATOR_DATABASE_ROLE away from its default then failed
+      # migration ("River schema or privilege policy was not applied") since
+      # dev-health-worker-migrate applied the privilege policy against the
+      # unexported default name instead. The deleted
+      # deploy/go-workers/compose-go-workers.yml overlay forwarded this.
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
     depends_on:
       go-river-provision:
         condition: service_completed_successfully
@@ -1019,42 +1112,6 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # `routes apply` is idempotent: re-applying the same transport to a route
-  # already at that transport is a no-op (confirmed by reading
-  # internal/syncroute -- the mutation path compares current to declared
-  # and returns cleanly when they already match), so a second `up` after
-  # the first activation run is safe and exits 0 without changing anything.
-  go-worker-route-activate: &go-worker-route-activate
-    build:
-      context: .
-      dockerfile: docker/go-worker.Dockerfile
-      target: operator
-      args:
-        COMMIT: ${COMMIT:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
-    restart: "no"
-    read_only: true
-    user: "65532:65532"
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp]
-    environment:
-      <<: *go-worker-env-base
-      WORKER_OPERATOR_TOKEN_FILE: /run/go-worker-operator/token
-    volumes:
-      - go_worker_operator_token:/run/go-worker-operator:ro
-    depends_on:
-      go-worker-operator-credential:
-        condition: service_completed_successfully
-      go-river-migrate:
-        condition: service_completed_successfully
-      pgbouncer:
-        condition: service_healthy
-      pgbouncer-river-queue:
-        condition: service_healthy
-      pgbouncer-river-coordinator:
-        condition: service_healthy
-
   go-sync-dispatch-route-activate:
     <<: *go-worker-route-activate
     command:
@@ -1150,9 +1207,17 @@ services:
     # by the readyz proof in TEST-EVIDENCE. `build:` makes this file build
     # the same tree's image by default, same as every other Go service
     # here; `image:` stays so `DEV_HEALTH_GO_WORKER_IMAGE` can still pin an
-    # already-published tag instead (compose only rebuilds when that tag
-    # isn't already present locally).
+    # already-published tag instead. codex review (JOB 6 re-render, P1):
+    # `pull_policy` defaults to `missing` -- with NO override, a bare `up`
+    # (no `--build`) prefers an already-present local image tagged
+    # `ghcr.io/full-chaos/dev-health-go-worker:latest` over building this
+    # tree, reintroducing the exact cross-tree lockstep refusal the
+    # `build:` block above exists to prevent, on any host that ever pulled
+    # that tag (e.g. an earlier proof run on this one). `pull_policy: build`
+    # (the bigboy overlay's own convention) forces the tree's build every
+    # time; `DEV_HEALTH_GO_WORKER_IMAGE` still names what gets tagged.
     image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
+    pull_policy: build
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile

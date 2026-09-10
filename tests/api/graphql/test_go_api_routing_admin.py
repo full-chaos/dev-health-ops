@@ -577,14 +577,25 @@ async def test_disable_plans_against_the_catalogs_document(
     operation, catalog_document = CATALOG[0]
     old_document = "0" * 64
 
-    await enable_operation(
-        session,
-        schema_digest=LIVE,
-        document_digest=old_document,
-        selected_operation=operation,
-        candidate_build=BUILD,
-        mode="python",
-    )
+    # Both documents, each with a DIFFERENT mode, and the plan is asked
+    # for BOTH in turn. That is what makes this order-independent: a map
+    # keyed by operation alone keeps whichever row the scan returned last,
+    # and the scan order is not ours to choose -- so whichever row it
+    # keeps, ONE of the two calls below must come back with the other
+    # row's mode.
+    #
+    # astra r4 caught the earlier version passing under the real revert.
+    # It asked about one document only, and the collapsed map happened to
+    # keep that one. Reordering the seeds did not help either: the order
+    # the rows come back in is Postgres's, not the order they were
+    # written. A test that depends on which row a collapse happens to keep
+    # is not a test of the collapse.
+    #
+    # (My own "mutant proof" of it was worse than vacuous: the mutation I
+    # ran changed only the lookup and left the map composite, so
+    # `live.get(operation)` found nothing and the test failed with zero
+    # changes -- red for a reason unrelated to collapsing, which I read as
+    # a kill.)
     await enable_operation(
         session,
         schema_digest=LIVE,
@@ -593,22 +604,36 @@ async def test_disable_plans_against_the_catalogs_document(
         candidate_build=BUILD,
         mode="canary",
     )
-    await session.commit()
-
-    changes, problems = await plan_disable(
+    await enable_operation(
         session,
         schema_digest=LIVE,
-        operations={operation: catalog_document},
-        new_mode="disabled",
+        document_digest=old_document,
+        selected_operation=operation,
+        candidate_build=BUILD,
+        mode="python",
     )
-    assert problems == []
-    assert len(changes) == 1
-    change = changes[0]
-    assert change.document_digest == catalog_document
-    assert change.current_mode == "canary", (
-        f"the rollback plan reported current_mode={change.current_mode!r} "
-        "-- the mode of a row the caller did not name"
-    )
+    await session.commit()
+
+    for document, expected_mode in (
+        (catalog_document, "canary"),
+        (old_document, "python"),
+    ):
+        changes, problems = await plan_disable(
+            session,
+            schema_digest=LIVE,
+            operations={operation: document},
+            new_mode="disabled",
+        )
+        assert problems == []
+        assert len(changes) == 1
+        assert changes[0].document_digest == document
+        assert changes[0].current_mode == expected_mode, (
+            f"plan_disable asked about document {document[:12]}... reported "
+            f"current_mode={changes[0].current_mode!r}, want {expected_mode!r} "
+            "-- it is reading a row the caller did not name, and a rollback "
+            "plan naming the wrong row's mode is a plan an operator cannot "
+            "check"
+        )
 
 
 @pytest.mark.asyncio

@@ -26,7 +26,12 @@ type fakeEdge struct {
 	// (CHAOS-5479). Empty means the deployment predates the pass-through,
 	// which is what makes an edge measurement unbound.
 	goBuild string
-	seen    []string
+	// goHeaders/pyHeaders let a test drive a HEADER divergence with
+	// identical bodies, which is the only way to prove the header
+	// comparison path counts what it finds (astra r4 P3).
+	goHeaders map[string]string
+	pyHeaders map[string]string
+	seen      []string
 }
 
 func (e *fakeEdge) handler() http.HandlerFunc {
@@ -39,6 +44,9 @@ func (e *fakeEdge) handler() http.HandlerFunc {
 		e.seen = append(e.seen, parsed.Query)
 
 		if strings.Contains(parsed.Query, "python-plane control") {
+			for name, value := range e.pyHeaders {
+				w.Header().Set(name, value)
+			}
 			w.Header().Set(planeHeader, "python")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(e.pythonBody))
@@ -51,6 +59,9 @@ func (e *fakeEdge) handler() http.HandlerFunc {
 		status := e.goStatus
 		if status == 0 {
 			status = http.StatusOK
+		}
+		for name, value := range e.goHeaders {
+			w.Header().Set(name, value)
 		}
 		w.Header().Set(planeHeader, plane)
 		if e.goBuild != "" {
@@ -1011,5 +1022,111 @@ func TestAnUnboundFullyCitedMismatchCannotAuthorizeAnything(t *testing.T) {
 	}
 	if len(receipts) != 1 || receipts[0].DifferencesOutsideBaselineDefect < 1 {
 		t.Fatalf("the RECEIPT says outside=%v -- a zero here admits the run", receipts)
+	}
+}
+
+// astra r4 P3: the HTTP counter test used a STATUS difference only, so
+// undoing the increment for the HEADER path survived. Both go through
+// one helper now, but a test that exercises one branch cannot prove the
+// helper is used by the other.
+//
+// A content-type divergence is a real parity failure on its own: identical
+// bytes served under different types tell the client to interpret them
+// differently. It is also uncitable -- BaselineDefect declares body paths --
+// so it must count as outside, exactly like a status difference.
+func TestAnUncitedHeaderDifferenceAlsoCountsOutside(t *testing.T) {
+	// Bodies IDENTICAL and the body difference therefore absent: the ONLY
+	// divergence is the content type, so `outside` can only be non-zero
+	// because the header path counted it.
+	// featureFlags, NOT flowMatrix: flowMatrix declares CHAOS-5448, and a
+	// declared baseline defect that matches nothing FAILS the run -- with
+	// identical bodies it matches nothing, so the run is refused before
+	// the comparison is ever read. featureFlags declares none, so the
+	// only divergence in this run is the content type.
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	edge := &fakeEdge{
+		goBody:     body,
+		pythonBody: body,
+		goBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
+		// Both decodable JSON -- a non-JSON type is refused at admission
+		// and never reaches the comparison, so it could not exercise the
+		// header path at all.
+		goHeaders: map[string]string{contentTypeHeader: "application/json; charset=utf-8"},
+		pyHeaders: map[string]string{contentTypeHeader: "application/json"},
+	}
+	runner := newRunner(t, edge, "canary")
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outcome := outcomes[0]
+
+	if outcome.TerminalState != TerminalStateMismatch {
+		t.Fatalf("a content-type divergence must be a mismatch, got %q", outcome.TerminalState)
+	}
+	var headerFinding bool
+	for _, finding := range outcome.Findings {
+		if finding.Path == "$.http.header."+contentTypeHeader {
+			headerFinding = true
+		}
+	}
+	if !headerFinding {
+		t.Fatalf("no $.http.header.%s finding: this test proves nothing about the header path unless that path ran (%+v)", contentTypeHeader, outcome.Findings)
+	}
+	if outcome.DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("outside=%d with an UNCITED content-type difference and NO body difference: the only divergence here is uncitable by construction, so a zero means the header path does not count it and a fully-cited mismatch carrying one is enablement-eligible",
+			outcome.DifferencesOutsideBaselineDefect)
+	}
+}
+
+// astra r4 P3: the persisted-binding readback started from a HAND-BUILT
+// Receipt, so it proved Write stores what it is handed and nothing about
+// what the Runner hands it. Hardcoding either receipt binding to `absent`
+// survived every suite.
+//
+// This drives a real run on the PROOF route -- where the binding is
+// per_request -- and asserts the RECEIPT carries what the RUN measured,
+// on both the success and the refusal path.
+func TestTheReceiptCarriesTheBindingTheRunMeasured(t *testing.T) {
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	edge := &fakeEdge{
+		goBody:     body,
+		pythonBody: body,
+		goBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
+	}
+	runner := newRunner(t, edge, "canary")
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	measured := outcomes[0].EdgeBuildBinding
+	if measured != EdgeBuildPresent {
+		t.Fatalf("this test needs a BOUND measurement to discriminate, got %q", measured)
+	}
+
+	receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 1 {
+		t.Fatalf("expected one receipt, got %d", len(receipts))
+	}
+	if receipts[0].BuildBinding != measured {
+		t.Fatalf("the run measured binding=%q and the receipt says %q: the column is the only record of how well this measurement knew its build, and no enablement reader consumes it yet, so a wrong value here is invisible",
+			measured, receipts[0].BuildBinding)
+	}
+
+	// The refusal path builds receipts too, from the same seal.
+	refusals, err := runner.RefusalReceipts(time.Unix(1757000000, 0).UTC(), "the serving build moved during the run")
+	if err != nil {
+		t.Fatalf("RefusalReceipts: %v", err)
+	}
+	if len(refusals) != 1 {
+		t.Fatalf("expected one refusal receipt, got %d", len(refusals))
+	}
+	if refusals[0].BuildBinding != measured {
+		t.Fatalf("the REFUSAL receipt says binding=%q, the run measured %q", refusals[0].BuildBinding, measured)
 	}
 }

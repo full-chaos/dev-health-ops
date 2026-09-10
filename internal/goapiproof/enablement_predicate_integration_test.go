@@ -358,7 +358,7 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 // prose rather than listed per case.
 //
 // What the predicate reads, and nothing else:
-//   - stage                                 (fixed: deployed_executed)
+//   - stage                                 (all 4 legal values)
 //   - terminal_state                        (all 11 legal values)
 //   - measurement_route                     (edge, proof, NULL)
 //   - differences_outside_baseline_defect   (0, 1)
@@ -391,6 +391,12 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	ctx := context.Background()
 	pool := startRegistryPostgres(t)
 
+	// astra r4 P3: stage was FIXED at deployed_executed, so mutating the
+	// predicate to accept stage='canary' or stage='shadow' survived this
+	// test entirely. A dimension held constant is a dimension unasserted,
+	// which is the same "enumerates only the inputs its author chose"
+	// failure this test was written to end.
+	allStages := []string{"dual_run", "deployed_executed", "shadow", "canary"}
 	allTerminalStates := []string{
 		"match", "mismatch", "auth_rejected", "validation_rejected",
 		"dependency_failed", "timeout", "cancelled", "resource_exhausted",
@@ -403,7 +409,10 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	modes := []string{TargetModeCanary, TargetModePrimary}
 
 	// The rule, in one place, derived rather than tabulated.
-	want := func(terminal string, route any, outside int, defect any, mode string) bool {
+	want := func(stage, terminal string, route any, outside int, defect any, mode string) bool {
+		if stage != EnablementProofStage {
+			return false
+		}
 		switch mode {
 		case TargetModePrimary:
 			if route != RouteEdge {
@@ -441,42 +450,55 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	}
 
 	combinations := 0
-	for _, terminal := range allTerminalStates {
-		for _, route := range routes {
-			for _, binding := range bindings {
-				for _, outside := range outsides {
-					for _, defect := range defects {
-						if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run`); err != nil {
-							t.Fatalf("truncate: %v", err)
-						}
-						if _, err := pool.Exec(ctx,
-							`INSERT INTO go_api_proof_run
+	for _, stage := range allStages {
+		for _, terminal := range allTerminalStates {
+			for _, route := range routes {
+				for _, binding := range bindings {
+					for _, outside := range outsides {
+						for _, defect := range defects {
+							// ck_go_api_proof_run_shadow_requires_watermark:
+							// a shadow-stage row without one is not a row
+							// the database accepts, so it is not part of
+							// the input surface. Supplying it keeps
+							// `shadow` IN the enumeration rather than
+							// dropping a stage because one combination
+							// could not be built.
+							var watermark any
+							if stage == "shadow" {
+								watermark = "2026-09-01"
+							}
+							if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run`); err != nil {
+								t.Fatalf("truncate: %v", err)
+							}
+							if _, err := pool.Exec(ctx,
+								`INSERT INTO go_api_proof_run
 							   (id, schema_digest, document_digest, selected_operation,
 							    candidate_build, request_identity, stage, terminal_state,
 							    observed_at, org_id, recorded_by, measurement_route,
 							    build_binding, differences_outside_baseline_defect,
-							    baseline_defect)
-							 VALUES ($1,$2,$3,$4,$5,'surface',$6,$7, now(),'70d529e0','surface',$8,$9,$10,$11)`,
-							uuid.New(), key.SchemaDigest, key.DocumentDigest, key.SelectedOperation,
-							key.CandidateBuild, EnablementProofStage, terminal,
-							route, binding, outside, defect,
-						); err != nil {
-							t.Fatalf("seed %s/%v/%v/%d/%v: %v", terminal, route, binding, outside, defect, err)
-						}
-
-						for _, mode := range modes {
-							combinations++
-							found, err := OperationsWithEnablementProof(ctx, pool,
-								key.SchemaDigest, key.CandidateBuild, mode,
-								map[string]string{key.SelectedOperation: key.DocumentDigest})
-							if err != nil {
-								t.Fatalf("read: %v", err)
+							    baseline_defect, data_watermark)
+							 VALUES ($1,$2,$3,$4,$5,'surface',$6,$7, now(),'70d529e0','surface',$8,$9,$10,$11,$12)`,
+								uuid.New(), key.SchemaDigest, key.DocumentDigest, key.SelectedOperation,
+								key.CandidateBuild, stage, terminal,
+								route, binding, outside, defect, watermark,
+							); err != nil {
+								t.Fatalf("seed %s/%v/%v/%d/%v: %v", terminal, route, binding, outside, defect, err)
 							}
-							got := found[key.SelectedOperation]
-							expected := want(terminal, route, outside, defect, mode)
-							if got != expected {
-								t.Fatalf("terminal=%s route=%v binding=%v outside=%d defect=%v mode=%s: predicate says %v, the rule says %v",
-									terminal, route, binding, outside, defect, mode, got, expected)
+
+							for _, mode := range modes {
+								combinations++
+								found, err := OperationsWithEnablementProof(ctx, pool,
+									key.SchemaDigest, key.CandidateBuild, mode,
+									map[string]string{key.SelectedOperation: key.DocumentDigest})
+								if err != nil {
+									t.Fatalf("read: %v", err)
+								}
+								got := found[key.SelectedOperation]
+								expected := want(stage, terminal, route, outside, defect, mode)
+								if got != expected {
+									t.Fatalf("stage=%s terminal=%s route=%v binding=%v outside=%d defect=%v mode=%s: predicate says %v, the rule says %v",
+										stage, terminal, route, binding, outside, defect, mode, got, expected)
+								}
 							}
 						}
 					}
@@ -485,10 +507,101 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 		}
 	}
 
-	// 11 terminal states x 3 routes x 3 bindings x 2 outside x 3 defect
-	// shapes x 2 modes. Asserted rather than commented, so a value added
-	// to any of those lists without thought fails here.
-	if combinations != 11*3*3*2*3*2 {
-		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 11*3*3*2*3*2)
+	// 4 stages x 11 terminal states x 3 routes x 3 bindings x 2 outside x
+	// 3 defect shapes x 2 modes. Asserted rather than commented, so a
+	// value added to any of those lists without thought fails here.
+	if combinations != 4*11*3*3*2*3*2 {
+		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 4*11*3*3*2*3*2)
+	}
+}
+
+// astra r4 P3: every case above asks about ONE operation/document pair,
+// so deleting the operation equality from `JOIN unnest(...)` survived.
+//
+// With one pair, matching on the document alone still returns the right
+// answer -- there is nothing else to confuse it with. The defect only
+// shows with TWO pairs: a proof recorded for (operationA, documentB) must
+// not answer a request that names (operationA, documentA) and
+// (operationB, documentB). Cross-matching admits it, and the operation
+// comes back proven on a receipt recorded against a document it does not
+// use.
+//
+// This is the multi-pair half of the surface. The cross-product above is
+// the single-pair half; neither is sufficient alone.
+func TestTheProofKeyPairsOperationWithItsOwnDocument(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	const (
+		digest = "sha256:pairs"
+		build  = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+		opA    = "featureFlags"
+		opB    = "hotspots"
+		docA   = "doc-a"
+		docB   = "doc-b"
+	)
+
+	// The ONLY receipt: operation A measured against document B. Neither
+	// requested pair is (opA, docB), so nothing may be proven.
+	for _, pair := range [][2]string{{opA, docB}, {opA, docA}, {opB, docB}} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO go_api_candidate_build
+			   (schema_digest, document_digest, selected_operation, candidate_build, registered_at)
+			 VALUES ($1,$2,$3,$4, now()) ON CONFLICT DO NOTHING`,
+			digest, pair[1], pair[0], build); err != nil {
+			t.Fatalf("register %v: %v", pair, err)
+		}
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_proof_run
+		   (id, schema_digest, document_digest, selected_operation, candidate_build,
+		    request_identity, stage, terminal_state, observed_at, org_id, recorded_by,
+		    measurement_route, differences_outside_baseline_defect)
+		 VALUES ($1,$2,$3,$4,$5,'pairs',$6,$7, now(),'70d529e0','pairs','edge',0)`,
+		uuid.New(), digest, docB, opA, build,
+		EnablementProofStage, EnablementProofTerminalState,
+	); err != nil {
+		t.Fatalf("seed the cross-pair receipt: %v", err)
+	}
+
+	found, err := OperationsWithEnablementProof(ctx, pool, digest, build,
+		TargetModeCanary, map[string]string{opA: docA, opB: docB})
+	if err != nil {
+		t.Fatalf("OperationsWithEnablementProof: %v", err)
+	}
+
+	if found[opA] {
+		t.Fatalf("%s came back proven: the only receipt is against document %q and the request asked about %q -- the predicate matched the operation to another pair's document",
+			opA, docB, docA)
+	}
+	if found[opB] {
+		t.Fatalf("%s came back proven: the only receipt names operation %q -- the predicate matched the document to another pair's operation",
+			opB, opA)
+	}
+
+	// Control: the SAME shape with the receipt on a requested pair must
+	// prove, or this test would also pass with the predicate returning
+	// nothing at all.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_proof_run
+		   (id, schema_digest, document_digest, selected_operation, candidate_build,
+		    request_identity, stage, terminal_state, observed_at, org_id, recorded_by,
+		    measurement_route, differences_outside_baseline_defect)
+		 VALUES ($1,$2,$3,$4,$5,'pairs',$6,$7, now(),'70d529e0','pairs','edge',0)`,
+		uuid.New(), digest, docA, opA, build,
+		EnablementProofStage, EnablementProofTerminalState,
+	); err != nil {
+		t.Fatalf("seed the matching receipt: %v", err)
+	}
+	found, err = OperationsWithEnablementProof(ctx, pool, digest, build,
+		TargetModeCanary, map[string]string{opA: docA, opB: docB})
+	if err != nil {
+		t.Fatalf("OperationsWithEnablementProof: %v", err)
+	}
+	if !found[opA] {
+		t.Fatal("the matching pair did not prove: the predicate refuses what it should admit, which would make the assertions above pass for the wrong reason")
+	}
+	if found[opB] {
+		t.Fatalf("%s proved off %s's receipt", opB, opA)
 	}
 }

@@ -12,7 +12,7 @@ import (
 
 func TestGitLabWorkItemFamilyEffectsComposeAllSixteenDestinations(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease)
+	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestGitLabWorkItemFamilyEffectsComposeAllSixteenDestinations(t *testing.T) 
 
 func TestGitLabWorkItemFamilyEffectsFailClosedWhenAnyAdapterIsMissing(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease)
+	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestGitLabWorkItemFamilyEffectsFailClosedWhenAnyAdapterIsMissing(t *testing
 
 func TestGitLabWorkItemFamilyEffectsRejectForeignAIProviderAndTenant(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease)
+	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -74,7 +74,7 @@ func TestGitLabWorkItemEffectsComposeAllSixteenAgainstRealClickHouse(t *testing.
 		t.Fatalf("composed effects=%d want=16", len(effects))
 	}
 	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(
-		conn, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		conn, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }), nil,
 	)
 	if err != nil {
 		t.Fatal(err)

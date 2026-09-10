@@ -492,9 +492,12 @@ type JiraWorkItemDerivedClickHouseEffects struct {
 	WorkItemUserMetricsDaily       JiraWorkItemEffectAdapter
 }
 
+// metrics (CHAOS-4320 round 7, codex round 6 P1) -- see the identical
+// parameter's doc comment on NewGitLabWorkItemDerivedClickHouseEffects.
 func NewJiraWorkItemDerivedClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (JiraWorkItemDerivedClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return JiraWorkItemDerivedClickHouseEffects{}, ErrInvalidConfiguration
@@ -512,7 +515,7 @@ func NewJiraWorkItemDerivedClickHouseEffects(
 		WorkItemCycleTimes:             wrap("work_item_cycle_times", GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease}),
 		WorkItemMetricsDaily:           wrap("work_item_metrics_daily", GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
 		WorkItemStateDurationsDaily:    wrap("work_item_state_durations_daily", GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemTeamAttributions:       wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemTeamAttributions:       wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics}),
 		WorkItemUserMetricsDaily:       wrap("work_item_user_metrics_daily", GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
 	}
 	if len(sink.MissingDestinations()) > 0 {
@@ -650,11 +653,12 @@ type JiraWorkItemCompositeClickHouseEffects struct {
 func NewJiraWorkItemCompositeClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (JiraWorkItemCompositeClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return JiraWorkItemCompositeClickHouseEffects{}, ErrInvalidConfiguration
 	}
-	derived, err := NewJiraWorkItemDerivedClickHouseEffects(conn, lease)
+	derived, err := NewJiraWorkItemDerivedClickHouseEffects(conn, lease, metrics)
 	if err != nil {
 		return JiraWorkItemCompositeClickHouseEffects{}, err
 	}

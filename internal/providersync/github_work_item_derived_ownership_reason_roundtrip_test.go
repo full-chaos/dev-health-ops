@@ -564,6 +564,78 @@ func TestRejectedRowsWithIdenticalSortingKeyCountOnceNotTwice(t *testing.T) {
 	}
 }
 
+// TestRejectedRowsWithDistinctKeysAreNotCollapsed is CHAOS-4320's
+// mutation-resistant pin for codex round 6's second P3: the sibling test
+// above only proves that an IDENTICAL sorting key collapses; it says
+// nothing about the four fields the key is actually built from
+// individually. Independently dropping the repo, work item, or team
+// component from githubTeamAttributionRejectionSortingKey (leaving Source
+// alone) passed both that test and the full suite -- only removing Source
+// was caught. This test varies ONE component at a time against a baseline
+// rejection and asserts each variant is counted SEPARATELY, not collapsed
+// into the baseline -- so a sorting key missing any one of those
+// components (which would falsely treat these as the same key) fails
+// here specifically, not just on a Source-only mutation.
+func TestRejectedRowsWithDistinctKeysAreNotCollapsed(t *testing.T) {
+	repoID := uuid.MustParse("c7198fbc-1945-3717-05d8-eb78866b4e79")
+	otherRepoID := uuid.MustParse("d8299fbc-1945-3717-05d8-eb78866b4e80")
+	teamID := "nonowner"
+	otherTeamID := "other-nonowner"
+	baseline := githubWorkItemTeamAttributionRejectionRow{
+		WorkItemID: "gh:acme/api#5", Provider: "github",
+		RepoID: &repoID, Source: "assignee_membership", TeamID: &teamID, Reason: "repo_not_owned",
+	}
+	differentRepo := baseline
+	differentRepo.RepoID = &otherRepoID
+	differentWorkItem := baseline
+	differentWorkItem.WorkItemID = "gh:acme/api#6"
+	differentTeam := baseline
+	differentTeam.TeamID = &otherTeamID
+
+	rejections := []githubWorkItemTeamAttributionRejectionRow{
+		baseline, differentRepo, differentWorkItem, differentTeam,
+	}
+	marshaledRejections, err := marshalGitHubWorkItemDerivedRows(rejections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired,
+		[]githubWorkItemTeamAttributionRow{{
+			WorkItemID: "gh:acme/api#5", Provider: "github", Source: "repo_ownership",
+			IsPrimary: 1, Confidence: "high", Evidence: "repo_ownership=x", OrgID: "org-acme",
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect.MembershipRejections = marshaledRejections
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: "org-acme", Provider: "github", Destination: githubTeamAttributionsDestination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+	metrics := providerfoundation.NewMetrics()
+	sink := GitHubWorkItemTeamAttributionsClickHouseEffects{
+		Conn:    &ownershipReasonWriteConn{},
+		Lease:   providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		Metrics: metrics,
+	}
+	if err := sink.WriteGitHubWorkItemEffect(context.Background(), identity, effect); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	if err := metrics.WritePrometheus(&output); err != nil {
+		t.Fatal(err)
+	}
+	rendered := output.String()
+	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="repo_not_owned"} 4`) {
+		t.Fatalf(
+			"four rejections that each differ by a distinct repo/work-item/team component were not "+
+				"counted separately -- the sorting key is missing one of those components:\n%s",
+			rendered,
+		)
+	}
+}
+
 // assertNoExportedFieldIsZero fails the test naming every exported field of
 // value that reflect.Value.IsZero reports as unset.
 func assertNoExportedFieldIsZero(t *testing.T, label string, value any) {
@@ -682,6 +754,35 @@ func TestWriteGitHubWorkItemEffectInsertsEveryRowNoFilteringPath(t *testing.T) {
 			WorkItemID: "gh:acme/api#3", Provider: "github", Source: "unassigned",
 			IsPrimary: 1, Confidence: "none", Evidence: "no_candidate", OrgID: "org-acme",
 		},
+		// codex round 6, P3: the earlier version of this fixture named only
+		// four of the cascade's nine sources (order: native_team,
+		// issue_project, project_ownership, repo_ownership,
+		// assignee_membership, linked_issue, author_membership,
+		// manual_fallback, unassigned) -- adding `if row.Source ==
+		// "native_team" { continue }` to the writer's Append loop passed
+		// this test unchanged, since no row here ever exercised that
+		// source. These four cover the rest of the vocabulary this
+		// destination's real resolver actually emits.
+		{
+			WorkItemID: "gh:acme/api#4", Provider: "github", Source: "native_team",
+			IsPrimary: 1, Confidence: "high", Evidence: "native_team_key=acme", OrgID: "org-acme",
+		},
+		{
+			WorkItemID: "gh:acme/api#5", Provider: "github", Source: "issue_project",
+			IsPrimary: 1, Confidence: "high", Evidence: "issue_project=acme/api", OrgID: "org-acme",
+		},
+		{
+			WorkItemID: "gh:acme/api#6", Provider: "github", Source: "project_ownership",
+			IsPrimary: 1, Confidence: "high", Evidence: "project_ownership=acme/api", OrgID: "org-acme",
+		},
+		{
+			WorkItemID: "gh:acme/api#7", Provider: "github", Source: "linked_issue",
+			IsPrimary: 1, Confidence: "medium", Evidence: "linked_issue=gh:acme/api#7", OrgID: "org-acme",
+		},
+		{
+			WorkItemID: "gh:acme/api#8", Provider: "github", Source: "manual_fallback",
+			IsPrimary: 1, Confidence: "high", Evidence: "manual_fallback=acme/api", OrgID: "org-acme",
+		},
 	}
 	effect, err := effectBatchFromValues(githubTeamAttributionsDestination, EffectReadbackRequired, rows)
 	if err != nil {
@@ -703,6 +804,9 @@ func TestWriteGitHubWorkItemEffectInsertsEveryRowNoFilteringPath(t *testing.T) {
 	want := []string{
 		"gh:acme/api#1|repo_ownership", "gh:acme/api#1|assignee_membership",
 		"gh:acme/api#2|author_membership", "gh:acme/api#3|unassigned",
+		"gh:acme/api#4|native_team", "gh:acme/api#5|issue_project",
+		"gh:acme/api#6|project_ownership", "gh:acme/api#7|linked_issue",
+		"gh:acme/api#8|manual_fallback",
 	}
 	got := append([]string(nil), conn.batch.Appended...)
 	sort.Strings(got)

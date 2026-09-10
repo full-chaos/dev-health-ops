@@ -159,7 +159,7 @@ type linearDerivedStubConn struct{ driver.Conn }
 
 func TestNewLinearWorkItemDerivedClickHouseEffectsWiresAllTen(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewLinearWorkItemDerivedClickHouseEffects(linearDerivedStubConn{}, lease)
+	sink, err := NewLinearWorkItemDerivedClickHouseEffects(linearDerivedStubConn{}, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestLinearAIAttributionDoesNotInferFromIssueText(t *testing.T) {
 
 func TestLinearDerivedSinkRejectsIncompleteBeforeDispatch(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
-	sink, err := NewLinearWorkItemDerivedClickHouseEffects(linearDerivedStubConn{}, lease)
+	sink, err := NewLinearWorkItemDerivedClickHouseEffects(linearDerivedStubConn{}, lease, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

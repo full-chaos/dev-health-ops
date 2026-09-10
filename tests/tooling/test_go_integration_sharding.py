@@ -1898,7 +1898,23 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # invariant this design is built on: every row in Rows reaches the
     # INSERT, no filtering path exists) are both in-memory, non-integration
     # tests.
-    assert len(expected_provider_tests) == 1348
+    # CHAOS-4320 round 7 (codex round 6, two P1 fixes, three P3
+    # test-strength fixes): +6 ordinary top-level (1348 -> 1354),
+    # integration-tagged UNCHANGED at 154. TestPreparedRouteSnapshotRetainsMembershipRejections
+    # (a rejection must survive the prepared-route recovery envelope, a
+    # SEPARATE JSON projection of EffectBatch from the in-process value);
+    # TestGitLabWorkItemFamilyConstructorEmitsOwnershipMetrics,
+    # TestJiraWorkItemCompositeConstructorEmitsOwnershipMetrics, and
+    # TestLinearWorkItemFamilyConstructorEmitsOwnershipMetrics (the real
+    # worker constructors left Metrics nil for these three providers, so
+    # the new counter never fired despite otherwise-correct plumbing);
+    # TestGitHubWorkItemDeriverCarriesRealRejectionsIntoRouteEffects (a
+    # real rejection must reach the built route effects, not just a
+    # hand-attached one); and TestRejectedRowsWithDistinctKeysAreNotCollapsed
+    # (each of the sorting key's repo/work-item/team components must
+    # actually distinguish two rejections, not just Source) are all
+    # in-memory, non-integration tests.
+    assert len(expected_provider_tests) == 1354
 
     assert len(expected_integration_tests) == 154
     assert expected_integration_tests < expected_provider_tests
@@ -1916,7 +1932,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
-    assert len(provider_flattened) == len(set(provider_flattened)) == 1348
+    assert len(provider_flattened) == len(set(provider_flattened)) == 1354
     assert set(provider_flattened) == expected_provider_tests
     assert {
         name
@@ -2018,7 +2034,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     expected_tests = _providersync_top_level_tests()
-    assert len(selected_tests) == len(set(selected_tests)) == 1348
+    assert len(selected_tests) == len(set(selected_tests)) == 1354
     assert set(selected_tests) == expected_tests
 
 

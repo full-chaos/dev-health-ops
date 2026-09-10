@@ -405,9 +405,16 @@ type GitLabWorkItemDerivedClickHouseEffects struct {
 	WorkItemUserMetricsDaily       GitHubWorkItemUserMetricsDailyClickHouseEffects
 }
 
+// metrics (CHAOS-4320 round 7, codex round 6 P1, executed repro): the
+// worker's real constructor call left this nil, so RecordTeamAttributionOwnershipChecked's
+// nil-receiver-safe no-op silently swallowed every GitLab ownership_checked
+// sample despite the plumbing being otherwise correct end to end -- an
+// executed write with no sample to show for it. Threaded the same way
+// NewGitHubWorkItemClickHouseEffects already accepts and forwards it.
 func NewGitLabWorkItemDerivedClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (GitLabWorkItemDerivedClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return GitLabWorkItemDerivedClickHouseEffects{}, ErrInvalidConfiguration
@@ -422,7 +429,7 @@ func NewGitLabWorkItemDerivedClickHouseEffects(
 		WorkItemCycleTimes:             GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease},
 		WorkItemMetricsDaily:           GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease},
 		WorkItemStateDurationsDaily:    GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease},
-		WorkItemTeamAttributions:       GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease},
+		WorkItemTeamAttributions:       GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics},
 		WorkItemUserMetricsDaily:       GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease},
 	}
 	if missing := sink.MissingDestinations(); len(missing) > 0 {

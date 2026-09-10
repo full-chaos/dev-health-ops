@@ -115,11 +115,12 @@ type LinearWorkItemFamilyClickHouseEffects struct {
 func NewLinearWorkItemFamilyClickHouseEffects(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
+	metrics *providerfoundation.Metrics,
 ) (LinearWorkItemFamilyClickHouseEffects, error) {
 	if conn == nil || lease == nil {
 		return LinearWorkItemFamilyClickHouseEffects{}, ErrInvalidConfiguration
 	}
-	derived, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lease)
+	derived, err := NewLinearWorkItemDerivedClickHouseEffects(conn, lease, metrics)
 	if err != nil {
 		return LinearWorkItemFamilyClickHouseEffects{}, err
 	}

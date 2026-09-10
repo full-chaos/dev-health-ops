@@ -312,7 +312,9 @@ def _extract_go_ddl() -> str:
         encoding="utf-8"
     )
     match = re.search(r"const DDL = `(.*?)`", source, re.DOTALL)
-    assert match, "internal/testsupport/registryschema/schema.go: const DDL literal not found"
+    assert match, (
+        "internal/testsupport/registryschema/schema.go: const DDL literal not found"
+    )
     return match.group(1)
 
 
@@ -379,7 +381,9 @@ def test_registry_ddl_mirror_matches_live_column_nullability(
     for table in ("go_api_candidate_build", "go_api_routing_state", "go_api_proof_run"):
         migrated_columns = _columns(migrated, table)
         mirror_columns = _columns(ddl_mirror_db, table)
-        assert mirror_columns, f"{table}: the DDL mirror declares no columns for this table"
+        assert mirror_columns, (
+            f"{table}: the DDL mirror declares no columns for this table"
+        )
         assert mirror_columns == migrated_columns, (
             f"{table}: registryschema.DDL disagrees with the migrated schema on column "
             f"presence or nullability.\n  mirror  : {sorted(mirror_columns.items())}\n"

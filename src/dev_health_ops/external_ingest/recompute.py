@@ -539,7 +539,9 @@ def schedule_or_coalesce(
     D10: different source instances debounce independently since their
     repo/team scopes are disjoint. Writes/merges the pending scope blob
     into Valkey and, iff a SETNX guard key is newly acquired, schedules
-    ``flush_external_ingest_recompute.apply_async(countdown=debounce_seconds)``.
+    ``flush_external_ingest_recompute`` via a named ``celery_app.send_task(...,
+    countdown=debounce_seconds)`` (CHAOS-3093: the direct task import this used
+    to call ``.apply_async()`` on no longer exists, its module was deleted).
 
     If Valkey is unavailable (no ``REDIS_URL``, connection error, or any
     other exception talking to it), degrades to an IMMEDIATE synchronous

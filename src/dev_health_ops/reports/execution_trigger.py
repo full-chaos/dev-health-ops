@@ -1,9 +1,10 @@
 """Atomic, coexistence-safe report execution triggers.
 
-The durable outbox records a versioned future-Go handoff in the same
-transaction as ``ReportRun``. While its migration route remains Celery, the
-outbox relay deliberately defers it and the caller publishes the established
-Celery task only *after* this transaction commits.
+The durable outbox records a versioned Go handoff (``enqueue_worker_job``) in
+the same transaction as ``ReportRun``, relayed to River and executed by Go's
+``report.execute_on_demand``/``report.execute_scheduled`` (CHAOS-4440) --
+there is no Celery task in this path (CHAOS-3093 deleted the last one,
+``execute_saved_report``/``workers/report_task.py``).
 """
 
 from __future__ import annotations

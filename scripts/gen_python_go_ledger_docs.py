@@ -398,7 +398,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "async_runner.py": {
         "category": "c",
-        "evidence": "imported by live sync_bootstrap/system_ops/system_webhooks/work_graph_tasks (and feature_flag_sync, itself LIVE per that file's own row) — 'run coroutine inside Celery task' helper",
+        "evidence": "imported by live sync_bootstrap.py, processors/dataset_adapters.py, api/external_ingest/consumer.py, and feature_flag_sync.py (itself LIVE per that file's own row) — 'run coroutine inside Celery task' helper. work_graph_tasks.py, a former importer, was deleted (CHAOS-3093)",
         "ticket": "n/a",
     },
     "celery_app.py": {
@@ -408,7 +408,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "config.py": {
         "category": "c",
-        "evidence": "used by queue_monitor.py, queues.py, celery_app.py, sync_reconciler.py, external_ingest_reconciler.py, and api/external_ingest/stream_health.py — env/config constants",
+        "evidence": "used by queues.py, celery_app.py, sync_reconciler.py, and api/external_ingest/stream_health.py — env/config constants. queue_monitor.py and external_ingest_reconciler.py, former importers, were deleted (CHAOS-3093)",
         "ticket": "n/a",
     },
     "feature_flag_sync.py": {
@@ -503,7 +503,7 @@ WORKER_FILE_LEDGER: dict[str, dict[str, str]] = {
     },
     "task_utils.py": {
         "category": "c",
-        "evidence": "imported by live files (sync_units, reference_discovery, team_autoimport, work_graph_tasks) and dead ones — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it",
+        "evidence": "imported by live files (sync_units, reference_discovery, team_autoimport) — shared credential/cache helpers; system_webhooks.py was also an importer until CHAOS-4105 deleted it, and work_graph_tasks.py until CHAOS-3093 deleted it",
         "ticket": "n/a",
     },
     "tasks.py": {

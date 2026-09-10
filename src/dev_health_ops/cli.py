@@ -283,18 +283,6 @@ def _is_help_invocation(argv: list[str] | None) -> bool:
     return any(arg in {"-h", "--help"} for arg in args)
 
 
-def _is_workers_inspect_json_invocation(argv: list[str] | None) -> bool:
-    args = sys.argv[1:] if argv is None else argv
-    if "workers" not in args or "inspect" not in args:
-        return False
-    if "--output=json" in args:
-        return True
-    return any(
-        arg == "--output" and index + 1 < len(args) and args[index + 1] == "json"
-        for index, arg in enumerate(args)
-    )
-
-
 def _is_go_api_routing_json_invocation(argv: list[str] | None) -> bool:
     """`dev-hops go-api routing status --json` must emit ONLY JSON.
 
@@ -319,9 +307,8 @@ def _is_push_invocation(argv: list[str] | None) -> bool:
     envelope JSON, `--json` mode's single JSON object) and are frequently
     piped (``push sample --all | push validate -``, CI log capture) --
     Sentry/OTel init noise and their background-exporter retry chatter
-    landing on stdout (same leak `_is_workers_inspect_json_invocation`
-    exists for) would corrupt that output, so every `push` invocation gets
-    the same quiet treatment regardless of `--json`."""
+    landing on stdout would corrupt that output, so every `push` invocation
+    gets the same quiet treatment regardless of `--json`."""
     args = sys.argv[1:] if argv is None else argv
     return bool(args) and args[0] == "push"
 
@@ -905,11 +892,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"dotenv error: {exc}", file=sys.stderr)
             return 2
 
-    quiet_json_inspect = (
-        _is_workers_inspect_json_invocation(argv)
-        or _is_push_invocation(argv)
-        or _is_go_api_routing_json_invocation(argv)
-    )
+    quiet_json_inspect = _is_push_invocation(
+        argv
+    ) or _is_go_api_routing_json_invocation(argv)
     service_credentials_output = _is_service_credential_invocation(argv)
     previous_otel_enabled = os.environ.get("OTEL_ENABLED")
     if quiet_json_inspect:

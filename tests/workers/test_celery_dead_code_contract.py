@@ -384,3 +384,16 @@ def test_provider_unit_dispatch_has_no_celery_fallthrough() -> None:
         "dispatch_sync_run publishes run_sync_unit again -- the Celery "
         "fallthrough this dispatcher had is deleted (CHAOS-4054 step 4)."
     )
+    # CHAOS-3093 (PR2b, r2 codex review finding): the literal-name check above
+    # is lexical, not behavioral -- a reintroduced fallthrough built from a
+    # concatenated string (e.g. `celery_app.send_task("run_" + "sync_unit",
+    # ...)`) would dodge it while still publishing. `send_task`/`apply_async`
+    # are the two ways anything gets published to a Celery-shaped transport at
+    # all; their absence as literal call-site tokens is a second, independent
+    # signal that doesn't depend on the target name being spelled out.
+    for banned_dispatch_call in ("send_task", "apply_async"):
+        assert banned_dispatch_call not in dispatch, (
+            f"dispatch_sync_run calls `.{banned_dispatch_call}` again -- the "
+            "Celery fallthrough this dispatcher had is deleted (CHAOS-4054 "
+            "step 4), regardless of what name it would target."
+        )

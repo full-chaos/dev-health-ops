@@ -3,9 +3,11 @@ package analytics
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -152,6 +154,155 @@ func TestCompileSankey_ThreeDimensionPath(t *testing.T) {
 	if e0Bindings["max_edges"] != 100 {
 		t.Errorf("edges[0] max_edges = %v, want 100", e0Bindings["max_edges"])
 	}
+}
+
+// TestCompileSankey_NodesOrderByDimOrderMatchesPathPositionNotAlphabet is
+// CHAOS-5546's red-first proof for the fix, pinned at the SQL-text level
+// (no engine needed for this half of the claim): a plain `UNION ALL` of
+// the per-dimension branches has NO guaranteed row order without an
+// explicit outer ORDER BY -- confirmed live against the real ClickHouse
+// stack (the same compiled SQL, bindings resolved, ran 4 times in a row
+// and came back in 3 different branch orderings). The fix tags every
+// branch with its own index in req.Path (`dim_order`) and wraps the
+// union in an outer `ORDER BY dim_order ASC, ...`.
+//
+// The path here is deliberately WORK_TYPE, THEME, TEAM -- neither
+// alphabetical (TEAM < THEME < WORK_TYPE) nor the reverse -- so a test
+// that only checked "some sort order exists" couldn't pass by accident
+// of the dimensions already sorting themselves; it must actually track
+// req.Path's own index.
+func TestCompileSankey_NodesOrderByDimOrderMatchesPathPositionNotAlphabet(t *testing.T) {
+	req := SankeyRequest{
+		Path:      []Dimension{DimensionWorkType, DimensionTheme, DimensionTeam},
+		Measure:   MeasureCount,
+		StartDate: mustDate(t, "2026-01-01"),
+		EndDate:   mustDate(t, "2026-01-31"),
+		MaxNodes:  90,
+		MaxEdges:  200,
+	}
+	nodes, _, err := CompileSankey(req, "org-1", 30, true, nil)
+	if err != nil {
+		t.Fatalf("CompileSankey error = %v", err)
+	}
+
+	// Each branch is tagged with its OWN index in req.Path, not an
+	// alphabetical or measure-derived rank.
+	wantDimOrder := map[string]int{"WORK_TYPE": 0, "THEME": 1, "TEAM": 2}
+	for dim, order := range wantDimOrder {
+		tag := fmt.Sprintf("'%s' AS dimension,\n    toString(", dim)
+		idx := strings.Index(nodes.sql, tag)
+		if idx == -1 {
+			t.Fatalf("branch for dimension %s not found in SQL: %s", dim, nodes.sql)
+		}
+		wantTag := fmt.Sprintf("%d AS dim_order", order)
+		if !strings.Contains(nodes.sql[idx:idx+800], wantTag) {
+			t.Errorf("dimension %s branch missing %q (path index), got: %s", dim, wantTag, nodes.sql[idx:idx+800])
+		}
+	}
+
+	// The outer query must sort on dim_order FIRST -- this is what turns
+	// the union's undefined branch order into "grouped by requested path
+	// position", and the value/node_id tie-break preserves the existing
+	// per-branch top-N ordering globally instead of leaving it to
+	// whatever physical row order the union happens to hand back.
+	if !strings.Contains(nodes.sql, "ORDER BY dim_order ASC, value DESC, node_id ASC") {
+		t.Errorf("expected an outer ORDER BY dim_order ASC, value DESC, node_id ASC, got: %s", nodes.sql)
+	}
+
+	// dim_order must never leak into the projected columns -- queryNodes
+	// scans exactly 3 columns (dimension, node_id, value) and is shared
+	// with flow-matrix's own node query.
+	if !strings.HasPrefix(strings.TrimSpace(nodes.sql), "SELECT dimension, node_id, value") {
+		t.Errorf("expected the outer SELECT to project exactly (dimension, node_id, value), got: %s", nodes.sql)
+	}
+}
+
+// TestExecuteSankeyQueries_NodeOrderPreservesQueryRowOrder pins the
+// OTHER half of the determinism claim: ExecuteSankeyQueries itself must
+// never reorder the rows a query returns -- ordering is entirely the
+// compiled SQL's responsibility (the test above), and the aggregation
+// loop here must just copy rows through in the order the client handed
+// them back, regardless of which goroutine (there is normally exactly
+// one nodes query, but this also covers callers that pass more than
+// one) finishes first. nodesResults is written into by INDEX
+// (`nodesResults[i], nodesErrs[i] = ...`), so slow-query-finishes-first
+// must not perturb the final concatenation order.
+func TestExecuteSankeyQueries_NodeOrderPreservesQueryRowOrder(t *testing.T) {
+	slow := &fakeRowScanner{rows: [][]any{{"TEAM", "slow-node", float64(1)}}}
+	fast := &fakeRowScanner{rows: [][]any{{"REPO", "fast-node", float64(2)}}}
+	client := &orderedDelayClient{
+		byStatement: map[string]*fakeRowScanner{
+			"slow-query": slow,
+			"fast-query": fast,
+		},
+		delay: map[string]time.Duration{
+			"slow-query": 30 * time.Millisecond,
+			"fast-query": 0,
+		},
+	}
+	nodesQ := []compiledQuery{
+		{sql: "slow-query"}, // index 0 -- must stay first in the output
+		{sql: "fast-query"}, // index 1, even though it returns first
+	}
+	nodes, _, err := ExecuteSankeyQueries(context.Background(), client, nodesQ, nil)
+	if err != nil {
+		t.Fatalf("ExecuteSankeyQueries error = %v", err)
+	}
+	if len(nodes) != 2 || nodes[0].Label != "slow-node" || nodes[1].Label != "fast-node" {
+		t.Fatalf("node order = %v, want [slow-node, fast-node] (index order, not completion order)", nodes)
+	}
+}
+
+// TestExecuteSankeyQueries_EdgeOrderPreservesQueryRowOrder is
+// CHAOS-5546 r1's P3 fix pin: the same completion-order-independence
+// claim as the node test above, but for edges -- there IS more than one
+// edges query per real request (one per path hop, CompileSankey's own
+// doc comment), so a hop's SQL finishing before an EARLIER hop's must
+// not reorder the concatenated edge list. edgesResults is written by
+// INDEX exactly like nodesResults; before this test, reversing the
+// concatenation loop (edgesErrs range order) still passed every existing
+// edge test, because none of them varied completion timing.
+func TestExecuteSankeyQueries_EdgeOrderPreservesQueryRowOrder(t *testing.T) {
+	slow := &fakeRowScanner{rows: [][]any{{"TEAM", "REPO", "team-a", "repo-x", float64(1)}}}
+	fast := &fakeRowScanner{rows: [][]any{{"REPO", "WORK_TYPE", "repo-x", "bug", float64(2)}}}
+	client := &orderedDelayClient{
+		byStatement: map[string]*fakeRowScanner{
+			"slow-hop-query": slow,
+			"fast-hop-query": fast,
+		},
+		delay: map[string]time.Duration{
+			"slow-hop-query": 30 * time.Millisecond,
+			"fast-hop-query": 0,
+		},
+	}
+	edgesQ := []compiledQuery{
+		{sql: "slow-hop-query"}, // hop 0 (TEAM->REPO) -- must stay first
+		{sql: "fast-hop-query"}, // hop 1 (REPO->WORK_TYPE), even though it returns first
+	}
+	_, edges, err := ExecuteSankeyQueries(context.Background(), client, nil, edgesQ)
+	if err != nil {
+		t.Fatalf("ExecuteSankeyQueries error = %v", err)
+	}
+	if len(edges) != 2 || edges[0].Source != "TEAM:team-a" || edges[1].Source != "REPO:repo-x" {
+		t.Fatalf("edge order = %+v, want hop 0 (TEAM:team-a->...) before hop 1 (REPO:repo-x->...), index order not completion order", edges)
+	}
+}
+
+// orderedDelayClient dispatches by exact statement match after an
+// artificial per-statement delay, so the SLOWEST query is queued FIRST
+// and must still land at its own index in the result.
+type orderedDelayClient struct {
+	byStatement map[string]*fakeRowScanner
+	delay       map[string]time.Duration
+}
+
+func (c *orderedDelayClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	time.Sleep(c.delay[statement])
+	resp, ok := c.byStatement[statement]
+	if !ok {
+		return nil, fmt.Errorf("orderedDelayClient: no canned response for %q", statement)
+	}
+	return resp, nil
 }
 
 func TestCompileSankey_MaxNodesSmallerThanDimensionCountClampsToOne(t *testing.T) {

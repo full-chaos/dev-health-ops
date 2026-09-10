@@ -136,8 +136,35 @@ func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInves
 		limitPerDim = 1
 	}
 
+	// CHAOS-5546: a plain UNION ALL across the per-dimension branches
+	// below has NO guaranteed row order without an explicit outer ORDER
+	// BY -- ClickHouse documents this ("if you don't use ORDER BY, the
+	// result depends on the order the query was executed, which is
+	// undefined") and it is not a theoretical concern: running this
+	// EXACT SQL (bindings resolved, no other change) four times in a row
+	// against live ClickHouse produced three DIFFERENT branch orderings
+	// (REPO/THEME/TEAM, THEME/REPO/TEAM x2, TEAM/THEME/REPO) -- each
+	// branch's parallel aggregation finishes and hands its blocks to the
+	// union in whatever order the server's thread scheduler happens to
+	// pick that run. This is true of the query text itself, independent
+	// of which client/language issues it -- go-api-prove's frozen
+	// baseline body (a5e7c5d3...) recorded exactly one such sample
+	// (THEME, REPO, TEAM), not a stable contract to reproduce bit for
+	// bit; a fresh baseline run against the same window is just as
+	// likely to come back in a different order. The only correct fix is
+	// to make the OUTPUT deterministic and tie it to something
+	// meaningful -- the dimension's position in the REQUESTED path,
+	// `req.Path`, which is exactly what a Sankey diagram's caller
+	// expects ("TEAM, THEME, REPO" was asked for in that order). Each
+	// branch below tags its rows with `dim_order`, the branch's index in
+	// req.Path, and the outer SELECT sorts on it first -- this also
+	// makes ExecuteSankeyQueries's node order independent of which
+	// goroutine's queryNodes call happens to return first (moot here
+	// since CompileSankey emits exactly one nodes query, but the
+	// UNION ALL's OWN internal parallelism is the same class of
+	// nondeterminism one level down).
 	var unionParts []string
-	for _, dim := range req.Path {
+	for i, dim := range req.Path {
 		dimCol, dimErr := dbColumn(dim, useInvestment)
 		if dimErr != nil {
 			return compiledQuery{}, nil, dimErr
@@ -146,7 +173,8 @@ func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInves
 SELECT
     '%s' AS dimension,
     toString(%s) AS node_id,
-    %s AS value
+    %s AS value,
+    %d AS dim_order
 FROM %s
 %s
 WHERE %s
@@ -155,9 +183,23 @@ WHERE %s
 GROUP BY node_id
 ORDER BY value DESC, node_id ASC
 LIMIT {limit_per_dim:UInt32}
-`, strings.ToUpper(string(dim)), dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql))
+`, strings.ToUpper(string(dim)), dimCol, measureExpr, i, source, extraClauses, dateFilter, alias, fc.sql))
 	}
-	nodesSQL := fmt.Sprintf("\n%s\n%s\n", strings.Join(unionParts, " UNION ALL "), settingsMaxExecutionTime(timeoutSeconds))
+	// The outer SELECT drops dim_order from the projection -- queryNodes
+	// (flowmatrix.go) scans exactly 3 columns (dimension, node_id,
+	// value) and is shared with flow-matrix's own node query, so the
+	// tie-break column stays ORDER-BY-only, never part of the result
+	// set. Referencing an unprojected subquery column in ORDER BY is
+	// valid ClickHouse (and standard SQL without DISTINCT): the column
+	// is still in scope from the FROM subquery.
+	nodesSQL := fmt.Sprintf(`
+SELECT dimension, node_id, value
+FROM (
+%s
+)
+ORDER BY dim_order ASC, value DESC, node_id ASC
+%s
+`, strings.Join(unionParts, "\nUNION ALL\n"), settingsMaxExecutionTime(timeoutSeconds))
 	nodesBindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},

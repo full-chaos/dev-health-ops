@@ -278,11 +278,46 @@ var operationSpecs = map[string]OperationSpec{
 	"investmentFull": {
 		ResponseRoot: "analytics",
 		Variables:    investmentFullVariables,
-		Parity: Options{FloatTierB: map[string]string{
-			"data.analytics.breakdowns.items.value": "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Rule-derived, not observed (CHAOS-5451)",
-			"data.analytics.sankey.nodes.value":     "CompileSankey calls the same dbExpression as breakdowns, so on the investment path this is the same SUM(subcategory_kv.2) float sum; subcategory_kv ARRAY JOINs a Map(String, Float64) column (investment.go:514, migration 017:12). Rule-derived, not observed (CHAOS-5451)",
-			"data.analytics.sankey.edges.value":     "same float sum as sankey.nodes.value -- one dbExpression, one compiled measure (validate.go:245-246, investment.go:514). Rule-derived, not observed (CHAOS-5451)",
-		}},
+		Parity: Options{
+			FloatTierB: map[string]string{
+				"data.analytics.breakdowns.items.value": "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Rule-derived, not observed (CHAOS-5451)",
+				"data.analytics.sankey.nodes.value":     "CompileSankey calls the same dbExpression as breakdowns, so on the investment path this is the same SUM(subcategory_kv.2) float sum; subcategory_kv ARRAY JOINs a Map(String, Float64) column (investment.go:514, migration 017:12). Rule-derived, not observed (CHAOS-5451)",
+				"data.analytics.sankey.edges.value":     "same float sum as sankey.nodes.value -- one dbExpression, one compiled measure (validate.go:245-246, investment.go:514). Rule-derived, not observed (CHAOS-5451)",
+			},
+			// CHAOS-5546: sankey.go's nodes/edges queries are a plain
+			// ClickHouse UNION ALL with no outer ORDER BY. Measured live:
+			// the SAME compiled SQL for this exact request, run 4 times
+			// in a row against the deployed ClickHouse, came back in 3
+			// DIFFERENT branch orderings (REPO/THEME/TEAM,
+			// THEME/REPO/TEAM x2, TEAM/THEME/REPO) -- this is genuine
+			// engine nondeterminism (parallel UNION ALL execution order
+			// is unspecified without an ORDER BY), present on BOTH
+			// planes, not a Go-vs-Python defect. A positional comparison
+			// of these two lists therefore reports a coin flip as a
+			// finding on every run, forever, regardless of which side is
+			// "correct" -- there is no stable baseline order to match.
+			// The producer fix (sankey.go's `dim_order` + outer
+			// `ORDER BY dim_order ASC, value DESC, node_id ASC`) makes
+			// the GO side deterministic and grouped by the request's own
+			// `path` order for every real client going forward; this
+			// declaration is the parity-rule-5 escape for the PROOF
+			// comparison itself, which still faces a Python baseline with
+			// no such ordering fix (no Python fixes, ever).
+			OrderInsensitiveLists: []OrderInsensitiveList{
+				{
+					Path:      "data.analytics.sankey.nodes",
+					KeyFields: []string{"id"},
+					Reason:    "CompileSankey's nodes query is an unordered ClickHouse UNION ALL; the identical compiled SQL returned 3 different branch orderings across 4 live runs (CHAOS-5546)",
+					Ticket:    "CHAOS-5546",
+				},
+				{
+					Path:      "data.analytics.sankey.edges",
+					KeyFields: []string{"source", "target"},
+					Reason:    "edges share the same unordered-UNION shape as nodes, one query per path hop with no cross-hop ordering guarantee either (CHAOS-5546)",
+					Ticket:    "CHAOS-5546",
+				},
+			},
+		},
 	},
 	"operatingReview": {
 		ResponseRoot: "operatingReview",

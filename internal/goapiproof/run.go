@@ -35,9 +35,17 @@ const (
 	RefusalStaleExclusion      = "declared_exclusion_matched_nothing"
 	RefusalStaleTierB          = "declared_tier_b_field_matched_nothing"
 	RefusalStaleBaselineDefect = "declared_baseline_defect_matched_nothing"
-	RefusalNonFinite           = "response_carried_a_non_finite_json_number"
-	RefusalPlaneUnidentified   = "response_carried_no_plane_evidence"
-	RefusalBuildMismatch       = "serving_build_is_not_the_named_build"
+	// RefusalStaleOrderInsensitiveList/RefusalOrderInsensitiveListKeyMissing
+	// are OrderInsensitiveList's two vacuity guards -- see compare.go's
+	// doc comment on that type. Same discipline as the three refusals
+	// above: a relaxation that relaxes nothing, or that cannot even build
+	// its declared pairing, cannot stand as the comparison a receipt
+	// records.
+	RefusalStaleOrderInsensitiveList      = "declared_order_insensitive_list_matched_nothing"
+	RefusalOrderInsensitiveListKeyMissing = "order_insensitive_list_element_missing_key_field"
+	RefusalNonFinite                      = "response_carried_a_non_finite_json_number"
+	RefusalPlaneUnidentified              = "response_carried_no_plane_evidence"
+	RefusalBuildMismatch                  = "serving_build_is_not_the_named_build"
 	// RefusalNeedsInstanceID is for an operation whose registered
 	// document requires an identifier for ONE stored row -- `pr(id:)`
 	// today. The table cannot supply one: any value it invented would
@@ -674,6 +682,19 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 		// misspelled; either way the comparison it produced is not the
 		// comparison anybody declared, so it cannot stand as a verdict.
 		return refuse(RefusalStaleExclusion, fmt.Sprintf("declared volatile fields matched nothing: %v", result.UnusedExclusions))
+	}
+	if len(result.UnusedOrderInsensitiveLists) > 0 {
+		// Same rule, one relaxation over: a declared order-insensitive
+		// list that matched no list in this response is stale or
+		// misspelled, and the comparison that ran positionally-compared a
+		// list nobody meant to leave positional.
+		return refuse(RefusalStaleOrderInsensitiveList, fmt.Sprintf("declared order-insensitive lists matched nothing: %v", result.UnusedOrderInsensitiveLists))
+	}
+	if len(result.OrderInsensitiveListRefusals) > 0 {
+		// An element missing a declared key field means the declaration
+		// does not describe this data -- the pairing it promises cannot
+		// be built, so nothing here can stand as a verdict either.
+		return refuse(RefusalOrderInsensitiveListKeyMissing, fmt.Sprintf("order-insensitive list comparison could not pair elements: %v", result.OrderInsensitiveListRefusals))
 	}
 
 	outcome.Executed = true

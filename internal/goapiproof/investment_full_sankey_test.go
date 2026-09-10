@@ -98,6 +98,22 @@ func TestInvestmentFullVariablesAskForSankey(t *testing.T) {
 	if !ok || len(path) < 2 {
 		t.Fatalf("sankey.path has %d dimension(s), want >= 2 (validateSankeyPath, sankey.go): %#v", len(path), sankey["path"])
 	}
+	// CHAOS-5546 r1 P3 finding: "at least 2 dimensions" alone let a
+	// mutation from ["TEAM","THEME","REPO"] to ["WORK_TYPE","THEME",
+	// "REPO"] pass silently. Pin the EXACT path -- it must mirror
+	// web/src/lib/graphql/investmentFetchers.ts's own default sankey
+	// batch (operations.go's investmentFullVariables doc comment), the
+	// real client traffic this proof exists to measure, not an arbitrary
+	// minimal one.
+	wantPath := []any{"TEAM", "THEME", "REPO"}
+	if len(path) != len(wantPath) {
+		t.Fatalf("sankey.path = %#v, want exactly %#v", path, wantPath)
+	}
+	for i, want := range wantPath {
+		if path[i] != want {
+			t.Fatalf("sankey.path[%d] = %#v, want %#v (full path %#v)", i, path[i], want, path)
+		}
+	}
 	if sankey["dateRange"] == nil {
 		t.Fatal("sankey.dateRange is required (resolve.go: \"sankey.dateRange is required\") but was not set")
 	}

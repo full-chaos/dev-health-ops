@@ -87,6 +87,7 @@ on:
       # block already fixes for gqlgen.yml above.
       - 'ci/check_gqlgen_drift.sh'
       - 'ci/gqlgen_generate.sh'
+      - 'ci/gqlgen_output_scope.sh'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
@@ -207,6 +208,7 @@ on:
       # block already fixes for gqlgen.yml above.
       - 'ci/check_gqlgen_drift.sh'
       - 'ci/gqlgen_generate.sh'
+      - 'ci/gqlgen_output_scope.sh'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'

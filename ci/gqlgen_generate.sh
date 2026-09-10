@@ -87,72 +87,21 @@ trap cleanup EXIT
 
 # REFUSE, DO NOT RECOVER, when the config points outside the protected area.
 #
-# Round r7 pointed exec.filename at a pre-existing file at the repo root. The
-# wrapper restored its area, announced "generated files restored to their
-# pre-run content", and left that file overwritten -- a true statement about
-# the area and a false one about the tree. Recovery cannot be stretched to
-# cover the whole repository, so the answer is to not start: every output path
-# the config names must resolve inside the generated root, checked BEFORE
-# generation, or this exits without running the generator at all.
+# Recovery is scoped to the generated area plus the module files. Anything
+# outside that is unreachable, so the answer is to not start rather than to
+# half-recover and report success -- which is what this did before, printing
+# "restored to their pre-run content" over a destroyed file elsewhere.
 #
-# Parsed with python3 + PyYAML rather than grep, because a key's value can be
-# quoted, folded, or nested and a regex over YAML is its own defect class.
-# The reader is written to a file with the printf BUILTIN, not fed in on a
-# heredoc: bash writes a heredoc into a pipe whose read end it also holds, so
-# a payload over the host's effective pipe budget hangs the script forever
-# (CHAOS-3362). This repo has a test for exactly that, and it caught this.
-OUTPUTS_PY="${SNAPSHOT}/read_outputs.py"
-{
-  printf '%s\n' 'import sys'
-  printf '%s\n' 'try:'
-  printf '%s\n' '    import yaml'
-  printf '%s\n' 'except ImportError:'
-  printf '%s\n' '    print("ERROR: PyYAML unavailable; cannot verify output paths")'
-  printf '%s\n' '    sys.exit(3)'
-  printf '%s\n' 'with open("gqlgen.yml", encoding="utf-8") as handle:'
-  printf '%s\n' '    cfg = yaml.safe_load(handle) or {}'
-  printf '%s\n' 'paths = []'
-  printf '%s\n' 'for section in ("exec", "model", "federation"):'
-  printf '%s\n' '    value = cfg.get(section) or {}'
-  printf '%s\n' '    if isinstance(value, dict) and value.get("filename"):'
-  printf '%s\n' '        paths.append(value["filename"])'
-  printf '%s\n' 'resolver = cfg.get("resolver") or {}'
-  printf '%s\n' 'if isinstance(resolver, dict):'
-  printf '%s\n' '    if resolver.get("filename"):'
-  printf '%s\n' '        paths.append(resolver["filename"])'
-  printf '%s\n' '    if resolver.get("dir"):'
-  printf '%s\n' '        paths.append(resolver["dir"].rstrip("/") + "/")'
-  printf '%s\n' 'for path in paths:'
-  printf '%s\n' '    print(path)'
-} >"${OUTPUTS_PY}"
-config_outputs="$(cd "${QUERY_API}" && python3 "${OUTPUTS_PY}")" || {
-  echo "gqlgen_generate: could not read the generator's output paths from gqlgen.yml." >&2
-  echo "${config_outputs}" >&2
-  exit 2
-}
-if printf '%s\n' "${config_outputs}" | grep -q '^ERROR:'; then
-  printf '%s\n' "${config_outputs}" >&2
-  exit 2
-fi
-outside=0
-while IFS= read -r out; do
-  [ -n "${out}" ] || continue
-  abs="$(cd "${QUERY_API}" && readlink -m "${out}")"
-  case "${abs}/" in
-    "${ROOT}/cmd/query-api/internal/graph/"*) ;;
-    *)
-      echo "gqlgen_generate: REFUSING -- gqlgen.yml points an output outside the protected area:" >&2
-      echo "    ${out}  ->  ${abs#"${ROOT}/"}" >&2
-      outside=1
-      ;;
-  esac
-done <<EOF
-${config_outputs}
-EOF
-if [ "${outside}" -ne 0 ]; then
-  echo "  Only cmd/query-api/internal/graph is snapshotted and restored. Generation" >&2
-  echo "  into any other path can destroy a hand-written file this script cannot" >&2
-  echo "  put back, so it does not run at all rather than half-recover afterwards." >&2
+# The check itself lives in ci/gqlgen_output_scope.sh because the drift guard
+# needs exactly the same answer, and r8 proved that a check only one of them
+# has is a check the other one is missing.
+# shellcheck source=ci/gqlgen_output_scope.sh
+. "${SCRIPT_DIR}/gqlgen_output_scope.sh"
+if ! gqlgen_output_scope_check "${QUERY_API}" "${ROOT}/cmd/query-api/internal/graph"; then
+  echo "gqlgen_generate: REFUSING -- gqlgen.yml writes outside the protected area (above)." >&2
+  echo "  Only cmd/query-api/internal/graph plus go.mod/go.sum are snapshotted and" >&2
+  echo "  restored. Generation into any other path can destroy a hand-written file" >&2
+  echo "  this script cannot put back, so it does not run at all." >&2
   exit 2
 fi
 
@@ -300,6 +249,7 @@ for rel in "${GENERATED_FILES[@]}"; do
     echo "gqlgen_generate: generation reported success but ${rel} is MISSING." >&2
     restore || exit 1
     restore_area || exit 1
+    restore_modules || exit 1
     purge_unexpected || exit 1
     echo "gqlgen_generate: generated files restored; treat the success as false." >&2
     exit 1

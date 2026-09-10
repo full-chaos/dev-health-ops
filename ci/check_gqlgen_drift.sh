@@ -63,6 +63,24 @@ tar -C "${ROOT}" \
 # the guard and checked what it DID. A fake generator makes that testable in
 # milliseconds instead of a 10s gqlgen run per case. The wiring test asserts
 # CI never sets this, which is the other half of the safety.
+# GENERATING IN A COPY IS NOT ISOLATION IF THE CONFIG NAMES ABSOLUTE PATHS.
+#
+# This script believed the temp copy made it safe. Review round r8 set
+# exec.filename to an absolute path and the generator wrote straight through
+# the copy into a real file on disk -- copying a tree does not relocate an
+# absolute path, and the after-the-fact scan only ever looked inside the copy.
+# The wrapper already refused such a config; the guard did not, which is
+# exactly the asymmetry that made it exploitable. Same check, same function,
+# both scripts, run BEFORE anything is generated.
+# shellcheck source=ci/gqlgen_output_scope.sh
+. "${SCRIPT_DIR}/gqlgen_output_scope.sh"
+if ! gqlgen_output_scope_check "${WORK}/cmd/query-api" "${WORK}/cmd/query-api/internal/graph"; then
+  echo "check_gqlgen_drift: REFUSING -- gqlgen.yml writes outside the generated root (above)." >&2
+  echo "  An absolute or escaping output path is not contained by the temp copy," >&2
+  echo "  so this refuses to generate rather than discover the damage afterwards." >&2
+  exit 2
+fi
+
 GENERATE_CMD="${GQLGEN_DRIFT_GENERATE_CMD:-go run github.com/99designs/gqlgen generate --config gqlgen.yml}"
 # Marker for detecting writes ANYWHERE in the copy, not only under the graph
 # root: a stanza pointed at internal/foo/ must be a finding, not an escape,

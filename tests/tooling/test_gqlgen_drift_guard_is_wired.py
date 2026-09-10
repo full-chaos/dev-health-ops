@@ -66,6 +66,10 @@ GENERATOR_INPUTS = (
 GUARD_INPUTS = (
     "ci/check_gqlgen_drift.sh",
     "ci/gqlgen_generate.sh",
+    # The shared output-scope check. Added after noticing it was NOT
+    # Go-relevant on its own -- the third time this file has caught the same
+    # class, and the first time it was caught before a review round found it.
+    "ci/gqlgen_output_scope.sh",
 )
 
 
@@ -766,4 +770,116 @@ def test_every_protection_is_load_bearing(
         f"{label}: {claim} -- STILL held with this protection disabled, so the "
         "protection is not what provides it and nothing here tests it.\n"
         f"stdout:\n{mutant.stdout}\nstderr:\n{mutant.stderr}"
+    )
+
+
+SCOPE_LIB = REPO_ROOT / "ci" / "gqlgen_output_scope.sh"
+
+
+def test_the_output_scope_check_is_shared_by_both_scripts() -> None:
+    """One answer to "where may the generator write", not two.
+
+    Round r8 exploited the asymmetry directly: the wrapper refused an
+    out-of-area config, the guard did not, and the guard's belief that a temp
+    copy isolates it is false for an ABSOLUTE path -- copying a tree does not
+    relocate one. Both scripts source the same function now, so neither can
+    drift into being the lenient one.
+    """
+    assert SCOPE_LIB.exists(), f"{SCOPE_LIB.relative_to(REPO_ROOT)} is missing"
+    for script in (GUARD, WRAPPER):
+        body = script.read_text()
+        assert (
+            "gqlgen_output_scope.sh" in body and "gqlgen_output_scope_check" in body
+        ), (
+            f"{script.name} no longer uses the shared output-scope check, so the two "
+            "scripts can disagree about where generation may write -- which is the "
+            "exact gap r8 used."
+        )
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        (
+            "absolute exec.filename",
+            lambda t, victim: t.replace(
+                "  filename: internal/graph/generated.go", f"  filename: {victim}", 1
+            ),
+        ),
+        (
+            "filename_template escaping with ../",
+            lambda t, victim: t.replace(
+                '  filename_template: "{name}.resolvers.go"',
+                f'  filename_template: "{victim}"',
+                1,
+            ),
+        ),
+        (
+            "exec.filename omitted, gqlgen default used",
+            lambda t, _v: t.replace("  filename: internal/graph/generated.go\n", "", 1),
+        ),
+    ],
+    ids=["absolute-path", "escaping-template", "omitted-default"],
+)
+def test_both_scripts_refuse_configs_that_write_outside_the_area(
+    tree_copy: Path, label: str, mutate: Callable[[str, str], str]
+) -> None:
+    """Every shape r8 got past the wrapper's first validator.
+
+    Absolute paths, `../` inside a filename_template, and an OMITTED key whose
+    gqlgen default still writes somewhere -- a missing key is an output path
+    too, which is why defaults are validated explicitly rather than only what
+    the config happens to name.
+    """
+    victim = tree_copy / "ZZ_victim.go"
+    victim.write_text("package main\n// hand-written, outside the generated area\n")
+    default_victim = tree_copy / "cmd" / "query-api" / "generated.go"
+    default_victim.write_text("package graph\n// at gqlgen's default path\n")
+    before = (victim.read_bytes(), default_victim.read_bytes())
+
+    for script in ("gqlgen_generate.sh", "check_gqlgen_drift.sh"):
+        with (
+            _pristine_area(tree_copy),
+            _mutated(
+                tree_copy, "cmd/query-api/gqlgen.yml", lambda t: mutate(t, str(victim))
+            ),
+        ):
+            result = _run_in(tree_copy, script)
+        assert result.returncode == 2, (
+            f"{script} did not REFUSE ({label}); it exited {result.returncode}. "
+            f"Generation into an unprotected path is unrecoverable.\n{result.stderr}"
+        )
+        assert (victim.read_bytes(), default_victim.read_bytes()) == before, (
+            f"{script} ran anyway ({label}) and overwrote a file it cannot restore."
+        )
+
+    victim.unlink()
+    default_victim.unlink()
+
+
+def test_the_wrapper_restores_modules_on_a_false_success(tree_copy: Path) -> None:
+    """The branch that had no restore_modules call.
+
+    A generator that exits 0 while deleting an output is the empty-error
+    failure seen from outside. That branch restored the GraphQL area and left
+    the module files tidied, unlike the nonzero-exit and signal branches --
+    three paths, one of them different, which is how this kind of gap survives.
+    """
+    gomod = tree_copy / "go.mod"
+    before = gomod.read_bytes()
+    with _pristine_area(tree_copy):
+        result = _run_in(
+            tree_copy,
+            "gqlgen_generate.sh",
+            GQLGEN_GENERATE_CMD=(
+                'rm internal/graph/generated.go; printf "\\n// tidy\\n" >> ../../go.mod; true'
+            ),
+        )
+        restored = gomod.read_bytes() == before
+        gomod.write_bytes(before)
+    assert result.returncode != 0, (
+        "a success that deleted an output was reported as success."
+    )
+    assert restored, (
+        "the false-success branch restored the generated area but left go.mod modified."
     )

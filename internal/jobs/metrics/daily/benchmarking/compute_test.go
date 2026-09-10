@@ -19,6 +19,20 @@ const (
 func goldenAsOf() time.Time  { return time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC) }
 func goldenStamp() time.Time { return time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC) }
 
+// mustFinite dereferences a CHAOS-4806/R73 nullable aggregate field for this
+// golden comparison. The frozen Python corpus behind this test has no
+// zero-denominator/NaN/overflow inputs anywhere in it, so every one of these
+// fields is expected to be non-nil on every row; a nil here is treated as a
+// genuine regression (the boundary firing on data it should never fire on),
+// not silently skipped or compared as a zero value.
+func mustFinite(t *testing.T, field string, ptr *float64) float64 {
+	t.Helper()
+	if ptr == nil {
+		t.Fatalf("%s is nil -- the frozen golden corpus has no non-finite inputs, so the R73 boundary must not have fired here", field)
+	}
+	return *ptr
+}
+
 // series builds one point per day ending on endDay, mirroring the generator's
 // `_series` helper exactly.
 func series(values []float64, endDay time.Time) []MetricPoint {
@@ -293,8 +307,12 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 		got := live.Baselines[index]
 		gotRow := []any{
 			got.MetricName, got.ScopeType, got.ScopeKey, isoDay(got.PeriodStart), isoDay(got.PeriodEnd),
-			got.RollingWindowDays, got.CurrentValue, got.BaselineValue, got.PercentileRank,
-			got.P25Value, got.P50Value, got.P75Value, got.P90Value, got.SampleSize,
+			got.RollingWindowDays,
+			mustFinite(t, "CurrentValue", got.CurrentValue), mustFinite(t, "BaselineValue", got.BaselineValue),
+			mustFinite(t, "PercentileRank", got.PercentileRank),
+			mustFinite(t, "P25Value", got.P25Value), mustFinite(t, "P50Value", got.P50Value),
+			mustFinite(t, "P75Value", got.P75Value), mustFinite(t, "P90Value", got.P90Value),
+			got.SampleSize,
 			isoStamp(got.ComputedAt), got.OrgID,
 		}
 		wantRow := []any{
@@ -313,7 +331,7 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 	}
 	for index, want := range golden.MaturityBands {
 		got := live.MaturityBands[index]
-		gotRow := []any{got.ScopeKey, got.Value, got.PercentileRank, got.MaturityBand, got.Confidence, got.OrgID}
+		gotRow := []any{got.ScopeKey, mustFinite(t, "Value", got.Value), got.PercentileRank, got.MaturityBand, got.Confidence, got.OrgID}
 		wantRow := []any{want.ScopeKey, want.Value, want.PercentileRank, want.MaturityBand, want.Confidence, want.OrgID}
 		if !reflect.DeepEqual(gotRow, wantRow) {
 			t.Errorf("maturity band %d:\n got  %v\n want %v", index, gotRow, wantRow)

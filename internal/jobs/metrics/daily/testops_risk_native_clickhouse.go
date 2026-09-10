@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -381,6 +382,23 @@ func pyRound(value float64, ndigits int) float64 {
 	return rounded
 }
 
+// nullablePyRound is this file's R73 write boundary (CHAOS-4806, codex
+// round chaos-4806-r2 P1) for a scalar numeric row field, analogous to
+// benchmarking.nullableRound4: finite -> a pointer to its pyRound'd value;
+// non-finite (NaN, or an infinity from an unconstrained Nullable(Float64)
+// source column such as median_duration_seconds/avg_queue_seconds) -> the
+// trip is recorded (family/field, the real reason) and nil is returned,
+// for a Nullable(Float64) column to write ClickHouse NULL instead of the
+// raw non-finite value.
+func nullablePyRound(family, field string, value float64, ndigits int) *float64 {
+	safe := finite.NullIfNonFinite(family, field, value)
+	if safe == nil {
+		return nil
+	}
+	rounded := pyRound(*safe, ndigits)
+	return &rounded
+}
+
 // pyMin2 and pyMax2 replicate CPython's two-argument min()/max() comparison
 // order exactly: the FIRST argument is the running candidate, and it is
 // replaced only on a strict "less than" (min) / "greater than" (max)
@@ -469,7 +487,19 @@ func fi(key string, value int) factorsJSONField {
 // factorsJSON ports json.dumps(factors) as compute_testops_risk.py's two
 // factors dicts build it: default separators (", " and ": "), no
 // sort_keys, insertion order preserved.
-func factorsJSON(fields []factorsJSONField) string {
+//
+// CHAOS-4806 / ruling R73: this is the write/serialization boundary for
+// every float field in the payload -- each one routes through
+// finite.JSONLiteral before pythonFloatJSON ever sees it, so a NaN or +-Inf
+// factor becomes the JSON literal `null` (tagged with family/field.key and
+// counted) instead of Python's own non-spec "NaN"/"Infinity"/"-Infinity"
+// json.dumps tokens (a baseline_defect, R60, deliberately not mirrored).
+// The rest of the factors object, and the row it belongs to, keep writing
+// regardless of which single key trips the guard. family identifies which
+// of this file's two factors_json producers is calling (see the two call
+// sites), so the counter can tell a release-confidence trip from a
+// quality-drag trip.
+func factorsJSON(family string, fields []factorsJSONField) string {
 	var b strings.Builder
 	b.WriteByte('{')
 	for index, field := range fields {
@@ -480,7 +510,7 @@ func factorsJSON(fields []factorsJSONField) string {
 		b.WriteString(field.key)
 		b.WriteString("\": ")
 		if field.isFloat {
-			b.WriteString(pythonFloatJSON(field.floatVal))
+			b.WriteString(finite.JSONLiteral(family, field.key, field.floatVal, pythonFloatJSON))
 		} else {
 			b.WriteString(strconv.Itoa(field.intVal))
 		}
@@ -521,16 +551,16 @@ func pythonFloatJSON(value float64) string {
 	// side, so a NaN (e.g. a 0/0 division upstream) is real, representable
 	// input, not a hypothetical one. Python's own json.dumps (default
 	// allow_nan=True) emits the literal tokens "NaN"/"Infinity"/"-Infinity"
-	// for these -- not valid JSON per the spec, but exactly what the Python
-	// authority this port must match byte-for-byte actually writes.
-	if math.IsNaN(value) {
-		return "NaN"
-	}
-	if math.IsInf(value, 1) {
-		return "Infinity"
-	}
-	if math.IsInf(value, -1) {
-		return "-Infinity"
+	// for these -- not valid JSON per the spec. Byte-for-byte parity with
+	// that is a baseline_defect (R60), not a target: CHAOS-4806 / ruling R73
+	// closes it. This function's one caller, factorsJSON, now routes every
+	// float through finite.JSONLiteral first, so a NaN/+-Inf value never
+	// reaches here in production -- the branch below is a defensive
+	// fallback only, so a direct call (present or future) still returns
+	// valid JSON (`null`) instead of one of Python's non-spec tokens or
+	// panicking on the un-guarded scientific-notation split further down.
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "null"
 	}
 	if value == 0 {
 		if math.Signbit(value) {
@@ -629,14 +659,21 @@ type testopsReleaseConfidenceRow struct {
 	ComputedAt            time.Time
 }
 
+// DragHours/FailureReworkHours/FlakeInvestigationHours/QueueWaitHours/
+// RetryOverheadHours are *float64, nil meaning undefined (CHAOS-4806,
+// ruling R73, codex round chaos-4806-r2 P1 -- see migration
+// 091_testops_quality_drag_nullable_fields.sql): median_duration_seconds
+// and avg_queue_seconds are unconstrained Nullable(Float64) source
+// columns, so a NaN/+-Inf reaching computeQualityDrag's own arithmetic is
+// real, reachable input.
 type testopsQualityDragRow struct {
 	RepoID                  uuid.UUID
 	Day                     time.Time
-	DragHours               float64
-	FailureReworkHours      float64
-	FlakeInvestigationHours float64
-	QueueWaitHours          float64
-	RetryOverheadHours      float64
+	DragHours               *float64
+	FailureReworkHours      *float64
+	FlakeInvestigationHours *float64
+	QueueWaitHours          *float64
+	RetryOverheadHours      *float64
 	FactorsJSON             string
 	TeamID                  *string
 	ServiceID               *string
@@ -707,7 +744,7 @@ func computeReleaseConfidence(
 	}
 	score := clampUnit(baseScore - flakePenalty - regressionPenalty)
 
-	factors := factorsJSON([]factorsJSONField{
+	factors := factorsJSON("testops_release_confidence", []factorsJSONField{
 		ff("pipeline_success_rate", pyRound(successRate, 4)),
 		ff("test_pass_rate", pyRound(passRate, 4)),
 		ff("coverage_pct", pyRound(coveragePct, 2)),
@@ -774,7 +811,7 @@ func computeQualityDrag(
 	retryOverheadHours := rerunRate * float64(pipelinesCount) * medianDur / 3600.0
 	dragHours := failureReworkHours + flakeInvestigationHours + queueWaitHours + retryOverheadHours
 
-	factors := factorsJSON([]factorsJSONField{
+	factors := factorsJSON("testops_quality_drag", []factorsJSONField{
 		fi("failure_count", failureCount),
 		ff("median_duration_seconds", pyRound(medianDur, 2)),
 		fi("pipelines_count", pipelinesCount),
@@ -786,11 +823,11 @@ func computeQualityDrag(
 
 	row := &testopsQualityDragRow{
 		RepoID: repoID, Day: day,
-		DragHours:               pyRound(dragHours, 4),
-		FailureReworkHours:      pyRound(failureReworkHours, 4),
-		FlakeInvestigationHours: pyRound(flakeInvestigationHours, 4),
-		QueueWaitHours:          pyRound(queueWaitHours, 4),
-		RetryOverheadHours:      pyRound(retryOverheadHours, 4),
+		DragHours:               nullablePyRound("testops_quality_drag", "drag_hours", dragHours, 4),
+		FailureReworkHours:      nullablePyRound("testops_quality_drag", "failure_rework_hours", failureReworkHours, 4),
+		FlakeInvestigationHours: nullablePyRound("testops_quality_drag", "flake_investigation_hours", flakeInvestigationHours, 4),
+		QueueWaitHours:          nullablePyRound("testops_quality_drag", "queue_wait_hours", queueWaitHours, 4),
+		RetryOverheadHours:      nullablePyRound("testops_quality_drag", "retry_overhead_hours", retryOverheadHours, 4),
 		FactorsJSON:             factors,
 		ComputedAt:              computedAt,
 	}
@@ -886,8 +923,12 @@ func computePipelineStability(repoID uuid.UUID, day time.Time, dayEntries []test
 		ComputedAt:             computedAt,
 	}
 	if medianRecovery != nil {
-		v := pyRound(*medianRecovery, 2)
-		row.MedianRecoveryTimeSeconds = &v
+		// CHAOS-4806 / ruling R73, codex round chaos-4806-r2 P1: median()
+		// over durations pulled straight from ci_pipeline_runs.
+		// median_duration_seconds (unconstrained Nullable(Float64)) can
+		// itself be non-finite -- this column was ALREADY Nullable, but
+		// nothing validated the computed value before taking its address.
+		row.MedianRecoveryTimeSeconds = nullablePyRound("testops_pipeline_stability", "median_recovery_time_seconds", *medianRecovery, 2)
 	}
 	return row
 }

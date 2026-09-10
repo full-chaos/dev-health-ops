@@ -51,17 +51,29 @@ var benchmarkingSchema = []string{
     avg_queue_seconds Float64, p95_queue_seconds Float64,
     computed_at DateTime('UTC'), org_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day)`,
+	// current_value/baseline_value/percentile_rank/p25-90_value and
+	// maturity_bands.value are Nullable(Float64) since migrations
+	// 090_testops_baselines_nullable_fields.sql and
+	// 092_testops_percentile_rank_nullable_field.sql (CHAOS-4806, ruling
+	// R73) -- a plain Float64 here would refuse the writer's *float64 nil
+	// writes with a real ClickHouse error instead of the production
+	// schema's actual NULL, silently diverging this fixture from what the
+	// migrations (and the writer's own struct types) now require.
+	// maturity_bands.percentile_rank stays required: ClassifyMaturityBands
+	// skips emitting a maturity-band row entirely when the source
+	// baseline's rank is undefined, so every row this table actually
+	// receives carries a real rank.
 	`CREATE TABLE testops_metric_baselines (
     metric_name LowCardinality(String), scope_type LowCardinality(String), scope_key String,
     period_start Date, period_end Date, rolling_window_days UInt16,
-    current_value Float64, baseline_value Float64, percentile_rank Float64,
-    p25_value Float64, p50_value Float64, p75_value Float64, p90_value Float64,
+    current_value Nullable(Float64), baseline_value Nullable(Float64), percentile_rank Nullable(Float64),
+    p25_value Nullable(Float64), p50_value Nullable(Float64), p75_value Nullable(Float64), p90_value Nullable(Float64),
     sample_size UInt32, org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
 ) ENGINE MergeTree PARTITION BY toYYYYMM(period_end)
   ORDER BY (metric_name, scope_type, scope_key, period_end, rolling_window_days)`,
 	`CREATE TABLE testops_maturity_bands (
     metric_name LowCardinality(String), scope_type LowCardinality(String), scope_key String,
-    period_start Date, period_end Date, value Float64, percentile_rank Float64,
+    period_start Date, period_end Date, value Nullable(Float64), percentile_rank Float64,
     maturity_band LowCardinality(String), confidence Float64,
     org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
 ) ENGINE MergeTree PARTITION BY toYYYYMM(period_end)

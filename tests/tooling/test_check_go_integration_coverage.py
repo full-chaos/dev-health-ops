@@ -165,10 +165,14 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # featureFlagEvents port's org-scoping/flagKey-filter/ORDER BY/
     # count-not-limit-bound happy path and the real UNKNOWN_TABLE degraded
     # path, both against a real ClickHouse container). 52 -> 53.
-    # CURRENT TOTAL: 53. Adding one -tags=integration package bumps every
+    # CHAOS-4806 added internal/jobs/metrics/daily/benchmarking's first
+    # //go:build integration file (baselines_nullable_integration_test.go:
+    # a nil *float64 field round-trips as a real ClickHouse NULL against
+    # migration 090's newly-Nullable columns). 53 -> 54.
+    # CURRENT TOTAL: 54. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "53 package(s) discovered, 0 denylisted, 53 will run" in result.stdout
+    assert "54 package(s) discovered, 0 denylisted, 54 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

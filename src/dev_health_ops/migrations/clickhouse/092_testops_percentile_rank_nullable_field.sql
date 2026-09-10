@@ -1,0 +1,22 @@
+-- CHAOS-4806, ruling R73, codex round chaos-4806-r3b P1 (executed repro):
+-- percentile_rank was left required in migrations 090/091 on the stated
+-- reasoning that PercentileRank's own ratio-of-counts formula is always a
+-- bounded, finite 0-100 -- true for a NaN comparison value (every
+-- comparison against NaN is false), but FALSE for a +-Inf comparison
+-- value: every finite candidate genuinely compares less-than +Inf (or
+-- greater-than -Inf), so a scope whose own CurrentValue was correctly
+-- nulled as undefined could still rank at a fully-confident 100
+-- ("leading" maturity, 1.0 confidence) -- a worse defect than a bland
+-- 0.0, because it actively misrepresents undefined data as top-tier.
+-- Widen testops_metric_baselines.percentile_rank so a non-finite (or
+-- no-cohort) rank can be written as a real NULL instead. Only this ONE
+-- column, not testops_maturity_bands.percentile_rank: ClassifyMaturityBands
+-- (baselines.go) skips emitting a MaturityBandRecord row at all when the
+-- source baseline's rank is undefined, so every row that table actually
+-- receives always carries a real, finite rank -- there is no NULL for that
+-- column to ever hold, and widening it would misrepresent the design (see
+-- codex round chaos-4806-r4, P3: an earlier draft of this migration widened
+-- both columns, which disagreed with the PR body and the schema fixture in
+-- benchmarking_integration_test.go, both of which correctly keep
+-- testops_maturity_bands.percentile_rank as plain, required Float64).
+ALTER TABLE testops_metric_baselines MODIFY COLUMN percentile_rank Nullable(Float64);

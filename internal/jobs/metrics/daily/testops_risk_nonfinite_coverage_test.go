@@ -32,6 +32,19 @@ import (
 // Python evaluates (see pyOrZero's own doc comment for the corrected
 // verification). Fixed here alongside pyOrZero itself.
 //
+// CHAOS-4806 / ruling R73 (Trap #116 note): the coveragePct/coverageDelta
+// NaN/+Inf/-Inf JSON expectations below used to be the literal Python
+// json.dumps tokens "NaN"/"Infinity"/"-Infinity" -- byte-for-byte parity
+// with the Python authority's own (spec-violating) allow_nan=True output.
+// That parity is now a baseline_defect (R60), not a target: this test
+// itself was pinning the wire-level defect CHAOS-4806 exists to close, so
+// the expectations changed to "null" (valid JSON) rather than adding a
+// second test alongside the old one. Every finite expectation, and every
+// non-JSON-string assertion (CoverageFactor/ConfidenceScore/
+// RegressionPenalty), is unchanged -- the row, the family, the partition
+// and the window still compute exactly as before; only the ONE non-finite
+// field's JSON literal changed.
+//
 // coveragePct/coverageDelta/medianDur/avgQueue are the ONLY testops_risk
 // inputs that can carry a non-finite value in production (pipeline/test
 // COUNT-based rates are ratios of finite integers, never NaN/Inf; see
@@ -68,12 +81,15 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 		// but for a different reason (this table exists to pin the reason,
 		// not just the number).
 		wantCovFactor float64
-		// wantCoveragePctJSON is Python's round(pct or 0.0, 2) then json.dumps.
+		// wantCoveragePctJSON is round(pct or 0.0, 2) then this file's own
+		// finite-boundary JSON rendering (R73): "null" for a non-finite
+		// value (never Python's own json.dumps "NaN"/"Infinity"/
+		// "-Infinity" tokens), the ordinary rendered literal otherwise.
 		wantCoveragePctJSON string
 	}{
-		{"NaN", math.NaN(), 0.2, "NaN"},
-		{"+Inf", math.Inf(1), 0.2, "Infinity"},
-		{"-Inf", math.Inf(-1), 0.0, "-Infinity"},
+		{"NaN", math.NaN(), 0.2, "null"},
+		{"+Inf", math.Inf(1), 0.2, "null"},
+		{"-Inf", math.Inf(-1), 0.0, "null"},
 		{"-0.0", math.Copysign(0, -1), 0.0, "0.0"}, // `-0.0 or 0.0` == 0.0 in Python (bool(-0.0) is False)
 	}
 
@@ -114,9 +130,9 @@ func TestNonFiniteCoverageClassSweep(t *testing.T) {
 		wantRegressionAdds bool // Python: `if (coverage_delta or 0.0) < -2.0: regression_penalty += 0.05`
 		wantDeltaJSON      string
 	}{
-		{"NaN", math.NaN(), false, "NaN"},            // nan < -2.0 is False in both Go and Python
-		{"+Inf", math.Inf(1), false, "Infinity"},     // +inf < -2.0 is False
-		{"-Inf", math.Inf(-1), true, "-Infinity"},    // -inf < -2.0 is True
+		{"NaN", math.NaN(), false, "null"},           // nan < -2.0 is False in both Go and Python
+		{"+Inf", math.Inf(1), false, "null"},         // +inf < -2.0 is False
+		{"-Inf", math.Inf(-1), true, "null"},         // -inf < -2.0 is True
 		{"-0.0", math.Copysign(0, -1), false, "0.0"}, // normalized to +0.0 before the comparison; 0.0 < -2.0 is False either way
 	}
 
@@ -205,8 +221,11 @@ func TestComputeQualityDragNegativeZeroDurationMatchesPython(t *testing.T) {
 	if row == nil {
 		t.Fatal("computeQualityDrag returned nil")
 	}
-	if math.Signbit(row.FailureReworkHours) {
-		t.Errorf("FailureReworkHours retained a negative sign bit from -0.0 duration: %v", row.FailureReworkHours)
+	if row.FailureReworkHours == nil {
+		t.Fatal("FailureReworkHours is nil, want a finite (non-nil) value -- a -0.0 duration is finite, never undefined")
+	}
+	if math.Signbit(*row.FailureReworkHours) {
+		t.Errorf("FailureReworkHours retained a negative sign bit from -0.0 duration: %v", *row.FailureReworkHours)
 	}
 	for _, want := range []string{`"median_duration_seconds": 0.0`, `"avg_queue_seconds": 0.0`} {
 		if !strings.Contains(row.FactorsJSON, want) {
@@ -215,5 +234,80 @@ func TestComputeQualityDragNegativeZeroDurationMatchesPython(t *testing.T) {
 		if strings.Contains(row.FactorsJSON, strings.Replace(want, "0.0", "-0.0", 1)) {
 			t.Errorf("factors_json retained a negative-zero sign bit Python's `or 0.0` idiom would have normalized away\ngot: %s", row.FactorsJSON)
 		}
+	}
+}
+
+// TestComputeQualityDragNonFiniteDurationNullsNumericFieldsNotRawNaN is the
+// red-first proof for codex round chaos-4806-r2 P1: computeQualityDrag's
+// factorsJSON already went through the finite boundary (CHAOS-4806 PR1),
+// but the ROW'S OWN numeric columns (DragHours, FailureReworkHours,
+// QueueWaitHours, RetryOverheadHours) did not -- a NaN/+-Inf
+// median_duration_seconds or avg_queue_seconds (both unconstrained
+// Nullable(Float64) source columns) reached these plain float64 fields
+// raw. Migration 091 widens the affected columns to Nullable(Float64);
+// this pins the Go-side null-out.
+func TestComputeQualityDragNonFiniteDurationNullsNumericFieldsNotRawNaN(t *testing.T) {
+	repoID := uuid.New()
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	nan := math.NaN()
+
+	pipe := &testops.PipelineMetric{
+		RepoID: repoID, OrgID: "org",
+		MedianDurationSeconds: &nan,
+		AvgQueueSeconds:       &nan,
+		FailureCount:          1,
+		PipelinesCount:        1,
+	}
+	test := &testops.TestMetric{RepoID: repoID, OrgID: "org"}
+
+	row := computeQualityDrag(repoID, day, pipe, test, day)
+	if row == nil {
+		t.Fatal("computeQualityDrag returned nil")
+	}
+	for name, ptr := range map[string]*float64{
+		"DragHours":          row.DragHours,
+		"FailureReworkHours": row.FailureReworkHours,
+		"QueueWaitHours":     row.QueueWaitHours,
+		"RetryOverheadHours": row.RetryOverheadHours,
+	} {
+		if ptr != nil {
+			t.Errorf("%s = %v, want nil (median_duration_seconds/avg_queue_seconds were NaN)", name, *ptr)
+		}
+	}
+	// FlakeInvestigationHours has no dependency on medianDur/avgQueue here
+	// (test is nil-flake-rate), so it stays a real, finite, non-nil zero --
+	// proving the fix is per-field, not a whole-row refusal.
+	if row.FlakeInvestigationHours == nil {
+		t.Error("FlakeInvestigationHours = nil, want a finite value -- its own inputs were never non-finite, this field must still compute")
+	}
+}
+
+// TestComputePipelineStabilityNonFiniteMedianDurationNullsRecoveryTime is
+// the red-first proof for the second half of the same finding:
+// computePipelineStability's median() over durations pulled straight from
+// median_duration_seconds could carry a NaN/+-Inf through to
+// MedianRecoveryTimeSeconds -- a field that was ALREADY *float64
+// (Nullable in the schema) but never validated before taking its address.
+func TestComputePipelineStabilityNonFiniteMedianDurationNullsRecoveryTime(t *testing.T) {
+	repoID := uuid.New()
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	nan := math.NaN()
+
+	entries := []testops.PipelineMetric{
+		{
+			RepoID:                repoID,
+			OrgID:                 "org",
+			MedianDurationSeconds: &nan,
+			FailureCount:          1,
+			SuccessRate:           0.5,
+		},
+	}
+
+	row := computePipelineStability(repoID, day, entries, day)
+	if row == nil {
+		t.Fatal("computePipelineStability returned nil")
+	}
+	if row.MedianRecoveryTimeSeconds != nil {
+		t.Errorf("MedianRecoveryTimeSeconds = %v, want nil (median_duration_seconds was NaN)", *row.MedianRecoveryTimeSeconds)
 	}
 }

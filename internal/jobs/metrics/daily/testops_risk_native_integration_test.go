@@ -93,9 +93,15 @@ func TestTestopsRiskExecutorComputeFamilyWritesAllThreeTablesAgainstRealClickHou
     factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
     org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
 ) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
+		// drag_hours/failure_rework_hours/flake_investigation_hours/
+		// queue_wait_hours/retry_overhead_hours are Nullable(Float64) since
+		// migration 091_testops_quality_drag_nullable_fields.sql (CHAOS-4806,
+		// ruling R73) -- a plain Float64 here would refuse the writer's
+		// *float64 nil writes with a real ClickHouse error instead of the
+		// production schema's actual NULL.
 		`CREATE TABLE testops_quality_drag (
-    repo_id UUID, day Date, drag_hours Float64, failure_rework_hours Float64,
-    flake_investigation_hours Float64, queue_wait_hours Float64, retry_overhead_hours Float64,
+    repo_id UUID, day Date, drag_hours Nullable(Float64), failure_rework_hours Nullable(Float64),
+    flake_investigation_hours Nullable(Float64), queue_wait_hours Nullable(Float64), retry_overhead_hours Nullable(Float64),
     factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
     org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
 ) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
@@ -342,9 +348,15 @@ func TestTestopsRiskExecutorComputeFamilyReportsPartialWriteAtTheCallSite(t *tes
     factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
     org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
 ) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
+		// drag_hours/failure_rework_hours/flake_investigation_hours/
+		// queue_wait_hours/retry_overhead_hours are Nullable(Float64) since
+		// migration 091_testops_quality_drag_nullable_fields.sql (CHAOS-4806,
+		// ruling R73) -- a plain Float64 here would refuse the writer's
+		// *float64 nil writes with a real ClickHouse error instead of the
+		// production schema's actual NULL.
 		`CREATE TABLE testops_quality_drag (
-    repo_id UUID, day Date, drag_hours Float64, failure_rework_hours Float64,
-    flake_investigation_hours Float64, queue_wait_hours Float64, retry_overhead_hours Float64,
+    repo_id UUID, day Date, drag_hours Nullable(Float64), failure_rework_hours Nullable(Float64),
+    flake_investigation_hours Nullable(Float64), queue_wait_hours Nullable(Float64), retry_overhead_hours Nullable(Float64),
     factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
     org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
 ) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,

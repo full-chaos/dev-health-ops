@@ -195,6 +195,13 @@ internal/jobs/investment/categorize	15
 internal/jobs/investment/chquery	122
 internal/jobs/investment/chwrite	130
 internal/jobs/metrics/daily	6
+# internal/jobs/metrics/daily/benchmarking (CHAOS-4806): first
+# -tags=integration file in this package,
+# TestWriteBaselinesNullFieldsRoundTripAsRealClickHouseNull, one
+# Testcontainers-backed ClickHouse test. 20s is ceil() of a local
+# -count=1 run (17.949s) plus margin, same shape as this file's other
+# single-container-per-test packages. Re-time if the package gains tests.
+internal/jobs/metrics/daily/benchmarking	20
 internal/jobs/metrics/daily/icfinalize	51
 internal/jobs/metrics/remaining	6
 internal/jobs/operational	55

@@ -170,7 +170,10 @@ def test_missing_postgres_test_uri_fails_in_ci(
     "module_name",
     (
         "tests.test_dispatch_outbox",
-        "tests.test_sync_reconciler",
+        # tests.test_sync_reconciler was deleted outright under CHAOS-3093
+        # (PR2a') with its sole source, workers/sync_reconciler.py; no other
+        # surviving test module needs to stand in for it here, the remaining
+        # three still prove the invariant.
         "tests.test_sync_planner",
         "tests.test_service_credentials_cli",
     ),

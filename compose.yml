@@ -808,9 +808,24 @@ services:
       # /api/v1/billing/webhooks/stripe and /health. A /ready probe here
       # always 404s via the app's catch-all handler regardless of actual
       # readiness, so this healthcheck was permanently unhealthy by
-      # construction. /health (200 postgres+secrets ok, 503 otherwise) is
-      # this app's real readiness surface -- use it.
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/health" ]
+      # construction. Retargeted to /health.
+      # R109/chris (verbatim: "Stripe secrets are there.... but also
+      # might not work because the port isn't open. Which is the real
+      # reason"): on the real deployed stack the three Stripe/license
+      # secrets ARE configured, so /health's overall status ("ok"/"down")
+      # does not depend on Stripe's own outbound reachability --
+      # `stripe_client` is reported separately in the JSON body and is
+      # NOT part of the ok/down decision (billing_edge.py's own
+      # `required_ok` never reads it). What DOES vary with outbound
+      # egress is a LOCAL DEV concern (this repo's own bare bring-up
+      # supplies no secrets at all, so /health legitimately 503s until an
+      # operator supplies them -- see TEST-EVIDENCE) -- a liveness check,
+      # not a readiness one, is what this compose file should assert:
+      # "is the process answering on :8000 at all", never "did every
+      # downstream dependency succeed". wget's exit 4 means the TCP
+      # connect itself failed (process down / port closed); any other
+      # exit (0 success, 8 a non-2xx HTTP status) means it answered.
+      test: [ "CMD-SHELL", "wget -q -O /dev/null http://localhost:8000/health; test $? -ne 4" ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -952,13 +967,15 @@ services:
     # default. This service's own comment above says it needs "the Ops
     # runtime image... not a bare postgres client image" -- that is exactly
     # what `worker`'s own build block below produces locally; build it the
-    # same way instead of assuming a registry pull. codex review (JOB 6
-    # re-render, P1): no `image:` here means `pull_policy` is moot for the
-    # pull-vs-build choice, but compose still reuses a previously built
-    # local image tagged under this service's own generated name without
-    # rebuilding by default -- `pull_policy: build` forces a fresh build of
-    # this tree every time, same hardening as the Go worker fleet below.
-    pull_policy: build
+    # same way instead of assuming a registry pull.
+    # R111 (chris, reversing the JOB 6 `pull_policy: build` hardening
+    # below): this root file is a STAGING file that honours an image pin
+    # by default -- `pull_policy` is left at compose's own default
+    # (`missing`: reuse an already-built/pulled local tag if one exists,
+    # else build) rather than forcing a rebuild every run. The CHAOS-5437
+    # cross-tree lockstep this used to guard against is now closed by
+    # pinning every image to the ONE sha JOB 6's prebuild produces
+    # (`job6-prebuild/*:<sha>`), not by forcing a build here.
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -1010,10 +1027,9 @@ services:
   # independently check that the resulting schema is current. Neither DSN
   # nor this binary is exposed to a long-running Go service.
   go-river-migrate:
-    # codex review (JOB 6 re-render, P1): same `pull_policy: build` hardening
-    # as go-river-provision above -- force a fresh build of this tree
-    # rather than reusing a previously built local image tag.
-    pull_policy: build
+    # R111 (chris): same reversal as go-river-provision above -- default
+    # `pull_policy` (reuse a cached local build if one exists), lockstep
+    # closed by JOB 6's single-sha pin, not by forcing a rebuild here.
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -1247,37 +1263,25 @@ services:
         condition: service_healthy
 
   go-worker-heavy: &go-worker
-    # codex review (r3 -- team-lead): a bare `docker compose up` built
-    # go-river-provision/migrate locally but PULLED this image, so migrate
-    # and the worker fleet could come from different trees and
-    # CHAOS-5437's posture-manifest digest lockstep refuses readiness by
-    # design, deterministically, on every from-scratch bring-up -- proven
-    # by the readyz proof in TEST-EVIDENCE. `build:` makes this file build
-    # the same tree's image by default, same as every other Go service
-    # here; `image:` stays so `DEV_HEALTH_GO_WORKER_IMAGE` can still pin an
-    # already-published tag instead. codex review (JOB 6 re-render, P1):
-    # `pull_policy` defaults to `missing` -- with NO override, a bare `up`
-    # (no `--build`) prefers an already-present local image tagged
-    # `ghcr.io/full-chaos/dev-health-go-worker:latest` over building this
-    # tree, reintroducing the exact cross-tree lockstep refusal the
-    # `build:` block above exists to prevent, on any host that ever pulled
-    # that tag (e.g. an earlier proof run on this one). `pull_policy: build`
-    # (the bigboy overlay's own convention) forces the tree's build every
-    # time; `DEV_HEALTH_GO_WORKER_IMAGE` still names what gets tagged.
-    # r5 P1 (executed repro): `pull_policy: build` unconditionally REJECTS
-    # a digest-shaped `DEV_HEALTH_GO_WORKER_IMAGE` override -- Compose must
-    # assign `image:` as the BUILD OUTPUT's tag under `build:`, and a
-    # digest (content-addressed, computed FROM a build, never assignable
-    # TO one) can never be a legal build tag ("build tag cannot contain a
-    # digest", confirmed for all four `*_IMAGE` families). Pinning an
-    # EXACT already-published image (by tag or digest) is a different
-    # intent than "build this tree" and needs pull skipped, not forced --
-    # `DEV_HEALTH_GO_WORKER_PULL_POLICY` (default unchanged, `build`) lets
-    # an operator opt out per family: set it to `missing`/`always` alongside
-    # a digest-pinned `DEV_HEALTH_GO_WORKER_IMAGE` to use that exact image
-    # with no local build at all.
+    # codex review (r3 -- team-lead): `build:` lets this file build the
+    # same tree's image locally when asked (`docker compose build`/
+    # `up --build`); `image:` stays so `DEV_HEALTH_GO_WORKER_IMAGE` can
+    # pin an already-published tag OR DIGEST instead.
+    # R108/R111 (chris, reversing the JOB 6 `pull_policy: build`
+    # hardening this anchor carried through round 6): "you just changed
+    # it to pinned images. So you made that call already" -- this root
+    # file is a STAGING file that honours an `*_IMAGE` pin BY DEFAULT.
+    # `pull_policy` is left at compose's own default (`missing`): a
+    # digest or tag named here is pulled/reused as-is, never rejected for
+    # "cannot contain a digest" (that rejection, r5's P1, was `pull_policy:
+    # build` unconditionally forcing this image's OWN name to double as a
+    # build output tag -- gone now that nothing forces a build). The
+    # CHAOS-5437 cross-tree posture-manifest lockstep this used to guard
+    # against is now closed by pinning EVERY image to the ONE sha JOB 6's
+    # prebuild produces (`job6-prebuild/*:<sha>`), never by forcing a
+    # build on every bring-up. `docker compose build`/`up --build` still
+    # builds this tree on request via the `build:` block below.
     image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
-    pull_policy: ${DEV_HEALTH_GO_WORKER_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1447,10 +1451,7 @@ services:
   go-reconciler:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
-    # r5 P1: own pull-policy override, same reasoning as go-worker-heavy's
-    # DEV_HEALTH_GO_WORKER_PULL_POLICY -- this service names a different
-    # `*_IMAGE` family and needs its own opt-out for a digest pin.
-    pull_policy: ${DEV_HEALTH_GO_RECONCILER_PULL_POLICY:-build}
+    # R111: default pull_policy, see go-worker-heavy's comment above.
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1520,8 +1521,7 @@ services:
   go-scheduler:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:latest}
-    # r5 P1: own pull-policy override, see go-worker-heavy's comment.
-    pull_policy: ${DEV_HEALTH_GO_SCHEDULER_PULL_POLICY:-build}
+    # R111: default pull_policy, see go-worker-heavy's comment above.
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1559,9 +1559,7 @@ services:
   go-stream-external:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
-    # r5 P1: own pull-policy override, see go-worker-heavy's comment.
-    # Shared by all three go-stream-* services (same `*_IMAGE` family).
-    pull_policy: ${DEV_HEALTH_GO_STREAM_RUNNER_PULL_POLICY:-build}
+    # R111: default pull_policy, see go-worker-heavy's comment above.
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1603,7 +1601,6 @@ services:
   go-stream-ingest:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
-    pull_policy: ${DEV_HEALTH_GO_STREAM_RUNNER_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1648,7 +1645,6 @@ services:
   go-stream-pagerduty:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
-    pull_policy: ${DEV_HEALTH_GO_STREAM_RUNNER_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile

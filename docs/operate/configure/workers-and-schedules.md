@@ -112,6 +112,45 @@ prove that no duplicate or missing domain effect occurs; it no longer needs
 to preserve a Celery rollback path, because there is no live Celery consumer
 left to roll back to.
 
+### Pinning a published image in the root file
+
+Root `compose.yml` is a **staging file**: each of the nine Go processes
+(plus `go-river-provision`/`go-river-migrate`) declares both `image:`
+(`DEV_HEALTH_GO_WORKER_IMAGE` and its `_RECONCILER_`/`_SCHEDULER_`/
+`_STREAM_RUNNER_` siblings) and a local `build:` block. `pull_policy` is
+left at Compose's own default (`missing`), so an operator pin -- a
+published tag OR a content digest -- is honoured as given: `docker
+compose up` reuses an already-present local image under that name, or
+pulls it, without ever forcing a rebuild. `docker compose build` /
+`up --build` still build every image from this tree on request, same as
+before. A bare `up` on a host that has neither pulled nor built any of
+these tags yet builds them locally (the `build:` block is the only source
+available), which is what a from-scratch clone actually gets.
+
+This default was `pull_policy: build` (forced rebuild every time) for one
+PR revision, to guard the CHAOS-5437 cross-tree posture-manifest lockstep
+(migrate and the worker fleet must come from the same tree or the worker
+refuses readiness by design) -- reverted because forcing a build made a
+digest pin unusable (`build tag cannot contain a digest`) and duplicated
+what a deployment-wide single-sha pin already guarantees. Lockstep safety
+now comes from pinning every one of these images to the SAME sha (as
+JOB 6's `job6-prebuild/*:<sha>` images do), not from forcing a build on
+every bring-up.
+
+### billing-edge: Stripe webhook forwarding in local dev
+
+`billing-edge` (root `compose.yml`, port `8010`) needs three secrets to
+report healthy readiness in its own `/health` payload:
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `LICENSE_PRIVATE_KEY`. On
+the real deployed stack these are configured, and `/health`'s overall
+`ok`/`down` status does not depend on Stripe's own outbound reachability
+(a blocked egress path shows up as `stripe_client: "down"` in the JSON
+body without flipping the container's compose healthcheck, which is a
+liveness probe on `:8000`, not a readiness one). In local dev, webhook
+delivery uses the Stripe CLI's own forwarder beside the stack: `stripe
+listen --forward-to http://localhost:8010/api/v1/billing/webhooks/stripe`
+(run from a host shell, not part of this repo).
+
 ## Known divergences: local vs prod worker topology
 
 Recorded under the standing order that local/prod divergence is itself a

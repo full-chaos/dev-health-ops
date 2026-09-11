@@ -1578,6 +1578,36 @@ def test_go_workers_run_at_one_replica_by_default() -> None:
         )
 
 
+def test_go_worker_family_has_no_pull_policy_override() -> None:
+    """R108/R111 (chris, verbatim: "Well you just changed it to pinned
+    images. So you made that call already."): the root file honours an
+    `*_IMAGE` pin (tag OR digest) by default. `pull_policy: build`
+    (round 6's own hardening, and its `*_PULL_POLICY` opt-out from round
+    6's fix) is REMOVED -- forcing a build on every bring-up is exactly
+    what made a digest pin unusable (`build tag cannot contain a digest`,
+    r5's P1) in the first place. Every one of the nine long-running
+    processes plus the two one-shot Postgres jobs must be left at
+    Compose's own default (`missing`); the CHAOS-5437 cross-tree lockstep
+    this used to guard against is closed by pinning every image to ONE
+    sha (JOB 6's prebuild), not by forcing a build here.
+
+    Executed (see TEST-EVIDENCE): a digest-shaped `DEV_HEALTH_GO_WORKER_
+    IMAGE` now renders and is pulled/reused as given; `docker compose
+    build`/`up --build` still builds this tree on request via the
+    `build:` block each of these services keeps.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    for service_name in list(_SPLIT_COMPOSE_SERVICE_BY_PROCESS.values()) + [
+        "go-river-provision",
+        "go-river-migrate",
+    ]:
+        assert "pull_policy" not in services[service_name], (
+            f"{service_name} must not override pull_policy -- Compose's own "
+            "default ('missing') is what lets an *_IMAGE pin (tag or "
+            "digest) actually be used instead of forcing a rebuild"
+        )
+
+
 def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
     """codex review (r2, P1/fixed): go-river-provision and go-river-migrate
     defaulted their Postgres connection to devhealth/devhealth, inherited
@@ -1748,6 +1778,52 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
             in environment["COORDINATOR_DATABASE_URI"]
         )
         assert environment["COORDINATOR_DATABASE_MODE"] == "session"
+
+
+def test_billing_edge_healthcheck_is_liveness_not_readiness() -> None:
+    """R109 (chris, verbatim: "Stripe secrets are there.... but also might
+    not work because the port isn't open. Which is the real reason."): on
+    the real deployed stack the three Stripe/license secrets ARE
+    configured, so /health's ok/down decision (billing_edge.py's
+    `required_ok`) never reads `stripe_client` -- an operator whose
+    outbound egress to Stripe is blocked still gets /health 200. The only
+    way to see /health 503 in practice is a genuinely unconfigured
+    deployment (this repo's own bare bring-up, by design -- see
+    TEST-EVIDENCE). A healthcheck built on that route must therefore
+    assert LIVENESS (the process answers on :8000 at all), never
+    readiness (every downstream dependency succeeded) -- reusing api/
+    metrics-api's exit-on-non-2xx `wget --spider` form here would make
+    the container flip unhealthy the moment ANY one of the three optional
+    Stripe/license secrets goes missing, none of which billing-edge's own
+    depends_on chain requires for the rest of the default bring-up to
+    succeed.
+
+    Mutation coverage (manually verified): reverting to `["CMD", "wget",
+    "--spider", "-q", "http://localhost:8000/health"]` survives every
+    OTHER test in this file (nothing else asserts this array), which is
+    exactly how the pre-r109 shape shipped unnoticed -- pinned here
+    directly.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    healthcheck = services["billing-edge"]["healthcheck"]
+    test = healthcheck["test"]
+    assert test[:1] == ["CMD-SHELL"], (
+        "billing-edge's healthcheck must be a shell form so it can ignore "
+        "the HTTP status code and only fail on a genuine connect failure "
+        f"(exit 4) -- got {test!r}"
+    )
+    command = test[1]
+    assert "wget" in command and "http://localhost:8000/health" in command, (
+        f"billing-edge's healthcheck must still target its own /health route: {command!r}"
+    )
+    assert "--spider" not in command, (
+        "wget --spider fails closed on any non-2xx status (exit 8) -- that "
+        "makes this a readiness check again, the exact class this test guards"
+    )
+    assert re.search(r"-ne\s+4", command) or re.search(r"!=\s*4", command), (
+        f"expected the command to explicitly tolerate every wget exit code "
+        f"except 4 (connection failure): {command!r}"
+    )
 
 
 def test_go_reconciler_declares_a_readyz_healthcheck() -> None:

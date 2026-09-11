@@ -398,6 +398,52 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 	}
 }
 
+// TestObservableDatabaseNameNeverLeaksParsingArtifacts is round 5's
+// (2026-09-11) findings #1 and #3, reproduced then fixed: (1) a malformed
+// pre-built URI can still "successfully" parse with net/url attributing
+// authority-shaped content to Path -- proven with a concrete input that
+// round-trips byte-for-byte yet is not a real database name; (2)
+// PostgreSQL's own `dbname` query parameter overrides the URL path for
+// which database a connection actually reaches, so Path-only extraction
+// can name a different database than the one really connected to.
+func TestObservableDatabaseNameNeverLeaksParsingArtifacts(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		raw  string
+		want string
+	}{
+		"well-formed URI -- path is the name": {
+			raw: "postgresql://app:app@db.internal:5432/appdb", want: "appdb",
+		},
+		"dbname query param overrides the path -- the real connection target": {
+			raw: "postgresql://app:app@db.internal:5432/postgres?dbname=review", want: "review",
+		},
+		"ambiguous parse that round-trips true is still refused": {
+			// net/url parses this as host="word", path="/extra@host:5432/realdb"
+			// -- a second unescaped '@' the parser treats as another host
+			// boundary -- and String() reproduces the exact input, so the
+			// round-trip check alone does not catch it; the character
+			// denylist does.
+			raw: "postgresql://user:pass@word/extra@host:5432/realdb", want: "",
+		},
+		"unescaped userinfo delimiter fails to round-trip -- refused": {
+			raw: "postgresql://user:pa@ss@host:5432/realdb", want: "",
+		},
+		"malformed URI that fails to parse at all -- refused": {
+			raw: "postgresql://user:sec/ret@host:5432/realdb", want: "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := ObservableDatabaseName(tc.raw)
+			if got != tc.want {
+				t.Fatalf("ObservableDatabaseName(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestQueueControlAndRetentionDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -1032,6 +1078,19 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 		{
 			name: "port with leading whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_PORT"] = " 5432" },
+		},
+		// Round-5 (2026-09-11) finding: envOrDefault's own presence check
+		// trimmed for emptiness, so a whitespace-only PORT/DB was treated
+		// as absent and silently fell to the default -- NEVER reaching the
+		// whitespace-refusal guard above at all. rawOrDefault fixes this;
+		// these cells pin it.
+		{
+			name: "port whitespace-only -- explicitly refused, not silently defaulted", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_PORT"] = "   " },
+		},
+		{
+			name: "db name whitespace-only -- explicitly refused, not silently defaulted", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "   " },
 		},
 		{
 			name: "user with trailing whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,

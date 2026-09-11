@@ -439,20 +439,25 @@ func Load(spec Spec) (Config, error) {
 		}
 		// CHAOS-5560 round 4: which FORM won is exactly what hostSet decided
 		// inside ResolveDSN -- recomputed here the same way (a set, non-empty
-		// HostKey), never guessed from the assembled DSN's shape. Name is the
-		// identifier segment only (the assembled URI's path, leading "/"
-		// trimmed); a parse failure here is unreachable in practice (the
-		// value only ever comes from ResolveDSN, which already round-trips
-		// it through url.Parse before returning), so it degrades to "" rather
-		// than failing Load() over an observability field.
+		// HostKey), never guessed from the assembled DSN's shape.
+		//
+		// Round 5 finding: naively taking the assembled DSN's URL path as
+		// the Name was unsafe for the pre-built-URI form specifically -- a
+		// malformed, unescaped URI can still "successfully" parse with
+		// password characters misattributed into Path by net/url itself,
+		// which this then would have echoed straight into the Info log.
+		// ObservableDatabaseName below refuses to trust ANY field of a
+		// parse that does not round-trip byte-for-byte back to the exact
+		// DSN it came from -- the same signal ResolveDSNFromComponents's
+		// own host/port round-trip check already relies on -- and prefers
+		// PostgreSQL's `dbname` query parameter when present, since that
+		// (not the path) is the database a real client actually reaches.
 		if host, present := lookup(binding.spec.HostKey); present && host != "" {
 			*binding.formTarget = "components"
 		} else {
 			*binding.formTarget = "uri"
 		}
-		if parsed, parseErr := url.Parse(value.Reveal()); parseErr == nil {
-			*binding.nameTarget = strings.TrimPrefix(parsed.Path, "/")
-		}
+		*binding.nameTarget = ObservableDatabaseName(value.Reveal())
 	}
 	cfg.OperationalBridgeURL = envOrDefault(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_URL", "",
@@ -816,6 +821,68 @@ func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
 	return fallback
 }
 
+// ObservableDatabaseName extracts the database identifier safe to publish
+// at Info from an already-resolved DSN string -- never a credential.
+// Exported so cmd/dev-health-worker-migrate's own Info-resolution record
+// (round 5's finding #5) applies the exact same safety rule to
+// MIGRATION_DATABASE_URI, rather than a second, independently-drifting
+// implementation.
+//
+// Round-5 (2026-09-11) findings: (1) a malformed pre-built URI with an
+// unescaped reserved character in its password can still parse
+// "successfully", with net/url itself misattributing part of the password
+// into Path or elsewhere -- a naive "just take Path" extraction then
+// echoed that leaked material into the (supposedly safe) Info log; (2)
+// PostgreSQL's own `dbname` query parameter, when present, overrides the
+// URL path for which database a real client actually reaches, so
+// Path-only extraction can name a DIFFERENT database than the one really
+// connected to. Both are addressed here: a parse that does not round-trip
+// byte-for-byte back to the exact input string is never trusted for
+// anything (the same signal ResolveDSNFromComponents's own host/port
+// check already relies on) and yields ""; `dbname` is preferred over Path
+// when both are present, matching real connection-string precedence.
+func ObservableDatabaseName(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.String() != raw {
+		return ""
+	}
+	name := parsed.Query().Get("dbname")
+	if name == "" {
+		name = strings.TrimPrefix(parsed.Path, "/")
+	}
+	// Defense in depth beyond the round-trip check above: even a
+	// self-consistent parse can attribute authority-shaped content to
+	// Path when a URI contains an unescaped '@' that net/url treats as a
+	// SECOND host boundary -- proven: net/url parses
+	// "postgresql://user:pass@word/extra@host:5432/realdb" as
+	// host="word", path="/extra@host:5432/realdb", and that round-trips
+	// true (nothing in that interpretation needed escaping, so the check
+	// above alone does not catch it). A real database name never contains
+	// '@', ':', '/', '#', or '?' -- refuse to publish anything that does
+	// rather than risk it being a parsing artifact instead of a name.
+	if strings.ContainsAny(name, "@:/#?") {
+		return ""
+	}
+	return name
+}
+
+// rawOrDefault is envOrDefault's UNTRIMMED counterpart: presence is a raw,
+// non-empty check, never TrimSpace-based. Round-5 (2026-09-11) finding:
+// ResolveDSNFromComponents used envOrDefault for PortKey/DBKey, whose
+// trimmed presence check silently treated a whitespace-only value as
+// absent and substituted the default -- BEFORE the component's own
+// explicit whitespace-refusal guard ever saw it. Every other setting
+// envOrDefault serves (HTTP address, role names, schema, ...) keeps its
+// existing "whitespace means unset" convention unchanged; only the two
+// identifiers this ticket's own whitespace guard is responsible for use
+// this stricter counterpart.
+func rawOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
+	if value, ok := lookup(key); ok && value != "" {
+		return value
+	}
+	return fallback
+}
+
 func durationEnv(
 	lookup secrets.LookupEnv,
 	key string,
@@ -1172,14 +1239,21 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if strings.TrimSpace(host) != host {
 		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.HostKey)
 	}
-	port := envOrDefault(lookup, spec.PortKey, spec.DefaultPort)
+	// Round-5 (2026-09-11) finding: envOrDefault's OWN presence check trims
+	// before testing for emptiness (a whitespace-only value is treated as
+	// absent, so the DEFAULT is substituted) -- a whitespace-only PORT/DB
+	// never reached the explicit whitespace refusal below at all, silently
+	// falling back to the default instead of being refused. rawOrDefault
+	// below is envOrDefault's exact untrimmed counterpart, matching how
+	// HostKey is already handled two lines up.
+	port := rawOrDefault(lookup, spec.PortKey, spec.DefaultPort)
 	if port == "" {
 		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.PortKey)
 	}
 	if strings.TrimSpace(port) != port {
 		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.PortKey)
 	}
-	db := envOrDefault(lookup, spec.DBKey, spec.DefaultDB)
+	db := rawOrDefault(lookup, spec.DBKey, spec.DefaultDB)
 	if db == "" {
 		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.DBKey)
 	}

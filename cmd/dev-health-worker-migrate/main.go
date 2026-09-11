@@ -85,6 +85,24 @@ func execute(
 	if !ok {
 		return 1
 	}
+	// CHAOS-5560 round 5 finding #5: successful resolution returned with no
+	// observable record of which form (uri|components) or database it
+	// reached -- a silent regression there (a wrong, but reachable,
+	// database) would have been invisible even after this ticket's other
+	// fixes. Form presence-checks DEV_HEALTH_MIGRATION_PG_HOST the same
+	// way resolveMigrationDatabaseURI/config.ResolveDSN's own hostSet
+	// check does; the database name reuses config.ObservableDatabaseName
+	// so a malformed MIGRATION_DATABASE_URI can never leak into this log
+	// line either -- one shared safety rule, not a second implementation.
+	resolutionForm := "uri"
+	if host, present := lookup("DEV_HEALTH_MIGRATION_PG_HOST"); present && host != "" {
+		resolutionForm = "components"
+	}
+	slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo})).InfoContext(
+		parent, "migration database resolved",
+		"form", resolutionForm,
+		"database", config.ObservableDatabaseName(migrationURI.Reveal()),
+	)
 	migrationRole, err := postgresstore.ConnectionUser(migrationURI.Reveal())
 	if err != nil {
 		fmt.Fprintln(stderr, "configuration error: invalid MIGRATION_DATABASE_URI")

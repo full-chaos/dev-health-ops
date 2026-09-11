@@ -231,6 +231,34 @@ func TestExecuteRequiresThreeSeparatedRolesBeforeConnecting(t *testing.T) {
 	}
 }
 
+// TestExecuteEmitsAnInfoRecordOfTheResolvedForm is round 5's (2026-09-11)
+// finding #5, reproduced then fixed: a successful resolution returned with
+// no observable record of which form (uri|components) or database it
+// reached, at all. The DSN itself (and its credentials) must never appear
+// in that record.
+func TestExecuteEmitsAnInfoRecordOfTheResolvedForm(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	status := execute(context.Background(), []string{"--check"}, env(map[string]string{
+		"MIGRATION_DATABASE_URI":     "postgresql://migration:s3cr3t@unreachable.invalid:5432/migrationdb",
+		"RIVER_DOMAIN_DATABASE_ROLE": "domain",
+		"RIVER_QUEUE_DATABASE_ROLE":  "queue",
+	}), &stdout, &stderr)
+	if status != 1 {
+		t.Fatalf("execute() = %d, want 1 (unreachable database)", status)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, `"msg":"migration database resolved"`) ||
+		!strings.Contains(out, `"form":"uri"`) ||
+		!strings.Contains(out, `"database":"migrationdb"`) {
+		t.Fatalf("expected the resolution Info record, got: %s", out)
+	}
+	if strings.Contains(out, "s3cr3t") || strings.Contains(out, "postgresql://") {
+		t.Fatalf("the resolution Info record leaked the DSN or a credential: %s", out)
+	}
+}
+
 // TestResolveMigrationDatabaseURIComponentForm pins CHAOS-5560's fix at this
 // binary's own entry point: compose.yml's entrypoint falls back to a raw
 // shell-interpolated postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB

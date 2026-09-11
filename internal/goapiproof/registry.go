@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 )
 
 // ErrNoBuildIdentity reports that the running query-api did not tell us
@@ -269,6 +270,17 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		return RegistryView{}, fmt.Errorf("goapiproof: read registry body: %w", err)
+	}
+	// Sibling of the catalog-file fix (routing_catalog.go's UTF-8 gate,
+	// r2 P1): `go_api_cli.py` reads THIS SAME `/registry` endpoint, and
+	// any Python HTTP client decodes response bytes as UTF-8 before
+	// `json.loads` ever runs -- invalid UTF-8 anywhere in the body fails
+	// there. encoding/json has no such requirement, so without this check
+	// a malformed or tampered registry response one byte away from being
+	// unreadable to the Python verb would still parse here, and this
+	// binary would go on to write a row from it.
+	if !utf8.Valid(body) {
+		return RegistryView{}, fmt.Errorf("goapiproof: %s response is not valid UTF-8 -- the Python verb's HTTP client decodes response bytes as UTF-8 before parsing and would refuse the whole body on one bad byte anywhere in it", EndpointLabel(registryURL))
 	}
 
 	var parsed registryBody

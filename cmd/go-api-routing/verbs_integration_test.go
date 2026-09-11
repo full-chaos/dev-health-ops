@@ -411,6 +411,58 @@ func TestEnableWarnsOnEveryUnprovenRowAcrossMultipleOperations(t *testing.T) {
 	}
 }
 
+// Pairwise-knob sweep (23:4xZ amendment): enable's -expect-build cross-check
+// (TestEnableExpectBuildCrossCheckRefusesAMismatch above) had an end-to-end
+// killer; repoint's OWN -expect-build -- the same knob, same contract,
+// checked by a different validate() -- did not: only a unit-level test
+// exercised RepointRequest.validate() directly, never runRepoint's real
+// flag parse + real /buildinfo fetch + real dispatch. Same class M22 fixed
+// for enable, found here by asking "which OTHER verb has this knob".
+func TestRepointExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "9999999999999999999999999999999999999999999999999999999999999999"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	// repoint refuses on an empty registry (ErrRepointNoRows), so seed one
+	// row first -- enable is the fixture's own way to do that.
+	if _, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...); err != nil {
+		t.Fatalf("seeding enable: %v", err)
+	}
+
+	_, _, err := captureVerb(t,
+		"repoint",
+		"-registry-url", server.URL+"/registry",
+		"-buildinfo-url", server.URL+"/buildinfo",
+		"-postgres-uri", dsn,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "repoint -expect-build killer",
+		"-expect-build", "0000000000000000000000000000000000000000",
+	)
+	if err == nil {
+		t.Fatal("repoint wrote/reported while -expect-build did not match the running build")
+	}
+	if !strings.Contains(err.Error(), "does not match the running build") {
+		t.Fatalf("refused for a different reason, so the -expect-build cross-check is not what stopped it: %v", err)
+	}
+
+	// A MATCHING value must not be refused.
+	_, _, err = captureVerb(t,
+		"repoint",
+		"-registry-url", server.URL+"/registry",
+		"-buildinfo-url", server.URL+"/buildinfo",
+		"-postgres-uri", dsn,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "repoint -expect-build killer",
+		"-expect-build", verbTestBuild,
+		"-dry-run",
+	)
+	if err != nil {
+		t.Fatalf("a MATCHING -expect-build must not be refused: %v", err)
+	}
+}
+
 func assertNoRows(t *testing.T, dsn string) {
 	t.Helper()
 	var count int

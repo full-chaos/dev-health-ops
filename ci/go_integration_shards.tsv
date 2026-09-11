@@ -170,17 +170,21 @@ cmd/dev-health-workerctl	13
 # suppressed, and an ORDER BY tiebreak dropped -- all survived the whole
 # suite at 53.2% command coverage, because nothing ever ran a verb end to
 # end. Two of the four need a real database to kill.
-# SEVEN Testcontainers-backed tests as of r2's fix round (up from two):
+# NINE Testcontainers-backed tests as of r2's fix round (up from two):
 # each takes a fresh Postgres container so the real FK and the mode CHECK
-# are exercised against a clean database. r2 added five -- a held-lock
+# are exercised against a clean database. r2 added seven -- a held-lock
 # `status` deadline test, the two preflight-3 halves (not-registered,
-# digest-divergent), the -expect-build cross-check, and a two-operation
-# unproven-warning test -- closing five mutants (M20-M23, M80) that the
-# original two tests' single-operation, no-concurrency shape could not
-# reach. MEASURED on bigboy 2026-09-10, whole package, -count=1: 23.129s.
-# Rounded up to 25 for CI headroom, the same treatment the other
-# per-test-container packages in this file get. Re-time if it gains tests.
-cmd/go-api-routing	25
+# digest-divergent), enable's -expect-build cross-check, a two-operation
+# unproven-warning test, a UTF-8 sibling-sweep unit test (no container),
+# and repoint's OWN -expect-build cross-check (the pairwise-knob sweep's
+# own finding: enable's had an end-to-end killer, repoint's did not) --
+# closing six mutants (M20-M23, M80) plus the repoint expect-build gap
+# that the original two tests' single-operation, no-concurrency shape
+# could not reach. MEASURED on bigboy 2026-09-10, whole package,
+# -count=1, twice: 38.673s and 35.637s. Rounded up to 45 for CI headroom,
+# the same treatment the other per-test-container packages in this file
+# get. Re-time if it gains tests.
+cmd/go-api-routing	45
 cmd/query-api	110
 cmd/query-api/internal/analytics	22
 # cmd/query-api/internal/featureflags (CHAOS-5523, 2026-09-09): TWO

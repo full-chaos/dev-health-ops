@@ -182,6 +182,20 @@ func TestFetchRegistryRefusesAnEmptyRegistration(t *testing.T) {
 // (`GoPlaneUnavailable ... lists operation 'X' more than once`); this
 // must too, and it must refuse regardless of which duplicate would have
 // "won" the old collapse.
+// Sibling of the catalog-file UTF-8 fix: the SAME /registry endpoint is
+// read by go_api_cli.py, whose HTTP client decodes the response as UTF-8
+// before json.loads ever runs. A byte Go's json.Unmarshal tolerates but
+// Python's client cannot decode must refuse here too.
+func TestFetchRegistryRefusesInvalidUTF8(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("{\"schema_digest\":\"sha256:abc\",\"operations\":[{\"operation\":\"flowMatrix\",\"document_digest\":\"\xff\"}]}"))
+	}))
+	t.Cleanup(server.Close)
+	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+		t.Fatal("a /registry response containing invalid UTF-8 must refuse -- python's HTTP client cannot decode it either")
+	}
+}
+
 func TestFetchRegistryRefusesConflictingDuplicateOperations(t *testing.T) {
 	for name, order := range map[string][2]string{
 		"catalog-matching digest first": {"77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},

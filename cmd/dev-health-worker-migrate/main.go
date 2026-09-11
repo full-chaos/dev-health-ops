@@ -43,10 +43,10 @@ func execute(
 	flags.SetOutput(stderr)
 	check := flags.Bool("check", false, "verify the pinned River schema without applying DDL")
 	showVersion := flags.Bool("version", false, "print build metadata as JSON and exit")
-	// CHAOS-5560 round-2 P3: this binary's own flag.NewFlagSet documented
-	// zero environment variables (not even the pre-existing
-	// MIGRATION_DATABASE_URI) -- the only place either DSN form was
-	// discoverable was this file's source or the PR history. defaultUsage
+	// This binary's own flag.NewFlagSet must document both DSN forms --
+	// leaving MIGRATION_DATABASE_URI (and the component form)
+	// undocumented would make this file's source the only place either
+	// was discoverable. defaultUsage
 	// is flag's own generated text; appending the env section keeps it
 	// rather than replacing it.
 	defaultUsage := flags.Usage
@@ -85,14 +85,13 @@ func execute(
 	if !ok {
 		return 1
 	}
-	// CHAOS-5560 round 5 finding #5, redesigned per round 6's ruling:
-	// successful resolution returned with no observable record of which
-	// form (uri|components) or database it reached -- a silent regression
-	// there (a wrong, but reachable, database) would have been invisible
-	// even after this ticket's other fixes. Form presence-checks
+	// A successful resolution must leave an observable record of which
+	// form (uri|components) or database it reached -- otherwise a silent
+	// regression there (a wrong, but reachable, database) would be
+	// invisible even after this ticket's other fixes. Form presence-checks
 	// DEV_HEALTH_MIGRATION_PG_HOST the same way
 	// resolveMigrationDatabaseURI/config.ResolveDSN's own hostSet check
-	// does. Round 6 ruling (chris): no telemetry field is ever derived by
+	// does. No telemetry field is ever derived by
 	// parsing a DSN -- for the URI form, "database" is omitted entirely;
 	// for the component form, config.ComponentDatabaseName reads the
 	// separate, non-secret DEV_HEALTH_MIGRATION_PG_DB env value directly,
@@ -276,8 +275,8 @@ func requiredName(key string, lookup platformsecrets.LookupEnv, stderr io.Writer
 // The component var names are deliberately NOT POSTGRES_HOST/_PORT/_USER/
 // _PASSWORD/_DB: deploy/docker-compose/compose.go-workers.yml (not touched
 // by this PR) already sets every one of those, unconditionally, for its own
-// pre-existing shell fallback -- a round-1 review (2026-09-11) proved that
-// reusing those names made this function activate every time that compose
+// pre-existing shell fallback -- reusing those names would make this
+// function activate every time that compose
 // service ran, silently discarding a perfectly valid, already-working
 // MIGRATION_DATABASE_URI override. DEV_HEALTH_MIGRATION_PG_* is a prefix
 // swept against compose.yml, both overlays, deploy/helm, and docs before

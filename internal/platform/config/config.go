@@ -159,8 +159,7 @@ type Config struct {
 	QueueDatabaseURI       secrets.Value
 	CoordinatorDatabaseURI secrets.Value
 	ClickHouseURI          secrets.Value
-	// CHAOS-5560 (chris's ruling, round 4, 2026-09-11): successful
-	// resolution previously left only a boolean ("*_database_configured")
+	// Successful resolution previously left only a boolean ("*_database_configured")
 	// observable -- which of the two DSN forms was actually honored, and
 	// which database an operator's config ultimately reaches, was invisible
 	// at Info. Neither field ever carries a credential: Form is the literal
@@ -403,15 +402,15 @@ func Load(spec Spec) (Config, error) {
 	// host/port/user/password/db pieces instead, encoded correctly by
 	// net/url regardless of their content.
 	//
-	// Round-1 (2026-09-11) review found two problems with "one form wins
-	// outright over the other": (1) whichever precedence direction is
-	// chosen, the LOSING form's value still sits in the environment with no
-	// way to tell a deliberate override from a stale leftover, and (2) the
-	// component HOST names first chosen (POSTGRES_DOMAIN_HOST et al) risked
-	// exactly this ambiguity the moment any deploy manifest defaulted them.
-	// Fixed at the root, per team-lead's ruling: every component key below
-	// is a name NOTHING in compose.yml, either overlay, deploy/helm, or the
-	// docs sets today (swept before choosing), and ResolveDSN refuses
+	// "One form wins outright over the other" has two problems: (1)
+	// whichever precedence direction is chosen, the LOSING form's value
+	// still sits in the environment with no way to tell a deliberate
+	// override from a stale leftover, and (2) a component HOST name that
+	// happens to match something a deploy manifest already defaults
+	// (e.g. POSTGRES_HOST) risks exactly this ambiguity. Fixed at the
+	// root: every component key below is a name NOTHING in compose.yml,
+	// either overlay, deploy/helm, or the docs sets today (swept before
+	// choosing), and ResolveDSN refuses
 	// outright -- naming both keys in one message -- if BOTH a HOST var and
 	// its DSN's pre-built key (or that key's `_FILE` variant) are set,
 	// rather than silently picking one. Neither set keeps today's
@@ -441,18 +440,17 @@ func Load(spec Spec) (Config, error) {
 		if !value.Configured() {
 			continue
 		}
-		// CHAOS-5560 round 4: which FORM won is exactly what hostSet decided
-		// inside ResolveDSN -- recomputed here the same way (a set, non-empty
+		// Which FORM won is exactly what hostSet decided inside
+		// ResolveDSN -- recomputed here the same way (a set, non-empty
 		// HostKey), never guessed from the assembled DSN's shape.
 		//
-		// Round 6 ruling (chris, via team-lead): for the pre-built-URI form,
-		// Info reports form="uri" ONLY -- no Name is ever derived by parsing
-		// the DSN. Round 5 proved a malformed, unescaped URI can still
-		// "successfully" parse via net/url with credential material
-		// misattributed into Path, and that no denylist of "suspicious"
-		// characters is a guarantee against a general-purpose URL parser
-		// being confused -- the only guarantee is to never parse a URI for
-		// telemetry at all. For the component form, the database name was
+		// For the pre-built-URI form, Info reports form="uri" ONLY -- no
+		// Name is ever derived by parsing the DSN. A malformed, unescaped
+		// URI can still "successfully" parse via net/url with credential
+		// material misattributed into Path, and no denylist of
+		// "suspicious" characters is a guarantee against a general-
+		// purpose URL parser being confused -- the only guarantee is to
+		// never parse a URI for telemetry at all. For the component form, the database name was
 		// never embedded in an opaque string to begin with: it is the
 		// separate, non-secret DBKey env value ComponentDatabaseName reads
 		// directly, needing no parsing and carrying none of that risk.
@@ -680,7 +678,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("domain_database_configured", c.DomainDatabaseURI.Configured()),
 		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),
 		slog.Bool("queue_database_configured", c.QueueDatabaseURI.Configured()),
-		// CHAOS-5560 round 4 (chris's ruling): a successful resolution used
+		// A successful resolution used
 		// to leave only the booleans above observable -- which of the two
 		// DSN forms actually won, and which database an operator's config
 		// reaches, was invisible at Info, so selecting the wrong (but
@@ -736,9 +734,9 @@ func (c Config) SafeAttrs() []slog.Attr {
 			slog.String("queue_workers", formatQueueConcurrency(c.WorkerQueueConcurrency)),
 		)
 	}
-	// CHAOS-5560 round 4: emitted only for a DSN that actually resolved --
-	// an unconfigured DSN already reports "false" above and has no form or
-	// database identifier to name.
+	// Emitted only for a DSN that actually resolved -- an unconfigured
+	// DSN already reports "false" above and has no form or database
+	// identifier to name.
 	for _, observed := range []struct {
 		configured bool
 		formKey    string
@@ -755,8 +753,8 @@ func (c Config) SafeAttrs() []slog.Attr {
 			continue
 		}
 		attrs = append(attrs, slog.String(observed.formKey, observed.form))
-		// Round 6 ruling: the pre-built-URI form never has a Name (chris's
-		// "no parsing of a URI for telemetry" rule) -- omit the key
+		// The pre-built-URI form never has a Name -- telemetry never
+		// parses a URI, so there is nothing to name -- omit the key
 		// entirely rather than emit a misleading empty string that could
 		// read as "the database name really is blank".
 		if observed.name != "" {
@@ -836,13 +834,11 @@ func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
 // publish at Info for spec's connection -- the raw env-key value (or
 // DefaultDB), NEVER derived by parsing an assembled DSN.
 //
-// Round-6 (2026-09-11) ruling, replacing round 5's parse-and-sanitize
-// ObservableDatabaseName entirely: round 5 proved a malformed pre-built
-// URI can still "successfully" parse with net/url attributing credential
-// material to Path, and that a denylist of "suspicious" characters is a
-// heuristic, not a guarantee, against every way a general-purpose URL
-// parser can be confused. Chris's rule: no parsing of a URI for telemetry,
-// ever. For the component form the database name was never embedded in
+// A malformed pre-built URI can still "successfully" parse with net/url
+// attributing credential material to Path, and a denylist of "suspicious"
+// characters is a heuristic, not a guarantee, against every way a
+// general-purpose URL parser can be confused -- so a URI is never parsed
+// for telemetry, ever. For the component form the database name was never embedded in
 // an opaque string in the first place -- it is exactly this already
 // separate, non-secret env value -- so publishing it needs no parsing and
 // carries none of that risk. Exported so
@@ -858,18 +854,15 @@ func ComponentDatabaseName(lookup secrets.LookupEnv, spec ComponentSpec) string 
 // "detail" carries err's message run through logging.RedactText as
 // defense in depth.
 //
-// Round-6 (2026-09-11) ruling (chris, via team-lead): one JSON diagnostic
-// writer, shared by every entry point that can surface a
-// ResolveDSN/ResolveDSNFromComponents/secrets.Resolve error --
-// cmd/dev-health-workerctl, cmd/dev-health-worker-migrate, and
-// internal/platform/shell (every long-running worker binary) -- rather
-// than each inventing (or, before this round, some NOT inventing) its own
-// safe-error convention. Every error these packages build is already
-// assembled purely from key-name strings, never a resolved value; the
-// redaction below is defense in depth on top of that, matching the same
-// rule internal/platform/shell/shell.go's own pre-existing error path
-// already applied for OTHER configuration errors before this ticket
-// existed (R89).
+// One JSON diagnostic writer, shared by cmd/dev-health-workerctl and
+// cmd/dev-health-worker-migrate (the entry points that can surface a
+// ResolveDSN/ResolveDSNFromComponents/secrets.Resolve error) rather than
+// each inventing its own safe-error convention. Every error these
+// packages build is already assembled purely from key-name strings,
+// never a resolved value; the redaction below is defense in depth on top
+// of that, matching the same rule internal/platform/shell/shell.go's own
+// pre-existing error path already applies for its own configuration
+// errors.
 func WriteConfigError(w io.Writer, err error) {
 	payload := struct {
 		Error struct {
@@ -883,10 +876,10 @@ func WriteConfigError(w io.Writer, err error) {
 }
 
 // rawOrDefault is envOrDefault's UNTRIMMED counterpart: presence is a raw,
-// non-empty check, never TrimSpace-based. Round-5 (2026-09-11) finding:
-// ResolveDSNFromComponents used envOrDefault for PortKey/DBKey, whose
-// trimmed presence check silently treated a whitespace-only value as
-// absent and substituted the default -- BEFORE the component's own
+// non-empty check, never TrimSpace-based. envOrDefault's own trimmed
+// presence check is wrong for PortKey/DBKey specifically: it silently
+// treats a whitespace-only value as absent and substitutes the default --
+// BEFORE the component's own
 // explicit whitespace-refusal guard ever saw it. Every other setting
 // envOrDefault serves (HTTP address, role names, schema, ...) keeps its
 // existing "whitespace means unset" convention unchanged; only the two
@@ -1108,11 +1101,11 @@ type ComponentSpec struct {
 // componentKeys returns every env var name this spec's component form can
 // read from -- host/port/user/password/db, and the `_FILE` variant of any
 // field tagged `dsnKey:"file"` -- derived from the struct's own fields via
-// reflection, never a second hand-maintained list. Round-3 (2026-09-11)
-// found ResolveDSN's exclusivity/missing-key detection using a hand-picked
-// slice that simply omitted DBKey (for connections where it is NOT shared)
-// and both `_FILE` forms entirely -- this method is the fix: adding a
-// field to ComponentSpec later automatically joins the sweep.
+// reflection, never a second hand-maintained list -- a hand-picked slice
+// naming the fields explicitly would omit DBKey (for connections where it
+// is NOT shared) and both `_FILE` forms unless updated by hand every
+// time a field is added; deriving the set from the struct itself means
+// adding a field to ComponentSpec later automatically joins the sweep.
 func (spec ComponentSpec) componentKeys() []string {
 	var keys []string
 	v := reflect.ValueOf(spec)
@@ -1142,13 +1135,13 @@ func (spec ComponentSpec) componentKeys() []string {
 // static enumeration, and (like componentKeys) derived from the struct's
 // own fields via reflection rather than a second hand-maintained list.
 //
-// Round-4 (2026-09-11) finding (Trap #140: never TrimSpace an identifier or
-// a secret): the previous presence check trimmed every value before
-// testing it for emptiness, so a password consisting only of whitespace --
-// non-empty, and therefore Configured() to secrets.Resolve, which
-// deliberately never trims a secret's meaningful content -- was invisible
-// here, letting a raw URI and that whitespace-only component coexist
-// unflagged. Presence for HostKey/PortKey/DBKey is now a plain, UNTRIMMED
+// Never TrimSpace an identifier or a secret: a presence check that trims
+// every value before testing it for emptiness would make a password
+// consisting only of whitespace -- non-empty, and therefore Configured()
+// to secrets.Resolve, which deliberately never trims a secret's
+// meaningful content -- invisible here, letting a raw URI and that
+// whitespace-only component coexist unflagged. Presence for
+// HostKey/PortKey/DBKey is a plain, UNTRIMMED
 // non-empty lookup (an identifier's whitespace is never used to decide
 // whether it is "really" set, matching ResolveDSNFromComponents' own
 // explicit-refusal handling of it above); presence for UserKey/PasswordKey
@@ -1195,8 +1188,8 @@ func (spec ComponentSpec) setComponentKeys(lookup secrets.LookupEnv) (keys []str
 // DomainDatabaseSpec, QueueDatabaseSpec, CoordinatorDatabaseSpec, and
 // ClickHouseSpec are the canonical component definitions for CHAOS-5560's
 // four Load()-resolved DSNs, exported so every caller that needs one of
-// these connections shares the exact same field names and defaults --
-// round-2 (2026-09-11) found cmd/dev-health-workerctl reading
+// these connections shares the exact same field names and defaults:
+// cmd/dev-health-workerctl once read
 // POSTGRES_URI/WORKER_DATABASE_URI/COORDINATOR_DATABASE_URI/CLICKHOUSE_URI
 // directly instead of going through Load(), which meant it could not use
 // the component form at all; it now calls ResolveDSN with these same specs
@@ -1238,13 +1231,12 @@ var (
 // url.URL.Host copy: see the URL-secret-leak lessons on why a component
 // "known safe by construction" still needs its own shape check before use).
 func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (built secrets.Value, used bool, err error) {
-	// Round-4 (2026-09-11) finding (Trap #140: never TrimSpace an
-	// identifier or a secret): host/port/db used to be stored TRIMMED,
-	// while the pre-built-URI form takes a database name verbatim from the
-	// URL path -- an identifier with meaningful leading/trailing
-	// whitespace (unusual, but valid) silently connected to a DIFFERENT
-	// existing resource depending on which form was used, proven against
-	// two real, distinctly-named databases. Every identifier below is now
+	// Never TrimSpace an identifier or a secret: storing host/port/db
+	// TRIMMED, while the pre-built-URI form takes a database name
+	// verbatim from the URL path, means an identifier with meaningful
+	// leading/trailing whitespace (unusual, but valid) silently connects
+	// to a DIFFERENT existing resource depending on which form was used
+	// -- proven against two real, distinctly-named databases. Every identifier below is
 	// preserved EXACTLY (never trimmed) and explicitly refused if it has
 	// leading/trailing whitespace, rather than having that whitespace
 	// silently discarded.
@@ -1255,7 +1247,7 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if strings.TrimSpace(host) != host {
 		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.HostKey)
 	}
-	// Round-8 (2026-09-11) finding: the round-trip check further below
+	// The round-trip check further below
 	// (net/url structural correctness) is not enough -- both pgx and
 	// clickhouse-go's own DSN parsers treat a comma inside the host field
 	// as a MULTI-HOST list delimiter, a driver-level convention net/url
@@ -1278,7 +1270,7 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if err != nil {
 		return secrets.Value{}, true, fmt.Errorf("%s %w", spec.HostKey, err)
 	}
-	// Round-5 (2026-09-11) finding: envOrDefault's OWN presence check trims
+	// envOrDefault's OWN presence check trims
 	// before testing for emptiness (a whitespace-only value is treated as
 	// absent, so the DEFAULT is substituted) -- a whitespace-only PORT/DB
 	// never reached the explicit whitespace refusal below at all, silently
@@ -1292,7 +1284,7 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if strings.TrimSpace(port) != port {
 		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.PortKey)
 	}
-	// Round-8 (2026-09-11) finding, same family: PORT gets the identical
+	// PORT gets the identical, same-family
 	// exactly-one-value discipline -- digits only, 1-65535. A driver-
 	// specific list/range syntax in PORT is refused here rather than
 	// discovered downstream.
@@ -1306,9 +1298,20 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if strings.TrimSpace(db) != db {
 		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.DBKey)
 	}
-	if strings.ContainsAny(db, "/?#") {
-		return secrets.Value{}, true, fmt.Errorf("%s must not contain '/', '?', or '#'", spec.DBKey)
-	}
+	// A literal '/', '?', or '#' is a valid PostgreSQL/ClickHouse database
+	// identifier character (a double-quoted CREATE DATABASE name may
+	// contain any of them) -- refusing them here violated the same
+	// exact-preservation contract every other identifier in this resolver
+	// gets. They do not need a denylist because the round-trip re-parse
+	// below already proves they are safe: url.URL's own path encoder
+	// percent-escapes '?' and '#' (both are path/query/fragment
+	// delimiters) when assembling the DSN and correctly decodes them back
+	// to the literal character on the far side (pgconn.ParseConfig,
+	// clickhouse.ParseDSN); '/' is a legitimate literal byte within a
+	// single path segment and neither driver splits the database name on
+	// it. The round-trip check further below still verifies this for any
+	// future Go stdlib/driver behavior change -- this is proof, not an
+	// assumption.
 	user, _, resolveErr := secrets.Resolve(spec.UserKey, lookup)
 	if resolveErr != nil {
 		return secrets.Value{}, true, resolveErr
@@ -1357,11 +1360,11 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 // of discrete components (spec) -- never both, and never one silently
 // overriding the other.
 //
-// Round-1 review (2026-09-11) tried letting one form win over the other by
-// precedence and found it unsafe either direction: whichever form loses is
-// still sitting in the environment, with nothing to say whether that was a
-// deliberate override or a stale leftover from an earlier config generation
-// -- and a deploy manifest that already defaults the "losing" var (as
+// Letting one form win over the other by precedence is unsafe either
+// direction: whichever form loses is still sitting in the environment,
+// with nothing to say whether that was a deliberate override or a stale
+// leftover from an earlier config generation -- and a deploy manifest
+// that already defaults the "losing" var (as
 // deploy/docker-compose/compose.go-workers.yml does for POSTGRES_HOST)
 // makes the ambiguity permanent, not occasional. Setting both is refused
 // outright, naming both keys in one message, checked before rawKey's own
@@ -1372,44 +1375,35 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 // directly -- every existing "%s is required" caller keeps working exactly
 // as before this function existed.
 //
-// Round-2 (2026-09-11) finding: the exclusivity check above only inspected
-// HostKey. A non-host component (port/user/password) set alongside a
-// pre-built URI was silently ignored -- ResolveDSNFromComponents never
-// activates without a host, so the raw URI won with no error and no
-// indication a stray/mistyped component var was sitting unused.
+// The exclusivity check inspects every per-connection component field
+// (host/port/user/password), not just HostKey: a non-host component set
+// alongside a pre-built URI must not be silently ignored just because
+// ResolveDSNFromComponents itself never activates without a host.
 //
-// Round-3 (2026-09-11) finding: the round-2 fix's own trigger set was a
-// hand-picked slice that omitted DBKey unconditionally (correct for the
-// three Postgres specs, where it is genuinely shared -- wrong for
-// ClickHouse and migrate, where it is not) and both fields' `_FILE`
-// variants entirely, even though ResolveDSNFromComponents resolves both
-// through secrets.Resolve. The check below now sweeps spec.componentKeys()
-// -- derived from the struct's own fields, never a second list -- which
-// covers every key correctly, DBKey included wherever it is not marked
-// shared, and both `_FILE` forms.
+// The trigger set is spec.componentKeys() -- derived from the struct's
+// own fields via reflection, never a hand-picked slice naming them again
+// -- which covers every key correctly, DBKey included wherever it is not
+// marked shared (DBKeyShared is correct for the three Postgres specs,
+// where DBKey is genuinely shared -- it would be wrong for ClickHouse
+// and migrate, where it is not), and both `_FILE` forms of any field
+// resolved through secrets.Resolve.
 //
-// Round-6 (2026-09-11) finding: the mutual-exclusion check for the RAW form
-// tested bare env-var PRESENCE (`lookup(rawKey)`'s ok bool), not whether
-// the raw form is actually CONFIGURED. secrets.Resolve treats a direct,
-// non-`_FILE` value of exactly "" as unconfigured (its own `direct != ""`
-// rule, same file) -- so `POSTGRES_URI=""` alongside a fully valid
-// component set was refused as "mutually exclusive" even though the raw
-// form contributes nothing. Fixed below with the SAME predicate
-// secrets.Resolve applies before it ever reads a `_FILE`: present-and-
-// non-empty for the direct key, OR present at all for its `_FILE`
-// variant (a set `_FILE` var can only ever resolve to configured=true or
-// an error -- never to unconfigured -- so testing its presence here,
-// without reading it, is exactly secrets.Resolve's own predicate, not an
-// approximation of it). This also means a decoy/misconfigured `_FILE`
-// path is never opened just to answer "is the raw form configured" when
-// components are what actually win -- the read only happens where it
-// already happened before this fix, in the tail secrets.Resolve call and
-// inside ResolveDSNFromComponents. A raw value that is merely
-// whitespace-only (never trimmed by secrets.Resolve) is still
-// "configured" under this same rule -- unlike a component field, the raw
-// form has no separate whitespace refusal, so whitespace-only counts as
-// set and still triggers exclusivity exactly like any other non-empty
-// raw value.
+// The mutual-exclusion check for the RAW form uses the SAME predicate
+// secrets.Resolve applies before it ever reads a `_FILE`, never a bare
+// env-var presence test: present-and-non-empty for the direct key, OR
+// present at all for its `_FILE` variant (a set `_FILE` var can only
+// ever resolve to configured=true or an error -- never to unconfigured
+// -- so testing its presence here, without reading it, is exactly
+// secrets.Resolve's own predicate, not an approximation of it). This
+// also means a decoy/misconfigured `_FILE` path is never opened just to
+// answer "is the raw form configured" when components are what actually
+// win -- the read only happens where it already happens regardless, in
+// the tail secrets.Resolve call and inside ResolveDSNFromComponents. A
+// raw value that is merely whitespace-only (never trimmed by
+// secrets.Resolve) is still "configured" under this same rule -- unlike
+// a component field, the raw form has no separate whitespace refusal, so
+// whitespace-only counts as set and still triggers exclusivity exactly
+// like any other non-empty raw value.
 func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (value secrets.Value, configured bool, err error) {
 	foundKeys, setErr := spec.setComponentKeys(lookup)
 	if setErr != nil {
@@ -1429,12 +1423,12 @@ func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (va
 		return ResolveDSNFromComponents(lookup, spec)
 	}
 	if len(foundKeys) > 0 {
-		// Round-2 (2026-09-11) finding, second half: a non-host component
-		// set with HOST itself absent used to fall straight through to
-		// secrets.Resolve(rawKey, lookup) -- if the raw key was also unset,
-		// this silently reported "not configured" with no sign the operator
-		// had already set (and presumably intended to use) a component
-		// field. HostKey is the only genuinely REQUIRED component (Port/DB
+		// A non-host component set with HOST itself absent must not fall
+		// straight through to secrets.Resolve(rawKey, lookup) -- if the
+		// raw key is also unset, that would silently report "not
+		// configured" with no sign the operator had already set (and
+		// presumably intended to use) a component field. HostKey is the
+		// only genuinely REQUIRED component (Port/DB
 		// have defaults; User/Password are an optional pair) -- since
 		// hostSet is false here, HostKey is necessarily among what is
 		// missing, whether or not it appears in foundKeys.
@@ -1464,9 +1458,9 @@ var hostnameLabelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a
 // isRFC1123Hostname reports whether host is a single, syntactically valid
 // DNS hostname -- never a comma-, space-, or slash-bearing value a
 // general-purpose URL parser would accept but a database driver's own DSN
-// parser would reinterpret (round-8, 2026-09-11).
+// parser would reinterpret.
 //
-// Round-9 (2026-09-11) finding: a SINGLE trailing dot ("localhost.")
+// A SINGLE trailing dot ("localhost.")
 // denotes an absolute hostname per RFC 1123 S6.1.4.3 -- it suppresses
 // resolver search-list expansion, it does not name a second endpoint or
 // introduce an empty label the way a leading or doubled dot would. The
@@ -1508,7 +1502,7 @@ func isRFC1123Hostname(host string) bool {
 // net.JoinHostPort call must receive, since JoinHostPort brackets an IPv6
 // host itself and a value bracketed twice is a different, broken host.
 //
-// Round-8 (2026-09-11) finding: net/url's own round-trip check (further
+// net/url's own round-trip check (further
 // below in ResolveDSNFromComponents) verifies only that the ASSEMBLED URI
 // parses back to the same Hostname()/Port()/Path -- it says nothing about
 // what the eventual database driver's OWN DSN parser does with that host
@@ -1548,9 +1542,9 @@ func validComponentHost(host string) (string, error) {
 }
 
 // validComponentPort enforces the identical exactly-one-value discipline
-// for the port component: digits only, 1-65535 -- never a driver-specific
-// list/range syntax net/url's own round-trip check would not catch either
-// (round-8, 2026-09-11, same finding family as validComponentHost).
+// for the port component, same family as validComponentHost: digits
+// only, 1-65535 -- never a driver-specific list/range syntax net/url's
+// own round-trip check would not catch either.
 func validComponentPort(port string) error {
 	for _, r := range port {
 		if r < '0' || r > '9' {

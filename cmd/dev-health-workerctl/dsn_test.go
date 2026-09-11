@@ -20,10 +20,10 @@ func dsnTestLookup(values map[string]string) platformsecrets.LookupEnv {
 	}
 }
 
-// TestResolveDSNRequiredUsesTheSharedComponentForm is round-2's (2026-09-11)
-// P1 fix: this binary used to read POSTGRES_URI/WORKER_DATABASE_URI/
-// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI directly via resolveRequired,
-// bypassing config.ResolveDSN entirely -- so a component-only deployment
+// TestResolveDSNRequiredUsesTheSharedComponentForm pins that this binary
+// must never read POSTGRES_URI/WORKER_DATABASE_URI/
+// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI directly (bypassing
+// config.ResolveDSN) -- doing so would mean a component-only deployment
 // could never configure this CLI at all, unlike every long-running worker
 // binary. resolveDSNRequired must behave identically to the shared
 // implementation the other binaries use.
@@ -43,7 +43,7 @@ func TestResolveDSNRequiredUsesTheSharedComponentForm(t *testing.T) {
 		}
 	})
 
-	t.Run("component form only now works -- the round-2 fix", func(t *testing.T) {
+	t.Run("component form only works", func(t *testing.T) {
 		t.Parallel()
 		value, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
 			"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
@@ -59,7 +59,7 @@ func TestResolveDSNRequiredUsesTheSharedComponentForm(t *testing.T) {
 		}
 	})
 
-	// Round-3 (2026-09-11) finding: resolveDSNRequired used to collapse this
+	// resolveDSNRequired must never collapse this
 	// error to a bare bool, discarding the key names ResolveDSN's own error
 	// already names.
 	t.Run("both forms set -- refused, naming both keys, not silently one winning", func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestResolveDSNRequiredUsesTheSharedComponentForm(t *testing.T) {
 		}
 	})
 
-	// Round-3 finding: ClickHouse's DB key is NOT shared (unlike the three
+	// ClickHouse's DB key is NOT shared (unlike the three
 	// Postgres specs' DEV_HEALTH_PG_DB) and must still be swept.
 	t.Run("clickhouse DB alone (no host) -- names the missing host key", func(t *testing.T) {
 		t.Parallel()
@@ -124,11 +124,11 @@ func TestResolveDSNRequiredUsesTheSharedComponentForm(t *testing.T) {
 	})
 }
 
-// TestLogResolvedDatabaseReportsFormAndNameWithoutParsingAURI is round-6's
-// (2026-09-11) P1 fix: configureRuntime and the two lazy ClickHouse
-// dispatch paths never emitted the resolution Info record every other
+// TestLogResolvedDatabaseReportsFormAndNameWithoutParsingAURI pins that
+// configureRuntime and the two lazy ClickHouse
+// dispatch paths must emit the resolution Info record every other
 // entry point (config.Load's daemons, cmd/dev-health-worker-migrate)
-// already promises. Per R117, a pre-built URI is never parsed for this
+// promises. A pre-built URI is never parsed for this
 // purpose -- the URI form names only "form":"uri"; the component form's
 // database name is read directly from the env, never derived from the
 // assembled DSN, proven here by planting a decoy raw value with an
@@ -177,9 +177,9 @@ func TestLogResolvedDatabaseReportsFormAndNameWithoutParsingAURI(t *testing.T) {
 	})
 }
 
-// TestConfigureRuntimeLogsAResolutionRecordForEachDSN is round-6's
-// (2026-09-11) P1 fix, proving the wiring (not just the helper in
-// isolation): configureRuntime must call logResolvedDatabase for all three
+// TestConfigureRuntimeLogsAResolutionRecordForEachDSN proves the wiring
+// (not just the helper in isolation): configureRuntime must call
+// logResolvedDatabase for all three
 // PostgreSQL DSNs it resolves, before it ever reaches OpenRuntimePools. An
 // unreachable domain/queue/coordinator host (127.0.0.1:1, refused
 // immediately) keeps this test fast and deterministic while still proving
@@ -209,11 +209,11 @@ func TestConfigureRuntimeLogsAResolutionRecordForEachDSN(t *testing.T) {
 	}
 }
 
-// TestConfigureRuntimePGBouncerModeErrorUsesTheSharedWriter is round-6's
-// (2026-09-11) P1 fix: an invalid PGBOUNCER_TRANSACTION_MODE used to return
-// a bare {"code":"configuration_error"} via the old writeError, the last
-// configuration-class diagnostic in this file that had not been converted
-// to writeConfigError -- an operator got no indication PGBOUNCER_TRANSACTION_MODE
+// TestConfigureRuntimePGBouncerModeErrorUsesTheSharedWriter pins that an
+// invalid PGBOUNCER_TRANSACTION_MODE must go through the shared
+// writeConfigError, never a bare {"code":"configuration_error"} via the
+// old writeError, which named no offending key -- an operator needs to
+// know PGBOUNCER_TRANSACTION_MODE
 // itself was the offending key.
 func TestConfigureRuntimePGBouncerModeErrorUsesTheSharedWriter(t *testing.T) {
 	t.Parallel()
@@ -243,8 +243,8 @@ func TestConfigureRuntimePGBouncerModeErrorUsesTheSharedWriter(t *testing.T) {
 	}
 }
 
-// TestWriteConfigErrorExposesKeyNamesNeverValues is round-3's (2026-09-11)
-// P1 fix at the CLI boundary: writeConfigError must keep the stable
+// TestWriteConfigErrorExposesKeyNamesNeverValues pins the CLI boundary
+// rule: writeConfigError must keep the stable
 // "configuration_error" JSON code (an operator script parsing it must not
 // break) while adding a `detail` field carrying the resolver's key-named
 // diagnostic -- and that detail must never contain a resolved value, only
@@ -278,12 +278,12 @@ func TestWriteConfigErrorExposesKeyNamesNeverValues(t *testing.T) {
 	}
 }
 
-// TestWriteConfigErrorNeverEchoesACredentialBearingFilePath is round-4's
-// (2026-09-11) P1 fix at the CLI boundary: a *_FILE var misconfigured to a
-// raw credential string instead of an actual path used to have that
+// TestWriteConfigErrorNeverEchoesACredentialBearingFilePath pins the CLI
+// boundary rule: a *_FILE var misconfigured to a
+// raw credential string instead of an actual path must never have that
 // entire string, password included, echoed on stderr -- Go's
-// os.PathError.Error() embeds the exact path it tried to open, and the
-// round-3 writeConfigError printed err.Error() unfiltered.
+// os.PathError.Error() embeds the exact path it tried to open, so
+// writeConfigError must never print err.Error() unfiltered.
 func TestWriteConfigErrorNeverEchoesACredentialBearingFilePath(t *testing.T) {
 	t.Parallel()
 
@@ -309,17 +309,17 @@ func TestWriteConfigErrorNeverEchoesACredentialBearingFilePath(t *testing.T) {
 	}
 }
 
-// TestWriteConfigErrorAlwaysProducesValidJSON is round-4's (2026-09-11) P1
-// fix: `%q` is Go string escaping, not JSON escaping -- a control byte
+// TestWriteConfigErrorAlwaysProducesValidJSON pins that writeConfigError
+// must produce valid JSON regardless of content: `%q` is Go string
+// escaping, not JSON escaping -- a control byte
 // (here U+0001) or an embedded quote/backslash in the underlying text
-// produced invalid JSON (`\x01` is not a legal JSON escape).
-// writeConfigError now builds the payload with encoding/json, which
-// escapes correctly regardless of content. This constructs the error
+// produces invalid JSON (`\x01` is not a legal JSON escape) unless the
+// payload is built with encoding/json, which escapes correctly
+// regardless of content. This constructs the error
 // DIRECTLY (bypassing resolveDSNRequired) so the case is not defeated by
-// secrets.Resolve's own round-4 fix, which no longer lets a raw file path
+// secrets.Resolve's own fix, which no longer lets a raw file path
 // (control characters included) reach any error message at all -- this
-// test exercises writeConfigError's own escaping in isolation, the actual
-// unit under test for this finding.
+// test exercises writeConfigError's own escaping in isolation.
 func TestWriteConfigErrorAlwaysProducesValidJSON(t *testing.T) {
 	t.Parallel()
 

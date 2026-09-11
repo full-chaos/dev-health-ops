@@ -224,8 +224,8 @@ var optionRegistry = []Option{
 	// as Secret, never as a flag.
 	//
 	// Every one of these env names carries a DEV_HEALTH_ prefix, on purpose:
-	// a round-1 review (2026-09-11) found that the shorter, more "natural"
-	// names first chosen (POSTGRES_DOMAIN_HOST, CLICKHOUSE_USER, and
+	// the shorter, more "natural"
+	// names (POSTGRES_DOMAIN_HOST, CLICKHOUSE_USER, and
 	// POSTGRES_HOST/_USER/_PASSWORD/_DB for the migrate binary) were either
 	// already deployed elsewhere in this repo's compose/helm surface for an
 	// unrelated purpose, or would collide the moment a future manifest
@@ -384,7 +384,7 @@ var optionRegistry = []Option{
 	// -- only the password half of a DSN is credential-shaped. Setting the
 	// matching *_HOST flag/var for a connection assembles its URI from
 	// components instead (URL-encoded correctly regardless of content) and
-	// -- per round-1's ruling -- is mutually exclusive with that
+	// -- is mutually exclusive with that
 	// connection's pre-built URI, refused loudly if both are set; leaving
 	// *_HOST unset changes nothing. See the naming note above these fields'
 	// GroupDatabase siblings for why every name here is DEV_HEALTH_-prefixed

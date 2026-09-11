@@ -326,13 +326,10 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		var err error
 		domainTransactionPooler, err = strconv.ParseBool(raw)
 		if err != nil {
-			// Round-6 (2026-09-11) finding: this bypassed the shared writer
-			// entirely, returning a bare {"code":"configuration_error"} with
-			// no indication which key caused it -- the one configuration-
-			// class diagnostic in this file that predates
-			// resolveDSNRequired's own error plumbing. Every other
-			// configuration_error site in this binary already names the
-			// offending key through writeConfigError; this is the last one.
+			// Must go through the shared writer, never a bare
+			// {"code":"configuration_error"} with no indication which key
+			// caused it -- every other configuration_error site in this
+			// binary names the offending key through writeConfigError.
 			return nil, writeConfigError(stderr, fmt.Errorf("PGBOUNCER_TRANSACTION_MODE must be a valid boolean"))
 		}
 	}
@@ -2532,20 +2529,21 @@ func resolveRequired(key string, lookup platformsecrets.LookupEnv) (platformsecr
 }
 
 // resolveDSNRequired is CHAOS-5560's component-aware counterpart to
-// resolveRequired, for the DSNs this binary needs. Round-2 (2026-09-11)
-// found this binary reading DSNs directly via resolveRequired, entirely
-// bypassing config.ResolveDSN -- meaning it could never use the component
+// resolveRequired, for the DSNs this binary needs. It must resolve DSNs
+// through config.ResolveDSN, never read them directly -- reading them
+// directly would mean this binary could never use the component
 // form at all, unlike every long-running worker binary.
 //
-// Round-3 (2026-09-11) finding: this originally collapsed ResolveDSN's
+// It must never collapse ResolveDSN's
 // error to a bare bool, discarding the specific, SAFE (key names only,
 // never values -- every error ResolveDSN/ResolveDSNFromComponents builds
 // is assembled purely from ComponentSpec's own key-name strings) diagnostic
-// it already constructs. An operator hitting a mutual-exclusion or
-// missing-host-key mistake saw only a bare "configuration_error", with no
-// way to tell which keys were involved. The error is now returned so every
-// call site can pass it to writeConfigError, which keeps the existing
-// stable JSON `code` and adds a `detail` field carrying it.
+// it already constructs: collapsing it would leave an operator hitting a
+// mutual-exclusion or missing-host-key mistake with only a bare
+// "configuration_error", no way to tell which keys were involved. The
+// error is returned so every call site can pass it to writeConfigError,
+// which keeps the existing stable JSON `code` and adds a `detail` field
+// carrying it.
 func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup platformsecrets.LookupEnv) (platformsecrets.Value, error) {
 	value, configured, err := platformconfig.ResolveDSN(lookup, rawKey, spec)
 	if err != nil {
@@ -2561,24 +2559,24 @@ func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup
 // which form (uri|components) name's DSN resolved through -- and, for the
 // component form only, the database identifier read directly from
 // spec.DBKey. Mirrors cmd/dev-health-worker-migrate's identical rule and
-// internal/platform/config's own Load() binding loop (CHAOS-5560 round
-// 6/7/8, chris's ruling: "the migrate/worker rule applies to every entry
-// point" -- workerctl resolves these same five DSNs through its own
-// resolveDSNRequired, bypassing config.Load entirely, so it never got this
-// observability wiring until round 6 found the gap). Per R117, a pre-built
+// internal/platform/config's own Load() binding loop: the rule that
+// every entry point resolving one of these DSNs must make the resolution
+// observable applies here too -- workerctl resolves these same five DSNs
+// through its own resolveDSNRequired, bypassing config.Load entirely, so
+// it needs its own wiring for this. A pre-built
 // URI is NEVER parsed for this purpose: the URI form's record omits
 // "database" entirely; the component form's database name is the
 // separate, non-secret spec.DBKey env value, requiring no parsing of the
 // assembled DSN.
 //
 // workerctl has no slog logger of its own (unlike the four long-running
-// daemons and migrate) -- chris's ruling: emit this in workerctl's OWN
+// daemons and migrate) -- this emits in workerctl's OWN
 // existing JSON convention instead of introducing slog just for this one
 // record. Emitted after a successful resolve, before the connection
 // attempt: workerctl is a short-lived CLI, so this line in the operator's
-// terminal IS the observability (the round-6 repro showed
-// "database_unavailable" with no way to tell which form/db had been
-// tried).
+// terminal IS the observability -- without it, a
+// "database_unavailable" failure gives no way to tell which form/db had been
+// tried.
 func logResolvedDatabase(stderr io.Writer, lookup platformsecrets.LookupEnv, spec platformconfig.ComponentSpec, name string) {
 	var record struct {
 		DSN struct {
@@ -2621,32 +2619,32 @@ func writeServiceError(stderr io.Writer, err error) int {
 	return writeError(stderr, "operator_request_failed")
 }
 
-// writeConfigError is CHAOS-5560 round-3's fix for resolveDSNRequired's
+// writeConfigError is resolveDSNRequired's fix for its own previously
 // swallowed diagnostics: keeps the existing stable "configuration_error"
 // JSON code (an operator script parsing it must not break) and adds a
 // `detail` field carrying err's message.
 //
-// Round-4 (2026-09-11) finding: round 3's claim that every such error is
-// "built purely from ComponentSpec's own key-name strings" was true for
-// ResolveDSN's OWN error constructions but false for the error path it can
-// pass through unchanged -- secrets.Resolve's KEY_FILE read failure, which
-// (before its own round-4 fix in internal/platform/secrets/source.go) wrapped
-// the raw os.PathError, embedding the exact `*_FILE` value an operator had
-// configured; a KEY_FILE misconfigured to a raw credential string had that
-// string echoed back verbatim on stderr. secrets.Resolve's message is now
-// key-name-only at the source. logging.RedactText is applied here too, as
-// defense in depth (R89 -- the same rule internal/platform/shell/shell.go's
-// own config.Load() error path already applies), in case any future error
-// text this function has not audited slips a credential-shaped substring
-// through. Uses encoding/json (round-4 finding: `%q` is Go string escaping,
-// not JSON escaping -- a control byte in the underlying text produced
-// invalid JSON).
-// writeConfigError delegates to config.WriteConfigError -- round 6's
-// ruling (chris, via team-lead): ONE JSON diagnostic writer shared by
-// every entry point that can surface a config.ResolveDSN error
-// (workerctl, migrate, and every long-running worker binary via
-// internal/platform/shell), rather than this binary keeping its own,
-// separately-maintained copy.
+// Every such error must be "built purely from ComponentSpec's own
+// key-name strings" -- true for ResolveDSN's OWN error constructions,
+// but it would be false for the error path it can pass through unchanged
+// if secrets.Resolve's KEY_FILE read failure ever again wrapped the raw
+// os.PathError, which embeds the exact `*_FILE` value an operator
+// configured; a KEY_FILE misconfigured to a raw credential string would
+// have that string echoed back verbatim on stderr. secrets.Resolve's
+// message is key-name-only at the source. logging.RedactText is applied
+// here too, as defense in depth (the same rule
+// internal/platform/shell/shell.go's own config.Load() error path
+// applies for its own diagnostics), in case any future error text this
+// function has not audited slips a credential-shaped substring through.
+// Uses encoding/json, never `%q` (Go string escaping, not JSON escaping
+// -- a control byte in the underlying text would produce invalid JSON).
+//
+// writeConfigError delegates to config.WriteConfigError -- ONE JSON
+// diagnostic writer shared by every entry point in this PR that can
+// surface a config.ResolveDSN error (workerctl and migrate), rather than
+// this binary keeping its own, separately-maintained copy.
+// internal/platform/shell/shell.go and the long-running worker binaries
+// keep their own, pre-existing plain-text convention -- not this writer.
 func writeConfigError(stderr io.Writer, err error) int {
 	platformconfig.WriteConfigError(stderr, err)
 	return 1

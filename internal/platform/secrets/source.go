@@ -34,12 +34,13 @@ func Resolve(key string, lookup LookupEnv) (Value, bool, error) {
 
 	contents, err := os.ReadFile(fileName)
 	if err != nil {
-		// CHAOS-5560 round-4 finding: this used to wrap err verbatim
-		// ("read %s_FILE: %w"). Go's os.PathError.Error() embeds the exact
+		// This must never wrap err verbatim
+		// ("read %s_FILE: %w"): Go's os.PathError.Error() embeds the exact
 		// path it tried to open -- fileName, an operator-supplied value
-		// with no shape requirement. A caller who misconfigures KEY_FILE
+		// with no shape requirement. Wrapping it would let a caller who
+		// misconfigures KEY_FILE
 		// to a raw credential string (a full DSN, say) instead of an
-		// actual path had that entire string echoed back verbatim by any
+		// actual path have that entire string echoed back verbatim by any
 		// caller that printed this error to a log or a CLI's stderr. Name
 		// only the key and a fixed error class -- never fileName, never
 		// err's own message.

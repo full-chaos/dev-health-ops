@@ -362,9 +362,9 @@ func TestSafeAttrsNeverContainSecretsOrDSNs(t *testing.T) {
 	}
 }
 
-// TestSafeAttrsReportFormAndNameOfEachResolvedDSN is round 4's (2026-09-11)
-// observability requirement (chris's ruling): a successful resolution used
-// to leave only "*_database_configured=true" observable -- which of the
+// TestSafeAttrsReportFormAndNameOfEachResolvedDSN pins the observability
+// requirement: a successful resolution must not leave only
+// "*_database_configured=true" observable -- which of the
 // two DSN forms actually won, and which database an operator's config
 // reaches, was invisible at Info, so silently selecting the wrong
 // (but reachable) database was a regression no one could see without
@@ -391,9 +391,9 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 			t.Fatalf("safe attrs missing %q: %s", want, text)
 		}
 	}
-	// Round 6 ruling: the pre-built-URI form NEVER has a Name -- chris's
-	// "no parsing of a URI for telemetry" rule -- so domain_database_name
-	// must be entirely absent, not an empty string.
+	// The pre-built-URI form NEVER has a Name -- telemetry never parses
+	// a URI -- so domain_database_name must be entirely absent, not an
+	// empty string.
 	if strings.Contains(text, "domain_database_name") {
 		t.Fatalf("safe attrs emitted a Name for the URI form, which must never be parsed for telemetry: %s", text)
 	}
@@ -406,8 +406,7 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 	}
 }
 
-// TestComponentDatabaseNameNeverParsesAURI is round 6's (2026-09-11)
-// ruling, replacing round 5's parse-and-sanitize approach entirely: no
+// TestComponentDatabaseNameNeverParsesAURI pins the rule that no
 // telemetry field is ever derived by parsing a DSN. ComponentDatabaseName
 // reads the separate, non-secret DBKey env value directly -- proven here
 // by handing it a lookup where the ONLY sensible value comes from that
@@ -917,11 +916,11 @@ func TestNoRouteEnablementSurfaceExists(t *testing.T) {
 	}
 }
 
-// TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException is round-3's
-// (2026-09-11) structural fix, pinned directly: componentKeys() must be
-// derived from ComponentSpec's own fields, never drift from them again the
-// way the round-2 hand-picked slice did (it silently omitted DBKey for
-// every spec and both fields' `_FILE` variants entirely).
+// TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException pins the
+// structural requirement directly: componentKeys() must be derived from
+// ComponentSpec's own fields, never a hand-picked slice that could drift
+// from them (silently omitting DBKey for a spec, or a field's `_FILE`
+// variant entirely).
 func TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException(t *testing.T) {
 	t.Parallel()
 
@@ -983,8 +982,8 @@ func TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException(t *testing.T) {
 	}
 }
 
-// TestValidComponentHostAcceptsExactlyOneEndpoint is round-8's (2026-09-11)
-// P1 fix, red-first: a HOST value like ",127.0.0.1" round-tripped through
+// TestValidComponentHostAcceptsExactlyOneEndpoint pins, red-first, that a
+// HOST value like ",127.0.0.1" round-tripped through
 // net/url perfectly (Hostname()/Port()/Path all matched) yet BOTH pgx and
 // clickhouse-go's own DSN parsers treat the comma as a multi-host list
 // delimiter and still connect. Every cell here is executed through
@@ -1013,12 +1012,11 @@ func TestValidComponentHostAcceptsExactlyOneEndpoint(t *testing.T) {
 		{name: "inner comma (two hosts)", host: "127.0.0.1,evil.invalid", wantErr: true},
 		{name: "space", host: "127.0.0.1 evil.invalid", wantErr: true},
 		{name: "host:port stuffed into HOST", host: "127.0.0.1:5432", wantErr: true},
-		// Round-9 (2026-09-11) finding: a SINGLE trailing dot denotes an
-		// absolute hostname (RFC 1123 S6.1.4.3) -- it must be ACCEPTED,
-		// not treated as an empty label. Reviewer's own reproduction: the
-		// pre-built-URI form already accepted "localhost." (net/url does
-		// not special-case it) and connected live; the component form
-		// wrongly rejected the identical value.
+		// A SINGLE trailing dot denotes an absolute hostname (RFC 1123
+		// S6.1.4.3) -- it must be ACCEPTED, not treated as an empty
+		// label. The pre-built-URI form already accepts "localhost."
+		// (net/url does not special-case it) and connects live; the
+		// component form must accept the identical value.
 		{name: "absolute hostname (single trailing dot)", host: "db.internal."},
 		{name: "empty label (leading dot)", host: ".db.internal", wantErr: true},
 		{name: "empty label (doubled trailing dot)", host: "db.internal..", wantErr: true},
@@ -1097,11 +1095,10 @@ func TestValidComponentHostAcceptsExactlyOneEndpoint(t *testing.T) {
 	}
 }
 
-// TestAbsoluteHostnameTrailingDotIsPreservedVerbatim is round-9's
-// (2026-09-11) fix, proving the reviewer's own fix note ("preserve it in
-// the assembled DSN") rather than merely that ResolveDSNFromComponents no
-// longer errors: the trailing dot must reach the real driver exactly as
-// configured, never stripped -- host identifiers are never altered
+// TestAbsoluteHostnameTrailingDotIsPreservedVerbatim proves the trailing
+// dot reaches the real driver exactly as configured, never stripped --
+// not merely that ResolveDSNFromComponents no longer errors on it. Host
+// identifiers are never altered
 // anywhere in this resolver (the same Trap #140 discipline as every
 // other identifier field).
 func TestAbsoluteHostnameTrailingDotIsPreservedVerbatim(t *testing.T) {
@@ -1122,11 +1119,11 @@ func TestAbsoluteHostnameTrailingDotIsPreservedVerbatim(t *testing.T) {
 	}
 }
 
-// TestAbsoluteHostnameAtTheMaximumLengthIsAccepted is round-10's
-// (2026-09-11) fix: isRFC1123Hostname checked len(host) BEFORE stripping
-// the trailing dot, so a valid, maximum-length (253-character) hostname
-// was rejected the instant it was written in absolute form (254
-// characters with the dot) -- the length limit must apply to the
+// TestAbsoluteHostnameAtTheMaximumLengthIsAccepted pins that
+// isRFC1123Hostname must not check len(host) BEFORE stripping the
+// trailing dot: doing so would reject a valid, maximum-length
+// (253-character) hostname the instant it is written in absolute form
+// (254 characters with the dot) -- the length limit must apply to the
 // hostname itself, not to the absolute-form marker appended to it.
 func TestAbsoluteHostnameAtTheMaximumLengthIsAccepted(t *testing.T) {
 	t.Parallel()
@@ -1165,9 +1162,62 @@ func TestAbsoluteHostnameAtTheMaximumLengthIsAccepted(t *testing.T) {
 	}
 }
 
-// TestValidComponentPortAcceptsExactlyOneNumericPort is round-8's
-// (2026-09-11) companion fix: PORT gets the identical exactly-one-value
-// discipline as HOST.
+// TestDatabaseNameReservedCharactersReachTheRealDriverExactly pins that a
+// component is never refused on character grounds when the assembler can
+// encode it: '/', '?', '#', a space, and '%' are all legitimate
+// PostgreSQL/ClickHouse database identifier characters -- this resolver
+// must never refuse them with a denylist it never needed, since every
+// OTHER identifier in it is preserved exactly with no character denylist
+// at all. Executed through the real drivers' own DSN parsers, not merely
+// proving ResolveDSNFromComponents stops erroring -- separately verified
+// LIVE against real PostgreSQL and ClickHouse containers (both drivers
+// connected to each of these five database names and
+// current_database()/currentDatabase() matched exactly; not committed
+// here since this package's suite does not otherwise spin up
+// containers).
+func TestDatabaseNameReservedCharactersReachTheRealDriverExactly(t *testing.T) {
+	t.Parallel()
+
+	for _, db := range []string{"app/db", "app?db", "app#db", "app db", "app%db"} {
+		t.Run(db+" (PostgreSQL)", func(t *testing.T) {
+			t.Parallel()
+			value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+				"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
+				"DEV_HEALTH_PG_DB":          db,
+			}), DomainDatabaseSpec)
+			if !used || err != nil {
+				t.Fatalf("db %q: used=%v err=%v", db, used, err)
+			}
+			cfg, parseErr := pgconn.ParseConfig(value.Reveal())
+			if parseErr != nil {
+				t.Fatalf("db %q: real pgx driver could not parse the assembled DSN: %v", db, parseErr)
+			}
+			if cfg.Database != db {
+				t.Fatalf("db %q: real pgx driver saw database=%q, want the exact identifier", db, cfg.Database)
+			}
+		})
+		t.Run(db+" (ClickHouse)", func(t *testing.T) {
+			t.Parallel()
+			value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+				"DEV_HEALTH_CH_HOST": "db.internal",
+				"DEV_HEALTH_CH_DB":   db,
+			}), ClickHouseSpec)
+			if !used || err != nil {
+				t.Fatalf("db %q: used=%v err=%v", db, used, err)
+			}
+			options, parseErr := clickhouse.ParseDSN(value.Reveal())
+			if parseErr != nil {
+				t.Fatalf("db %q: real clickhouse-go driver could not parse the assembled DSN: %v", db, parseErr)
+			}
+			if options.Auth.Database != db {
+				t.Fatalf("db %q: real clickhouse-go driver saw database=%q, want the exact identifier", db, options.Auth.Database)
+			}
+		})
+	}
+}
+
+// TestValidComponentPortAcceptsExactlyOneNumericPort pins that PORT gets
+// the identical exactly-one-value discipline as HOST.
 func TestValidComponentPortAcceptsExactlyOneNumericPort(t *testing.T) {
 	t.Parallel()
 
@@ -1239,9 +1289,8 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 		wantDB    string // "" = don't check
 	}{
 		{name: "absent host", mutate: func(m map[string]string) { delete(m, "TEST_HOST") }, wantUsed: false},
-		// Round-4 (2026-09-11) finding (Trap #140: never TrimSpace an
-		// identifier): a whitespace-only host used to be treated as
-		// "absent" (trimmed to empty). It is non-empty raw input -- the
+		// Never TrimSpace an identifier: a whitespace-only host must not
+		// be treated as "absent" (trimmed to empty). It is non-empty raw input -- the
 		// component form now activates and explicitly refuses it, rather
 		// than silently treating it the same as no host at all.
 		{name: "whitespace-only host -- activates and is explicitly refused", mutate: func(m map[string]string) { m["TEST_HOST"] = "   " }, wantUsed: true, wantErr: true},
@@ -1306,11 +1355,11 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 			name: "port with leading whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_PORT"] = " 5432" },
 		},
-		// Round-5 (2026-09-11) finding: envOrDefault's own presence check
-		// trimmed for emptiness, so a whitespace-only PORT/DB was treated
-		// as absent and silently fell to the default -- NEVER reaching the
-		// whitespace-refusal guard above at all. rawOrDefault fixes this;
-		// these cells pin it.
+		// envOrDefault's own presence check trims for emptiness, so a
+		// whitespace-only PORT/DB would be treated as absent and
+		// silently fall to the default -- NEVER reaching the
+		// whitespace-refusal guard above at all. rawOrDefault avoids
+		// this; these cells pin it.
 		{
 			name: "port whitespace-only -- explicitly refused, not silently defaulted", wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_PORT"] = "   " },
@@ -1323,19 +1372,36 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 			name: "user with trailing whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_USER"] = "app " },
 		},
+		// '/', '?', and '#' are all valid
+		// PostgreSQL/ClickHouse database identifier characters (a
+		// double-quoted CREATE DATABASE name may contain any of them) --
+		// refusing them violated the same exact-preservation contract
+		// every other identifier in this resolver gets. Proven safe by
+		// the round-trip check immediately below: url.URL's own path
+		// encoder percent-escapes '?'/'#' when assembling the DSN and
+		// decodes them back to the literal character; '/' is a
+		// legitimate literal byte within one path segment and neither
+		// driver splits the database name on it.
 		{
-			name: "db name with / -- refused explicitly (would inject a path segment)", wantUsed: true, wantErr: true,
-			mutate: func(m map[string]string) { m["TEST_DB"] = "app/db" },
+			name: "db name with / -- preserved exactly, not refused", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "app/db" }, wantDB: "app/db",
 		},
 		{
-			name: "db name with # -- refused explicitly (would inject a fragment)", wantUsed: true, wantErr: true,
-			mutate: func(m map[string]string) { m["TEST_DB"] = "app#db" },
+			name: "db name with ? -- preserved exactly, not refused", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "app?db" }, wantDB: "app?db",
 		},
-		// Round-4 (2026-09-11) findings (Trap #140): leading/trailing
-		// whitespace on an identifier used to be silently trimmed, which
-		// proved (against a real live PostgreSQL, in the reviewer's own
-		// reproduction) to connect to a DIFFERENT existing database than
-		// the one actually configured. It is now explicitly refused;
+		{
+			name: "db name with # -- preserved exactly, not refused", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "app#db" }, wantDB: "app#db",
+		},
+		{
+			name: "db name with % -- preserved exactly, not refused", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "app%db" }, wantDB: "app%db",
+		},
+		// Leading/trailing whitespace on an identifier must never be
+		// silently trimmed: doing so connects (proven against a real
+		// live PostgreSQL) to a DIFFERENT existing database than the one
+		// actually configured. It is explicitly refused;
 		// meaningful INNER whitespace (not at either edge) is preserved
 		// exactly and connects correctly.
 		{
@@ -1479,8 +1545,8 @@ func TestLoadPrefersComponentFormAndSurvivesAReservedCharacterPassword(t *testin
 	}
 }
 
-// TestURIAndComponentFormsAreMutuallyExclusivePerDSN is round-1's
-// (2026-09-11) design ruling: NEITHER form may silently win over the other
+// TestURIAndComponentFormsAreMutuallyExclusivePerDSN pins the design rule
+// that NEITHER form may silently win over the other
 // (both directions were tried and both left the losing form's value sitting
 // in the environment with no way to tell a deliberate override from a stale
 // leftover). Setting both a DSN's pre-built key (or its `_FILE` variant) and
@@ -1500,10 +1566,9 @@ func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 		t.Fatalf("expected the pre-existing KEY/KEY_FILE error when no host var is set, got: %v", err)
 	}
 
-	// URI + component HOST, both set: refused, naming both keys -- this is
-	// round-1's exact reproduction (an operator set POSTGRES_DOMAIN_HOST to
-	// move to components while a stale POSTGRES_URI/_FILE pair still sat in
-	// the environment).
+	// URI + component HOST, both set: refused, naming both keys -- e.g.
+	// an operator set POSTGRES_DOMAIN_HOST to move to components while a
+	// stale POSTGRES_URI/_FILE pair still sat in the environment.
 	_, err = Load(workerSpec(map[string]string{
 		"POSTGRES_URI":                  "postgresql://old:old@old.invalid:5432/old",
 		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
@@ -1560,11 +1625,11 @@ func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 		t.Fatalf("expected DomainDatabaseURI to be unconfigured when neither form is set, got %q", cfg2.DomainDatabaseURI.Reveal())
 	}
 
-	// Round-2 (2026-09-11) finding: the exclusivity check only inspected
-	// HOST. A non-host component (here, USER) set alongside a raw URI was
+	// The exclusivity check must not inspect only HOST: a non-host
+	// component (here, USER) set alongside a raw URI must not be
 	// silently ignored -- ResolveDSNFromComponents never activates without
-	// HOST, so the raw URI won with no error and no indication the stray
-	// USER var was sitting unused.
+	// HOST, so the raw URI would otherwise win with no error and no
+	// indication the stray USER var was sitting unused.
 	_, err = Load(workerSpec(map[string]string{
 		"POSTGRES_URI":              "postgresql://raw:raw@raw.invalid:5432/rawdb",
 		"DEV_HEALTH_PG_DOMAIN_USER": "app",
@@ -1577,10 +1642,10 @@ func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 		t.Fatalf("expected a non-host component set alongside a raw URI to be refused, got: %v", err)
 	}
 
-	// Round-2 (2026-09-11) finding, second half: a non-host component set
-	// with HOST absent AND no raw URI either used to silently report
-	// "not configured" -- the same as if nothing had been set at all, with
-	// no sign the operator had already started configuring components.
+	// A non-host component set with HOST absent AND no raw URI either
+	// must not silently report "not configured" -- the same as if
+	// nothing had been set at all, with no sign the operator had
+	// already started configuring components.
 	_, err = Load(workerSpec(map[string]string{
 		"DEV_HEALTH_PG_DOMAIN_USER": "app",
 		"WORKER_DATABASE_URI":       "postgresql://app:app@db.internal:5432/appdb",
@@ -1591,10 +1656,10 @@ func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 		t.Fatalf("expected a partial component set (no HOST, no raw URI) to name the missing HOST key, got: %v", err)
 	}
 
-	// Round-6 (2026-09-11) finding: an empty-string raw URI alongside a full,
-	// valid component set used to be refused as "mutually exclusive" -- the
-	// exclusivity check tested bare env-var PRESENCE, not secrets.Resolve's
-	// own "configured" predicate (a direct value of exactly "" is NOT
+	// An empty-string raw URI alongside a full, valid component set must
+	// not be refused as "mutually exclusive" -- the exclusivity check
+	// must use secrets.Resolve's own "configured" predicate, never bare
+	// env-var PRESENCE (a direct value of exactly "" is NOT
 	// configured, per secrets.Resolve's `direct != ""` rule). An operator
 	// who leaves POSTGRES_URI="" set (e.g. a compose file's unset-interpolation
 	// default) while fully configuring components must succeed on components,
@@ -1637,8 +1702,8 @@ func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 	}
 }
 
-// TestNonSharedDBKeyAndFileVariantsAreDetected is round 3's (2026-09-11) two
-// findings, reproduced then fixed: (1) ClickHouse's DBKey is NOT shared the
+// TestNonSharedDBKeyAndFileVariantsAreDetected pins two requirements:
+// (1) ClickHouse's DBKey is NOT shared the
 // way the three Postgres specs' DBKey is, so it must still be swept by the
 // exclusivity/missing-key detection; (2) USER_FILE/PASSWORD_FILE are real,
 // supported activation paths (ResolveDSNFromComponents resolves both
@@ -1713,21 +1778,19 @@ func TestNonSharedDBKeyAndFileVariantsAreDetected(t *testing.T) {
 	})
 }
 
-// TestWhitespaceOnlyPasswordIsDetectedAndAuthenticates is round 4's
-// (2026-09-11) third finding, reproduced then fixed (Trap #140: never
-// TrimSpace a secret): presence detection used to TrimSpace a password
-// before checking it for emptiness, while secrets.Resolve (which actually
-// builds the connection) deliberately never trims a secret's meaningful
-// content -- so a password consisting only of whitespace was Configured()
-// to secrets.Resolve (and DID authenticate -- the reviewer proved this
-// against a real live PostgreSQL) but invisible to the exclusivity check,
-// letting it silently coexist with a raw URI unflagged.
+// TestWhitespaceOnlyPasswordIsDetectedAndAuthenticates pins that presence
+// detection must never TrimSpace a secret: a password consisting only of
+// whitespace is Configured() to secrets.Resolve (which actually builds
+// the connection, and deliberately never trims a secret's meaningful
+// content) and DOES authenticate (proven against a real live PostgreSQL)
+// -- if presence detection trimmed it before checking emptiness, it
+// would be invisible to the exclusivity check, letting it silently
+// coexist with a raw URI unflagged.
 func TestWhitespaceOnlyPasswordIsDetectedAndAuthenticates(t *testing.T) {
 	t.Parallel()
 
-	// Presence: the round-4 defect, reproduced then fixed. A whitespace-
-	// only password alongside a raw URI must be refused, not silently
-	// ignored.
+	// Presence: a whitespace-only password alongside a raw URI must be
+	// refused, not silently ignored.
 	_, err := Load(workerSpec(map[string]string{
 		"POSTGRES_URI":                  "postgresql://old:old@old.invalid:5432/old",
 		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
@@ -1765,8 +1828,8 @@ func TestWhitespaceOnlyPasswordIsDetectedAndAuthenticates(t *testing.T) {
 	}
 }
 
-// TestWhitespaceOnlyFileSourcedCredentialsAreDetected is round 6's explicit
-// cell for round 4/5's whitespace-detection fix: a whitespace-only
+// TestWhitespaceOnlyFileSourcedCredentialsAreDetected is the explicit
+// cell for the whitespace-detection rule: a whitespace-only
 // PASSWORD or USER delivered via its `_FILE` form (a mounted secret file
 // containing only spaces, no trailing newline) must be detected exactly
 // the same way as one supplied directly -- secrets.Resolve applies the
@@ -1837,11 +1900,10 @@ func TestWhitespaceOnlyFileSourcedCredentialsAreDetected(t *testing.T) {
 	})
 }
 
-// TestFileReadFailureNeverEchoesTheConfiguredPath is round 4's (2026-09-11)
-// first finding, reproduced then fixed at the root
+// TestFileReadFailureNeverEchoesTheConfiguredPath pins the fix at the root
 // (internal/platform/secrets/source.go): secrets.Resolve's KEY_FILE
-// read-failure error used to wrap the underlying os.PathError verbatim,
-// and Go's os.PathError.Error() embeds the exact path it tried to open --
+// read-failure error must never wrap the underlying os.PathError
+// verbatim, since Go's os.PathError.Error() embeds the exact path it tried to open --
 // an operator who misconfigures KEY_FILE to a raw credential string (a
 // full DSN, say) instead of an actual path had that entire string,
 // password included, echoed back by any caller that printed the error.

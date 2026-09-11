@@ -35,10 +35,10 @@ func TestExecuteHelpAndVersionDoNotRequireDatabase(t *testing.T) {
 	}
 }
 
-// TestHelpDocumentsBothDSNForms is round-2's (2026-09-11) P3 fix: --help
-// documented zero environment variables (not even the pre-existing
-// MIGRATION_DATABASE_URI), so an operator had no way to discover either DSN
-// form from this binary itself.
+// TestHelpDocumentsBothDSNForms pins that --help must document both DSN
+// forms: leaving it at zero environment variables (not even the
+// pre-existing MIGRATION_DATABASE_URI) would give an operator no way to
+// discover either DSN form from this binary itself.
 func TestHelpDocumentsBothDSNForms(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr bytes.Buffer
@@ -234,10 +234,9 @@ func TestExecuteRequiresThreeSeparatedRolesBeforeConnecting(t *testing.T) {
 	}
 }
 
-// TestExecuteEmitsAnInfoRecordOfTheResolvedForm is round 5's (2026-09-11)
-// finding #5, reproduced then fixed: a successful resolution returned with
-// no observable record of which form (uri|components) or database it
-// reached, at all. Round 6's ruling (chris): the URI form's record names
+// TestExecuteEmitsAnInfoRecordOfTheResolvedForm pins that a successful
+// resolution must leave an observable record of which form
+// (uri|components) and database it reached: the URI form's record names
 // ONLY the form, never a database identifier parsed out of the DSN --
 // only the component form's record includes a database name, read
 // directly from the env key. The DSN itself (and its credentials) must
@@ -303,7 +302,7 @@ func TestExecuteEmitsAnInfoRecordOfTheResolvedForm(t *testing.T) {
 // DEV_HEALTH_MIGRATION_PG_* names (never POSTGRES_HOST/_PORT/_USER/
 // _PASSWORD/_DB, which deploy/docker-compose/compose.go-workers.yml --
 // not touched by this PR -- already sets unconditionally for that same
-// shell fallback; round-1 (2026-09-11) proved reusing those names made
+// shell fallback; reusing those names would make
 // this function silently discard a real, working MIGRATION_DATABASE_URI
 // override the instant that compose service ran).
 func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
@@ -357,7 +356,7 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		}
 	})
 
-	// Round-1 (2026-09-11) ruling: URI and component forms are mutually
+	// URI and component forms are mutually
 	// exclusive, refused loudly naming both keys -- neither silently wins.
 	t.Run("both forms set -- refused naming both keys", func(t *testing.T) {
 		t.Parallel()
@@ -377,7 +376,7 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		}
 	})
 
-	// The exact overlay scenario named in the round-1 ruling: this binary
+	// The exact overlay scenario this matters for: this binary
 	// must behave EXACTLY as it did before this ticket when
 	// deploy/docker-compose/compose.go-workers.yml's own POSTGRES_HOST
 	// default (or any of its raw shell-fallback vars) is present --
@@ -415,11 +414,11 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		}
 	})
 
-	// Round-2 (2026-09-11) finding, second half: a non-host component set
-	// with the component HOST absent, and no MIGRATION_DATABASE_URI either,
-	// used to silently report "MIGRATION_DATABASE_URI is required" -- true,
-	// but hiding that the operator had already started configuring
-	// components and only forgot the host var.
+	// A non-host component set with the component HOST absent, and no
+	// MIGRATION_DATABASE_URI either, must not silently report
+	// "MIGRATION_DATABASE_URI is required" -- true, but hiding that the
+	// operator had already started configuring components and only
+	// forgot the host var.
 	t.Run("non-host component set without host or URI names the missing host key", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
@@ -455,10 +454,10 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		}
 	})
 
-	// Round-3 (2026-09-11) finding: unlike the four internal/platform/config
+	// Unlike the four internal/platform/config
 	// DSNs, migrate's DB key is NOT shared with any sibling connection, so
-	// it must still be swept by the detection -- the round-2 fix's blanket
-	// DBKey exclusion wrongly covered this binary too.
+	// it must still be swept by the detection -- a blanket
+	// DBKey exclusion would wrongly cover this binary too.
 	t.Run("component DB alone (no host, no URI) names the missing host key", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
@@ -491,10 +490,10 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		}
 	})
 
-	// Round-3 finding: PASSWORD_FILE is a real, supported activation path
+	// PASSWORD_FILE is a real, supported activation path
 	// (ResolveDSNFromComponents resolves DEV_HEALTH_MIGRATION_PG_PASSWORD
 	// through secrets.Resolve, which supports its own `_FILE` form) that the
-	// round-2 detection sweep never checked.
+	// detection sweep must check too.
 	t.Run("PASSWORD_FILE alone (no host, no URI) names the missing host key", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()

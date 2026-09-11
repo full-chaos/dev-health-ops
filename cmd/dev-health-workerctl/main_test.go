@@ -898,10 +898,9 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *
 	runtime := commandRuntime(t, commandAuthorizer{})
 	runtime.lookup = func(string) (string, bool) { return "", false }
 	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, nil, &stdout, &stderr)
-	// CHAOS-5560 round-3: the stable "code" is unchanged, but a "detail"
-	// field naming the missing key was added -- assert both rather than an
-	// exact string, so this test does not itself pin the old, less useful
-	// shape back in place.
+	// Assert the stable "code" AND the "detail" field naming the missing
+	// key, rather than an exact string, so this test does not itself pin
+	// a less useful shape in place.
 	if code != 1 ||
 		!strings.Contains(stderr.String(), `"code":"configuration_error"`) ||
 		!strings.Contains(stderr.String(), "CLICKHOUSE_URI") {
@@ -909,11 +908,11 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *
 	}
 }
 
-// TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase is
-// round-6's (2026-09-11) P1 fix: this dispatcher resolves CLICKHOUSE_URI
+// TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase
+// pins that this dispatcher, which resolves CLICKHOUSE_URI
 // lazily through resolveDSNRequired, entirely bypassing config.Load and
-// configureRuntime's own resolution -- so it never got the Info resolution
-// record every other successful DSN resolution in this ticket promises.
+// configureRuntime's own resolution, must still emit the Info resolution
+// record every other successful DSN resolution promises.
 // The eventual chclickhouse.Open against an unroutable host (127.0.0.1:1,
 // refused immediately) fails closed with operator_backend_unavailable, same
 // as before this fix -- what changed is that the Info record is now
@@ -1007,8 +1006,8 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRequiresClickHouse
 	runtime := commandRuntime(t, commandAuthorizer{})
 	runtime.lookup = func(string) (string, bool) { return "", false }
 	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, nil, &stdout, &stderr)
-	// CHAOS-5560 round-3: see the sibling test above -- the stable "code" is
-	// unchanged, a "detail" field naming the missing key was added.
+	// See the sibling test above -- the stable "code" plus a "detail"
+	// field naming the missing key.
 	if code != 1 ||
 		!strings.Contains(stderr.String(), `"code":"configuration_error"`) ||
 		!strings.Contains(stderr.String(), "CLICKHOUSE_URI") {
@@ -1018,10 +1017,10 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRequiresClickHouse
 
 // TestDispatchProvidersyncRetireStaleLinearProjectOwnershipLogsResolvedDatabase
 // mirrors TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase
-// for this dispatcher's own, separate lazy CLICKHOUSE_URI resolution site
-// (round-7 review, 2026-09-11, P3: the sibling site had this coverage, this
+// for this dispatcher's own, separate lazy CLICKHOUSE_URI resolution
+// site: the sibling site had this coverage, this
 // one did not -- removing only this dispatcher's logResolvedDatabase call
-// passed the whole suite).
+// still passed the whole suite without it.
 func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipLogsResolvedDatabase(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runtime := commandRuntime(t, commandAuthorizer{})

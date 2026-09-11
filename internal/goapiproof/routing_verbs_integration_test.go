@@ -14,6 +14,13 @@ import (
 
 const verbsRunningBuild = "ffd9e5d5dc8ee21de5befa1bae47ba9195be135e"
 
+// testDocumentDigest2 is a SECOND registered document, so a test can put
+// two operations in one invocation without giving them the same digest --
+// the routing table's primary key is (schema, document, operation), and
+// two operations sharing a document digest is not a shape the edge's
+// catalog can produce (its loader refuses a duplicate digest).
+const testDocumentDigest2 = "77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2"
+
 // seedProof writes the exact receipt `enable`'s preflight selects on, so
 // the two halves meet: what go-api-prove WRITES must be what this verb
 // READS. A hand-built INSERT here would prove only that the test agrees
@@ -58,6 +65,7 @@ func enableRequest(operations ...string) EnableRequest {
 		digests[operation] = testDocumentDigest
 	}
 	return EnableRequest{
+		PrincipalID:       testPrincipalID,
 		SchemaDigest:      testSchemaDigest,
 		RunningBuild:      verbsRunningBuild,
 		Operations:        operations,
@@ -75,7 +83,7 @@ func enableRequest(operations ...string) EnableRequest {
 // parse/validate, dispatch and a real database.
 func TestEnableRefusesAnOperationWithNoProofForThisBuild(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 
 	if _, err := Enable(ctx, pool, enableRequest("featureFlags")); !errors.Is(err, ErrEnableUnproven) {
 		t.Fatalf("Enable = %v, want ErrEnableUnproven", err)
@@ -102,7 +110,7 @@ func TestEnableRefusesAProofRecordedAgainstAnythingElse(t *testing.T) {
 	for name, seed := range cases {
 		t.Run(name, func(t *testing.T) {
 			ctx := t.Context()
-			pool := startRegistryPostgres(t)
+			pool := startAuditedRegistryPostgres(t)
 			seedProof(t, ctx, pool, "featureFlags", testDocumentDigest, seed.build, seed.stage, seed.terminalState)
 
 			if _, err := Enable(ctx, pool, enableRequest("featureFlags")); !errors.Is(err, ErrEnableUnproven) {
@@ -117,7 +125,7 @@ func TestEnableRefusesAProofRecordedAgainstAnythingElse(t *testing.T) {
 // the durable who/why.
 func TestEnableWritesTheProvenRowWithItsProvenance(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedProof(t, ctx, pool, "featureFlags", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
 
 	outcomes, err := Enable(ctx, pool, enableRequest("featureFlags"))
@@ -148,7 +156,7 @@ func TestEnableWritesTheProvenRowWithItsProvenance(t *testing.T) {
 // message; this is the fix for that.
 func TestEnableAcknowledgedUnprovenMarksTheRowDurably(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 
 	request := enableRequest("featureFlags")
 	request.AcknowledgeUnproven = true
@@ -181,7 +189,7 @@ func TestEnableAcknowledgedUnprovenMarksTheRowDurably(t *testing.T) {
 // BEFORE anything is written.
 func TestEnableDryRunRunsTheGateAndWritesNothing(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedProof(t, ctx, pool, "featureFlags", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
 
 	request := enableRequest("featureFlags")
@@ -217,7 +225,7 @@ func TestEnableDryRunRunsTheGateAndWritesNothing(t *testing.T) {
 // command twice without thinking about it.
 func TestEnableIsIdempotentOnItsOwnPrimaryKey(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedProof(t, ctx, pool, "featureFlags", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
 
 	for attempt := 0; attempt < 2; attempt++ {
@@ -238,7 +246,7 @@ func TestEnableIsIdempotentOnItsOwnPrimaryKey(t *testing.T) {
 // candidate build -- only a database.
 func TestDisableTurnsARowOffWithoutTouchingItsBuild(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "primary", verbsRunningBuild, pool)
 
 	changes, err := Disable(ctx, pool, DisableRequest{
@@ -272,7 +280,7 @@ func TestDisableTurnsARowOffWithoutTouchingItsBuild(t *testing.T) {
 // touch -- and writes nothing.
 func TestDisableDryRunReportsEveryRowAndWritesNothing(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", verbsRunningBuild, pool)
 
 	changes, err := Disable(ctx, pool, DisableRequest{
@@ -301,7 +309,7 @@ func TestDisableDryRunReportsEveryRowAndWritesNothing(t *testing.T) {
 // was never enabled manufactures history.
 func TestDisableNeverInsertsARowForAnOperationThatHasNone(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 
 	changes, err := Disable(ctx, pool, DisableRequest{
 		SchemaDigest:   testSchemaDigest,
@@ -331,7 +339,7 @@ func TestDisableNeverInsertsARowForAnOperationThatHasNone(t *testing.T) {
 // since I looked". It is never WRITTEN, only compared.
 func TestDisableGuardRefusesARowThatMovedAndWritesNothing(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", verbsRunningBuild, pool)
 
 	_, err := Disable(ctx, pool, DisableRequest{
@@ -358,7 +366,7 @@ func TestDisableGuardRefusesARowThatMovedAndWritesNothing(t *testing.T) {
 // CHAOS-5416 outage stayed invisible for six days.
 func TestRoutingStatusRowsSeparatesMatchStaleAndMissing(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", verbsRunningBuild, pool)
 
 	const staleDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -412,7 +420,7 @@ func TestRoutingStatusRowsSeparatesMatchStaleAndMissing(t *testing.T) {
 // across any of them changing (plan §8.3).
 func TestRoutingStatusRowsNeverBorrowsAnotherBuildsProof(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", testCandidateBuild, pool)
 	seedProof(t, ctx, pool, "featureFlags", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
 
@@ -483,7 +491,7 @@ func TestRoutingStatusRowsAppliesThePrimaryRowsStricterRouteRule(t *testing.T) {
 // the UPDATE on the ROW's own document digest instead.
 func TestDisableTurnsOffARowWhoseDocumentDigestDriftedFromTheCatalog(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	const driftedDigest = "2222222222222222222222222222222222222222222222222222222222222222"
 	seedRow(t, ctx, "featureFlags", driftedDigest, "canary", verbsRunningBuild, pool)
 
@@ -520,7 +528,7 @@ func TestDisableTurnsOffARowWhoseDocumentDigestDriftedFromTheCatalog(t *testing.
 // failure: it reports success while leaving a reachable row behind.
 func TestDisableTurnsOffEveryRowAnOperationHasAtTheLiveDigest(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	const otherDigest = "5555555555555555555555555555555555555555555555555555555555555555"
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", verbsRunningBuild, pool)
 	seedRow(t, ctx, "featureFlags", otherDigest, "primary", verbsRunningBuild, pool)
@@ -645,6 +653,7 @@ func TestRepointRefusesAFilterNamingAnOperationWithNoRow(t *testing.T) {
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "shadow", testCandidateBuild, pool)
 
 	_, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:    testPrincipalID,
 		SchemaDigest:   testSchemaDigest,
 		RunningBuild:   verbsRunningBuild,
 		Operations:     []string{"featureFlags", "typo"},
@@ -684,7 +693,7 @@ func TestRepointRefusesAFilterNamingAnOperationWithNoRow(t *testing.T) {
 // post-enable state.
 func TestDisableCannotReportSuccessOverAConcurrentEnable(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "python", testCandidateBuild, pool)
 
 	holder, err := pool.Begin(ctx)
@@ -808,7 +817,7 @@ func waitForALockWaiter(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 // `mode` at all.
 func TestRepointNeverBorrowsASiblingRowsModeAcrossTheTwoReachableModes(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	const canaryDigest = "7777777777777777777777777777777777777777777777777777777777777777"
 	const primaryDigest = "8888888888888888888888888888888888888888888888888888888888888888"
 	seedRow(t, ctx, "flowMatrix", canaryDigest, "canary", testCandidateBuild, pool)
@@ -819,6 +828,7 @@ func TestRepointNeverBorrowsASiblingRowsModeAcrossTheTwoReachableModes(t *testin
 		RunningBuild:   verbsRunningBuild,
 		RecordedBy:     "lane-routing-verbs",
 		ReviewEvidence: "CHAOS-5486: the astra canary/primary re-point shape",
+		PrincipalID:    testPrincipalID,
 	})
 	if err != nil {
 		t.Fatalf("Repoint: %v", err)
@@ -870,12 +880,13 @@ func TestRepointNeverBorrowsASiblingRowsModeAcrossTheTwoReachableModes(t *testin
 
 func TestRepointAssertsEachDuplicateRowsModeAgainstItsOwnBeforeValue(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	const otherDigest = "6666666666666666666666666666666666666666666666666666666666666666"
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "shadow", testCandidateBuild, pool)
 	seedRow(t, ctx, "featureFlags", otherDigest, "canary", testCandidateBuild, pool)
 
 	outcomes, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:    testPrincipalID,
 		SchemaDigest:   testSchemaDigest,
 		RunningBuild:   verbsRunningBuild,
 		RecordedBy:     "lane-routing-verbs",
@@ -1081,7 +1092,7 @@ func TestEnableRefusesWhenTheRoutingRowWriteIsSwallowed(t *testing.T) {
 // non-concurrent half: does it read back what was actually there.
 func TestEnableOutcomeReportsThePriorRowWhenOneExisted(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "flowMatrix", testDocumentDigest, "python", "deaddeaddeaddeaddeaddeaddeaddeaddeaddead", pool)
 	seedProof(t, ctx, pool, "flowMatrix", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
 
@@ -1106,7 +1117,7 @@ func TestEnableOutcomeReportsThePriorRowWhenOneExisted(t *testing.T) {
 // The other half: no row existed at all.
 func TestEnableOutcomeReportsNoPriorRowWhenNoneExisted(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedProof(t, ctx, pool, "flowMatrix", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
 
 	outcomes, err := Enable(ctx, pool, enableRequest("flowMatrix"))

@@ -37,11 +37,24 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/registryschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routingauditschema"
 )
 
 const (
 	verbTestBuild     = "b18e56fa79cfe20ce0f75df148144b832d92be36"
 	verbTestOperation = "flowMatrix"
+	// verbTestBearer is a syntactically valid effective-principal envelope
+	// -- three base64url segments carrying verbTestPrincipalID as `sub` --
+	// so CHAOS-5505's audit row can be written for a verb this suite
+	// calls. It is NOT signed and would be rejected by a real verifier;
+	// these tests never call one (startQueryAPI's fake /buildinfo below
+	// accepts any non-empty Authorization header), and EnvelopeSubject
+	// itself never verifies the envelope, only decodes it -- see its own
+	// doc comment (internal/goapiproof/routing_audit.go) for why that is
+	// safe here but would not be outside a verb that already called the
+	// real /buildinfo first.
+	verbTestBearer      = "eyJhbGciOiJFZERTQSIsImtpZCI6ImdvLWFwaS1lbnZlbG9wZS10ZXN0In0.eyJzdWIiOiJiMGExYzJkMy0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEifQ.c2lnbmF0dXJl" // gitleaks:allow -- fabricated fixture, unsigned, never accepted by any real verifier
+	verbTestPrincipalID = "b0a1c2d3-0000-4000-8000-000000000001"
 )
 
 func startVerbPostgres(t *testing.T) (*pgxpool.Pool, string) {
@@ -66,6 +79,13 @@ func startVerbPostgres(t *testing.T) (*pgxpool.Pool, string) {
 	}
 	t.Cleanup(pool.Close)
 	if err := registryschema.Create(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	// CHAOS-5505: every write verb now also writes an audit row in the
+	// SAME transaction, so a verb driven end to end here needs the audit
+	// table too -- not just the tables enable/disable/repoint's own
+	// preflights read.
+	if err := routingauditschema.Create(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
 	return pool, instance.URI
@@ -165,7 +185,7 @@ func TestEnableRefusesWhenThePlanesDisagreeOnTheSchemaDigest(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "0000000000000000000000000000000000000000000000000000000000000000"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 
 	// The running process reports a DIFFERENT schema digest from this
 	// binary's embedded SDL.
@@ -202,7 +222,7 @@ func TestEnableDryRunNeverWritesARow(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "9999999999999999999999999999999999999999999999999999999999999999"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	out, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven", "-dry-run")...)
@@ -225,7 +245,7 @@ func TestEnableWarnsOnEveryUnprovenRowItActuallyWrites(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "1111111111111111111111111111111111111111111111111111111111111111"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	// Without the acknowledgement, an unproven build is REFUSED outright.
@@ -359,7 +379,7 @@ func TestEnableRefusesAnOperationTheRunningProcessDoesNotRegister(t *testing.T) 
 	_, dsn := startVerbPostgres(t)
 	digest := "2222222222222222222222222222222222222222222222222222222222222222"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	// The running process registers SOME operation, agreeing on the
 	// schema digest -- but not the one this run asks for. Without at
 	// least one operation, enable's OWN "registers no operations" check
@@ -388,7 +408,7 @@ func TestEnableRefusesADocumentDigestDivergentFromTheCatalog(t *testing.T) {
 	catalogDigest := "4444444444444444444444444444444444444444444444444444444444444444"
 	registryDigest := "5555555555555555555555555555555555555555555555555555555555555555"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: catalogDigest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: registryDigest})
 
 	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
@@ -409,7 +429,7 @@ func TestEnableExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "6666666666666666666666666666666666666666666666666666666666666666"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-expect-build", "0000000000000000000000000000000000000000")...)
@@ -443,7 +463,7 @@ func TestEnableWarnsOnEveryUnprovenRowAcrossMultipleOperations(t *testing.T) {
 		verbTestOperation: digestA,
 		secondOperation:   digestB,
 	})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{
 		verbTestOperation: digestA,
 		secondOperation:   digestB,
@@ -477,7 +497,7 @@ func TestRepointExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "9999999999999999999999999999999999999999999999999999999999999999"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	// repoint refuses on an empty registry (ErrRepointNoRows), so seed one
@@ -530,7 +550,7 @@ func TestStatusTextMarksAGenuinelyProvenRowOkNotUnproven(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	digest := "8888888888888888888888888888888888888888888888888888888888888887"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	ctx := context.Background()
@@ -621,7 +641,7 @@ func TestStatusReportsDeployedDocumentDigestMismatchNotHealthy(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	digest := "8888888888888888888888888888888888888888888888888888888888888887"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	documentDigests := map[string]string{verbTestOperation: digest}
 	server := startQueryAPI(t, localSchemaDigest(), documentDigests)
 
@@ -728,7 +748,7 @@ func TestStatusTextReportsMismatchWhenTheDeployedPlaneStopsRegisteringTheOperati
 	pool, dsn := startVerbPostgres(t)
 	digest := "8888888888888888888888888888888888888888888888888888888888888886"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	documentDigests := map[string]string{verbTestOperation: digest}
 	server := startQueryAPI(t, localSchemaDigest(), documentDigests)
 
@@ -790,7 +810,7 @@ func TestEnableRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "4444444444444444444444444444444444444444444444444444444444444444"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{})
 
 	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
@@ -808,7 +828,7 @@ func TestRepointRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "5555555555555555555555555555555555555555555555555555555555555555"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	// Seed a row first with a REGISTERING fixture, then point repoint at
 	// an EMPTY one -- proves the check fires from repoint's own preflight
 	// against the registry it actually reads, not from an incidental
@@ -845,7 +865,7 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 	pool, dsn := startVerbPostgres(t)
 	digest := "6666666666666666666666666666666666666666666666666666666666666666"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	ctx := context.Background()
@@ -978,7 +998,7 @@ func TestEnableDerivesBothEndpointsFromTheEnvVarAloneNoFlags(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "7777777777777777777777777777777777777777777777777777777777777777"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 	t.Setenv("GO_API_QUERY_API_URL", server.URL)
 
@@ -1010,7 +1030,7 @@ func TestEnableRefusesWithNoQueryAPIURLConfiguredAtAllRealBinary(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "8888888888888888888888888888888888888888888888888888888888888886"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	t.Setenv("GO_API_QUERY_API_URL", "")
 
 	_, _, err := captureVerb(t,
@@ -1302,7 +1322,7 @@ func TestRepointTwoRowsSameOperationDifferentDocumentDigestProduceDistinguishabl
 	// actually CHANGES (matching disable's convention), so both rows must
 	// have something to move.
 	oldBuild := "0000000000000000000000000000000000000000"
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digestA})
 
 	for _, digest := range []string{digestA, digestB} {
@@ -1351,7 +1371,7 @@ func TestEnableLogNamesTheLiveRowsDocumentDigestNotADeadSiblings(t *testing.T) {
 	liveDigest := "5555555555555555555555555555555555555555555555555555555555555555"
 	deadDigest := "6666666666666666666666666666666666666666666666666666666666666668"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: liveDigest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: liveDigest})
 
 	if _, err := pool.Exec(ctx, `
@@ -1392,7 +1412,7 @@ func TestEnableAndRepointBuildInfoRefusalNeverPrintsTheURLPath(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "7777777777777777777777777777777777777777777777777777777777777777"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	registry := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	// A /buildinfo that answers 404 to EVERY path -- the ErrNoBuildIdentity
@@ -1442,7 +1462,7 @@ func TestEnableBuildInfoGenericFailureIsWordedRefused(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "8888888888888888888888888888888888888888888888888888888888888888"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	registry := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	_, _, err := captureVerb(t, enableArgs(registry, dsn, catalogPath, "-buildinfo-url", "http://127.0.0.1:9/buildinfo")...)
@@ -1773,7 +1793,7 @@ func TestEnableExitsOneOnAGenuineServerSideWriteFailure(t *testing.T) {
 	ctx := context.Background()
 	digest := "9999999999999999999999999999999999999999999999999999999999999998"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	if _, err := pool.Exec(ctx, `
@@ -1808,7 +1828,7 @@ func TestEnableAndRepointEmitEndpointAndPerRowStructuredLines(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "6666666666666666666666666666666666666666666666666666666666666667"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	enableOut, enableErrOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
@@ -1977,7 +1997,7 @@ func TestEnableRefusesAMixOfOneExplicitURLFlagAndTheEnvVar(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "7777777777777777777777777777777777777777777777777777777777777770"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	deployedServer := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 	t.Setenv("GO_API_QUERY_API_URL", deployedServer.URL) // a DIFFERENT process than the explicit flag below
 	strayServer := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
@@ -2005,7 +2025,7 @@ func TestEnableEndpointLineDistinguishesTwoLocalProcessesByPort(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "7777777777777777777777777777777777777777777777777777777777777771"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	out, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
@@ -2084,7 +2104,7 @@ func TestEnableBeforeStateLogNamesTheCorrectRowNotADeadOne(t *testing.T) {
 	liveDigest := "aaaa111111111111111111111111111111111111111111111111111111111111"
 	deadDigest := "bbbb222222222222222222222222222222222222222222222222222222222222"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: liveDigest})
-	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv(bearerEnvVar, verbTestBearer)
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: liveDigest})
 
 	// The LIVE row (catalog's document digest): mode=python.

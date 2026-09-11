@@ -40,10 +40,11 @@ func seedRow(t *testing.T, ctx context.Context, operation, documentDigest, mode,
 // build AND STAYS SHADOW.
 func TestRepointMovesAShadowRowWithoutMakingItReachable(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "hotspots", testDocumentDigest, "shadow", testCandidateBuild, pool)
 
 	outcomes, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:    testPrincipalID,
 		SchemaDigest:   testSchemaDigest,
 		RunningBuild:   repointRunningBuild,
 		RecordedBy:     "lane-stack-owner",
@@ -80,13 +81,14 @@ func TestRepointMovesAShadowRowWithoutMakingItReachable(t *testing.T) {
 // Every reachability column survives, not just mode.
 func TestRepointLeavesOwnerAndRolloutUntouched(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "flowMatrix", testDocumentDigest, "canary", testCandidateBuild, pool)
 	if _, err := pool.Exec(ctx, `UPDATE go_api_routing_state SET rollout_percentage = 42 WHERE selected_operation = 'flowMatrix'`); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:  testPrincipalID,
 		SchemaDigest: testSchemaDigest, RunningBuild: repointRunningBuild,
 		RecordedBy: "t", ReviewEvidence: "e",
 	}); err != nil {
@@ -109,7 +111,7 @@ func TestRepointLeavesOwnerAndRolloutUntouched(t *testing.T) {
 // because registration happens inside the same transaction.
 func TestRepointRegistersTheBuildItPointsAt(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "cognitiveLoad", testDocumentDigest, "canary", testCandidateBuild, pool)
 
 	var before int
@@ -120,6 +122,7 @@ func TestRepointRegistersTheBuildItPointsAt(t *testing.T) {
 		t.Fatalf("precondition: running build already registered (%d rows)", before)
 	}
 	if _, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:  testPrincipalID,
 		SchemaDigest: testSchemaDigest, RunningBuild: repointRunningBuild,
 		RecordedBy: "t", ReviewEvidence: "e",
 	}); err != nil {
@@ -138,10 +141,11 @@ func TestRepointRegistersTheBuildItPointsAt(t *testing.T) {
 // write that changed nothing.
 func TestRepointIsIdempotentAndReportsUnchanged(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "reviewEdges", testDocumentDigest, "canary", testCandidateBuild, pool)
 
 	request := RepointRequest{
+		PrincipalID:  testPrincipalID,
 		SchemaDigest: testSchemaDigest, RunningBuild: repointRunningBuild,
 		RecordedBy: "t", ReviewEvidence: "e",
 	}
@@ -167,10 +171,11 @@ func TestRepointIsIdempotentAndReportsUnchanged(t *testing.T) {
 // A dry run reports exactly what a real run would do and writes nothing.
 func TestRepointDryRunWritesNothing(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "workGraphEdges", testDocumentDigest, "shadow", testCandidateBuild, pool)
 
 	outcomes, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:  testPrincipalID,
 		SchemaDigest: testSchemaDigest, RunningBuild: repointRunningBuild,
 		RecordedBy: "t", ReviewEvidence: "e", DryRun: true,
 	})
@@ -193,12 +198,13 @@ func TestRepointDryRunWritesNothing(t *testing.T) {
 // every one must keep its own mode.
 func TestRepointPreservesEachRowsOwnMode(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "canaryOp", "aa"+testDocumentDigest[2:], "canary", testCandidateBuild, pool)
 	seedRow(t, ctx, "shadowOp", "bb"+testDocumentDigest[2:], "shadow", testCandidateBuild, pool)
 	seedRow(t, ctx, "pythonOp", "cc"+testDocumentDigest[2:], "python", testCandidateBuild, pool)
 
 	outcomes, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:  testPrincipalID,
 		SchemaDigest: testSchemaDigest, RunningBuild: repointRunningBuild,
 		RecordedBy: "t", ReviewEvidence: "e",
 	})
@@ -236,11 +242,12 @@ func TestRepointPreservesEachRowsOwnMode(t *testing.T) {
 // Selecting a subset must leave every other row alone.
 func TestRepointHonoursTheOperationFilter(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "chosen", "aa"+testDocumentDigest[2:], "canary", testCandidateBuild, pool)
 	seedRow(t, ctx, "untouched", "bb"+testDocumentDigest[2:], "shadow", testCandidateBuild, pool)
 
 	if _, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:  testPrincipalID,
 		SchemaDigest: testSchemaDigest, RunningBuild: repointRunningBuild,
 		Operations: []string{"chosen"}, RecordedBy: "t", ReviewEvidence: "e",
 	}); err != nil {
@@ -259,8 +266,9 @@ func TestRepointHonoursTheOperationFilter(t *testing.T) {
 // registry and a fully-correct one must never read alike.
 func TestRepointRefusesWhenNothingMatches(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	if _, err := Repoint(ctx, pool, RepointRequest{
+		PrincipalID:  testPrincipalID,
 		SchemaDigest: testSchemaDigest, RunningBuild: repointRunningBuild,
 		RecordedBy: "t", ReviewEvidence: "e",
 	}); !errors.Is(err, ErrRepointNoRows) {
@@ -279,7 +287,7 @@ func TestRepointRefusesWhenNothingMatches(t *testing.T) {
 // touches the row.
 func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "flowMatrix", testDocumentDigest, "canary", testCandidateBuild, pool)
 
 	if _, err := pool.Exec(ctx, `
@@ -300,6 +308,7 @@ func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
 		RunningBuild:   repointRunningBuild,
 		RecordedBy:     "lane-routing-verbs",
 		ReviewEvidence: "r2 M29 killer",
+		PrincipalID:    testPrincipalID,
 	})
 	if err == nil {
 		t.Fatal("repoint must refuse when mode moved during the write -- its whole contract is that it never touches reachability")

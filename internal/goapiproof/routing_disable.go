@@ -137,6 +137,7 @@ type DisableRequest struct {
 	ExpectedCandidateBuild string
 	RecordedBy             string
 	ReviewEvidence         string
+
 	// Apply writes. Without it nothing is written and the plan is
 	// returned for the operator to read.
 	Apply bool
@@ -369,6 +370,20 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 	}
 
 	now := time.Now().UTC()
+	// CredentialClassOperatorDirect, and PrincipalID deliberately EMPTY.
+	// This verb verified no credential -- it contacts nothing, by
+	// contract, so the off-ramp works when the deployed process is down --
+	// and 0130's pairing CHECK makes "no credential, therefore no
+	// subject" the only legal shape for the class. `recorded_by` still
+	// carries what the operator typed about themselves; it is simply not
+	// dressed up as something a credential asserted.
+	audit := RoutingAudit{
+		Action:          AuditActionDisable,
+		CredentialClass: CredentialClassOperatorDirect,
+		RecordedBy:      request.RecordedBy,
+		ReviewEvidence:  request.ReviewEvidence,
+		SchemaDigest:    request.SchemaDigest,
+	}
 	for index := range changes {
 		change := &changes[index]
 		// No row means nothing to turn off. Never an INSERT: turning
@@ -415,6 +430,27 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 			return nil, fmt.Errorf("goapiproof: disable %s: %w", change.Operation, err)
 		}
 		change.Applied = true
+		modeBefore, buildBefore := change.CurrentMode, change.CandidateBuild
+		audit.Entries = append(audit.Entries, RoutingAuditEntry{
+			DocumentDigest: change.DocumentDigest,
+			Operation:      change.Operation,
+			// Before and after are the SAME build, always: this verb
+			// changes mode only, and recording both is what makes that
+			// checkable from the row rather than asserted in a comment.
+			CandidateBuildBefore: &buildBefore,
+			CandidateBuildAfter:  buildBefore,
+			ModeBefore:           &modeBefore,
+			ModeAfter:            change.NewMode,
+		})
+	}
+	// Only rows that ACTUALLY moved are audited. A row with no row at the
+	// live digest was never touched, and a guarded row that did not match
+	// was not written -- an audit entry for either would record a change
+	// that did not happen, in a table nothing can later correct.
+	if len(audit.Entries) > 0 {
+		if _, err := writeRoutingAudit(ctx, tx, audit, now); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("goapiproof: commit: %w", err)

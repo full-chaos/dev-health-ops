@@ -1,6 +1,7 @@
 package goapiproof
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -215,6 +216,7 @@ func TestEnableRequestRefusesAnUnreachableMode(t *testing.T) {
 		DocumentDigest: map[string]string{"a": "d"},
 		RecordedBy:     "who",
 		ReviewEvidence: "why",
+		PrincipalID:    "user-1",
 	}
 	for _, mode := range []string{"", "shadow", "python", "disabled", "PRIMARY"} {
 		request := base
@@ -244,6 +246,7 @@ func TestEnableRequestRefusesAWriteWithNoDurableRecord(t *testing.T) {
 		Mode:           "canary",
 		RecordedBy:     "who",
 		ReviewEvidence: "why",
+		PrincipalID:    "user-1",
 	}
 	for name, mutate := range map[string]func(*EnableRequest){
 		"no recorded-by":     func(r *EnableRequest) { r.RecordedBy = "" },
@@ -254,6 +257,9 @@ func TestEnableRequestRefusesAWriteWithNoDurableRecord(t *testing.T) {
 		"no document digest": func(r *EnableRequest) { r.DocumentDigest = nil },
 		"rollout above 100":  func(r *EnableRequest) { r.RolloutPercentage = 101 },
 		"negative rollout":   func(r *EnableRequest) { r.RolloutPercentage = -1 },
+		// CHAOS-5505: the audit row must name WHO THE CREDENTIAL SAYS is
+		// acting, which is not the same question as -recorded-by.
+		"no principal id": func(r *EnableRequest) { r.PrincipalID = "" },
 	} {
 		request := base
 		mutate(&request)
@@ -489,6 +495,7 @@ func TestEveryEnableRequestRefusalCarriesTheRefusalSentinel(t *testing.T) {
 		RolloutPercentage: 100,
 		RecordedBy:        "lane",
 		ReviewEvidence:    "why",
+		PrincipalID:       "user-1",
 	}
 	if err := valid.validate(); err != nil {
 		t.Fatalf("the canonical request was refused: %v", err)
@@ -499,6 +506,7 @@ func TestEveryEnableRequestRefusalCarriesTheRefusalSentinel(t *testing.T) {
 		"no running build":   func(r *EnableRequest) { r.RunningBuild = "" },
 		"no recorded-by":     func(r *EnableRequest) { r.RecordedBy = "" },
 		"no review-evidence": func(r *EnableRequest) { r.ReviewEvidence = "" },
+		"no principal id":    func(r *EnableRequest) { r.PrincipalID = "" },
 		"no operations":      func(r *EnableRequest) { r.Operations = nil },
 		"rollout -1":         func(r *EnableRequest) { r.RolloutPercentage = -1 },
 		"rollout 101":        func(r *EnableRequest) { r.RolloutPercentage = 101 },
@@ -531,5 +539,102 @@ func TestEveryEnableRequestRefusalCarriesTheRefusalSentinel(t *testing.T) {
 		if err := request.validate(); err != nil {
 			t.Fatalf("rollout %d was refused: %v", rollout, err)
 		}
+	}
+}
+
+// EnvelopeSubject reads the `sub` out of a credential. Two properties
+// matter and both are pinned here: it must never render the token in an
+// error, and it must refuse rather than invent a subject.
+func TestEnvelopeSubjectReadsTheClaimAndNeverEchoesTheToken(t *testing.T) {
+	// A real-shaped envelope: three unpadded base64url segments.
+	payload := base64.RawURLEncoding.EncodeToString([]byte(
+		`{"v":1,"sub":"b0a1c2d3-0000-4000-8000-000000000001","org_id":"70d529e0","role":"admin"}`))
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","kid":"go-api-envelope-2026-08"}`))
+	const signature = "c2lnbmF0dXJl"
+	token := header + "." + payload + "." + signature
+
+	got, err := EnvelopeSubject(token)
+	if err != nil {
+		t.Fatalf("EnvelopeSubject: %v", err)
+	}
+	if got != "b0a1c2d3-0000-4000-8000-000000000001" {
+		t.Fatalf("subject = %q, want the envelope's sub claim", got)
+	}
+	// The "Bearer " prefix and surrounding whitespace are tolerated: the
+	// same value is handed to an Authorization header elsewhere, and a
+	// caller should not have to remember which form this wants.
+	if got, err := EnvelopeSubject("  Bearer " + token + "  "); err != nil || got == "" {
+		t.Fatalf("EnvelopeSubject with a Bearer prefix = (%q, %v)", got, err)
+	}
+}
+
+func TestEnvelopeSubjectRefusesEveryShapeThatCarriesNoSubject(t *testing.T) {
+	noSub := base64.RawURLEncoding.EncodeToString([]byte(`{"v":1,"org_id":"70d529e0"}`))
+	emptySub := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"   "}`))
+	notJSON := base64.RawURLEncoding.EncodeToString([]byte(`not json at all`))
+	for name, token := range map[string]string{
+		"empty":              "",
+		"one segment":        "abcdefgh",
+		"two segments":       "abcd.efgh",
+		"four segments":      "a.b.c.d",
+		"payload not base64": "aaaa.!!!!.cccc",
+		"payload not JSON":   "aaaa." + notJSON + ".cccc",
+		"no sub claim":       "aaaa." + noSub + ".cccc",
+		"blank sub claim":    "aaaa." + emptySub + ".cccc",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := EnvelopeSubject(token)
+			if !errors.Is(err, ErrEnvelopeSubjectMissing) {
+				t.Fatalf("EnvelopeSubject(%s) = (%q, %v), want ErrEnvelopeSubjectMissing", name, got, err)
+			}
+			if got != "" {
+				t.Fatalf("EnvelopeSubject(%s) returned %q alongside its error", name, got)
+			}
+		})
+	}
+}
+
+// A credential must never reach an error string. Every refusal above is
+// checked against the token it was given, including the one case where
+// the token is well-formed enough to be a real envelope.
+func TestEnvelopeSubjectErrorsNeverContainTheCredential(t *testing.T) {
+	const secret = "eyJzZWNyZXQiOiJkbwbm90bGVhayJ9" // gitleaks:allow -- fabricated fixture, never accepted by any real verifier
+	for _, token := range []string{
+		secret,
+		secret + "." + secret,
+		"aaaa." + secret + ".cccc",
+		"Bearer " + secret,
+	} {
+		_, err := EnvelopeSubject(token)
+		if err == nil {
+			continue
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("the refusal rendered the credential: %q", err)
+		}
+	}
+}
+
+// The two identity fields answer different questions, and the request
+// types must keep them separate. An enable whose principal is silently
+// its -recorded-by would record an unverified string as something a
+// verified credential asserted.
+func TestPrincipalIDAndRecordedByAreSeparateRequiredFields(t *testing.T) {
+	request := EnableRequest{
+		SchemaDigest:   "sha256:x",
+		RunningBuild:   "b",
+		Operations:     []string{"a"},
+		DocumentDigest: map[string]string{"a": "d"},
+		Mode:           "canary",
+		ReviewEvidence: "why",
+		PrincipalID:    "user-1",
+	}
+	if err := request.validate(); err == nil {
+		t.Fatal("a principal id must not stand in for -recorded-by")
+	}
+	request.RecordedBy = "who"
+	request.PrincipalID = ""
+	if err := request.validate(); err == nil {
+		t.Fatal("-recorded-by must not stand in for the principal id")
 	}
 }

@@ -118,7 +118,8 @@ def test_a_real_match_receipts_provenance_is_recorded_and_empty() -> None:
     ONLY by the presence of a shape key regressed this exact case: it
     could not tell a genuine match receipt's provenance apart from an
     operator's unrelated JSON, since both omit both shape keys (caught by
-    the e2e harness's r8 P3-5 cell, `run_enable_e2e.py`, before landing).
+    the e2e harness's own match-admission case, `run_enable_e2e.py`,
+    before landing).
     """
     evidence = '{"measurement_route":"edge","edge_build_binding":"present"}'
     assert _recorded_shape_counts(evidence) == ({}, {})

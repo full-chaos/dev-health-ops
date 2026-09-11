@@ -829,8 +829,9 @@ def _recorded_shape_counts(
     checking only those two treated a genuine MATCH receipt's provenance
     the same as an operator's unrelated JSON, both missing both shape
     keys, and both rendered "unrecorded" instead of "covered[] outside[]"
-    (a regression the e2e harness's r8 P3-5 cell catches: match must print
-    it too). A payload with NONE of the writer's field names (``{}``, an
+    (a regression the e2e harness's own case for a match receipt catches:
+    a match admission must print its shape counts too, not only a cited
+    mismatch's). A payload with NONE of the writer's field names (``{}``, an
     operator's own JSON, or free text that is not JSON at all) is
     "unrecorded" (``None``), and so is a key that IS present but is not
     the writer's shape: not a JSON object, or holding a non-integer (bool

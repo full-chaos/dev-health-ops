@@ -793,21 +793,50 @@ class AuthorizingReceipt:
         )
 
 
+#: Every field name ``ReceiptProvenance`` (internal/goapiproof/run.go) may
+#: put in a receipt's ``review_evidence`` JSON. Any one of them present
+#: marks the payload as the writer's own object, independent of which
+#: particular fields that receipt happened to carry.
+_RECEIPT_PROVENANCE_FIELDS = frozenset(
+    {
+        "operator",
+        "measurement_route",
+        "edge_build_binding",
+        "routing_row_build",
+        "refusal",
+        "measured_operations",
+        "attempted_operations",
+        "covered_by_shape",
+        "outside_by_shape",
+    }
+)
+
+
 def _recorded_shape_counts(
     review_evidence: str | None,
 ) -> tuple[dict[str, int] | None, dict[str, int] | None]:
     """The per-shape counts the Go writer put in a receipt's provenance.
 
-    The writer's provenance is a JSON object; either key is omitted by the
-    writer's own ``omitempty`` when its map is empty, so a key's ABSENCE
-    from a recognised provenance object is "nothing of that kind" (``{}``).
-    Recognised means at least one of the two keys is present -- an object
-    with neither (``{}``, an operator's own JSON, or free text that is not
-    JSON at all) is "unrecorded" (``None``), and so is a key that IS
-    present but is not the writer's shape: not a JSON object, or holding a
-    non-integer (bool included) count -- a malformed key invalidates the
-    whole object rather than being read as "nothing of that kind" (F3,
-    CHAOS-5484 opus-r9). Counts are only ever integers.
+    The writer's provenance is a JSON object (``ReceiptProvenance``,
+    internal/goapiproof/run.go); every field on it -- including
+    ``covered_by_shape``/``outside_by_shape`` themselves -- is
+    ``omitempty``. A MATCH receipt has no findings to shape-classify, so
+    both shape keys are legitimately absent while other fields
+    (``measurement_route`` at least) are always present -- that object is
+    still recognisably the writer's, and its counts read as "nothing of
+    that kind" (``{}``), not unrecorded. Recognised means the payload has
+    ANY of the writer's own field names, not only the two shape keys --
+    checking only those two treated a genuine MATCH receipt's provenance
+    the same as an operator's unrelated JSON, both missing both shape
+    keys, and both rendered "unrecorded" instead of "covered[] outside[]"
+    (a regression the e2e harness's r8 P3-5 cell catches: match must print
+    it too). A payload with NONE of the writer's field names (``{}``, an
+    operator's own JSON, or free text that is not JSON at all) is
+    "unrecorded" (``None``), and so is a key that IS present but is not
+    the writer's shape: not a JSON object, or holding a non-integer (bool
+    included) count -- a malformed key invalidates the whole object
+    rather than being read as "nothing of that kind" (F3, CHAOS-5484
+    opus-r9). Counts are only ever integers.
     """
     try:
         payload = json.loads(review_evidence) if review_evidence else None
@@ -815,7 +844,7 @@ def _recorded_shape_counts(
         return None, None
     if not isinstance(payload, dict):
         return None, None
-    if "covered_by_shape" not in payload and "outside_by_shape" not in payload:
+    if payload.keys().isdisjoint(_RECEIPT_PROVENANCE_FIELDS):
         return None, None
 
     def counts(key: str) -> dict[str, int] | None:

@@ -315,6 +315,54 @@ func TestCitationPathDomainForTheEmptyResultAddendum(t *testing.T) {
 	}
 }
 
+// Self-review (rule 26, CHAOS-5484): the root citation's empty-result
+// addendum must fail closed only when the CANDIDATE'S WHOLE cited subtree
+// has no non-null leaf, not merely when one leaf under it is null. A
+// partial-null response is the ordinary row-selection defect (hotspots'
+// real case) and must stay a plain, coverable leaf difference even when
+// the citation is the root.
+func TestSelfReviewPartialNullUnderRootCitationStaysNormallyCoverable(t *testing.T) {
+	baseline := `{"data":{"a":1,"b":5}}`
+	candidate := `{"data":{"a":null,"b":5}}`
+	opts := Options{BaselineDefects: []BaselineDefect{{Ticket: "CHAOS-5484", Reason: "self-review", Paths: []string{"data"}}}}
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), opts)
+	if result.TerminalState != TerminalStateMismatch || result.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("terminal=%s outside=%d, want mismatch outside=0 (candidate has a non-null leaf elsewhere, so this is a plain null leaf, coverable) -- findings %+v",
+			result.TerminalState, result.DifferencesOutsideBaselineDefect, result.Findings)
+	}
+	counts := FormatShapeCounts(result.CoveredByShape, result.OutsideByShape)
+	if counts != "covered[null=1] outside[]" {
+		t.Fatalf("shape counts %s, want covered[null=1] outside[] -- a partial null under a root citation must NOT be misread as an empty result", counts)
+	}
+}
+
+// Self-review (rule 26, CHAOS-5484): citedSegments must restrict the
+// empty-result addendum's leaf count to the CITED SUBTREE, not the whole
+// payload. A mutant that resolves "data.x" or "data.x.y" to the root
+// segments (walk everything) instead of their own segments survives every
+// OTHER cell in this file, because they all use single-leaf fixtures where
+// "the whole payload" and "the cited subtree" happen to hold the same one
+// leaf. A second, unrelated, non-null leaf elsewhere in the payload is
+// what makes citedSegments' path-specificity load-bearing: verified by
+// hand-applying that exact mutant against this test (killed) and against
+// the rest of the file (survived) before this test was added.
+func TestSelfReviewCitedSegmentsWalksOnlyItsOwnSubtreeNotTheWholePayload(t *testing.T) {
+	baseline := `{"data":{"x":{"y":"python"},"z":"other"}}`
+	candidate := `{"data":{"x":{"y":null},"z":"other"}}`
+	for _, cited := range []string{"data.x", "data.x.y"} {
+		opts := Options{BaselineDefects: []BaselineDefect{{Ticket: "CHAOS-5484", Reason: "self-review", Paths: []string{cited}}}}
+		result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), opts)
+		if result.TerminalState != TerminalStateMismatch || result.DifferencesOutsideBaselineDefect != 1 {
+			t.Fatalf("cited=%q: terminal=%s outside=%d, want mismatch outside=1 -- an unrelated non-null leaf (z) elsewhere in the payload must not satisfy the cited subtree's own non-null-leaf check -- findings %+v",
+				cited, result.TerminalState, result.DifferencesOutsideBaselineDefect, result.Findings)
+		}
+		counts := FormatShapeCounts(result.CoveredByShape, result.OutsideByShape)
+		if counts != "covered[] outside[empty_result=1]" {
+			t.Fatalf("cited=%q: shape counts %s, want covered[] outside[empty_result=1]", cited, counts)
+		}
+	}
+}
+
 // Every BaselineDefect path DECLARED in operationSpecs, not only hotspots':
 // for each, eight candidates at that exact path -- three leaf differences (a
 // value, a null leaf beside a non-null one, another scalar type: covered)

@@ -503,6 +503,15 @@ func TestStatusReportsAnUnusableEnvURLInsteadOfRefusing(t *testing.T) {
 	if strings.Contains(out, `"go_plane_error": "no -registry-url and GO_API_QUERY_API_URL is unset"`) {
 		t.Fatalf("go_plane_error named the wrong cause -- something WAS set, it just could not be used safely:\n%s", out)
 	}
+	// r7 F6, second half (reproduced, team-lead ruling): the message must
+	// name the SOURCE that actually supplied the value -- the env var, not
+	// a flag the operator never typed.
+	if !strings.Contains(out, "GO_API_QUERY_API_URL") {
+		t.Fatalf("go_plane_error must name GO_API_QUERY_API_URL, not blame a flag nobody typed:\n%s", out)
+	}
+	if strings.Contains(out, "-registry-url must be") {
+		t.Fatalf("go_plane_error blamed -registry-url, but that flag was never passed -- the value came from the env var:\n%s", out)
+	}
 }
 
 // r7 F7 (reproduced): `<verb> -h` on all four verbs used to fall through

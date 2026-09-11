@@ -75,22 +75,6 @@ var ErrDisableGuardMismatch = errors.New("goapiproof: a routing row points at a 
 // ON -- the one thing an off-ramp must never be able to do.
 var ErrDisableRefusesEnablingMode = errors.New("goapiproof: disable may only set an unreachable mode")
 
-// ErrDisableStaleDigestOnly reports that a named operation has NO row at
-// this binary's own live schema digest, but DOES have one at some OTHER
-// digest (r6 F2, reproduced -- team-lead ruling: this refuses, it does
-// not merely warn). `disable` computes its schema digest from THIS
-// BINARY's own embedded SDL, and -- unlike the Python verb, which runs
-// inside the deployed edge image, so its SDL is the edge's by
-// construction -- `go-api-routing` ships in no image and is built from
-// an operator checkout by design (disable.go's own package comment). A
-// stale checkout used to print `applied: 0`, exit 0, while the row it
-// was actually trying to reach sat completely untouched. There is no
-// flag on this verb to SELECT which digest to act against (CHAOS-5566 is
-// the ticket for that gap); until it exists, an operator hitting this
-// refusal has one honest option -- rebuild from the deployed revision --
-// which is exactly what the refusal message says.
-var ErrDisableStaleDigestOnly = errors.New("goapiproof: a named operation has no row at this checkout's schema digest, but does have one at another -- this checkout is stale")
-
 // DisableChange is one row `disable` would change, or did.
 type DisableChange struct {
 	Operation      string
@@ -144,24 +128,6 @@ type DisableRequest struct {
 	// Apply writes. Without it nothing is written and the plan is
 	// returned for the operator to read.
 	Apply bool
-	// ExplicitOperations is true when the operator NAMED specific
-	// operations (`-operations flowMatrix,pr`), false for the
-	// `all-registered` default (r7 F1, reproduced).
-	//
-	// ErrDisableStaleDigestOnly (below) refuses when a named operation
-	// has no row at this checkout's live digest but has one elsewhere --
-	// correct for an operation the operator explicitly asked about, WRONG
-	// for `all-registered`: the documented rollback recipe
-	// (`-operations all-registered -mode python -apply`, the runbook's
-	// own step) auto-selects EVERY catalog operation, and one leftover
-	// row at an old digest for an operation nobody is touching (every SDL
-	// move leaves these behind; no verb deletes old rows) used to block
-	// the off-ramp for every operation that IS live -- exactly when the
-	// rollback is most likely to be needed. Under `all-registered`, a
-	// stale-only operation is reported (StaleSchemaDigests survives) but
-	// treated as "nothing to disable HERE", the same as any other
-	// operation with no live row, never a refusal.
-	ExplicitOperations bool
 }
 
 func (r DisableRequest) validate() error {
@@ -289,37 +255,36 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 
 	changes := make([]DisableChange, 0, len(operations))
 	var guardProblems []string
-	var staleOnlyProblems []string
 	for _, operation := range operations {
 		rows := live[operation]
 		if len(rows) == 0 {
-			// r6 F2 (reproduced, team-lead ruling: REFUSE, not warn): no
-			// row at THIS checkout's live digest is normally "nothing to
-			// disable" -- unless a row for the SAME operation DOES exist
-			// at another digest, which means this checkout is stale and
-			// the row it was actually trying to reach is untouched.
-			// Collected here and refused BELOW, before anything is
-			// written, the same shape guardProblems already uses.
+			// r6 F2 (reproduced): first fixed as a REFUSAL when a named
+			// operation has no row at this checkout's own live digest but
+			// DOES have one at another -- disable computes SchemaDigest
+			// from THIS BINARY's own embedded SDL, and unlike the Python
+			// verb (runs INSIDE the deployed edge image, so its SDL is the
+			// edge's by construction), `go-api-routing` ships in no image
+			// and is built from an operator checkout by design. A stale
+			// checkout used to print `applied: 0`, exit 0, with the row
+			// it was actually trying to reach left completely untouched
+			// and NOTHING saying so.
 			//
-			// r7 F1 (reproduced): scoped to EXPLICITLY named operations
-			// only -- see ExplicitOperations's own doc comment. Under
-			// `all-registered` (the documented rollback recipe's own
-			// flag value), a stale-only operation falls through to the
-			// SAME "nothing to disable HERE" branch every other no-row
-			// operation takes, just with StaleSchemaDigests still
-			// attached so the plan can still name it.
-			if request.ExplicitOperations && len(staleDigests[operation]) > 0 {
-				staleOnlyProblems = append(staleOnlyProblems, fmt.Sprintf(
-					"%s has no row at this checkout's schema digest (%s), but has one at: %v",
-					operation, request.SchemaDigest, staleDigests[operation]))
-				continue
-			}
-			// No row anywhere at the live digest: genuinely reported as
-			// "nothing to disable", never invented. The catalog's digest
-			// is carried only so the plan can name the row it would have
-			// targeted. `StaleSchemaDigests` still survives (set below)
-			// so `all-registered` output can still note a stale-only
-			// operation without refusing the whole request over it.
+			// r7 F1 (reproduced, team-lead ruling, corrected): that
+			// refusal was WRONG, not merely too broad under
+			// `-operations all-registered` -- it contradicts this verb's
+			// own documented contract (disable.go's package comment:
+			// "must work when the planes disagree and when the deployed
+			// process is down"). An off-ramp that ABORTS ENTIRELY,
+			// leaving every operation's row -- including ones with a
+			// perfectly live row -- untouched, over ONE unrelated
+			// operation's leftover old-digest row (which every SDL move
+			// leaves behind; no verb deletes old rows) is the off-ramp
+			// failing exactly when it is most needed. Never a refusal,
+			// named or not: a stale-digest-only operation is SKIPPED,
+			// reported as "nothing to disable HERE" with
+			// `StaleSchemaDigests` still attached so the plan names it,
+			// and every OTHER named operation -- including this same
+			// one, at whatever digest IS live -- is still acted on.
 			changes = append(changes, DisableChange{
 				Operation:          operation,
 				DocumentDigest:     request.DocumentDigest[operation],
@@ -361,9 +326,6 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 	}
 	if len(guardProblems) > 0 {
 		return nil, fmt.Errorf("%w: %v", ErrDisableGuardMismatch, guardProblems)
-	}
-	if len(staleOnlyProblems) > 0 {
-		return nil, fmt.Errorf("%w: %v -- there is no flag on this verb to select which digest to act against (CHAOS-5566); rebuild this binary from the deployed revision and re-run", ErrDisableStaleDigestOnly, staleOnlyProblems)
 	}
 	if !request.Apply {
 		return changes, nil

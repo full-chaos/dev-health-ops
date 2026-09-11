@@ -19,7 +19,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
@@ -96,10 +95,6 @@ func runDisable(argv []string) error {
 	defer pool.Close()
 
 	local := localSchemaDigest()
-	// r7 F1 (reproduced): see DisableRequest.ExplicitOperations's own doc
-	// comment -- the stale-digest-only refusal must not fire under the
-	// documented rollback recipe's own `-operations all-registered`.
-	explicitOperations := strings.TrimSpace(common.operations) != "all-registered"
 	changes, err := goapiproof.Disable(ctx, pool, goapiproof.DisableRequest{
 		SchemaDigest:           local,
 		Operations:             operations,
@@ -109,10 +104,9 @@ func runDisable(argv []string) error {
 		RecordedBy:             common.recordedBy,
 		ReviewEvidence:         common.reviewEvidence,
 		Apply:                  apply,
-		ExplicitOperations:     explicitOperations,
 	})
 	if err != nil {
-		if errors.Is(err, goapiproof.ErrDisableGuardMismatch) || errors.Is(err, goapiproof.ErrDisableRefusesEnablingMode) || errors.Is(err, goapiproof.ErrDisableStaleDigestOnly) {
+		if errors.Is(err, goapiproof.ErrDisableGuardMismatch) || errors.Is(err, goapiproof.ErrDisableRefusesEnablingMode) {
 			return refuse("%v", err)
 		}
 		return classifyWriteError(err)

@@ -143,10 +143,24 @@ func runStatus(argv []string) error {
 	// to the report right after it is constructed, below.
 	var registryURLSanitizeErr error
 	if haveRegistryURL {
+		// r7 F6, second half (reproduced, team-lead ruling): the sanitize
+		// failure must name the SOURCE that actually supplied the value --
+		// "-registry-url" only when the OPERATOR typed that flag. When the
+		// value came from GO_API_QUERY_API_URL instead (registryURL, the
+		// flag variable, is still empty at this point), the message must
+		// name the ENV VAR, or an operator who never touched the flag at
+		// all is blamed for typing something they did not type. Executed:
+		// GO_API_QUERY_API_URL="…?v=1" with no -registry-url used to
+		// report `-registry-url carries a query string`, naming a flag
+		// nobody passed.
+		label := "-registry-url"
+		if registryURL == "" {
+			label = queryAPIURLEnvVar
+		}
 		// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query
 		// or a fragment is printed verbatim by any transport error
 		// downstream. The REBUILT value is what is used from here on.
-		if sanitized, err := sanitizeEndpointURL("-registry-url", registryURLResolved); err != nil {
+		if sanitized, err := sanitizeEndpointURL(label, registryURLResolved); err != nil {
 			registryURLSanitizeErr = err
 			haveRegistryURL = false
 		} else {

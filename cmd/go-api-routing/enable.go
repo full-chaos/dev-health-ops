@@ -239,10 +239,16 @@ func runEnable(argv []string) error {
 	// line can say "(unknown)" rather than reusing "(no row)" for both.
 	before := map[string]struct{ mode, build string }{}
 	beforeReadFailed := false
+	// The map is keyed by the row's FULL identity (see below), so this
+	// ORDER BY cannot change which row's state lands under which key --
+	// it exists so this read's own row order is deterministic like every
+	// other multi-row read in this package (team-lead ruling, r7 F4),
+	// rather than relying on the keying alone to make ordering moot.
 	rows, queryErr := pool.Query(ctx, `
 		SELECT selected_operation, document_digest, mode, current_candidate_build
 		  FROM public.go_api_routing_state
-		 WHERE schema_digest = $1 AND selected_operation = ANY($2)`,
+		 WHERE schema_digest = $1 AND selected_operation = ANY($2)
+		 ORDER BY selected_operation, document_digest`,
 		registry.SchemaDigest, operations)
 	if queryErr != nil {
 		beforeReadFailed = true

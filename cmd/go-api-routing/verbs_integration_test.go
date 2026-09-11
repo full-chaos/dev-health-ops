@@ -952,7 +952,15 @@ func TestEnableRefusesWithNoQueryAPIURLConfiguredAtAllRealBinary(t *testing.T) {
 // deployed process actually uses, sat completely untouched. Fixed by
 // REFUSING outright (exit 2) rather than merely warning, both dry-run
 // and -apply, naming the digest(s) the row actually lives at.
-func TestDisableRefusesWhenAnOperationOnlyHasRowsAtOtherSchemaDigests(t *testing.T) {
+// r7 F1 (reproduced, team-lead ruling, corrected from an earlier version
+// of this test that expected a REFUSAL): disable must never abort over a
+// named operation whose only rows sit at another schema digest -- that
+// contradicts this verb's own documented contract ("must work when the
+// planes disagree and when the deployed process is down"). It SKIPS the
+// operation, names the stale digest(s) in the plan, and leaves the row
+// genuinely untouched -- whether the operation was named explicitly or
+// picked up by `-operations all-registered`.
+func TestDisableSkipsAndNamesAnOperationWithRowsOnlyAtOtherSchemaDigests(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	ctx := context.Background()
 	staleDigest := "sha256:" + strings.Repeat("9", 64) // deliberately NOT this binary's own digest
@@ -973,28 +981,29 @@ func TestDisableRefusesWhenAnOperationOnlyHasRowsAtOtherSchemaDigests(t *testing
 		t.Fatalf("seed routing row at the stale digest: %v", err)
 	}
 
-	_, _, err := captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath)
-	if err == nil {
-		t.Fatal("disable must refuse (not silently no-op) when the named operation has rows ONLY at another schema digest")
+	out, _, err := captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("disable must NOT refuse when the named operation has rows only at another schema digest, even named explicitly: %v", err)
 	}
-	if exitCodeFor(err) != 2 {
-		t.Fatalf("exit %d, want 2 -- this is operator-actionable, not a crash", exitCodeFor(err))
+	if !strings.Contains(out, "!! 1 row(s) for this operation exist at OTHER schema digest(s)") || !strings.Contains(out, staleDigest) {
+		t.Fatalf("the stale digest must still be NAMED in the plan:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), staleDigest) {
-		t.Fatalf("the stale digest must be named in the refusal: %v", err)
-	}
-	if !strings.Contains(err.Error(), "CHAOS-5566") {
-		t.Fatalf("the digest-selector gap ticket must be cited: %v", err)
+	if !strings.Contains(out, "DRY RUN: 0 row(s) would change") {
+		t.Fatalf("nothing at the live digest, so nothing should change:\n%s", out)
 	}
 
-	// -apply refuses identically, BEFORE anything is written.
-	_, _, err = captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath,
-		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r6 F2 killer")
-	if err == nil {
-		t.Fatal("disable -apply must refuse identically")
+	// -apply behaves identically: skips, names the stale digest, writes
+	// nothing.
+	out, _, err = captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r7 F1 killer")
+	if err != nil {
+		t.Fatalf("disable -apply must not refuse either: %v", err)
 	}
-	if exitCodeFor(err) != 2 {
-		t.Fatalf("exit %d, want 2", exitCodeFor(err))
+	if !strings.Contains(out, "!! 1 row(s) for this operation exist at OTHER schema digest(s)") {
+		t.Fatalf("the stale digest must still be named under -apply:\n%s", out)
+	}
+	if !strings.Contains(out, "applied: 0 row(s)") {
+		t.Fatalf("nothing at the live digest, so nothing should be applied:\n%s", out)
 	}
 
 	var mode string
@@ -1417,12 +1426,18 @@ func TestDisableAllRegisteredSkipsStaleOnlyOperationsInsteadOfRefusing(t *testin
 		t.Fatalf("the stale-only row must be genuinely untouched: mode = %q, want canary", staleMode)
 	}
 
-	// Control: naming the stale-only operation EXPLICITLY must still
-	// refuse -- this test proves the SCOPE of the fix, not its removal.
-	_, _, err = captureVerb(t, "disable", "-operations", staleOnlyOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath,
+	// Control (team-lead ruling, corrected: explicit naming does NOT
+	// refuse either -- see TestDisableSkipsAndNamesAnOperationWithRowsOnlyAtOtherSchemaDigests,
+	// which is the dedicated test for that shape): naming the stale-only
+	// operation EXPLICITLY skips it identically, same as under
+	// all-registered.
+	out, _, err = captureVerb(t, "disable", "-operations", staleOnlyOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath,
 		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r7 F1 control")
-	if err == nil {
-		t.Fatal("control: explicitly naming the stale-only operation must still refuse")
+	if err != nil {
+		t.Fatalf("control: explicitly naming the stale-only operation must not refuse either: %v", err)
+	}
+	if !strings.Contains(out, "applied: 0 row(s)") {
+		t.Fatalf("control: nothing to apply for the stale-only operation:\n%s", out)
 	}
 }
 

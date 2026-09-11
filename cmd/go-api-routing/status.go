@@ -65,6 +65,16 @@ type statusReport struct {
 	Operations          []statusReportOperation `json:"operations"`
 }
 
+// Python's per-operation object carries exactly: operation,
+// document_digest, digest_state, mode, current_candidate_build,
+// rollout_percentage, owner, updated_at, stale_digests, proven,
+// reachable. Every field below NOT in that list is a Go-only, deliberate
+// addition Python has no equivalent read for: ReviewEvidence and
+// RecordedBy (the row's own provenance columns, 0127),
+// UnreachableDocumentDigests (a dead row at the live schema digest under
+// a different document digest), ReachableReason, DeployedDigestState and
+// DeployedDocumentDigest (what the DEPLOYED plane, not just this row,
+// actually reports).
 type statusReportOperation struct {
 	Operation                  string   `json:"operation"`
 	DocumentDigest             string   `json:"document_digest"`

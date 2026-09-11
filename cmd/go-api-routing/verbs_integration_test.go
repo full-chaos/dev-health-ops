@@ -1380,6 +1380,76 @@ func TestEnableLogNamesTheLiveRowsDocumentDigestNotADeadSiblings(t *testing.T) {
 	}
 }
 
+// When the deployed process cannot identify its build, the refusal must
+// still name WHICH process was asked -- scheme://host[:port], never
+// anything an operator put in the URL's own path. `enable` and `repoint`
+// share this exact refusal shape; both are pinned here in one fixture.
+func TestEnableAndRepointBuildInfoRefusalNeverPrintsTheURLPath(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "7777777777777777777777777777777777777777777777777777777777777777"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	registry := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	// A /buildinfo that answers 404 to EVERY path -- the ErrNoBuildIdentity
+	// case -- whose own path carries something that would be a leak if
+	// printed verbatim.
+	pathToken := "/t/PROXY-PATH-TOKEN-hunter2/buildinfo"
+	noBuildInfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(noBuildInfo.Close)
+	buildInfoURL := noBuildInfo.URL + pathToken
+
+	_, _, err := captureVerb(t, enableArgs(registry, dsn, catalogPath, "-buildinfo-url", buildInfoURL)...)
+	if err == nil {
+		t.Fatal("enable must refuse when the deployed process cannot identify its build")
+	}
+	if strings.Contains(err.Error(), "PROXY-PATH-TOKEN-hunter2") {
+		t.Fatalf("enable's refusal must never print the buildinfo URL's path:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), noBuildInfo.URL) {
+		t.Fatalf("enable's refusal must still name the endpoint (scheme://host[:port]):\n%v", err)
+	}
+
+	_, _, err = captureVerb(t, "repoint",
+		"-registry-url", registry.URL+"/registry",
+		"-buildinfo-url", buildInfoURL,
+		"-postgres-uri", dsn,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "F1 repoint sibling",
+	)
+	if err == nil {
+		t.Fatal("repoint must refuse when the deployed process cannot identify its build")
+	}
+	if strings.Contains(err.Error(), "PROXY-PATH-TOKEN-hunter2") {
+		t.Fatalf("repoint's refusal must never print the buildinfo URL's path:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), noBuildInfo.URL) {
+		t.Fatalf("repoint's refusal must still name the endpoint (scheme://host[:port]):\n%v", err)
+	}
+}
+
+// `enable`'s fallback path for a `/buildinfo` failure that is NOT
+// ErrNoBuildIdentity (a transport failure, say) must still say "refused"
+// -- the word every OTHER refusal in this package carries, and the one
+// `repoint`'s identical call site already used.
+func TestEnableBuildInfoGenericFailureIsWordedRefused(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "8888888888888888888888888888888888888888888888888888888888888888"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	registry := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	_, _, err := captureVerb(t, enableArgs(registry, dsn, catalogPath, "-buildinfo-url", "http://127.0.0.1:9/buildinfo")...)
+	if err == nil {
+		t.Fatal("enable must refuse when /buildinfo is unreachable")
+	}
+	if !strings.Contains(err.Error(), "refused:") {
+		t.Fatalf("enable's generic /buildinfo failure must be worded \"refused\", matching every other refusal in this package: %v", err)
+	}
+}
+
 // The `-candidate-build` guard must not check
 // EVERY row at the live schema digest, including DEAD ones (a document
 // digest the catalog does not carry) -- rows `status` never shows a

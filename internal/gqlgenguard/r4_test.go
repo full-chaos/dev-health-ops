@@ -110,7 +110,20 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 					line = l
 				}
 			}
-			logCell(t, err, line)
+			if c.wantErr != "" || !gen.ran {
+				logCell(t, err, line)
+			} else {
+				// The cell is about what reached the generator, not about
+				// check-drift's verdict (the fixture has no record), so the
+				// output is the child's key set and the go command's view.
+				var keys []string
+				for _, kv := range gen.env {
+					k, _, _ := strings.Cut(kv, "=")
+					keys = append(keys, k)
+				}
+				_, eff, _ := strings.Cut(line, "nothing inherited): ")
+				t.Logf("CELL-OUTPUT: child env keys %s; go env: %s", strings.Join(keys, ","), eff)
+			}
 			if c.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 					t.Fatalf("want a refusal naming %q, got %v", c.wantErr, err)

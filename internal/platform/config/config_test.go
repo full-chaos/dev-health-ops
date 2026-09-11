@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -829,6 +830,72 @@ func TestNoRouteEnablementSurfaceExists(t *testing.T) {
 	}
 }
 
+// TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException is round-3's
+// (2026-09-11) structural fix, pinned directly: componentKeys() must be
+// derived from ComponentSpec's own fields, never drift from them again the
+// way the round-2 hand-picked slice did (it silently omitted DBKey for
+// every spec and both fields' `_FILE` variants entirely).
+func TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException(t *testing.T) {
+	t.Parallel()
+
+	for name, spec := range map[string]ComponentSpec{
+		"domain":      DomainDatabaseSpec,
+		"queue":       QueueDatabaseSpec,
+		"coordinator": CoordinatorDatabaseSpec,
+		"clickhouse":  ClickHouseSpec,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			want := []string{spec.HostKey, spec.PortKey, spec.UserKey, spec.UserKey + "_FILE", spec.PasswordKey, spec.PasswordKey + "_FILE"}
+			if !spec.DBKeyShared {
+				want = append(want, spec.DBKey)
+			}
+			got := spec.componentKeys()
+			gotSet := make(map[string]bool, len(got))
+			for _, k := range got {
+				gotSet[k] = true
+			}
+			wantSet := make(map[string]bool, len(want))
+			for _, k := range want {
+				wantSet[k] = true
+			}
+			if len(got) != len(gotSet) {
+				t.Fatalf("componentKeys() returned a duplicate: %v", got)
+			}
+			for k := range wantSet {
+				if !gotSet[k] {
+					t.Fatalf("componentKeys() missing %q, got %v", k, got)
+				}
+			}
+			for k := range gotSet {
+				if !wantSet[k] {
+					t.Fatalf("componentKeys() has unexpected %q, got %v want %v", k, got, want)
+				}
+			}
+		})
+	}
+
+	// The shared exception itself: DomainDatabaseSpec.DBKey must be absent
+	// from its own componentKeys().
+	for _, key := range DomainDatabaseSpec.componentKeys() {
+		if key == DomainDatabaseSpec.DBKey {
+			t.Fatalf("DomainDatabaseSpec.componentKeys() must exclude the shared DBKey %q, got %v",
+				DomainDatabaseSpec.DBKey, DomainDatabaseSpec.componentKeys())
+		}
+	}
+	// ClickHouse's DB key is NOT shared and must be present.
+	found := false
+	for _, key := range ClickHouseSpec.componentKeys() {
+		if key == ClickHouseSpec.DBKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ClickHouseSpec.componentKeys() must include its own (unshared) DBKey %q, got %v",
+			ClickHouseSpec.DBKey, ClickHouseSpec.componentKeys())
+	}
+}
+
 // TestResolveDSNFromComponentsInputDomain pins CHAOS-5560's per-field input
 // domain: the whole point of the component form is that url.UserPassword
 // percent-encodes whatever it is given, so none of the reserved-character
@@ -1163,4 +1230,80 @@ func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 		!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
 		t.Fatalf("expected a partial component set (no HOST, no raw URI) to name the missing HOST key, got: %v", err)
 	}
+}
+
+// TestNonSharedDBKeyAndFileVariantsAreDetected is round 3's (2026-09-11) two
+// findings, reproduced then fixed: (1) ClickHouse's DBKey is NOT shared the
+// way the three Postgres specs' DBKey is, so it must still be swept by the
+// exclusivity/missing-key detection; (2) USER_FILE/PASSWORD_FILE are real,
+// supported activation paths (ResolveDSNFromComponents resolves both
+// through secrets.Resolve) that the detection sweep must also cover.
+func TestNonSharedDBKeyAndFileVariantsAreDetected(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ClickHouse DB alone (no host, no raw) names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		_, err := Load(workerSpec(map[string]string{
+			"DEV_HEALTH_CH_DB":    "analytics",
+			"WORKER_DATABASE_URI": "postgresql://app:app@db.internal:5432/appdb",
+		}))
+		if err == nil ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_CH_DB") ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_CH_HOST") {
+			t.Fatalf("expected the missing-host error naming DEV_HEALTH_CH_DB, got: %v", err)
+		}
+	})
+
+	t.Run("ClickHouse DB plus a raw CLICKHOUSE_URI is refused", func(t *testing.T) {
+		t.Parallel()
+		_, err := Load(workerSpec(map[string]string{
+			"CLICKHOUSE_URI":      "clickhouse://old:old@old.invalid:9000/old",
+			"DEV_HEALTH_CH_DB":    "analytics",
+			"WORKER_DATABASE_URI": "postgresql://app:app@db.internal:5432/appdb",
+		}))
+		if err == nil ||
+			!strings.Contains(err.Error(), "CLICKHOUSE_URI") ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_CH_DB") ||
+			!strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_CH_DB, got: %v", err)
+		}
+	})
+
+	t.Run("PASSWORD_FILE alone (no host, no raw) names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		passwordFile := dir + "/password"
+		if err := os.WriteFile(passwordFile, []byte("s3cret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(workerSpec(map[string]string{
+			"DEV_HEALTH_PG_DOMAIN_PASSWORD_FILE": passwordFile,
+			"WORKER_DATABASE_URI":                "postgresql://app:app@db.internal:5432/appdb",
+		}))
+		if err == nil ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_PASSWORD_FILE") ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
+			t.Fatalf("expected the missing-host error naming DEV_HEALTH_PG_DOMAIN_PASSWORD_FILE, got: %v", err)
+		}
+	})
+
+	t.Run("USER_FILE plus a raw POSTGRES_URI is refused", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		userFile := dir + "/user"
+		if err := os.WriteFile(userFile, []byte("app\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(workerSpec(map[string]string{
+			"POSTGRES_URI":                   "postgresql://old:old@old.invalid:5432/old",
+			"DEV_HEALTH_PG_DOMAIN_USER_FILE": userFile,
+			"WORKER_DATABASE_URI":            "postgresql://app:app@db.internal:5432/appdb",
+		}))
+		if err == nil ||
+			!strings.Contains(err.Error(), "POSTGRES_URI") ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_USER_FILE") ||
+			!strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_PG_DOMAIN_USER_FILE, got: %v", err)
+		}
+	})
 }

@@ -284,13 +284,13 @@ func execute(parent context.Context, args []string, lookup platformsecrets.Looku
 }
 
 func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, stderr io.Writer) (*operatorRuntime, int) {
-	domainURI, ok := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, lookup)
-	if !ok {
-		return nil, writeError(stderr, "configuration_error")
+	domainURI, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, lookup)
+	if err != nil {
+		return nil, writeConfigError(stderr, err)
 	}
-	queueURI, ok := resolveDSNRequired("WORKER_DATABASE_URI", platformconfig.QueueDatabaseSpec, lookup)
-	if !ok {
-		return nil, writeError(stderr, "configuration_error")
+	queueURI, err := resolveDSNRequired("WORKER_DATABASE_URI", platformconfig.QueueDatabaseSpec, lookup)
+	if err != nil {
+		return nil, writeConfigError(stderr, err)
 	}
 	// Required, not optional: workerctl is a coordinator binary. Its very first
 	// database action (authenticating the operator token against
@@ -298,9 +298,9 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	// this DSN the whole CLI is non-functional. Failing here with
 	// configuration_error is the honest outcome; falling back to the domain pool
 	// would reproduce the 42501 this change exists to remove.
-	coordinatorURI, ok := resolveDSNRequired("COORDINATOR_DATABASE_URI", platformconfig.CoordinatorDatabaseSpec, lookup)
-	if !ok {
-		return nil, writeError(stderr, "configuration_error")
+	coordinatorURI, err := resolveDSNRequired("COORDINATOR_DATABASE_URI", platformconfig.CoordinatorDatabaseSpec, lookup)
+	if err != nil {
+		return nil, writeConfigError(stderr, err)
 	}
 	token, ok := resolveRequired("WORKER_OPERATOR_TOKEN", lookup)
 	if !ok {
@@ -1487,9 +1487,9 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 	if runtime.lookup == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	dsn, ok := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
-	if !ok {
-		return writeError(stderr, "configuration_error")
+	dsn, err := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
+	if err != nil {
+		return writeConfigError(stderr, err)
 	}
 	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
 	if err != nil {
@@ -1579,9 +1579,9 @@ func dispatchProvidersyncRetireStaleLinearProjectOwnership(
 	if runtime.lookup == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	dsn, ok := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
-	if !ok {
-		return writeError(stderr, "configuration_error")
+	dsn, err := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
+	if err != nil {
+		return writeConfigError(stderr, err)
 	}
 	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
 	if err != nil {
@@ -2523,13 +2523,26 @@ func resolveRequired(key string, lookup platformsecrets.LookupEnv) (platformsecr
 // resolveRequired, for the DSNs this binary needs. Round-2 (2026-09-11)
 // found this binary reading DSNs directly via resolveRequired, entirely
 // bypassing config.ResolveDSN -- meaning it could never use the component
-// form at all, unlike every long-running worker binary. Every error shape
-// (a plain "configuration_error" JSON code, no detail) is unchanged: this
-// binary's stderr contract has never carried Go error text, and adding it
-// only for this one caller would be its own inconsistency.
-func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup platformsecrets.LookupEnv) (platformsecrets.Value, bool) {
+// form at all, unlike every long-running worker binary.
+//
+// Round-3 (2026-09-11) finding: this originally collapsed ResolveDSN's
+// error to a bare bool, discarding the specific, SAFE (key names only,
+// never values -- every error ResolveDSN/ResolveDSNFromComponents builds
+// is assembled purely from ComponentSpec's own key-name strings) diagnostic
+// it already constructs. An operator hitting a mutual-exclusion or
+// missing-host-key mistake saw only a bare "configuration_error", with no
+// way to tell which keys were involved. The error is now returned so every
+// call site can pass it to writeConfigError, which keeps the existing
+// stable JSON `code` and adds a `detail` field carrying it.
+func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup platformsecrets.LookupEnv) (platformsecrets.Value, error) {
 	value, configured, err := platformconfig.ResolveDSN(lookup, rawKey, spec)
-	return value, err == nil && configured
+	if err != nil {
+		return platformsecrets.Value{}, err
+	}
+	if !configured {
+		return platformsecrets.Value{}, fmt.Errorf("%s is required", rawKey)
+	}
+	return value, nil
 }
 
 func resolveName(key, fallback string, lookup platformsecrets.LookupEnv) string {
@@ -2554,6 +2567,18 @@ func writeServiceError(stderr io.Writer, err error) int {
 		return writeError(stderr, string(serviceError.Code))
 	}
 	return writeError(stderr, "operator_request_failed")
+}
+
+// writeConfigError is CHAOS-5560 round-3's fix for resolveDSNRequired's
+// swallowed diagnostics: keeps the existing stable "configuration_error"
+// JSON code (an operator script parsing it must not break) and adds a
+// `detail` field carrying err's message. Every error resolveDSNRequired
+// can return is built purely from ComponentSpec's own key-name strings
+// (see ResolveDSN/ResolveDSNFromComponents) -- never a resolved value --
+// so this is always safe to print.
+func writeConfigError(stderr io.Writer, err error) int {
+	_, _ = fmt.Fprintf(stderr, "{\"error\":{\"code\":\"configuration_error\",\"detail\":%q}}\n", err.Error())
+	return 1
 }
 
 func writeError(stderr io.Writer, code string) int {

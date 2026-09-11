@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -388,6 +389,88 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_USER") ||
 			!strings.Contains(stderr.String(), "mutually exclusive") {
 			t.Fatalf("expected the mutual-exclusion error, got: %s", stderr.String())
+		}
+	})
+
+	// Round-3 (2026-09-11) finding: unlike the four internal/platform/config
+	// DSNs, migrate's DB key is NOT shared with any sibling connection, so
+	// it must still be swept by the detection -- the round-2 fix's blanket
+	// DBKey exclusion wrongly covered this binary too.
+	t.Run("component DB alone (no host, no URI) names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_DB": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_DB") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_HOST") {
+			t.Fatalf("expected the missing-host error naming DEV_HEALTH_MIGRATION_PG_DB, got: %s", stderr.String())
+		}
+	})
+
+	t.Run("component DB plus a raw MIGRATION_DATABASE_URI is refused", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI":     "postgresql://real:real@real-host:5432/real",
+			"DEV_HEALTH_MIGRATION_PG_DB": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_DB") ||
+			!strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_MIGRATION_PG_DB, got: %s", stderr.String())
+		}
+	})
+
+	// Round-3 finding: PASSWORD_FILE is a real, supported activation path
+	// (ResolveDSNFromComponents resolves DEV_HEALTH_MIGRATION_PG_PASSWORD
+	// through secrets.Resolve, which supports its own `_FILE` form) that the
+	// round-2 detection sweep never checked.
+	t.Run("PASSWORD_FILE alone (no host, no URI) names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		passwordFile := dir + "/password"
+		if err := os.WriteFile(passwordFile, []byte("s3cret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_PASSWORD_FILE": passwordFile,
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_PASSWORD_FILE") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_HOST") {
+			t.Fatalf("expected the missing-host error naming DEV_HEALTH_MIGRATION_PG_PASSWORD_FILE, got: %s", stderr.String())
+		}
+	})
+
+	t.Run("USER_FILE plus a raw MIGRATION_DATABASE_URI is refused", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		userFile := dir + "/user"
+		if err := os.WriteFile(userFile, []byte("migrator\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI":            "postgresql://real:real@real-host:5432/real",
+			"DEV_HEALTH_MIGRATION_PG_USER_FILE": userFile,
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_USER_FILE") ||
+			!strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_MIGRATION_PG_USER_FILE, got: %s", stderr.String())
 		}
 	})
 }

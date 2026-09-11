@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -938,9 +939,54 @@ func validateURI(key string, value secrets.Value, schemes ...string) error {
 // URL-encode every credential component correctly. It never does.
 type ComponentSpec struct {
 	HostKey, PortKey, DefaultPort string
-	UserKey, PasswordKey          string
-	DBKey, DefaultDB              string
-	Scheme                        string
+	// UserKey and PasswordKey also accept a `_FILE` suffix, exactly like
+	// secrets.Resolve's own KEY/KEY_FILE convention (ResolveDSNFromComponents
+	// resolves both through secrets.Resolve) -- tagged `dsnKey:"file"` so
+	// componentKeys' reflection sweep knows to check both forms without a
+	// second, hand-maintained list naming them again.
+	UserKey, PasswordKey string `dsnKey:"file"`
+	DBKey, DefaultDB     string
+	// DBKeyShared marks DBKey as shared across sibling connections -- true
+	// only for the three Postgres specs below, which all read the same
+	// DEV_HEALTH_PG_DB. componentKeys excludes DBKey from its sweep when
+	// this is set, since a shared field's mere presence says nothing about
+	// which one connection, if any, is moving to components; every OTHER
+	// component key, including a connection-specific DB name (ClickHouse's
+	// or migrate's own), has no such ambiguity and stays in the sweep.
+	DBKeyShared bool
+	Scheme      string
+}
+
+// componentKeys returns every env var name this spec's component form can
+// read from -- host/port/user/password/db, and the `_FILE` variant of any
+// field tagged `dsnKey:"file"` -- derived from the struct's own fields via
+// reflection, never a second hand-maintained list. Round-3 (2026-09-11)
+// found ResolveDSN's exclusivity/missing-key detection using a hand-picked
+// slice that simply omitted DBKey (for connections where it is NOT shared)
+// and both `_FILE` forms entirely -- this method is the fix: adding a
+// field to ComponentSpec later automatically joins the sweep.
+func (spec ComponentSpec) componentKeys() []string {
+	var keys []string
+	v := reflect.ValueOf(spec)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if !strings.HasSuffix(field.Name, "Key") {
+			continue
+		}
+		value, ok := v.Field(i).Interface().(string)
+		if !ok || value == "" {
+			continue
+		}
+		if field.Name == "DBKey" && spec.DBKeyShared {
+			continue
+		}
+		keys = append(keys, value)
+		if field.Tag.Get("dsnKey") == "file" {
+			keys = append(keys, value+"_FILE")
+		}
+	}
+	return keys
 }
 
 // DomainDatabaseSpec, QueueDatabaseSpec, CoordinatorDatabaseSpec, and
@@ -956,17 +1002,17 @@ var (
 	DomainDatabaseSpec = ComponentSpec{
 		HostKey: "DEV_HEALTH_PG_DOMAIN_HOST", PortKey: "DEV_HEALTH_PG_DOMAIN_PORT", DefaultPort: "5432",
 		UserKey: "DEV_HEALTH_PG_DOMAIN_USER", PasswordKey: "DEV_HEALTH_PG_DOMAIN_PASSWORD",
-		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", DBKeyShared: true, Scheme: "postgresql",
 	}
 	QueueDatabaseSpec = ComponentSpec{
 		HostKey: "DEV_HEALTH_PG_QUEUE_HOST", PortKey: "DEV_HEALTH_PG_QUEUE_PORT", DefaultPort: "5432",
 		UserKey: "DEV_HEALTH_PG_QUEUE_USER", PasswordKey: "DEV_HEALTH_PG_QUEUE_PASSWORD",
-		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", DBKeyShared: true, Scheme: "postgresql",
 	}
 	CoordinatorDatabaseSpec = ComponentSpec{
 		HostKey: "DEV_HEALTH_PG_COORDINATOR_HOST", PortKey: "DEV_HEALTH_PG_COORDINATOR_PORT", DefaultPort: "5432",
 		UserKey: "DEV_HEALTH_PG_COORDINATOR_USER", PasswordKey: "DEV_HEALTH_PG_COORDINATOR_PASSWORD",
-		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", DBKeyShared: true, Scheme: "postgresql",
 	}
 	ClickHouseSpec = ComponentSpec{
 		HostKey: "DEV_HEALTH_CH_HOST", PortKey: "DEV_HEALTH_CH_PORT", DefaultPort: "9000",
@@ -1064,23 +1110,20 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 // HostKey. A non-host component (port/user/password) set alongside a
 // pre-built URI was silently ignored -- ResolveDSNFromComponents never
 // activates without a host, so the raw URI won with no error and no
-// indication a stray/mistyped component var was sitting unused. The check
-// below now inspects every PER-CONNECTION component field, not only the
-// one that gates activation, and names every one of them that was
-// actually set. DBKey is deliberately excluded from this trigger set: it
-// is shared across all three Postgres connections by design (one
-// DEV_HEALTH_PG_DB default, matching the pre-existing single-database-name
-// convention), so its mere presence says nothing about which connection,
-// if any, an operator means to move to components -- flagging it here
-// would make "domain via components, queue via its pre-built URI" (a
-// supported, tested combination) spuriously refuse itself the moment
-// DEV_HEALTH_PG_DB is set for the domain side.
+// indication a stray/mistyped component var was sitting unused.
+//
+// Round-3 (2026-09-11) finding: the round-2 fix's own trigger set was a
+// hand-picked slice that omitted DBKey unconditionally (correct for the
+// three Postgres specs, where it is genuinely shared -- wrong for
+// ClickHouse and migrate, where it is not) and both fields' `_FILE`
+// variants entirely, even though ResolveDSNFromComponents resolves both
+// through secrets.Resolve. The check below now sweeps spec.componentKeys()
+// -- derived from the struct's own fields, never a second list -- which
+// covers every key correctly, DBKey included wherever it is not marked
+// shared, and both `_FILE` forms.
 func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (value secrets.Value, configured bool, err error) {
 	var setComponentKeys []string
-	for _, key := range []string{spec.HostKey, spec.PortKey, spec.UserKey, spec.PasswordKey} {
-		if key == "" {
-			continue
-		}
+	for _, key := range spec.componentKeys() {
 		if v, present := lookup(key); present && strings.TrimSpace(v) != "" {
 			setComponentKeys = append(setComponentKeys, key)
 		}

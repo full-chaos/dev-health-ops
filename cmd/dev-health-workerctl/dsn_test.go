@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -26,11 +28,11 @@ func TestResolveDSNRequiredUsesTheSharedComponentForm(t *testing.T) {
 
 	t.Run("pre-built URI only still works, unchanged", func(t *testing.T) {
 		t.Parallel()
-		value, ok := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
+		value, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
 			"POSTGRES_URI": "postgresql://app:app@db.internal:5432/appdb",
 		}))
-		if !ok {
-			t.Fatal("expected success")
+		if err != nil {
+			t.Fatalf("expected success, got: %v", err)
 		}
 		if value.Reveal() != "postgresql://app:app@db.internal:5432/appdb" {
 			t.Fatalf("got %q", value.Reveal())
@@ -39,49 +41,116 @@ func TestResolveDSNRequiredUsesTheSharedComponentForm(t *testing.T) {
 
 	t.Run("component form only now works -- the round-2 fix", func(t *testing.T) {
 		t.Parallel()
-		value, ok := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
+		value, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
 			"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
 			"DEV_HEALTH_PG_DOMAIN_USER":     "app",
 			"DEV_HEALTH_PG_DOMAIN_PASSWORD": "app",
 			"DEV_HEALTH_PG_DB":              "appdb",
 		}))
-		if !ok {
-			t.Fatal("expected success via the component form")
+		if err != nil {
+			t.Fatalf("expected success via the component form, got: %v", err)
 		}
 		if value.Reveal() != "postgresql://app:app@db.internal:5432/appdb" {
 			t.Fatalf("got %q", value.Reveal())
 		}
 	})
 
-	t.Run("both forms set -- refused, not silently one winning", func(t *testing.T) {
+	// Round-3 (2026-09-11) finding: resolveDSNRequired used to collapse this
+	// error to a bare bool, discarding the key names ResolveDSN's own error
+	// already names.
+	t.Run("both forms set -- refused, naming both keys, not silently one winning", func(t *testing.T) {
 		t.Parallel()
-		_, ok := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
+		_, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
 			"POSTGRES_URI":              "postgresql://old:old@old.invalid:5432/old",
 			"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
 		}))
-		if ok {
-			t.Fatal("expected failure when both forms are set")
+		if err == nil ||
+			!strings.Contains(err.Error(), "POSTGRES_URI") ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") ||
+			!strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("expected an error naming both keys, got: %v", err)
+		}
+	})
+
+	t.Run("partial component set (no host) -- names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		_, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
+			"DEV_HEALTH_PG_DOMAIN_USER": "app",
+		}))
+		if err == nil ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_USER") ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
+			t.Fatalf("expected an error naming the missing host key, got: %v", err)
 		}
 	})
 
 	t.Run("neither set -- required error, unchanged", func(t *testing.T) {
 		t.Parallel()
-		_, ok := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(nil))
-		if ok {
-			t.Fatal("expected failure when neither form is set")
+		_, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(nil))
+		if err == nil || !strings.Contains(err.Error(), "POSTGRES_URI") {
+			t.Fatalf("expected a required-key error, got: %v", err)
 		}
 	})
 
 	t.Run("clickhouse component form works through the same helper", func(t *testing.T) {
 		t.Parallel()
-		value, ok := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, dsnTestLookup(map[string]string{
+		value, err := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, dsnTestLookup(map[string]string{
 			"DEV_HEALTH_CH_HOST": "ch.internal",
 		}))
-		if !ok {
-			t.Fatal("expected success via the component form")
+		if err != nil {
+			t.Fatalf("expected success via the component form, got: %v", err)
 		}
 		if value.Reveal() != "clickhouse://ch.internal:9000/default" {
 			t.Fatalf("got %q", value.Reveal())
 		}
 	})
+
+	// Round-3 finding: ClickHouse's DB key is NOT shared (unlike the three
+	// Postgres specs' DEV_HEALTH_PG_DB) and must still be swept.
+	t.Run("clickhouse DB alone (no host) -- names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		_, err := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, dsnTestLookup(map[string]string{
+			"DEV_HEALTH_CH_DB": "analytics",
+		}))
+		if err == nil ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_CH_DB") ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_CH_HOST") {
+			t.Fatalf("expected an error naming DEV_HEALTH_CH_DB, got: %v", err)
+		}
+	})
+}
+
+// TestWriteConfigErrorExposesKeyNamesNeverValues is round-3's (2026-09-11)
+// P1 fix at the CLI boundary: writeConfigError must keep the stable
+// "configuration_error" JSON code (an operator script parsing it must not
+// break) while adding a `detail` field carrying the resolver's key-named
+// diagnostic -- and that detail must never contain a resolved value, only
+// key names, since every ResolveDSN/ResolveDSNFromComponents error is
+// built purely from ComponentSpec's own key-name strings.
+func TestWriteConfigErrorExposesKeyNamesNeverValues(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
+		"POSTGRES_URI":              "postgresql://old:s3cr3t-password@old.invalid:5432/old",
+		"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
+	}))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+
+	var stderr bytes.Buffer
+	status := writeConfigError(&stderr, err)
+	if status != 1 {
+		t.Fatalf("status = %d, want 1", status)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, `"code":"configuration_error"`) {
+		t.Fatalf("expected the stable configuration_error code, got: %s", out)
+	}
+	if !strings.Contains(out, "POSTGRES_URI") || !strings.Contains(out, "DEV_HEALTH_PG_DOMAIN_HOST") {
+		t.Fatalf("expected the detail to name both keys, got: %s", out)
+	}
+	if strings.Contains(out, "s3cr3t-password") {
+		t.Fatalf("detail must never contain a resolved value, got: %s", out)
+	}
 }

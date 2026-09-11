@@ -898,7 +898,13 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *
 	runtime := commandRuntime(t, commandAuthorizer{})
 	runtime.lookup = func(string) (string, bool) { return "", false }
 	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, nil, &stdout, &stderr)
-	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"configuration_error\"}}\n" {
+	// CHAOS-5560 round-3: the stable "code" is unchanged, but a "detail"
+	// field naming the missing key was added -- assert both rather than an
+	// exact string, so this test does not itself pin the old, less useful
+	// shape back in place.
+	if code != 1 ||
+		!strings.Contains(stderr.String(), `"code":"configuration_error"`) ||
+		!strings.Contains(stderr.String(), "CLICKHOUSE_URI") {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
 }
@@ -972,7 +978,11 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRequiresClickHouse
 	runtime := commandRuntime(t, commandAuthorizer{})
 	runtime.lookup = func(string) (string, bool) { return "", false }
 	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, nil, &stdout, &stderr)
-	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"configuration_error\"}}\n" {
+	// CHAOS-5560 round-3: see the sibling test above -- the stable "code" is
+	// unchanged, a "detail" field naming the missing key was added.
+	if code != 1 ||
+		!strings.Contains(stderr.String(), `"code":"configuration_error"`) ||
+		!strings.Contains(stderr.String(), "CLICKHOUSE_URI") {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
 }

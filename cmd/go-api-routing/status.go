@@ -29,10 +29,27 @@ import (
 // pointer or a nullable string, so "we could not tell" is a value a
 // reader can see rather than a zero that looks like an answer.
 type statusReport struct {
-	LocalSchemaDigest   string  `json:"local_schema_digest"`
-	GoPlaneSchemaDigest *string `json:"go_plane_schema_digest"`
-	GoPlaneError        *string `json:"go_plane_error"`
-	PlanesAgree         *bool   `json:"planes_agree"`
+	// r8 F6 (reproduced, team-lead ruling R126): the JSON key names
+	// LocalSchemaDigest -- named "local" from THIS binary's own
+	// perspective, matching every other Go-side naming in this file --
+	// now match Python's `status --json` key names EXACTLY:
+	// `python_plane_schema_digest`, not `local_schema_digest`. Python
+	// named its own equivalent field from the TWO-PLANE system's
+	// perspective (the python plane's own reading), predating this Go
+	// binary; matching that established key literally, rather than
+	// re-deriving a "more accurate" name from Go's own point of view, is
+	// what lets a consumer read either command's JSON with the SAME key
+	// regardless of which binary produced it -- the exact class of
+	// undeclared divergence this whole surface exists to eliminate.
+	// PythonPlaneDigestError has no Go equivalent failure mode (computing
+	// this value from the embedded SDL cannot fail at runtime, unlike
+	// Python's disk read) and is always nil -- present for KEY-SET
+	// parity, never populated.
+	LocalSchemaDigest      string  `json:"python_plane_schema_digest"`
+	PythonPlaneDigestError *string `json:"python_plane_digest_error"`
+	GoPlaneSchemaDigest    *string `json:"go_plane_schema_digest"`
+	GoPlaneError           *string `json:"go_plane_error"`
+	PlanesAgree            *bool   `json:"planes_agree"`
 	// TWO independent database facts, not one (r2 R2-04). The census
 	// ("how many rows at which digests") and the per-operation
 	// classification are separate reads with separate failure modes, and

@@ -799,8 +799,24 @@ func connectPostgres(ctx context.Context, uri string, timeout time.Duration) (*p
 		pool.Close()
 		// The dial error names host/port, not the password, and an
 		// operator needs to know WHICH endpoint went dark -- so this one
-		// IS wrapped. Asserted by TestAMalformedDSNIsNeverEchoed.
-		return nil, refuse("Postgres did not answer within %s: %w", timeout, err)
+		// IS wrapped. Asserted by TestConnectPostgresBoundsTheDialAndSaysSo
+		// (r8 F8-class fix in passing: the name cited here was never this
+		// test's real name).
+		//
+		// r8 F6 (reproduced, team-lead ruling R126): exit 1, not 2 --
+		// corrected from an earlier version of this fix, which left a
+		// dead database refusing (exit 2) and only DECLARED the
+		// divergence from Python's identical command (an unhandled
+		// `ConnectionRefusedError`, exit 1) rather than closing it. A
+		// syntactically valid DSN naming an endpoint that will not answer
+		// is not something the operator TYPED wrong (that is the parse
+		// error above, still exit 2) -- it is the database itself being
+		// unreachable, the same class of failure `classifyWriteError`
+		// already exits 1 for once inside a write transaction. `status`
+		// is unaffected: it catches this error and reports it as
+		// `registry_db_error`, never propagating it as an exit code, so
+		// this reclassification only changes enable/disable/repoint.
+		return nil, internal("Postgres did not answer within %s: %w", timeout, err)
 	}
 	return pool, nil
 }

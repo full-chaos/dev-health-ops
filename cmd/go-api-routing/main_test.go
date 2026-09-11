@@ -494,7 +494,7 @@ func TestStatusReportsAnUnusableEnvURLInsteadOfRefusing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status must never refuse, even on an unusable inherited env URL: %v", err)
 	}
-	if !strings.Contains(out, `"local_schema_digest"`) {
+	if !strings.Contains(out, `"python_plane_schema_digest"`) {
 		t.Fatalf("status printed nothing -- an unusable env URL must not suppress the schema digest, which needs no registry call:\n%s", out)
 	}
 	if strings.Contains(out, `"go_plane_error": null`) {
@@ -663,8 +663,15 @@ func TestConnectPostgresBoundsTheDialAndSaysSo(t *testing.T) {
 	if elapsed > 15*time.Second {
 		t.Fatalf("the dial took %s -- the -timeout flag must bound it, or `status` hangs forever on a dead database", elapsed)
 	}
-	if got := exitCodeFor(err); got != 2 {
-		t.Fatalf("an unreachable database exits %d, want 2", got)
+	// r8 F6 (reproduced, team-lead ruling R126): exit 1, matching
+	// Python's identical command (an unhandled ConnectionRefusedError,
+	// also exit 1) -- corrected from an earlier version of this test that
+	// asserted exit 2. A syntactically valid DSN naming an endpoint that
+	// will not answer is not an operator typo; see
+	// TestConnectPostgresRefusesAndNeverEchoesTheDSN's PARSE-error case,
+	// which stays exit 2.
+	if got := exitCodeFor(err); got != 1 {
+		t.Fatalf("an unreachable database exits %d, want 1", got)
 	}
 	if strings.Contains(err.Error(), password) {
 		t.Fatalf("the refusal echoed the DSN's password: %q", err)

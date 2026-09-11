@@ -1292,22 +1292,24 @@ func TestDisableCandidateBuildGuardIgnoresDeadRows(t *testing.T) {
 	}
 }
 
-// r8 F2 (reproduced): when an operation's ONLY row at the live digest is
-// a DEAD one (no catalog row exists at all for it), r6 F3(c)'s
-// catalog-row scoping used to make `-candidate-build` guard ZERO rows --
-// the write went ahead completely unguarded, with nothing said about it.
-// Python has no "dead row" concept and checks whatever row exists, so
-// this was an accept/refuse divergence: Python refuses the identical
-// command. Fixed: the guard falls back to every row that DOES exist when
-// the operation has no catalog row to check instead.
-func TestDisableCandidateBuildGuardAppliesToADeadRowWhenNoCatalogRowExists(t *testing.T) {
+// r8 F2 (reproduced, team-lead ruling R123, corrected): when an
+// operation's ONLY row at the live digest is a DEAD one (no catalog row
+// exists at all for it), r6 F3(c)'s catalog-row scoping used to make
+// `-candidate-build` guard ZERO rows -- the write went ahead completely
+// unguarded, with nothing said about it. Python refuses the identical
+// command. Fixed: a guard the operation has NO catalog row to check
+// against now REFUSES unconditionally ("nothing to compare"), the SAME
+// way whether the dead row's build happens to match the guard or not --
+// the guard is defined (r6 F3(c)) to never read a dead row's build at
+// all, so there being no OTHER row to check is itself the refusal, not a
+// build comparison against the dead one.
+func TestDisableCandidateBuildGuardRefusesWhenNoCatalogRowExistsToCheck(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	ctx := context.Background()
 	deadDigest := "6666666666666666666666666666666666666666666666666666666666666666" // NOT in the catalog
 	liveDigestNeverWritten := "7777777777777777777777777777777777777777777777777777777777777777"
 	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: liveDigestNeverWritten})
 	const actualBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	const guardBuild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // deliberately WRONG
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
@@ -1323,17 +1325,35 @@ func TestDisableCandidateBuildGuardAppliesToADeadRowWhenNoCatalogRowExists(t *te
 		t.Fatalf("seed routing row: %v", err)
 	}
 
+	// A guard that does NOT match the dead row's build -- must refuse.
 	_, _, err := captureVerb(t, "disable",
 		"-operations", verbTestOperation, "-mode", "python",
 		"-postgres-uri", dsn, "-catalog", catalogPath,
-		"-candidate-build", guardBuild,
-		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r8 F2 killer",
+		"-candidate-build", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", // deliberately WRONG
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r8 F2 killer (mismatch)",
 	)
 	if err == nil {
-		t.Fatal("the guard must apply to the dead row when it is the ONLY row this operation has -- a mismatched -candidate-build must refuse, not silently guard nothing")
+		t.Fatal("a mismatched -candidate-build against an operation with no catalog row must refuse")
 	}
 	if exitCodeFor(err) != 2 {
 		t.Fatalf("exit %d, want 2 -- operator-actionable, not a crash", exitCodeFor(err))
+	}
+
+	// The SAME guard, this time MATCHING the dead row's actual build --
+	// must ALSO refuse. The guard never reads a dead row's build at all
+	// (r6 F3(c)), so a coincidental match does not make this write safe;
+	// "nothing to compare" is unconditional.
+	_, _, err = captureVerb(t, "disable",
+		"-operations", verbTestOperation, "-mode", "python",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-candidate-build", actualBuild,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r8 F2 killer (match)",
+	)
+	if err == nil {
+		t.Fatal("a MATCHING -candidate-build against an operation with no catalog row must STILL refuse -- the guard never reads a dead row's build, so a coincidental match must not silently apply the write")
+	}
+	if exitCodeFor(err) != 2 {
+		t.Fatalf("exit %d, want 2", exitCodeFor(err))
 	}
 
 	var mode string
@@ -1341,23 +1361,22 @@ func TestDisableCandidateBuildGuardAppliesToADeadRowWhenNoCatalogRowExists(t *te
 		t.Fatal(err)
 	}
 	if mode != "canary" {
-		t.Fatalf("the dead row must be genuinely untouched: mode = %q, want canary", mode)
+		t.Fatalf("the dead row must be genuinely untouched by either attempt: mode = %q, want canary", mode)
 	}
 
-	// Control: the SAME -candidate-build MATCHING the dead row's actual
-	// build must still succeed -- the guard falling back to dead rows
-	// must not become a refusal nobody can satisfy.
+	// Control: OMITTING the guard entirely still disables the dead row --
+	// this refusal is about a GUARD with nothing to check, not about
+	// dead rows being permanently undisableable.
 	out, _, err := captureVerb(t, "disable",
 		"-operations", verbTestOperation, "-mode", "python",
 		"-postgres-uri", dsn, "-catalog", catalogPath,
-		"-candidate-build", actualBuild,
 		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r8 F2 control",
 	)
 	if err != nil {
-		t.Fatalf("control: a MATCHING -candidate-build against the dead row must succeed: %v", err)
+		t.Fatalf("control: omitting the guard entirely must still disable the dead row: %v", err)
 	}
 	if !strings.Contains(out, "applied: 1 row(s)") {
-		t.Fatalf("control: the dead row must be disabled: %s", out)
+		t.Fatalf("control: the dead row must be disabled when no guard is named: %s", out)
 	}
 }
 

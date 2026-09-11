@@ -417,24 +417,21 @@ Added since, all reproduced by review and pinned by a test:
 * **`<verb> -h`/`-help` exits 0**, printing that verb's usage text, the
   same as this binary's own top-level `-h` and Python's argparse --  not a
   refusal (exit 2).
-* **A dead database exits 2 (a refusal), not 1** (r8 F6, reproduced,
-  newly DECLARED -- deliberate since r2 R2-01/R2-02, but never named in
-  this list). Python's `disable`/`enable`/`repoint` against a dead
-  database crash with an unhandled `ConnectionRefusedError`, exit 1; this
-  binary reports "Postgres did not answer" as an ordinary,
-  operator-actionable refusal, exit 2 -- a malformed or unreachable DSN is
-  something an operator fixes, not a crash. A script ported from Python
-  and reading "exit 1 means the database is down" will read this as "fix
-  your input" instead; this is the residual of that port, named rather
-  than left implicit.
-* **`status -json`'s key names do not match Python's** (r8 F6, reproduced,
-  newly DECLARED). Python's `status --json` reports
-  `python_plane_schema_digest`/`python_plane_digest_error`; this binary
-  reports `local_schema_digest` and carries no equivalent digest-error
-  key at all (a digest read failure here is a defect in THIS binary, not
-  a state worth a separate field the way an unreachable go plane is). No
-  in-repo consumer reads either JSON shape today, so nothing currently
-  breaks -- declared so a future consumer is not surprised.
+* **A dead database exits 1, matching Python** (r8 F6, corrected --
+  team-lead ruling R126 required fixing this, not declaring it; an
+  earlier version of this line left it exit 2 and only named the gap).
+  Python's `disable`/`enable`/`repoint` against a dead database crash
+  with an unhandled `ConnectionRefusedError`, exit 1; `connectPostgres`'s
+  dial-failure path now classifies the same way. A malformed DSN (a
+  parse-time failure, the operator's own typo) is unaffected and stays
+  exit 2.
+* **`status -json`'s key names match Python's exactly** (r8 F6,
+  corrected, same ruling): `python_plane_schema_digest` and
+  `python_plane_digest_error` (always `null` -- computing this value has
+  no runtime failure mode in Go, present for key-set parity only), not
+  the earlier `local_schema_digest` with no digest-error key at all.
+  `catalog_error` and `classification_error` remain Go-only additions
+  Python has no equivalent read for.
 
 `disable` also turns off **every** row an operation has at the live
 digest, not one of them. The routing primary key is `(schema_digest,

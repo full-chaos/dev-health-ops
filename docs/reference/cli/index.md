@@ -1786,15 +1786,24 @@ The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 
-The checked-in transport for all four sync-dispatch kinds is River and the
-rollback transport is Celery. `routes apply` converges one unpaused Celery
-route to its checked-in River transport after proving the matching capability
-exists and no live outbox claim remains. It is idempotent when the route is
-already active. `routes resume --transport celery` remains the explicit
-rollback path. Before resuming on Celery, drain the external River queue for
-the kind as well as the database claims: there must be no queued or running
-River job and no pending or claimed outbox row. `routes drain` proves the
-database-claim condition only; it does not inspect River job state.
+The checked-in transport for all four sync-dispatch kinds is River, and the
+rollback transport recorded against them is `celery`. `routes apply` converges
+one unpaused Celery route to its checked-in River transport after proving the
+matching capability exists and no live outbox claim remains. It is idempotent
+when the route is already active.
+
+**`routes resume --transport celery` is not a supported rollback target.** The
+verb still exists and the recorded rollback transport is still `celery`, but no
+Celery consumer runs anywhere: resuming on it hands the work to nothing. It
+survives as a code-level mechanism only, until the code phase of the Celery
+removal deletes it. To roll back, redeploy a previously deployed Go revision
+from the rollback tag set.
+
+Were a consumer ever restored, the drain conditions would still apply: before
+resuming on Celery, drain the external River queue for the kind as well as the
+database claims, with no queued or running River job and no pending or claimed
+outbox row. `routes drain` proves the database-claim condition only; it does
+not inspect River job state.
 
 ---
 

@@ -91,7 +91,7 @@ For every group, confirm:
   effective connection limits;
 - queue depth, oldest eligible age, execution saturation, and both
   pool-saturation metrics are monitored;
-- rollback can restore Celery ownership without duplicate effects.
+- rollback restores a previously deployed Go revision without duplicate effects. The Celery transport is not a rollback target: no consumer runs, so rolling back to it hands the work to nothing.
 
 There is no global unique-queue-owner requirement. River claim semantics allow
 overlapping groups to share a queue. Budget the overlap as additional consumer

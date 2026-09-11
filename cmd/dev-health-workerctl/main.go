@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -2572,12 +2573,35 @@ func writeServiceError(stderr io.Writer, err error) int {
 // writeConfigError is CHAOS-5560 round-3's fix for resolveDSNRequired's
 // swallowed diagnostics: keeps the existing stable "configuration_error"
 // JSON code (an operator script parsing it must not break) and adds a
-// `detail` field carrying err's message. Every error resolveDSNRequired
-// can return is built purely from ComponentSpec's own key-name strings
-// (see ResolveDSN/ResolveDSNFromComponents) -- never a resolved value --
-// so this is always safe to print.
+// `detail` field carrying err's message.
+//
+// Round-4 (2026-09-11) finding: round 3's claim that every such error is
+// "built purely from ComponentSpec's own key-name strings" was true for
+// ResolveDSN's OWN error constructions but false for the error path it can
+// pass through unchanged -- secrets.Resolve's KEY_FILE read failure, which
+// (before its own round-4 fix in internal/platform/secrets/source.go) wrapped
+// the raw os.PathError, embedding the exact `*_FILE` value an operator had
+// configured; a KEY_FILE misconfigured to a raw credential string had that
+// string echoed back verbatim on stderr. secrets.Resolve's message is now
+// key-name-only at the source. logging.RedactText is applied here too, as
+// defense in depth (R89 -- the same rule internal/platform/shell/shell.go's
+// own config.Load() error path already applies), in case any future error
+// text this function has not audited slips a credential-shaped substring
+// through. Uses encoding/json (round-4 finding: `%q` is Go string escaping,
+// not JSON escaping -- a control byte in the underlying text produced
+// invalid JSON).
 func writeConfigError(stderr io.Writer, err error) int {
-	_, _ = fmt.Fprintf(stderr, "{\"error\":{\"code\":\"configuration_error\",\"detail\":%q}}\n", err.Error())
+	payload := struct {
+		Error struct {
+			Code   string `json:"code"`
+			Detail string `json:"detail"`
+		} `json:"error"`
+	}{}
+	payload.Error.Code = "configuration_error"
+	payload.Error.Detail = logging.RedactText(err.Error())
+	encoder := json.NewEncoder(stderr)
+	encoder.SetEscapeHTML(true)
+	_ = encoder.Encode(payload)
 	return 1
 }
 

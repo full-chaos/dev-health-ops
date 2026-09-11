@@ -989,6 +989,61 @@ func (spec ComponentSpec) componentKeys() []string {
 	return keys
 }
 
+// setComponentKeys reports which of spec's component keys are ACTUALLY set
+// in lookup's environment -- the runtime counterpart to componentKeys'
+// static enumeration, and (like componentKeys) derived from the struct's
+// own fields via reflection rather than a second hand-maintained list.
+//
+// Round-4 (2026-09-11) finding (Trap #140: never TrimSpace an identifier or
+// a secret): the previous presence check trimmed every value before
+// testing it for emptiness, so a password consisting only of whitespace --
+// non-empty, and therefore Configured() to secrets.Resolve, which
+// deliberately never trims a secret's meaningful content -- was invisible
+// here, letting a raw URI and that whitespace-only component coexist
+// unflagged. Presence for HostKey/PortKey/DBKey is now a plain, UNTRIMMED
+// non-empty lookup (an identifier's whitespace is never used to decide
+// whether it is "really" set, matching ResolveDSNFromComponents' own
+// explicit-refusal handling of it above); presence for UserKey/PasswordKey
+// (tagged `dsnKey:"file"`) is secrets.Resolve's own Configured() result --
+// the exact predicate ResolveDSNFromComponents itself uses, including its
+// transparent `_FILE` handling, so this can never drift from it again.
+func (spec ComponentSpec) setComponentKeys(lookup secrets.LookupEnv) (keys []string, err error) {
+	v := reflect.ValueOf(spec)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if !strings.HasSuffix(field.Name, "Key") {
+			continue
+		}
+		key, ok := v.Field(i).Interface().(string)
+		if !ok || key == "" {
+			continue
+		}
+		if field.Name == "DBKey" && spec.DBKeyShared {
+			continue
+		}
+		if field.Tag.Get("dsnKey") == "file" {
+			resolved, _, resolveErr := secrets.Resolve(key, lookup)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if !resolved.Configured() {
+				continue
+			}
+			if _, direct := lookup(key); direct {
+				keys = append(keys, key)
+			} else {
+				keys = append(keys, key+"_FILE")
+			}
+			continue
+		}
+		if value, present := lookup(key); present && value != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys, nil
+}
+
 // DomainDatabaseSpec, QueueDatabaseSpec, CoordinatorDatabaseSpec, and
 // ClickHouseSpec are the canonical component definitions for CHAOS-5560's
 // four Load()-resolved DSNs, exported so every caller that needs one of
@@ -1035,17 +1090,36 @@ var (
 // url.URL.Host copy: see the URL-secret-leak lessons on why a component
 // "known safe by construction" still needs its own shape check before use).
 func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (built secrets.Value, used bool, err error) {
-	host := strings.TrimSpace(firstOrEmpty(lookup(spec.HostKey)))
+	// Round-4 (2026-09-11) finding (Trap #140: never TrimSpace an
+	// identifier or a secret): host/port/db used to be stored TRIMMED,
+	// while the pre-built-URI form takes a database name verbatim from the
+	// URL path -- an identifier with meaningful leading/trailing
+	// whitespace (unusual, but valid) silently connected to a DIFFERENT
+	// existing resource depending on which form was used, proven against
+	// two real, distinctly-named databases. Every identifier below is now
+	// preserved EXACTLY (never trimmed) and explicitly refused if it has
+	// leading/trailing whitespace, rather than having that whitespace
+	// silently discarded.
+	host := firstOrEmpty(lookup(spec.HostKey))
 	if host == "" {
 		return secrets.Value{}, false, nil
 	}
-	port := strings.TrimSpace(envOrDefault(lookup, spec.PortKey, spec.DefaultPort))
+	if strings.TrimSpace(host) != host {
+		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.HostKey)
+	}
+	port := envOrDefault(lookup, spec.PortKey, spec.DefaultPort)
 	if port == "" {
 		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.PortKey)
 	}
-	db := strings.TrimSpace(envOrDefault(lookup, spec.DBKey, spec.DefaultDB))
+	if strings.TrimSpace(port) != port {
+		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.PortKey)
+	}
+	db := envOrDefault(lookup, spec.DBKey, spec.DefaultDB)
 	if db == "" {
 		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.DBKey)
+	}
+	if strings.TrimSpace(db) != db {
+		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.DBKey)
 	}
 	if strings.ContainsAny(db, "/?#") {
 		return secrets.Value{}, true, fmt.Errorf("%s must not contain '/', '?', or '#'", spec.DBKey)
@@ -1054,6 +1128,13 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if resolveErr != nil {
 		return secrets.Value{}, true, resolveErr
 	}
+	if user.Configured() && strings.TrimSpace(user.Reveal()) != user.Reveal() {
+		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.UserKey)
+	}
+	// PasswordKey is deliberately NOT subject to the whitespace guard
+	// above: a password's characters, leading/trailing whitespace
+	// included, are meaningful and must reach url.UserPassword exactly as
+	// configured -- that is this whole ticket's reason to exist.
 	password, _, resolveErr := secrets.Resolve(spec.PasswordKey, lookup)
 	if resolveErr != nil {
 		return secrets.Value{}, true, resolveErr
@@ -1122,25 +1203,23 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 // covers every key correctly, DBKey included wherever it is not marked
 // shared, and both `_FILE` forms.
 func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (value secrets.Value, configured bool, err error) {
-	var setComponentKeys []string
-	for _, key := range spec.componentKeys() {
-		if v, present := lookup(key); present && strings.TrimSpace(v) != "" {
-			setComponentKeys = append(setComponentKeys, key)
-		}
+	foundKeys, setErr := spec.setComponentKeys(lookup)
+	if setErr != nil {
+		return secrets.Value{}, false, setErr
 	}
-	hostSet := strings.TrimSpace(firstOrEmpty(lookup(spec.HostKey))) != ""
+	hostSet := firstOrEmpty(lookup(spec.HostKey)) != ""
 	_, rawPresent := lookup(rawKey)
 	_, rawFilePresent := lookup(rawKey + "_FILE")
-	if len(setComponentKeys) > 0 && (rawPresent || rawFilePresent) {
+	if len(foundKeys) > 0 && (rawPresent || rawFilePresent) {
 		return secrets.Value{}, false, fmt.Errorf(
 			"%s (or %s_FILE) and %s are mutually exclusive -- set exactly one to configure this connection",
-			rawKey, rawKey, strings.Join(setComponentKeys, ", "),
+			rawKey, rawKey, strings.Join(foundKeys, ", "),
 		)
 	}
 	if hostSet {
 		return ResolveDSNFromComponents(lookup, spec)
 	}
-	if len(setComponentKeys) > 0 {
+	if len(foundKeys) > 0 {
 		// Round-2 (2026-09-11) finding, second half: a non-host component
 		// set with HOST itself absent used to fall straight through to
 		// secrets.Resolve(rawKey, lookup) -- if the raw key was also unset,
@@ -1149,10 +1228,10 @@ func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (va
 		// field. HostKey is the only genuinely REQUIRED component (Port/DB
 		// have defaults; User/Password are an optional pair) -- since
 		// hostSet is false here, HostKey is necessarily among what is
-		// missing, whether or not it appears in setComponentKeys.
+		// missing, whether or not it appears in foundKeys.
 		return secrets.Value{}, false, fmt.Errorf(
 			"%s is set without %s -- the component form requires %s to be set",
-			strings.Join(setComponentKeys, ", "), spec.HostKey, spec.HostKey,
+			strings.Join(foundKeys, ", "), spec.HostKey, spec.HostKey,
 		)
 	}
 	return secrets.Resolve(rawKey, lookup)

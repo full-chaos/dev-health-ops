@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -152,5 +153,68 @@ func TestWriteConfigErrorExposesKeyNamesNeverValues(t *testing.T) {
 	}
 	if strings.Contains(out, "s3cr3t-password") {
 		t.Fatalf("detail must never contain a resolved value, got: %s", out)
+	}
+}
+
+// TestWriteConfigErrorNeverEchoesACredentialBearingFilePath is round-4's
+// (2026-09-11) P1 fix at the CLI boundary: a *_FILE var misconfigured to a
+// raw credential string instead of an actual path used to have that
+// entire string, password included, echoed on stderr -- Go's
+// os.PathError.Error() embeds the exact path it tried to open, and the
+// round-3 writeConfigError printed err.Error() unfiltered.
+func TestWriteConfigErrorNeverEchoesACredentialBearingFilePath(t *testing.T) {
+	t.Parallel()
+
+	syntheticSecret := "s3cr3t-p@ssw0rd-should-never-appear"
+	misconfiguredPath := "postgresql://svc:" + syntheticSecret + "@internal.example:5432/db"
+
+	_, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
+		"DEV_HEALTH_PG_DOMAIN_HOST":      "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER_FILE": misconfiguredPath,
+	}))
+	if err == nil {
+		t.Fatal("expected a file-read failure")
+	}
+
+	var stderr bytes.Buffer
+	writeConfigError(&stderr, err)
+	out := stderr.String()
+	if strings.Contains(out, syntheticSecret) || strings.Contains(out, misconfiguredPath) {
+		t.Fatalf("the misconfigured, credential-bearing path leaked on stderr: %s", out)
+	}
+	if !strings.Contains(out, "DEV_HEALTH_PG_DOMAIN_USER_FILE") {
+		t.Fatalf("expected the key name to still be named, got: %s", out)
+	}
+}
+
+// TestWriteConfigErrorAlwaysProducesValidJSON is round-4's (2026-09-11) P1
+// fix: `%q` is Go string escaping, not JSON escaping -- a control byte
+// (here U+0001) or an embedded quote in the underlying text produced
+// invalid JSON (`\x01` is not a legal JSON escape). writeConfigError now
+// builds the payload with encoding/json, which escapes correctly
+// regardless of content.
+func TestWriteConfigErrorAlwaysProducesValidJSON(t *testing.T) {
+	t.Parallel()
+
+	for name, path := range map[string]string{
+		"control character": "/missing/review-round-\x01",
+		"embedded quote":    `/missing/review-round-"quoted"`,
+		"backslash":         `/missing/review-round-\`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
+				"DEV_HEALTH_PG_DOMAIN_HOST":      "db.internal",
+				"DEV_HEALTH_PG_DOMAIN_USER_FILE": path,
+			}))
+			if err == nil {
+				t.Fatal("expected a file-read failure")
+			}
+			var stderr bytes.Buffer
+			writeConfigError(&stderr, err)
+			if !json.Valid(stderr.Bytes()) {
+				t.Fatalf("writeConfigError produced invalid JSON: %s", stderr.String())
+			}
+		})
 	}
 }

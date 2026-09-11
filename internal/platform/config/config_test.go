@@ -925,9 +925,15 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 		wantHost  string // "" = don't check
 		wantUser  string
 		checkUser bool
+		wantDB    string // "" = don't check
 	}{
 		{name: "absent host", mutate: func(m map[string]string) { delete(m, "TEST_HOST") }, wantUsed: false},
-		{name: "empty host (whitespace)", mutate: func(m map[string]string) { m["TEST_HOST"] = "   " }, wantUsed: false},
+		// Round-4 (2026-09-11) finding (Trap #140: never TrimSpace an
+		// identifier): a whitespace-only host used to be treated as
+		// "absent" (trimmed to empty). It is non-empty raw input -- the
+		// component form now activates and explicitly refuses it, rather
+		// than silently treating it the same as no host at all.
+		{name: "whitespace-only host -- activates and is explicitly refused", mutate: func(m map[string]string) { m["TEST_HOST"] = "   " }, wantUsed: true, wantErr: true},
 		{name: "canonical", wantUsed: true, wantHost: "db.internal"},
 		{
 			name: "password with # (RFC3986 reserved, fragment)", wantUsed: true,
@@ -986,12 +992,39 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 			mutate: func(m map[string]string) { m["TEST_PORT"] = "notaport" },
 		},
 		{
+			name: "port with leading whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_PORT"] = " 5432" },
+		},
+		{
+			name: "user with trailing whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_USER"] = "app " },
+		},
+		{
 			name: "db name with / -- refused explicitly (would inject a path segment)", wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_DB"] = "app/db" },
 		},
 		{
 			name: "db name with # -- refused explicitly (would inject a fragment)", wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_DB"] = "app#db" },
+		},
+		// Round-4 (2026-09-11) findings (Trap #140): leading/trailing
+		// whitespace on an identifier used to be silently trimmed, which
+		// proved (against a real live PostgreSQL, in the reviewer's own
+		// reproduction) to connect to a DIFFERENT existing database than
+		// the one actually configured. It is now explicitly refused;
+		// meaningful INNER whitespace (not at either edge) is preserved
+		// exactly and connects correctly.
+		{
+			name: "db name with leading whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = " appdb" },
+		},
+		{
+			name: "db name with trailing whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "appdb " },
+		},
+		{
+			name: "db name with inner whitespace -- preserved exactly, not an edge case", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "app db" }, wantDB: "app db",
 		},
 		{
 			name: "db name empty -- falls to defaultDB", wantUsed: true,
@@ -1052,6 +1085,9 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 			}
 			if tc.wantHost != "" && parsed.Hostname() != tc.wantHost {
 				t.Fatalf("hostname = %q, want %q", parsed.Hostname(), tc.wantHost)
+			}
+			if tc.wantDB != "" && parsed.Path != "/"+tc.wantDB {
+				t.Fatalf("db path = %q, want %q -- the identifier must be preserved exactly", parsed.Path, "/"+tc.wantDB)
 			}
 			// The password (whatever reserved characters it contains) must
 			// round-trip byte-for-byte through Password() -- this is the
@@ -1306,4 +1342,89 @@ func TestNonSharedDBKeyAndFileVariantsAreDetected(t *testing.T) {
 			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_PG_DOMAIN_USER_FILE, got: %v", err)
 		}
 	})
+}
+
+// TestWhitespaceOnlyPasswordIsDetectedAndAuthenticates is round 4's
+// (2026-09-11) third finding, reproduced then fixed (Trap #140: never
+// TrimSpace a secret): presence detection used to TrimSpace a password
+// before checking it for emptiness, while secrets.Resolve (which actually
+// builds the connection) deliberately never trims a secret's meaningful
+// content -- so a password consisting only of whitespace was Configured()
+// to secrets.Resolve (and DID authenticate -- the reviewer proved this
+// against a real live PostgreSQL) but invisible to the exclusivity check,
+// letting it silently coexist with a raw URI unflagged.
+func TestWhitespaceOnlyPasswordIsDetectedAndAuthenticates(t *testing.T) {
+	t.Parallel()
+
+	// Presence: the round-4 defect, reproduced then fixed. A whitespace-
+	// only password alongside a raw URI must be refused, not silently
+	// ignored.
+	_, err := Load(workerSpec(map[string]string{
+		"POSTGRES_URI":                  "postgresql://old:old@old.invalid:5432/old",
+		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER":     "app",
+		"DEV_HEALTH_PG_DOMAIN_PASSWORD": "   ",
+		"WORKER_DATABASE_URI":           "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err == nil ||
+		!strings.Contains(err.Error(), "POSTGRES_URI") ||
+		!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_PASSWORD") ||
+		!strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_PG_DOMAIN_PASSWORD, got: %v", err)
+	}
+
+	// The whitespace-only password is still preserved exactly (never
+	// trimmed) when the component form is used on its own -- byte-for-byte
+	// round-trip through url.User.Password(), the same acceptance
+	// criterion CHAOS-5560 uses for every other reserved-character case.
+	cfg, err := Load(workerSpec(map[string]string{
+		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER":     "app",
+		"DEV_HEALTH_PG_DOMAIN_PASSWORD": "   ",
+		"WORKER_DATABASE_URI":           "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err != nil {
+		t.Fatalf("component form with a whitespace-only password should succeed, got: %v", err)
+	}
+	parsed, parseErr := url.Parse(cfg.DomainDatabaseURI.Reveal())
+	if parseErr != nil {
+		t.Fatalf("assembled URI does not parse: %v", parseErr)
+	}
+	got, ok := parsed.User.Password()
+	if !ok || got != "   " {
+		t.Fatalf("whitespace-only password round-trip failed: got %q (present=%v), want %q", got, ok, "   ")
+	}
+}
+
+// TestFileReadFailureNeverEchoesTheConfiguredPath is round 4's (2026-09-11)
+// first finding, reproduced then fixed at the root
+// (internal/platform/secrets/source.go): secrets.Resolve's KEY_FILE
+// read-failure error used to wrap the underlying os.PathError verbatim,
+// and Go's os.PathError.Error() embeds the exact path it tried to open --
+// an operator who misconfigures KEY_FILE to a raw credential string (a
+// full DSN, say) instead of an actual path had that entire string,
+// password included, echoed back by any caller that printed the error.
+func TestFileReadFailureNeverEchoesTheConfiguredPath(t *testing.T) {
+	t.Parallel()
+
+	syntheticSecret := "s3cr3t-p@ssw0rd-should-never-appear"
+	misconfiguredPath := "postgresql://svc:" + syntheticSecret + "@internal.example:5432/db"
+
+	_, err := Load(workerSpec(map[string]string{
+		"DEV_HEALTH_PG_DOMAIN_HOST":      "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER_FILE": misconfiguredPath,
+		"WORKER_DATABASE_URI":            "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err == nil {
+		t.Fatal("expected a file-read failure")
+	}
+	if strings.Contains(err.Error(), syntheticSecret) {
+		t.Fatalf("the configured (credential-bearing) path leaked into the error, got: %v", err)
+	}
+	if strings.Contains(err.Error(), misconfiguredPath) {
+		t.Fatalf("the entire misconfigured path leaked into the error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_USER_FILE") {
+		t.Fatalf("expected the error to name the key, got: %v", err)
+	}
 }

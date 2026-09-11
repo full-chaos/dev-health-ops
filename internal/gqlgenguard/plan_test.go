@@ -52,6 +52,43 @@ resolver: {layout: single-file, filename: gen/resolver.go, package: gen}
 			runReal: true,
 		},
 		{
+			// Not an output-path knob: it changes the NOTICE gqlgen writes, and
+			// the real run proves the guard accepts that shape on the next pass.
+			name: "resolver.preserve_resolver: the single-file resolver carries the STARTING POINT notice",
+			config: `
+schema: [schema.graphql]
+exec: {filename: gen/generated.go, package: gen}
+model: {filename: gen/model/models_gen.go, package: model}
+resolver: {layout: single-file, filename: gen/resolver.go, package: gen, preserve_resolver: true}
+`,
+			wantOutputs: []string{
+				"gen/generated.go",
+				"gen/model/models_gen.go",
+				"gen/resolver.go",
+			},
+			runReal: true,
+		},
+		{
+			// Also a notice knob: the follow-schema resolver notice loses its
+			// " version <v>" suffix.
+			name: "omit_gqlgen_version_in_file_notice: the follow-schema notice without its version",
+			config: `
+schema: [schema.graphql]
+exec: {filename: gen/generated.go, package: gen}
+model: {filename: gen/model/models_gen.go, package: model}
+resolver: {layout: follow-schema, dir: gen, package: gen}
+omit_gqlgen_version_in_file_notice: true
+`,
+			wantOutputs: []string{
+				"gen/generated.go",
+				"gen/model/models_gen.go",
+				"gen/prelude.resolvers.go",
+				"gen/resolver.go",
+				"gen/schema.resolvers.go",
+			},
+			runReal: true,
+		},
+		{
 			name: "exec.filename OMITTED still writes: the default is an output",
 			config: `
 schema: [schema.graphql]

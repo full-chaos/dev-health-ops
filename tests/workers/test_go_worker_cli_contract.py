@@ -48,6 +48,14 @@ _CREDENTIALS = frozenset(
         "WORKER_DATABASE_URI",
         "COORDINATOR_DATABASE_URI",
         "CLICKHOUSE_URI",
+        # CHAOS-5560: component-form PASSWORDS for the four DSNs above.
+        # Non-secret components (host/port/user/db) are deliberately NOT
+        # here -- only the password half of a DSN is credential-shaped
+        # (see options.go's identical note beside these fields).
+        "DEV_HEALTH_CH_PASSWORD",
+        "DEV_HEALTH_PG_DOMAIN_PASSWORD",
+        "DEV_HEALTH_PG_QUEUE_PASSWORD",
+        "DEV_HEALTH_PG_COORDINATOR_PASSWORD",
         "VALKEY_URI",
         "SETTINGS_ENCRYPTION_KEY",
         "SETTINGS_ENCRYPTION_SALT",

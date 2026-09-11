@@ -114,6 +114,14 @@ func runDisable(argv []string) error {
 	}
 
 	summary := goapiproof.SummarizeDisable(changes)
+	// R145: a per-operation guard state (no catalog row, a stale schema
+	// digest, no row at all) is a plan decision, named on that operation's
+	// own line, never a whole-run refusal -- but it still means something
+	// needed attention, so the run exits non-zero once it has said what it
+	// could and skipped what it could not, matching Python's own "wrote
+	// what it could, exit 2, named the rest" shape rather than Go's
+	// previous "wrote nothing at all".
+	var skippedOperations []string
 	fmt.Fprintf(stdout, "schema_digest %s\n", local)
 	fmt.Fprintf(stdout, "%-24s %-10s -> %-10s CANDIDATE BUILD                           DOCUMENT DIGEST\n", "OPERATION", "FROM", "TO")
 	for _, change := range changes {
@@ -156,11 +164,24 @@ func runDisable(argv []string) error {
 			fmt.Fprintf(stdout, "    !! %d digest(s) OTHER than this checkout's live one carry a row for this operation: %v -- if you expected THOSE rows to change, this binary's embedded SDL is stale; see `status` or rebuild from the deployed revision\n",
 				len(change.StaleSchemaDigests), change.StaleSchemaDigests)
 		}
+		// DeadRowsOnly: a guard was named, but this operation's only rows
+		// at the live schema digest are DEAD (not the catalog's document
+		// digest) -- there is no row a guard can compare against, so this
+		// operation was SKIPPED rather than aborting every other named
+		// operation. Every OTHER row in this plan, including this same
+		// operation's own live row if it has one elsewhere, is unaffected.
+		if change.DeadRowsOnly {
+			fmt.Fprintf(stdout, "    !! -candidate-build could not be checked: every row this operation has at the live schema digest is DEAD (no catalog document digest) -- SKIPPED, not disabled; re-run without the guard, or on an operation with a live row, to act on it\n")
+			skippedOperations = append(skippedOperations, change.Operation)
+		}
 	}
 
 	if !apply {
 		fmt.Fprintf(stdout, "\nDRY RUN: %d row(s) would change, %d unchanged (%d of those have no row at this digest). Re-run with -apply -recorded-by <who> -review-evidence '<why>' to write.\n",
 			summary.Actionable, summary.Total-summary.Actionable, summary.NoRow)
+		if len(skippedOperations) > 0 {
+			return refuse("-candidate-build could not be checked for: %v -- would be SKIPPED, not disabled; see the plan above", skippedOperations)
+		}
 		return nil
 	}
 
@@ -179,5 +200,13 @@ func runDisable(argv []string) error {
 	// made impossible by the `FOR UPDATE` plan read -- see
 	// goapiproof.Disable's own write loop, which marks every row Applied
 	// unconditionally on a successful write for exactly this reason.
+	if len(skippedOperations) > 0 {
+		// Written AFTER every healthy operation's write already
+		// committed -- this refusal reports, it does not undo. The
+		// alternative (aborting before any write) is exactly F2: an
+		// off-ramp that turns off nothing because ONE unrelated operation
+		// could not be guard-checked.
+		return refuse("-candidate-build could not be checked for: %v -- SKIPPED, not disabled; the rest of this plan was still applied above", skippedOperations)
+	}
 	return nil
 }

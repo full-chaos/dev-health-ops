@@ -295,7 +295,12 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		wanted[operation] = request.DocumentDigest[operation]
 	}
 
-	proven, err := OperationsWithEnablementProof(ctx, pool, request.SchemaDigest, request.RunningBuild, wanted)
+	// request.Mode IS the target mode: `enable --mode` accepts only
+	// canary|primary (EnableModes), the exact vocabulary
+	// OperationsWithEnablementProof's targetMode expects, so the value
+	// enable is about to WRITE is also the value that decides whether
+	// today's proof authorizes writing it.
+	proven, err := OperationsWithEnablementProof(ctx, pool, request.SchemaDigest, request.RunningBuild, request.Mode, wanted)
 	if err != nil {
 		return nil, err
 	}

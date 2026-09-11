@@ -223,21 +223,40 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest string,
 	// build must not borrow a newer build's proof. The row's OWN document
 	// digest is used, not the catalog's, for the same reason: a row whose
 	// document digest has drifted must not borrow the catalog's proof.
-	buildsWanted := map[string]map[string]string{}
+	//
+	// The route rule also depends on the row's OWN mode, matching Python's
+	// routing_status_rows exactly: a `primary` row is held to the strict
+	// edge-only rule (this is the mode `enable --mode primary` would use);
+	// every other mode -- canary, but also python/shadow/disabled, none of
+	// which `enable` can even target -- reads the permissive any-route
+	// rule, the same one `enable --mode canary` uses. So the group key is
+	// (build, target mode), not build alone.
+	type buildModeKey struct{ build, targetMode string }
+	buildsWanted := map[buildModeKey]map[string]string{}
 	for operation, row := range liveByOperation {
-		if buildsWanted[row.candidateBuild] == nil {
-			buildsWanted[row.candidateBuild] = map[string]string{}
+		targetMode := TargetModeCanary
+		if row.mode == TargetModePrimary {
+			targetMode = TargetModePrimary
 		}
-		buildsWanted[row.candidateBuild][operation] = row.documentDigest
+		key := buildModeKey{build: row.candidateBuild, targetMode: targetMode}
+		if buildsWanted[key] == nil {
+			buildsWanted[key] = map[string]string{}
+		}
+		buildsWanted[key][operation] = row.documentDigest
 	}
 	proven := map[string]bool{}
-	builds := make([]string, 0, len(buildsWanted))
-	for build := range buildsWanted {
-		builds = append(builds, build)
+	keys := make([]buildModeKey, 0, len(buildsWanted))
+	for key := range buildsWanted {
+		keys = append(keys, key)
 	}
-	sort.Strings(builds)
-	for _, build := range builds {
-		found, err := OperationsWithEnablementProof(ctx, db, liveSchemaDigest, build, buildsWanted[build])
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].build != keys[j].build {
+			return keys[i].build < keys[j].build
+		}
+		return keys[i].targetMode < keys[j].targetMode
+	})
+	for _, key := range keys {
+		found, err := OperationsWithEnablementProof(ctx, db, liveSchemaDigest, key.build, key.targetMode, buildsWanted[key])
 		if err != nil {
 			return nil, err
 		}

@@ -86,6 +86,18 @@ type DisableChange struct {
 	// CandidateBuild is what the row points at. Reported, NEVER written.
 	CandidateBuild string
 	Applied        bool
+	// DeadRowsOnly is true when a guard was named
+	// (-candidate-build) and this operation has rows at the live schema
+	// digest, but NONE of them carry the catalog's document digest -- so
+	// there is no row a guard can compare against. The operation is
+	// SKIPPED (no write attempted here), never a whole-run refusal: a
+	// guard state discovered on ONE operation must not stop every OTHER
+	// named operation, including ones with a perfectly live row, from
+	// being acted on. The caller is expected to name this on the
+	// operation's plan line and exit non-zero if any change carries it,
+	// matching every other per-operation guard state (a stale schema
+	// digest, no row at all) that is already a SKIP rather than an abort.
+	DeadRowsOnly bool
 	// StaleSchemaDigests names every OTHER schema digest (not the live
 	// one) at which this operation currently has a row: `disable`
 	// computes `SchemaDigest` from THIS BINARY's
@@ -297,15 +309,25 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 		// the COMPARISON, full stop -- it was never meant to read a dead
 		// row's build at all, live-catalog-row-present or not. When an
 		// operation has NO catalog row, there is therefore NOTHING for a
-		// set guard to compare against, and that absence -- not a
-		// build value -- is what refuses: an operator who named a guard
-		// asked this verb to check something, and there is no row it is
-		// entitled to check. Never falls back to reading a dead row's
-		// build, matching or not.
+		// set guard to compare against, and that absence -- not a build
+		// value -- is what stops it. This is a per-operation PLAN decision,
+		// the same shape as the len(rows)==0 SKIP above, never a whole-run
+		// refusal: aborting every OTHER named operation, including ones
+		// with a perfectly live row, over one operation's dead-only rows
+		// is the off-ramp failing exactly when it is most needed -- the
+		// identical reasoning already applied to a stale schema digest,
+		// now applied to its sibling. Never falls back to reading a dead
+		// row's build, matching or not; the caller names the reason on
+		// this operation's plan line and exits non-zero because something
+		// was skipped.
 		if hasCatalogRow == false && request.ExpectedCandidateBuild != "" {
-			guardProblems = append(guardProblems, fmt.Sprintf(
-				"%s: -candidate-build was named, but every row this operation has at the live schema digest is DEAD (no catalog document digest) -- there is no row a guard can check; re-run `status` and decide again without the guard, or on an operation with a live row",
-				operation))
+			changes = append(changes, DisableChange{
+				Operation:          operation,
+				DocumentDigest:     request.DocumentDigest[operation],
+				NewMode:            request.NewMode,
+				StaleSchemaDigests: staleDigests[operation],
+				DeadRowsOnly:       true,
+			})
 			continue
 		}
 		for _, row := range rows {
@@ -364,14 +386,14 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 		// holding its write to that same guard would refuse a write the
 		// plan already promised, on a build nobody compared it to.
 		//
-		// An operation with NO
-		// catalog row at all is refused entirely at PLAN time (see
-		// `hasCatalogRow` above) whenever a guard is set -- `changes`
-		// therefore never contains a row for such an operation on this
-		// path (guardProblems being non-empty returns before
-		// `request.Apply` is even read), so this write-time guard needs
-		// no fallback of its own: reaching here at all already proves
-		// the operation HAS a catalog row.
+		// An operation with NO catalog row at all is a per-operation SKIP
+		// at PLAN time (see `hasCatalogRow` above) whenever a guard is
+		// set: `changes` DOES carry an entry for it, with CurrentMode ""
+		// -- the `continue` two lines up already sends it past this
+		// write-time guard entirely, the same as the len(rows)==0 SKIP's
+		// entries. So reaching HERE still proves the operation has a
+		// catalog row: this write-time guard needs no fallback of its
+		// own.
 		var guard any
 		if request.ExpectedCandidateBuild != "" && change.DocumentDigest == request.DocumentDigest[change.Operation] {
 			guard = request.ExpectedCandidateBuild

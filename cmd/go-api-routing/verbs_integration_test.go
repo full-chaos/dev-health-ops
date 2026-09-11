@@ -552,6 +552,7 @@ func TestStatusTextMarksAGenuinelyProvenRowOkNotUnproven(t *testing.T) {
 		Stage:             goapiproof.EnablementProofStage,
 		TerminalState:     goapiproof.EnablementProofTerminalState,
 		MeasurementRoute:  goapiproof.RouteEdge,
+		BuildBinding:      goapiproof.EdgeBuildPresent,
 		RecordedBy:        "lane-routing-verbs",
 		ReviewEvidence:    "r3 P3 killer: genuinely proven row",
 	}); err != nil {
@@ -640,6 +641,7 @@ func TestStatusReportsDeployedDocumentDigestMismatchNotHealthy(t *testing.T) {
 		Stage:             goapiproof.EnablementProofStage,
 		TerminalState:     goapiproof.EnablementProofTerminalState,
 		MeasurementRoute:  goapiproof.RouteEdge,
+		BuildBinding:      goapiproof.EdgeBuildPresent,
 		RecordedBy:        "lane-routing-verbs",
 		ReviewEvidence:    "r4 P1 killer: deployed document digest drift after enablement",
 	}); err != nil {
@@ -746,6 +748,7 @@ func TestStatusTextReportsMismatchWhenTheDeployedPlaneStopsRegisteringTheOperati
 		Stage:             goapiproof.EnablementProofStage,
 		TerminalState:     goapiproof.EnablementProofTerminalState,
 		MeasurementRoute:  goapiproof.RouteEdge,
+		BuildBinding:      goapiproof.EdgeBuildPresent,
 		RecordedBy:        "lane-routing-verbs",
 		ReviewEvidence:    "r8 T1a killer: deployed plane stops registering the operation",
 	}); err != nil {
@@ -861,6 +864,7 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 		Stage:             goapiproof.EnablementProofStage,
 		TerminalState:     goapiproof.EnablementProofTerminalState,
 		MeasurementRoute:  goapiproof.RouteEdge,
+		BuildBinding:      goapiproof.EdgeBuildPresent,
 		RecordedBy:        "lane-routing-verbs",
 		ReviewEvidence:    "r5 P1 killer: reachable must degrade on schema mismatch and on a down plane",
 	}); err != nil {
@@ -1605,6 +1609,89 @@ func TestDisableCandidateBuildGuardRefusesWhenNoCatalogRowExistsToCheck(t *testi
 	}
 	if !strings.Contains(out, "applied: 1 row(s)") {
 		t.Fatalf("control: the dead row must be disabled when no guard is named: %s", out)
+	}
+}
+
+// R145: a guarded `-operations all-registered` rollback -- the runbook's
+// own documented recipe -- must not abort EVERY operation because ONE
+// unrelated operation's only live-schema rows are dead (no catalog
+// document digest). The healthy operation is disabled; the dead-rows-only
+// one is SKIPPED and named on its own plan line; the run still exits
+// non-zero because something needed attention -- matching Python, which
+// disables what it can and warns about what it cannot, never Go's
+// previous "disable nothing at all".
+func TestDisableAllRegisteredSkipsADeadRowsOnlyOperationAndStillDisablesTheHealthyOne(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	liveDigest := "8888888888888888888888888888888888888888888888888888888888888880"
+	deadDigest := "9999999999999999999999999999999999999999999999999999999999999990" // NOT in the catalog
+	catalogPath := writeCatalog(t, map[string]string{
+		verbTestOperation: liveDigest,
+		"hotspots":        "aaaa111111111111111111111111111111111111111111111111111111111111",
+	})
+	const build = "cccccccccccccccccccccccccccccccccccccccc"
+
+	// verbTestOperation: healthy, at the catalog digest.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		localSchemaDigest(), liveDigest, verbTestOperation, build); err != nil {
+		t.Fatalf("seed healthy candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded healthy', 'test')`,
+		localSchemaDigest(), liveDigest, verbTestOperation, build); err != nil {
+		t.Fatalf("seed healthy routing row: %v", err)
+	}
+	// hotspots: only a DEAD row at the live schema digest -- its own
+	// catalog digest is never written here.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, 'hotspots', $3)`,
+		localSchemaDigest(), deadDigest, build); err != nil {
+		t.Fatalf("seed dead candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, 'hotspots', $3, 'go', 'primary', 100, 'seeded dead-only', 'test')`,
+		localSchemaDigest(), deadDigest, build); err != nil {
+		t.Fatalf("seed dead routing row: %v", err)
+	}
+
+	out, _, err := captureVerb(t, "disable",
+		"-operations", "all-registered", "-mode", "python",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-candidate-build", build,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "R145 killer",
+	)
+	if err == nil {
+		t.Fatal("a guarded all-registered rollback with one dead-rows-only sibling must still exit non-zero -- something was skipped")
+	}
+	if exitCodeFor(err) != 2 {
+		t.Fatalf("exit %d, want 2 -- operator-actionable, not a crash", exitCodeFor(err))
+	}
+	if !strings.Contains(out, "applied: 1 row(s)") {
+		t.Fatalf("the healthy operation must still be disabled despite the sibling's guard state: %s", out)
+	}
+	if !strings.Contains(out, "SKIPPED, not disabled") {
+		t.Fatalf("the skipped operation's plan line must name why: %s", out)
+	}
+
+	var flowMode, hotspotsMode string
+	if err := pool.QueryRow(ctx, `SELECT mode FROM go_api_routing_state WHERE selected_operation = $1`, verbTestOperation).Scan(&flowMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT mode FROM go_api_routing_state WHERE selected_operation = 'hotspots'`).Scan(&hotspotsMode); err != nil {
+		t.Fatal(err)
+	}
+	if flowMode != "python" {
+		t.Fatalf("%s must be rolled back: mode = %q, want python", verbTestOperation, flowMode)
+	}
+	if hotspotsMode != "primary" {
+		t.Fatalf("hotspots (dead-rows-only, guard uncheckable) must be genuinely untouched: mode = %q, want primary", hotspotsMode)
 	}
 }
 

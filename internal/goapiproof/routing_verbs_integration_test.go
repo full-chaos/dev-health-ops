@@ -32,6 +32,7 @@ func seedProof(t *testing.T, ctx context.Context, pool *pgxpool.Pool, operation,
 		Stage:             stage,
 		TerminalState:     terminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildPresent,
 		RecordedBy:        "lane-routing-verbs",
 		ReviewEvidence:    "CHAOS-5486 integration test",
 	}); err != nil {
@@ -422,6 +423,52 @@ func TestRoutingStatusRowsNeverBorrowsAnotherBuildsProof(t *testing.T) {
 	if len(statuses) != 1 || statuses[0].Proven {
 		t.Fatalf("status = %+v: a row pointing at %s must NOT be proven by a receipt for %s",
 			statuses, testCandidateBuild, verbsRunningBuild)
+	}
+}
+
+// `status`'s proof check must use the SAME route rule `enable` would if
+// asked to write into this row's own mode: a `primary` row is held to the
+// strict edge-only rule, every other mode (canary here) to the permissive
+// any-route rule. One receipt, recorded over the non-edge `RouteProof`
+// route, must therefore prove a canary row and leave a primary row at the
+// identical build UNPROVEN.
+func TestRoutingStatusRowsAppliesThePrimaryRowsStricterRouteRule(t *testing.T) {
+	ctx := t.Context()
+	pool := startRegistryPostgres(t)
+	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", testCandidateBuild, pool)
+	seedRow(t, ctx, "hotspots", testDocumentDigest, "primary", testCandidateBuild, pool)
+	for _, operation := range []string{"featureFlags", "hotspots"} {
+		if _, err := Write(ctx, pool, Receipt{
+			SchemaDigest:      testSchemaDigest,
+			DocumentDigest:    testDocumentDigest,
+			SelectedOperation: operation,
+			CandidateBuild:    testCandidateBuild,
+			RequestIdentity:   "identity-" + operation,
+			Stage:             EnablementProofStage,
+			TerminalState:     EnablementProofTerminalState,
+			MeasurementRoute:  RouteProof,
+			BuildBinding:      EdgeBuildPresent,
+			RecordedBy:        "lane-routing-verbs",
+			ReviewEvidence:    "route-rule split integration test",
+		}); err != nil {
+			t.Fatalf("write receipt for %s: %v", operation, err)
+		}
+	}
+
+	catalog := map[string]string{"featureFlags": testDocumentDigest, "hotspots": testDocumentDigest}
+	statuses, err := RoutingStatusRows(ctx, pool, testSchemaDigest, catalog)
+	if err != nil {
+		t.Fatalf("RoutingStatusRows: %v", err)
+	}
+	byOperation := map[string]OperationStatus{}
+	for _, status := range statuses {
+		byOperation[status.Operation] = status
+	}
+	if got := byOperation["featureFlags"]; !got.Proven {
+		t.Fatalf("featureFlags (canary) = %+v, want Proven -- the any-route rule admits a %s-route receipt", got, RouteProof)
+	}
+	if got := byOperation["hotspots"]; got.Proven {
+		t.Fatalf("hotspots (primary) = %+v, want UNPROVEN -- the edge-only rule must refuse a %s-route receipt", got, RouteProof)
 	}
 }
 

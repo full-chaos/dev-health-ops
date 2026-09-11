@@ -361,7 +361,11 @@ func TestADocumentDriftRowIsNamedCountedAndFailsThePage(t *testing.T) {
 		if !strings.HasPrefix(line, "| `featureFlags` |") {
 			continue
 		}
-		if strings.Contains(line, "| primary |") {
+		// By the MODE cell's prefix, not its whole text: the cell reads
+		// "primary / **UNPROVEN**" if the render wrongly marks the drifted
+		// row reachable-unproven, and the assertion that names THAT defect
+		// must be the one that fires, not a failure to find the line.
+		if strings.Contains(line, "| primary") {
 			driftedLine = line
 		} else {
 			servedLine = line

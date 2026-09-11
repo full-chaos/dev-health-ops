@@ -933,9 +933,7 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase(t *t
 		t.Fatalf("code = %d, want 1 (unroutable ClickHouse host)", code)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, `"msg":"clickhouse database resolved"`) ||
-		!strings.Contains(out, `"form":"components"`) ||
-		!strings.Contains(out, `"database":"default"`) {
+	if !strings.Contains(out, `"dsn":{"name":"clickhouse","form":"components","database":"default"}`) {
 		t.Fatalf("expected a components-form resolution record, got: %s", out)
 	}
 }

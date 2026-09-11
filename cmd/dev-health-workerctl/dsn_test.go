@@ -139,12 +139,12 @@ func TestLogResolvedDatabaseReportsFormAndNameWithoutParsingAURI(t *testing.T) {
 	t.Run("uri form names only the form, never a database", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		logResolvedDatabase(context.Background(), &stderr, dsnTestLookup(map[string]string{
+		logResolvedDatabase(&stderr, dsnTestLookup(map[string]string{
 			"POSTGRES_URI": "postgresql://app:app@db.internal:5432/appdb",
 		}), platformconfig.DomainDatabaseSpec, "domain")
 		out := stderr.String()
-		if !strings.Contains(out, `"form":"uri"`) {
-			t.Fatalf("expected form=uri, got: %s", out)
+		if !strings.Contains(out, `"dsn":{"name":"domain","form":"uri"}`) {
+			t.Fatalf("expected form=uri and no database field, got: %s", out)
 		}
 		if strings.Contains(out, `"database"`) || strings.Contains(out, "appdb") {
 			t.Fatalf("expected no database field for the URI form, got: %s", out)
@@ -154,7 +154,7 @@ func TestLogResolvedDatabaseReportsFormAndNameWithoutParsingAURI(t *testing.T) {
 	t.Run("component form names the form and the db identifier read directly from the env", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
-		logResolvedDatabase(context.Background(), &stderr, dsnTestLookup(map[string]string{
+		logResolvedDatabase(&stderr, dsnTestLookup(map[string]string{
 			"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
 			"DEV_HEALTH_PG_DB":          "realdb",
 			// Decoy: an unrelated raw URI naming a DIFFERENT database sits in
@@ -199,16 +199,13 @@ func TestConfigureRuntimeLogsAResolutionRecordForEachDSN(t *testing.T) {
 	_ = code
 	out := stderr.String()
 	for _, want := range []string{
-		`"msg":"domain database resolved"`,
-		`"msg":"queue database resolved"`,
-		`"msg":"coordinator database resolved"`,
+		`"dsn":{"name":"domain","form":"uri"}`,
+		`"dsn":{"name":"queue","form":"uri"}`,
+		`"dsn":{"name":"coordinator","form":"uri"}`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected %s in stderr, got: %s", want, out)
 		}
-	}
-	if strings.Count(out, `"form":"uri"`) != 3 {
-		t.Fatalf("expected all three DSNs to report form=uri, got: %s", out)
 	}
 }
 

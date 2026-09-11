@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -289,12 +288,12 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(ctx, stderr, lookup, platformconfig.DomainDatabaseSpec, "domain")
+	logResolvedDatabase(stderr, lookup, platformconfig.DomainDatabaseSpec, "domain")
 	queueURI, err := resolveDSNRequired("WORKER_DATABASE_URI", platformconfig.QueueDatabaseSpec, lookup)
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(ctx, stderr, lookup, platformconfig.QueueDatabaseSpec, "queue")
+	logResolvedDatabase(stderr, lookup, platformconfig.QueueDatabaseSpec, "queue")
 	// Required, not optional: workerctl is a coordinator binary. Its very first
 	// database action (authenticating the operator token against
 	// internal_service_credentials) is a coordinator-exclusive read, so without
@@ -305,7 +304,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(ctx, stderr, lookup, platformconfig.CoordinatorDatabaseSpec, "coordinator")
+	logResolvedDatabase(stderr, lookup, platformconfig.CoordinatorDatabaseSpec, "coordinator")
 	token, ok := resolveRequired("WORKER_OPERATOR_TOKEN", lookup)
 	if !ok {
 		return nil, writeError(stderr, joboperator.ReasonAuthenticationFailed)
@@ -1502,7 +1501,7 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 	if err != nil {
 		return writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(ctx, stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse")
+	logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse")
 	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
@@ -1595,7 +1594,7 @@ func dispatchProvidersyncRetireStaleLinearProjectOwnership(
 	if err != nil {
 		return writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(ctx, stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse")
+	logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse")
 	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
@@ -2558,26 +2557,44 @@ func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup
 	return value, nil
 }
 
-// logResolvedDatabase records, at Info, which form (uri|components) name's
-// DSN resolved through -- and, for the component form only, the database
-// identifier read directly from spec.DBKey. Mirrors
-// cmd/dev-health-worker-migrate's identical rule and internal/platform/config's
-// own Load() binding loop (CHAOS-5560 round 6/7, chris's ruling: "the
-// migrate/worker rule applies to every entry point" -- workerctl resolves
-// these same five DSNs through its own resolveDSNRequired, bypassing
-// config.Load entirely, so it never got this observability wiring until
-// round 6 found the gap). Per R117, a pre-built URI is NEVER parsed for
-// this purpose: the URI form names only itself; the component form's
-// database name is the separate, non-secret spec.DBKey env value,
-// requiring no parsing of the assembled DSN.
-func logResolvedDatabase(ctx context.Context, stderr io.Writer, lookup platformsecrets.LookupEnv, spec platformconfig.ComponentSpec, name string) {
-	infoLogger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	if host, present := lookup(spec.HostKey); present && host != "" {
-		infoLogger.InfoContext(ctx, name+" database resolved",
-			"form", "components", "database", platformconfig.ComponentDatabaseName(lookup, spec))
-		return
+// logResolvedDatabase writes one structured JSON line to stderr recording
+// which form (uri|components) name's DSN resolved through -- and, for the
+// component form only, the database identifier read directly from
+// spec.DBKey. Mirrors cmd/dev-health-worker-migrate's identical rule and
+// internal/platform/config's own Load() binding loop (CHAOS-5560 round
+// 6/7/8, chris's ruling: "the migrate/worker rule applies to every entry
+// point" -- workerctl resolves these same five DSNs through its own
+// resolveDSNRequired, bypassing config.Load entirely, so it never got this
+// observability wiring until round 6 found the gap). Per R117, a pre-built
+// URI is NEVER parsed for this purpose: the URI form's record omits
+// "database" entirely; the component form's database name is the
+// separate, non-secret spec.DBKey env value, requiring no parsing of the
+// assembled DSN.
+//
+// workerctl has no slog logger of its own (unlike the four long-running
+// daemons and migrate) -- chris's ruling: emit this in workerctl's OWN
+// existing JSON convention instead of introducing slog just for this one
+// record. Emitted after a successful resolve, before the connection
+// attempt: workerctl is a short-lived CLI, so this line in the operator's
+// terminal IS the observability (the round-6 repro showed
+// "database_unavailable" with no way to tell which form/db had been
+// tried).
+func logResolvedDatabase(stderr io.Writer, lookup platformsecrets.LookupEnv, spec platformconfig.ComponentSpec, name string) {
+	var record struct {
+		DSN struct {
+			Name     string `json:"name"`
+			Form     string `json:"form"`
+			Database string `json:"database,omitempty"`
+		} `json:"dsn"`
 	}
-	infoLogger.InfoContext(ctx, name+" database resolved", "form", "uri")
+	record.DSN.Name = name
+	if host, present := lookup(spec.HostKey); present && host != "" {
+		record.DSN.Form = "components"
+		record.DSN.Database = platformconfig.ComponentDatabaseName(lookup, spec)
+	} else {
+		record.DSN.Form = "uri"
+	}
+	_ = json.NewEncoder(stderr).Encode(record)
 }
 
 func resolveName(key, fallback string, lookup platformsecrets.LookupEnv) string {

@@ -277,19 +277,9 @@ func Execute(
 		return 0
 	}
 
-	// CHAOS-5560 round 6 ruling (chris, via team-lead): every entry point
-	// that can surface a config.ResolveDSN/ResolveDSNFromComponents/
-	// secrets.Resolve error uses the same JSON diagnostic writer --
-	// config.WriteConfigError -- rather than each inventing its own
-	// convention. This replaces the plain-text "configuration error: %s"
-	// this file used before this ticket existed for BOTH of shell.go's
-	// configuration-error sites, for the one consistent contract every
-	// long-running worker binary (dev-health-worker, -reconciler,
-	// -scheduler, -stream-runner) now shares with cmd/dev-health-workerctl
-	// and cmd/dev-health-worker-migrate.
 	profile, err := resolveProfile(spec, selectedProfile, lookup)
 	if err != nil {
-		config.WriteConfigError(streams.Stderr, err)
+		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))
 		return 1
 	}
 	loadSpec := config.Spec{
@@ -304,7 +294,7 @@ func Execute(
 	}
 	cfg, err := config.Load(loadSpec)
 	if err != nil {
-		config.WriteConfigError(streams.Stderr, err)
+		fmt.Fprintf(streams.Stderr, "configuration error: %s\n", logging.RedactText(err.Error()))
 		return 1
 	}
 

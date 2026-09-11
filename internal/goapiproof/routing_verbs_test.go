@@ -598,7 +598,7 @@ func TestEnvelopeSubjectRefusesEveryShapeThatCarriesNoSubject(t *testing.T) {
 // checked against the token it was given, including the one case where
 // the token is well-formed enough to be a real envelope.
 func TestEnvelopeSubjectErrorsNeverContainTheCredential(t *testing.T) {
-	const secret = "eyJzZWNyZXQiOiJkbwbm90bGVhayJ9"
+	const secret = "eyJzZWNyZXQiOiJkbwbm90bGVhayJ9" // gitleaks:allow -- fabricated fixture, never accepted by any real verifier
 	for _, token := range []string{
 		secret,
 		secret + "." + secret,

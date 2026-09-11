@@ -53,7 +53,7 @@ const (
 	// doc comment (internal/goapiproof/routing_audit.go) for why that is
 	// safe here but would not be outside a verb that already called the
 	// real /buildinfo first.
-	verbTestBearer      = "eyJhbGciOiJFZERTQSIsImtpZCI6ImdvLWFwaS1lbnZlbG9wZS10ZXN0In0.eyJzdWIiOiJiMGExYzJkMy0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEifQ.c2lnbmF0dXJl"
+	verbTestBearer      = "eyJhbGciOiJFZERTQSIsImtpZCI6ImdvLWFwaS1lbnZlbG9wZS10ZXN0In0.eyJzdWIiOiJiMGExYzJkMy0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEifQ.c2lnbmF0dXJl" // gitleaks:allow -- fabricated fixture, unsigned, never accepted by any real verifier
 	verbTestPrincipalID = "b0a1c2d3-0000-4000-8000-000000000001"
 )
 

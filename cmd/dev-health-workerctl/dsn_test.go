@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -189,29 +190,27 @@ func TestWriteConfigErrorNeverEchoesACredentialBearingFilePath(t *testing.T) {
 
 // TestWriteConfigErrorAlwaysProducesValidJSON is round-4's (2026-09-11) P1
 // fix: `%q` is Go string escaping, not JSON escaping -- a control byte
-// (here U+0001) or an embedded quote in the underlying text produced
-// invalid JSON (`\x01` is not a legal JSON escape). writeConfigError now
-// builds the payload with encoding/json, which escapes correctly
-// regardless of content.
+// (here U+0001) or an embedded quote/backslash in the underlying text
+// produced invalid JSON (`\x01` is not a legal JSON escape).
+// writeConfigError now builds the payload with encoding/json, which
+// escapes correctly regardless of content. This constructs the error
+// DIRECTLY (bypassing resolveDSNRequired) so the case is not defeated by
+// secrets.Resolve's own round-4 fix, which no longer lets a raw file path
+// (control characters included) reach any error message at all -- this
+// test exercises writeConfigError's own escaping in isolation, the actual
+// unit under test for this finding.
 func TestWriteConfigErrorAlwaysProducesValidJSON(t *testing.T) {
 	t.Parallel()
 
-	for name, path := range map[string]string{
-		"control character": "/missing/review-round-\x01",
-		"embedded quote":    `/missing/review-round-"quoted"`,
-		"backslash":         `/missing/review-round-\`,
+	for name, message := range map[string]string{
+		"control character": "DEV_HEALTH_PG_DOMAIN_USER_FILE could not be read: byte \x01 present",
+		"embedded quote":    `DEV_HEALTH_PG_DOMAIN_USER_FILE: unexpected "quoted" token`,
+		"backslash":         `DEV_HEALTH_PG_DOMAIN_USER_FILE: path has a trailing \`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, dsnTestLookup(map[string]string{
-				"DEV_HEALTH_PG_DOMAIN_HOST":      "db.internal",
-				"DEV_HEALTH_PG_DOMAIN_USER_FILE": path,
-			}))
-			if err == nil {
-				t.Fatal("expected a file-read failure")
-			}
 			var stderr bytes.Buffer
-			writeConfigError(&stderr, err)
+			writeConfigError(&stderr, errors.New(message))
 			if !json.Valid(stderr.Bytes()) {
 				t.Fatalf("writeConfigError produced invalid JSON: %s", stderr.String())
 			}

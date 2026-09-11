@@ -1564,10 +1564,10 @@ def test_go_workers_run_at_one_replica_by_default() -> None:
     for process, service_name in _SPLIT_COMPOSE_SERVICE_BY_PROCESS.items():
         deploy = services[service_name].get("deploy") or {}
         replicas = deploy.get("replicas")
-        # r6/r7 P3 (executed repro): `replicas == 1` alone accepts `True`
+        # `replicas == 1` alone accepts `True`
         # (bool is an int subclass, `True == 1`) -- a `replicas: true`
-        # mutation SURVIVED this exact assertion on every one of the nine
-        # processes. Exclude bool explicitly.
+        # mutation would survive this assertion on every one of the nine
+        # processes unless bool is excluded explicitly.
         assert (
             isinstance(replicas, int)
             and not isinstance(replicas, bool)
@@ -1579,17 +1579,16 @@ def test_go_workers_run_at_one_replica_by_default() -> None:
 
 
 def test_go_worker_family_has_no_pull_policy_override() -> None:
-    """R108/R111 (chris, verbatim: "Well you just changed it to pinned
-    images. So you made that call already."): the root file honours an
+    """The root file honours an
     `*_IMAGE` pin (tag OR digest) by default. `pull_policy: build`
-    (round 6's own hardening, and its `*_PULL_POLICY` opt-out from round
-    6's fix) is REMOVED -- forcing a build on every bring-up is exactly
-    what made a digest pin unusable (`build tag cannot contain a digest`,
-    r5's P1) in the first place. Every one of the nine long-running
+    and its `*_PULL_POLICY` opt-out are REMOVED -- forcing a build on
+    every bring-up is exactly
+    what made a digest pin unusable (`build tag cannot contain a digest`)
+    in the first place. Every one of the nine long-running
     processes plus the two one-shot Postgres jobs must be left at
     Compose's own default (`missing`); the CHAOS-5437 cross-tree lockstep
     this used to guard against is closed by pinning every image to ONE
-    sha (JOB 6's prebuild), not by forcing a build here.
+    sha (the prebuild step), not by forcing a build here.
 
     Executed (see TEST-EVIDENCE): a digest-shaped `DEV_HEALTH_GO_WORKER_
     IMAGE` now renders and is pulled/reused as given; `docker compose
@@ -1623,13 +1622,13 @@ def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     postgres_env = services["postgres"]["environment"]
-    # r6/r7 P1 (executed repro, class sweep): go-river-provision/migrate's
+    # go-river-provision/migrate's
     # entrypoints already read POSTGRES_USER/_PASSWORD overrides to
     # authenticate against this exact server -- only the server itself
     # hardcoded past them (same class as POSTGRES_DB below).
     assert postgres_env["POSTGRES_USER"] == "${POSTGRES_USER:-postgres}"
     assert postgres_env["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD:-postgres}"
-    # r5 P1 (executed repro): every downstream consumer below already reads
+    # Every downstream consumer below already reads
     # ${POSTGRES_DB:-postgres} -- the actual server that CREATES the
     # database at first init was the one hardcoded literal, so overriding
     # POSTGRES_DB anywhere pointed every consumer at a database that never
@@ -1781,8 +1780,7 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
 
 
 def test_billing_edge_healthcheck_is_liveness_not_readiness() -> None:
-    """R109 (chris, verbatim: "Stripe secrets are there.... but also might
-    not work because the port isn't open. Which is the real reason."): on
+    """On
     the real deployed stack the three Stripe/license secrets ARE
     configured, so /health's ok/down decision (billing_edge.py's
     `required_ok`) never reads `stripe_client` -- an operator whose
@@ -1884,10 +1882,10 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
         "start_period",
     }
 
-    # r5 P3 (executed repro): a clause-by-clause mutation setting interval/
-    # timeout/start_period to "-1s" and retries to -1 all SURVIVED this
-    # test before this block existed -- presence-only assertions above
-    # can't catch a nonsensical value, only a missing key. Docker itself
+    # A clause-by-clause mutation setting interval/
+    # timeout/start_period to "-1s" and retries to -1 would SURVIVE a
+    # presence-only assertion -- that alone can't catch a nonsensical
+    # value, only a missing key. Docker itself
     # renders a negative interval/timeout/start_period without complaint
     # (`docker compose config --quiet` also passed on it), so nothing else
     # in the toolchain catches this either.
@@ -1899,10 +1897,10 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
             f"go-reconciler healthcheck {duration_key!r}={value!r} must be a "
             "positive Compose duration (e.g. '15s'), not zero/negative/malformed"
         )
-    # r6/r7 P3 (executed repro): `isinstance(x, int)` alone accepts `True`
+    # `isinstance(x, int)` alone accepts `True`
     # (bool is an int subclass in Python, and `True == 1`) -- a
-    # `retries: true` mutation SURVIVED this exact assertion. Exclude bool
-    # explicitly.
+    # `retries: true` mutation would survive that assertion unless bool
+    # is excluded explicitly.
     retries = healthcheck["retries"]
     assert isinstance(retries, int) and not isinstance(retries, bool) and retries > 0, (
         f"go-reconciler healthcheck retries={retries!r} must be a positive integer, not a bool"
@@ -1919,7 +1917,7 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
 
 
 def test_go_operator_target_services_declare_a_nonempty_command() -> None:
-    """r5 P3 (executed repro): a service built from `docker/go-worker.
+    """A service built from `docker/go-worker.
     Dockerfile`'s `operator` target (the four `go-sync-*-route-activate`
     services, via the shared `x-go-worker-route-activate` anchor) has no
     ENTRYPOINT of its own baked into the image -- Compose's `command:` is
@@ -1961,9 +1959,9 @@ def test_go_operator_target_services_declare_a_nonempty_command() -> None:
             "['routes', 'apply'] -- update this assertion if that's a "
             "deliberate change to what the operator binary is invoked to do"
         )
-        # r6/r7 P3 (executed repro): a prefix-only check (`command[:2]`)
-        # accepts the bare two-element `["routes", "apply"]` -- the exact
-        # invalid_request-shaped command the round constructed, which the
+        # A prefix-only check (`command[:2]`)
+        # accepts the bare two-element `["routes", "apply"]` -- an
+        # invalid_request-shaped command the
         # real binary refuses at runtime. Pin the FULL shape: --reason and
         # --correlation-id flags present, and a real kind as the last
         # argument (never one of the four canonical kinds by coincidence

@@ -301,8 +301,15 @@ smoke() {
   # nonzero, so `if ! docker run` alone would green-light an unusable image.
   migrate_stderr="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-migrate:ci" 2>&1 >/dev/null)" \
     && die "migrate did not fail closed without MIGRATION_DATABASE_URI"
+  # CHAOS-5560 (2026-09-11): migrate's configuration-error diagnostic moved
+  # from a plain-text "configuration error: %s\n" line to a single JSON
+  # object (config.WriteConfigError -- one shared writer, now also used by
+  # cmd/dev-health-workerctl) so an operator script can parse the class and
+  # the offending key reliably instead of substring-matching prose that is
+  # free to be reworded. Parse the object and assert its stable shape --
+  # never a substring match on `detail`'s prose, which is not a contract.
   printf '%s' "${migrate_stderr}" \
-    | grep -F 'configuration error: MIGRATION_DATABASE_URI is required' >/dev/null \
+    | jq -e '.error.code == "configuration_error" and (.error.detail | contains("MIGRATION_DATABASE_URI"))' >/dev/null \
     || die "migrate did not report the missing MIGRATION_DATABASE_URI diagnostic"
 }
 

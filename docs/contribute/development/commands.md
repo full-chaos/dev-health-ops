@@ -244,7 +244,7 @@ dev-hops metrics --help
 dev-hops migrate --help
 ```
 
-Bare Python CLI commands run inline. Some provider or job paths are safer and better validated through the API and active Celery workers; check the current command `Requires:` output and [CLI reference](../../reference/cli/index.md).
+Bare Python CLI commands run inline. Some provider or job paths are safer and better validated through the API and the Go worker fleet, which supplies the credentials the CLI does not enforce at startup; check the current command `Requires:` output and [CLI reference](../../reference/cli/index.md).
 
 ## Before committing
 

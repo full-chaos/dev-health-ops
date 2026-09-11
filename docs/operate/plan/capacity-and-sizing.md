@@ -1,6 +1,6 @@
 ---
 page_id: op-sizing
-summary: Size API, Celery, deployment-selected Go queue groups, PostgreSQL connections, ClickHouse, and provider capacity from measured workload.
+summary: Size API, Go worker queue groups, PostgreSQL connections, ClickHouse, and provider capacity from measured workload.
 content_type: reference
 owner: platform-operations
 source_of_truth:
@@ -31,11 +31,11 @@ Base initial capacity on:
 - PostgreSQL semantic, queue-control, migration, and operator connections;
 - model and external-service rate or spend limits.
 
-## Active Celery sizing
+## Worker sizing
 
 Size normal and heavy-worker classes independently. Use observed execution duration and queue age, not process count alone. Provider-specific and cost-class queues need enough consumers to prevent one expensive source family from starving user-visible work.
 
-Keep Celery Beat singular. Budget scheduled bursts against manual sync, backfill, report, webhook, and materialization work that can overlap.
+Keep the scheduler singular. Budget scheduled bursts against manual sync, backfill, report, webhook, and materialization work that can overlap.
 
 ## PostgreSQL connection budget
 
@@ -43,7 +43,7 @@ Count all server-side connection pools:
 
 - PgBouncer server pools for Python and Go domain roles;
 - direct River queue-control connections;
-- API and Celery direct pools where used;
+- API and Go worker direct pools where used;
 - operator CLI invocation;
 - migration and administrative reserve.
 

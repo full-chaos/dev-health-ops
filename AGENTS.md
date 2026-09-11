@@ -24,7 +24,7 @@ Backend: ingest → metrics → API → jobs. The versioned platform contract (W
 | `processors/` | Orchestrate provider calls + persistence. No raw fetch / no provider normalization. |
 | `metrics/` + `metrics/sinks/` | Compute rollups; **sinks are the only persistence path** (`sinks/clickhouse/`). |
 | `api/` | FastAPI app (`api/main.py`) + Strawberry GraphQL (`api/graphql/`), admin, auth, billing, webhooks, ingest. |
-| `workers/` | Celery (`celery_app.py`): sync, metrics, reports, team auto-import, schedulers. |
+| `workers/` | Job implementations shared with the Go fleet: sync, metrics, reports, team auto-import. The Celery app that used to consume them is retired. |
 | `work_graph/`, `llm/`, `licensing/`, `reports/`, `backfill/`, `sync/` | Investment categorization, LLM calls, billing/licensing, AI reports, backfills, sync orchestration. |
 
 ## North Star (read before changing Ask Dev / Context Fabric behavior)

@@ -13,7 +13,7 @@ lifecycle: active
 
 # Databases and storage
 
-Dev Health uses different stores for different guarantees. PostgreSQL owns semantic and control-plane state, ClickHouse owns high-volume analytics and canonical source facts, and Valkey/Redis coordinates Celery delivery and distributed controls. The additive Go worker foundation also uses PostgreSQL-backed River queue state through a deliberately separate direct connection.
+Dev Health uses different stores for different guarantees. PostgreSQL owns semantic and control-plane state, ClickHouse owns high-volume analytics and canonical source facts, and Valkey/Redis coordinates distributed controls. The Go worker fleet uses PostgreSQL-backed River queue state through a deliberately separate direct connection.
 {: .fc-page-lede }
 
 ## Store responsibilities
@@ -22,15 +22,15 @@ Dev Health uses different stores for different guarantees. PostgreSQL owns seman
 | --- | --- |
 | PostgreSQL | Organizations, users, settings, encrypted provider credentials, source registration, job/run control state, webhook bindings, operational authority, and River job state |
 | ClickHouse | Provider facts, work items, commits, incidents, analytics, derived metrics, and product materializations |
-| Valkey or Redis | Celery broker and result backend, rate/budget coordination, stream delivery, and bounded ephemeral claims |
+| Valkey or Redis | Rate and budget coordination, stream delivery, and bounded ephemeral claims |
 
 A queue, cache, or stream is not the system of record unless its contract explicitly says so. Product-visible history remains in domain tables even when execution records are retained for a shorter period.
 
 ## PostgreSQL connection model
 
-### Python API and Celery domain access
+### Python API domain access
 
-Horizontal API and Celery fleets can multiply SQLAlchemy pools. Use transaction-mode PgBouncer where appropriate and set:
+A horizontally scaled API can multiply SQLAlchemy pools. Use transaction-mode PgBouncer where appropriate and set:
 
 ```dotenv
 POSTGRES_URI="postgresql+asyncpg://...@pgbouncer:6432/devhealth"
@@ -122,7 +122,7 @@ The canonical incident cutover records no production downgrade to the legacy inc
 
 Size pools against the maximum deployment topology, not current replicas. Account for:
 
-- SQLAlchemy pools across API and Celery processes;
+- SQLAlchemy pools across API processes;
 - PgBouncer server pools per database/user pair;
 - River queue-control and coordinator session pools;
 - operator CLI invocations;

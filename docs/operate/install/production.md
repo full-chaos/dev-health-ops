@@ -1,6 +1,6 @@
 ---
 page_id: op-production
-summary: Choose a supported deployment artifact, preserve migration ordering, keep Celery ownership explicit, and verify a production revision before enabling traffic or synchronization.
+summary: Choose a supported deployment artifact, preserve migration ordering, and verify a production revision before enabling traffic or synchronization.
 content_type: task-guide
 owner: platform-operations
 source_of_truth:
@@ -29,7 +29,7 @@ Use the repository artifact that matches the environment you already operate. Do
 
 ### [Docker Compose](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/docker-compose)
 
-Best for a single managed host or small environment where Docker Compose is the operational standard. The example includes one-shot migrations, API, Celery workers, queue routing, health checks, and an environment template.
+Best for a single managed host or small environment where Docker Compose is the operational standard. The example includes one-shot migrations, API, the Go worker fleet, queue routing, health checks, and an environment template.
 
 </div>
 
@@ -63,15 +63,21 @@ The root [`compose.yml`](https://github.com/full-chaos/dev-health-ops/blob/main/
 
 ## Current worker ownership
 
-Celery remains the production owner of all current jobs and schedules. The checked-in Go worker deployment groups under [`deploy/go-workers/`](https://github.com/full-chaos/dev-health-ops/tree/main/deploy/go-workers) are disabled coexistence foundations:
+The Go worker fleet owns every production job and schedule. Celery was stopped
+in production on 2026-08-19 and its services were removed from the deployed
+topology; no Python Celery worker or Beat process runs in production, and no
+route is served by one.
 
-- minimum replicas are zero;
-- current routes remain `celery`;
-- a healthy Go binary does not admit production work;
-- River queue ownership requires job-specific contract, handler, parity, canary, and rollback evidence;
-- Celery workers and Beat remain required until a migration explicitly changes a route.
+What that means when you deploy:
 
-Do not add enabled Go replicas to a production overlay merely because the image and profile exist. Use the profiles to validate topology, connection budgets, health, and future migration readiness.
+- the Go worker deployment groups are the production worker topology, not a coexistence foundation waiting on approval. The Kubernetes tree still renders every group at `replicas: 0` so an operator scales only the groups that environment needs -- zero replicas there is a sizing default, no longer a statement that the route belongs to something else;
+- routes are served by the Go runtime, and a route's owner is recorded in the routing state rather than assumed from the deployment;
+- River queue ownership is established per job kind, and changing it still requires contract, handler, parity, canary, and rollback evidence;
+- the reconciler refuses a route that drifts from the checked-in policy, so a
+  deployment whose routes disagree with the manifest fails closed rather than
+  serving the wrong runtime.
+
+The root [`compose.yml`](https://github.com/full-chaos/dev-health-ops/blob/main/compose.yml) keeps the Celery services defined behind a `celery-legacy` profile for local parity and historical reference. They are not part of any default bring-up and must not be enabled in a production overlay.
 
 ## Prepare the production inputs
 
@@ -80,7 +86,7 @@ Before applying any example, decide and record:
 - the immutable Dev Health image or reviewed source revision;
 - PostgreSQL domain, queue-control, and migration endpoints where the Go foundation is included;
 - the ClickHouse database and credentials;
-- the Valkey or Redis endpoint used by Celery and distributed controls;
+- the Valkey or Redis endpoint used by distributed controls;
 - provider credentials or app installations;
 - ingress hostname, TLS termination, and trusted proxy ranges;
 - worker concurrency, heavy-worker capacity, and scheduled work;
@@ -90,7 +96,7 @@ Use an external secret store or the scheduler's secret mechanism. Never commit p
 
 ## Database identities and migration ordering
 
-For the active Python runtime, `POSTGRES_URI` may use transaction-mode PgBouncer when `PGBOUNCER_TRANSACTION_MODE=true`. Migrations must bypass the transaction pooler.
+For the Python API runtime, `POSTGRES_URI` may use transaction-mode PgBouncer when `PGBOUNCER_TRANSACTION_MODE=true`. Migrations must bypass the transaction pooler.
 
 When the Go coexistence foundation is deployed, keep these responsibilities distinct:
 
@@ -149,7 +155,7 @@ If migration fails, correct the database, credential, role, or schema problem an
 
 ## Kubernetes example
 
-The checked-in [Kustomize entry point](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/kubernetes/kustomization.yaml) assembles namespace, configuration, secret template, ClickHouse, Valkey, migration Job, API, Celery workers, schedules, and ingress. Review the [Kubernetes deployment notes](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/kubernetes/README.md).
+The checked-in [Kustomize entry point](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/kubernetes/kustomization.yaml) assembles namespace, configuration, secret template, ClickHouse, Valkey, migration Job, API, the Go worker groups, schedules, and ingress. It renders no Celery manifests: the `worker.yaml` and `beat.yaml` they replaced were deleted once production stopped running them. Review the [Kubernetes deployment notes](https://github.com/full-chaos/dev-health-ops/blob/main/deploy/kubernetes/README.md).
 
 Create an environment overlay that pins the image and replaces example configuration:
 
@@ -213,9 +219,9 @@ Before enabling provider synchronization or directing user traffic, verify:
 2. PostgreSQL, River where present, and ClickHouse migrations are current;
 3. runtime role separation and connection modes pass readiness;
 4. the API readiness endpoint succeeds through the intended ingress path;
-5. active Celery workers consume every configured queue;
-6. Celery Beat or the current scheduler is enabled exactly once;
-7. any Go foundation profile remains disabled unless its route is explicitly approved;
+5. the Go worker groups you scaled report ready, and each configured queue has a consumer;
+6. the scheduler is enabled exactly once;
+7. the reconciler reports no route drift against the checked-in policy;
 8. Valkey or Redis is reachable and persistent where required;
 9. TLS, forwarded headers, and trusted proxies match the real network path;
 10. logs, metrics, and alerts identify environment and revision;

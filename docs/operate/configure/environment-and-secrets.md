@@ -15,7 +15,7 @@ lifecycle: active
 
 # Environment and secrets
 
-Dev Health configuration is process-specific. An API, Celery worker, dormant Go worker, migration job, scheduler, and operator command may require different subsets of the same deployment settings. Do not copy one large environment block into every process: assign each process only the ordinary configuration and secrets it owns.
+Dev Health configuration is process-specific. An API, Go worker, migration job, scheduler, and operator command may require different subsets of the same deployment settings. Do not copy one large environment block into every process: assign each process only the ordinary configuration and secrets it owns.
 {: .fc-page-lede }
 
 ## Separate configuration from secrets
@@ -29,15 +29,14 @@ Store secret values in the approved secret manager and inject them at runtime. W
 | Process | Typical owned configuration |
 | --- | --- |
 | API | Public host, authentication, encryption, provider app configuration, PostgreSQL and ClickHouse access, trusted proxies, GraphQL limits |
-| Celery workers | Provider credentials needed for sync, queue/broker settings, ClickHouse/PostgreSQL access, model credentials, worker concurrency and routing |
-| Celery scheduler | Broker access and schedule configuration; exactly one active scheduler unless the deployment contract says otherwise |
-| Go worker foundations | Domain PostgreSQL DSN, direct River queue-control DSN, job registry/profile settings, health and telemetry configuration |
+| Go workers | Domain PostgreSQL DSN, direct River queue-control DSN, provider credentials needed for sync, ClickHouse access, model credentials, job registry/profile settings, worker concurrency and routing, health and telemetry configuration |
+| Scheduler | Queue-control access and schedule configuration; exactly one active scheduler unless the deployment contract says otherwise |
 | One-shot migration job | Direct elevated migration DSN and runtime role names; never long-running worker credentials only |
 | Worker operator CLI | Payload-redacted operator token plus the domain and queue-control database roles required for the requested read or mutation |
 
 ## Database and worker DSNs
 
-The current Go coexistence foundation deliberately separates three PostgreSQL responsibilities:
+The Go worker fleet deliberately separates three PostgreSQL responsibilities:
 
 | Responsibility | Setting | Endpoint |
 | --- | --- | --- |

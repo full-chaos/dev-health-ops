@@ -19,14 +19,13 @@ The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
 - `ai` — AI governance allowlist
 - `migrate` — PostgreSQL (Alembic) and ClickHouse schema migrations
 - `api` — run the REST/GraphQL API server
-- `workers` — Celery worker and beat scheduler
 - `maintenance` — operational cleanup
 
-### Inline Execution vs. Celery-Backed Operations
+### Inline execution and its enforcement gaps
 
 Bare CLI commands run inline, executing immediately in your terminal session. However, several commands have argument-enforcement gaps (CHAOS-2475). These operations require credentials or inputs that the CLI doesn't enforce at startup. Running them inline without these inputs can lead to silent failures or incomplete runs.
 
-Until these gaps are fixed, we recommend triggering the equivalent Celery jobs instead of running the commands inline. Celery workers run in a managed environment where credentials and configurations are fully validated. You can find the list of Celery tasks and queue configurations in [Run workers and jobs](../../operate/run/workers-and-jobs.md).
+The advice that used to sit here -- trigger the equivalent Celery job instead -- no longer applies: there is no Celery runtime to trigger. The Go worker fleet runs this work on its own schedules, in an environment where the same credentials and configuration are validated before a job is admitted. Prefer letting the scheduled run do the work, and treat an inline invocation as a diagnostic you supply every input to yourself. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for the Go worker, scheduler, reconciler, and stream-runner processes.
 
 ---
 
@@ -320,7 +319,7 @@ The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty
 
 > ⚠️ **Warning (CHAOS-2475):** Metrics commands run inline and require database connections and configurations that the CLI doesn't enforce at startup. Running them inline can cause silent failures or incomplete computations.
 >
-> **Interim Workaround:** We recommend triggering the equivalent Celery jobs on the `metrics` queue. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
+> **Interim Workaround:** Prefer the scheduled Go run over an inline invocation; it validates the same inputs before admitting the job. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
 ### `metrics daily`
 
@@ -1871,7 +1870,7 @@ dev-hops ai allowlist list
 
 > ⚠️ **Warning (CHAOS-2475):** The `work-graph build` command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.
 >
-> **Interim Workaround:** We recommend triggering the equivalent Celery job on the `metrics` queue. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
+> **Interim Workaround:** Prefer the scheduled Go run over an inline invocation; it validates the same inputs before admitting the job. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
 Build work graph edges from raw data (issue → PR → commit linkages). Takes its ClickHouse DSN via its own **required** `--db` flag.
 

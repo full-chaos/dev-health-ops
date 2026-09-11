@@ -534,6 +534,25 @@ func TestVerbHelpFlagExitsZeroLikeTopLevelHelp(t *testing.T) {
 	}
 }
 
+// r8 F5 (reproduced): a back-quoted word inside a flag's usage string
+// makes Go's `flag` package treat it as the flag's OWN VALUE NAME (its
+// documented mechanism for choosing the usage placeholder) -- so
+// `-acknowledge-unproven`'s usage text, which said "...by `status`
+// for...", made `enable -h` print `-acknowledge-unproven status`, a
+// boolean switch that reads as if it takes an argument.
+func TestEnableHelpDoesNotShowAcknowledgeUnprovenAsTakingAnArgument(t *testing.T) {
+	_, errOut, err := captureVerb(t, "enable", "-h")
+	if err != nil {
+		t.Fatalf("enable -h: run() = %v, want nil", err)
+	}
+	if strings.Contains(errOut, "-acknowledge-unproven status") {
+		t.Fatalf("-acknowledge-unproven still prints as if it takes an argument named status:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "-acknowledge-unproven\n") {
+		t.Fatalf("-acknowledge-unproven must print as a plain boolean switch, own line, no value name:\n%s", errOut)
+	}
+}
+
 // T1 M48 (opus r7, reproduced): status's half of the r6 P2
 // GO_API_QUERY_API_URL fallback was unpinned -- a mutant that made
 // `haveRegistryURL` depend ONLY on the explicit `-registry-url` flag

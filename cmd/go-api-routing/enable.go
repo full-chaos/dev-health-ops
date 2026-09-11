@@ -63,7 +63,14 @@ func runEnable(argv []string) error {
 	set.StringVar(&mode, "mode", "", "routing mode: canary or primary. Only these two make an operation reachable, so they are the only ones an 'enable' verb offers (required)")
 	set.IntVar(&rollout, "rollout", 100, "rollout_percentage written to the row. NOTE: neither plane enforces this yet -- canary means 'on for everyone, revocable'. Recorded, not obeyed")
 	set.StringVar(&expectBuild, "expect-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written")
-	set.BoolVar(&acknowledgeUnproven, "acknowledge-unproven", false, "enable operations with no deployed-executed proof run for this build. Each such row records ACKNOWLEDGED-UNPROVEN durably and is reported UNPROVEN by `status` for as long as it is in force")
+	// r8 F5 (reproduced): backticks around "status" here made Go's `flag`
+	// package treat the back-quoted word as the FLAG'S OWN VALUE NAME (its
+	// documented convention for choosing the placeholder shown in usage
+	// text) -- so `enable -h` printed `-acknowledge-unproven status`, a
+	// boolean switch that reads as if it takes an argument named "status".
+	// Following that literally is refused safely (an unexpected operand),
+	// so the only real cost was a confused operator; still worth fixing.
+	set.BoolVar(&acknowledgeUnproven, "acknowledge-unproven", false, "enable operations with no deployed-executed proof run for this build. Each such row records ACKNOWLEDGED-UNPROVEN durably and is reported UNPROVEN by status for as long as it is in force")
 	set.BoolVar(&dryRun, "dry-run", false, "run every preflight and write NOTHING")
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "per-request timeout")
 	if err := parseVerbFlags(set, argv); err != nil {
@@ -215,55 +222,16 @@ func runEnable(argv []string) error {
 	}
 	defer pool.Close()
 
-	// r6 observability (1) (team-lead ruling): read the BEFORE state,
-	// plain and UNLOCKED, purely so the per-row log line below can say
-	// what a row replaced. Deliberately NOT a `FOR UPDATE` pre-read --
-	// the package comment on Enable (routing_enable.go) explains at
-	// length why this verb never pre-locks a routing row, and that
-	// reasoning is about LOCK ORDER, not about reading data at all. A
-	// best-effort, unlocked read costs nothing there: if it fails, or a
-	// row was already gone the instant this read runs, the log line
-	// below just says "(unknown)" -- it never gates the write.
-	// r7 F4 (reproduced): keyed by `(selected_operation, document_digest)`
-	// -- the SAME composite key the upsert below actually writes to (r1
-	// F5 / r3 CONC-01's own class, missed by the r6 composite-key sweep
-	// at this new site) -- not by operation alone. One operation can have
-	// SEVERAL rows at the live schema digest (a live one under the
-	// catalog's document digest, a dead one under an old document
-	// digest); a map keyed by operation alone, filled with no ORDER BY,
-	// silently kept whichever row the driver happened to scan LAST.
-	// Executed: with a dead row (mode=python) and a live one
-	// (mode=primary) both present, the log named the DEAD row's state as
-	// if it were what enable replaced. `beforeReadFailed` distinguishes
-	// "the read itself failed" from "genuinely no prior row", so the log
-	// line can say "(unknown)" rather than reusing "(no row)" for both.
-	before := map[string]struct{ mode, build string }{}
-	beforeReadFailed := false
-	// The map is keyed by the row's FULL identity (see below), so this
-	// ORDER BY cannot change which row's state lands under which key --
-	// it exists so this read's own row order is deterministic like every
-	// other multi-row read in this package (team-lead ruling, r7 F4),
-	// rather than relying on the keying alone to make ordering moot.
-	rows, queryErr := pool.Query(ctx, `
-		SELECT selected_operation, document_digest, mode, current_candidate_build
-		  FROM public.go_api_routing_state
-		 WHERE schema_digest = $1 AND selected_operation = ANY($2)
-		 ORDER BY selected_operation, document_digest`,
-		registry.SchemaDigest, operations)
-	if queryErr != nil {
-		beforeReadFailed = true
-	} else {
-		for rows.Next() {
-			var op, docDigest, rowMode, rowBuild string
-			if rows.Scan(&op, &docDigest, &rowMode, &rowBuild) == nil {
-				before[op+"\x00"+docDigest] = struct{ mode, build string }{rowMode, rowBuild}
-			}
-		}
-		rows.Close()
-		if rows.Err() != nil {
-			beforeReadFailed = true
-		}
-	}
+	// r8 F1 (reproduced, fixed in goapiproof.Enable itself): the
+	// before-state used to be read here, plain and UNLOCKED, before this
+	// call even started -- so under real concurrency (a third session
+	// holding the row, a racing `disable` landing between this read and
+	// Enable's own write) the log line could print a STALE state that
+	// looked like nothing had changed. See EnableOutcome.ModeBefore's own
+	// doc comment (routing_enable.go) for the executed repro and the
+	// fix: the read now happens INSIDE Enable's write transaction, under
+	// the SAME lock the write itself takes, so `outcome.ModeBefore` below
+	// is always the value this write ACTUALLY replaced.
 
 	// --- Preflight 4 (inside Enable) + the write, one transaction ------
 	outcomes, err := goapiproof.Enable(ctx, pool, goapiproof.EnableRequest{
@@ -328,14 +296,15 @@ func runEnable(argv []string) error {
 		// mode/build, so a log search finds what a specific enable
 		// REPLACED, not just that it wrote something.
 		if !dryRun {
+			// r8 F1 (reproduced): these values are now read under the
+			// SAME lock the write itself took, inside goapiproof.Enable
+			// -- see EnableOutcome.ModeBefore's own doc comment. No
+			// "(unknown)" case survives: a genuine read failure there now
+			// aborts the whole enable rather than reaching this line at
+			// all.
 			modeBefore, buildBefore := "(no row)", "-"
-			switch {
-			case beforeReadFailed:
-				modeBefore, buildBefore = "(unknown)", "(unknown)"
-			default:
-				if row, ok := before[outcome.Operation+"\x00"+outcome.DocumentDigest]; ok {
-					modeBefore, buildBefore = row.mode, row.build
-				}
+			if outcome.HadRowBefore {
+				modeBefore, buildBefore = outcome.ModeBefore, outcome.CandidateBuildBefore
 			}
 			fmt.Fprintf(stderr, "go_api_routing.enabled operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s recorded_by=%s\n",
 				outcome.Operation, modeBefore, outcome.Mode, buildBefore, outcome.CandidateBuild, registry.SchemaDigest, common.recordedBy)

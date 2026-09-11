@@ -1028,3 +1028,144 @@ func TestEnableRefusesWhenTheRoutingRowWriteIsSwallowed(t *testing.T) {
 		t.Fatalf("routing_state rows = %d, want 0", count)
 	}
 }
+
+// r8 F1 (reproduced): EnableOutcome now carries the row's OWN prior state,
+// read under the same lock the write itself takes -- this is the
+// non-concurrent half: does it read back what was actually there.
+func TestEnableOutcomeReportsThePriorRowWhenOneExisted(t *testing.T) {
+	ctx := t.Context()
+	pool := startRegistryPostgres(t)
+	seedRow(t, ctx, "flowMatrix", testDocumentDigest, "python", "deaddeaddeaddeaddeaddeaddeaddeaddeaddead", pool)
+	seedProof(t, ctx, pool, "flowMatrix", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
+
+	outcomes, err := Enable(ctx, pool, enableRequest("flowMatrix"))
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("outcomes = %+v, want exactly 1", outcomes)
+	}
+	if !outcomes[0].HadRowBefore {
+		t.Fatalf("HadRowBefore = false, want true -- a row existed before this write")
+	}
+	if outcomes[0].ModeBefore != "python" {
+		t.Fatalf("ModeBefore = %q, want %q (the row's mode before enable replaced it)", outcomes[0].ModeBefore, "python")
+	}
+	if outcomes[0].CandidateBuildBefore != "deaddeaddeaddeaddeaddeaddeaddeaddeaddead" {
+		t.Fatalf("CandidateBuildBefore = %q, want the seeded build", outcomes[0].CandidateBuildBefore)
+	}
+}
+
+// r8 F1 (reproduced), the other half: no row existed at all.
+func TestEnableOutcomeReportsNoPriorRowWhenNoneExisted(t *testing.T) {
+	ctx := t.Context()
+	pool := startRegistryPostgres(t)
+	seedProof(t, ctx, pool, "flowMatrix", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
+
+	outcomes, err := Enable(ctx, pool, enableRequest("flowMatrix"))
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("outcomes = %+v, want exactly 1", outcomes)
+	}
+	if outcomes[0].HadRowBefore {
+		t.Fatalf("HadRowBefore = true, want false -- no row existed before this write")
+	}
+	if outcomes[0].ModeBefore != "" || outcomes[0].CandidateBuildBefore != "" {
+		t.Fatalf("ModeBefore/CandidateBuildBefore = %q/%q, want both empty when no row existed", outcomes[0].ModeBefore, outcomes[0].CandidateBuildBefore)
+	}
+}
+
+// r8 F1 (reproduced), the concurrency repro itself: a genuinely
+// deterministic proof that the before-state read sees a CONCURRENT
+// writer's COMMITTED value, not a stale snapshot -- the exact shape
+// opus r8 found with two real binaries (a disable landing between an
+// unlocked pre-read and enable's own write, logging "mode_before=canary
+// mode_after=canary" for what was actually a re-enable of a just-rolled-
+// back operation). Driven at the SQL level, like
+// TestEnableAndRepointLockOrderInversionDeadlocks above, for a
+// deterministic interleaving rather than a timing-dependent race between
+// two real subprocess invocations.
+func TestEnablesBeforeStateReadSeesADisableThatCommittedWhileItWasBlocked(t *testing.T) {
+	ctx := t.Context()
+	pool := startRegistryPostgres(t)
+	const operation = "flowMatrix"
+	const build = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	seedRow(t, ctx, operation, testDocumentDigest, "canary", build, pool)
+
+	// Step 1: disable's real plan read locks the row -- selectDisableCandidatesSQL,
+	// `FOR UPDATE`, iterated to completion so the lock is held server-side.
+	disableTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin disable side: %v", err)
+	}
+	defer func() { _ = disableTx.Rollback(ctx) }()
+	rows, err := disableTx.Query(ctx, selectDisableCandidatesSQL, testSchemaDigest)
+	if err != nil {
+		t.Fatalf("disable FOR UPDATE select: %v", err)
+	}
+	rowCount := 0
+	for rows.Next() {
+		rowCount++
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("disable FOR UPDATE select: %v", err)
+	}
+	if rowCount == 0 {
+		t.Fatal("the seeded row must be visible to disable's own read")
+	}
+
+	// Step 2: enable's OWN before-state read (selectEnableBeforeStateSQL)
+	// starts concurrently and BLOCKS on the same row -- launched in a
+	// goroutine because it does not return until step 3 releases the lock.
+	type readResult struct {
+		mode, build string
+		err         error
+	}
+	results := make(chan readResult, 1)
+	enableTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin enable side: %v", err)
+	}
+	defer func() { _ = enableTx.Rollback(ctx) }()
+	go func() {
+		var mode, build string
+		err := enableTx.QueryRow(ctx, selectEnableBeforeStateSQL, testSchemaDigest, testDocumentDigest, operation).Scan(&mode, &build)
+		results <- readResult{mode, build, err}
+	}()
+
+	// Give the goroutine a moment to actually reach the blocked state
+	// server-side before step 3 releases the lock -- otherwise step 3
+	// could race ahead of the SELECT even being sent.
+	time.Sleep(200 * time.Millisecond)
+
+	// Step 3: disable's real write lands and COMMITS -- exactly
+	// disableRoutingRowSQL, unguarded (NULL candidate-build guard).
+	now := time.Now().UTC()
+	if _, err := disableTx.Exec(ctx, disableRoutingRowSQL,
+		testSchemaDigest, testDocumentDigest, operation, "python", "r8 F1 killer", nil, "lane-routing-verbs", now); err != nil {
+		t.Fatalf("disable's write: %v", err)
+	}
+	if err := disableTx.Commit(ctx); err != nil {
+		t.Fatalf("disable's commit: %v", err)
+	}
+
+	// Step 4: enable's before-state read, unblocked by the commit above,
+	// must now see disable's COMMITTED value -- "python", never the
+	// "canary" it would have seen from a stale, unlocked read taken
+	// before disable ever ran.
+	var result readResult
+	select {
+	case result = <-results:
+	case <-time.After(15 * time.Second):
+		t.Fatal("enable's before-state read did not return within 15s of disable's commit")
+	}
+	if result.err != nil {
+		t.Fatalf("enable's before-state read: %v", result.err)
+	}
+	if result.mode != "python" {
+		t.Fatalf("enable's before-state read saw mode=%q, want %q -- it must reflect disable's COMMITTED write, not a stale pre-disable snapshot", result.mode, "python")
+	}
+}

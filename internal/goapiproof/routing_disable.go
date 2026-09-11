@@ -255,6 +255,11 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 
 	changes := make([]DisableChange, 0, len(operations))
 	var guardProblems []string
+	// operationHasCatalogRow (r8 F2, reproduced) records, per operation,
+	// whether ANY of its rows at the live digest is the catalog row --
+	// shared between the plan-time guard below and the write-time guard
+	// further down, so both apply the SAME fallback rule.
+	operationHasCatalogRow := make(map[string]bool, len(operations))
 	for _, operation := range operations {
 		rows := live[operation]
 		if len(rows) == 0 {
@@ -293,6 +298,14 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 			})
 			continue
 		}
+		hasCatalogRow := false
+		for _, row := range rows {
+			if row.documentDigest == request.DocumentDigest[operation] {
+				hasCatalogRow = true
+				break
+			}
+		}
+		operationHasCatalogRow[operation] = hasCatalogRow
 		for _, row := range rows {
 			// r6 F3(c) (reproduced): the guard used to check EVERY row at
 			// the live schema digest, including DEAD ones -- rows whose
@@ -307,8 +320,23 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 			// operation. A dead row is still eligible to be disabled --
 			// just never guarded against a build nobody could have
 			// compared it to.
+			//
+			// r8 F2 (reproduced): that scoping silently guarded NOTHING
+			// when an operation's ONLY rows at the live digest are dead
+			// ones (no catalog row exists at all) -- `-candidate-build`
+			// then covered zero rows and the write went ahead unguarded,
+			// with nothing said about it. Python has no "dead row"
+			// concept at all: it checks whatever row exists, so this is
+			// an accept/refuse divergence, not merely a widened refusal.
+			// Fix: when the operation has NO catalog row (hasCatalogRow
+			// above), the guard falls back to every row that DOES exist
+			// -- restoring Python parity for exactly the case r6 F3(c)
+			// never covered, while leaving r6 F3(c)'s own scoping
+			// (ignore dead rows when a catalog row is ALSO present)
+			// untouched.
 			isCatalogRow := row.documentDigest == request.DocumentDigest[operation]
-			if isCatalogRow && request.ExpectedCandidateBuild != "" && row.candidateBuild != request.ExpectedCandidateBuild {
+			guardApplies := isCatalogRow || !hasCatalogRow
+			if guardApplies && request.ExpectedCandidateBuild != "" && row.candidateBuild != request.ExpectedCandidateBuild {
 				guardProblems = append(guardProblems, fmt.Sprintf(
 					"%s (document digest %s) points at %s, not the %s you named -- somebody has repointed it since you looked; re-run `status` and decide again",
 					operation, row.documentDigest, row.candidateBuild, request.ExpectedCandidateBuild))
@@ -348,8 +376,16 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 		// checked against -candidate-build at plan time either, so
 		// holding its write to that same guard would refuse a write the
 		// plan already promised, on a build nobody compared it to.
+		//
+		// r8 F2 (reproduced): matching the plan-time fallback above, the
+		// guard also applies here when the operation has NO catalog row
+		// at all -- `operationHasCatalogRow` is the SAME map the plan
+		// loop filled, so a mismatch WOULD already have been refused at
+		// plan time (guardProblems, above) before this write loop ever
+		// runs; this mirrors that decision rather than re-deciding it.
 		var guard any
-		if request.ExpectedCandidateBuild != "" && change.DocumentDigest == request.DocumentDigest[change.Operation] {
+		if request.ExpectedCandidateBuild != "" &&
+			(change.DocumentDigest == request.DocumentDigest[change.Operation] || !operationHasCatalogRow[change.Operation]) {
 			guard = request.ExpectedCandidateBuild
 		}
 		// r6 T1 (reproduced): this used to check `tag.RowsAffected() == 0`

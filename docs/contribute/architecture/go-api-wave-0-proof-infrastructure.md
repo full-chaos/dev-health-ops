@@ -309,9 +309,17 @@ UNTOUCHED and still work; these are the ones to reach for on a Go-only
 fleet, and they are the only ones that can re-point a `shadow` row.
 
 ```bash
+# r8 F4 (reproduced): every -postgres-uri below used to be typed as a
+# FLAG, "$POSTGRES_URI" included -- reaching /proc/<pid>/cmdline and
+# shell history, the exact leak class this package's own bindPostgresURI
+# fix (finding (a)) closed for the usage TEXT. This recipe is the
+# operator's document of record; the same rule applies to it. The binary
+# already falls back to the POSTGRES_URI environment variable on its own
+# (main.go) -- set it in the environment and omit the flag entirely.
+export POSTGRES_URI=<dsn>
+
 # 1. Same question. Never refuses, works with query-api down.
-go-api-routing status -registry-url http://query-api:8090/registry \
-  -postgres-uri "$POSTGRES_URI"
+go-api-routing status -registry-url http://query-api:8090/registry
 
 # 2. Re-enable. NOTE the difference that matters: there is no
 #    -candidate-build to type. The build is READ from the deployed
@@ -323,7 +331,6 @@ go-api-routing status -registry-url http://query-api:8090/registry \
 GO_API_ROUTING_BEARER=<envelope> go-api-routing enable \
   -registry-url  http://query-api:8090/registry \
   -buildinfo-url http://query-api:8090/buildinfo \
-  -postgres-uri  "$POSTGRES_URI" \
   -operations    all-registered \
   -mode          canary \
   -recorded-by   <who> \
@@ -333,9 +340,9 @@ GO_API_ROUTING_BEARER=<envelope> go-api-routing enable \
 #    credential -- because it has to work when the planes disagree and the
 #    deployed process is down. -candidate-build here is a GUARD ("refuse
 #    if somebody repointed this since I looked"), never written.
-go-api-routing disable -postgres-uri "$POSTGRES_URI" \
+go-api-routing disable \
   -operations all-registered -mode python        # dry run, writes nothing
-go-api-routing disable -postgres-uri "$POSTGRES_URI" \
+go-api-routing disable \
   -operations all-registered -mode python -apply \
   -recorded-by <who> -review-evidence '<why>'
 
@@ -377,12 +384,16 @@ The original three:
 
 Added since, all reproduced by review and pinned by a test:
 
-* **`disable -operations all-registered` does not refuse over an
-  operation whose ONLY rows sit at other schema digests.** The documented
-  rollback recipe (`-operations all-registered -mode python`) must be able
-  to turn everything off even when one operation's rows are all stale to
-  this checkout; naming that operation EXPLICITLY still refuses, because
-  an operator who typed its name is asking about exactly that operation.
+* **`disable` never refuses over an operation whose ONLY rows sit at other
+  schema digests, named explicitly or picked up by `-operations
+  all-registered`** (r8 F3, corrected -- an earlier version of this line
+  claimed naming the operation explicitly still refuses this way; that
+  was true only briefly and contradicts this verb's own documented
+  contract of working when the planes disagree). It is SKIPPED, reported
+  as "nothing to disable" with the other digest(s) named in the plan, so
+  the documented rollback recipe (`-operations all-registered -mode
+  python`) can still turn everything off even when one operation's rows
+  are all stale to this checkout.
 * **`-candidate-build` passed as an explicitly empty value is refused**,
   not silently treated as "no guard" -- an empty value reads identically
   to the flag never being passed at all otherwise, which would apply an
@@ -406,6 +417,24 @@ Added since, all reproduced by review and pinned by a test:
 * **`<verb> -h`/`-help` exits 0**, printing that verb's usage text, the
   same as this binary's own top-level `-h` and Python's argparse --  not a
   refusal (exit 2).
+* **A dead database exits 2 (a refusal), not 1** (r8 F6, reproduced,
+  newly DECLARED -- deliberate since r2 R2-01/R2-02, but never named in
+  this list). Python's `disable`/`enable`/`repoint` against a dead
+  database crash with an unhandled `ConnectionRefusedError`, exit 1; this
+  binary reports "Postgres did not answer" as an ordinary,
+  operator-actionable refusal, exit 2 -- a malformed or unreachable DSN is
+  something an operator fixes, not a crash. A script ported from Python
+  and reading "exit 1 means the database is down" will read this as "fix
+  your input" instead; this is the residual of that port, named rather
+  than left implicit.
+* **`status -json`'s key names do not match Python's** (r8 F6, reproduced,
+  newly DECLARED). Python's `status --json` reports
+  `python_plane_schema_digest`/`python_plane_digest_error`; this binary
+  reports `local_schema_digest` and carries no equivalent digest-error
+  key at all (a digest read failure here is a defect in THIS binary, not
+  a state worth a separate field the way an unreachable go plane is). No
+  in-repo consumer reads either JSON shape today, so nothing currently
+  breaks -- declared so a future consumer is not surprised.
 
 `disable` also turns off **every** row an operation has at the live
 digest, not one of them. The routing primary key is `(schema_digest,

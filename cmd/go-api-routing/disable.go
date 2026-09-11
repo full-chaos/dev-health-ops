@@ -142,7 +142,13 @@ func runDisable(argv []string) error {
 		// actually uses, completely untouched. `status`'s census already
 		// has this fact; naming it here is the fix.
 		if len(change.StaleSchemaDigests) > 0 {
-			fmt.Fprintf(stdout, "    !! %d row(s) for this operation exist at OTHER schema digest(s) this checkout does not match: %v -- if you expected THOSE rows to change, this binary's embedded SDL is stale; see `status` or rebuild from the deployed revision\n",
+			// r8 T1c (reproduced): `StaleSchemaDigests` is a deduplicated
+			// list of DIGESTS, not a row count -- two rows for this
+			// operation at ONE stale digest still print as a single
+			// entry here, so labelling that count "row(s)" understates
+			// how many rows actually exist there. Say what is actually
+			// being counted.
+			fmt.Fprintf(stdout, "    !! %d digest(s) OTHER than this checkout's live one carry a row for this operation: %v -- if you expected THOSE rows to change, this binary's embedded SDL is stale; see `status` or rebuild from the deployed revision\n",
 				len(change.StaleSchemaDigests), change.StaleSchemaDigests)
 		}
 	}

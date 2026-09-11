@@ -80,6 +80,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -150,6 +151,31 @@ type EnableOutcome struct {
 	Proven bool
 	// ReviewEvidence is what was actually written, prefix included.
 	ReviewEvidence string
+	// ModeBefore/CandidateBuildBefore/HadRowBefore (r8 F1, reproduced) are
+	// the row's own state, read with the SAME lock and the SAME
+	// transaction as the write that replaces it -- see the SELECT ... FOR
+	// UPDATE in Enable's write loop, below. HadRowBefore is false when no
+	// row existed yet (ModeBefore/CandidateBuildBefore are then the zero
+	// value); only set when Apply actually wrote (empty on a dry run,
+	// which reads nothing).
+	//
+	// This REPLACES an earlier, unlocked, OUTSIDE-the-transaction pre-read
+	// that used to live in cmd/go-api-routing/enable.go, purely for this
+	// log line. Executed (opus r8, two real binaries): a third session
+	// holds the target row for 3s; `disable -apply` (queued first) turns
+	// it python; `enable` (queued second, unaware) turns it back on. The
+	// OLD unlocked read ran before `disable`'s write landed, so the log
+	// printed `mode_before=canary mode_after=canary` -- durably recording
+	// "nothing happened" for the one event (a re-enable of a just-rolled-
+	// back operation) a rollback investigation most needs to find. Reading
+	// under the SAME FOR-UPDATE lock the write itself takes closes that
+	// window: by the time this read runs, `disable`'s commit has already
+	// happened or this transaction is already waiting behind it, so
+	// ModeBefore is always the value the write ACTUALLY replaced, never a
+	// stale snapshot from before a concurrent writer ran.
+	ModeBefore           string
+	CandidateBuildBefore string
+	HadRowBefore         bool
 }
 
 // ErrEnableRequestRefused marks EVERY validate() refusal as a refusal.
@@ -246,6 +272,18 @@ ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE
        recorded_by = EXCLUDED.recorded_by,
        updated_at = EXCLUDED.updated_at`
 
+// selectEnableBeforeStateSQL reads the target row's mode/build UNDER THE
+// SAME LOCK the upsert immediately below it takes (r8 F1, reproduced --
+// see EnableOutcome.ModeBefore's own doc comment). Scoped to the row's
+// FULL identity, matching the upsert's own ON CONFLICT columns exactly --
+// there is no ambiguity to resolve with an ORDER BY the way the shared
+// multi-row reads elsewhere in this package need one.
+const selectEnableBeforeStateSQL = `
+SELECT mode, current_candidate_build
+  FROM public.go_api_routing_state
+ WHERE schema_digest = $1 AND document_digest = $2 AND selected_operation = $3
+   FOR UPDATE`
+
 // Enable registers the candidate build and points the named routing rows
 // at it, in ONE transaction.
 //
@@ -314,7 +352,8 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	now := time.Now().UTC()
-	for _, outcome := range outcomes {
+	for i := range outcomes {
+		outcome := &outcomes[i]
 		// Candidate build FIRST. The routing row's 4-column foreign key
 		// makes the order mandatory -- but this is NOT a deadlock-avoiding
 		// "lock-order convention" (r7 F8, reproduced: corrected, this
@@ -333,6 +372,31 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		if _, err := tx.Exec(ctx, registerCandidateBuildSQL,
 			request.SchemaDigest, outcome.DocumentDigest, outcome.Operation, request.RunningBuild); err != nil {
 			return nil, fmt.Errorf("goapiproof: register candidate build for %s: %w", outcome.Operation, err)
+		}
+		// r8 F1 (reproduced): the row's BEFORE state, read under the SAME
+		// FOR-UPDATE lock the upsert immediately below takes, in the SAME
+		// CB-then-RS order the upsert already uses -- see
+		// EnableOutcome.ModeBefore's own doc comment for why this
+		// replaced an unlocked, outside-the-transaction pre-read that
+		// used to live in the cmd layer. A genuine query error here
+		// (never observed with a real role in either r7's or r8's own
+		// attempts to reach it -- Postgres's privilege model requires the
+		// SAME grant for the UPSERT immediately below, so a role that
+		// cannot run this SELECT cannot run that UPSERT either) now
+		// aborts the WHOLE enable the same way any other mid-transaction
+		// database error already does, rather than degrading to a
+		// silently-wrong logged value -- the CHAOS-5416 "a measurement
+		// that did not happen is not a pass" rule applied to this read
+		// too.
+		switch err := tx.QueryRow(ctx, selectEnableBeforeStateSQL,
+			request.SchemaDigest, outcome.DocumentDigest, outcome.Operation,
+		).Scan(&outcome.ModeBefore, &outcome.CandidateBuildBefore); {
+		case err == nil:
+			outcome.HadRowBefore = true
+		case errors.Is(err, pgx.ErrNoRows):
+			// Genuinely no row yet -- not a failure.
+		default:
+			return nil, fmt.Errorf("goapiproof: read before-state for %s: %w", outcome.Operation, err)
 		}
 		tag, err := tx.Exec(ctx, upsertRoutingStateSQL,
 			request.SchemaDigest, outcome.DocumentDigest, outcome.Operation, request.RunningBuild,

@@ -59,7 +59,18 @@
                 { "const": ["post-install", "pre-upgrade"] }
               ]
             },
-            "localBundledPostgres": { "type": "boolean" }
+            "localBundledPostgres": { "type": "boolean" },
+            "routeActivate": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Gates the CHAOS-4272/CHAOS-4455 route-activate hook Job. Helm's own --set coercion accepts any truthy/falsy value on an untyped key (codex review, r2 P3 -- executed: `--set-string …enabled=maybe` rendered clean); this key is boolean-only."
+                }
+              },
+              "required": ["enabled"],
+              "description": "codex review (r3, P1 -- executed, fixed): a null override (--set-json …enabled=null) DELETES this key during Helm's values coalescing rather than failing type validation against it -- the type:boolean guard above never even runs, since there is then no value left to check. The missing key then reads as Go-template-false, silently disabling activation with exit 0, unlike simply OMITTING an override (which leaves values.yaml's own default of true in the merged result, present and required-satisfying). `required` closes exactly the null-deletes-the-key gap without rejecting the normal absent-override case."
+            }
           }
         }
       }

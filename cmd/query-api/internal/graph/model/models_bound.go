@@ -57,3 +57,20 @@ type TimeseriesBucket struct {
 	Date  graphqldate.Date `json:"date"`
 	Value *float64         `json:"value"`
 }
+
+// SankeyCoverage splits the repository coverage headline. The last three fields
+// are nullable because neither plane can always measure them, and a
+// non-nullable Float would force a 0 into the cases where the measurement is
+// simply absent -- "0% of this org's coverage is team-fallback" is a confident
+// false claim where null is an honest absent one. The share fields are guarded
+// on the same denominator the headline uses, so direct plus fallback reads back
+// as exactly the number the cards already show; the fanout is a width, not a
+// share, and is passed through unscaled. analytics/sankeycoverage.go, above the
+// repoTotal guard, is where that reasoning lives.
+type SankeyCoverage struct {
+	TeamCoverage             float64  `json:"teamCoverage"`
+	RepoCoverage             float64  `json:"repoCoverage"`
+	DirectRepoCoverage       *float64 `json:"directRepoCoverage"`
+	TeamFallbackRepoCoverage *float64 `json:"teamFallbackRepoCoverage"`
+	RepoFanoutReposPerUnit   *float64 `json:"repoFanoutReposPerUnit"`
+}

@@ -1581,19 +1581,6 @@ type ReworkThemeAllocation struct {
 	ChurnLoc      int     `json:"churnLoc"`
 }
 
-// The three nullable fields below are not in the published SDL yet, so a
-// regeneration removes them; that is the one difference the expected-drift
-// record is expected to carry until the SDL catches up. Why they are nullable
-// while the two above are not: analytics/sankeycoverage.go, above the
-// repoTotal guard in resolveSankeyCoverage.
-type SankeyCoverage struct {
-	TeamCoverage             float64  `json:"teamCoverage"`
-	RepoCoverage             float64  `json:"repoCoverage"`
-	DirectRepoCoverage       *float64 `json:"directRepoCoverage,omitempty"`
-	TeamFallbackRepoCoverage *float64 `json:"teamFallbackRepoCoverage,omitempty"`
-	RepoFanoutReposPerUnit   *float64 `json:"repoFanoutReposPerUnit,omitempty"`
-}
-
 type SankeyRequestInput struct {
 	Path          []DimensionInput `json:"path"`
 	Measure       MeasureInput     `json:"measure"`

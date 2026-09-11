@@ -1448,8 +1448,11 @@ type ComplexityRoot struct {
 	}
 
 	SankeyCoverage struct {
-		RepoCoverage func(childComplexity int) int
-		TeamCoverage func(childComplexity int) int
+		DirectRepoCoverage       func(childComplexity int) int
+		RepoCoverage             func(childComplexity int) int
+		RepoFanoutReposPerUnit   func(childComplexity int) int
+		TeamCoverage             func(childComplexity int) int
+		TeamFallbackRepoCoverage func(childComplexity int) int
 	}
 
 	SankeyEdge struct {
@@ -8819,6 +8822,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ReworkThemeAllocation.Theme(childComplexity), true
 
+	case "SankeyCoverage.directRepoCoverage":
+		if e.complexity.SankeyCoverage.DirectRepoCoverage == nil {
+			break
+		}
+
+		return e.complexity.SankeyCoverage.DirectRepoCoverage(childComplexity), true
+
 	case "SankeyCoverage.repoCoverage":
 		if e.complexity.SankeyCoverage.RepoCoverage == nil {
 			break
@@ -8826,12 +8836,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.SankeyCoverage.RepoCoverage(childComplexity), true
 
+	case "SankeyCoverage.repoFanoutReposPerUnit":
+		if e.complexity.SankeyCoverage.RepoFanoutReposPerUnit == nil {
+			break
+		}
+
+		return e.complexity.SankeyCoverage.RepoFanoutReposPerUnit(childComplexity), true
+
 	case "SankeyCoverage.teamCoverage":
 		if e.complexity.SankeyCoverage.TeamCoverage == nil {
 			break
 		}
 
 		return e.complexity.SankeyCoverage.TeamCoverage(childComplexity), true
+
+	case "SankeyCoverage.teamFallbackRepoCoverage":
+		if e.complexity.SankeyCoverage.TeamFallbackRepoCoverage == nil {
+			break
+		}
+
+		return e.complexity.SankeyCoverage.TeamFallbackRepoCoverage(childComplexity), true
 
 	case "SankeyEdge.source":
 		if e.complexity.SankeyEdge.Source == nil {
@@ -12402,6 +12426,9 @@ type ReworkThemeAllocation {
 type SankeyCoverage {
   teamCoverage: Float!
   repoCoverage: Float!
+  directRepoCoverage: Float
+  teamFallbackRepoCoverage: Float
+  repoFanoutReposPerUnit: Float
 }
 
 type SankeyEdge {
@@ -61613,6 +61640,129 @@ func (ec *executionContext) fieldContext_SankeyCoverage_repoCoverage(_ context.C
 	return fc, nil
 }
 
+func (ec *executionContext) _SankeyCoverage_directRepoCoverage(ctx context.Context, field graphql.CollectedField, obj *model.SankeyCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SankeyCoverage_directRepoCoverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DirectRepoCoverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SankeyCoverage_directRepoCoverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SankeyCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SankeyCoverage_teamFallbackRepoCoverage(ctx context.Context, field graphql.CollectedField, obj *model.SankeyCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SankeyCoverage_teamFallbackRepoCoverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TeamFallbackRepoCoverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SankeyCoverage_teamFallbackRepoCoverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SankeyCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SankeyCoverage_repoFanoutReposPerUnit(ctx context.Context, field graphql.CollectedField, obj *model.SankeyCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SankeyCoverage_repoFanoutReposPerUnit(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoFanoutReposPerUnit, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SankeyCoverage_repoFanoutReposPerUnit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SankeyCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _SankeyEdge_source(ctx context.Context, field graphql.CollectedField, obj *model.SankeyEdge) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_SankeyEdge_source(ctx, field)
 	if err != nil {
@@ -62061,6 +62211,12 @@ func (ec *executionContext) fieldContext_SankeyResult_coverage(_ context.Context
 				return ec.fieldContext_SankeyCoverage_teamCoverage(ctx, field)
 			case "repoCoverage":
 				return ec.fieldContext_SankeyCoverage_repoCoverage(ctx, field)
+			case "directRepoCoverage":
+				return ec.fieldContext_SankeyCoverage_directRepoCoverage(ctx, field)
+			case "teamFallbackRepoCoverage":
+				return ec.fieldContext_SankeyCoverage_teamFallbackRepoCoverage(ctx, field)
+			case "repoFanoutReposPerUnit":
+				return ec.fieldContext_SankeyCoverage_repoFanoutReposPerUnit(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type SankeyCoverage", field.Name)
 		},
@@ -85188,6 +85344,12 @@ func (ec *executionContext) _SankeyCoverage(ctx context.Context, sel ast.Selecti
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "directRepoCoverage":
+			out.Values[i] = ec._SankeyCoverage_directRepoCoverage(ctx, field, obj)
+		case "teamFallbackRepoCoverage":
+			out.Values[i] = ec._SankeyCoverage_teamFallbackRepoCoverage(ctx, field, obj)
+		case "repoFanoutReposPerUnit":
+			out.Values[i] = ec._SankeyCoverage_repoFanoutReposPerUnit(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

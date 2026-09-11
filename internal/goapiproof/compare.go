@@ -98,6 +98,64 @@ type Finding struct {
 	Kind   string `json:"kind"`
 	Path   string `json:"path"`
 	Detail string `json:"detail"`
+	// Shape says WHAT differs, and decides whether a baseline-defect
+	// citation may cover it: only ShapeValue can be. Empty on findings the
+	// comparator did not classify (transport-level ones the runner adds),
+	// and an empty shape is never coverable.
+	Shape string `json:"shape,omitempty"`
+}
+
+// Finding shapes. A citation (BaselineDefect) declares that a VALUE the
+// Python baseline produces is known to be wrong. It can say nothing about
+// the candidate returning a different SHAPE -- fewer or more elements, a
+// null where there was a value, an object where there was a list, a key
+// one side lacks -- so only ShapeValue is ever covered by one.
+//
+// opus r7 (P1-1): before shapes existed a cited path covered EVERY finding
+// beneath it, and compareList reports a LENGTH difference at the list's own
+// path. hotspots cites the whole `data.hotspots.rows` subtree, so a Go
+// build returning `[]`, `null`, or rows of empty objects was a fully-cited
+// mismatch with outside=0 -- primary enablement proof, executed through the
+// real writer, CLI and migration matrix. The same principle this change
+// already applies to `$.http.*` differences ("a citation that cannot
+// express a difference must never be read as covering it") applies here.
+const (
+	// ShapeValue: both sides are non-null scalars of the same JSON type
+	// (string, number or bool), both finite, and they differ.
+	ShapeValue = "value"
+	// ShapeLength: two lists of different lengths.
+	ShapeLength = "length"
+	// ShapePresence: a key, an element (by key) or `data` itself is
+	// present on one side only.
+	ShapePresence = "presence"
+	// ShapeNull: null on one side, a value on the other.
+	ShapeNull = "null"
+	// ShapeType: two values of different JSON types (object, array,
+	// string, number, bool).
+	ShapeType = "type"
+	// ShapeNonFinite: NaN or Infinity on either side -- parity rule 3's
+	// "always mismatches", and never a known Python defect to cite.
+	ShapeNonFinite = "non_finite"
+)
+
+// jsonKind names a decoded JSON value's type for ShapeType/ShapeNull.
+func jsonKind(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case map[string]any:
+		return "object"
+	case []any:
+		return "array"
+	case bool:
+		return "bool"
+	case string:
+		return "string"
+	}
+	if _, isNumber := asFloat(value); isNumber {
+		return "number"
+	}
+	return fmt.Sprintf("%T", value)
 }
 
 // Result is the comparator's verdict plus every observation behind it.
@@ -268,8 +326,11 @@ type BaselineDefect struct {
 	// Reason states, in words, what the baseline gets wrong.
 	Reason string
 	// Paths are dotted, index-free field paths (the same form
-	// FloatTierB and VolatileFields use). A path also covers everything
-	// beneath it, so naming a subtree root covers its fields.
+	// FloatTierB and VolatileFields use). A path also reaches everything
+	// beneath it, so naming a subtree root reaches its fields -- but only
+	// a leaf VALUE difference (ShapeValue) is covered. A length, null,
+	// type or presence difference beneath a cited path is outside every
+	// citation (opus r7 P1-1).
 	Paths []string
 }
 
@@ -326,7 +387,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		if !baseline.DataPresent {
 			detail = "present in candidate, absent in baseline"
 		}
-		findings = append(findings, Finding{Kind: FindingMismatch, Path: "$.data", Detail: detail})
+		findings = append(findings, Finding{Kind: FindingMismatch, Path: "$.data", Detail: detail, Shape: ShapePresence})
 	case baseline.DataPresent && candidate.DataPresent:
 		findings = append(findings, compareJSON(baseline.Data, candidate.Data, "$.data", opts, opts.EnvelopeKeys, track)...)
 	}
@@ -388,10 +449,11 @@ func unmatched(declared map[string]string, used map[string]bool) []string {
 // declared, understood, ticketed Python defect is still a divergence, and
 // the receipt still says mismatch.
 func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
-	var mismatches []string
+	var mismatches, shapes []string
 	for _, finding := range result.Findings {
 		if finding.Kind == FindingMismatch {
 			mismatches = append(mismatches, tieredPath(finding.Path))
+			shapes = append(shapes, finding.Shape)
 		}
 	}
 
@@ -400,9 +462,16 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
 	for _, defect := range defects {
 		hit := false
 		for i, path := range mismatches {
-			if defectCovers(defect, path) {
+			if !defectCovers(defect, path) {
+				continue
+			}
+			// The citation is LIVE -- there is a difference under its
+			// path, so it is not stale -- but it COVERS only a leaf value
+			// difference. A length / null / type / presence finding under
+			// a cited subtree stays outside every citation (opus r7 P1-1).
+			hit = true
+			if shapes[i] == ShapeValue {
 				covered[i] = true
-				hit = true
 			}
 		}
 		if hit {
@@ -426,9 +495,10 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
 	result.DifferencesOutsideBaselineDefect = outside
 }
 
-// defectCovers reports whether a declared path covers a difference path.
-// A cited path covers itself and everything beneath it, so a subtree root
-// can be named once instead of every leaf under it.
+// defectCovers reports whether a difference path lies under a declared
+// path: itself or anything beneath it, so a subtree root can be named once
+// instead of every leaf under it. Whether the difference is then COVERED
+// also depends on its shape -- see classifyBaselineDefects.
 func defectCovers(defect BaselineDefect, path string) bool {
 	for _, cited := range defect.Paths {
 		if path == cited || strings.HasPrefix(path, cited+".") {
@@ -502,6 +572,7 @@ func compareErrors(baseline, candidate []map[string]any, pathPrefix string) []Fi
 			Kind:   FindingMismatch,
 			Path:   identityPath(id),
 			Detail: "error present in baseline, missing from candidate",
+			Shape:  ShapePresence,
 		})
 	}
 	for _, id := range extra {
@@ -509,6 +580,7 @@ func compareErrors(baseline, candidate []map[string]any, pathPrefix string) []Fi
 			Kind:   FindingMismatch,
 			Path:   identityPath(id),
 			Detail: "error present in candidate, missing from baseline",
+			Shape:  ShapePresence,
 		})
 	}
 	for _, id := range shared {
@@ -583,11 +655,22 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 		return compareList(baselineList, candidateList, path, opts, track)
 	}
 
+	// Different JSON types (including null against a value) are a SHAPE
+	// difference, never a value one, whatever the path: no citation may
+	// cover them (opus r7 P1-1). Detail text unchanged.
+	if baselineKind, candidateKind := jsonKind(baseline), jsonKind(candidate); baselineKind != candidateKind {
+		shape := ShapeType
+		if baselineKind == "null" || candidateKind == "null" {
+			shape = ShapeNull
+		}
+		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: shape}}
+	}
+
 	baselineBool, baselineIsBool := baseline.(bool)
 	candidateBool, candidateIsBool := candidate.(bool)
 	if baselineIsBool || candidateIsBool {
 		if !baselineIsBool || !candidateIsBool || baselineBool != candidateBool {
-			return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate)}}
+			return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: ShapeValue}}
 		}
 		return nil
 	}
@@ -620,6 +703,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 							Kind:   FindingMismatch,
 							Path:   path,
 							Detail: fmt.Sprintf("%d != %d (Tier A, exact integer)", baselineInt, candidateInt),
+							Shape:  ShapeValue,
 						}}
 					}
 					return nil
@@ -630,7 +714,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 	}
 
 	if !sameScalar(baseline, candidate) {
-		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate)}}
+		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: ShapeValue}}
 	}
 	return nil
 }
@@ -719,6 +803,7 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 			Kind:   FindingMismatch,
 			Path:   path,
 			Detail: fmt.Sprintf("non-finite value: %v vs %v (NaN/Infinity always mismatches)", baseline, candidate),
+			Shape:  ShapeNonFinite,
 		}}
 	}
 
@@ -729,6 +814,7 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 				Kind:   FindingMismatch,
 				Path:   path,
 				Detail: fmt.Sprintf("%v != %v (Tier A, exact)", baseline, candidate),
+				Shape:  ShapeValue,
 			}}
 		}
 		return nil
@@ -747,6 +833,7 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 			Kind:   FindingMismatch,
 			Path:   path,
 			Detail: fmt.Sprintf("%v != %v (Tier B, tolerance %v)", baseline, candidate, tolerance),
+			Shape:  ShapeValue,
 		}}
 	}
 	return nil
@@ -789,7 +876,7 @@ func compareDict(baseline, candidate map[string]any, path string, opts Options, 
 			if !inBaseline {
 				detail = "present in candidate, absent in baseline"
 			}
-			findings = append(findings, Finding{Kind: FindingMismatch, Path: childPath, Detail: detail})
+			findings = append(findings, Finding{Kind: FindingMismatch, Path: childPath, Detail: detail, Shape: ShapePresence})
 			continue
 		}
 		findings = append(findings, compareJSON(baseline[key], candidate[key], childPath, opts, nil, track)...)
@@ -812,6 +899,7 @@ func compareList(baseline, candidate []any, path string, opts Options, track *tr
 			Kind:   FindingMismatch,
 			Path:   path,
 			Detail: fmt.Sprintf("length %d != %d", len(baseline), len(candidate)),
+			Shape:  ShapeLength,
 		}}
 	}
 	var findings []Finding
@@ -933,7 +1021,7 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 			if !inBaseline {
 				detail = fmt.Sprintf("key %q present in candidate, absent in baseline", key)
 			}
-			findings = append(findings, Finding{Kind: FindingMismatch, Path: elementPath, Detail: detail})
+			findings = append(findings, Finding{Kind: FindingMismatch, Path: elementPath, Detail: detail, Shape: ShapePresence})
 			continue
 		}
 		for _, finding := range compareJSON(baselineElement, candidateElement, elementPath, opts, nil, track) {

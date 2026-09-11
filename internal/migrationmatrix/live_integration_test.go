@@ -594,3 +594,40 @@ func TestTheRoutingSnapshotStatementIsWhatTheOfflineReaderReads(t *testing.T) {
 		t.Fatalf("an empty routing table: rows=%d total=%d err=%v, want 0, 1, nil", len(rows), total, err)
 	}
 }
+
+// opus r7 (mutant g25): the page shows the NEWEST admissible receipt for a
+// row. `ORDER BY observed_at ASC` survived every suite; with two receipts the
+// page would name the oldest -- evidence the next re-prove supersedes.
+func TestTheMatrixShowsTheNewestAdmissibleReceipt(t *testing.T) {
+	ctx, pool, uri := startMatrixPostgres(t)
+	const (
+		digest   = "sha256:live"
+		document = "doc-a"
+		op       = "featureFlags"
+		build    = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	)
+	seedMatrixRow(ctx, t, pool, digest, document, op, "canary", build)
+	var older, newer string
+	for _, c := range []struct {
+		at  string
+		dst *string
+	}{{"2026-09-01T00:00:00Z", &older}, {"2026-09-10T00:00:00Z", &newer}} {
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO go_api_proof_run
+			   (id, schema_digest, document_digest, selected_operation, candidate_build,
+			    request_identity, stage, terminal_state, observed_at, recorded_by,
+			    measurement_route, build_binding, differences_outside_baseline_defect)
+			 VALUES (gen_random_uuid(),$1,$2,$3,$4,'x','deployed_executed','match', $5::timestamptz,'test','edge','per_request',0)
+			 RETURNING id::text`, digest, document, op, build, c.at).Scan(c.dst); err != nil {
+			t.Fatalf("seed receipt: %v", err)
+		}
+	}
+	rows, _, err := ReadRoutingState(ctx, uri, digest)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ReadRoutingState: %v %+v", err, rows)
+	}
+	if rows[0].Proven != newer {
+		t.Fatalf("proven=%q, want the newest receipt %q (the older is %q)", rows[0].Proven, newer, older)
+	}
+	t.Logf("cell two admissible receipts -> page shows the newest: %v", rows[0].Proven == newer)
+}

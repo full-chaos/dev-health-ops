@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -436,4 +437,57 @@ func TestNoFlagIsSilentlyIgnored(t *testing.T) {
 		}
 		t.Logf("cell %-86s observed refused=%-5v notice=%v", c.name, err != nil, notice != "")
 	}
+}
+
+// opus r7 (mutant g35): R14 on -render was unpinned -- dropping it left
+// `-render` exiting 0 on a drift snapshot, caught only later by -check. The
+// real runRender, in a scratch git repository, on a -routing file whose live
+// row serves a document the catalog does not name.
+func TestRenderFailsOnALiveRowTheCatalogCannotDispatch(t *testing.T) {
+	root := copyContractTree(t)
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "add", "-A"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-qm", "scratch"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	pin, err := migrationmatrix.SchemaDigestPin(filepath.Join(root, digestPinRelative))
+	if err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	routing := filepath.Join(t.TempDir(), "routing.json")
+	payload := `{"proof_run_total":0,"rows":[{"selected_operation":"featureFlags","document_digest":"` + strings.Repeat("0", 64) +
+		`","mode":"primary","schema_digest":"` + pin + `","current_candidate_build":"` + strings.Repeat("a", 40) + `","proof_run_id":null}]}`
+	if err := os.WriteFile(routing, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write routing: %v", err)
+	}
+	reader, writer, _ := os.Pipe()
+	saved := os.Stderr
+	os.Stderr = writer
+	renderErr := runRender(root, "", routing, "none", nil)
+	os.Stderr = saved
+	_ = writer.Close()
+	var printed bytes.Buffer
+	_, _ = io.Copy(&printed, reader)
+	if renderErr == nil || !strings.Contains(printed.String(), "R14-document-drift") {
+		t.Fatalf("-render must fail on R14 for a drifted live row; err=%v stderr=%s", renderErr, printed.String())
+	}
+	t.Logf("cell -render on a drifted live row -> err=%q, R14 printed: true", renderErr)
+}
+
+// opus r7 (mutant g36): -check's warning about rows it cannot judge was
+// unpinned. On the committed tree (whose snapshot predates document digests)
+// the real -check must pass AND say how many rows it could not judge.
+func TestCheckWarnsAboutRowsItCannotJudge(t *testing.T) {
+	err, printed := runCheckCapturingViolations(t, copyContractTree(t))
+	if err != nil {
+		t.Fatalf("the committed tree must pass -check: %v\n%s", err, printed)
+	}
+	if !strings.Contains(printed, "carry no document digest") {
+		t.Fatalf("-check must warn about rows it cannot judge for DOCUMENT_DRIFT; stderr:\n%s", printed)
+	}
+	t.Logf("cell committed tree -> -check passes and warns: %v", strings.Contains(printed, "carry no document digest"))
 }

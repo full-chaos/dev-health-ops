@@ -518,6 +518,10 @@ async def test_the_refusal_states_every_clause_of_the_rule(
         )
     err = capsys.readouterr().err
     for clause in (
+        # The route rule of THE MODE ASKED FOR (opus r7 P3-5: swapping the
+        # mode condition survived every suite and made the primary refusal
+        # state the canary rule -- a rule the refused receipt satisfies).
+        "measured on the edge route",
         "build_binding = 'per_request'",
         "NULL build_binding",
         "candidate_build",
@@ -647,3 +651,82 @@ async def test_status_renders_a_drifted_row_with_its_proof_and_its_document(
         False,
         True,
     ), f"--json misreports the catalog's row: {match_json}"
+
+
+@pytest.mark.asyncio
+async def test_the_canary_refusal_states_the_canary_route_rule(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of the route-rule pin: a canary refusal states the
+    canary rule ("a recorded route"), never the primary one."""
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route=None,
+        build_binding="per_request",
+    )
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="canary"))
+            == 2
+        )
+    err = capsys.readouterr().err
+    assert "measured on a recorded route" in err, err
+    assert "measured on the edge route" not in err, err
+
+
+@pytest.mark.asyncio
+async def test_status_names_an_unregistered_live_row_on_both_outputs(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """opus r7 (P2-1): a live row for an operation the catalog does not
+    register was named nowhere by `status`, text or `--json`, while the
+    migration page named it. Both outputs now carry it, unreachable."""
+    retired = "e" * 64
+    async with session_factory() as session:
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=retired,
+            selected_operation="retiredOperation",
+            candidate_build=BUILD,
+        )
+        session.add(
+            RoutingState(
+                schema_digest=current_schema_digest(),
+                document_digest=retired,
+                selected_operation="retiredOperation",
+                current_candidate_build=BUILD,
+                owner="go",
+                mode="primary",
+                rollout_percentage=100,
+            )
+        )
+        await session.commit()
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_status(
+                argparse.Namespace(query_api_url=url, json=False)
+            )
+            == 0
+        )
+    out = capsys.readouterr().out
+    line = [line for line in out.splitlines() if line.startswith("retiredOperation ")]
+    assert len(line) == 1 and "UNREGISTERED" in line[0], out
+    assert f"serving document {retired}" in out, out
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_status(
+                argparse.Namespace(query_api_url=url, json=True)
+            )
+            == 0
+        )
+    rows = [
+        r
+        for r in json.loads(capsys.readouterr().out)["operations"]
+        if r["operation"] == "retiredOperation"
+    ]
+    assert [(r["digest_state"], r["mode"], r["reachable"]) for r in rows] == [
+        ("UNREGISTERED", "primary", False)
+    ], rows

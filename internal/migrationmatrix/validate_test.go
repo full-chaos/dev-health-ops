@@ -372,7 +372,7 @@ func TestADocumentDriftRowIsNamedCountedAndFailsThePage(t *testing.T) {
 			servedLine = line
 		}
 	}
-	if !strings.Contains(driftedLine, "**DOCUMENT_DRIFT**") || !strings.Contains(driftedLine, "000000000000") {
+	if !strings.Contains(driftedLine, "**DOCUMENT_DRIFT**") || !strings.Contains(driftedLine, "`000000000000…`") {
 		t.Fatalf("the drifted row must render as DOCUMENT_DRIFT naming its document; got %q in:\n%s", driftedLine, block)
 	}
 	if strings.Contains(driftedLine, "UNPROVEN") {
@@ -757,4 +757,70 @@ func TestTheRoutingStatementCarriesNoVersionDependentLiteral(t *testing.T) {
 		t.Fatalf("the routing statement carries a backslash or an escape string that is not the generated literal:\n%s", rest)
 	}
 	t.Logf("cell RoutingStateSQL: %d escape-string literals, all numeric-only; backslashes or E-strings elsewhere: none", len(literals))
+}
+
+// opus r7 (P3-4, mutant g26): the Live derivation moved into
+// ParseRoutingSnapshot, and `Live: true` survived every suite -- a row at a
+// moved schema digest then rendered "yes" and the silent-fallback count read
+// 0: the 2026-09-01 silent death, on the page built to show it, all green.
+func TestParseRoutingSnapshotDerivesLiveFromTheSchemaDigest(t *testing.T) {
+	body := `{"proof_run_total":0,"rows":[` +
+		`{"selected_operation":"featureFlags","document_digest":"d","mode":"canary","schema_digest":"sha256:pin","current_candidate_build":"b","proof_run_id":null},` +
+		`{"selected_operation":"hotspots","document_digest":"h","mode":"canary","schema_digest":"sha256:moved","current_candidate_build":"b","proof_run_id":null}]}`
+	rows, _, err := ParseRoutingSnapshot([]byte(body), "sha256:pin")
+	if err != nil {
+		t.Fatalf("ParseRoutingSnapshot: %v", err)
+	}
+	live := map[string]bool{}
+	for _, row := range rows {
+		live[row.Operation] = row.Live
+	}
+	if !live["featureFlags"] || live["hotspots"] {
+		t.Fatalf("Live must be schema_digest == the pin: got %v", live)
+	}
+	if got := DeadReachable(rows); got != 1 {
+		t.Fatalf("DeadReachable = %d, want 1: the canary row at the moved digest is the silent-fallback row", got)
+	}
+	t.Logf("cell pin row -> live=%v ; moved-digest row -> live=%v ; silent-fallback count=%d", live["featureFlags"], live["hotspots"], DeadReachable(rows))
+}
+
+// opus r7 (mutant g28): the document tiebreak in ParseRoutingSnapshot's
+// sort. A hand-built -routing file need not be ordered, and the snapshot is
+// COMMITTED as last-render.json: without the tiebreak two documents of one
+// operation keep the file's order, so the same rows commit differently.
+func TestParseRoutingSnapshotOrdersRowsByTheFullRoutingKey(t *testing.T) {
+	body := `{"proof_run_total":0,"rows":[` +
+		`{"selected_operation":"featureFlags","document_digest":"doc-b","mode":"canary","schema_digest":"sha256:pin","current_candidate_build":"b","proof_run_id":null},` +
+		`{"selected_operation":"featureFlags","document_digest":"doc-a","mode":"primary","schema_digest":"sha256:pin","current_candidate_build":"b","proof_run_id":null}]}`
+	rows, _, err := ParseRoutingSnapshot([]byte(body), "sha256:pin")
+	if err != nil {
+		t.Fatalf("ParseRoutingSnapshot: %v", err)
+	}
+	if rows[0].DocumentDigest != "doc-a" || rows[1].DocumentDigest != "doc-b" {
+		t.Fatalf("rows are not ordered by (schema, operation, document): %s then %s", rows[0].DocumentDigest, rows[1].DocumentDigest)
+	}
+	t.Logf("cell input order doc-b,doc-a -> output order %s,%s", rows[0].DocumentDigest, rows[1].DocumentDigest)
+}
+
+// The R14 message names the state `routing status` reports and a remedy the
+// shipped tooling can perform (opus r7 P2-1, P3-2).
+func TestR14NamesTheStatusStateAndAnExecutableRemedy(t *testing.T) {
+	catalog := catalogFor(t, "featureFlags")
+	drifted := liveRow("featureFlags", "primary")
+	drifted.DocumentDigest = strings.Repeat("0", 64)
+	orphan := liveRow("retiredOperation", "primary")
+	for _, c := range []struct {
+		row   OperationRow
+		state string
+	}{{drifted, "reports it DOCUMENT_DRIFT"}, {orphan, "reports it UNREGISTERED"}} {
+		v := ValidateDocumentDrift(snapshot(c.row), catalog)
+		if len(v) != 1 || !strings.Contains(v[0].Detail, c.state) {
+			t.Fatalf("%s: R14 must say status %q, got %v", c.row.Operation, c.state, v)
+		}
+		remedy := "DELETE FROM go_api_routing_state WHERE schema_digest = '" + c.row.SchemaDigest + "' AND document_digest = '" + c.row.DocumentDigest + "' AND selected_operation = '" + c.row.Operation + "'"
+		if !strings.Contains(v[0].Detail, remedy) {
+			t.Fatalf("%s: R14 must name the full-key removal, got: %s", c.row.Operation, v[0].Detail)
+		}
+		t.Logf("cell %-16s R14 says %q and names the full-key removal", c.row.Operation, c.state)
+	}
 }

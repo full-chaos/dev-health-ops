@@ -39,7 +39,8 @@ Two commands, and the split between them is deliberate:
     digests and, per registered operation, whether that operation's row
     is ``MATCH`` / ``STALE`` / ``MISSING`` and whether it is ``UNPROVEN`` --
     plus, as a row of its own, any live row serving a document the catalog
-    does not name (``DOCUMENT_DRIFT``).
+    does not name (``DOCUMENT_DRIFT``) or an operation it does not register
+    (``UNREGISTERED``).
 
 HTTP here is ``urllib.request`` from the standard library, not ``httpx``:
 this is one small JSON GET, and keeping the module free of the web stack
@@ -758,7 +759,7 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
         # Printing `-` here told the operator nothing about the one row
         # they are being asked to notice, and the terminal disagreed with
         # `--json` on the same run (opus r5, P3).
-        if status.digest_state in ("MATCH", "DOCUMENT_DRIFT"):
+        if status.digest_state in ("MATCH", "DOCUMENT_DRIFT", "UNREGISTERED"):
             proof = "ok" if status.proven else "UNPROVEN"
         else:
             proof = "-"
@@ -778,6 +779,12 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
             print(
                 f"    serving document {status.document_digest} -- the catalog "
                 "does not name it, so the edge cannot dispatch this row"
+            )
+        if status.digest_state == "UNREGISTERED":
+            print(
+                f"    serving document {status.document_digest} -- the catalog "
+                "does not register this operation at all, so the edge cannot "
+                "dispatch this row"
             )
     return 0
 

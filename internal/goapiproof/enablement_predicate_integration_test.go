@@ -993,3 +993,55 @@ func TestTheGeneratedLiteralRoundTripsThroughPostgres(t *testing.T) {
 		t.Logf("cell %-24q PostgreSQL %s decodes the generated literal back to the input: true", value, version)
 	}
 }
+
+// opus r7 (P1-1), end to end through the real writer and the real reader:
+// a Go build returning NO hotspots rows wrote a receipt `enable --mode
+// primary` admitted. Here the same Runner writes the receipt with WriteAtomic
+// and the production predicate is asked, in both modes. The control is the
+// declared defect itself (value differences only), which must still prove --
+// otherwise the refusal could be a predicate that proves nothing.
+func TestAShapeDifferenceUnderACitationNeverBecomesProof(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+	python := `{"data":{"hotspots":{"rows":[{"filePath":"a.go","churnCommits30d":3},{"filePath":"b.go","churnCommits30d":2}]}}}`
+	build := "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	for _, cell := range []struct {
+		name, goBody string
+		proves       bool
+	}{
+		{"rows empty", `{"data":{"hotspots":{"rows":[]}}}`, false},
+		{"rows null", `{"data":{"hotspots":{"rows":null}}}`, false},
+		{"rows of empty objects", `{"data":{"hotspots":{"rows":[{},{}]}}}`, false},
+		{"control: value differences only", `{"data":{"hotspots":{"rows":[{"filePath":"a.go","churnCommits30d":9},{"filePath":"c.go","churnCommits30d":2}]}}}`, true},
+	} {
+		if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+			t.Fatalf("truncate: %v", err)
+		}
+		edge := &fakeEdge{goBody: cell.goBody, pythonBody: python, goBuild: build}
+		runner := newRunner(t, edge, "primary")
+		runner.Documents = map[string]string{"hotspots": "query Hotspots { hotspots { rows { filePath } } }"}
+		runner.Registry = RegistryView{SchemaDigest: "sha256:29d509cd", BuildIdentity: build, DocumentDigest: map[string]string{"hotspots": "6ccfcc78"}}
+		runner.Routing = map[string]RoutingRow{"hotspots": {Mode: "primary", CandidateBuild: build}}
+		if _, _, err := runner.Run(ctx); err != nil {
+			t.Fatalf("%s: Run: %v", cell.name, err)
+		}
+		receipts, err := runner.ReceiptsFor(time.Now().UTC())
+		if err != nil || len(receipts) != 1 {
+			t.Fatalf("%s: ReceiptsFor: %d, %v", cell.name, len(receipts), err)
+		}
+		if _, err := WriteAtomic(ctx, pool, receipts[0]); err != nil {
+			t.Fatalf("%s: WriteAtomic: %v", cell.name, err)
+		}
+		for _, mode := range []string{TargetModeCanary, TargetModePrimary} {
+			found, err := OperationsWithEnablementProof(ctx, pool, "sha256:29d509cd", build, mode, map[string]string{"hotspots": "6ccfcc78"})
+			if err != nil {
+				t.Fatalf("%s: read: %v", cell.name, err)
+			}
+			if found["hotspots"] != cell.proves {
+				t.Fatalf("%s mode=%s: the written receipt (outside=%d, cited=%v) proves=%v, want %v",
+					cell.name, mode, receipts[0].DifferencesOutsideBaselineDefect, receipts[0].BaselineDefects, found["hotspots"], cell.proves)
+			}
+			t.Logf("cell %-34s mode=%-7s written receipt outside=%d -> proves=%v", cell.name, mode, receipts[0].DifferencesOutsideBaselineDefect, found["hotspots"])
+		}
+	}
+}

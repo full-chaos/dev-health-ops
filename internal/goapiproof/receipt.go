@@ -440,9 +440,19 @@ func escapeStringLiteral(value string) string {
 //   - edge WITHOUT it, mismatch -> outside >= 1, so already excluded
 //
 // So "match or cited mismatch, from this writer" already implies
-// per_request. Saying it out loud costs nothing and closes the retroactive
-// window; a NULL binding now means what it is, a row written before the
-// column existed.
+// per_request. Saying it out loud closes the retroactive window; a NULL
+// binding now means what it is, a row written before the column existed.
+//
+// It is NOT free, and this comment used to say it was (opus r7 P3-3). The
+// base writer could not produce an UNBOUND match either -- the proof route
+// required the header and an unbound edge match was downgraded -- so the
+// pre-0129 MATCH rows were sound evidence, and this clause discards them
+// with the unsafe mismatches: after 0129 deploys, every operation proven
+// before it reads UNPROVEN on `routing status` and on the migration page,
+// and `enable` refuses it, until go-api-prove runs again at the deployed
+// build. That is the ruled trade (one uniform clause over a per-arm
+// exception nobody can audit); JOB 6's re-prove step is what restores the
+// proofs. Stated in the PR's RISK-NOTES and the Wave-0 runbook.
 //
 // A citation that names NOTHING is not a citation. `cardinality(ARRAY[”])`
 // is 1, so before the NOT EXISTS below a mismatch citing a single empty

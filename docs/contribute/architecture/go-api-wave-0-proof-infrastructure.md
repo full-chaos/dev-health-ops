@@ -276,6 +276,18 @@ build. The last of these is waivable with `--acknowledge-unproven`, which
 logs one warning per row and makes `status` report those rows as
 `UNPROVEN` for as long as they are in force.
 
+### After alembic 0129: every earlier proof reads UNPROVEN until re-proven
+
+The enablement rule requires `build_binding = 'per_request'` on every
+receipt, and rows written before 0129 carry `build_binding` NULL. So the
+moment 0129 is applied, **every operation proven before it reads UNPROVEN**
+on `dev-hops go-api routing status` and on the migration-status page, and
+`routing enable` refuses it -- including operations whose old receipt was a
+sound `match`. Nothing is lost from the table; the old receipts stay as
+history. Re-run `go-api-prove` at the deployed build (JOB 6's re-prove step
+does exactly this) and the new receipts, bound per request, restore the
+proofs. Do not `--acknowledge-unproven` around it.
+
 ### How this is now detected
 
 | Signal | Where | Fires when |

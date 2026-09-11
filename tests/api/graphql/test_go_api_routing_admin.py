@@ -591,6 +591,78 @@ async def test_status_reports_a_drifted_document_by_name_not_as_match(
 
 
 @pytest.mark.asyncio
+async def test_status_names_a_live_row_whose_operation_the_catalog_does_not_register(
+    session: AsyncSession,
+) -> None:
+    """opus r7 (P2-1): status iterated the CATALOG, so a live row for an
+    operation the catalog no longer registers (renamed or retired) was named
+    nowhere -- only counted in the per-digest totals -- while the edge cannot
+    dispatch it and the migration page names it. Every live row the edge
+    cannot dispatch gets a row of its own: ``UNREGISTERED``, with its own
+    document, mode and proof, and never reachable.
+    """
+    retired_document = "e" * 64
+    await enable_operation(
+        session,
+        schema_digest=LIVE,
+        document_digest=retired_document,
+        selected_operation="retiredOperation",
+        candidate_build=BUILD,
+        mode="primary",
+    )
+    await session.commit()
+
+    statuses = await routing_status_rows(
+        session, live_schema_digest=LIVE, catalog=CATALOG
+    )
+    named = [s for s in statuses if s.operation == "retiredOperation"]
+    assert [(s.digest_state, s.document_digest, s.mode) for s in named] == [
+        ("UNREGISTERED", retired_document, "primary")
+    ], f"a live row the catalog does not register must be named: {named}"
+    assert named[0].reachable is False
+    # The catalog's own operations are unaffected: each is still reported.
+    assert {s.operation for s in statuses} >= {op for op, _ in CATALOG}
+
+
+@pytest.mark.asyncio
+async def test_one_operation_at_two_catalog_documents_is_two_matches_not_drift(
+    session: AsyncSession,
+) -> None:
+    """opus r7 (P3-1): both loaders accept a catalog naming one operation at
+    two documents, and the drift subtraction removed only the CURRENT
+    catalog entry's digest -- so each catalog document flagged the other as
+    DOCUMENT_DRIFT, and each document was reported both MATCH and drifted.
+    A document the catalog names is never drift.
+    """
+    operation = CATALOG[0][0]
+    doc_a, doc_b = "1" * 64, "2" * 64
+    for document, mode in ((doc_a, "canary"), (doc_b, "primary")):
+        await enable_operation(
+            session,
+            schema_digest=LIVE,
+            document_digest=document,
+            selected_operation=operation,
+            candidate_build=BUILD,
+            mode=mode,
+        )
+    await session.commit()
+
+    statuses = await routing_status_rows(
+        session,
+        live_schema_digest=LIVE,
+        catalog=[(operation, doc_a), (operation, doc_b)],
+    )
+    states = sorted(
+        (s.document_digest[:1], s.digest_state)
+        for s in statuses
+        if s.operation == operation
+    )
+    assert states == [("1", "MATCH"), ("2", "MATCH")], (
+        f"each catalog document must be reported once, as MATCH: {states}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_disable_plans_against_the_catalogs_document(
     session: AsyncSession,
 ) -> None:

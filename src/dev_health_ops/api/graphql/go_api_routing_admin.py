@@ -174,6 +174,10 @@ class OperationStatus:
       carries a DOCUMENT digest the catalog no longer names. It gets its
       OWN status row, carrying its own ``document_digest`` and ``mode``,
       so the operator sees which digest is actually in the table.
+    * ``UNREGISTERED`` -- a row exists at the LIVE schema digest for an
+      operation the catalog does not register at all (renamed or retired).
+      Its own status row too: iterating the catalog alone named it
+      nowhere (opus r7, P2-1).
 
     ``DOCUMENT_DRIFT`` is the silent-death shape one level down: the edge
     resolves a request to an operation through the catalog, so such a row
@@ -565,10 +569,13 @@ def _admissible_terminal_state() -> ColumnElement[bool]:
         # no replica and possibly carrying an uncited HTTP difference.
         # Those are the pre-0129 rows: build_binding IS NULL.
         #
-        # per_request excludes exactly them and nothing this writer
-        # produces: the proof route always binds per request, an edge
-        # match without the header is downgraded to `unsupported`, and an
-        # edge mismatch without it already has outside >= 1.
+        # per_request excludes them and nothing this writer produces: the
+        # proof route always binds per request, an edge match without the
+        # header is downgraded to `unsupported`, and an edge mismatch
+        # without it already has outside >= 1. It ALSO excludes the sound
+        # pre-0129 MATCH rows (opus r7 P3-3): after 0129 every operation
+        # proven before it reads UNPROVEN and `enable` refuses it until
+        # go-api-prove re-runs at the deployed build (JOB 6 does).
         ProofRun.build_binding == BUILD_BINDING_PER_REQUEST,
         _terminal_state_admits(),
     )
@@ -830,7 +837,16 @@ async def routing_status_rows(
         # build or a target mode.
         proven |= {(operation, operations[operation]) for operation in found}
 
+    # Every document the catalog registers per operation. A drifted row is a
+    # live row at a document the catalog does not name AT ALL -- subtracting
+    # only the current entry's digest made each of two registered documents
+    # flag the other as drift (opus r7, P3-1).
+    catalog_documents: dict[str, set[str]] = {}
+    for operation, document_digest in catalog:
+        catalog_documents.setdefault(operation, set()).add(document_digest)
+
     statuses: list[OperationStatus] = []
+    reported_drift: set[tuple[str, str]] = set()
     for operation, document_digest in catalog:
         # The catalog's EXACT document, never whichever row carries this
         # operation name.
@@ -879,8 +895,12 @@ async def routing_status_rows(
         # and reading them as one would repeat, one level down, the
         # collapsing this whole change exists to stop.
         for drifted_digest in sorted(
-            live_documents_by_operation.get(operation, set()) - {document_digest}
+            live_documents_by_operation.get(operation, set())
+            - catalog_documents[operation]
         ):
+            if (operation, drifted_digest) in reported_drift:
+                continue
+            reported_drift.add((operation, drifted_digest))
             drifted_row = live_by_document[(operation, drifted_digest)]
             statuses.append(
                 OperationStatus(
@@ -895,4 +915,27 @@ async def routing_status_rows(
                     proven=(operation, drifted_digest) in proven,
                 )
             )
+
+    # A live row for an operation the catalog does not register at all
+    # (renamed or retired) cannot be dispatched either -- the edge resolves
+    # a request to an operation THROUGH the catalog -- and iterating the
+    # catalog named it nowhere, while the migration page named it (opus r7,
+    # P2-1). Its own state, its own row, after the catalog's.
+    for operation, document_digest in sorted(live_by_document):
+        if operation in catalog_documents:
+            continue
+        row = live_by_document[(operation, document_digest)]
+        statuses.append(
+            OperationStatus(
+                operation=operation,
+                document_digest=document_digest,
+                digest_state="UNREGISTERED",
+                mode=row.mode,
+                current_candidate_build=row.current_candidate_build,
+                rollout_percentage=row.rollout_percentage,
+                owner=row.owner,
+                updated_at=row.updated_at,
+                proven=(operation, document_digest) in proven,
+            )
+        )
     return statuses

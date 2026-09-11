@@ -325,13 +325,23 @@ func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
 		if !DocumentDrift(row, catalog) {
 			continue
 		}
-		want := "the catalog does not register this operation at all"
+		// The state `dev-hops go-api routing status` names for this row:
+		// DOCUMENT_DRIFT when the catalog registers the operation at another
+		// document, UNREGISTERED when it does not register the operation at
+		// all (opus r7 P2-1: this message used to claim DOCUMENT_DRIFT for
+		// both, and status named the second nowhere).
+		want, state := "the catalog does not register this operation at all", "UNREGISTERED"
 		if names := catalog.Documents(row.Operation); len(names) > 0 {
-			want = "the catalog names " + strings.Join(names, ", ")
+			want, state = "the catalog names "+strings.Join(names, ", "), "DOCUMENT_DRIFT"
 		}
+		// The remedy is the one the shipped verbs can perform (opus r7
+		// P3-2): `disable` keys on the CATALOG's document, so it cannot
+		// reach this row, and re-enabling writes the catalog's row beside
+		// it. Until a disable-by-document verb exists, the row is removed by
+		// its full key.
 		out = append(out, Violation{row.Operation, "R14-document-drift",
-			fmt.Sprintf("a live %s row at digest %s serves document %s, but %s: the edge resolves requests through the catalog, so this row cannot be dispatched and every request for it is served elsewhere. `dev-hops go-api routing status` reports it DOCUMENT_DRIFT. Disable it, or re-enable at the catalog's document, then re-render",
-				row.Mode, row.SchemaDigest, row.DocumentDigest, want)})
+			fmt.Sprintf("a live %s row at digest %s serves document %s, but %s: the edge resolves requests through the catalog, so this row cannot be dispatched and every request for it is served elsewhere. `dev-hops go-api routing status` reports it %s. No shipped verb reaches it (`routing disable` keys on the catalog's document): remove it by its full key -- DELETE FROM go_api_routing_state WHERE schema_digest = '%s' AND document_digest = '%s' AND selected_operation = '%s' -- then re-render",
+				row.Mode, row.SchemaDigest, row.DocumentDigest, want, state, row.SchemaDigest, row.DocumentDigest, row.Operation)})
 	}
 	return out
 }

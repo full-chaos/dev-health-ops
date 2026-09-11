@@ -155,11 +155,28 @@ type Config struct {
 	QueueDatabaseURI       secrets.Value
 	CoordinatorDatabaseURI secrets.Value
 	ClickHouseURI          secrets.Value
-	ValkeyURI              secrets.Value
-	SettingsEncryptionKey  secrets.Value
-	SettingsEncryptionSalt secrets.Value
-	PagerDutyOAuthClientID secrets.Value
-	PagerDutyOAuthSecret   secrets.Value
+	// CHAOS-5560 (chris's ruling, round 4, 2026-09-11): successful
+	// resolution previously left only a boolean ("*_database_configured")
+	// observable -- which of the two DSN forms was actually honored, and
+	// which database an operator's config ultimately reaches, was invisible
+	// at Info. Neither field ever carries a credential: Form is the literal
+	// "uri" or "components"; Name is the identifier segment of the already-
+	// assembled DSN (its URL path with the leading "/" trimmed), the same
+	// value a bare `psql`/`clickhouse-client` invocation would show in its
+	// own prompt, never the DSN itself.
+	DomainDatabaseForm      string
+	DomainDatabaseName      string
+	QueueDatabaseForm       string
+	QueueDatabaseName       string
+	CoordinatorDatabaseForm string
+	CoordinatorDatabaseName string
+	ClickHouseForm          string
+	ClickHouseName          string
+	ValkeyURI               secrets.Value
+	SettingsEncryptionKey   secrets.Value
+	SettingsEncryptionSalt  secrets.Value
+	PagerDutyOAuthClientID  secrets.Value
+	PagerDutyOAuthSecret    secrets.Value
 
 	QueueDatabaseMode           QueueControlMode
 	CoordinatorDatabaseMode     QueueControlMode
@@ -396,18 +413,20 @@ func Load(spec Spec) (Config, error) {
 	// rather than silently picking one. Neither set keeps today's
 	// "%s is required" behavior unchanged.
 	dsnBindings := []struct {
-		rawKey string
-		spec   ComponentSpec
-		target *secrets.Value
+		rawKey     string
+		spec       ComponentSpec
+		target     *secrets.Value
+		formTarget *string
+		nameTarget *string
 	}{
-		{rawKey: "POSTGRES_URI", spec: DomainDatabaseSpec, target: &cfg.DomainDatabaseURI},
-		{rawKey: "WORKER_DATABASE_URI", spec: QueueDatabaseSpec, target: &cfg.QueueDatabaseURI},
+		{rawKey: "POSTGRES_URI", spec: DomainDatabaseSpec, target: &cfg.DomainDatabaseURI, formTarget: &cfg.DomainDatabaseForm, nameTarget: &cfg.DomainDatabaseName},
+		{rawKey: "WORKER_DATABASE_URI", spec: QueueDatabaseSpec, target: &cfg.QueueDatabaseURI, formTarget: &cfg.QueueDatabaseForm, nameTarget: &cfg.QueueDatabaseName},
 		// COORDINATOR_DATABASE_URI is optional here on purpose: only
 		// coordinator binaries require it, and they enforce that themselves
 		// through postgres.RuntimeConfig.RequireCoordinator. A domain-only
 		// worker must not fail to start merely because this is unset.
-		{rawKey: "COORDINATOR_DATABASE_URI", spec: CoordinatorDatabaseSpec, target: &cfg.CoordinatorDatabaseURI},
-		{rawKey: "CLICKHOUSE_URI", spec: ClickHouseSpec, target: &cfg.ClickHouseURI},
+		{rawKey: "COORDINATOR_DATABASE_URI", spec: CoordinatorDatabaseSpec, target: &cfg.CoordinatorDatabaseURI, formTarget: &cfg.CoordinatorDatabaseForm, nameTarget: &cfg.CoordinatorDatabaseName},
+		{rawKey: "CLICKHOUSE_URI", spec: ClickHouseSpec, target: &cfg.ClickHouseURI, formTarget: &cfg.ClickHouseForm, nameTarget: &cfg.ClickHouseName},
 	}
 	for _, binding := range dsnBindings {
 		value, _, resolveErr := ResolveDSN(lookup, binding.rawKey, binding.spec)
@@ -415,6 +434,25 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, resolveErr
 		}
 		*binding.target = value
+		if !value.Configured() {
+			continue
+		}
+		// CHAOS-5560 round 4: which FORM won is exactly what hostSet decided
+		// inside ResolveDSN -- recomputed here the same way (a set, non-empty
+		// HostKey), never guessed from the assembled DSN's shape. Name is the
+		// identifier segment only (the assembled URI's path, leading "/"
+		// trimmed); a parse failure here is unreachable in practice (the
+		// value only ever comes from ResolveDSN, which already round-trips
+		// it through url.Parse before returning), so it degrades to "" rather
+		// than failing Load() over an observability field.
+		if host, present := lookup(binding.spec.HostKey); present && host != "" {
+			*binding.formTarget = "components"
+		} else {
+			*binding.formTarget = "uri"
+		}
+		if parsed, parseErr := url.Parse(value.Reveal()); parseErr == nil {
+			*binding.nameTarget = strings.TrimPrefix(parsed.Path, "/")
+		}
 	}
 	cfg.OperationalBridgeURL = envOrDefault(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_URL", "",
@@ -633,6 +671,13 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("domain_database_configured", c.DomainDatabaseURI.Configured()),
 		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),
 		slog.Bool("queue_database_configured", c.QueueDatabaseURI.Configured()),
+		// CHAOS-5560 round 4 (chris's ruling): a successful resolution used
+		// to leave only the booleans above observable -- which of the two
+		// DSN forms actually won, and which database an operator's config
+		// reaches, was invisible at Info, so selecting the wrong (but
+		// reachable) database was a silent regression. Neither field is a
+		// credential: Form is the literal "uri"/"components"; Name is the
+		// identifier segment of the already-assembled DSN.
 		slog.String("queue_database_mode", string(c.QueueDatabaseMode)),
 		slog.String("coordinator_database_mode", string(c.CoordinatorDatabaseMode)),
 		slog.String("river_database_schema", c.RiverDatabaseSchema),
@@ -681,6 +726,26 @@ func (c Config) SafeAttrs() []slog.Attr {
 			slog.String("worker_group", c.WorkerGroup),
 			slog.String("queue_workers", formatQueueConcurrency(c.WorkerQueueConcurrency)),
 		)
+	}
+	// CHAOS-5560 round 4: emitted only for a DSN that actually resolved --
+	// an unconfigured DSN already reports "false" above and has no form or
+	// database identifier to name.
+	for _, observed := range []struct {
+		configured bool
+		formKey    string
+		form       string
+		nameKey    string
+		name       string
+	}{
+		{c.DomainDatabaseURI.Configured(), "domain_database_form", c.DomainDatabaseForm, "domain_database_name", c.DomainDatabaseName},
+		{c.QueueDatabaseURI.Configured(), "queue_database_form", c.QueueDatabaseForm, "queue_database_name", c.QueueDatabaseName},
+		{c.CoordinatorDatabaseURI.Configured(), "coordinator_database_form", c.CoordinatorDatabaseForm, "coordinator_database_name", c.CoordinatorDatabaseName},
+		{c.ClickHouseURI.Configured(), "clickhouse_form", c.ClickHouseForm, "clickhouse_name", c.ClickHouseName},
+	} {
+		if !observed.configured {
+			continue
+		}
+		attrs = append(attrs, slog.String(observed.formKey, observed.form), slog.String(observed.nameKey, observed.name))
 	}
 	return attrs
 }

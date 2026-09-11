@@ -360,6 +360,44 @@ func TestSafeAttrsNeverContainSecretsOrDSNs(t *testing.T) {
 	}
 }
 
+// TestSafeAttrsReportFormAndNameOfEachResolvedDSN is round 4's (2026-09-11)
+// observability requirement (chris's ruling): a successful resolution used
+// to leave only "*_database_configured=true" observable -- which of the
+// two DSN forms actually won, and which database an operator's config
+// reaches, was invisible at Info, so silently selecting the wrong
+// (but reachable) database was a regression no one could see without
+// reading the DSN itself. Neither new field is a credential.
+func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(workerSpec(map[string]string{
+		"POSTGRES_URI":                 "postgresql://app:app@db.internal:5432/appdb",
+		"DEV_HEALTH_PG_QUEUE_HOST":     "queue.internal",
+		"DEV_HEALTH_PG_QUEUE_USER":     "app",
+		"DEV_HEALTH_PG_QUEUE_PASSWORD": "app",
+		"DEV_HEALTH_PG_DB":             "queuedb",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := fmt.Sprint(cfg.SafeAttrs())
+	for _, want := range []string{
+		"domain_database_form=uri", "domain_database_name=appdb",
+		"queue_database_form=components", "queue_database_name=queuedb",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("safe attrs missing %q: %s", want, text)
+		}
+	}
+	// Coordinator and ClickHouse were never configured in this Spec --
+	// neither field is emitted for a DSN that never resolved.
+	for _, absent := range []string{"coordinator_database_form", "coordinator_database_name", "clickhouse_form", "clickhouse_name"} {
+		if strings.Contains(text, absent) {
+			t.Fatalf("safe attrs emitted %q for an unconfigured DSN: %s", absent, text)
+		}
+	}
+}
+
 func TestQueueControlAndRetentionDefaults(t *testing.T) {
 	t.Parallel()
 

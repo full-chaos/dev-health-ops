@@ -85,7 +85,7 @@ def _column_defaults(engine: Engine, table: str) -> dict[str, str | None]:
             ),
             {"t": table},
         ).all()
-    return dict(rows)
+    return {name: default for name, default in rows}
 
 
 def _constraints(engine: Engine, table: str) -> set[str]:

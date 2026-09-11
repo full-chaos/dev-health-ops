@@ -1563,9 +1563,18 @@ def test_go_workers_run_at_one_replica_by_default() -> None:
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     for process, service_name in _SPLIT_COMPOSE_SERVICE_BY_PROCESS.items():
         deploy = services[service_name].get("deploy") or {}
-        assert deploy.get("replicas") == 1, (
+        replicas = deploy.get("replicas")
+        # r6/r7 P3 (executed repro): `replicas == 1` alone accepts `True`
+        # (bool is an int subclass, `True == 1`) -- a `replicas: true`
+        # mutation SURVIVED this exact assertion on every one of the nine
+        # processes. Exclude bool explicitly.
+        assert (
+            isinstance(replicas, int)
+            and not isinstance(replicas, bool)
+            and replicas == 1
+        ), (
             f"{service_name} (registry process {process!r}) must default to "
-            f"deploy.replicas: 1, got {deploy.get('replicas')!r}"
+            f"deploy.replicas: 1 (an int, not a bool), got {replicas!r}"
         )
 
 
@@ -1584,8 +1593,12 @@ def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     postgres_env = services["postgres"]["environment"]
-    assert postgres_env["POSTGRES_USER"] == "postgres"
-    assert postgres_env["POSTGRES_PASSWORD"] == "postgres"
+    # r6/r7 P1 (executed repro, class sweep): go-river-provision/migrate's
+    # entrypoints already read POSTGRES_USER/_PASSWORD overrides to
+    # authenticate against this exact server -- only the server itself
+    # hardcoded past them (same class as POSTGRES_DB below).
+    assert postgres_env["POSTGRES_USER"] == "${POSTGRES_USER:-postgres}"
+    assert postgres_env["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD:-postgres}"
     # r5 P1 (executed repro): every downstream consumer below already reads
     # ${POSTGRES_DB:-postgres} -- the actual server that CREATES the
     # database at first init was the one hardcoded literal, so overriding
@@ -1810,9 +1823,13 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
             f"go-reconciler healthcheck {duration_key!r}={value!r} must be a "
             "positive Compose duration (e.g. '15s'), not zero/negative/malformed"
         )
-    assert isinstance(healthcheck["retries"], int) and healthcheck["retries"] > 0, (
-        f"go-reconciler healthcheck retries={healthcheck['retries']!r} must be "
-        "a positive integer"
+    # r6/r7 P3 (executed repro): `isinstance(x, int)` alone accepts `True`
+    # (bool is an int subclass in Python, and `True == 1`) -- a
+    # `retries: true` mutation SURVIVED this exact assertion. Exclude bool
+    # explicitly.
+    retries = healthcheck["retries"]
+    assert isinstance(retries, int) and not isinstance(retries, bool) and retries > 0, (
+        f"go-reconciler healthcheck retries={retries!r} must be a positive integer, not a bool"
     )
 
     for other_name, other_spec in services.items():
@@ -1867,6 +1884,34 @@ def test_go_operator_target_services_declare_a_nonempty_command() -> None:
             f"{name}'s command {command!r} no longer starts with "
             "['routes', 'apply'] -- update this assertion if that's a "
             "deliberate change to what the operator binary is invoked to do"
+        )
+        # r6/r7 P3 (executed repro): a prefix-only check (`command[:2]`)
+        # accepts the bare two-element `["routes", "apply"]` -- the exact
+        # invalid_request-shaped command the round constructed, which the
+        # real binary refuses at runtime. Pin the FULL shape: --reason and
+        # --correlation-id flags present, and a real kind as the last
+        # argument (never one of the four canonical kinds by coincidence
+        # -- OUT_OF_VOCABULARY_KIND below is deliberately not one of them,
+        # this list is exhaustive of what compose.yml currently ships).
+        assert (
+            len(command) == 7
+            and command[2] == "--reason"
+            and command[4] == "--correlation-id"
+        ), (
+            f"{name}'s command {command!r} is missing --reason/--correlation-id "
+            "or extra/missing arguments -- the bare ['routes', 'apply'] shape "
+            "fails at runtime with {'error': {'code': 'invalid_request'}}"
+        )
+        valid_kinds = {
+            "dispatch_sync_run",
+            "finalize_sync_run",
+            "post_sync",
+            "reference_discovery",
+        }
+        assert command[-1] in valid_kinds, (
+            f"{name}'s command ends in {command[-1]!r}, not one of the four "
+            f"canonical kinds {sorted(valid_kinds)} -- update this list if a "
+            "kind was deliberately added/renamed"
         )
 
 

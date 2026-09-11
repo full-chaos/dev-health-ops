@@ -95,6 +95,16 @@ func TestConfigurationFailureIsSanitized(t *testing.T) {
 	if strings.Contains(stderr.String(), secret) || strings.Contains(stderr.String(), "do-not-print") {
 		t.Fatalf("configuration error leaked secret: %s", stderr.String())
 	}
+	// CHAOS-5560 round 6 ruling: every entry point's configuration-error
+	// diagnostic is now valid JSON via config.WriteConfigError, the same
+	// shared writer cmd/dev-health-workerctl and
+	// cmd/dev-health-worker-migrate use.
+	if !json.Valid([]byte(strings.TrimSpace(stderr.String()))) {
+		t.Fatalf("configuration error was not emitted as valid JSON: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `"code":"configuration_error"`) {
+		t.Fatalf("expected the stable configuration_error code, got: %s", stderr.String())
+	}
 }
 
 // TestProfileResolutionOwnsFlagEnvDefaultAndMembership pins the resolution

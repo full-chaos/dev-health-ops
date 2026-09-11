@@ -382,12 +382,18 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 	}
 	text := fmt.Sprint(cfg.SafeAttrs())
 	for _, want := range []string{
-		"domain_database_form=uri", "domain_database_name=appdb",
+		"domain_database_form=uri",
 		"queue_database_form=components", "queue_database_name=queuedb",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("safe attrs missing %q: %s", want, text)
 		}
+	}
+	// Round 6 ruling: the pre-built-URI form NEVER has a Name -- chris's
+	// "no parsing of a URI for telemetry" rule -- so domain_database_name
+	// must be entirely absent, not an empty string.
+	if strings.Contains(text, "domain_database_name") {
+		t.Fatalf("safe attrs emitted a Name for the URI form, which must never be parsed for telemetry: %s", text)
 	}
 	// Coordinator and ClickHouse were never configured in this Spec --
 	// neither field is emitted for a DSN that never resolved.
@@ -398,50 +404,45 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 	}
 }
 
-// TestObservableDatabaseNameNeverLeaksParsingArtifacts is round 5's
-// (2026-09-11) findings #1 and #3, reproduced then fixed: (1) a malformed
-// pre-built URI can still "successfully" parse with net/url attributing
-// authority-shaped content to Path -- proven with a concrete input that
-// round-trips byte-for-byte yet is not a real database name; (2)
-// PostgreSQL's own `dbname` query parameter overrides the URL path for
-// which database a connection actually reaches, so Path-only extraction
-// can name a different database than the one really connected to.
-func TestObservableDatabaseNameNeverLeaksParsingArtifacts(t *testing.T) {
+// TestComponentDatabaseNameNeverParsesAURI is round 6's (2026-09-11)
+// ruling, replacing round 5's parse-and-sanitize approach entirely: no
+// telemetry field is ever derived by parsing a DSN. ComponentDatabaseName
+// reads the separate, non-secret DBKey env value directly -- proven here
+// by handing it a lookup where the ONLY sensible value comes from that
+// key, including a case where a raw MIGRATION_DATABASE_URI-shaped
+// pre-built value is ALSO present in the same environment (component
+// resolution never even looks at it for this purpose).
+func TestComponentDatabaseNameNeverParsesAURI(t *testing.T) {
 	t.Parallel()
 
-	for name, tc := range map[string]struct {
-		raw  string
-		want string
-	}{
-		"well-formed URI -- path is the name": {
-			raw: "postgresql://app:app@db.internal:5432/appdb", want: "appdb",
-		},
-		"dbname query param overrides the path -- the real connection target": {
-			raw: "postgresql://app:app@db.internal:5432/postgres?dbname=review", want: "review",
-		},
-		"ambiguous parse that round-trips true is still refused": {
-			// net/url parses this as host="word", path="/extra@host:5432/realdb"
-			// -- a second unescaped '@' the parser treats as another host
-			// boundary -- and String() reproduces the exact input, so the
-			// round-trip check alone does not catch it; the character
-			// denylist does.
-			raw: "postgresql://user:pass@word/extra@host:5432/realdb", want: "",
-		},
-		"unescaped userinfo delimiter fails to round-trip -- refused": {
-			raw: "postgresql://user:pa@ss@host:5432/realdb", want: "",
-		},
-		"malformed URI that fails to parse at all -- refused": {
-			raw: "postgresql://user:sec/ret@host:5432/realdb", want: "",
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			got := ObservableDatabaseName(tc.raw)
-			if got != tc.want {
-				t.Fatalf("ObservableDatabaseName(%q) = %q, want %q", tc.raw, got, tc.want)
-			}
-		})
-	}
+	t.Run("reads the DBKey value directly", func(t *testing.T) {
+		t.Parallel()
+		got := ComponentDatabaseName(lookup(map[string]string{
+			"DEV_HEALTH_PG_DOMAIN_DB": "appdb",
+		}), ComponentSpec{DBKey: "DEV_HEALTH_PG_DOMAIN_DB", DefaultDB: "postgres"})
+		if got != "appdb" {
+			t.Fatalf("got %q, want %q", got, "appdb")
+		}
+	})
+
+	t.Run("falls back to DefaultDB when unset", func(t *testing.T) {
+		t.Parallel()
+		got := ComponentDatabaseName(lookup(nil), ComponentSpec{DBKey: "DEV_HEALTH_PG_DOMAIN_DB", DefaultDB: "postgres"})
+		if got != "postgres" {
+			t.Fatalf("got %q, want %q", got, "postgres")
+		}
+	})
+
+	t.Run("never influenced by an unrelated raw URI in the same environment", func(t *testing.T) {
+		t.Parallel()
+		got := ComponentDatabaseName(lookup(map[string]string{
+			"DEV_HEALTH_PG_DOMAIN_DB": "appdb",
+			"POSTGRES_URI":            "postgresql://user:pass@word/extra@host:5432/realdb",
+		}), ComponentSpec{DBKey: "DEV_HEALTH_PG_DOMAIN_DB", DefaultDB: "postgres"})
+		if got != "appdb" {
+			t.Fatalf("got %q, want %q -- must never be influenced by an unrelated raw URI", got, "appdb")
+		}
+	})
 }
 
 func TestQueueControlAndRetentionDefaults(t *testing.T) {
@@ -1491,6 +1492,78 @@ func TestWhitespaceOnlyPasswordIsDetectedAndAuthenticates(t *testing.T) {
 	if !ok || got != "   " {
 		t.Fatalf("whitespace-only password round-trip failed: got %q (present=%v), want %q", got, ok, "   ")
 	}
+}
+
+// TestWhitespaceOnlyFileSourcedCredentialsAreDetected is round 6's explicit
+// cell for round 4/5's whitespace-detection fix: a whitespace-only
+// PASSWORD or USER delivered via its `_FILE` form (a mounted secret file
+// containing only spaces, no trailing newline) must be detected exactly
+// the same way as one supplied directly -- secrets.Resolve applies the
+// identical Configured() predicate regardless of source.
+func TestWhitespaceOnlyFileSourcedCredentialsAreDetected(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	passwordFile := dir + "/password"
+	if err := os.WriteFile(passwordFile, []byte("   "), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	userFile := dir + "/user"
+	if err := os.WriteFile(userFile, []byte("   "), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("whitespace-only PASSWORD_FILE alongside a raw URI is refused", func(t *testing.T) {
+		t.Parallel()
+		_, err := Load(workerSpec(map[string]string{
+			"POSTGRES_URI":                       "postgresql://old:old@old.invalid:5432/old",
+			"DEV_HEALTH_PG_DOMAIN_HOST":          "db.internal",
+			"DEV_HEALTH_PG_DOMAIN_USER":          "app",
+			"DEV_HEALTH_PG_DOMAIN_PASSWORD_FILE": passwordFile,
+			"WORKER_DATABASE_URI":                "postgresql://app:app@db.internal:5432/appdb",
+		}))
+		if err == nil ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_PASSWORD_FILE") ||
+			!strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_PG_DOMAIN_PASSWORD_FILE, got: %v", err)
+		}
+	})
+
+	t.Run("whitespace-only PASSWORD_FILE preserved exactly via the component form", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := Load(workerSpec(map[string]string{
+			"DEV_HEALTH_PG_DOMAIN_HOST":          "db.internal",
+			"DEV_HEALTH_PG_DOMAIN_USER":          "app",
+			"DEV_HEALTH_PG_DOMAIN_PASSWORD_FILE": passwordFile,
+			"WORKER_DATABASE_URI":                "postgresql://app:app@db.internal:5432/appdb",
+		}))
+		if err != nil {
+			t.Fatalf("expected success, got: %v", err)
+		}
+		parsed, parseErr := url.Parse(cfg.DomainDatabaseURI.Reveal())
+		if parseErr != nil {
+			t.Fatalf("assembled URI does not parse: %v", parseErr)
+		}
+		got, ok := parsed.User.Password()
+		if !ok || got != "   " {
+			t.Fatalf("whitespace-only PASSWORD_FILE round-trip failed: got %q (present=%v)", got, ok)
+		}
+	})
+
+	t.Run("whitespace-only USER_FILE alongside a raw URI is refused", func(t *testing.T) {
+		t.Parallel()
+		_, err := Load(workerSpec(map[string]string{
+			"POSTGRES_URI":                   "postgresql://old:old@old.invalid:5432/old",
+			"DEV_HEALTH_PG_DOMAIN_HOST":      "db.internal",
+			"DEV_HEALTH_PG_DOMAIN_USER_FILE": userFile,
+			"WORKER_DATABASE_URI":            "postgresql://app:app@db.internal:5432/appdb",
+		}))
+		if err == nil ||
+			!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_USER_FILE") ||
+			!strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_PG_DOMAIN_USER_FILE, got: %v", err)
+		}
+	})
 }
 
 // TestFileReadFailureNeverEchoesTheConfiguredPath is round 4's (2026-09-11)

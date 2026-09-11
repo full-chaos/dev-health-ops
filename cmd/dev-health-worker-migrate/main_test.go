@@ -227,6 +227,9 @@ func TestExecuteRequiresThreeSeparatedRolesBeforeConnecting(t *testing.T) {
 					t.Fatalf("stderr leaked %q: %s", secret, stderr.String())
 				}
 			}
+			if !json.Valid([]byte(strings.TrimSpace(strings.SplitN(stderr.String(), "\n", 2)[0]))) {
+				t.Fatalf("configuration error was not emitted as valid JSON: %s", stderr.String())
+			}
 		})
 	}
 }
@@ -234,29 +237,61 @@ func TestExecuteRequiresThreeSeparatedRolesBeforeConnecting(t *testing.T) {
 // TestExecuteEmitsAnInfoRecordOfTheResolvedForm is round 5's (2026-09-11)
 // finding #5, reproduced then fixed: a successful resolution returned with
 // no observable record of which form (uri|components) or database it
-// reached, at all. The DSN itself (and its credentials) must never appear
-// in that record.
+// reached, at all. Round 6's ruling (chris): the URI form's record names
+// ONLY the form, never a database identifier parsed out of the DSN --
+// only the component form's record includes a database name, read
+// directly from the env key. The DSN itself (and its credentials) must
+// never appear in either record.
 func TestExecuteEmitsAnInfoRecordOfTheResolvedForm(t *testing.T) {
 	t.Parallel()
 
-	var stdout, stderr bytes.Buffer
-	status := execute(context.Background(), []string{"--check"}, env(map[string]string{
-		"MIGRATION_DATABASE_URI":     "postgresql://migration:s3cr3t@unreachable.invalid:5432/migrationdb",
-		"RIVER_DOMAIN_DATABASE_ROLE": "domain",
-		"RIVER_QUEUE_DATABASE_ROLE":  "queue",
-	}), &stdout, &stderr)
-	if status != 1 {
-		t.Fatalf("execute() = %d, want 1 (unreachable database)", status)
-	}
-	out := stderr.String()
-	if !strings.Contains(out, `"msg":"migration database resolved"`) ||
-		!strings.Contains(out, `"form":"uri"`) ||
-		!strings.Contains(out, `"database":"migrationdb"`) {
-		t.Fatalf("expected the resolution Info record, got: %s", out)
-	}
-	if strings.Contains(out, "s3cr3t") || strings.Contains(out, "postgresql://") {
-		t.Fatalf("the resolution Info record leaked the DSN or a credential: %s", out)
-	}
+	t.Run("URI form -- form only, no database name is ever parsed from the DSN", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		status := execute(context.Background(), []string{"--check"}, env(map[string]string{
+			"MIGRATION_DATABASE_URI":     "postgresql://migration:s3cr3t@unreachable.invalid:5432/migrationdb",
+			"RIVER_DOMAIN_DATABASE_ROLE": "domain",
+			"RIVER_QUEUE_DATABASE_ROLE":  "queue",
+		}), &stdout, &stderr)
+		if status != 1 {
+			t.Fatalf("execute() = %d, want 1 (unreachable database)", status)
+		}
+		out := stderr.String()
+		if !strings.Contains(out, `"msg":"migration database resolved"`) || !strings.Contains(out, `"form":"uri"`) {
+			t.Fatalf("expected the resolution Info record, got: %s", out)
+		}
+		if strings.Contains(out, `"database"`) {
+			t.Fatalf("the URI form must never include a parsed database name, got: %s", out)
+		}
+		if strings.Contains(out, "s3cr3t") || strings.Contains(out, "postgresql://") || strings.Contains(out, "migrationdb") {
+			t.Fatalf("the resolution Info record leaked the DSN or a credential: %s", out)
+		}
+	})
+
+	t.Run("component form -- form and the database name read directly from the env key", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		status := execute(context.Background(), []string{"--check"}, env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_HOST":     "unreachable.invalid",
+			"DEV_HEALTH_MIGRATION_PG_USER":     "migration",
+			"DEV_HEALTH_MIGRATION_PG_PASSWORD": "s3cr3t",
+			"DEV_HEALTH_MIGRATION_PG_DB":       "migrationdb",
+			"RIVER_DOMAIN_DATABASE_ROLE":       "domain",
+			"RIVER_QUEUE_DATABASE_ROLE":        "queue",
+		}), &stdout, &stderr)
+		if status != 1 {
+			t.Fatalf("execute() = %d, want 1 (unreachable database)", status)
+		}
+		out := stderr.String()
+		if !strings.Contains(out, `"msg":"migration database resolved"`) ||
+			!strings.Contains(out, `"form":"components"`) ||
+			!strings.Contains(out, `"database":"migrationdb"`) {
+			t.Fatalf("expected the resolution Info record naming the component database, got: %s", out)
+		}
+		if strings.Contains(out, "s3cr3t") {
+			t.Fatalf("the resolution Info record leaked a credential: %s", out)
+		}
+	})
 }
 
 // TestResolveMigrationDatabaseURIComponentForm pins CHAOS-5560's fix at this

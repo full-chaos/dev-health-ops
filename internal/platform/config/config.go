@@ -2,8 +2,10 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/url"
@@ -14,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -441,23 +444,23 @@ func Load(spec Spec) (Config, error) {
 		// inside ResolveDSN -- recomputed here the same way (a set, non-empty
 		// HostKey), never guessed from the assembled DSN's shape.
 		//
-		// Round 5 finding: naively taking the assembled DSN's URL path as
-		// the Name was unsafe for the pre-built-URI form specifically -- a
-		// malformed, unescaped URI can still "successfully" parse with
-		// password characters misattributed into Path by net/url itself,
-		// which this then would have echoed straight into the Info log.
-		// ObservableDatabaseName below refuses to trust ANY field of a
-		// parse that does not round-trip byte-for-byte back to the exact
-		// DSN it came from -- the same signal ResolveDSNFromComponents's
-		// own host/port round-trip check already relies on -- and prefers
-		// PostgreSQL's `dbname` query parameter when present, since that
-		// (not the path) is the database a real client actually reaches.
+		// Round 6 ruling (chris, via team-lead): for the pre-built-URI form,
+		// Info reports form="uri" ONLY -- no Name is ever derived by parsing
+		// the DSN. Round 5 proved a malformed, unescaped URI can still
+		// "successfully" parse via net/url with credential material
+		// misattributed into Path, and that no denylist of "suspicious"
+		// characters is a guarantee against a general-purpose URL parser
+		// being confused -- the only guarantee is to never parse a URI for
+		// telemetry at all. For the component form, the database name was
+		// never embedded in an opaque string to begin with: it is the
+		// separate, non-secret DBKey env value ComponentDatabaseName reads
+		// directly, needing no parsing and carrying none of that risk.
 		if host, present := lookup(binding.spec.HostKey); present && host != "" {
 			*binding.formTarget = "components"
+			*binding.nameTarget = ComponentDatabaseName(lookup, binding.spec)
 		} else {
 			*binding.formTarget = "uri"
 		}
-		*binding.nameTarget = ObservableDatabaseName(value.Reveal())
 	}
 	cfg.OperationalBridgeURL = envOrDefault(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_URL", "",
@@ -750,7 +753,14 @@ func (c Config) SafeAttrs() []slog.Attr {
 		if !observed.configured {
 			continue
 		}
-		attrs = append(attrs, slog.String(observed.formKey, observed.form), slog.String(observed.nameKey, observed.name))
+		attrs = append(attrs, slog.String(observed.formKey, observed.form))
+		// Round 6 ruling: the pre-built-URI form never has a Name (chris's
+		// "no parsing of a URI for telemetry" rule) -- omit the key
+		// entirely rather than emit a misleading empty string that could
+		// read as "the database name really is blank".
+		if observed.name != "" {
+			attrs = append(attrs, slog.String(observed.nameKey, observed.name))
+		}
 	}
 	return attrs
 }
@@ -821,49 +831,54 @@ func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
 	return fallback
 }
 
-// ObservableDatabaseName extracts the database identifier safe to publish
-// at Info from an already-resolved DSN string -- never a credential.
-// Exported so cmd/dev-health-worker-migrate's own Info-resolution record
-// (round 5's finding #5) applies the exact same safety rule to
-// MIGRATION_DATABASE_URI, rather than a second, independently-drifting
-// implementation.
+// ComponentDatabaseName returns the database identifier a caller should
+// publish at Info for spec's connection -- the raw env-key value (or
+// DefaultDB), NEVER derived by parsing an assembled DSN.
 //
-// Round-5 (2026-09-11) findings: (1) a malformed pre-built URI with an
-// unescaped reserved character in its password can still parse
-// "successfully", with net/url itself misattributing part of the password
-// into Path or elsewhere -- a naive "just take Path" extraction then
-// echoed that leaked material into the (supposedly safe) Info log; (2)
-// PostgreSQL's own `dbname` query parameter, when present, overrides the
-// URL path for which database a real client actually reaches, so
-// Path-only extraction can name a DIFFERENT database than the one really
-// connected to. Both are addressed here: a parse that does not round-trip
-// byte-for-byte back to the exact input string is never trusted for
-// anything (the same signal ResolveDSNFromComponents's own host/port
-// check already relies on) and yields ""; `dbname` is preferred over Path
-// when both are present, matching real connection-string precedence.
-func ObservableDatabaseName(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.String() != raw {
-		return ""
-	}
-	name := parsed.Query().Get("dbname")
-	if name == "" {
-		name = strings.TrimPrefix(parsed.Path, "/")
-	}
-	// Defense in depth beyond the round-trip check above: even a
-	// self-consistent parse can attribute authority-shaped content to
-	// Path when a URI contains an unescaped '@' that net/url treats as a
-	// SECOND host boundary -- proven: net/url parses
-	// "postgresql://user:pass@word/extra@host:5432/realdb" as
-	// host="word", path="/extra@host:5432/realdb", and that round-trips
-	// true (nothing in that interpretation needed escaping, so the check
-	// above alone does not catch it). A real database name never contains
-	// '@', ':', '/', '#', or '?' -- refuse to publish anything that does
-	// rather than risk it being a parsing artifact instead of a name.
-	if strings.ContainsAny(name, "@:/#?") {
-		return ""
-	}
-	return name
+// Round-6 (2026-09-11) ruling, replacing round 5's parse-and-sanitize
+// ObservableDatabaseName entirely: round 5 proved a malformed pre-built
+// URI can still "successfully" parse with net/url attributing credential
+// material to Path, and that a denylist of "suspicious" characters is a
+// heuristic, not a guarantee, against every way a general-purpose URL
+// parser can be confused. Chris's rule: no parsing of a URI for telemetry,
+// ever. For the component form the database name was never embedded in
+// an opaque string in the first place -- it is exactly this already
+// separate, non-secret env value -- so publishing it needs no parsing and
+// carries none of that risk. Exported so
+// cmd/dev-health-worker-migrate's own Info-resolution record applies the
+// identical rule to MIGRATION_DATABASE_URI's component form.
+func ComponentDatabaseName(lookup secrets.LookupEnv, spec ComponentSpec) string {
+	return rawOrDefault(lookup, spec.DBKey, spec.DefaultDB)
+}
+
+// WriteConfigError writes a single-line JSON configuration-error
+// diagnostic to w: `{"error":{"code":"configuration_error","detail":"..."}}`.
+// The stable "code" lets an operator script keep matching on it unchanged;
+// "detail" carries err's message run through logging.RedactText as
+// defense in depth.
+//
+// Round-6 (2026-09-11) ruling (chris, via team-lead): one JSON diagnostic
+// writer, shared by every entry point that can surface a
+// ResolveDSN/ResolveDSNFromComponents/secrets.Resolve error --
+// cmd/dev-health-workerctl, cmd/dev-health-worker-migrate, and
+// internal/platform/shell (every long-running worker binary) -- rather
+// than each inventing (or, before this round, some NOT inventing) its own
+// safe-error convention. Every error these packages build is already
+// assembled purely from key-name strings, never a resolved value; the
+// redaction below is defense in depth on top of that, matching the same
+// rule internal/platform/shell/shell.go's own pre-existing error path
+// already applied for OTHER configuration errors before this ticket
+// existed (R89).
+func WriteConfigError(w io.Writer, err error) {
+	payload := struct {
+		Error struct {
+			Code   string `json:"code"`
+			Detail string `json:"detail"`
+		} `json:"error"`
+	}{}
+	payload.Error.Code = "configuration_error"
+	payload.Error.Detail = logging.RedactText(err.Error())
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 // rawOrDefault is envOrDefault's UNTRIMMED counterpart: presence is a raw,

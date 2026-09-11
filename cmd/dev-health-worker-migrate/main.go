@@ -85,27 +85,28 @@ func execute(
 	if !ok {
 		return 1
 	}
-	// CHAOS-5560 round 5 finding #5: successful resolution returned with no
-	// observable record of which form (uri|components) or database it
-	// reached -- a silent regression there (a wrong, but reachable,
-	// database) would have been invisible even after this ticket's other
-	// fixes. Form presence-checks DEV_HEALTH_MIGRATION_PG_HOST the same
-	// way resolveMigrationDatabaseURI/config.ResolveDSN's own hostSet
-	// check does; the database name reuses config.ObservableDatabaseName
-	// so a malformed MIGRATION_DATABASE_URI can never leak into this log
-	// line either -- one shared safety rule, not a second implementation.
-	resolutionForm := "uri"
-	if host, present := lookup("DEV_HEALTH_MIGRATION_PG_HOST"); present && host != "" {
-		resolutionForm = "components"
+	// CHAOS-5560 round 5 finding #5, redesigned per round 6's ruling:
+	// successful resolution returned with no observable record of which
+	// form (uri|components) or database it reached -- a silent regression
+	// there (a wrong, but reachable, database) would have been invisible
+	// even after this ticket's other fixes. Form presence-checks
+	// DEV_HEALTH_MIGRATION_PG_HOST the same way
+	// resolveMigrationDatabaseURI/config.ResolveDSN's own hostSet check
+	// does. Round 6 ruling (chris): no telemetry field is ever derived by
+	// parsing a DSN -- for the URI form, "database" is omitted entirely;
+	// for the component form, config.ComponentDatabaseName reads the
+	// separate, non-secret DEV_HEALTH_MIGRATION_PG_DB env value directly,
+	// needing no parsing of the assembled DSN.
+	infoLogger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if host, present := lookup(migrationDatabaseSpec.HostKey); present && host != "" {
+		infoLogger.InfoContext(parent, "migration database resolved",
+			"form", "components", "database", config.ComponentDatabaseName(lookup, migrationDatabaseSpec))
+	} else {
+		infoLogger.InfoContext(parent, "migration database resolved", "form", "uri")
 	}
-	slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo})).InfoContext(
-		parent, "migration database resolved",
-		"form", resolutionForm,
-		"database", config.ObservableDatabaseName(migrationURI.Reveal()),
-	)
 	migrationRole, err := postgresstore.ConnectionUser(migrationURI.Reveal())
 	if err != nil {
-		fmt.Fprintln(stderr, "configuration error: invalid MIGRATION_DATABASE_URI")
+		config.WriteConfigError(stderr, errors.New("invalid MIGRATION_DATABASE_URI"))
 		return 1
 	}
 	domainRole, ok := requiredName("RIVER_DOMAIN_DATABASE_ROLE", lookup, stderr)
@@ -163,7 +164,7 @@ func execute(
 	}
 	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil ||
 		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole {
-		fmt.Fprintln(stderr, "configuration error: migration, domain, queue-control, and coordinator PostgreSQL roles must be distinct")
+		config.WriteConfigError(stderr, errors.New("migration, domain, queue-control, and coordinator PostgreSQL roles must be distinct"))
 		return 1
 	}
 
@@ -259,7 +260,7 @@ func reportSchemaCheck(
 func requiredName(key string, lookup platformsecrets.LookupEnv, stderr io.Writer) (string, bool) {
 	value, configured := lookup(key)
 	if !configured || strings.TrimSpace(value) == "" {
-		fmt.Fprintf(stderr, "configuration error: %s is required\n", key)
+		config.WriteConfigError(stderr, fmt.Errorf("%s is required", key))
 		return "", false
 	}
 	return value, true
@@ -284,21 +285,28 @@ func requiredName(key string, lookup platformsecrets.LookupEnv, stderr io.Writer
 // today, deployed or documented. See config.ResolveDSN for the shared
 // mutual-exclusion contract this now defers to instead of picking a
 // precedence winner.
+// migrationDatabaseSpec is the ONE ComponentSpec for MIGRATION_DATABASE_URI,
+// shared by resolveMigrationDatabaseURI and execute's own Info-resolution
+// record (config.ComponentDatabaseName) so the two never risk drifting
+// into two different definitions of "the migration database's component
+// form".
+var migrationDatabaseSpec = config.ComponentSpec{
+	HostKey: "DEV_HEALTH_MIGRATION_PG_HOST", PortKey: "DEV_HEALTH_MIGRATION_PG_PORT", DefaultPort: "5432",
+	UserKey: "DEV_HEALTH_MIGRATION_PG_USER", PasswordKey: "DEV_HEALTH_MIGRATION_PG_PASSWORD",
+	DBKey: "DEV_HEALTH_MIGRATION_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+}
+
 func resolveMigrationDatabaseURI(
 	lookup platformsecrets.LookupEnv,
 	stderr io.Writer,
 ) (platformsecrets.Value, bool) {
-	value, configured, err := config.ResolveDSN(lookup, "MIGRATION_DATABASE_URI", config.ComponentSpec{
-		HostKey: "DEV_HEALTH_MIGRATION_PG_HOST", PortKey: "DEV_HEALTH_MIGRATION_PG_PORT", DefaultPort: "5432",
-		UserKey: "DEV_HEALTH_MIGRATION_PG_USER", PasswordKey: "DEV_HEALTH_MIGRATION_PG_PASSWORD",
-		DBKey: "DEV_HEALTH_MIGRATION_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
-	})
+	value, configured, err := config.ResolveDSN(lookup, "MIGRATION_DATABASE_URI", migrationDatabaseSpec)
 	if err != nil {
-		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		config.WriteConfigError(stderr, err)
 		return platformsecrets.Value{}, false
 	}
 	if !configured {
-		fmt.Fprintln(stderr, "configuration error: MIGRATION_DATABASE_URI is required")
+		config.WriteConfigError(stderr, errors.New("MIGRATION_DATABASE_URI is required"))
 		return platformsecrets.Value{}, false
 	}
 	return value, true

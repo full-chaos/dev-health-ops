@@ -26,7 +26,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -2590,18 +2589,14 @@ func writeServiceError(stderr io.Writer, err error) int {
 // through. Uses encoding/json (round-4 finding: `%q` is Go string escaping,
 // not JSON escaping -- a control byte in the underlying text produced
 // invalid JSON).
+// writeConfigError delegates to config.WriteConfigError -- round 6's
+// ruling (chris, via team-lead): ONE JSON diagnostic writer shared by
+// every entry point that can surface a config.ResolveDSN error
+// (workerctl, migrate, and every long-running worker binary via
+// internal/platform/shell), rather than this binary keeping its own,
+// separately-maintained copy.
 func writeConfigError(stderr io.Writer, err error) int {
-	payload := struct {
-		Error struct {
-			Code   string `json:"code"`
-			Detail string `json:"detail"`
-		} `json:"error"`
-	}{}
-	payload.Error.Code = "configuration_error"
-	payload.Error.Detail = logging.RedactText(err.Error())
-	encoder := json.NewEncoder(stderr)
-	encoder.SetEscapeHTML(true)
-	_ = encoder.Encode(payload)
+	platformconfig.WriteConfigError(stderr, err)
 	return 1
 }
 

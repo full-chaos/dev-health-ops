@@ -2,6 +2,7 @@ package gqlgenguard
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -436,7 +437,11 @@ func assertRealGenerationStaysInsideThePlan(t *testing.T, f *fixture, plan *Plan
 
 	var out strings.Builder
 	gen := NewGoRunGenerator(&out, &out)
-	if err := gen.Generate(context.Background(), f.dir, "gqlgen.yml"); err != nil {
+	env, err := childEnvironment(context.Background(), f.t.TempDir(), f.dir, f.dir, f.dir, io.Discard)
+	if err != nil {
+		t.Fatalf("build the generator's environment: %v", err)
+	}
+	if err := gen.Generate(context.Background(), f.dir, "gqlgen.yml", env); err != nil {
 		t.Fatalf("the real generator failed in the fixture: %v\ngenerator output:\n%s", err, out.String())
 	}
 

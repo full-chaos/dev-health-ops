@@ -301,7 +301,17 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	if err != nil {
 		return nil, nil, fmt.Errorf("create private module copy: %w", err)
 	}
-	cleanup := func() { _ = os.RemoveAll(copyDir) }
+	// The generator's HOME and TMPDIR: beside the copy, never inside it (a
+	// file there would be an undeclared output) and never inherited.
+	scratchDir, err := os.MkdirTemp(opts.TempParent, "gqlgen-guard-env-")
+	if err != nil {
+		_ = os.RemoveAll(copyDir)
+		return nil, nil, fmt.Errorf("create the generator's scratch directory: %w", err)
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(copyDir)
+		_ = os.RemoveAll(scratchDir)
+	}
 
 	copyRoot, err := os.OpenRoot(copyDir)
 	if err != nil {
@@ -342,10 +352,11 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	}
 
 	workDir := filepath.Join(copyDir, filepath.FromSlash(plan.ConfigDir))
-	if err := refuseUnconfinedGoEnvironment(ctx, workDir, copyDir, moduleAbs, w); err != nil {
+	childEnv, err := childEnvironment(ctx, scratchDir, workDir, copyDir, moduleAbs, w)
+	if err != nil {
 		return nil, cleanup, err
 	}
-	if err := refuseReplacesOutsideTheCopy(ctx, copyRoot, copyDir); err != nil {
+	if err := refuseReplacesOutsideTheCopy(ctx, copyRoot, copyDir, childEnv); err != nil {
 		return nil, cleanup, err
 	}
 
@@ -364,7 +375,7 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	}
 	fmt.Fprintf(w, "generator: %s (cwd %s)\n", gen.Describe(), plan.ConfigDir)
 
-	if err := gen.Generate(ctx, workDir, path.Base(plan.ConfigPath)); err != nil {
+	if err := gen.Generate(ctx, workDir, path.Base(plan.ConfigPath), childEnv); err != nil {
 		return nil, cleanup, fmt.Errorf("refusing: the generator failed: %w (nothing was written to %s)", err, moduleAbs)
 	}
 	// No separate "cancelled after generating" check, and none after the copy
@@ -422,56 +433,146 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	return res, cleanup, nil
 }
 
-// goEnvLocations are the go command settings that name a directory it writes
-// to. Checked in this order, so a refusal names the setting the user set (an
-// unset GOMODCACHE is derived from GOPATH).
-var goEnvLocations = []string{"GOPATH", "GOMODCACHE", "GOCACHE", "GOTMPDIR"}
+// childEnvKeys is the WHOLE environment the generator child gets: an
+// allowlist, built from nothing, never a filtered copy of the guard's own. A
+// setting a future Go release adds cannot reach the child, because nothing is
+// inherited that is not named here. Round 4 of review executed an inherited
+// `GOFLAGS=-mod=mod -modfile=<tree>/x.mod` (and the same through a GOENV file)
+// making the child write into the working tree while check-drift passed.
+//
+//	PATH        the directory of the go binary the guard resolved, only
+//	HOME        a scratch directory beside the private copy
+//	TMPDIR      a scratch directory beside the private copy
+//	GOCACHE     the guard's effective build cache      } shared with the parent for
+//	GOMODCACHE  the guard's effective module cache     } speed and offline use, each
+//	GOPATH      the guard's effective GOPATH           } refused if inside the module
+//	GOFLAGS     -mod=readonly
+//	GOENV       off   (no go env file is read)
+//	GOWORK      off   (no workspace redirects package loading)
+//	GOTOOLCHAIN local (no other toolchain is fetched or run)
+var childEnvKeys = []string{"PATH", "HOME", "TMPDIR", "GOCACHE", "GOMODCACHE", "GOPATH", "GOFLAGS", "GOENV", "GOWORK", "GOTOOLCHAIN"}
 
-// refuseUnconfinedGoEnvironment asks the go command itself -- in the directory
-// the generator will run in, with the generator's exact environment -- for its
-// EFFECTIVE settings, so values from the environment and from a GOENV file are
-// both seen, and refuses any that would make the child read a module other
-// than the private copy's or write inside the module: a -modfile in GOFLAGS, a
-// main module outside the copy, or a cache/path/temp directory inside the
-// module. Round 4 of review executed `GOFLAGS=-mod=mod -modfile=<tree>/x.mod`
-// writing into the working tree while check-drift passed.
-func refuseUnconfinedGoEnvironment(ctx context.Context, workDir, copyDir, moduleAbs string, w io.Writer) error {
-	env, _ := childEnv(os.Environ())
-	args := append([]string{"env", "-json", "GOMOD", "GOFLAGS"}, goEnvLocations...)
-	cmd := exec.CommandContext(ctx, "go", args...)
-	cmd.Dir = workDir
-	cmd.Env = env
-	out, err := cmd.Output()
+// sharedLocations are the three values the child takes from the guard's own
+// go environment: where the build and module caches live.
+var sharedLocations = []string{"GOPATH", "GOMODCACHE", "GOCACHE"}
+
+// goBinary resolves the go command once, from the guard's PATH.
+func goBinary() (string, error) {
+	p, err := exec.LookPath("go")
 	if err != nil {
-		return fmt.Errorf("refusing: could not read the go command's effective environment for the generator: %w", err)
+		return "", fmt.Errorf("refusing: the go command is not on PATH: %w", err)
 	}
-	var eff map[string]string
-	if err := json.Unmarshal(out, &eff); err != nil {
-		return fmt.Errorf("refusing: could not parse `go env -json`: %w", err)
-	}
-	fmt.Fprintf(w, "go env: GOMOD=%s GOFLAGS=%q\n", eff["GOMOD"], eff["GOFLAGS"])
-	for _, f := range strings.Fields(eff["GOFLAGS"]) {
-		if strings.HasPrefix(strings.TrimLeft(f, "-"), "modfile") {
-			return fmt.Errorf("refusing: the go environment's GOFLAGS carries %q, so the go command would read and write that module file instead of the private copy's go.mod", f)
-		}
+	return resolvedPath(p), nil
+}
+
+// childEnvironment builds the generator's environment from the allowlist, and
+// then ASSERTS it by asking the go command, in the directory the generator
+// will run in and with exactly that environment, for its effective settings.
+func childEnvironment(ctx context.Context, scratch, workDir, copyDir, moduleAbs string, w io.Writer) ([]string, error) {
+	goBin, err := goBinary()
+	if err != nil {
+		return nil, err
 	}
 	copyReal := resolvedPath(copyDir)
 	moduleReal := resolvedPath(moduleAbs)
-	if m := eff["GOMOD"]; m != "" && m != os.DevNull && !within(copyReal, resolvedPath(m)) {
-		return fmt.Errorf("refusing: the go command resolves the main module to %q, outside the private copy", m)
+	inside := func(p string) bool {
+		r := resolvedPath(p)
+		return within(moduleReal, r) || within(copyReal, r)
 	}
-	for _, key := range goEnvLocations {
-		for _, v := range filepath.SplitList(eff[key]) {
-			if v == "" {
-				continue
-			}
-			r := resolvedPath(v)
-			if within(moduleReal, r) || within(copyReal, r) {
-				return fmt.Errorf("refusing: %s=%q is inside the module, so the go command would write there while the generator runs", key, v)
+	if inside(goBin) {
+		return nil, fmt.Errorf("refusing: the go command resolves to %q, inside the module", goBin)
+	}
+
+	// The caches: the guard's EFFECTIVE values (environment and go env file
+	// alike), read in the scratch directory so no module is in play.
+	// GOTOOLCHAIN/GOWORK/GOFLAGS are pinned for this one query too, so the
+	// guard's own lookup cannot switch toolchains or be redirected; the caches
+	// it reports come from the environment and the go env file as the user set
+	// them. (exec keeps the LAST value of a duplicated key.)
+	parent := append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off", "GOFLAGS=")
+	shared, err := goEnv(ctx, goBin, scratch, parent, sharedLocations...)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range sharedLocations {
+		for _, v := range filepath.SplitList(shared[key]) {
+			if v != "" && inside(v) {
+				return nil, fmt.Errorf("refusing: %s=%q is inside the module, so the go command would write there while the generator runs", key, v)
 			}
 		}
 	}
-	return nil
+
+	home := filepath.Join(scratch, "home")
+	tmp := filepath.Join(scratch, "tmp")
+	for _, d := range []string{home, tmp} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return nil, fmt.Errorf("create the generator's scratch %q: %w", d, err)
+		}
+	}
+	// Go telemetry is OFF in the scratch HOME. Its default ("local") has the
+	// go command write counters under $HOME/.config/go/telemetry from a
+	// process that can outlive the command -- measured: files appearing in the
+	// scratch directory after the guard had returned and removed it. "off" is
+	// the mode file's documented value (x/telemetry internal/telemetry dir.go).
+	modeFile := filepath.Join(home, ".config", "go", "telemetry", "mode")
+	if err := os.MkdirAll(filepath.Dir(modeFile), 0o700); err != nil {
+		return nil, fmt.Errorf("create the generator's telemetry config: %w", err)
+	}
+	if err := os.WriteFile(modeFile, []byte("off\n"), 0o600); err != nil {
+		return nil, fmt.Errorf("write the generator's telemetry mode: %w", err)
+	}
+	env := []string{
+		"PATH=" + filepath.Dir(goBin),
+		"HOME=" + home,
+		"TMPDIR=" + tmp,
+		"GOCACHE=" + shared["GOCACHE"],
+		"GOMODCACHE=" + shared["GOMODCACHE"],
+		"GOPATH=" + shared["GOPATH"],
+		"GOFLAGS=-mod=readonly",
+		"GOENV=off",
+		"GOWORK=off",
+		"GOTOOLCHAIN=local",
+	}
+
+	// The executed assertion: what the go command itself will do with it.
+	eff, err := goEnv(ctx, goBin, workDir, env, "GOMOD", "GOFLAGS", "GOENV", "GOWORK", "GOTOOLCHAIN", "GOMODCACHE", "GOCACHE", "GOTMPDIR")
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(w, "generator env (allowlist %s; nothing inherited): GOMOD=%s GOFLAGS=%s GOENV=%q GOWORK=%s GOTOOLCHAIN=%s\n",
+		strings.Join(childEnvKeys, ","), eff["GOMOD"], eff["GOFLAGS"], eff["GOENV"], eff["GOWORK"], eff["GOTOOLCHAIN"])
+	if m := eff["GOMOD"]; m != "" && m != os.DevNull && !within(copyReal, resolvedPath(m)) {
+		return nil, fmt.Errorf("refusing: the go command resolves the main module to %q, outside the private copy", m)
+	}
+	// `go env GOENV` reports "" when GOENV=off (measured, go1.27), a path otherwise.
+	if eff["GOFLAGS"] != "-mod=readonly" || (eff["GOENV"] != "" && eff["GOENV"] != "off") || eff["GOWORK"] != "off" || !strings.HasPrefix(eff["GOTOOLCHAIN"], "local") {
+		return nil, fmt.Errorf("refusing: the go command does not honour the generator's environment (GOFLAGS=%q GOENV=%q GOWORK=%q GOTOOLCHAIN=%q)", eff["GOFLAGS"], eff["GOENV"], eff["GOWORK"], eff["GOTOOLCHAIN"])
+	}
+	for _, key := range []string{"GOMODCACHE", "GOCACHE", "GOTMPDIR"} {
+		if v := eff[key]; v != "" && inside(v) {
+			return nil, fmt.Errorf("refusing: the generator's effective %s=%q is inside the module", key, v)
+		}
+	}
+	return env, nil
+}
+
+func goEnv(ctx context.Context, goBin, dir string, env []string, keys ...string) (map[string]string, error) {
+	cmd := exec.CommandContext(ctx, goBin, append([]string{"env", "-json"}, keys...)...)
+	cmd.Dir = dir
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("refusing: could not read the go command's effective environment: %w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return nil, fmt.Errorf("refusing: could not read the go command's effective environment: %w", err)
+	}
+	var m map[string]string
+	if err := json.Unmarshal(out, &m); err != nil {
+		return nil, fmt.Errorf("refusing: could not parse `go env -json`: %w", err)
+	}
+	return m, nil
 }
 
 // goModEdit is the part of `go mod edit -json` this package reads.
@@ -487,15 +588,18 @@ type goModEdit struct {
 // directory's packages to bind models, so it is an input like the schema.
 // Version replaces resolve through the module cache and go.sum, like any
 // dependency. The go command parses go.mod (`go mod edit -json`), not a regexp.
-func refuseReplacesOutsideTheCopy(ctx context.Context, copyRoot *os.Root, copyDir string) error {
+func refuseReplacesOutsideTheCopy(ctx context.Context, copyRoot *os.Root, copyDir string, env []string) error {
 	if _, err := copyRoot.Lstat("go.mod"); err != nil {
 		if errNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("stat go.mod: %w", err)
 	}
-	env, _ := childEnv(os.Environ())
-	cmd := exec.CommandContext(ctx, "go", "mod", "edit", "-json")
+	goBin, err := goBinary()
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, goBin, "mod", "edit", "-json")
 	cmd.Dir = copyDir
 	cmd.Env = env
 	out, err := cmd.Output()

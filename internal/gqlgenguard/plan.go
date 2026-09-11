@@ -127,6 +127,19 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	// PROCESS working directory. Doing the load inside the chdir and the checks
 	// outside it silently produces paths rooted at wherever the guard was
 	// started, which is the working tree rather than the private copy.
+	// The raw config is read THROUGH the module's root handle, after the path
+	// check above: a config that is a link out of the module (in the private
+	// copy, an inert self-loop) is refused by the root, never followed.
+	root, err := os.OpenRoot(moduleAbs)
+	if err != nil {
+		return nil, fmt.Errorf("open module root %q: %w", moduleAbs, err)
+	}
+	rawConfig, err := ReadThroughRoot(root, filepath.ToSlash(filepath.Clean(filepath.FromSlash(configPath))))
+	root.Close()
+	if err != nil {
+		return nil, fmt.Errorf("load gqlgen config %q: unable to read config: %w", configPath, err)
+	}
+
 	err = withWorkingDir(configDirAbs, func() error {
 		// gqlgen's schema globbing SWALLOWS every error on the way to a file:
 		// filepath.Glob returns "no match" for a directory it cannot traverse,
@@ -136,7 +149,7 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 		// without a word and the generation would silently lose its types. The
 		// pattern's own directory is therefore resolved first, by the operating
 		// system, before gqlgen globs it.
-		raw, err := readRawInputs(filepath.Base(configPath))
+		raw, err := readRawInputs(rawConfig)
 		if err != nil {
 			return fmt.Errorf("load gqlgen config %q: %w", configPath, err)
 		}
@@ -262,15 +275,11 @@ type rawInputs struct {
 
 type templateInput struct{ knob, path string }
 
-// readRawInputs decodes the config at file into gqlgen's own Config type with
+// readRawInputs decodes the config bytes into gqlgen's own Config type with
 // gqlgen's own decoder settings (config.ReadConfig: yaml.v3, KnownFields), so
 // every value -- including the "schema.graphql" default when the key is absent
 // -- is gqlgen's, not a re-parse with different rules.
-func readRawInputs(file string) (rawInputs, error) {
-	b, err := os.ReadFile(file)
-	if err != nil {
-		return rawInputs{}, fmt.Errorf("unable to read config: %w", err)
-	}
+func readRawInputs(b []byte) (rawInputs, error) {
 	raw := config.DefaultConfig()
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)

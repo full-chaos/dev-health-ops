@@ -155,11 +155,14 @@ type fakeGenerator struct {
 	name         string
 	ran          bool
 	ignoreCancel bool
-	fn           func(workDir string) error
+	// env is the environment the guard handed the generator.
+	env []string
+	fn  func(workDir string) error
 }
 
-func (g *fakeGenerator) Generate(ctx context.Context, workDir, configFile string) error {
+func (g *fakeGenerator) Generate(ctx context.Context, workDir, configFile string, env []string) error {
 	g.ran = true
+	g.env = env
 	if err := ctx.Err(); err != nil && !g.ignoreCancel {
 		return err
 	}

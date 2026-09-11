@@ -4,68 +4,84 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
 
-// TestGoEnvironmentInputDomain is the go-command environment the generator
-// child inherits, as a family: every setting that decides where the go command
-// reads a module from or writes anything to. Each cell sets one -- through the
-// environment or through a GOENV file, the go command's two sources -- and the
-// guard asks the go command itself (`go env -json`, in the private copy, with
-// the child's exact environment) for the EFFECTIVE value before generating.
-// Round 4 executed `GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod` writing
-// into the working tree while check-drift passed. Each wantErr names the
-// setting as `KEY="` -- the fixture's own path carries the cell name, so a bare
-// key would match the path and let a mutant that checks the wrong key pass
-// (measured: N55 survived until this).
+// TestGoEnvironmentInputDomain: the generator child's environment is BUILT from
+// an allowlist, never inherited (childEnvKeys), so every cell here sets a
+// setting in the GUARD's environment -- directly or through a GOENV file -- and
+// the contract is that it does not reach the child: generation proceeds and
+// nothing outside the private copy moves. The only inherited values are the
+// three cache locations, and a location inside the module is refused. Round 4
+// executed `GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod` writing into the
+// working tree while check-drift passed.
 func TestGoEnvironmentInputDomain(t *testing.T) {
 	goAvailable(t)
 	type cell struct {
 		shape   string
-		env     func(f *fixture) map[string]string
+		env     func(t *testing.T, f *fixture) map[string]string
 		wantErr string
 	}
 	inTree := func(f *fixture, rel string) string { return filepath.Join(f.dir, rel) }
-	goenvFile := func(t *testing.T, f *fixture, line string) string {
+	goenvFile := func(t *testing.T, line string) string {
 		p := filepath.Join(t.TempDir(), "goenv")
 		if err := os.WriteFile(p, []byte(line+"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return p
 	}
-	var tt *testing.T
+	set := func(kv ...string) func(*testing.T, *fixture) map[string]string {
+		return func(*testing.T, *fixture) map[string]string {
+			m := map[string]string{}
+			for i := 0; i+1 < len(kv); i += 2 {
+				m[kv[i]] = kv[i+1]
+			}
+			return m
+		}
+	}
 	cells := []cell{
-		{shape: "canonical (the inherited environment, GOFLAGS cleared)", env: func(f *fixture) map[string]string { return map[string]string{"GOFLAGS": ""} }},
-		{shape: "GOFLAGS=-p=2 (a benign flag, the review harness's own)", env: func(f *fixture) map[string]string { return map[string]string{"GOFLAGS": "-p=2"} }},
-		{shape: "GOFLAGS=-mod=mod (writes go.mod -- in the copy only)", env: func(f *fixture) map[string]string { return map[string]string{"GOFLAGS": "-mod=mod"} }},
-		{shape: "GOFLAGS=-modfile=<tree>/alternate.mod", env: func(f *fixture) map[string]string {
+		{shape: "canonical (nothing unusual inherited)", env: set()},
+		{shape: "GOFLAGS=-modfile=<tree>/alternate.mod (not inherited)", env: func(t *testing.T, f *fixture) map[string]string {
 			return map[string]string{"GOFLAGS": "-modfile=" + inTree(f, "alternate.mod")}
-		}, wantErr: `GOFLAGS carries "-modfile`},
-		{shape: "GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod (round 4's shape)", env: func(f *fixture) map[string]string {
+		}},
+		{shape: "GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod (round 4's shape; not inherited)", env: func(t *testing.T, f *fixture) map[string]string {
 			return map[string]string{"GOFLAGS": "-mod=mod -modfile=" + inTree(f, "alternate.mod")}
-		}, wantErr: `GOFLAGS carries "-modfile`},
-		{shape: "a GOENV file carrying GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod", env: func(f *fixture) map[string]string {
-			return map[string]string{"GOFLAGS": "", "GOENV": goenvFile(tt, f, "GOFLAGS=-mod=mod -modfile="+inTree(f, "alternate.mod"))}
-		}, wantErr: `GOFLAGS carries "-modfile`},
-		{shape: "GOCACHE inside the working tree", env: func(f *fixture) map[string]string { return map[string]string{"GOCACHE": inTree(f, ".gocache")} }, wantErr: `GOCACHE="`},
-		{shape: "GOMODCACHE inside the working tree", env: func(f *fixture) map[string]string { return map[string]string{"GOMODCACHE": inTree(f, ".modcache")} }, wantErr: `GOMODCACHE="`},
-		{shape: "GOPATH inside the working tree", env: func(f *fixture) map[string]string {
+		}},
+		{shape: "a GOENV file carrying GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod (GOENV=off for the child)", env: func(t *testing.T, f *fixture) map[string]string {
+			return map[string]string{"GOFLAGS": "", "GOENV": goenvFile(t, "GOFLAGS=-mod=mod -modfile="+inTree(f, "alternate.mod"))}
+		}},
+		{shape: "GOTMPDIR inside the working tree (not inherited: the child's temp is scratch)", env: func(t *testing.T, f *fixture) map[string]string {
+			return map[string]string{"GOTMPDIR": inTree(f, ".gotmp")}
+		}},
+		{shape: "GOTOOLCHAIN=go1.99.0 (not inherited: local)", env: set("GOTOOLCHAIN", "go1.99.0")},
+		{shape: "GOWORK=<a workspace> (not inherited: off)", env: func(t *testing.T, f *fixture) map[string]string {
+			w := filepath.Join(t.TempDir(), "go.work")
+			if err := os.WriteFile(w, []byte("go 1.27.0\n\nuse "+f.dir+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return map[string]string{"GOWORK": w}
+		}},
+		{shape: "a setting Go does not know yet (GO_FUTURE_KNOB; not inherited)", env: set("GO_FUTURE_KNOB", "1", "GOEXPERIMENT", "")},
+		{shape: "GOCACHE inside the working tree (a shared location: refused)", env: func(t *testing.T, f *fixture) map[string]string {
+			return map[string]string{"GOCACHE": inTree(f, ".gocache")}
+		}, wantErr: `GOCACHE="`},
+		{shape: "GOMODCACHE inside the working tree (a shared location: refused)", env: func(t *testing.T, f *fixture) map[string]string {
+			return map[string]string{"GOMODCACHE": inTree(f, ".modcache")}
+		}, wantErr: `GOMODCACHE="`},
+		{shape: "GOPATH inside the working tree (a shared location: refused)", env: func(t *testing.T, f *fixture) map[string]string {
 			return map[string]string{"GOPATH": inTree(f, ".gopath"), "GOMODCACHE": ""}
 		}, wantErr: `GOPATH="`},
-		{shape: "GOTMPDIR inside the working tree", env: func(f *fixture) map[string]string { return map[string]string{"GOTMPDIR": inTree(f, ".gotmp")} }, wantErr: `GOTMPDIR="`},
-		{shape: "a GOENV file carrying GOCACHE inside the working tree", env: func(f *fixture) map[string]string {
-			return map[string]string{"GOCACHE": "", "GOENV": goenvFile(tt, f, "GOCACHE="+inTree(f, ".gocache"))}
+		{shape: "a GOENV file carrying GOCACHE inside the working tree (read for the shared location: refused)", env: func(t *testing.T, f *fixture) map[string]string {
+			return map[string]string{"GOCACHE": "", "GOENV": goenvFile(t, "GOCACHE="+inTree(f, ".gocache"))}
 		}, wantErr: `GOCACHE="`},
+		{shape: "the module has no go.mod and one sits ABOVE the private copy (the go command would adopt it)", env: set(), wantErr: "outside the private copy"},
 	}
-	cells = append(cells, cell{shape: "the module has no go.mod and one sits ABOVE the private copy (the go command would adopt it)", env: func(f *fixture) map[string]string {
-		return map[string]string{"GOFLAGS": ""}
-	}, wantErr: "outside the private copy"})
 	for i, c := range cells {
 		t.Run(cellID("G12", i)+" "+c.shape, func(t *testing.T) {
-			tt = t
 			f := guardFixture(t).withModuleFiles()
 			opts := guardOptions(f, nil)
 			if strings.HasPrefix(c.shape, "the module has no go.mod") {
@@ -76,7 +92,7 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for k, v := range c.env(f) {
+			for k, v := range c.env(t, f) {
 				t.Setenv(k, v)
 			}
 			if c.wantErr != "" && strings.Contains(f.dir, c.wantErr) {
@@ -85,21 +101,117 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 			before := f.digests()
 			gen := &fakeGenerator{fn: rewriteOutputs("generated")}
 			opts.Generator = gen
-			_, err := UpdateDriftRecord(context.Background(), opts)
-			logCell(t, err, "go environment accepted")
-			if c.wantErr == "" {
-				if err != nil {
-					t.Fatalf("cell REFUSED but its contract says accept: %v", err)
+			var report strings.Builder
+			opts.Report = &report
+			_, err := CheckDrift(context.Background(), opts)
+			line := ""
+			for _, l := range strings.Split(report.String(), "\n") {
+				if strings.HasPrefix(l, "generator env (allowlist") {
+					line = l
 				}
+			}
+			logCell(t, err, line)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("want a refusal naming %q, got %v", c.wantErr, err)
+				}
+				if gen.ran {
+					t.Fatal("the generator ran with a shared location inside the module")
+				}
+				assertUnchanged(t, before, f.digests(), c.shape)
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("want a refusal naming %q, got %v", c.wantErr, err)
+			// check-drift refuses for lack of a record here; what the cell is
+			// about is the environment the generator was handed and the tree.
+			if !gen.ran {
+				t.Fatalf("the generator never ran: %v\n%s", err, report.String())
 			}
-			if gen.ran {
-				t.Fatal("the generator ran with a go environment that reaches the working tree")
+			assertAllowlistedEnv(t, gen.env)
+			for _, want := range []string{"GOFLAGS=-mod=readonly", `GOENV=""`, "GOWORK=off", "GOTOOLCHAIN=local"} {
+				if !strings.Contains(line, want) {
+					t.Fatalf("the go command's effective environment for the generator lacks %q:\n%s", want, line)
+				}
 			}
 			assertUnchanged(t, before, f.digests(), c.shape)
+		})
+	}
+}
+
+// assertAllowlistedEnv fails unless env holds exactly the allowlisted keys, each
+// once -- the property that makes "a setting a future Go release adds cannot
+// reach the child" true by construction.
+func assertAllowlistedEnv(t *testing.T, env []string) {
+	t.Helper()
+	var keys []string
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		keys = append(keys, k)
+	}
+	if strings.Join(keys, ",") != strings.Join(childEnvKeys, ",") {
+		t.Fatalf("the generator's environment has keys %v, want exactly %v", keys, childEnvKeys)
+	}
+}
+
+// TestTheRealChildSeesOnlyTheAllowlist executes the claim in a real child
+// process: a `go run` of a program that prints its own environment's keys, run
+// by the guard exactly as it runs gqlgen, with extra settings in the guard's
+// environment that must not arrive.
+func TestTheRealChildSeesOnlyTheAllowlist(t *testing.T) {
+	goAvailable(t)
+	f := guardFixture(t).withModuleFiles()
+	f.write("envdump/main.go", "package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"sort\"\n\t\"strings\"\n)\n\nfunc main() {\n\tvar k []string\n\tfor _, kv := range os.Environ() {\n\t\tk = append(k, strings.SplitN(kv, \"=\", 2)[0])\n\t}\n\tsort.Strings(k)\n\tfmt.Println(\"CHILD-ENV-KEYS:\", strings.Join(k, \",\"))\n}\n")
+	t.Setenv("GO_FUTURE_KNOB", "1")
+	t.Setenv("GOFLAGS", "-mod=mod -modfile="+filepath.Join(f.dir, "alternate.mod"))
+	var report strings.Builder
+	opts := guardOptions(f, &GoRunGenerator{Package: "./envdump", Stdout: &report, Stderr: &report})
+	opts.Report = &report
+	_, _ = CheckDrift(context.Background(), opts)
+	var got string
+	for _, l := range strings.Split(report.String(), "\n") {
+		if v, ok := strings.CutPrefix(l, "CHILD-ENV-KEYS: "); ok {
+			got = v
+		}
+	}
+	want := append([]string(nil), childEnvKeys...)
+	sortStrings(want)
+	if got != strings.Join(want, ",") {
+		t.Fatalf("the real child's environment keys are %q, want exactly %q\n%s", got, strings.Join(want, ","), report.String())
+	}
+	t.Logf("CELL-OUTPUT: accepted: child environment keys = %s", got)
+}
+
+// TestTheReviewersModfileReproWritesNothing is round 4's P1-1 run for real:
+// a committed record, then check-drift with the reviewer's GOFLAGS -- and the
+// same through a GOENV file. Before the allowlist the child wrote
+// alternate.mod/alternate.sum in the working tree and check-drift still passed.
+func TestTheReviewersModfileReproWritesNothing(t *testing.T) {
+	goAvailable(t)
+	for _, via := range []string{"GOFLAGS", "GOENV"} {
+		t.Run(via, func(t *testing.T) {
+			f := guardFixture(t).withModuleFiles()
+			if _, err := UpdateDriftRecord(context.Background(), guardOptions(f, nil)); err != nil {
+				t.Fatalf("write the record: %v", err)
+			}
+			f.write("alternate.mod", f.read("go.mod"))
+			f.write("alternate.sum", "")
+			flags := "-mod=mod -modfile=" + filepath.Join(f.dir, "alternate.mod")
+			if via == "GOFLAGS" {
+				t.Setenv("GOFLAGS", flags)
+			} else {
+				p := filepath.Join(t.TempDir(), "goenv")
+				if err := os.WriteFile(p, []byte("GOFLAGS="+flags+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("GOFLAGS", "")
+				t.Setenv("GOENV", p)
+			}
+			before := f.digests()
+			_, err := CheckDrift(context.Background(), guardOptions(f, nil))
+			logCell(t, err, "drift matches; the tree did not move")
+			if err != nil {
+				t.Fatalf("check-drift: %v", err)
+			}
+			assertUnchanged(t, before, f.digests(), "check-drift under the reviewer's "+via)
 		})
 	}
 }
@@ -252,3 +364,5 @@ func TestTheGuardsOwnInputsAreInBothParsedPathLists(t *testing.T) {
 		}
 	}
 }
+
+func sortStrings(s []string) { sort.Strings(s) }

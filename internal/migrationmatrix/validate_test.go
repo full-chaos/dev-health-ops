@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -701,4 +702,59 @@ func TestDocumentDriftOverItsInputDomain(t *testing.T) {
 		}
 		t.Logf("cell %-80s observed drift=%-5v unjudged=%-5v R14=%d", c.name, DocumentDrift(row, catalog), DocumentUnjudged(row), len(ValidateDocumentDrift(snapshot(row), catalog)))
 	}
+}
+
+// R8's proof-id judgments over the one blank definition: a proof id is a
+// routing-proof value, so "names nothing" here is goapiproof.NamesNothing,
+// the same set every other blank judgment in this change uses.
+func TestR8ProofIdCellsUseTheOneBlankDefinition(t *testing.T) {
+	for _, c := range []struct {
+		name, proven, rule string
+	}{
+		{"empty", "", "R8-proven-empty"},
+		{"spaces", "  ", "R8-proven-empty"},
+		{"tab and newline", "\t\n", "R8-proven-empty"},
+		{"NBSP (in the cutset, not in ASCII whitespace)", "\u00a0", "R8-proven-empty"},
+		{"U+2028 (outside the cutset: a value, too short to identify a run)", "\u2028", "R8-proven-ref"},
+		{"too short", "ok", "R8-proven-ref"},
+		{"NoProof", NoProof, ""},
+		{"a run id", "742b4019-0000-4000-8000-000000000002", ""},
+	} {
+		row := liveRow("featureFlags", "canary")
+		row.Proven = c.proven
+		var got []string
+		for _, v := range ValidateRender(snapshot(row)) {
+			if strings.HasPrefix(v.Rule, "R8-proven") {
+				got = append(got, v.Rule)
+			}
+		}
+		want := []string{}
+		if c.rule != "" {
+			want = []string{c.rule}
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s: proven=%q gave %v, want %v", c.name, c.proven, got, want)
+		}
+		t.Logf("cell %-66s proven=%q observed %v", c.name, c.proven, got)
+	}
+}
+
+// The matrix's own composed statement, swept like the clause it composes:
+// every escape string in it must be the generated numeric-only literal, and
+// nothing else in it may carry a backslash.
+func TestTheRoutingStatementCarriesNoVersionDependentLiteral(t *testing.T) {
+	statement, err := RoutingStateSQL()
+	if err != nil {
+		t.Fatalf("RoutingStateSQL: %v", err)
+	}
+	numeric := regexp.MustCompile(`E'(?:\\x[0-9a-f]{2}|\\u[0-9a-f]{4}|\\U[0-9a-f]{8})*'`)
+	literals := numeric.FindAllString(statement, -1)
+	rest := numeric.ReplaceAllString(statement, "")
+	if len(literals) != 4 {
+		t.Fatalf("want the generated literal 4 times (citation and build, two modes), found %d", len(literals))
+	}
+	if strings.Contains(rest, "\\") || strings.Contains(rest, "E'") {
+		t.Fatalf("the routing statement carries a backslash or an escape string that is not the generated literal:\n%s", rest)
+	}
+	t.Logf("cell RoutingStateSQL: %d escape-string literals, all numeric-only; backslashes or E-strings elsewhere: none", len(literals))
 }

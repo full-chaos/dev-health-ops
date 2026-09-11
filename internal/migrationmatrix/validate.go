@@ -220,7 +220,10 @@ func ValidateRender(render *Render) []Violation {
 			out = append(out, Violation{row.Operation, "R8-digest",
 				fmt.Sprintf("schema_digest must be sha256:<64 hex>, got %q", row.SchemaDigest)})
 		}
-		if strings.TrimSpace(row.Proven) == "" {
+		// NamesNothing, not strings.TrimSpace: a proof id is a routing-proof
+		// value, and every blank judgment over one uses the single definition
+		// (opus r6 P2-1, swept as a class).
+		if goapiproof.NamesNothing(row.Proven) {
 			out = append(out, Violation{row.Operation, "R8-proven-empty",
 				fmt.Sprintf("proven is empty; write %q when no proof run matches this exact tuple", NoProof)})
 		}
@@ -232,7 +235,7 @@ func ValidateRender(render *Render) []Violation {
 		// carries the count -- and the doc-drift rule makes that rendering
 		// impossible to soften by hand. What IS a violation is a proof
 		// reference too short to identify a run, checked below.
-		if row.Proven != NoProof && len(strings.TrimSpace(row.Proven)) < 8 {
+		if row.Proven != NoProof && !goapiproof.NamesNothing(row.Proven) && len(row.Proven) < 8 {
 			out = append(out, Violation{row.Operation, "R8-proven-ref",
 				fmt.Sprintf("proven %q is too short to identify a proof run", row.Proven)})
 		}

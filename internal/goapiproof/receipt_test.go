@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -278,5 +279,48 @@ func TestTheCutsetIsTheOneTheSharedFixtureStates(t *testing.T) {
 	}
 	if NamesNothing("v") || NamesNothing("\u2028") || NamesNothing("a") {
 		t.Fatal("NamesNothing called a real value blank")
+	}
+}
+
+// The escape-literal fix swept across its siblings, EXECUTED rather than
+// argued: every value this package concatenates into SQL. Each named
+// constant must be plain lowercase ASCII (no quote, no backslash, nothing a
+// server version can read two ways), and the composed clause for each mode
+// -- with the one generated literal removed -- must contain no backslash
+// and no escape-string prefix at all, so no other literal can carry the
+// PG16 hazard.
+func TestEverySQLComposedValueIsVersionStable(t *testing.T) {
+	plain := regexp.MustCompile(`^[a-z_]+$`)
+	for _, c := range []struct{ name, value string }{
+		{"EnablementProofStage", EnablementProofStage},
+		{"EnablementProofTerminalState", EnablementProofTerminalState},
+		{"EnablementCitedMismatchState", EnablementCitedMismatchState},
+		{"EdgeBuildPresent", EdgeBuildPresent},
+		{"RouteEdge", RouteEdge},
+		{"TargetModePrimary", TargetModePrimary},
+		{"TargetModeCanary", TargetModeCanary},
+		{"alias p (the Go reader)", "p"},
+		{"alias pr (the matrix reader)", "pr"},
+	} {
+		if !plain.MatchString(c.value) {
+			t.Fatalf("%s = %q is composed into SQL and is not plain lowercase ASCII", c.name, c.value)
+		}
+		t.Logf("cell %-34s = %-18q plain lowercase ASCII: true", c.name, c.value)
+	}
+	for _, mode := range []string{TargetModeCanary, TargetModePrimary} {
+		for _, alias := range []string{"p", "pr"} {
+			clause, err := EnablementProofClause(alias, mode)
+			if err != nil {
+				t.Fatalf("EnablementProofClause(%q, %q): %v", alias, mode, err)
+			}
+			rest := strings.ReplaceAll(clause, blankCitationSQL(), "")
+			if strings.Count(clause, blankCitationSQL()) != 2 {
+				t.Fatalf("mode %s alias %s: the generated literal appears %d times, want 2 (citation and build)", mode, alias, strings.Count(clause, blankCitationSQL()))
+			}
+			if strings.ContainsAny(rest, "\\") || strings.Contains(rest, "E'") {
+				t.Fatalf("mode %s alias %s: the clause carries a backslash or an escape string outside the generated literal:\n%s", mode, alias, rest)
+			}
+			t.Logf("cell clause mode=%-7s alias=%-2s generated literals=2, backslashes or E-strings elsewhere: none", mode, alias)
+		}
 	}
 }

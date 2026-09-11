@@ -201,3 +201,38 @@ def test_the_two_known_modes_compile_to_different_route_rules() -> None:
     )
     # primary is the STRICTER one: it must name the edge route explicitly.
     assert MEASUREMENT_ROUTE_EDGE in compiled[ENABLEMENT_TARGET_MODE_EDGE_ONLY]
+
+
+@pytest.mark.parametrize("target_mode", ["canary", "primary"])
+def test_the_python_predicate_binds_the_cutset_rather_than_writing_a_literal(
+    target_mode: str,
+) -> None:
+    """The escape-literal fix, swept to the Python sibling and EXECUTED.
+
+    opus r6 (P2-1): the Go side's hand-typed ``E'...\\v...'`` meant the letter
+    v on PostgreSQL 16. The Python predicate is only version-independent if
+    it never writes the cutset into the SQL text at all -- so this compiles
+    the production statement WITHOUT literal binds and requires that the SQL
+    text carry no escape string and no backslash, and that the cutset reach
+    the server only as a bound parameter, byte for byte.
+    """
+    from dev_health_ops.api.graphql.go_api_routing_admin import (
+        _BLANK_CUTSET,
+        build_enablement_proof_select,
+    )
+
+    compiled = build_enablement_proof_select(
+        schema_digest="sha256:" + "a" * 64,
+        candidate_build="b" * 40,
+        operations={"featureFlags": "c" * 64},
+        target_mode=target_mode,
+    ).compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    assert "E'" not in sql and "\\" not in sql, (
+        f"the Python predicate writes an escape string or a backslash into SQL:\n{sql}"
+    )
+    bound = [v for v in compiled.params.values() if v == _BLANK_CUTSET]
+    assert len(bound) == 2, (
+        f"the cutset must be bound twice (citation and build), found {len(bound)} "
+        f"in params {sorted(compiled.params)}"
+    )

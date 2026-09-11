@@ -12,10 +12,198 @@
 # empty volume -- it is no longer a way to attach to another project's data.
 name: dev-health-ops
 
+# The Python operational-bridge SERVERS (`api`,
+# `metrics-api`, via worker_auth.py's `_bounded_secret("WORKER_OPERATIONAL_BRIDGE_TOKEN")`)
+# and the Go worker CLIENTS that call them must read this exact shell
+# variable to the exact same default -- a mismatch means every bridge call
+# fails closed with 401, not a readiness-visible failure. One shared
+# anchor, merged into both `&env` (api/metrics-api/billing-edge/worker)
+# below and `&go-worker-env-base` below that, so the literal default lives
+# in exactly one place rather than two copies that can drift.
+x-worker-operational-bridge-token:
+  token: &worker-operational-bridge-token
+    WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-local-go-worker-bridge-token}
+
+# An empty SETTINGS_ENCRYPTION_KEY default crash-loops
+# every Go worker family that constructs a provider-credential decryptor
+# (sync/ops/heavy) on a bare bring-up -- reproduced: "worker family builder
+# failed", three stream runners 503. Same single-anchor convention as the
+# bridge token above, so api/metrics-api and the Go fleet stay byte-identical
+# on the same local-only placeholder rather than two independent empty
+# defaults that happen to agree only when an operator sets the real value.
+x-settings-encryption-key:
+  token: &settings-encryption-key
+    SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-local-dev-settings-encryption-key}
+
+# Api's org-id-extraction middleware
+# (get_authenticated_user_from_headers, src/dev_health_ops/api/middleware/__init__.py)
+# runs for every request carrying an Authorization header -- including the
+# Go-worker bridge's bearer calls -- and unconditionally constructs
+# AuthService(), which raises RuntimeError("JWT_SECRET_KEY is required") with
+# no default anywhere in this file. Reproduced: heartbeat 500s with both the
+# correct and a wrong bridge token, so the claimed 200/401 behavior never
+# actually ran. Pre-existing gap (not introduced by this PR), but this PR is
+# what makes it block a default bring-up for the first time. One local-only
+# placeholder default, same convention as above.
+x-jwt-secret-key:
+  token: &jwt-secret-key
+    JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key}
+
+# Go/River worker topology (CHAOS-3142, folded in at CHAOS-3088 from
+# deploy/docker-compose/compose.go-workers.yml -- that file keeps its own
+# copy for compose.production.yml's separate `--profile go-workers` overlay
+# path; this is a second, independently maintained copy for local-dev
+# parity against THIS file's own postgres/clickhouse/valkey, same as the
+# archived Celery fleet below keeps its own copy rather than sharing one
+# with compose.production.yml). Credentials only in `environment:` --
+# everything else is a flag, so `docker compose config` shows the deployed
+# configuration of every service below in one place.
+x-go-worker-flag:
+  http-addr: &flag-http-addr "--http-addr=:8080"
+  river-schema: &flag-river-schema "--river-schema=${RIVER_DATABASE_SCHEMA:-river}"
+  domain-role: &flag-domain-role "--domain-database-role=${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}"
+  queue-role: &flag-queue-role "--queue-database-role=${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}"
+  queue-mode: &flag-queue-mode "--queue-database-mode=${WORKER_DATABASE_MODE:-session}"
+  coordinator-mode: &flag-coordinator-mode "--coordinator-database-mode=${COORDINATOR_DATABASE_MODE:-session}"
+  domain-pooler: &flag-domain-pooler "--domain-transaction-pooler=${PGBOUNCER_TRANSACTION_MODE:-true}"
+  # The PagerDuty stream runner forwards reconciliation to the Python worker
+  # bridge until the locked-graph port lands (CUT-20), so it cannot open
+  # readiness without a bridge URL.
+  bridge-url: &flag-bridge-url "--operational-bridge-url=${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}"
+  # CHAOS-4351: `go-worker-heavy` is the ONLY worker group whose queue set
+  # includes `metrics` -- every other group's operational-bridge traffic
+  # stays on `api` via the shared `flag-bridge-url` above; only this
+  # group's flag is repointed at the dedicated `metrics-api` service so a
+  # bridge-side pids/memory incident there can no longer take unrelated
+  # `api` request handling, or unrelated go-worker groups, down with it.
+  bridge-url-heavy: &flag-bridge-url-heavy "--operational-bridge-url=${DEV_HEALTH_METRICS_BRIDGE_URL:-http://metrics-api:8000}"
+  # The default bridge endpoint above is a plaintext Compose service-discovery
+  # name, which the runtime rejects unless this opt-in is set. Override to
+  # false once the bridge is reachable over an internal HTTPS origin.
+  bridge-insecure: &flag-bridge-insecure "--operational-bridge-allow-insecure=${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}"
+  log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
+
+x-go-worker-env-base: &go-worker-env-base
+  # `POSTGRES_URI` here used to be
+  # `:?required` (deploy/docker-compose/compose.go-workers.yml's shape,
+  # fine for an opt-in overlay) and then just empty-default -- but the
+  # container env var the Go binary reads (`POSTGRES_URI`, hardcoded in
+  # internal/platform/config/config.go) is the SAME NAME `.env.example`
+  # already uses for unrelated host-side Python tooling
+  # (`postgresql+asyncpg://postgres:postgres@localhost:5555/postgres`,
+  # meaningless inside a container -- `localhost` there is the worker
+  # itself). An empty-default on that exact name never even applied: the
+  # shell variable IS set, just to the wrong thing, so the Go domain
+  # connection silently failed closed (`queue_control_config`... no,
+  # `domain_postgres` -- confirmed executed against this exact value).
+  # Fixed by reading a DEDICATED shell variable instead, same pattern as
+  # `go-river-migrate`'s `GO_WORKER_MIGRATION_DATABASE_URI` below, with a
+  # computed default through the dedicated poolers folded in above (domain
+  # via the existing `pgbouncer`, queue-control via `pgbouncer-river-queue`)
+  # -- adapted from the proven design already running the shared bigboy
+  # stack (compose/compose.go.workers.yml, untracked, outside this repo),
+  # to this file's own postgres identity (superuser/database `postgres`,
+  # not that stack's `devhealth`).
+  POSTGRES_URI: ${GO_WORKER_POSTGRES_URI:-postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-postgres}}
+  WORKER_DATABASE_URI: ${GO_WORKER_QUEUE_DATABASE_URI:-postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-postgres}}
+  # Port 9000 is the NATIVE protocol, not 8123 -- the Go worker speaks the
+  # native wire protocol through clickhouse-go and eagerly Ping()s at
+  # construction (CHAOS-3872, deploy/go-workers/README.md).
+  CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+  VALKEY_URI: redis://valkey:6379/1
+  # deploy/go-workers/deployment.json requires this for the sync group, and
+  # provider-sync handler construction fails closed without it. Shared with
+  # the Python services via the `x-settings-encryption-key` anchor above, so
+  # the value stays byte-identical between the two runtimes.
+  # Found by executing the required readyz proof rather than
+  # by inspection): go-worker/go-worker-heavy/go-worker-ops claim
+  # work_graph_execution_requests rows via a coordinator-role connection
+  # (matches the bigboy overlay's own CHAOS-5133 comment) -- without this
+  # in the shared base, sync crash-looped with "worker family builder
+  # failed... syncCoordinator... worker readiness dependency is
+  # unavailable" instead of the expected live-but-unready shape. Default
+  # here, not just on go-reconciler/go-scheduler; the three stream
+  # services neutralize it back to empty below, same as the overlay this
+  # was folded from.
+  COORDINATOR_DATABASE_URI: ${GO_WORKER_COORDINATOR_DATABASE_URI:-postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-postgres}}
+  # Found by executing the required readyz proof:
+  # internal/syncdispatchruntime.NewHTTPBridge rejects an empty bearer
+  # token outright (pure validation, no network call) -- sync/ops/heavy
+  # construct this bridge unconditionally, so an empty default here made
+  # EVERY worker family fail to compose at all ("worker readiness
+  # dependency is unavailable"), not the live-but-unready shape the other
+  # empty-defaults produce. That fix only reached
+  # the Go-worker side -- `api`/`metrics-api` never picked up the same
+  # default, so every bridge call 401'd. Merged from the single shared
+  # `x-worker-operational-bridge-token` anchor above instead of a second
+  # literal here.
+  <<: [*worker-operational-bridge-token, *settings-encryption-key]
+  AUTO_RUN_MIGRATIONS: "false"
+  # CHAOS-4587: see `migrate`'s own comment on this variable below -- must
+  # move with the migrate export in the same deploy pass; see
+  # deploy/go-workers/README.md's rollout note before changing this value.
+  OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
+
+# This template was a real entry under `services:`
+# with no `command:` of its own -- a bare `up` (no explicit service list)
+# instantiated it directly and it crashed ({"error":{"code":"invalid_request"}},
+# exited 1) instead of never running at all. A shared template that every
+# consumer overrides via `<<:` belongs at the top level next to every other
+# `x-` anchor in this file, not inside `services:`, exactly like
+# `x-go-worker-env-base` above. `routes apply` itself is idempotent
+# (confirmed by reading internal/syncroute -- the mutation path compares
+# current to declared and returns cleanly when they already match), so a
+# second `up` after the first activation run is safe and exits 0 without
+# changing anything.
+x-go-worker-route-activate:
+  template: &go-worker-route-activate
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: operator
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      <<: *go-worker-env-base
+      WORKER_OPERATOR_TOKEN_FILE: /run/go-worker-operator/token
+    volumes:
+      - go_worker_operator_token:/run/go-worker-operator:ro
+    depends_on:
+      go-worker-operator-credential:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
 volumes:
   postgres_data:
     driver: local
   clickhouse_data:
+    driver: local
+  # Route activation for a Go-default bring-up: holds the
+  # one-shot operator credential go-worker-operator-credential mints, read
+  # by the go-sync-*-route-activate chain below.
+  go_worker_operator_token:
     driver: local
 
 services:
@@ -43,9 +231,23 @@ services:
     container_name: postgres
     restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
+      # Class sweep over the whole file, not only the knob found: go-river-provision/
+      # migrate's own entrypoint already reads POSTGRES_USER/_PASSWORD
+      # overrides (they authenticate against THIS server with them) --
+      # only the server itself, the actual authority for these
+      # credentials, hardcoded past them. `postgres`'s official image
+      # takes both as plain env vars, same mechanism as POSTGRES_DB below.
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Reproduced: every OTHER consumer of this database name
+      # (poolers' DB_NAME/healthchecks, migrate's POSTGRES_URI, the Go
+      # worker DSNs, go-river-provision's --dbname) already reads
+      # ${POSTGRES_DB:-postgres} -- only the server that actually CREATES
+      # the database at first init was hardcoded to the literal string
+      # "postgres", so overriding POSTGRES_DB anywhere else pointed every
+      # downstream consumer at a database that was never created
+      # ("database ... does not exist"). One source of truth now.
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
       # Must be a subdirectory of the volume mount (postgres_data is mounted
       # at the parent /var/lib/postgresql/), never the mount root itself --
       # otherwise the image's lost+found and other reserved entries live
@@ -74,7 +276,7 @@ services:
       - postgres_data:/var/lib/postgresql/
       - ./docker/init-extra-dbs.sh:/docker-entrypoint-initdb.d/init-extra-dbs.sh:ro
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -91,9 +293,17 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: postgres
+      # Class sweep over this whole file -- every knob it exposes is part
+      # of the same promise, not only the one that was found:
+      # DB_USER/DB_PASSWORD/DB_NAME
+      # were hardcoded literals while the postgres server (below),
+      # go-river-provision/migrate and query-api already read
+      # POSTGRES_USER/_PASSWORD/_DB overrides -- an override honoured by
+      # some consumers and hardcoded past by the pooler in front of the
+      # server itself. Same anchors, everywhere.
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DB_NAME: ${POSTGRES_DB:-postgres}
       LISTEN_PORT: "6432"
       POOL_MODE: transaction
       AUTH_TYPE: scram-sha-256
@@ -101,7 +311,7 @@ services:
       DEFAULT_POOL_SIZE: "25"
       MIN_POOL_SIZE: "5"
       RESERVE_POOL_SIZE: "5"
-      ADMIN_USERS: postgres
+      ADMIN_USERS: ${POSTGRES_USER:-postgres}
       # CHAOS-3944: log_connections/log_disconnections default on and turn a
       # Go worker fleet's steady attach/detach churn into a continuous,
       # diagnostically worthless firehose (measured ~36 lines/min across the
@@ -114,9 +324,9 @@ services:
       LOG_DISCONNECTIONS: "0"
       LOG_POOLER_ERRORS: "1"
       # Healthcheck-only credential: PGPASSWORD is a libpq env var psql reads
-      # automatically, so it never appears in argv. Dev-only literal,
-      # matching DB_PASSWORD above.
-      PGPASSWORD: postgres
+      # automatically, so it never appears in argv. Dev-only default,
+      # matching DB_PASSWORD above -- same override, not a second literal.
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
       - "6432:6432"
     depends_on:
@@ -128,11 +338,91 @@ services:
       # regardless of username, so pinning -U/-d alone doesn't fix that (see
       # deploy/docker-compose/compose.production.yml). Run a real query
       # through the pooler instead.
-      test: ["CMD", "psql", "-w", "-h", "localhost", "-p", "6432", "-U", "postgres", "-d", "postgres", "-c", "SELECT 1"]
+      test: ["CMD", "psql", "-w", "-h", "localhost", "-p", "6432", "-U", "${POSTGRES_USER:-postgres}", "-d", "${POSTGRES_DB:-postgres}", "-c", "SELECT 1"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  # The Go worker fleet below needs two more
+  # dedicated poolers -- queue-control and coordinator -- that this file
+  # never defined; folded in from the proven design already running the
+  # shared bigboy stack (/home/ubuntu/devhealth/compose/compose.go.workers.yml),
+  # adapted to this file's own postgres identity (superuser `postgres`,
+  # database `postgres` -- not that stack's `devhealth`/`devhealth`).
+  # `pgbouncer` above already lets devhealth_domain/devhealth_queue/
+  # devhealth_coordinator authenticate through it with no changes: edoburu/
+  # pgbouncer's AUTH_TYPE != trust wires an implicit auth_query against
+  # pg_shadow using DB_USER (a real superuser here, same as the bigboy
+  # stack's), so any role docker/init-extra-dbs.sh created passes through
+  # -- confirmed by inspecting a live, multi-day-running go-worker container
+  # on that stack, whose resolved POSTGRES_URI uses devhealth_domain through
+  # that exact single-role-configured pgbouncer. ADMIN_USERS is deliberately
+  # NOT widened; that setting is unrelated to this mechanism.
+  #
+  # Session mode pins one server connection per client session for the life
+  # of that session, so DEFAULT_POOL_SIZE is a hard ceiling on how many
+  # worker replicas can start, not a throughput knob -- this default (40)
+  # is the bigboy file's own general-purpose value ("covers 3 replicas of
+  # every worker group plus headroom" per its comment), NOT bigboy's own
+  # further-tuned override (100, applied there only because that stack runs
+  # at a measured 4 replicas per group -- see
+  # .remember/lanes/lane-stack-owner/river-queue-pool-override.yml). This
+  # file defaults every Go process to 1 replica, comfortably inside 40.
+  pgbouncer-river-queue:
+    image: edoburu/pgbouncer:latest
+    container_name: pgbouncer-river-queue
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      DB_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      DB_NAME: ${POSTGRES_DB:-postgres}
+      LISTEN_PORT: "6433"
+      POOL_MODE: session
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: ${PGBOUNCER_RIVER_QUEUE_MAX_CLIENT_CONN:-128}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_RIVER_QUEUE_POOL_SIZE:-40}
+      PGPASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "psql", "-w", "-h", "localhost", "-p", "6433", "-U", "${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}", "-d", "${POSTGRES_DB:-postgres}", "-c", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Coordinators hold locks across statements, so they receive their own
+  # bounded session pool rather than the transaction-mode domain endpoint
+  # above (same rationale as the bigboy file this was folded from).
+  pgbouncer-river-coordinator:
+    image: edoburu/pgbouncer:latest
+    container_name: pgbouncer-river-coordinator
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      DB_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      DB_NAME: ${POSTGRES_DB:-postgres}
+      LISTEN_PORT: "6434"
+      POOL_MODE: session
+      AUTH_TYPE: scram-sha-256
+      MAX_CLIENT_CONN: "32"
+      DEFAULT_POOL_SIZE: "10"
+      PGPASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "psql", "-w", "-h", "localhost", "-p", "6434", "-U", "${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}", "-d", "${POSTGRES_DB:-postgres}", "-c", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   clickhouse:
     image: clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5
@@ -140,9 +430,15 @@ services:
     restart: on-failure
     environment:
       CLICKHOUSE_LISTEN_HOST: 0.0.0.0
-      CLICKHOUSE_USER: ch
-      CLICKHOUSE_PASSWORD: ch
-      CLICKHOUSE_DB: default
+      # Class sweep over the whole file, not only the knob found: query-api and the
+      # go-worker fleet's CLICKHOUSE_URI already read CLICKHOUSE_USER/
+      # _PASSWORD/_DB overrides -- only the server that actually
+      # authenticates them (the official image takes all three as plain
+      # env vars, same mechanism as POSTGRES_USER/_DB above) hardcoded
+      # past them.
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ch}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -173,6 +469,14 @@ services:
       start_period: 5s
 
   migrate:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -195,22 +499,28 @@ services:
         then dev-hops migrate postgres; fi
         && dev-hops migrate clickhouse
     environment:
-      POSTGRES_URI: postgresql+asyncpg://postgres:postgres@postgres:5432/${POSTGRES_DB:-postgres}
+      # Class sweep over the whole file, not only the knob found: user/password here were hardcoded past the
+      # server's own POSTGRES_USER/_PASSWORD overrides (fixed above); DB
+      # was already templated.
+      POSTGRES_URI: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-postgres}
       MIGRATION_DATABASE_URI: ${MIGRATION_DATABASE_URI:-}
       DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ${DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER:-}
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
-      # CHAOS-4587 (codex delta round 2, P1): migration 067 checks this same
+      # CHAOS-4587: migration 067 checks this same
       # variable to decide whether to apply the ordering-contract cutover
       # (src/dev_health_ops/migrations/clickhouse/067_operational_ordering_contract.py) --
       # without a reference here, an operator's shell export never reaches
       # this container, 067 silently defers ("successfully"), and workers
-      # wired to the same export (deploy/go-workers/compose-go-workers.yml)
-      # start against a still-contract-1 table. Must move with the worker
-      # export in the same deploy pass; see deploy/go-workers/README.md.
+      # wired to the same export (the go-worker-* services below) start
+      # against a still-contract-1 table. Must move with the worker export
+      # in the same deploy pass; see deploy/go-workers/README.md.
       OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
-      CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      # Class sweep over the whole file, not only the knob found: user/password were hardcoded past the
+      # clickhouse server's own CLICKHOUSE_USER/_PASSWORD overrides (fixed
+      # below); DB was already templated.
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       postgres:
@@ -219,6 +529,14 @@ services:
         condition: service_healthy
 
   api:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -231,6 +549,25 @@ services:
     command: |
       --host 0.0.0.0 --port 8000 --reload
     environment: &env
+      # Api/metrics-api -- and, via this shared
+      # anchor, billing-edge -- are the servers worker_auth.py authorizes
+      # incoming Go operational-bridge calls against; this must read the
+      # exact same shell variable and default as the Go-worker side below
+      # (x-worker-operational-bridge-token), never a second literal.
+      #
+      # JWT_SECRET_KEY had no default anywhere in this
+      # file -- the global org-id-extraction middleware's AuthService()
+      # construction raised on every request carrying an Authorization
+      # header, including Go-worker bridge calls, so the claimed heartbeat
+      # 200/401 proof never actually exercised the real default path. See
+      # `x-jwt-secret-key` above. Same gap
+      # for SETTINGS_ENCRYPTION_KEY's empty default -- see
+      # `x-settings-encryption-key` above. YAML forbids more than one `<<`
+      # key in the same mapping, hence the single list-form merge below.
+      <<:
+        - *worker-operational-bridge-token
+        - *jwt-secret-key
+        - *settings-encryption-key
       SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DEV_HEALTH_OPS: "0.0.0"
       PYTHONPATH: /app/src
       # GraphQL analytics endpoint available at /graphql
@@ -238,26 +575,34 @@ services:
       # CHAOS-2065: runtime DB traffic flows through PgBouncer (transaction mode).
       # Run schema migrations against postgres:5432 directly -- see
       # docs/ops/database-connection-pooling.md.
-      DATABASE_URI: "postgresql+asyncpg://postgres:postgres@pgbouncer:6432/postgres"
+      # Class sweep over the whole file, not only the knob found: api/metrics-api
+      # (this shared `&env` anchor) hardcoded past the same
+      # POSTGRES_USER/_PASSWORD/_DB and CLICKHOUSE_USER/_PASSWORD/_DB
+      # overrides every other consumer in this file already honours.
+      DATABASE_URI: "postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@pgbouncer:6432/${POSTGRES_DB:-postgres}"
       PGBOUNCER_TRANSACTION_MODE: "true"
-      CLICKHOUSE_URI: "clickhouse://ch:ch@clickhouse:8123/default"
+      CLICKHOUSE_URI: "clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}"
       REDIS_URL: "redis://valkey:6379/1"
       # Pre-existing gap fixed alongside CHAOS-3142: declared in
       # .env.example but was never actually referenced by this file, so no
       # override ever reached any container -- provider credential
       # decryption (src/dev_health_ops/core/encryption.py, read by
       # workers/task_utils.py for every provider) silently had no key in
-      # local dev. The Go worker's `sync` profile decrypts the same stored
-      # credentials with the same variable name
-      # (SETTINGS_ENCRYPTION_KEY, deploy/go-workers/deployment.json) wherever
-      # it runs, so this value stays byte-identical to whatever a Go
-      # topology alongside this stack is given.
-      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+      # local dev. An empty default crash-looped the
+      # Go fleet on a bare bring-up -- now merged via `x-settings-encryption-key`
+      # in the single list-form `<<:` above, byte-identical between runtimes.
       # CHAOS-2299: route sync dispatch to per-provider queues. Safe to enable
       # here because the worker -Q lists below consume sync.<provider> in the
       # SAME change. Bare-image deployments must follow the two-phase rollout
       # in workers/queues.py: expand consumer -Q lists first, then flip this.
       PROVIDER_SYNC_QUEUES_ENABLED: "true"
+      # CHAOS-3942/CHAOS-3088: /health/workers is Celery-authoritative until
+      # told otherwise. The Go fleet below is this file's unconditional
+      # default now, so it is the declared worker_instances fleet the
+      # endpoint checks -- reconciler/scheduler/stream-* are excluded: they
+      # run a separate role with their own /healthz and never register
+      # worker_instances presence.
+      EXPECTED_WORKER_GROUPS: ${EXPECTED_WORKER_GROUPS:-heavy,ops,sync,sync-provider}
       # There are no provider/dataset route switches. CHAOS-4054: capability is
       # always on in the binary, the user's sync config decides what should run,
       # and each worker's -Q/--queues topology decides what it serves.
@@ -375,25 +720,28 @@ services:
   # `worker_metrics.py`'s bridge routes are exposed on `api` too, this is
   # just a separate process/cgroup so a bridge-side pids/memory incident
   # (CHAOS-4264, CHAOS-4317, CHAOS-4350) can no longer take unrelated `api`
-  # request handling down with it. `compose.go-workers.yml` points
-  # `go-worker-heavy` (the one worker group that actually calls the
-  # metrics compatibility bridge -- confirmed via `rg 'queues='`, no other
-  # go-worker-* group's queue set includes `metrics`) at this service
-  # instead of `api`; every other go-worker-* group is unaffected.
+  # request handling down with it. `go-worker-heavy` below (the one worker
+  # group that actually calls the metrics compatibility bridge -- confirmed
+  # via `rg 'queues='`, no other go-worker-* group's queue set includes
+  # `metrics`) points at this service instead of `api`; every other
+  # go-worker-* group is unaffected.
   #
-  # codex review (PR #1938, P2): only `--profile go-workers` (same gate as
-  # `go-worker-heavy` itself in compose.go-workers.yml) starts this service
-  # -- a bare `docker compose up` with Go workers disabled has nothing
-  # that ever calls it, so starting it unconditionally would be a second
-  # full API process idling for no reason on every default dev-stack up.
-  # This is the `deploy/docker-compose/compose.go-workers.yml` overlay's
-  # own profile -- `deploy/go-workers/compose-go-workers.yml` is a SEPARATE
-  # overlay (`profiles: [go]`) whose single-worker `--queues=sync` topology
-  # doesn't run the `metrics` queue at all, so it has no caller for this
-  # service; see that file's own comment on its `go-worker` service for
-  # the full explanation.
+  # codex review (PR #1938, P2, re-scoped for the Go-default cutover,
+  # CHAOS-3088): this service is unconditional (no profile) like the rest of
+  # the Go fleet below. Go-default now means go-worker-heavy actually runs
+  # (`deploy.replicas: 1`) on a bare `docker compose up`, so this keeps its
+  # own pre-existing implicit default (no `deploy:` key -- one replica) to
+  # match: an idle metrics-api would be a real waste, but a go-worker-heavy
+  # that cannot reach its bridge target at all is worse.
   metrics-api:
-    profiles: [go-workers]
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -445,6 +793,14 @@ services:
       start_period: 30s
 
   billing-edge:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -469,7 +825,10 @@ services:
       - /app/src/dev_health_ops/api
     environment:
       <<: *env
-      POSTGRES_URI: "postgresql+asyncpg://postgres:postgres@pgbouncer:6432/postgres"
+      # Class sweep over the whole file, not only the knob found: billing-edge's own POSTGRES_URI (takes
+      # precedence over the inherited DATABASE_URI, db.py:190-196) was
+      # ALSO hardcoded, independently of the shared anchor fix above.
+      POSTGRES_URI: "postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@pgbouncer:6432/${POSTGRES_DB:-postgres}"
       AUTO_RUN_MIGRATIONS: "false"
     depends_on:
       postgres:
@@ -484,14 +843,47 @@ services:
       - ./:/app
     working_dir: /app
     healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/ready" ]
+      # Reproduced: billing-edge (billing_edge.py) is a
+      # separate FastAPI app from api/metrics-api's main.py -- it never
+      # imported the shared /ready route those two serve, only its own
+      # /api/v1/billing/webhooks/stripe and /health. A /ready probe here
+      # always 404s via the app's catch-all handler regardless of actual
+      # readiness, so this healthcheck was permanently unhealthy by
+      # construction. Retargeted to /health.
+      # Stripe secrets ARE supplied on the real deployed stack; what can
+      # still fail there is outbound egress to Stripe, which is a
+      # different thing from an unconfigured secret. On that stack the
+      # three Stripe/license
+      # secrets ARE configured, so /health's overall status ("ok"/"down")
+      # does not depend on Stripe's own outbound reachability --
+      # `stripe_client` is reported separately in the JSON body and is
+      # NOT part of the ok/down decision (billing_edge.py's own
+      # `required_ok` never reads it). What DOES vary with outbound
+      # egress is a LOCAL DEV concern (this repo's own bare bring-up
+      # supplies no secrets at all, so /health legitimately 503s until an
+      # operator supplies them -- see TEST-EVIDENCE) -- a liveness check,
+      # NOT a readiness one, is what this compose file should assert.
+      # This is deliberate and is not a masked failure: the three
+      # Stripe/license secrets are absent from this staging file ON
+      # PURPOSE. They live in the operator's own `ops/.env`, and webhook
+      # delivery is started separately by `scripts/start-stripe.sh`, so a
+      # bare bring-up here reports "the process is up" while /health
+      # honestly discloses which secrets are unset. Reading the 503 as a
+      # defect and "fixing" the probe would flip the container unhealthy
+      # on a stack that is behaving exactly as designed. In short:
+      # "is the process answering on :8000 at all", never "did every
+      # downstream dependency succeed". wget's exit 4 means the TCP
+      # connect itself failed (process down / port closed); any other
+      # exit (0 success, 8 a non-2xx HTTP status) means it answered.
+      test: [ "CMD-SHELL", "wget -q -O /dev/null http://localhost:8000/health; test $? -ne 4" ]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 30s
 
   # ---------------------------------------------------------------------------
-  # ARCHIVED (CHAOS-4164, 2026-08-23): Python/Celery worker fleet.
+  # ARCHIVED (CHAOS-4164, 2026-08-23; gated CHAOS-3088): Python/Celery worker
+  # fleet.
   #
   # Go owns every current production job and schedule; every Python Celery
   # worker and Beat service was stopped in production 2026-08-19 (CHAOS-4026).
@@ -504,11 +896,17 @@ services:
   # diagnose a live incident: it has no consumers wired to current queues and
   # no operator has kept its routing current since the cutover.
   #
-  # This comment is not a guard: nothing below is profile-gated, so a bare
-  # `docker compose up -d` from this file still starts them, same as before
-  # this archival -- intentional here (local-dev parity), unlike the
-  # production/swarm compose files where the same lack of gating is a real
-  # accidental-resurrection risk (see compose.production.yml's ARCHIVED note).
+  # CHAOS-3088: a bare `docker compose up -d` from this file used to start
+  # these five unconditionally -- the comment above was explicitly "not a
+  # guard." It now is one: `profiles: [celery-legacy]` on `worker` below
+  # (inherited by every sibling through `<<: *worker-base`) means a default
+  # `up` starts none of them; the Go fleet after this block is the
+  # unconditional default instead. Opt in with `--profile celery-legacy` to
+  # bring the archived fleet back for local-dev parity or historical
+  # reference. This still differs from the production/swarm compose files,
+  # which carry their own, separately-tracked archival note
+  # (compose.production.yml's ARCHIVED comment) and are not gated by this
+  # change.
   # ---------------------------------------------------------------------------
 
   # ---------------------------------------------------------------------------
@@ -525,6 +923,15 @@ services:
   # worker-heavy so telemetry survives one pool flooding (CHAOS-2299).
   # ---------------------------------------------------------------------------
   worker: &worker-base
+    profiles: [celery-legacy]
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -590,6 +997,782 @@ services:
     command: -A dev_health_ops.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
 
   # ---------------------------------------------------------------------------
+  # Go/River workers (CHAOS-3142) -- the unconditional default as of
+  # CHAOS-3088. No `profiles:` here, unlike the archived Celery fleet above:
+  # this is the fleet a bare `docker compose up -d` now actually runs,
+  # folded in from deploy/docker-compose/compose.go-workers.yml (kept there
+  # too, for compose.production.yml's separate overlay path, still at its
+  # own `replicas: 0` -- unaffected by this PR). The nine long-running
+  # worker/reconciler/scheduler/stream processes below run at
+  # `deploy.replicas: 1` each -- one each is the intended shape, while
+  # CHAOS-3087's deployment.json still declares every process
+  # `enabled_by_default: false` / `desired_replicas: 0` (a deliberate,
+  # out-of-scope-for-this-PR gap: see this PR's RISK-NOTES and the tracked
+  # follow-up ticket). The one-shot setup chain (go-river-provision/
+  # go-river-migrate/go-contractcheck) is unaffected: `restart: "no"`, no
+  # `deploy:` block, runs to completion once per `up` regardless.
+  # ---------------------------------------------------------------------------
+
+  # The canonical Python migrate service (above) owns Alembic and
+  # ClickHouse. Re-run role provisioning only after it completes so guarded
+  # grants see every current semantic table, including an already
+  # initialized local volume.
+  go-river-provision:
+    # The default here is `dev-hops-runner`, the family the release
+    # workflow actually publishes for `docker/Dockerfile` target `runner`,
+    # not the `ghcr.io/your-org/...` placeholder a production renderer
+    # uses: that placeholder cannot be pulled, which is why carrying it as
+    # this file's local default was wrong. This service needs the Ops
+    # runtime image (it runs `psql` AND the repo's own tooling), not a
+    # bare postgres client image, and that is exactly what the build block
+    # below produces and tags.
+    # This root file is a STAGING file that honours an image pin by
+    # default -- `pull_policy` is left at compose's own default
+    # (`missing`: reuse an already-built/pulled local tag if one exists,
+    # else build) rather than forcing a rebuild every run. The CHAOS-5437
+    # cross-tree lockstep this used to guard against is closed by pinning
+    # every image to the ONE sha the prebuild produces
+    # (`job6-prebuild/*:<sha>`), not by forcing a build here.
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: runner
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      # The root `postgres` service above creates the
+      # superuser identity postgres/postgres/postgres (container_name:
+      # postgres, lines ~97-102) -- NOT a `devhealth` role or database.
+      # (A)'s defaults assumed compose.production.yml's postgres identity,
+      # which this file does not share. Match `migrate`'s own
+      # POSTGRES_URI default (line ~252) instead of inventing a second
+      # convention.
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_DOMAIN_DATABASE_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        exec psql \
+          --host="${POSTGRES_HOST:-postgres}" \
+          --username="${POSTGRES_USER:-postgres}" \
+          --dbname="${POSTGRES_DB:-postgres}" \
+          --set=domain_role="$$RIVER_DOMAIN_DATABASE_ROLE" \
+          --set=queue_role="$$RIVER_QUEUE_DATABASE_ROLE" \
+          --set=coordinator_role="$$RIVER_COORDINATOR_DATABASE_ROLE" \
+          --set=domain_password="$$RIVER_DOMAIN_DATABASE_PASSWORD" \
+          --set=queue_password="$$RIVER_QUEUE_DATABASE_PASSWORD" \
+          --set=coordinator_password="$$RIVER_COORDINATOR_DATABASE_PASSWORD" \
+          --file=/usr/local/share/dev-health/provision_river_roles.sql
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Apply the pinned River bundle with the elevated local/admin DSN, then
+  # independently check that the resulting schema is current. Neither DSN
+  # nor this binary is exposed to a long-running Go service.
+  go-river-migrate:
+    # Same as go-river-provision above -- default `pull_policy` (reuse a
+    # cached local build if one exists); lockstep is closed by the
+    # single-sha pin the prebuild produces, not by forcing a rebuild here.
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runner
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - >-
+        if [ -z "$$MIGRATION_DATABASE_URI" ];
+        then export MIGRATION_DATABASE_URI="postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:5432/$$POSTGRES_DB";
+        fi;
+        dev-health-worker-migrate
+        && dev-health-worker-migrate --check
+    environment:
+      MIGRATION_DATABASE_URI: ${GO_WORKER_MIGRATION_DATABASE_URI:-}
+      # Same fix as go-river-provision above -- the
+      # root `postgres` service's superuser identity is postgres/postgres,
+      # not `devhealth`.
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
+      RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+      RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+      # This service never forwarded the coordinator
+      # role/password, unlike go-river-provision just above it -- overriding
+      # RIVER_COORDINATOR_DATABASE_ROLE away from its default then failed
+      # migration ("River schema or privilege policy was not applied") since
+      # dev-health-worker-migrate applied the privilege policy against the
+      # unexported default name instead. The deleted
+      # deploy/go-workers/compose-go-workers.yml overlay forwarded this.
+      RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+      RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+    depends_on:
+      go-river-provision:
+        condition: service_completed_successfully
+
+  # Validate the exact checked-in job registry and worker manifest before
+  # Compose is allowed to start any long-running Go process.
+  go-contractcheck:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_GO_CONTRACTCHECK_IMAGE:-ghcr.io/full-chaos/dev-health-go-contractcheck:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: contractcheck
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    command: [validate]
+    depends_on:
+      go-river-migrate:
+        condition: service_completed_successfully
+
+  # On a fresh Go-default bring-up, the four
+  # sync-dispatch "frozen kinds" alembic migration 0049 seeds are assigned
+  # transport `celery` -- the reconciler's `sync_dispatch_route_fence`
+  # readiness check (internal/syncroute.Fence.Check) correctly refuses
+  # readiness on that drift, since nothing actually consumes Celery
+  # anymore. Folded in from the proven design already running the shared
+  # bigboy stack (compose/compose.go.workers.yml, untracked, outside this
+  # repository): `dev-health-workerctl` mints and uses an audited operator
+  # credential to flip each kind to `river`, the exact reference
+  # implementation option (a) names. This is the default for THIS file;
+  # `sync.provider_unit`'s own canary-route activation (the fifth
+  # `job-routes apply` the bigboy overlay also runs) is NOT folded in --
+  # that promotion is a separate, already-tracked decision, not a
+  # compose default.
+  #
+  # dev-health-workerctl authenticates its very first database action (the
+  # operator token) against `internal_service_credentials` -- there is no
+  # Go-native way to mint that row, so this one-shot reuses the existing
+  # Python CLI command the bigboy overlay also uses
+  # (`service-credentials create`), same local build as `migrate`/`worker`
+  # above. Idempotent by construction: it only mints a token when the
+  # shared volume file is empty.
+  go-worker-operator-credential:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      target: runner
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 0.0.0
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    restart: "no"
+    read_only: true
+    # codex proof (executed): Docker creates a named volume's mount point
+    # root:root, so the usual 65532:65532 non-root user this file's other
+    # one-shot steps run as cannot write the token file into it at all
+    # ("Permission denied" -- reproduced, then fixed). Matches the bigboy
+    # overlay's own `user: "0:0"` for this exact service; the minted file
+    # is chown'd to 65532:65532 and chmod 0400 below, so the route-activate
+    # chain (which mounts this volume read-only as that same non-root user)
+    # can read it, but nothing else can. codex proof (executed, three
+    # rounds): dropping every capability (this file's usual one-shot
+    # convention) made even uid 0 fail "Operation not permitted" on, in
+    # order, the initial file create (needs DAC_OVERRIDE -- a dropped-
+    # capability root does not bypass permission bits the way an
+    # unconstrained root does), `chown` (needs CHOWN), and `chmod` of the
+    # now-non-root-owned file (needs FOWNER) -- reproduced and fixed each
+    # time. Add back only those three rather than keep every root
+    # capability, which is what the bigboy overlay's own version of this
+    # service does instead.
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      <<: *env
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        token=/run/go-worker-operator/token
+        if [ ! -s "$$token" ]; then
+          umask 077
+          dev-hops service-credentials create \
+            --service worker-operator \
+            --scope workers:read \
+            --scope workers:operate > "$$token.tmp"
+          chown 65532:65532 "$$token.tmp"
+          chmod 0400 "$$token.tmp"
+          mv "$$token.tmp" "$$token"
+        fi
+    volumes:
+      - go_worker_operator_token:/run/go-worker-operator
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  go-sync-dispatch-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-dispatch-sync-run
+      - dispatch_sync_run
+
+  go-sync-finalize-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-finalize-sync-run
+      - finalize_sync_run
+    depends_on:
+      # The operator intentionally permits one audited mutation at a time --
+      # serialize the four route changes rather than race its advisory lock
+      # with four parallel one-shot containers.
+      go-sync-dispatch-route-activate:
+        condition: service_completed_successfully
+      go-worker-operator-credential:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-sync-post-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-post-sync
+      - post_sync
+    depends_on:
+      go-sync-finalize-route-activate:
+        condition: service_completed_successfully
+      go-worker-operator-credential:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-sync-reference-route-activate:
+    <<: *go-worker-route-activate
+    command:
+      - routes
+      - apply
+      - --reason
+      - local_compose_start
+      - --correlation-id
+      - local-compose-reference-discovery
+      - reference_discovery
+    depends_on:
+      go-sync-post-route-activate:
+        condition: service_completed_successfully
+      go-worker-operator-credential:
+        condition: service_completed_successfully
+      go-river-migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+
+  go-worker-heavy: &go-worker
+    # `build:` lets this file build the
+    # same tree's image locally when asked (`docker compose build`/
+    # `up --build`); `image:` stays so `DEV_HEALTH_GO_WORKER_IMAGE` can
+    # pin an already-published tag OR DIGEST instead.
+    # This anchor briefly carried a `pull_policy: build` hardening; it is
+    # gone, because pinning every image to one sha is the call that was
+    # already made and it is what closes the lockstep. This root file is a
+    # STAGING file that honours an `*_IMAGE` pin BY DEFAULT.
+    # `pull_policy` is left at compose's own default (`missing`): a
+    # digest or tag named here is pulled/reused as-is, never rejected for
+    # "cannot contain a digest" (that rejection, r5's P1, was `pull_policy:
+    # build` unconditionally forcing this image's OWN name to double as a
+    # build output tag -- gone now that nothing forces a build). The
+    # CHAOS-5437 cross-tree posture-manifest lockstep this used to guard
+    # against is now closed by pinning EVERY image to the ONE sha JOB 6's
+    # prebuild produces (`job6-prebuild/*:<sha>`), never by forcing a
+    # build on every bring-up. `docker compose build`/`up --build` still
+    # builds this tree on request via the `build:` block below.
+    image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: worker
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    labels:
+      dev-health.io/worker-group: heavy
+    restart: unless-stopped
+    read_only: true
+    user: "65532:65532"
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    command:
+      - --queues=investment,metrics,reports,workgraph
+      - --queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1
+      - --worker-group=heavy
+      - --shutdown-timeout=7260s
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-domain-role
+      - *flag-queue-role
+      - *flag-queue-mode
+      - *flag-coordinator-mode
+      - *flag-domain-pooler
+      - *flag-bridge-url-heavy
+      - *flag-bridge-insecure
+      - *flag-log-level
+    environment: &go-worker-env
+      <<: *go-worker-env-base
+    stop_grace_period: 7260s
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      # Every go-* service reads POSTGRES_URI
+      # (domain) and WORKER_DATABASE_URI (queue-control) from
+      # go-worker-env-base -- gate on both poolers' healthchecks, not just
+      # container-started, so a worker doesn't attempt its first connection
+      # before the pooler it targets can actually serve one.
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+      # this group's --operational-bridge-url points at metrics-api, a
+      # separate service with no other dependency edge into it -- gating on
+      # its healthcheck (not just container-started) means this worker
+      # doesn't start dispatching metrics/workgraph jobs before the bridge
+      # target can actually answer them.
+      metrics-api:
+        condition: service_healthy
+    deploy: &go-worker-resources
+      replicas: 1
+      resources:
+        limits: {cpus: "1.0", memory: 1G}
+        reservations: {cpus: "0.25", memory: 256M}
+
+  go-worker-ops:
+    <<: *go-worker
+    labels:
+      dev-health.io/worker-group: ops
+    command:
+      - --queues=coverage,heartbeat,retention,webhooks
+      - --queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4
+      - --worker-group=ops
+      - --shutdown-timeout=960s
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-domain-role
+      - *flag-queue-role
+      - *flag-queue-mode
+      - *flag-coordinator-mode
+      - *flag-domain-pooler
+      - *flag-bridge-url
+      - *flag-bridge-insecure
+      - *flag-log-level
+    # Explicit override (not a merge): the shared &go-worker anchor's own
+    # depends_on includes metrics-api (needed by go-worker-heavy only). This
+    # service does not touch the metrics queue, so it does not inherit that
+    # dependency.
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+    environment:
+      <<: *go-worker-env-base
+    stop_grace_period: 960s
+
+  # This worker group selects both registered sync queues. Its queue set is
+  # a group choice, not a runtime profile.
+  go-worker-sync:
+    <<: *go-worker
+    labels:
+      dev-health.io/worker-group: sync
+    command:
+      - --queues=sync
+      - --queue-concurrency=sync=4
+      - --worker-group=sync
+      - --shutdown-timeout=960s
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-domain-role
+      - *flag-queue-role
+      - *flag-queue-mode
+      - *flag-coordinator-mode
+      - *flag-domain-pooler
+      - *flag-bridge-url
+      - *flag-bridge-insecure
+      - *flag-log-level
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+    environment:
+      <<: *go-worker-env-base
+    stop_grace_period: 960s
+
+  # sync_provider is its own process, exactly as the Celery fleet splits
+  # worker-ingest and worker-heavy out by queue. It is NOT fused into the
+  # sync worker above: startup validation requires selected queues to equal
+  # CONSTRUCTED queues, and buildProviderSyncWorker constructs nothing while
+  # every provider route is default-off (CHAOS-3926).
+  go-worker-sync-provider:
+    <<: *go-worker
+    labels:
+      dev-health.io/worker-group: sync-provider
+    command:
+      - --queues=sync_provider
+      - --queue-concurrency=sync_provider=2
+      - --worker-group=sync-provider
+      - --shutdown-timeout=960s
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-domain-role
+      - *flag-queue-role
+      - *flag-queue-mode
+      - *flag-coordinator-mode
+      - *flag-domain-pooler
+      - *flag-bridge-url
+      - *flag-bridge-insecure
+      - *flag-log-level
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+    environment:
+      <<: *go-worker-env-base
+    stop_grace_period: 960s
+
+  go-reconciler:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
+    # Default pull_policy, see go-worker-heavy's comment above.
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: reconciler
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    labels:
+      dev-health.io/worker-group: reconciler
+    # CHAOS-3092 made "no Celery consumer serves provider units" true of
+    # every deployment, which is exactly the assertion SweepModeActive
+    # encodes -- so the sweep ships ACTIVE rather than as an operator
+    # opt-in. A FLAG, not an environment entry: only credentials render
+    # through `environment:`, every other setting is visible in `command:`.
+    command:
+      - --shutdown-timeout=60s
+      - --unreclaimable-sweep=${SYNC_UNRECLAIMABLE_SWEEP:-active}
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-domain-role
+      - *flag-queue-role
+      - *flag-queue-mode
+      - *flag-coordinator-mode
+      - *flag-domain-pooler
+      - *flag-bridge-url
+      - *flag-bridge-insecure
+      - *flag-log-level
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+    environment:
+      <<: *go-worker-env-base
+    stop_grace_period: 60s
+    # Ported from the now-deleted deploy/go-workers/compose-go-workers.yml
+    # (CHAOS-3142) rather than dropped: per-stage budgets and the
+    # step-overrun watchdog (internal/syncreconciler) make the process stay
+    # up and mark /readyz unhealthy when a stage is stuck; this healthcheck
+    # is what turns that into a container status Docker can actually see
+    # (`docker ps`, `depends_on: condition: service_healthy` elsewhere in
+    # this file). Reproduced: it does NOT itself trigger a
+    # restart -- `restart: unless-stopped` (inherited from &go-worker)
+    # restarts on container EXIT only; a process that stays running but
+    # reports unhealthy (proven by freezing it with SIGSTOP: RestartCount
+    # stayed 0, State.Health.Status went healthy->unhealthy->healthy again
+    # on SIGCONT, container never restarted) is exactly the case this
+    # healthcheck exists to make OBSERVABLE, not to remediate -- recovery
+    # from a stuck stage is the step-overrun watchdog's own job inside the
+    # process. The runtime image has no shell/curl/wget, so this
+    # invokes the reconciler binary's own `healthcheck` subcommand
+    # (cmd/dev-health-reconciler/main.go), which queries this same
+    # container's own /readyz over loopback and mirrors that status as its
+    # exit code. No other service in this fleet declares one to copy
+    # interval/timeout/retries from -- these are this service's own.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dev-health-reconciler", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  go-scheduler:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:latest}
+    # Default pull_policy, see go-worker-heavy's comment above.
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: scheduler
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    labels:
+      dev-health.io/worker-group: scheduler
+    command:
+      - --shutdown-timeout=60s
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-domain-role
+      - *flag-queue-role
+      - *flag-queue-mode
+      - *flag-coordinator-mode
+      - *flag-domain-pooler
+      - *flag-bridge-url
+      - *flag-bridge-insecure
+      - *flag-log-level
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+      pgbouncer-river-coordinator:
+        condition: service_healthy
+    environment:
+      <<: *go-worker-env-base
+    stop_grace_period: 60s
+
+  go-stream-external:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    # Default pull_policy, see go-worker-heavy's comment above.
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: stream-runner
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    labels:
+      dev-health.io/worker-group: stream-external
+    command:
+      - --profile=external
+      - --shutdown-timeout=60s
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-domain-role
+      - *flag-queue-role
+      - *flag-queue-mode
+      - *flag-coordinator-mode
+      - *flag-domain-pooler
+      - *flag-bridge-url
+      - *flag-bridge-insecure
+      - *flag-log-level
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+    environment:
+      <<: *go-worker-env-base
+      # Not a River-queue consumer, no
+      # coordinator-claim path -- neutralize the shared base's coordinator
+      # wiring rather than inherit it (same pattern the bigboy overlay this
+      # was folded from uses for its own stream services).
+      COORDINATOR_DATABASE_URI: ""
+    stop_grace_period: 60s
+
+  go-stream-ingest:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: stream-runner
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    labels:
+      dev-health.io/worker-group: stream-ingest
+    command:
+      - --profile=ingest
+      - --shutdown-timeout=60s
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-domain-role
+      - *flag-queue-role
+      - *flag-queue-mode
+      - *flag-coordinator-mode
+      - *flag-domain-pooler
+      - *flag-bridge-url
+      - *flag-bridge-insecure
+      - *flag-log-level
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+    environment:
+      <<: *go-worker-env-base
+      # Not a River-queue consumer, no
+      # coordinator-claim path -- neutralize the shared base's coordinator
+      # wiring rather than inherit it (same pattern the bigboy overlay this
+      # was folded from uses for its own stream services).
+      COORDINATOR_DATABASE_URI: ""
+    stop_grace_period: 60s
+
+  # PagerDuty webhook delivery is independently routable from dataset sync,
+  # so it runs as its own stream family rather than sharing the external
+  # runner.
+  go-stream-pagerduty:
+    <<: *go-worker
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: stream-runner
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    labels:
+      dev-health.io/worker-group: stream-pagerduty
+    command:
+      - --profile=pagerduty
+      - --shutdown-timeout=60s
+      - *flag-http-addr
+      - *flag-river-schema
+      - *flag-domain-role
+      - *flag-queue-role
+      - *flag-queue-mode
+      - *flag-coordinator-mode
+      - *flag-domain-pooler
+      - *flag-bridge-url
+      - *flag-bridge-insecure
+      - *flag-log-level
+    depends_on:
+      go-contractcheck:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-river-queue:
+        condition: service_healthy
+    environment:
+      <<: *go-worker-env-base
+      # Not a River-queue consumer, no
+      # coordinator-claim path -- neutralize the shared base's coordinator
+      # wiring rather than inherit it (same pattern the bigboy overlay this
+      # was folded from uses for its own stream services).
+      COORDINATOR_DATABASE_URI: ""
+    stop_grace_period: 60s
+
+  # ---------------------------------------------------------------------------
   # Observability — SigNoz (distributed tracing + metrics)
   # ---------------------------------------------------------------------------
   # Run SigNoz separately from its own compose file:
@@ -617,7 +1800,11 @@ services:
     container_name: bugsink
     restart: unless-stopped
     environment:
-      DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/bugsink"
+      # Class sweep over the whole file, not only the knob found: connects as the postgres superuser, whose
+      # credentials are now overridable at the server (above) -- the
+      # `bugsink` DATABASE NAME stays a literal on purpose (its own fixed
+      # sibling database, unrelated to POSTGRES_DB).
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/bugsink"
       SECRET_KEY: ${BUGSINK_SECRET_KEY:?BUGSINK_SECRET_KEY must be set}
       BASE_URL: ${BUGSINK_BASE_URL:-http://localhost:8800}
       PORT: "8000"

@@ -180,7 +180,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 _LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
 _SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
-_GO_WORKER_OVERLAY = _REPO_ROOT / "deploy" / "go-workers" / "compose-go-workers.yml"
 _GO_CONFIG_PACKAGE = _REPO_ROOT / "internal" / "platform" / "config"
 _K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
@@ -412,14 +411,80 @@ def test_legacy_compose_migrate_waits_for_postgres_health() -> None:
     assert depends_on.get("clickhouse", {}).get("condition") == "service_healthy"
 
 
-def test_legacy_compose_migrate_uses_local_build_matching_api() -> None:
+def test_every_buildable_service_declares_an_overridable_image() -> None:
+    """A service that declares only `build:` can never honour a release pin:
+    Compose names its image after the project and rebuilds locally, so a
+    one-shot setup job silently keeps running a different build of the same
+    binary the long-running services honour a pin for. That is not
+    hypothetical -- the provisioning and migration jobs shipped exactly that
+    way, while every long-running Go process next to them honoured
+    `DEV_HEALTH_GO_*_IMAGE`.
+
+    Every buildable service therefore carries `image:` in the
+    `${VAR:-default}` form, so an operator pin is honoured by default and the
+    unset case still resolves to the tag its own build produces. The default
+    must name a family the release workflow actually publishes -- a
+    placeholder that cannot be pulled is how the pin was dropped in the first
+    place.
+    """
+    published_families = {
+        "ghcr.io/full-chaos/dev-hops-runner",
+        "ghcr.io/full-chaos/dev-hops-api",
+        "ghcr.io/full-chaos/dev-health-go-worker",
+        "ghcr.io/full-chaos/dev-health-go-scheduler",
+        "ghcr.io/full-chaos/dev-health-go-reconciler",
+        "ghcr.io/full-chaos/dev-health-go-stream-runner",
+        "ghcr.io/full-chaos/dev-health-go-operator",
+        "ghcr.io/full-chaos/dev-health-go-contractcheck",
+        "ghcr.io/full-chaos/dev-health-go-migrate",
+    }
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    buildable = {
+        name: service
+        for name, service in services.items()
+        if isinstance(service.get("build"), dict)
+    }
+    assert buildable, "expected compose.yml to declare buildable services"
+
+    for name, service in sorted(buildable.items()):
+        image = service.get("image")
+        assert image, (
+            f"{name} declares build: with no image:, so a release pin cannot "
+            f"reach it and it will always run a locally built image"
+        )
+        match = re.fullmatch(r"\$\{([A-Z0-9_]+):-(.+)\}", image)
+        assert match, (
+            f"{name}'s image must be an overridable ${{VAR:-default}} pin so "
+            f"an operator can supply a published tag or digest: {image!r}"
+        )
+        variable, default = match.groups()
+        assert variable.endswith("_IMAGE"), (
+            f"{name}'s pin variable should end in _IMAGE like every sibling: "
+            f"{variable!r}"
+        )
+        family = default.rsplit(":", maxsplit=1)[0]
+        assert family in published_families, (
+            f"{name}'s default image {default!r} does not name a family the "
+            f"release workflow publishes -- an unpullable default is how the "
+            f"pin was silently dropped before"
+        )
+
+
+def test_legacy_compose_migrate_runs_the_same_image_as_api() -> None:
+    """`migrate` applies the schema the `api` process then serves. If the two
+    ever resolve to different builds of the same tree, the schema applied and
+    the code reading it disagree, and nothing in the bring-up says so. They
+    must therefore share BOTH halves of their image identity: the same local
+    build block, and the same pin variable so an operator override moves them
+    together or not at all.
+    """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     migrate = services["migrate"]
     api = services["api"]
 
-    assert migrate.get("image") is None
     assert isinstance(migrate.get("build"), dict)
     assert migrate["build"] == api["build"]
+    assert migrate["image"] == api["image"]
 
 
 def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
@@ -544,7 +609,7 @@ def test_provision_river_roles_sql_is_not_a_grant_authority() -> None:
     # follows from the checks below. This script's only string literals are
     # role names and passwords passed in as psql variables, none of which
     # contain `--` today, so this is a latent gap in the guard rather than a
-    # live false negative -- flagged by codex round 2 on CHAOS-4261's PR. A
+    # live false negative -- found on CHAOS-4261's PR. A
     # full quote-aware tokenizer was judged disproportionate for a ~100-line
     # bootstrap script; if this script ever grows a literal containing `--`,
     # this comment is the signal to revisit that judgment.
@@ -610,12 +675,12 @@ def test_init_extra_dbs_sh_is_only_reachable_through_postgres_container_init() -
         "init-extra-dbs.sh must be mounted into /docker-entrypoint-initdb.d/ (initdb-only, never re-run against an existing volume)"
     )
 
-    # A comment cross-referencing the filename (deploy/go-workers/
-    # compose-go-workers.yml does this, explaining why go-river-provision
-    # exists at all) is documentation, not a reachability path -- check each
-    # service's actual volumes/entrypoint/command fields, the only places a
-    # compose file can make Postgres execute a script, not the raw file text.
-    for other_compose in (_PROD_COMPOSE, _SWARM_STACK, _GO_WORKER_OVERLAY):
+    # A comment cross-referencing the filename (root compose.yml's
+    # go-river-provision comment does this) is documentation, not a
+    # reachability path -- check each service's actual
+    # volumes/entrypoint/command fields, the only places a compose file can
+    # make Postgres execute a script, not the raw file text.
+    for other_compose in (_PROD_COMPOSE, _SWARM_STACK, _SPLIT_COMPOSE_OVERLAY):
         other_services = _load_yaml(other_compose).get("services") or {}
         for name, service in other_services.items():
             for field in ("volumes", "entrypoint", "command"):
@@ -1402,13 +1467,20 @@ def test_go_config_package_declares_no_route_switches() -> None:
 def test_compose_declares_no_provider_route_switches() -> None:
     """Ticket step-5 acceptance: the rendered compose config contains ZERO
     ``WORKER_*_ENABLED`` keys anywhere -- not on the shared Celery env
-    anchor, not on worker/beat, not on the additive Go profile. The route
-    switch plane is deleted, not defaulted off.
+    anchor, not on worker/beat, not on the go-* fleet. The route switch
+    plane is deleted, not defaulted off.
 
     The GitHub work-item route's two file-path configs are NOT switches
     (``WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH`` /
     ``..._INVESTMENT_CONFIG_PATH``) and must still be present, unset by
-    default.
+    default, on the Python side. CHAOS-3088 deleted deploy/go-workers/
+    compose-go-workers.yml, whose go-worker service used to carry these two
+    keys too (pass-through, unset) -- the folded-in go-* fleet (copied from
+    deploy/docker-compose/compose.go-workers.yml) never has, since that file
+    relies on the worker image's own packaged /app/config default instead;
+    that is a pre-existing difference between the two overlays, not
+    something this PR changes, so only the negative (no switches) half
+    extends to the go-* fleet below.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
 
@@ -1421,15 +1493,12 @@ def test_compose_declares_no_provider_route_switches() -> None:
     for name in _PROVIDER_ROUTE_CONFIG_NAMES:
         assert shared_env[name] == f"${{{name}:-}}"
 
-    go_worker_env = _load_yaml(_GO_WORKER_OVERLAY)["services"]["go-worker"][
-        "environment"
-    ]
-    matched = [
-        key for key in go_worker_env if _WORKER_ENABLED_SWITCH_PATTERN.fullmatch(key)
-    ]
-    assert not matched, f"go-worker still declares route switches: {sorted(matched)}"
-    for name in _PROVIDER_ROUTE_CONFIG_NAMES:
-        assert go_worker_env[name] == f"${{{name}:-}}"
+    for name, spec in services.items():
+        if not name.startswith("go-"):
+            continue
+        env = spec.get("environment") or {}
+        matched = [key for key in env if _WORKER_ENABLED_SWITCH_PATTERN.fullmatch(key)]
+        assert not matched, f"{name} still declares route switches: {sorted(matched)}"
 
 
 def test_provider_route_env_example_declares_no_route_switches() -> None:
@@ -1451,28 +1520,44 @@ def test_provider_route_env_example_declares_no_route_switches() -> None:
 
 
 def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
-    """CHAOS-3142/CHAOS-3143: no `go-*` service may `depends_on` the Python
-    `migrate` service.
+    """CHAOS-3142/CHAOS-3143: no long-running `go-*` worker/reconciler/
+    scheduler/stream process may `depends_on` the Python `migrate` service.
 
-    `depends_on` pulls a service in regardless of profile. The application
-    migrator defers 0066 by default, but an environment carrying the explicit
-    cutover authorization would still flip routes before the downstream Go
-    runtimes can start, violating 0066's ordering contract.
-
-    Standing up the Go observation path must never be able to move real traffic
-    as a side effect, so the Python schema stays an explicitly authorized
-    prerequisite (`migrate postgres --revision 0065`) rather than a compose
-    dependency edge.
+    `depends_on` pulls a service in regardless of profile. On the now-deleted
+    deploy/go-workers/compose-go-workers.yml overlay (CHAOS-3088 superseded
+    it), `migrate` was NOT part of the default/unconditional service set, so
+    this edge would have forced Alembic to run -- including 0066, the actual
+    Celery->River route cutover -- on a plain `--profile go up -d`, before the
+    downstream Go runtimes could even start. That overlay's fix was to never
+    take the edge at all (a documented manual `migrate postgres upgrade 0065`
+    step instead); this file's `migrate` has no profile of its own and already
+    runs on every plain `up`, Go or not, so that specific risk does not apply
+    to the one-shot provisioning chain here (go-river-provision legitimately
+    waits on it, by design -- see that service's own comment). The invariant
+    this test still enforces: no LONG-RUNNING Go process may carry that edge.
 
     Mutation coverage (manually verified): re-adding
     `migrate: {condition: service_completed_successfully}` to
-    go-worker-migrate's depends_on fails this test.
+    go-worker-heavy's depends_on fails this test.
     """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
-    go_services = {
-        name: spec for name, spec in services.items() if name.startswith("go-")
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    one_shot_setup = {
+        "go-river-provision",
+        "go-river-migrate",
+        "go-contractcheck",
+        # The route-activation chain's own credential-minting step
+        # reuses the Python `service-credentials create` CLI (no Go-native
+        # equivalent exists) and, like go-river-provision, legitimately
+        # waits on `migrate` for the same reason -- it is a one-shot setup
+        # step, not a long-running process that could move traffic.
+        "go-worker-operator-credential",
     }
-    assert go_services, "the overlay must define the go-* services it exists to carry"
+    go_services = {
+        name: spec
+        for name, spec in services.items()
+        if name.startswith("go-") and name not in one_shot_setup
+    }
+    assert go_services, "compose.yml must define the go-* services it exists to carry"
 
     for name, spec in go_services.items():
         depends_on = spec.get("depends_on") or {}
@@ -1487,62 +1572,190 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
         )
 
 
-def test_go_profile_overlay_services_are_all_profile_gated() -> None:
-    """CHAOS-3142: every service the overlay adds must be gated behind the `go`
-    profile, so a default `docker compose up` brings up the unchanged Celery
-    stack and nothing else.
+def test_go_services_are_unconditional_and_celery_is_profile_gated() -> None:
+    """CHAOS-3088: the premise flipped. Go is now this file's unconditional
+    default; the archived Celery fleet is the opt-in.
 
-    This is what makes the overlay safe to leave in place permanently -- the
-    developer opts in per-invocation (`--profile go`) or via COMPOSE_PROFILES in
-    the root `.env`, and forgetting to opt in costs nothing.
+    Before CHAOS-3088, deploy/go-workers/compose-go-workers.yml gated every
+    `go-*` service behind `profiles: ["go"]` so a default `docker compose up`
+    brought up the unchanged Celery stack and nothing else -- that overlay is
+    now deleted. Root compose.yml's own `go-*` fleet (folded in from
+    deploy/docker-compose/compose.go-workers.yml) must declare NO `profiles`
+    key at all, and the five archived Celery services must declare
+    `profiles: ["celery-legacy"]` -- the exact inverse of the old contract.
 
-    Mutation coverage (manually verified): deleting `profiles: ["go"]` from any
-    go-* service fails this test.
+    Mutation coverage (manually verified): adding `profiles: ["go"]` to any
+    go-* service, or removing `profiles: [celery-legacy]` from `worker`,
+    fails this test.
     """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
-    for name, spec in services.items():
-        assert spec.get("profiles") == ["go"], (
-            f'{name} must declare profiles: ["go"] so a default `up` never starts it'
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    go_services = {
+        name: spec for name, spec in services.items() if name.startswith("go-")
+    }
+    assert go_services, "compose.yml must define the go-* services it exists to carry"
+    for name, spec in go_services.items():
+        assert "profiles" not in spec, (
+            f"{name} must not declare profiles: -- the go-* fleet is this "
+            "file's unconditional default, not an opt-in"
+        )
+
+    celery_services = (
+        "worker",
+        "worker-ingest",
+        "worker-external-ingest",
+        "worker-heavy",
+        "beat",
+    )
+    for name in celery_services:
+        assert services[name].get("profiles") == ["celery-legacy"], (
+            f'{name} must declare profiles: ["celery-legacy"] so a default '
+            "`up` never starts the archived Celery fleet"
         )
 
 
-def test_go_profile_overlay_worker_selects_manifest_queues_without_runtime_profile() -> (
-    None
-):
-    """CHAOS-3851: the local River worker uses the registered sync queues.
+def test_go_workers_run_at_one_replica_by_default() -> None:
+    """CHAOS-3088: existing unconditionally is not enough -- the nine
+    long-running Go processes must actually run on a bare `docker compose
+    up`, not merely be buildable and scalable.
 
-    Compose's `go` activation profile is a deployment opt-in and is unrelated
-    to the worker's removed runtime profile contract.
+    This property was asserted nowhere -- mutating
+    `replicas: 1` to `replicas: 0` on the shared `&go-worker-resources`
+    anchor survived the full focused suite (55 passed). Pin it directly.
+
+    The one-shot setup chain (go-river-provision/go-river-migrate/
+    go-contractcheck) has no `deploy:`/replica concept at all
+    (`restart: "no"`) and is deliberately excluded.
     """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
-    worker = services["go-worker"]
-    environment = worker["environment"]
-    assert "DEV_HEALTH_PROFILE" not in environment
-    assert "DEV_HEALTH_QUEUES" not in environment
-    assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
-    assert "DEV_HEALTH_WORKER_GROUP" not in environment
-    arguments = _go_worker_arguments(worker)
-    sync_queues = next(
-        process["queues"]
-        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
-            "processes"
-        ]
-        if process["name"] == "sync"
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    for process, service_name in _SPLIT_COMPOSE_SERVICE_BY_PROCESS.items():
+        deploy = services[service_name].get("deploy") or {}
+        replicas = deploy.get("replicas")
+        # `replicas == 1` alone accepts `True`
+        # (bool is an int subclass, `True == 1`) -- a `replicas: true`
+        # mutation would survive this assertion on every one of the nine
+        # processes unless bool is excluded explicitly.
+        assert (
+            isinstance(replicas, int)
+            and not isinstance(replicas, bool)
+            and replicas == 1
+        ), (
+            f"{service_name} (registry process {process!r}) must default to "
+            f"deploy.replicas: 1 (an int, not a bool), got {replicas!r}"
+        )
+
+
+def test_go_worker_family_has_no_pull_policy_override() -> None:
+    """The root file honours an
+    `*_IMAGE` pin (tag OR digest) by default. `pull_policy: build`
+    and its `*_PULL_POLICY` opt-out are REMOVED -- forcing a build on
+    every bring-up is exactly
+    what made a digest pin unusable (`build tag cannot contain a digest`)
+    in the first place. Every one of the nine long-running
+    processes plus the two one-shot Postgres jobs must be left at
+    Compose's own default (`missing`); the CHAOS-5437 cross-tree lockstep
+    this used to guard against is closed by pinning every image to ONE
+    sha (the prebuild step), not by forcing a build here.
+
+    Executed (see TEST-EVIDENCE): a digest-shaped `DEV_HEALTH_GO_WORKER_
+    IMAGE` now renders and is pulled/reused as given; `docker compose
+    build`/`up --build` still builds this tree on request via the
+    `build:` block each of these services keeps.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    for service_name in list(_SPLIT_COMPOSE_SERVICE_BY_PROCESS.values()) + [
+        "go-river-provision",
+        "go-river-migrate",
+    ]:
+        assert "pull_policy" not in services[service_name], (
+            f"{service_name} must not override pull_policy -- Compose's own "
+            "default ('missing') is what lets an *_IMAGE pin (tag or "
+            "digest) actually be used instead of forcing a rebuild"
+        )
+
+
+def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
+    """go-river-provision and go-river-migrate
+    defaulted their Postgres connection to devhealth/devhealth, inherited
+    unchanged from deploy/docker-compose/compose.go-workers.yml (which
+    assumes compose.production.yml's postgres identity). Root compose.yml's
+    own `postgres` service is postgres/postgres/postgres -- matching
+    `migrate`'s own POSTGRES_URI default already in this file.
+
+    Mutation coverage (manually verified): changing either service's
+    username default back to `devhealth` survived the full focused suite
+    before this test existed (55 passed) -- pin it directly so it cannot
+    regress silently again.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    postgres_env = services["postgres"]["environment"]
+    # go-river-provision/migrate's
+    # entrypoints already read POSTGRES_USER/_PASSWORD overrides to
+    # authenticate against this exact server -- only the server itself
+    # hardcoded past them (same class as POSTGRES_DB below).
+    assert postgres_env["POSTGRES_USER"] == "${POSTGRES_USER:-postgres}"
+    assert postgres_env["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD:-postgres}"
+    # Every downstream consumer below already reads
+    # ${POSTGRES_DB:-postgres} -- the actual server that CREATES the
+    # database at first init was the one hardcoded literal, so overriding
+    # POSTGRES_DB anywhere pointed every consumer at a database that never
+    # got created ("database ... does not exist", exit 2). Unlike
+    # USER/PASSWORD (the fixed bootstrap superuser identity, intentionally
+    # not parameterized), the database NAME is meant to be operator-
+    # choosable -- one source of truth, same var everywhere.
+    assert postgres_env["POSTGRES_DB"] == "${POSTGRES_DB:-postgres}"
+
+    provision_entrypoint = _container_command_string(services["go-river-provision"])
+    assert '--username="${POSTGRES_USER:-postgres}"' in provision_entrypoint
+    assert '--dbname="${POSTGRES_DB:-postgres}"' in provision_entrypoint
+    assert services["go-river-provision"]["environment"]["PGPASSWORD"] == (
+        "${POSTGRES_PASSWORD:-postgres}"
     )
-    assert arguments["--queues"] == ",".join(sync_queues)
-    sync_process = next(
-        process
-        for process in _load_yaml(_REPO_ROOT / "deploy/go-workers/deployment.json")[
-            "processes"
-        ]
-        if process["name"] == "sync"
-    )
-    assert arguments["--queue-concurrency"] == ",".join(
-        f"{entry['queue']}={entry['max_workers']}"
-        for entry in sync_process["queue_workers"]
-    )
-    assert arguments["--worker-group"] == "sync"
-    assert worker["profiles"] == ["go"]
+
+    migrate_env = services["go-river-migrate"]["environment"]
+    assert migrate_env["POSTGRES_USER"] == "${POSTGRES_USER:-postgres}"
+    assert migrate_env["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD:-postgres}"
+    assert migrate_env["POSTGRES_DB"] == "${POSTGRES_DB:-postgres}"
+
+
+def test_go_workers_select_manifest_queues_without_runtime_profile() -> None:
+    """CHAOS-3851: every queue-bearing River worker group uses exactly its
+    registered queues.
+
+    Compose has no activation profile to opt into any more (CHAOS-3088): the
+    go-* fleet is unconditional, folded into root compose.yml from
+    deploy/docker-compose/compose.go-workers.yml. The now-deleted
+    deploy/go-workers/compose-go-workers.yml only ever covered the `sync`
+    group as a single `go-worker` service; this file splits sync and
+    sync-provider out (and heavy/ops besides), so this checks all four
+    queue-bearing groups against their deployment.json process entries.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    processes_by_name = {
+        process["name"]: process
+        for process in _load_yaml(_DEPLOYMENT_JSON)["processes"]
+    }
+    group_to_service = {
+        "heavy": "go-worker-heavy",
+        "ops": "go-worker-ops",
+        "sync": "go-worker-sync",
+        "sync-provider": "go-worker-sync-provider",
+    }
+    for group, service_name in group_to_service.items():
+        worker = services[service_name]
+        environment = worker["environment"]
+        assert "DEV_HEALTH_PROFILE" not in environment
+        assert "DEV_HEALTH_QUEUES" not in environment
+        assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
+        assert "DEV_HEALTH_WORKER_GROUP" not in environment
+        arguments = _go_worker_arguments(worker)
+        process = processes_by_name[group]
+        assert arguments["--queues"] == ",".join(process["queues"]), service_name
+        assert arguments["--queue-concurrency"] == ",".join(
+            f"{entry['queue']}={entry['max_workers']}"
+            for entry in process["queue_workers"]
+        ), service_name
+        assert arguments["--worker-group"] == group, service_name
+        assert "profiles" not in worker
 
 
 def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
@@ -1615,7 +1828,14 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
         assert "@pgbouncer-river-queue:6433/" in environment["WORKER_DATABASE_URI"]
         assert environment["WORKER_DATABASE_MODE"] == "session"
         assert "COORDINATOR_DATABASE_URI" not in environment
-    for service_name in ("go-reconciler", "go-scheduler", "go-worker-route-activate"):
+    # go-worker-route-activate is a top-level `x-` template (codex r4, P1:
+    # a bare `up` must never instantiate it directly), not a service --
+    # check one of its real instances instead.
+    for service_name in (
+        "go-reconciler",
+        "go-scheduler",
+        "go-sync-dispatch-route-activate",
+    ):
         environment = services[service_name]["environment"]
         assert "@pgbouncer-river-queue:6433/" in environment["WORKER_DATABASE_URI"]
         assert (
@@ -1623,6 +1843,59 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
             in environment["COORDINATOR_DATABASE_URI"]
         )
         assert environment["COORDINATOR_DATABASE_MODE"] == "session"
+
+
+def test_billing_edge_healthcheck_is_liveness_not_readiness() -> None:
+    """On
+    the real deployed stack the three Stripe/license secrets ARE
+    configured, so /health's ok/down decision (billing_edge.py's
+    `required_ok`) never reads `stripe_client` -- an operator whose
+    outbound egress to Stripe is blocked still gets /health 200. The only
+    way to see /health 503 in practice is a genuinely unconfigured
+    deployment (this repo's own bare bring-up, by design -- see
+    TEST-EVIDENCE). A healthcheck built on that route must therefore
+    assert LIVENESS (the process answers on :8000 at all), never
+    readiness (every downstream dependency succeeded) -- reusing api/
+    metrics-api's exit-on-non-2xx `wget --spider` form here would make
+    the container flip unhealthy the moment ANY one of the three optional
+    Stripe/license secrets goes missing, none of which billing-edge's own
+    depends_on chain requires for the rest of the default bring-up to
+    succeed.
+
+    The 503 on a bare bring-up is the DESIGNED behaviour, not a masked
+    failure: the three Stripe/license secrets are deliberately absent from
+    the staging compose file, they live in the operator's own `ops/.env`,
+    and webhook delivery is started separately by
+    `scripts/start-stripe.sh`. /health discloses exactly which of them is
+    unset; the healthcheck deliberately does not turn that disclosure into
+    an unhealthy container.
+
+    Mutation coverage (manually verified): reverting to `["CMD", "wget",
+    "--spider", "-q", "http://localhost:8000/health"]` survives every
+    OTHER test in this file (nothing else asserts this array), which is
+    exactly how the readiness-shaped probe shipped unnoticed once already
+    -- pinned here directly.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    healthcheck = services["billing-edge"]["healthcheck"]
+    test = healthcheck["test"]
+    assert test[:1] == ["CMD-SHELL"], (
+        "billing-edge's healthcheck must be a shell form so it can ignore "
+        "the HTTP status code and only fail on a genuine connect failure "
+        f"(exit 4) -- got {test!r}"
+    )
+    command = test[1]
+    assert "wget" in command and "http://localhost:8000/health" in command, (
+        f"billing-edge's healthcheck must still target its own /health route: {command!r}"
+    )
+    assert "--spider" not in command, (
+        "wget --spider fails closed on any non-2xx status (exit 8) -- that "
+        "makes this a readiness check again, the exact class this test guards"
+    )
+    assert re.search(r"-ne\s+4", command) or re.search(r"!=\s*4", command), (
+        f"expected the command to explicitly tolerate every wget exit code "
+        f"except 4 (connection failure): {command!r}"
+    )
 
 
 def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
@@ -1640,15 +1913,22 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
     subcommand (cmd/dev-health-reconciler/main.go), never a CMD-SHELL
     one-liner that could not run in this image at all.
 
-    No other service in this overlay declares a healthcheck to match
-    interval/timeout/retries against -- this asserts the reconciler's own
-    values are present and sane, not copied from a sibling.
+    No other `go-*` service in root compose.yml declares a healthcheck to
+    match interval/timeout/retries against -- this asserts the reconciler's
+    own values are present and sane, not copied from a sibling. (Other,
+    non-Go services in this file -- clickhouse, api, metrics-api,
+    billing-edge -- declare their own unrelated healthchecks; this test only
+    claims uniqueness within the go-* fleet.) Ported from the now-deleted
+    deploy/go-workers/compose-go-workers.yml (CHAOS-3088) -- that file was
+    the only place this healthcheck was defined before being folded into
+    root compose.yml; deploy/docker-compose/compose.go-workers.yml never had
+    it.
 
     Mutation coverage (manually verified): deleting the `healthcheck` key,
     or changing `test` to a CMD-SHELL form, or to a command other than the
     binary's own `healthcheck` subcommand, each fail this test.
     """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
     healthcheck = services["go-reconciler"].get("healthcheck")
     assert healthcheck is not None, "go-reconciler must declare a healthcheck"
 
@@ -1676,13 +1956,110 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
         "start_period",
     }
 
+    # A clause-by-clause mutation setting interval/
+    # timeout/start_period to "-1s" and retries to -1 would SURVIVE a
+    # presence-only assertion -- that alone can't catch a nonsensical
+    # value, only a missing key. Docker itself
+    # renders a negative interval/timeout/start_period without complaint
+    # (`docker compose config --quiet` also passed on it), so nothing else
+    # in the toolchain catches this either.
+    _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m|h)$")
+    for duration_key in ("interval", "timeout", "start_period"):
+        value = healthcheck[duration_key]
+        match = _DURATION_RE.match(str(value))
+        assert match and float(match.group(1)) > 0, (
+            f"go-reconciler healthcheck {duration_key!r}={value!r} must be a "
+            "positive Compose duration (e.g. '15s'), not zero/negative/malformed"
+        )
+    # `isinstance(x, int)` alone accepts `True`
+    # (bool is an int subclass in Python, and `True == 1`) -- a
+    # `retries: true` mutation would survive that assertion unless bool
+    # is excluded explicitly.
+    retries = healthcheck["retries"]
+    assert isinstance(retries, int) and not isinstance(retries, bool) and retries > 0, (
+        f"go-reconciler healthcheck retries={retries!r} must be a positive integer, not a bool"
+    )
+
     for other_name, other_spec in services.items():
-        if other_name == "go-reconciler":
+        if other_name == "go-reconciler" or not other_name.startswith("go-"):
             continue
         assert "healthcheck" not in other_spec, (
             f"{other_name} declares a healthcheck too, but this test's "
-            "docstring claims go-reconciler's is the only one in this "
-            "overlay -- update the docstring if that changed on purpose"
+            "docstring claims go-reconciler's is the only one in the go-* "
+            "fleet -- update the docstring if that changed on purpose"
+        )
+
+
+def test_go_operator_target_services_declare_a_nonempty_command() -> None:
+    """A service built from `docker/go-worker.
+    Dockerfile`'s `operator` target (the four `go-sync-*-route-activate`
+    services, via the shared `x-go-worker-route-activate` anchor) has no
+    ENTRYPOINT of its own baked into the image -- Compose's `command:` is
+    the only thing that tells `dev-health-workerctl` what to do. The
+    anchor itself declares no `command:` (each concrete service supplies
+    its own `routes apply ...` args), so restoring a service that merges
+    the anchor with nothing else silently ships zero args:
+
+        docker run --rm codex-review-r5-go-sync-dispatch-route-activate
+        {"error":{"code":"invalid_request"}}   # exit 1
+
+    The full two-file focused suite (57 tests) passed with this exact
+    mutant present -- nothing was asserting `command` is non-empty for
+    this service family. This test targets the TARGET, not a hardcoded
+    service-name list, so a fifth `operator`-built service added later is
+    covered automatically.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    operator_services = [
+        name
+        for name, spec in services.items()
+        if (spec.get("build") or {}).get("target") == "operator"
+    ]
+    assert operator_services, (
+        "expected at least the four go-sync-*-route-activate services to "
+        "build the 'operator' target -- none found, has the target name "
+        "or build shape changed?"
+    )
+    for name in operator_services:
+        command = services[name].get("command")
+        assert isinstance(command, list) and len(command) > 0, (
+            f"{name} builds the distroless 'operator' target (no image "
+            "ENTRYPOINT args of its own) but declares no non-empty "
+            "`command:` -- it would run with zero args and fail closed "
+            "with {'error': {'code': 'invalid_request'}}"
+        )
+        assert command[:2] == ["routes", "apply"], (
+            f"{name}'s command {command!r} no longer starts with "
+            "['routes', 'apply'] -- update this assertion if that's a "
+            "deliberate change to what the operator binary is invoked to do"
+        )
+        # A prefix-only check (`command[:2]`)
+        # accepts the bare two-element `["routes", "apply"]` -- an
+        # invalid_request-shaped command the
+        # real binary refuses at runtime. Pin the FULL shape: --reason and
+        # --correlation-id flags present, and a real kind as the last
+        # argument (never one of the four canonical kinds by coincidence
+        # -- OUT_OF_VOCABULARY_KIND below is deliberately not one of them,
+        # this list is exhaustive of what compose.yml currently ships).
+        assert (
+            len(command) == 7
+            and command[2] == "--reason"
+            and command[4] == "--correlation-id"
+        ), (
+            f"{name}'s command {command!r} is missing --reason/--correlation-id "
+            "or extra/missing arguments -- the bare ['routes', 'apply'] shape "
+            "fails at runtime with {'error': {'code': 'invalid_request'}}"
+        )
+        valid_kinds = {
+            "dispatch_sync_run",
+            "finalize_sync_run",
+            "post_sync",
+            "reference_discovery",
+        }
+        assert command[-1] in valid_kinds, (
+            f"{name}'s command ends in {command[-1]!r}, not one of the four "
+            f"canonical kinds {sorted(valid_kinds)} -- update this list if a "
+            "kind was deliberately added/renamed"
         )
 
 
@@ -1728,16 +2105,23 @@ def test_go_worker_process_registry_matches_ordering_contract_coverage_maps() ->
 def test_split_compose_and_swarm_go_workers_wire_operational_ordering_contract() -> (
     None
 ):
-    """The fully split compose overlay and its Swarm equivalent each carry
-    all nine registry processes as distinct services -- assert every one
-    resolves OPERATIONAL_ORDERING_CONTRACT in its rendered (post-YAML-merge)
+    """The fully split compose overlay, its Swarm equivalent, and root
+    compose.yml's own folded-in copy (CHAOS-3088) each carry all nine
+    registry processes as distinct services -- assert every one resolves
+    OPERATIONAL_ORDERING_CONTRACT in its rendered (post-YAML-merge)
     environment.
 
     Red on origin/main 2b3032b63: neither file's shared env anchor sets the
     key, so every service is reported missing.
+
+    CHAOS-3088 deleted deploy/go-workers/compose-go-workers.yml, the single-
+    machine overlay that only ever implemented two of these nine processes
+    (`sync` as `go-worker`, and `reconciler`) and had its own, narrower test
+    here -- removed as redundant now that root compose.yml carries the full
+    nine-process split fleet this test already covers.
     """
     processes = [p["name"] for p in _load_yaml(_DEPLOYMENT_JSON)["processes"]]
-    for manifest in (_SPLIT_COMPOSE_OVERLAY, _SWARM_GO_WORKER_OVERLAY):
+    for manifest in (_LEGACY_COMPOSE, _SPLIT_COMPOSE_OVERLAY, _SWARM_GO_WORKER_OVERLAY):
         services = _load_yaml(manifest)["services"]
         for process in processes:
             service_name = _SPLIT_COMPOSE_SERVICE_BY_PROCESS[process]
@@ -1746,24 +2130,6 @@ def test_split_compose_and_swarm_go_workers_wire_operational_ordering_contract()
                 f"{manifest.name}:{service_name} (registry process "
                 f"{process!r}) is missing OPERATIONAL_ORDERING_CONTRACT"
             )
-
-
-def test_single_machine_go_overlay_wires_operational_ordering_contract() -> None:
-    """compose-go-workers.yml (`_GO_WORKER_OVERLAY`) is the single
-    hand-maintained local-machine topology described in its own header
-    comment -- it implements only the `sync` (as service `go-worker`) and
-    `reconciler` registry processes, not the full split fleet. Assert those
-    two, not the nine-process registry that the split overlay above covers.
-
-    Red on origin/main 2b3032b63: neither service's environment sets the
-    key.
-    """
-    services = _load_yaml(_GO_WORKER_OVERLAY)["services"]
-    for service_name in ("go-worker", "go-reconciler"):
-        env = services[service_name].get("environment") or {}
-        assert "OPERATIONAL_ORDERING_CONTRACT" in env, (
-            f"{service_name} is missing OPERATIONAL_ORDERING_CONTRACT"
-        )
 
 
 def test_kubernetes_go_workers_wire_operational_ordering_contract() -> None:
@@ -1833,7 +2199,7 @@ def test_helm_go_workers_wire_operational_ordering_contract() -> None:
 
 
 def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
-    """codex review (delta round 2, P1): migration 067 itself checks
+    """Migration 067 itself checks
     OPERATIONAL_ORDERING_CONTRACT to decide whether to apply the
     ordering-contract cutover. Wiring only the workers (the tests above)
     left the migrate job/Job unable to receive an operator's export at all
@@ -1882,7 +2248,7 @@ def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
 
 
 def test_readme_documents_the_kubernetes_cutover_has_no_shell_export() -> None:
-    """codex review (delta round 4, P1): unlike Compose/Swarm/Helm, the raw
+    """Unlike Compose/Swarm/Helm, the raw
     Kubernetes manifests have no shell-interpolation surface -- exporting
     OPERATIONAL_ORDERING_CONTRACT=2 before `kubectl apply` silently does
     nothing, because the ConfigMap value is a literal. The only correct

@@ -21,10 +21,13 @@ lifecycle: active
 current production schedule.** Every Python Celery worker and Beat service has
 been stopped in production since 2026-08-19 (CHAOS-4026): they remain defined
 in `compose.yml` for local-dev parity and as historical evidence of the
-pre-cutover vocabulary, but nothing in production consumes them. Configure and
-operate the Go worker groups and the Go scheduler described below; read the
-Celery section only to understand a queue name you find in an old issue,
-runbook, or `rollback_route` value.
+pre-cutover vocabulary, but nothing in production consumes them. Since
+CHAOS-3088, root `compose.yml` itself no longer starts them by default either
+-- the Go/River fleet is that file's unconditional default, and the five
+Celery services are an explicit opt-in behind `profiles: [celery-legacy]`.
+Configure and operate the Go worker groups and the Go scheduler described
+below; read the Celery section only to understand a queue name you find in an
+old issue, runbook, or `rollback_route` value.
 {: .fc-page-lede }
 
 For worker-group semantics (identity vs. routing), the two-plane
@@ -34,15 +37,18 @@ this page does not repeat that content.
 
 ## Historical Celery topology (dormant)
 
-**ARCHIVED (CHAOS-4164, 2026-08-23):** every checked-in compose surface that
-still defines the `worker`/`worker-ingest`/`worker-external-ingest`/
-`worker-heavy`/`beat` Celery services -- `compose.yml`,
+**ARCHIVED (CHAOS-4164, 2026-08-23; gated CHAOS-3088):** every checked-in
+compose surface that still defines the `worker`/`worker-ingest`/
+`worker-external-ingest`/`worker-heavy`/`beat` Celery services -- `compose.yml`,
 `deploy/docker-compose/compose.production.yml`, and
-`deploy/docker-swarm/stack.yml` -- now carries an ARCHIVED banner comment at
-the service definition itself, so a reader of the compose file alone (not
-just this doc) sees that the fleet is not live topology. Nothing below
-changes what those files run; this only makes their own text match what this
-page already said.
+`deploy/docker-swarm/stack.yml` -- carries an ARCHIVED banner comment at the
+service definition itself, so a reader of the compose file alone (not just
+this doc) sees that the fleet is not live topology. Root `compose.yml` also
+gates the fleet behind `profiles: [celery-legacy]` as of CHAOS-3088, so a
+plain `docker compose up -d` from that file no longer starts it at all;
+`compose.production.yml` and `stack.yml` are unchanged by that PR and still
+start the archived fleet unconditionally (their own, separately tracked
+archival note says so).
 
 Kept for context, not for operation. Before 2026-08-19 these were configured together:
 
@@ -106,6 +112,63 @@ prove that no duplicate or missing domain effect occurs; it no longer needs
 to preserve a Celery rollback path, because there is no live Celery consumer
 left to roll back to.
 
+### Pinning a published image in the root file
+
+Root `compose.yml` is a **staging file**: every service that declares a
+`build:` block also declares `image:` in the `${VAR:-default}` form, so an
+operator pin reaches all of them and not just the long-running ones. The
+one-shot setup jobs are included on purpose -- a provisioning or migration
+job that keeps building locally while the processes beside it honour a
+release pin is how a setup step ends up running a different build of the
+same binary.
+
+| Pin variable | Default family | Services |
+| --- | --- | --- |
+| `DEV_HEALTH_GO_WORKER_IMAGE` | `dev-health-go-worker` | the four `go-worker-*` processes |
+| `DEV_HEALTH_GO_RECONCILER_IMAGE` | `dev-health-go-reconciler` | `go-reconciler` |
+| `DEV_HEALTH_GO_SCHEDULER_IMAGE` | `dev-health-go-scheduler` | `go-scheduler` |
+| `DEV_HEALTH_GO_STREAM_RUNNER_IMAGE` | `dev-health-go-stream-runner` | the three `go-stream-*` processes |
+| `DEV_HEALTH_GO_OPERATOR_IMAGE` | `dev-health-go-operator` | the four `go-sync-*-route-activate` one-shots |
+| `DEV_HEALTH_GO_CONTRACTCHECK_IMAGE` | `dev-health-go-contractcheck` | `go-contractcheck` |
+| `DEV_HEALTH_IMAGE` | `dev-hops-runner` | `go-river-provision`, `go-river-migrate`, `go-worker-operator-credential`, and the dormant Celery services |
+| `DEV_HEALTH_API_IMAGE` | `dev-hops-api` | `api`, `metrics-api`, `billing-edge`, `migrate` |
+
+Every default names a family the release workflow actually publishes, so
+the unset case resolves to the same tag the local `build:` produces rather
+than to a placeholder that cannot be pulled. `pull_policy` is
+left at Compose's own default (`missing`), so an operator pin -- a
+published tag OR a content digest -- is honoured as given: `docker
+compose up` reuses an already-present local image under that name, or
+pulls it, without ever forcing a rebuild. `docker compose build` /
+`up --build` still build every image from this tree on request, same as
+before. A bare `up` on a host that has neither pulled nor built any of
+these tags yet builds them locally (the `build:` block is the only source
+available), which is what a from-scratch clone actually gets.
+
+This default was `pull_policy: build` (forced rebuild every time) for one
+PR revision, to guard the CHAOS-5437 cross-tree posture-manifest lockstep
+(migrate and the worker fleet must come from the same tree or the worker
+refuses readiness by design) -- reverted because forcing a build made a
+digest pin unusable (`build tag cannot contain a digest`) and duplicated
+what a deployment-wide single-sha pin already guarantees. Lockstep safety
+now comes from pinning every one of these images to the SAME sha (as
+JOB 6's `job6-prebuild/*:<sha>` images do), not from forcing a build on
+every bring-up.
+
+### billing-edge: Stripe webhook forwarding in local dev
+
+`billing-edge` (root `compose.yml`, port `8010`) needs three secrets to
+report healthy readiness in its own `/health` payload:
+`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `LICENSE_PRIVATE_KEY`. On
+the real deployed stack these are configured, and `/health`'s overall
+`ok`/`down` status does not depend on Stripe's own outbound reachability
+(a blocked egress path shows up as `stripe_client: "down"` in the JSON
+body without flipping the container's compose healthcheck, which is a
+liveness probe on `:8000`, not a readiness one). In local dev, webhook
+delivery uses the Stripe CLI's own forwarder beside the stack: `stripe
+listen --forward-to http://localhost:8010/api/v1/billing/webhooks/stripe`
+(run from a host shell, not part of this repo).
+
 ## Known divergences: local vs prod worker topology
 
 Recorded under the standing order that local/prod divergence is itself a
@@ -116,13 +179,17 @@ a bug and re-discover it from scratch.
 
 - **Worker topology naming.** Prod splits `go-worker-sync` (`--queues=sync`)
   and `go-worker-sync-provider` (`--queues=sync_provider`) as two services.
-  Local merges both into one service named `go-worker`
-  (`--queues=sync,sync_provider`, `compose.yml`, with
-  `PROVIDER_SYNC_QUEUES_ENABLED: "true"`). Queue *coverage* is equivalent --
-  `sync_provider` has a consumer locally, so this is not a missing-consumer
-  bug -- but process isolation differs (one saturated queue can starve the
-  other locally) and anything keying off service *name* (dashboards, alert
-  `job` regexes, runbooks) cannot match both shapes at once.
+  The local host stack merges both into one service named `go-worker`
+  (`--queues=sync,sync_provider`, with `PROVIDER_SYNC_QUEUES_ENABLED:
+  "true"`). Queue *coverage* is equivalent -- `sync_provider` has a
+  consumer locally, so this is not a missing-consumer bug -- but process
+  isolation differs (one saturated queue can starve the other locally) and
+  anything keying off service *name* (dashboards, alert `job` regexes,
+  runbooks) cannot match both shapes at once. This repo's own root
+  `compose.yml` is a separate thing again: as of the Go-default cutover it
+  folds in the split `go-worker-sync`/`go-worker-sync-provider` shape
+  (matching prod's naming, not the local host stack's merged one) as its
+  unconditional default.
 - **Profile gating.** Prod's `go-*` services sit behind the `go-workers`
   compose profile, which is why bringing the fleet up on the prod host is a
   two-pass `pull` then `up --profile go-workers`: a plain `pull` before the

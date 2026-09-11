@@ -131,9 +131,8 @@ class RecommendationsTeamFailure(Exception):
 # 2. Even that aggregate signal is NOT READABLE from here. This gate runs as
 #    the Python semantic-DB session (``get_postgres_session_sync``, bound to
 #    ``POSTGRES_URI``), which production scopes to the ``devhealth_domain``
-#    role (docs/operate/install/production.md:98,
-#    deploy/go-workers/compose-go-workers.yml:234,337). Under the
-#    domain/coordinator Postgres role split,
+#    role (docs/operate/install/production.md:98, root compose.yml:27,50).
+#    Under the domain/coordinator Postgres role split,
 #    ``fixed_schedule_occurrences`` is coordinator-EXCLUSIVE by design
 #    (internal/storage/postgres/domain_authorization.go's coordinatorPosture
 #    doc: "adding fixed_schedule_occurrences to the domain role would

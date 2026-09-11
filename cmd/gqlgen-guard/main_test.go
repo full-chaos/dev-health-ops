@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/gqlgenguard"
 )
 
 // The tests here drive the real binary as a real process, because that is the
@@ -409,6 +412,81 @@ func TestTheModuleRootIsTheOneContainingTheWorkingDirectoryInAWorkspace(t *testi
 	err = cmd.Run()
 	if !strings.Contains(out.String(), "module: "+dir+"\n") {
 		t.Fatalf("the guard did not resolve the module containing the working directory (%s); exit %v\noutput:\n%s", dir, err, out.String())
+	}
+}
+
+// TestTheModuleQueryRunsOnlyAVettedGoCommand: locating the module is the FIRST
+// thing the binary does, and it does it by running `go list -m`. A `go` shim
+// committed in the working tree must therefore be refused before that query,
+// not after it has already answered -- otherwise the one binary the guard
+// refuses is the one it has already executed.
+func TestTheModuleQueryRunsOnlyAVettedGoCommand(t *testing.T) {
+	bin := buildGuard(t)
+	dir := newGeneratableFixture(t)
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran := filepath.Join(t.TempDir(), "ran.log")
+	shimDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(shimDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shimDir, "go"),
+		[]byte("#!/bin/sh\necho \"$@\" >> "+ran+"\nexec "+realGo+" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "check-drift", "-config", "gqlgen.yml")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TMPDIR="+t.TempDir())
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err = cmd.Run()
+
+	if got := exitCodeOf(t, err); got != 1 {
+		t.Fatalf("want exit 1, got %d\noutput:\n%s", got, out.String())
+	}
+	if !strings.Contains(out.String(), "inside the module") {
+		t.Fatalf("want a refusal naming the in-module go command\noutput:\n%s", out.String())
+	}
+	if b, rerr := os.ReadFile(ran); rerr == nil && len(b) > 0 {
+		t.Fatalf("the shim ran before the refusal: %q\noutput:\n%s", b, out.String())
+	}
+}
+
+// TestTheModuleQueryUsesTheRunsOwnGoCommand: the module query is an ordinary
+// command of the run, not an exception to it. A PATH that changes between the
+// one resolution and this query must stop it, the way it stops every other
+// command -- resolving `go` again here would compare a lookup with itself.
+func TestTheModuleQueryUsesTheRunsOwnGoCommand(t *testing.T) {
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err := gqlgenguard.ResolveGoTool("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ran := filepath.Join(t.TempDir(), "ran.log")
+	shimDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(shimDir, "go"),
+		[]byte("#!/bin/sh\necho \"$@\" >> "+ran+"\nexec "+realGo+" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// After the resolution, never before it.
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	root, err := discoverModuleRoot(context.Background(), tool)
+	if err == nil || !strings.Contains(err.Error(), "not the go binary this run vetted") {
+		t.Fatalf("the module query accepted an unvetted go command: root=%q err=%v", root, err)
+	}
+	if b, rerr := os.ReadFile(ran); rerr == nil && len(b) > 0 {
+		t.Fatalf("the shim ran: %q", b)
 	}
 }
 

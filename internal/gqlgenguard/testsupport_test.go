@@ -240,3 +240,32 @@ func logCell(t *testing.T, err error, accepted string) {
 	}
 	t.Logf("CELL-OUTPUT: accepted: %s", accepted)
 }
+
+// vettedGoTool is the resolved go command for a test that needs one directly.
+// Production resolves it once per run; a test that calls goEnv or builds a
+// generator needs the same value.
+func vettedGoTool(t *testing.T) GoTool {
+	t.Helper()
+	tool, err := ResolveGoTool("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tool
+}
+
+// writeOptions is guardOptions for a cell that drives the WRITING verb and is
+// not about the expected-drift record.
+//
+// `generate` fails closed on the record STATE: with no record it cannot say
+// which of the files it is about to overwrite hold deliberate hand-edits, so it
+// refuses. These fixtures carry no record because the cell is about the link
+// policy, copy-back, a config key or the file mode -- so they say what the
+// operator would say, and pass the documented override. The record's own cells
+// never use this: weakening the refusal to fit a fixture is how the hole stayed
+// open, since five unrelated cells silently depended on generate succeeding
+// without a record.
+func writeOptions(f *fixture, gen Generator) Options {
+	o := guardOptions(f, gen)
+	o.RevertRecorded = true
+	return o
+}

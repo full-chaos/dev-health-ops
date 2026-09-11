@@ -245,6 +245,20 @@ go run ./cmd/gqlgen-guard check-drift   # compare, write nothing, exit non-zero 
 go run ./cmd/gqlgen-guard generate      # regenerate and copy the outputs back
 ```
 
+`generate` REFUSES, writing nothing, whenever the record cannot account for
+what it is about to overwrite: a hand-edit the record describes as deliberate
+(it names each file and both digests), a record that is absent, mistyped, empty
+or stripped of its digest table, or a record that describes other bytes than a
+file now holds. Being unable to read the record is not permission to overwrite;
+`-revert-recorded` is the only override. `-update` likewise never replaces a
+destination that is not already a record. That is the ordinary state of this
+repository, so regenerating on purpose is:
+
+```bash
+go run ./cmd/gqlgen-guard generate -revert-recorded    # names what it reverts as it writes
+go run ./cmd/gqlgen-guard check-drift -update          # then refresh the record
+```
+
 The guard runs the generator inside a private copy of the module and copies
 back only the paths `gqlgen.yml` itself declares. That matters here because the
 checked-in generated files carry deliberate hand-edits — the nullability

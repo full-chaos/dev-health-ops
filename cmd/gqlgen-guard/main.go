@@ -5,6 +5,13 @@
 //	                           files; write nothing; exit non-zero on drift
 //	gqlgen-guard generate      regenerate and copy the outputs back
 //
+// The write verbs fail closed on the RECORD STATE, not on the verb. `generate`
+// refuses, and writes nothing, unless the expected-drift record is present,
+// parses, and describes every file it is about to overwrite as it now stands;
+// -revert-recorded is the only override and names every file it reverts.
+// `check-drift -update` never replaces a destination that is not already a
+// record.
+//
 // The generator never runs in the working tree. Every read and write the guard
 // itself performs goes through an *os.Root opened on the module root, so an
 // output path that resolves outside the module -- an absolute `resolver.dir`,
@@ -49,6 +56,10 @@ flags:
   -record string   module-relative expected-drift record (default %q)
   -update          check-drift only: rewrite the expected-drift record instead of
                    comparing against it. Never used by CI; a test asserts that.
+  -revert-recorded generate only: overwrite outputs even though the expected-drift
+                   record describes them as deliberate hand-edits, or cannot
+                   account for them at all. Without it, generate refuses and
+                   writes nothing.
 
 exit status:
   0  the operation succeeded
@@ -79,6 +90,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	configPath := fs.String("config", gqlgenguard.DefaultConfigPath, "module-relative gqlgen config")
 	recordPath := fs.String("record", gqlgenguard.DefaultDriftPath, "module-relative expected-drift record")
 	update := fs.Bool("update", false, "check-drift only: rewrite the expected-drift record")
+	revertRecorded := fs.Bool("revert-recorded", false, "generate only: overwrite outputs the record describes as deliberate hand-edits")
 	fs.Usage = func() { fmt.Fprintf(stderr, usage, gqlgenguard.DefaultConfigPath, gqlgenguard.DefaultDriftPath) }
 
 	if err := fs.Parse(args[1:]); err != nil {
@@ -89,38 +101,55 @@ func run(args []string, stdout, stderr *os.File) int {
 		return exitUsage
 	}
 
+	// Every signal that can reach this process is caught rather than left to
+	// the default disposition, from before the FIRST command runs. Catching it
+	// cancels the context, which kills the generator child and returns before
+	// anything is copied back -- so an interrupt at any point up to the
+	// copy-back phase leaves the tree untouched, and the private copy is
+	// removed on the way out.
+	ctx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
+	defer stop()
+
+	// The go command is resolved ONCE, here, before anything is executed --
+	// including the `go list -m` that locates the module. The module root is
+	// not known yet when it has to be discovered, so the boundary for this
+	// first refusal is the module that lexically encloses the working
+	// directory; the root the guard settles on is checked again inside the
+	// guard. Without this, a `go` shim committed in the tree ran the discovery
+	// query before any check could refuse it.
+	tool, err := gqlgenguard.ResolveGoTool(confinementDir(*moduleDir))
+	if err != nil {
+		fmt.Fprintf(stderr, "gqlgen-guard: %v\n", err)
+		return exitRefused
+	}
+
 	root := *moduleDir
 	if root == "" {
-		var err error
-		root, err = discoverModuleRoot()
+		root, err = discoverModuleRoot(ctx, tool)
 		if err != nil {
 			fmt.Fprintf(stderr, "gqlgen-guard: %v\n", err)
 			return exitRefused
 		}
 	}
 
-	// Every signal that can reach this process is caught rather than left to
-	// the default disposition. Catching it cancels the context, which kills the
-	// generator child and returns before anything is copied back -- so an
-	// interrupt at any point up to the copy-back phase leaves the tree
-	// untouched, and the private copy is removed on the way out.
-	ctx, stop := signal.NotifyContext(context.Background(),
-		syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
-	defer stop()
-
 	opts := gqlgenguard.Options{
 		ModuleDir:  root,
 		ConfigPath: *configPath,
 		DriftPath:  *recordPath,
+		GoTool:     tool,
 		Report:     stdout,
+
+		RevertRecorded: *revertRecorded,
 	}
 
-	var (
-		res *gqlgenguard.Result
-		err error
-	)
+	var res *gqlgenguard.Result
 	switch verb {
 	case "check-drift":
+		if *revertRecorded {
+			fmt.Fprintln(stderr, "gqlgen-guard: -revert-recorded applies to generate, not check-drift")
+			return exitUsage
+		}
 		if *update {
 			res, err = gqlgenguard.UpdateDriftRecord(ctx, opts)
 		} else {
@@ -189,8 +218,16 @@ func dashIfEmpty(s string) string {
 // directory -- the deepest listed directory that is the working directory or
 // one of its ancestors -- and a working directory inside none of them is a
 // refusal that says so, never a multi-line string used as a path.
-func discoverModuleRoot() (string, error) {
-	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}")
+func discoverModuleRoot(ctx context.Context, tool gqlgenguard.GoTool) (string, error) {
+	// Through the run's own go command, like every other invocation: this is
+	// the FIRST thing that executes, so a `go` the run did not vet must be
+	// refused here rather than after it has already answered. It is bound to
+	// ctx like every other command, so an interrupt during the query ends the
+	// run instead of being ignored until the query returns.
+	cmd, err := tool.Command(ctx, "list", "-m", "-f", "{{.Dir}}")
+	if err != nil {
+		return "", err
+	}
 	// Not the bare environment: see GuardQueryEnv (a HOME inside the module
 	// would otherwise receive the go command's telemetry counters).
 	cmd.Env = gqlgenguard.GuardQueryEnv()
@@ -233,6 +270,32 @@ func discoverModuleRoot() (string, error) {
 		return "", fmt.Errorf("locate the module root: workspace mode lists %d modules and the working directory is inside none of them; pass -module", len(dirs))
 	}
 	return best, nil
+}
+
+// confinementDir is the directory the go command must not live inside, chosen
+// before the module root is known. With -module it is that root. Otherwise it
+// is the nearest enclosing directory holding a go.mod, found LEXICALLY -- the
+// one thing available without running the go command. It is only the first of
+// two refusals: the root the guard settles on is checked again, so a workspace
+// whose module is elsewhere is still covered.
+func confinementDir(moduleFlag string) string {
+	if moduleFlag != "" {
+		return moduleFlag
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 func resolved(p string) string {

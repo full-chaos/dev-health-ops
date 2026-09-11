@@ -130,7 +130,7 @@ func TestEveryInputPathIsJudgedWhereItPhysicallyResolves(t *testing.T) {
 	for i, c := range cells {
 		t.Run(cellID("G17", i)+" "+c.shape, func(t *testing.T) {
 			f := guardFixture(t)
-			opts := guardOptions(f, nil)
+			opts := writeOptions(f, nil)
 			outside := opts.TempParent
 			cfg := c.setup(t, f, outside)
 			if strings.HasSuffix(cfg, ".yml") {
@@ -240,7 +240,7 @@ func TestTheRealGeneratorRunsWhereTheConfigPhysicallyIs(t *testing.T) {
 	if err := os.Symlink("../../../x", filepath.Join(f.dir, "a", "b", "c", "cfg")); err != nil {
 		t.Fatal(err)
 	}
-	opts := guardOptions(f, nil)
+	opts := writeOptions(f, nil)
 	opts.ConfigPath = "a/b/c/cfg/gqlgen.yml"
 	var report strings.Builder
 	opts.Report = &report
@@ -439,6 +439,32 @@ func TestEachPhysicalCheckRefusesOnItsOwn(t *testing.T) {
 		}},
 		{"physicalSchemaInputs: " + up + "/evil.graphql", func() error {
 			_, err := physicalSchemaInputs(module, lexical, []string{up + "/evil.graphql"})
+			return err
+		}},
+		// The config's own two checks, each reached on its own: the DIRECTORY
+		// that resolves outside, and -- with an in-module directory accepted
+		// by that first check -- the config FILE that resolves outside it.
+		// Only the DIRECTORY check can refuse this one: the config FILE inside
+		// that outside directory is a link back INTO the module, so the file
+		// check passes on its own.
+		{"physicalConfigLocation, the directory alone: outcfg/gqlgen.yml (outcfg -> outside; the file links back in)", func() error {
+			if err := os.WriteFile(filepath.Join(module, "x", "gqlgen.yml"), []byte("schema: [s.graphql]\n"), 0o644); err != nil {
+				return err
+			}
+			if err := os.Symlink(filepath.Join(outside, name), filepath.Join(module, "outcfg")); err != nil && !os.IsExist(err) {
+				return err
+			}
+			if err := os.Symlink(filepath.Join(module, "x", "gqlgen.yml"), filepath.Join(outside, name, "gqlgen.yml")); err != nil && !os.IsExist(err) {
+				return err
+			}
+			_, _, err := physicalConfigLocation(module, "outcfg/gqlgen.yml")
+			return err
+		}},
+		{"physicalConfigLocation, the file: a/b/c/outcfg.yml -> outside the module (its directory is inside)", func() error {
+			if err := os.Symlink(filepath.Join(outside, name, "evil.graphql"), filepath.Join(module, "a", "b", "c", "outcfg.yml")); err != nil && !os.IsExist(err) {
+				return err
+			}
+			_, _, err := physicalConfigLocation(module, "a/b/c/outcfg.yml")
 			return err
 		}},
 	}

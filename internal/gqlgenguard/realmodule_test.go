@@ -63,7 +63,7 @@ func TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDigests(t *testing.T)
 		t.Fatalf("open the copy root: %v", err)
 	}
 	defer dst.Close()
-	if _, err := CopyTree(context.Background(), src, dst, skipVCS); err != nil {
+	if _, _, err := CopyTree(context.Background(), src, dst, skipVCS); err != nil {
 		t.Fatalf("copy the repository: %v", err)
 	}
 
@@ -87,14 +87,50 @@ func TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDigests(t *testing.T)
 		t.Fatalf("read go.sum: %v", err)
 	}
 
-	res, err := Generate(context.Background(), Options{
+	// On this repository the record describes the checked-in hand-edits, so a
+	// plain `generate` must refuse and write nothing rather than reverting
+	// them silently.
+	var refusal strings.Builder
+	before, err := TakeSnapshot(dst, skipVCS)
+	if err != nil {
+		t.Fatalf("snapshot before the refused generate: %v", err)
+	}
+	_, err = Generate(context.Background(), Options{
 		ModuleDir:  copyDir,
 		TempParent: t.TempDir(),
-		Report:     io.Discard,
+		Report:     &refusal,
+	})
+	if err == nil || !strings.Contains(err.Error(), "records as deliberate") {
+		t.Fatalf("generate did not refuse to revert the recorded hand-edits: %v", err)
+	}
+	t.Logf("CELL-OUTPUT: refused: %v", err)
+	afterRefusal, err := TakeSnapshot(dst, skipVCS)
+	if err != nil {
+		t.Fatalf("snapshot after the refused generate: %v", err)
+	}
+	for rel, e := range before {
+		if afterRefusal[rel].Digest != e.Digest {
+			t.Fatalf("the refused generate changed %s", rel)
+		}
+	}
+	if len(afterRefusal) != len(before) {
+		t.Fatalf("the refused generate changed the file set: %d -> %d", len(before), len(afterRefusal))
+	}
+
+	var applied strings.Builder
+	res, err := Generate(context.Background(), Options{
+		ModuleDir:      copyDir,
+		TempParent:     t.TempDir(),
+		RevertRecorded: true,
+		Report:         &applied,
 	})
 	if err != nil {
 		t.Fatalf("generate in the copy: %v", err)
 	}
+	if !strings.Contains(applied.String(), "reverting 3 recorded hand-edit(s)") {
+		t.Fatalf("the applied run did not name the hand-edits it reverted:\n%s", applied.String())
+	}
+	t.Logf("CELL-OUTPUT: accepted under -revert-recorded: %s", firstLine(applied.String()))
 	if len(res.Applied) == 0 {
 		t.Fatal("generate applied nothing, so this proves nothing about the write path")
 	}
@@ -196,4 +232,12 @@ func TestCheckDriftOnThisRepositoryIgnoresAnInheritedWorkspace(t *testing.T) {
 		t.Fatalf("the report does not say the inherited workspace was switched off:\n%s", report.String())
 	}
 	assertUnchanged(t, before, repoDigests(t, root), "CheckDrift under an inherited GOWORK")
+}
+
+// firstLine is the head of a multi-line report, for a cell's output line.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }

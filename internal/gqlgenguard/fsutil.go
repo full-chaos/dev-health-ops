@@ -22,11 +22,11 @@ type Entry struct {
 	// Digest is the hex sha256 of a regular file's bytes, or "symlink:<target>"
 	// for a symbolic link. The prefix makes a link and a file that happens to
 	// contain the target text distinguishable.
+	//
+	// It is the WHOLE of what a snapshot compares. A field a snapshot carries
+	// but nothing reads implies a check the guard does not make: mode was
+	// recorded here and compared nowhere, while copy-back normalised it.
 	Digest string
-	// Mode carries only the permission bits and the type bits.
-	Mode fs.FileMode
-	// Size is the byte length of a regular file, and 0 for a symlink.
-	Size int64
 }
 
 // Snapshot is a content-addressed view of a tree, keyed by slash-separated
@@ -83,13 +83,13 @@ func TakeSnapshotContext(ctx context.Context, root *os.Root, skip func(rel strin
 			if err != nil {
 				return fmt.Errorf("read symlink %q: %w", rel, err)
 			}
-			snap[rel] = Entry{Path: rel, Digest: "symlink:" + target, Mode: info.Mode()}
+			snap[rel] = Entry{Path: rel, Digest: "symlink:" + target}
 		case info.Mode().IsRegular():
-			digest, size, err := digestFile(root, rel)
+			digest, err := digestFile(root, rel)
 			if err != nil {
 				return err
 			}
-			snap[rel] = Entry{Path: rel, Digest: digest, Mode: info.Mode().Perm(), Size: size}
+			snap[rel] = Entry{Path: rel, Digest: digest}
 		default:
 			return fmt.Errorf("refusing tree containing %q: not a regular file, directory or symlink (%s)", rel, info.Mode())
 		}
@@ -101,18 +101,17 @@ func TakeSnapshotContext(ctx context.Context, root *os.Root, skip func(rel strin
 	return snap, nil
 }
 
-func digestFile(root *os.Root, rel string) (string, int64, error) {
+func digestFile(root *os.Root, rel string) (string, error) {
 	f, err := root.Open(rel)
 	if err != nil {
-		return "", 0, fmt.Errorf("open %q: %w", rel, err)
+		return "", fmt.Errorf("open %q: %w", rel, err)
 	}
 	defer f.Close()
 	h := sha256.New()
-	n, err := io.Copy(h, f)
-	if err != nil {
-		return "", 0, fmt.Errorf("read %q: %w", rel, err)
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("read %q: %w", rel, err)
 	}
-	return hex.EncodeToString(h.Sum(nil)), n, nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // DroppedLink is a symbolic link in the source tree that CopyTree did not
@@ -126,6 +125,16 @@ type DroppedLink struct {
 	// report says WHY a link did not resolve (escaped, dangling, looping), and
 	// empty for droppedAbsolute.
 	Detail string
+}
+
+// SkippedEntry is a tree entry CopyTree did not reproduce because it is
+// neither a regular file, a directory nor a symbolic link -- a socket a dev
+// server left behind, a FIFO, a device node.
+type SkippedEntry struct {
+	// Path is slash-separated and relative to the source root.
+	Path string
+	// Mode is the entry's mode, so the report names WHAT was skipped.
+	Mode fs.FileMode
 }
 
 // The reasons a link is dropped from the copy. They are the whole vocabulary:
@@ -171,8 +180,9 @@ const (
 // The walk checks ctx before every entry: the guard catches SIGINT/SIGTERM and
 // turns them into a cancelled context, and a copy that never looked at it made
 // those signals caught-and-ignored for as long as the copy ran.
-func CopyTree(ctx context.Context, src, dst *os.Root, skip func(rel string) bool) ([]DroppedLink, error) {
+func CopyTree(ctx context.Context, src, dst *os.Root, skip func(rel string) bool) ([]DroppedLink, []SkippedEntry, error) {
 	var dropped []DroppedLink
+	var skipped []SkippedEntry
 	err := fs.WalkDir(src.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -225,13 +235,26 @@ func CopyTree(ctx context.Context, src, dst *os.Root, skip func(rel string) bool
 			}
 			return copyFile(src, dst, rel, info.Mode().Perm())
 		default:
-			return fmt.Errorf("refusing to copy %q: not a regular file, directory or symlink (%s)", rel, info.Mode())
+			// A socket or FIFO somewhere in the checkout is not the guard's
+			// business: it is skipped and named, the way a link that cannot be
+			// reproduced is. Its NAME becomes the same inert self-loop, so a
+			// use of it fails loudly rather than finding nothing -- and the
+			// caller refuses the run when the name is one the configuration
+			// declares (an input or an output).
+			skipped = append(skipped, SkippedEntry{Path: rel, Mode: info.Mode()})
+			if err := dst.MkdirAll(path.Dir(rel), 0o755); err != nil {
+				return fmt.Errorf("create directory for %q: %w", rel, err)
+			}
+			if err := dst.Symlink(path.Base(rel), rel); err != nil {
+				return fmt.Errorf("create inert stand-in for skipped %q: %w", rel, err)
+			}
+			return nil
 		}
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return dropped, nil
+	return dropped, skipped, nil
 }
 
 // linkDropReason returns "" when the link at rel may be reproduced, and the
@@ -335,6 +358,14 @@ func copyFile(src, dst *os.Root, rel string, perm fs.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("create %q: %w", rel, err)
 	}
+	// The copy carries the source's mode, not the mode minus the umask: the
+	// generator rewrites these files in place and copy-back takes the mode
+	// from the copy, so a umask trimming it here would change permissions in
+	// the working tree on every regeneration.
+	if err := out.Chmod(perm); err != nil {
+		out.Close()
+		return fmt.Errorf("set the mode of %q: %w", rel, err)
+	}
 	if _, err := io.Copy(out, in); err != nil {
 		out.Close()
 		return fmt.Errorf("write %q: %w", rel, err)
@@ -382,6 +413,14 @@ func AtomicWrite(root *os.Root, rel string, data []byte, perm fs.FileMode) (err 
 			_ = root.Remove(tmp)
 		}
 	}()
+	// perm is the mode the file GETS, not a request the umask may reduce:
+	// copy-back passes the mode the source file has, and a umask that trimmed
+	// it would make a regeneration change permissions in the tree. Through the
+	// open descriptor, so no path is resolved a second time.
+	if err = f.Chmod(perm); err != nil {
+		f.Close()
+		return fmt.Errorf("set the mode of the temporary for %q: %w", rel, err)
+	}
 	if _, err = f.Write(data); err != nil {
 		f.Close()
 		return fmt.Errorf("write temporary for %q: %w", rel, err)

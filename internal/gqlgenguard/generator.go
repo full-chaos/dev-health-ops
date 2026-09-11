@@ -42,6 +42,9 @@ type Generator interface {
 // before doing anything, which is the state that let the checked-in generated
 // files carry hand-edits unguarded for as long as they did.
 type GoRunGenerator struct {
+	// Tool is the go command this run vetted. Every command is built from it,
+	// so the generator cannot reach a binary the run never checked.
+	Tool GoTool
 	// Package is the generator's import path.
 	Package string
 	// Args are passed to the generator after the package.
@@ -52,8 +55,9 @@ type GoRunGenerator struct {
 }
 
 // NewGoRunGenerator returns the generator the guard uses in production.
-func NewGoRunGenerator(stdout, stderr io.Writer) *GoRunGenerator {
+func NewGoRunGenerator(tool GoTool, stdout, stderr io.Writer) *GoRunGenerator {
 	return &GoRunGenerator{
+		Tool:    tool,
 		Package: "github.com/99designs/gqlgen",
 		Args:    []string{"generate"},
 		Stdout:  stdout,
@@ -81,8 +85,9 @@ func (g *GoRunGenerator) Generate(ctx context.Context, workDir, configFile strin
 	if env == nil {
 		return fmt.Errorf("`%s`: no environment was built for the generator; refusing to fall back to the guard's own", g.Describe())
 	}
-	// goCommand refuses unless `go` resolves to the vetted binary; the child's PATH holds only its directory.
-	cmd, err := goCommand(ctx, args...)
+	// The command refuses unless `go` still resolves to the binary this run
+	// vetted; the child's PATH holds only that binary's directory.
+	cmd, err := g.Tool.Command(ctx, args...)
 	if err != nil {
 		return err
 	}

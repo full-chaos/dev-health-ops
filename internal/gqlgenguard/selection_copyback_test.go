@@ -136,7 +136,7 @@ func TestTheRealGeneratorReadsTheValidatedConfigByName(t *testing.T) {
 		t.Fatal(err)
 	}
 	var report strings.Builder
-	opts := guardOptions(f, nil)
+	opts := writeOptions(f, nil)
 	opts.ConfigPath = "custom.yml"
 	opts.Report = &report
 	res, err := Generate(context.Background(), opts)
@@ -227,7 +227,7 @@ func TestCopyBackInputDomain(t *testing.T) {
 				mid = f.digests()
 				return rewriteOutputs("generated")(workDir)
 			}}
-			_, err := Generate(context.Background(), guardOptions(f, gen))
+			_, err := Generate(context.Background(), writeOptions(f, gen))
 			logCell(t, err, "applied")
 			if tc.wantErr == "" {
 				if err != nil {

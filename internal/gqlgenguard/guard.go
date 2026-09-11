@@ -16,7 +16,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // DefaultConfigPath is the gqlgen config this repository guards.
@@ -48,6 +51,14 @@ type Options struct {
 	// TempParent is the directory the private copy is made under. Empty means
 	// the system temporary directory.
 	TempParent string
+	// GoTool is the go command this run uses, resolved once by the caller
+	// before anything ran. The zero value makes the guard resolve and confine
+	// it itself.
+	GoTool GoTool
+	// RevertRecorded allows Generate to overwrite outputs the expected-drift
+	// record describes as deliberate hand-edits. Without it Generate refuses
+	// rather than destroying recorded state.
+	RevertRecorded bool
 	// Report receives the guard's own progress and digest output.
 	Report io.Writer
 }
@@ -142,14 +153,9 @@ func CheckDrift(ctx context.Context, opts Options) (*Result, error) {
 	}
 	defer moduleRoot.Close()
 
-	committed, err := ReadThroughRoot(moduleRoot, opts.driftPath())
+	committed, err := readTheRecord(moduleRoot, opts.driftPath())
 	if err != nil {
-		if errNotExist(err) {
-			return res, fmt.Errorf(
-				"refusing: no expected-drift record at %q. Regenerate it with `gqlgen-guard check-drift -update` and review every line before committing it",
-				opts.driftPath())
-		}
-		return nil, fmt.Errorf("read expected-drift record %q: %w", opts.driftPath(), err)
+		return res, err
 	}
 
 	if bytes.Equal(committed, []byte(res.Record)) {
@@ -183,6 +189,13 @@ func UpdateDriftRecord(ctx context.Context, opts Options) (*Result, error) {
 	// declared output moved meanwhile, the record would describe a tree that
 	// no longer exists.
 	if err := verifyTreeUnchanged(moduleRoot, res); err != nil {
+		return nil, err
+	}
+	// The other half of the same posture: a destination that already holds
+	// something this tool did not write is never replaced. -update refreshes a
+	// RECORD; pointed at any other tracked file it used to overwrite it and say
+	// `wrote <path>`.
+	if err := refuseRecordDestinationThatIsNotARecord(moduleRoot, opts.driftPath()); err != nil {
 		return nil, err
 	}
 	if err := moduleRoot.MkdirAll(path.Dir(opts.driftPath()), 0o755); err != nil {
@@ -238,6 +251,34 @@ func Generate(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 
+	// A write verb does not silently destroy recorded state, and being unable
+	// to READ the record is not permission to overwrite -- it is the state in
+	// which the guard knows least. The posture belongs to the record STATE, not
+	// to the verb: before anything is written, the record must be there, parse,
+	// and carry a digest line for every file about to be overwritten.
+	// -revert-recorded is the one override, and it is the operator saying so.
+	reverts, err := recordedRevertsOf(moduleRoot, opts.driftPath(), res)
+	if err != nil {
+		return nil, err
+	}
+	w := opts.report()
+	if !opts.RevertRecorded {
+		// The most specific refusal first: the record NAMES these as deliberate
+		// and shows all three digests. Only when it has nothing to say about
+		// what is being overwritten does the state check speak.
+		if len(reverts) > 0 {
+			return nil, fmt.Errorf(
+				"refusing: this would revert %d hand-edit(s) that %s records as deliberate; nothing was written:\n%s\nRe-run with -revert-recorded to replace them, then refresh the record with `gqlgen-guard check-drift -update`",
+				len(reverts), opts.driftPath(), describeReverts(reverts))
+		}
+		if err := refuseUnlessTheRecordCoversTheWrites(moduleRoot, opts.driftPath(), res); err != nil {
+			return nil, err
+		}
+	} else if len(reverts) > 0 {
+		fmt.Fprintf(w, "reverting %d recorded hand-edit(s) (-revert-recorded); %s describes them as deliberate and will be stale afterwards:\n%s",
+			len(reverts), opts.driftPath(), describeReverts(reverts))
+	}
+
 	// Past this line the tree is being changed. Signals are deliberately not
 	// consulted again: the phase is a handful of renames of files already held
 	// in memory, and stopping halfway would leave exactly the partial state
@@ -250,16 +291,23 @@ func Generate(ctx context.Context, opts Options) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read generated %q: %w", c.Path, err)
 		}
+		// The mode comes from the file being copied back, not from a constant:
+		// the copy carries the tree's own mode (CopyTree) and the generator
+		// rewrites in place, so an executable or group-writable output keeps
+		// what it had instead of being normalised to 0644 by regenerating.
+		info, err := copyRoot.Lstat(c.Path)
+		if err != nil {
+			return nil, fmt.Errorf("stat generated %q: %w", c.Path, err)
+		}
 		if err := moduleRoot.MkdirAll(path.Dir(c.Path), 0o755); err != nil {
 			return nil, fmt.Errorf("create directory for %q: %w", c.Path, err)
 		}
-		if err := AtomicWrite(moduleRoot, c.Path, data, 0o644); err != nil {
+		if err := AtomicWrite(moduleRoot, c.Path, data, info.Mode().Perm()); err != nil {
 			return nil, err
 		}
 		res.Applied = append(res.Applied, c.Path)
 	}
 
-	w := opts.report()
 	if len(res.Applied) == 0 {
 		fmt.Fprintln(w, "no output changed; the working tree already matches a fresh generation.")
 	}
@@ -269,9 +317,196 @@ func Generate(ctx context.Context, opts Options) (*Result, error) {
 	return res, nil
 }
 
+// readTheRecord reads the committed expected-drift record. Both verbs go
+// through it, so "there is no record" is ONE refusal with one wording: the
+// reading verb refused it from the start, and the writing verb treating the
+// same state as permission to overwrite was the hole.
+func readTheRecord(moduleRoot *os.Root, driftPath string) ([]byte, error) {
+	committed, err := ReadThroughRoot(moduleRoot, driftPath)
+	if err != nil {
+		if errNotExist(err) {
+			return nil, fmt.Errorf(
+				"refusing: no expected-drift record at %q. Regenerate it with `gqlgen-guard check-drift -update` and review every line before committing it",
+				driftPath)
+		}
+		return nil, fmt.Errorf("read expected-drift record %q: %w", driftPath, err)
+	}
+	return committed, nil
+}
+
+// overwrittenByThisRun lists the declared outputs this result would write over
+// -- present in the tree, drifted, and produced by this generation. A file the
+// generator creates is not one of them: there is nothing there to destroy.
+func overwrittenByThisRun(res *Result) []string {
+	var out []string
+	for _, c := range res.Changes {
+		if c.GeneratedDigest != "" && c.Drifted() && c.TreeDigest != "" {
+			out = append(out, c.Path)
+		}
+	}
+	return out
+}
+
+// refuseUnlessTheRecordCoversTheWrites is the fail-closed check a writing run
+// makes about the record STATE: present, parsing, and carrying a digest line
+// for every file it is about to overwrite. A record that is absent, empty,
+// mistyped or stripped of its digest table cannot say which of those files hold
+// deliberate hand-edits, and a run that cannot tell must not write.
+func refuseUnlessTheRecordCoversTheWrites(moduleRoot *os.Root, driftPath string, res *Result) error {
+	overwritten := overwrittenByThisRun(res)
+	if len(overwritten) == 0 {
+		return nil
+	}
+	committed, err := readTheRecord(moduleRoot, driftPath)
+	if err != nil {
+		return err
+	}
+	recorded := digestLines(string(committed))
+	if len(recorded) == 0 {
+		return fmt.Errorf(
+			"refusing: the expected-drift record %q carries no digest line, so it cannot say whether these %d file(s) hold deliberate hand-edits; nothing was written:\n%s%s",
+			driftPath, len(overwritten), indentPaths(overwritten), recordAdvice)
+	}
+	var uncovered, stale []string
+	tree := map[string]string{}
+	for _, c := range res.Changes {
+		tree[c.Path] = c.TreeDigest
+	}
+	for _, p := range overwritten {
+		line, ok := recorded[p]
+		if !ok {
+			uncovered = append(uncovered, p)
+			continue
+		}
+		// A digest line that describes OTHER bytes than the file now holds
+		// does not describe this file: an edit made since the last -update is
+		// exactly the hand-edit the record exists to protect, and it is the
+		// one the record cannot see.
+		if recordedTreeDigest(line) != tree[p] {
+			stale = append(stale, fmt.Sprintf("%s\n    recorded  %s\n    in the tree %s", p, recordedTreeDigest(line), tree[p]))
+		}
+	}
+	if len(uncovered) > 0 {
+		return fmt.Errorf(
+			"refusing: the expected-drift record %q has no digest line for %d file(s) this run would overwrite, so it cannot say whether they hold deliberate hand-edits; nothing was written:\n%s%s",
+			driftPath, len(uncovered), indentPaths(uncovered), recordAdvice)
+	}
+	if len(stale) > 0 {
+		return fmt.Errorf(
+			"refusing: the expected-drift record %q describes other bytes than %d file(s) this run would overwrite now hold, so an edit made since the record was written would be reverted unseen; nothing was written:\n%s%s",
+			driftPath, len(stale), indentPaths(stale), recordAdvice)
+	}
+	return nil
+}
+
+const recordAdvice = "Refresh it with `gqlgen-guard check-drift -update`, or pass -revert-recorded to overwrite them anyway."
+
+func indentPaths(paths []string) string {
+	var b strings.Builder
+	for _, p := range paths {
+		fmt.Fprintf(&b, "  %s\n", p)
+	}
+	return b.String()
+}
+
+// recordMarker is the first line of recordHeader: the shortest thing that says
+// a file is this tool's record. The REST of the header is part of the bytes
+// check-drift compares and may change between versions of this tool; the marker
+// must not, or -update could no longer refresh a record an older build wrote.
+var recordMarker = []byte(recordHeader[:strings.IndexByte(recordHeader, '\n')+1])
+
+// refuseRecordDestinationThatIsNotARecord refuses to replace a file that is not
+// an expected-drift record. -update is the one path in this package that writes
+// to the tree outside `generate`, and its destination is operator-supplied: any
+// tracked file could be named, and every one of them was overwritten.
+func refuseRecordDestinationThatIsNotARecord(moduleRoot *os.Root, driftPath string) error {
+	existing, err := ReadThroughRoot(moduleRoot, driftPath)
+	if err != nil {
+		if errNotExist(err) {
+			return nil // nothing is there to destroy
+		}
+		return fmt.Errorf("read the destination of the expected-drift record %q: %w", driftPath, err)
+	}
+	if bytes.HasPrefix(existing, recordMarker) {
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing: %q already holds a file that is not an expected-drift record (it does not begin with %q), and -update replaces a record rather than overwriting a file; nothing was written",
+		driftPath, strings.TrimRight(string(recordMarker), "\n"))
+}
+
+// recordedRevert is one output Generate would overwrite that the committed
+// expected-drift record describes as a deliberate hand-edit.
+type recordedRevert struct {
+	Path string
+	// Recorded is the tree digest the record carries for Path.
+	Recorded string
+	// Tree is the digest the working tree has now. It differs from Recorded
+	// only when the record is stale -- which makes the hand-edits MORE at
+	// risk, not less, so it never softens the refusal.
+	Tree string
+	// Generated is the digest of what this run produced and would write.
+	Generated string
+}
+
+// recordedRevertsOf lists the outputs this result would write over that the
+// committed record marks as drift. A missing record means nothing is recorded
+// and nothing can be destroyed; an unreadable one is an error, not a silent
+// permission to overwrite.
+func recordedRevertsOf(moduleRoot *os.Root, driftPath string, res *Result) ([]recordedRevert, error) {
+	committed, err := ReadThroughRoot(moduleRoot, driftPath)
+	if err != nil {
+		if errNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read expected-drift record %q: %w", driftPath, err)
+	}
+	recorded := digestLines(string(committed))
+	var out []recordedRevert
+	for _, c := range res.Changes {
+		if c.GeneratedDigest == "" || !c.Drifted() {
+			continue
+		}
+		line, ok := recorded[c.Path]
+		// digestLines yields "<status> <path> tree=<d> generated=<d>". A
+		// recorded DRIFT is a hand-edit; whether the tree still holds exactly
+		// the recorded bytes decides nothing, because regenerating reverts
+		// whatever is there either way.
+		if !ok || !strings.HasPrefix(line, "drift ") {
+			continue
+		}
+		out = append(out, recordedRevert{
+			Path:      c.Path,
+			Recorded:  recordedTreeDigest(line),
+			Tree:      c.TreeDigest,
+			Generated: c.GeneratedDigest,
+		})
+	}
+	return out, nil
+}
+
+// recordedTreeDigest reads the tree= field out of a record's digest line.
+func recordedTreeDigest(line string) string {
+	for _, f := range strings.Fields(line) {
+		if d, ok := strings.CutPrefix(f, "tree="); ok {
+			return d
+		}
+	}
+	return ""
+}
+
+func describeReverts(rs []recordedRevert) string {
+	var b strings.Builder
+	for _, r := range rs {
+		fmt.Fprintf(&b, "  %s\n    recorded  %s\n    in the tree %s\n    generated %s\n", r.Path, r.Recorded, r.Tree, r.Generated)
+	}
+	return b.String()
+}
+
 // testStageHook, when set (tests only), runs at named points between a check
 // and the writes it guards, so a test can change the filesystem exactly there:
 // "copy-parent-checked" (the copy's parent passed its check, nothing created),
+// "copy-parent-opened" (the parent is open, its location not yet read back),
 // "scratch-created" (the generator's scratch directory exists, nothing written
 // in it), "copy-created" (the private copy exists, nothing copied into it),
 // "before-generator" (every check has passed; dir is "<copy>\x00<scratch>").
@@ -296,6 +531,19 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	moduleAbs, err := filepath.Abs(opts.ModuleDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve module dir %q: %w", opts.ModuleDir, err)
+	}
+
+	// The go command for this whole run, resolved and confined BEFORE anything
+	// is executed. A caller that already resolved it (the command, which had to
+	// run `go list -m` to find this module) passes it in; it is confined again
+	// here against the root actually in use, which -module may have moved.
+	tool := opts.GoTool
+	if tool.Path() == "" {
+		if tool, err = ResolveGoTool(moduleAbs); err != nil {
+			return nil, nil, err
+		}
+	} else if tool, err = tool.Confine(moduleAbs); err != nil {
+		return nil, nil, err
 	}
 
 	moduleRoot, err := os.OpenRoot(moduleAbs)
@@ -328,6 +576,10 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	if err != nil {
 		return nil, nil, fmt.Errorf("open the private copy's parent %q: %w", parentPhys, err)
 	}
+	// The window rootLocation exists to close: the directory is OPEN, and its
+	// path has not been read back yet. A test plants an escape here, where
+	// only an answer read from the open handle itself can still be right.
+	stageHook("copy-parent-opened", parentPhys)
 	parentLoc, err := rootLocation(parentRoot)
 	if err != nil {
 		parentRoot.Close()
@@ -337,22 +589,37 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 		parentRoot.Close()
 		return nil, nil, fmt.Errorf("refusing: the private copy's parent %s is physically inside the module (the kernel resolves the opened directory to %s). Point TMPDIR outside the module", parentPhys, parentLoc)
 	}
-	copyName, err := mkdirTempIn(parentRoot, "gqlgen-guard-")
+	sweepStaleCopies(parentRoot, parentLoc, opts.report())
+
+	copyName, removeCopy, err := tempDirIn(parentRoot, "gqlgen-guard-")
 	if err != nil {
 		parentRoot.Close()
 		return nil, nil, fmt.Errorf("create private module copy: %w", err)
 	}
 	// The generator's HOME and TMPDIR: beside the copy, never inside it (a
 	// file there would be an undeclared output) and never inherited.
-	scratchName, err := mkdirTempIn(parentRoot, "gqlgen-guard-env-")
+	scratchName, removeScratch, err := tempDirIn(parentRoot, "gqlgen-guard-env-")
 	if err != nil {
-		_ = parentRoot.RemoveAll(copyName)
+		_ = removeCopy()
 		parentRoot.Close()
 		return nil, nil, fmt.Errorf("create the generator's scratch directory: %w", err)
 	}
+	// A removal that fails is REPORTED. Discarded, it left a whole copy of the
+	// working tree in the temporary directory with nothing in the output
+	// saying so.
 	cleanup := func() {
-		_ = parentRoot.RemoveAll(copyName)
-		_ = parentRoot.RemoveAll(scratchName)
+		rw := opts.report()
+		for _, d := range []struct {
+			name, what string
+			remove     func() error
+		}{
+			{copyName, "private copy", removeCopy},
+			{scratchName, "generator's scratch directory", removeScratch},
+		} {
+			if err := d.remove(); err != nil {
+				fmt.Fprintf(rw, "note: the %s %s could not be removed: %v\n", d.what, filepath.Join(parentLoc, d.name), err)
+			}
+		}
 		parentRoot.Close()
 	}
 	copyDir := filepath.Join(parentLoc, copyName)
@@ -375,7 +642,7 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	fmt.Fprintf(w, "module: %s\n", moduleAbs)
 	fmt.Fprintf(w, "private copy: %s (created through the parent's root; the kernel resolves the parent to %s)\n", copyDir, parentLoc)
 
-	dropped, err := CopyTree(ctx, moduleRoot, copyRoot, skipVCS)
+	dropped, skipped, err := CopyTree(ctx, moduleRoot, copyRoot, skipVCS)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("copy module into %q: %w", copyDir, err)
 	}
@@ -397,11 +664,15 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 		fmt.Fprintf(w, "dropped symbolic link %s (%s); the copy holds an inert self-loop in its place\n", d.Path, d.Reason)
 	}
 
+	for _, sk := range skipped {
+		fmt.Fprintf(w, "skipped %s (%s: not a regular file, directory or symlink); the copy holds an inert self-loop in its place\n", sk.Path, sk.Mode)
+	}
+
 	// The config is read from the COPY, which is byte-identical to the tree,
 	// so the enumeration describes the file the generator is about to read.
 	plan, err := EnumerateOutputs(copyDir, opts.configPath())
 	if err != nil {
-		return nil, cleanup, err
+		return nil, cleanup, explainSkipped(err, skipped)
 	}
 	fmt.Fprintf(w, "config: %s (%d schema file(s), %d declared output path(s))\n",
 		plan.ConfigPath, len(plan.Schemas), len(plan.Outputs))
@@ -415,6 +686,15 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	if err := refuseDiscoverableConfigs(copyRoot, plan); err != nil {
 		return nil, cleanup, err
 	}
+	// The record and the configuration are two inputs that name paths in the
+	// same tree. Where they name the SAME path, the record write is a write
+	// over a generator input or output: `check-drift -update -record
+	// <a declared output>` replaced a 3 MB generated file with the 15 KB
+	// record, and `check-drift` alone read that file as a record and reported
+	// a mismatch about it.
+	if err := refuseRecordOverTheGeneratorsOwnPaths(moduleAbs, opts.driftPath(), plan); err != nil {
+		return nil, cleanup, err
+	}
 
 	workDir := filepath.Join(copyDir, filepath.FromSlash(plan.ConfigDir))
 	// The go command is about to run with HOME and TMPDIR in the scratch
@@ -422,11 +702,11 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	if err := stillNamed(scratchRoot, scratchDir, "generator's scratch directory"); err != nil {
 		return nil, cleanup, err
 	}
-	childEnv, err := childEnvironment(ctx, scratchRoot, scratchDir, workDir, copyDir, moduleAbs, w)
+	childEnv, err := childEnvironment(ctx, tool, scratchRoot, scratchDir, workDir, copyDir, moduleAbs, w)
 	if err != nil {
 		return nil, cleanup, err
 	}
-	if err := refuseReplacesOutsideTheCopy(ctx, copyRoot, copyDir, childEnv); err != nil {
+	if err := refuseReplacesOutsideTheCopy(ctx, tool, copyRoot, copyDir, childEnv); err != nil {
 		return nil, cleanup, err
 	}
 
@@ -441,7 +721,7 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 
 	gen := opts.Generator
 	if gen == nil {
-		gen = NewGoRunGenerator(w, w)
+		gen = NewGoRunGenerator(tool, w, w)
 	}
 	fmt.Fprintf(w, "generator: %s (cwd %s)\n", gen.Describe(), plan.ConfigDir)
 
@@ -564,53 +844,84 @@ func GuardQueryEnv() []string {
 	return append(os.Environ(), "GOENV="+goenv, "XDG_CONFIG_HOME="+os.DevNull, "GOTOOLCHAIN=local")
 }
 
-// goCommand is every go command the guard runs. The command is the literal
-// name "go", which exec resolves through the guard's PATH into cmd.Path; that
-// resolution is then VERIFIED against the go binary the guard vetted
-// (goBinary: resolved physically, refused inside the module) and a mismatch
-// refuses -- the command is never redirected to a path, only checked. A PATH
-// that changes between the vetting and the command (a `go` shim put first)
-// therefore stops the run before anything is executed.
-func goCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
-	vetted, err := goBinary()
+// GoTool is the go command ONE run uses. It is resolved once, before anything
+// is executed, and every later command is checked against that one resolution
+// rather than against a fresh lookup -- a fresh lookup walks the same PATH in
+// the same process and compares a value with itself, so it can only catch a
+// PATH that changes mid-run.
+//
+// The zero value runs nothing: Command refuses until ResolveGoTool has
+// produced a path.
+type GoTool struct {
+	// path is the vetted go binary, resolved physically.
+	path string
+}
+
+// ResolveGoTool resolves the go command from PATH once and refuses one that
+// lives inside moduleDir, BEFORE any go command runs -- so a `go` shim
+// committed in the working tree is never executed, not even by the query that
+// locates the module. An empty moduleDir skips the confinement check; the
+// caller that does not know the module root yet must call Confine once it
+// does.
+func ResolveGoTool(moduleDir string) (GoTool, error) {
+	p, err := exec.LookPath("go")
 	if err != nil {
-		return nil, err
+		return GoTool{}, fmt.Errorf("refusing: the go command is not on PATH: %w", err)
+	}
+	return GoTool{path: resolvedPath(p)}.Confine(moduleDir)
+}
+
+// Confine refuses the tool when it resolves inside moduleDir. It is separate
+// from ResolveGoTool because the module root is itself discovered by running
+// the go command: the caller confines against the module that lexically
+// encloses the working directory first, then against the root it settled on.
+func (g GoTool) Confine(moduleDir string) (GoTool, error) {
+	if g.path == "" {
+		return GoTool{}, errors.New("refusing: the go command has not been resolved")
+	}
+	if moduleDir == "" {
+		return g, nil
+	}
+	if within(resolvedPath(moduleDir), g.path) {
+		return GoTool{}, fmt.Errorf("refusing: the go command resolves to %q, inside the module", g.path)
+	}
+	return g, nil
+}
+
+// Path is the vetted go binary.
+func (g GoTool) Path() string { return g.path }
+
+// Command builds one go command. The first argument is the literal name "go",
+// which exec resolves through PATH into cmd.Path; that resolution is then
+// compared with the path THIS run vetted, and a mismatch refuses. The command
+// is never redirected to a path -- overwriting cmd.Path would silence the
+// check instead of making it -- so a PATH that changes after the run began
+// stops the run before the command executes.
+func (g GoTool) Command(ctx context.Context, args ...string) (*exec.Cmd, error) {
+	if g.path == "" {
+		return nil, errors.New("refusing: the go command has not been resolved for this run")
 	}
 	stageHook("go-command", "")
 	cmd := exec.CommandContext(ctx, "go", args...)
 	if cmd.Err != nil {
 		return nil, fmt.Errorf("refusing: the go command cannot be located: %w", cmd.Err)
 	}
-	if got := resolvedPath(cmd.Path); got != vetted {
-		return nil, fmt.Errorf("refusing: `go` now resolves to %q, not the vetted go binary %q", got, vetted)
+	if got := resolvedPath(cmd.Path); got != g.path {
+		return nil, fmt.Errorf("refusing: `go` now resolves to %q, not the go binary this run vetted (%q)", got, g.path)
 	}
 	return cmd, nil
-}
-
-func goBinary() (string, error) {
-	p, err := exec.LookPath("go")
-	if err != nil {
-		return "", fmt.Errorf("refusing: the go command is not on PATH: %w", err)
-	}
-	return resolvedPath(p), nil
 }
 
 // childEnvironment builds the generator's environment from the allowlist, and
 // then ASSERTS it by asking the go command, in the directory the generator
 // will run in and with exactly that environment, for its effective settings.
-func childEnvironment(ctx context.Context, scratchRoot *os.Root, scratch, workDir, copyDir, moduleAbs string, w io.Writer) ([]string, error) {
-	goBin, err := goBinary()
-	if err != nil {
-		return nil, err
-	}
+func childEnvironment(ctx context.Context, tool GoTool, scratchRoot *os.Root, scratch, workDir, copyDir, moduleAbs string, w io.Writer) ([]string, error) {
+	goBin := tool.Path()
 	copyReal := resolvedPath(copyDir)
 	moduleReal := resolvedPath(moduleAbs)
 	inside := func(p string) bool {
 		r := resolvedPath(p)
 		return within(moduleReal, r) || within(copyReal, r)
-	}
-	if inside(goBin) {
-		return nil, fmt.Errorf("refusing: the go command resolves to %q, inside the module", goBin)
 	}
 
 	// The caches: the guard's EFFECTIVE values (environment and go env file
@@ -620,7 +931,7 @@ func childEnvironment(ctx context.Context, scratchRoot *os.Root, scratch, workDi
 	// it reports come from the environment and the go env file as the user set
 	// them. (exec keeps the LAST value of a duplicated key.)
 	parent := append(GuardQueryEnv(), "GOWORK=off", "GOFLAGS=")
-	shared, err := goEnv(ctx, scratch, parent, sharedLocations...)
+	shared, err := goEnv(ctx, tool, scratch, parent, sharedLocations...)
 	if err != nil {
 		return nil, err
 	}
@@ -667,7 +978,7 @@ func childEnvironment(ctx context.Context, scratchRoot *os.Root, scratch, workDi
 	}
 
 	// The executed assertion: what the go command itself will do with it.
-	eff, err := goEnv(ctx, workDir, env, "GOMOD", "GOFLAGS", "GOENV", "GOWORK", "GOTOOLCHAIN", "GOMODCACHE", "GOCACHE", "GOTMPDIR")
+	eff, err := goEnv(ctx, tool, workDir, env, "GOMOD", "GOFLAGS", "GOENV", "GOWORK", "GOTOOLCHAIN", "GOMODCACHE", "GOCACHE", "GOTMPDIR")
 	if err != nil {
 		return nil, err
 	}
@@ -703,8 +1014,8 @@ func checkChildGoEnv(eff map[string]string, copyReal string, inside func(string)
 	return nil
 }
 
-func goEnv(ctx context.Context, dir string, env []string, keys ...string) (map[string]string, error) {
-	cmd, err := goCommand(ctx, append([]string{"env", "-json"}, keys...)...)
+func goEnv(ctx context.Context, tool GoTool, dir string, env []string, keys ...string) (map[string]string, error) {
+	cmd, err := tool.Command(ctx, append([]string{"env", "-json"}, keys...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -738,14 +1049,14 @@ type goModEdit struct {
 // directory's packages to bind models, so it is an input like the schema.
 // Version replaces resolve through the module cache and go.sum, like any
 // dependency. The go command parses go.mod (`go mod edit -json`), not a regexp.
-func refuseReplacesOutsideTheCopy(ctx context.Context, copyRoot *os.Root, copyDir string, env []string) error {
+func refuseReplacesOutsideTheCopy(ctx context.Context, tool GoTool, copyRoot *os.Root, copyDir string, env []string) error {
 	if _, err := copyRoot.Lstat("go.mod"); err != nil {
 		if errNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("stat go.mod: %w", err)
 	}
-	cmd, err := goCommand(ctx, "mod", "edit", "-json")
+	cmd, err := tool.Command(ctx, "mod", "edit", "-json")
 	if err != nil {
 		return err
 	}
@@ -877,8 +1188,7 @@ func treeState(root *os.Root, rel string) (string, error) {
 		}
 		return "symlink:" + target, nil
 	case info.Mode().IsRegular():
-		d, _, err := digestFile(root, rel)
-		return d, err
+		return digestFile(root, rel)
 	default:
 		return "not-a-file:" + info.Mode().String(), nil
 	}
@@ -958,8 +1268,52 @@ func stillNamed(root *os.Root, p, what string) error {
 	return nil
 }
 
+// ownerMarkerOf is the name of the file that records which process created a
+// directory the guard made outside the tree. It sits BESIDE that directory,
+// never inside it, so the private copy stays byte-identical to the module.
+//
+// It is what makes the stale sweep safe: a directory with no marker was not
+// made by this guard (or was made in the instant before the marker landed) and
+// is never removed, and one whose process is still running belongs to a
+// concurrent run.
+func ownerMarkerOf(name string) string { return "." + name + ".owner" }
+
+// markedName is ownerMarkerOf in reverse: the directory a marker belongs to.
+func markedName(marker string) (string, bool) {
+	name, ok := strings.CutPrefix(marker, ".")
+	if !ok {
+		return "", false
+	}
+	name, ok = strings.CutSuffix(name, ".owner")
+	if !ok || !strings.HasPrefix(name, "gqlgen-guard-") {
+		return "", false
+	}
+	return name, true
+}
+
+// tempDirIn creates a marked temporary directory inside root and returns its
+// name together with the removal that takes the MARKER with it. The two are
+// returned as one thing so no error path can remove the directory and leave
+// its marker behind: an orphan marker is a file nothing ever cleans up.
+func tempDirIn(root *os.Root, prefix string) (string, func() error, error) {
+	name, err := mkdirTempIn(root, prefix)
+	if err != nil {
+		return "", nil, err
+	}
+	return name, func() error {
+		if err := root.RemoveAll(name); err != nil {
+			return err
+		}
+		if err := root.Remove(ownerMarkerOf(name)); err != nil && !errNotExist(err) {
+			return err
+		}
+		return nil
+	}, nil
+}
+
 // mkdirTempIn creates a new directory named prefix+random inside root and
-// returns its name, the way os.MkdirTemp does for a path.
+// returns its name, the way os.MkdirTemp does for a path, leaving its owner
+// marker beside it.
 func mkdirTempIn(root *os.Root, prefix string) (string, error) {
 	for try := 0; try < 10000; try++ {
 		var b [6]byte
@@ -969,6 +1323,10 @@ func mkdirTempIn(root *os.Root, prefix string) (string, error) {
 		name := prefix + hex.EncodeToString(b[:])
 		err := root.Mkdir(name, 0o700)
 		if err == nil {
+			if err := root.WriteFile(ownerMarkerOf(name), fmt.Appendf(nil, "%d\n", os.Getpid()), 0o600); err != nil {
+				_ = root.RemoveAll(name)
+				return "", fmt.Errorf("mark %q as this run's: %w", name, err)
+			}
 			return name, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
@@ -976,6 +1334,146 @@ func mkdirTempIn(root *os.Root, prefix string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("could not create a unique %s* directory in %q", prefix, root.Name())
+}
+
+// sweepStaleCopies reports and removes the directories earlier runs of THIS
+// guard left in parent and could not clean up -- an uncatchable signal
+// (SIGKILL) is the only way they survive, and each is a whole copy of the
+// working tree, including anything untracked in it. Nothing without the
+// guard's own marker is touched, and nothing whose marking process is still
+// running: a concurrent run's copy is left alone.
+func sweepStaleCopies(parentRoot *os.Root, parentLoc string, w io.Writer) {
+	entries, err := fs.ReadDir(parentRoot.FS(), ".")
+	if err != nil {
+		fmt.Fprintf(w, "note: could not list %s for stale private copies: %v\n", parentLoc, err)
+		return
+	}
+	present := map[string]bool{}
+	for _, e := range entries {
+		if e.IsDir() {
+			present[e.Name()] = true
+		}
+	}
+	for _, e := range entries {
+		name := e.Name()
+		// A marker whose directory is already gone is an orphan: nothing else
+		// would ever look at it again.
+		if orphan, ok := markedName(e.Name()); ok && !present[orphan] {
+			if err := parentRoot.Remove(e.Name()); err == nil {
+				fmt.Fprintf(w, "note: removed the owner marker of a private copy that is already gone (%s)\n", filepath.Join(parentLoc, e.Name()))
+			}
+			continue
+		}
+		if !e.IsDir() || !strings.HasPrefix(name, "gqlgen-guard-") {
+			continue
+		}
+		marker, err := ReadThroughRoot(parentRoot, ownerMarkerOf(name))
+		if err != nil {
+			continue // not ours (or unreadable): never removed
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(marker)))
+		if err != nil || processAlive(pid) {
+			continue
+		}
+		age := "unknown age"
+		if info, serr := e.Info(); serr == nil {
+			age = time.Since(info.ModTime()).Round(time.Second).String() + " old"
+		}
+		full := filepath.Join(parentLoc, name)
+		if rerr := parentRoot.RemoveAll(name); rerr != nil {
+			fmt.Fprintf(w, "note: a private copy left by pid %d (%s, %s) could not be removed: %v\n", pid, full, age, rerr)
+			continue
+		}
+		_ = parentRoot.Remove(ownerMarkerOf(name))
+		fmt.Fprintf(w, "note: removed the private copy pid %d left behind (%s, %s); it was killed before it could clean up\n", pid, full, age)
+	}
+}
+
+// processAlive reports whether pid still names a running process. A signal 0
+// that is refused (EPERM) means the process exists but is not ours, which is
+// still alive -- and still a reason not to remove its directory.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// refuseRecordOverTheGeneratorsOwnPaths refuses a record path that is also a
+// path the gqlgen configuration names: a declared output, a schema, a template,
+// or the config file itself. Both verbs refuse, because reading one of those as
+// a record is as wrong as writing over it.
+func refuseRecordOverTheGeneratorsOwnPaths(moduleAbs, driftPath string, plan *Plan) error {
+	// Both sides are compared where the operating system puts them, not only
+	// as written: `-record <a link to the output directory>/generated.go` is
+	// lexically a different path and physically the same file.
+	rel := func(p string) string {
+		phys := resolvedPath(moduleAbs + string(filepath.Separator) + filepath.FromSlash(p))
+		r, err := filepath.Rel(resolvedPath(moduleAbs), phys)
+		if err != nil {
+			return path.Clean(p)
+		}
+		return filepath.ToSlash(r)
+	}
+	// The record is an operator-named path like the config, so it gets the
+	// same rule: a `..` after a directory name climbs from wherever that name
+	// resolves, which through a link is not where the path reads.
+	if err := refuseDotDotAfterAName("expected-drift record", driftPath); err != nil {
+		return err
+	}
+	named := map[string]string{}
+	add := func(p, what string) {
+		named[path.Clean(p)] = what
+		named[rel(p)] = what
+	}
+	add(plan.ConfigPath, "the gqlgen config")
+	for _, in := range append(append([]Input(nil), plan.SchemaInputs...), plan.Templates...) {
+		add(in.Path, in.Knob)
+		add(in.Physical, in.Knob)
+	}
+	for _, sch := range plan.Schemas {
+		add(sch, "a schema")
+	}
+	for _, o := range plan.Outputs {
+		add(o.Path, "the declared output of "+string(o.Declaree))
+	}
+	for _, form := range []string{path.Clean(driftPath), rel(driftPath)} {
+		if knob, ok := named[form]; ok {
+			return fmt.Errorf(
+				"refusing: the expected-drift record %q is also %s (both resolve to %q); the record would be read from, and with -update written over, a file the generator owns",
+				driftPath, knob, form)
+		}
+	}
+	return nil
+}
+
+// explainSkipped names the cause when a failure is about a path CopyTree could
+// not reproduce. The copy holds an inert self-loop there, so the failure that
+// reaches the operator is "too many levels of symbolic links" -- true, and
+// useless on its own. Everything the guard skipped is already on the report;
+// this puts the reason on the refusal itself.
+//
+// There is deliberately no SEPARATE refusal for "a skipped entry the config
+// declares". Every such path is already refused by the check that reads it --
+// the config's own resolution, the schema's physical resolution, the
+// template's regular-file check, the declared output's -- and a guard that
+// cannot fire is not a guard. What was missing was never the refusal; it was
+// the reason, which is what this adds.
+func explainSkipped(err error, skipped []SkippedEntry) error {
+	if err == nil {
+		return nil
+	}
+	for _, sk := range skipped {
+		if strings.Contains(err.Error(), sk.Path) {
+			return fmt.Errorf("%w (%q in the working tree is not a regular file, directory or symlink (%s), so the copy holds an inert self-loop where it was)", err, sk.Path, sk.Mode)
+		}
+	}
+	return err
 }
 
 // refuseHandWrittenCollisions refuses a configuration whose declared outputs

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -131,19 +132,12 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	// (handed --config <base name>) resolves every relative path in the file
 	// against it. The file itself may be an in-module link; it is read through
 	// the module root below, which follows it only inside the module.
-	configDirAbs, err := physicalPath(moduleAbs + string(filepath.Separator) + filepath.FromSlash(filepath.Dir(configPath)))
+	configDirAbs, configRel, err := physicalConfigLocation(moduleAbs, configPath)
 	if err != nil {
-		return nil, fmt.Errorf("refusing: the directory of gqlgen config %q cannot be resolved: %v", configPath, err)
+		return nil, err
 	}
-	configDirRel, err := filepath.Rel(moduleAbs, configDirAbs)
-	if err != nil || configDirRel == ".." || strings.HasPrefix(configDirRel, ".."+string(filepath.Separator)) {
-		return nil, fmt.Errorf("refusing: the directory of gqlgen config %q resolves physically to %q, outside the module", configPath, configDirAbs)
-	}
-	configBase := filepath.Base(filepath.FromSlash(configPath))
-	if _, err := physicallyInside(moduleAbs, configDirAbs+string(filepath.Separator)+configBase); err != nil {
-		return nil, fmt.Errorf("refusing: gqlgen config %q %v", configPath, err)
-	}
-	configRel := filepath.ToSlash(filepath.Join(configDirRel, configBase))
+	configBase := path.Base(configRel)
+	configDirRel := path.Dir(configRel)
 
 	var (
 		cfg        *config.Config
@@ -270,7 +264,7 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 
 	plan := &Plan{
 		ConfigPath: configRel,
-		ConfigDir:  filepath.ToSlash(configDirRel),
+		ConfigDir:  configDirRel,
 		Templates:  templates,
 	}
 	if plan.ConfigDir == "" {
@@ -296,15 +290,27 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s output %q: %w", o.declaree, o.abs, err)
 		}
-		if prev, seen := owner[rel]; seen {
+		// Collisions are decided on the path with its DIRECTORY resolved
+		// physically. The copy reproduces in-module links, so two declarees
+		// naming one file through a directory link really do write over each
+		// other while reading as two paths. The final component is left
+		// alone: an output that is ITSELF a link has its own, more precise
+		// refusal (refuseHandWrittenCollisions), and resolving it here would
+		// replace that reason with this one.
+		physRel, err := moduleRelative(resolvedPath(moduleAbs),
+			filepath.Join(resolvedPath(filepath.Dir(o.abs)), filepath.Base(o.abs)))
+		if err != nil {
+			return nil, fmt.Errorf("%s output %q: %w", o.declaree, o.abs, err)
+		}
+		if prev, seen := owner[physRel]; seen {
 			if prev != o.declaree {
 				return nil, fmt.Errorf(
 					"gqlgen config collision: %s and %s both resolve to %q; one would silently overwrite the other",
-					prev, o.declaree, rel)
+					prev, o.declaree, physRel)
 			}
 			continue
 		}
-		owner[rel] = o.declaree
+		owner[physRel] = o.declaree
 		plan.Outputs = append(plan.Outputs, Output{Path: rel, Declaree: o.declaree})
 	}
 	sort.Slice(plan.Outputs, func(i, j int) bool { return plan.Outputs[i].Path < plan.Outputs[j].Path })
@@ -326,6 +332,31 @@ type templateInput struct{ knob, path string }
 // written, and where it physically resolves (module-relative).
 type Input struct {
 	Knob, Path, Physical string
+}
+
+// physicalConfigLocation resolves the gqlgen config's DIRECTORY the way the
+// operating system does and refuses one that lands outside the module, then
+// the config file itself. It returns the directory's absolute physical path
+// and the module-relative path of the config inside it.
+//
+// The three refusals are separate on purpose and each is exercised alone
+// (TestEachPhysicalCheckRefusesOnItsOwn): the directory that cannot be
+// resolved at all, the directory that resolves outside, and the file that
+// resolves outside the directory that was just accepted.
+func physicalConfigLocation(moduleAbs, configPath string) (dirAbs, configRel string, err error) {
+	dirAbs, err = physicalPath(moduleAbs + string(filepath.Separator) + filepath.FromSlash(filepath.Dir(configPath)))
+	if err != nil {
+		return "", "", fmt.Errorf("refusing: the directory of gqlgen config %q cannot be resolved: %v", configPath, err)
+	}
+	dirRel, err := filepath.Rel(moduleAbs, dirAbs)
+	if err != nil || dirRel == ".." || strings.HasPrefix(dirRel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("refusing: the directory of gqlgen config %q resolves physically to %q, outside the module", configPath, dirAbs)
+	}
+	base := filepath.Base(filepath.FromSlash(configPath))
+	if _, err := physicallyInside(moduleAbs, dirAbs+string(filepath.Separator)+base); err != nil {
+		return "", "", fmt.Errorf("refusing: gqlgen config %q %v", configPath, err)
+	}
+	return dirAbs, filepath.ToSlash(filepath.Join(dirRel, base)), nil
 }
 
 // refuseDotDotAfterAName refuses a path with a `..` component after a
@@ -514,7 +545,7 @@ func refuseSchemaPatternsLeavingTheModule(patterns []string, moduleAbs, configDi
 // globMeta are the characters filepath.Glob treats as pattern syntax on the
 // platforms this guard runs on. A component containing one is matched against
 // directory entries rather than resolved by name.
-const globMeta = `*?[\\`
+const globMeta = `*?[\`
 
 // refuseUnresolvableSchemaDirs walks every directory each schema pattern would
 // traverse -- exactly the traversal filepath.Glob (and gqlgen's `**` walk

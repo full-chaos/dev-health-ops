@@ -115,7 +115,7 @@ func TestAVirtualEnvironmentShapedCheckoutStillGenerates(t *testing.T) {
 	}
 
 	var report strings.Builder
-	opts := guardOptions(f, nil)
+	opts := writeOptions(f, nil)
 	opts.Report = &report
 	res, err := Generate(context.Background(), opts)
 	if err != nil {
@@ -374,7 +374,7 @@ func TestCopyTreeStopsWhenCancelled(t *testing.T) {
 	defer dst.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := CopyTree(ctx, src, dst, skipVCS); !errors.Is(err, context.Canceled) {
+	if _, _, err := CopyTree(ctx, src, dst, skipVCS); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CopyTree with a cancelled context returned %v, want context.Canceled", err)
 	}
 	entries, _ := os.ReadDir(dstDir)
@@ -599,7 +599,7 @@ func TestTheRealGeneratorUsesAnInModuleTemplate(t *testing.T) {
 	f.write("gqlgen.yml", strings.Replace(guardConfig,
 		"model: {filename: gen/model/models_gen.go, package: model}",
 		"model: {filename: gen/model/models_gen.go, package: model, model_template: tmpl/models.gotpl}", 1))
-	if _, err := Generate(context.Background(), guardOptions(f, nil)); err != nil {
+	if _, err := Generate(context.Background(), writeOptions(f, nil)); err != nil {
 		t.Fatalf("an in-module template was refused: %v", err)
 	}
 	if !strings.Contains(f.read("gen/model/models_gen.go"), "in_module_template_marker") {
@@ -734,7 +734,7 @@ func TestEveryConfigKeyThatNamesAPathInputDomain(t *testing.T) {
 			f.write("gqlgen.yml", tc.edit(guardConfig))
 			before := f.digests()
 			var report strings.Builder
-			opts := guardOptions(f, gen)
+			opts := writeOptions(f, gen)
 			opts.Report = &report
 			var err error
 			if tc.real {

@@ -396,7 +396,7 @@ func TestModuleFilesAreNeverCopiedBack(t *testing.T) {
 		return writeIn(workDir, "go.sum", "")
 	}}
 
-	res, err := Generate(context.Background(), guardOptions(f, gen))
+	res, err := Generate(context.Background(), writeOptions(f, gen))
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestGenerateCopiesBackOnlyTheDeclaredOutputsThatChanged(t *testing.T) {
 		return writeIn(workDir, "gen/generated.go", strings.Replace(markedExec, "tree", "regenerated", 1))
 	}}
 
-	res, err := Generate(context.Background(), guardOptions(f, gen))
+	res, err := Generate(context.Background(), writeOptions(f, gen))
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}

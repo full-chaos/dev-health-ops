@@ -265,11 +265,18 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		}
 	})
 
-	t.Run("component form wins even when MIGRATION_DATABASE_URI is also set", func(t *testing.T) {
+	// Round-1 (2026-09-11) finding: deploy/docker-compose/compose.go-workers.yml
+	// (not touched by this PR) unconditionally sets POSTGRES_HOST, defaulted
+	// to "postgres", for its own pre-existing shell-fallback entrypoint --
+	// so "component form wins whenever HOST is set" (this sub-test's old
+	// name and assertion) silently discarded a real, working
+	// MIGRATION_DATABASE_URI override the moment that compose service ran.
+	// Precedence is flipped: the pre-built URI wins whenever it is set.
+	t.Run("pre-built URI wins even when a host var is also set", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
 		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
-			"MIGRATION_DATABASE_URI": "postgresql://ignored:ignored@ignored:5432/ignored",
+			"MIGRATION_DATABASE_URI": "postgresql://real:real@real-host:5432/real",
 			"POSTGRES_HOST":          "postgres",
 			"POSTGRES_USER":          "postgres",
 			"POSTGRES_PASSWORD":      "postgres",
@@ -278,8 +285,27 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected success, stderr=%s", stderr.String())
 		}
-		if strings.Contains(got.Reveal(), "ignored") {
-			t.Fatalf("component form should have superseded MIGRATION_DATABASE_URI, got %q", got.Reveal())
+		if got.Reveal() != "postgresql://real:real@real-host:5432/real" {
+			t.Fatalf("pre-built MIGRATION_DATABASE_URI should have won over the component form, got %q", got.Reveal())
+		}
+	})
+
+	// The exact round-1 reproduction: a real, reachable MIGRATION_DATABASE_URI
+	// plus compose's own always-present POSTGRES_HOST default must still
+	// resolve to the real endpoint, never the host var's (here, deliberately
+	// wrong) value.
+	t.Run("a compose-defaulted host var never redirects a working pre-built URI", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI": "postgresql://postgres:postgres@postgres:5432/postgres",
+			"POSTGRES_HOST":          "does-not-exist.invalid",
+		}), &stderr)
+		if !ok {
+			t.Fatalf("expected success, stderr=%s", stderr.String())
+		}
+		if got.Reveal() != "postgresql://postgres:postgres@postgres:5432/postgres" {
+			t.Fatalf("a bogus compose-defaulted POSTGRES_HOST must not redirect a working URI, got %q", got.Reveal())
 		}
 	})
 

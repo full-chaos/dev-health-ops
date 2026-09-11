@@ -235,12 +235,37 @@ func requiredName(key string, lookup platformsecrets.LookupEnv, stderr io.Writer
 // class this ticket fixes, just one shell layer further out. Setting
 // POSTGRES_HOST here builds the same URI safely instead, sharing
 // config.ResolveDSNFromComponents with the runtime binaries rather than a
-// second hand-rolled DSN builder. MIGRATION_DATABASE_URI (still supported)
-// wins if POSTGRES_HOST is unset.
+// second hand-rolled DSN builder.
+//
+// MIGRATION_DATABASE_URI wins whenever it is set; POSTGRES_HOST is a
+// fallback used only when no MIGRATION_DATABASE_URI is present at all.
+// This is deliberately the OPPOSITE precedence from
+// internal/platform/config's four runtime DSNs, where a set HOST var wins
+// outright -- because deploy/docker-compose/compose.go-workers.yml (not
+// touched by this PR) ALWAYS sets POSTGRES_HOST, defaulted to "postgres",
+// for its own pre-existing shell-fallback entrypoint. A round-1 review
+// (2026-09-11) proved that "HOST wins outright" here silently discarded a
+// perfectly valid, already-working MIGRATION_DATABASE_URI override the
+// moment that compose service ran, because its POSTGRES_HOST default is
+// present unconditionally, not just when an operator means to opt into
+// components. Preferring the explicit URI when set restores today's
+// behavior (the entrypoint's own shell fallback, or an operator's
+// GO_WORKER_MIGRATION_DATABASE_URI override, both arrive as a non-empty
+// MIGRATION_DATABASE_URI and win as before); components remain available
+// for a caller -- a future Kubernetes Job, say -- that sets POSTGRES_HOST
+// and genuinely never sets MIGRATION_DATABASE_URI at all.
 func resolveMigrationDatabaseURI(
 	lookup platformsecrets.LookupEnv,
 	stderr io.Writer,
 ) (platformsecrets.Value, bool) {
+	uri, configured, err := platformsecrets.Resolve("MIGRATION_DATABASE_URI", lookup)
+	if err != nil {
+		fmt.Fprintln(stderr, "configuration error: could not resolve MIGRATION_DATABASE_URI")
+		return platformsecrets.Value{}, false
+	}
+	if configured {
+		return uri, true
+	}
 	built, used, err := config.ResolveDSNFromComponents(lookup, config.ComponentSpec{
 		HostKey: "POSTGRES_HOST", PortKey: "POSTGRES_PORT", DefaultPort: "5432",
 		UserKey: "POSTGRES_USER", PasswordKey: "POSTGRES_PASSWORD",
@@ -253,24 +278,8 @@ func resolveMigrationDatabaseURI(
 	if used {
 		return built, true
 	}
-	return requiredSecret("MIGRATION_DATABASE_URI", lookup, stderr)
-}
-
-func requiredSecret(
-	key string,
-	lookup platformsecrets.LookupEnv,
-	stderr io.Writer,
-) (platformsecrets.Value, bool) {
-	value, configured, err := platformsecrets.Resolve(key, lookup)
-	if err != nil {
-		fmt.Fprintf(stderr, "configuration error: could not resolve %s\n", key)
-		return platformsecrets.Value{}, false
-	}
-	if !configured {
-		fmt.Fprintf(stderr, "configuration error: %s is required\n", key)
-		return platformsecrets.Value{}, false
-	}
-	return value, true
+	fmt.Fprintln(stderr, "configuration error: MIGRATION_DATABASE_URI is required")
+	return platformsecrets.Value{}, false
 }
 
 // coordinatorGrants derives the coordinator role's GRANT set from

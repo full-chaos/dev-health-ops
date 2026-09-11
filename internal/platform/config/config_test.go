@@ -1051,3 +1051,46 @@ func TestLoadPrefersComponentFormAndSurvivesAReservedCharacterPassword(t *testin
 			cfg.QueueDatabaseURI.Reveal())
 	}
 }
+
+// TestComponentHostSkipsThePreBuiltKeysOwnFileConflictCheck is round-1's
+// (2026-09-11) second finding, reproduced then fixed: POSTGRES_URI and
+// POSTGRES_URI_FILE are mutually exclusive when POSTGRES_URI is actually
+// consulted, and that check used to run unconditionally, before the
+// component path was ever considered -- so an operator who set
+// POSTGRES_DOMAIN_HOST specifically to bypass a stale/conflicting
+// POSTGRES_URI/_FILE pair was refused on a conflict irrelevant to the path
+// actually taken. Setting the host var must skip that raw key's resolution
+// (and its conflict check) entirely, not just its result.
+func TestComponentHostSkipsThePreBuiltKeysOwnFileConflictCheck(t *testing.T) {
+	t.Parallel()
+
+	// Unfixed behavior, reproduced first: no host var set -> the conflict is
+	// real and must still be reported.
+	_, err := Load(workerSpec(map[string]string{
+		"POSTGRES_URI":        "postgresql://old:old@old.invalid:5432/old",
+		"POSTGRES_URI_FILE":   "/does/not/matter",
+		"WORKER_DATABASE_URI": "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "POSTGRES_URI and POSTGRES_URI_FILE are mutually exclusive") {
+		t.Fatalf("expected the mutual-exclusivity error when no host var is set, got: %v", err)
+	}
+
+	// Fixed behavior: the SAME conflicting pair, but POSTGRES_DOMAIN_HOST is
+	// also set -- the raw pair must never be consulted, and Load must
+	// succeed via components alone.
+	cfg, err := Load(workerSpec(map[string]string{
+		"POSTGRES_URI":                   "postgresql://old:old@old.invalid:5432/old",
+		"POSTGRES_URI_FILE":              "/does/not/matter",
+		"POSTGRES_DOMAIN_HOST":           "db.internal",
+		"RIVER_DOMAIN_DATABASE_ROLE":     "app",
+		"RIVER_DOMAIN_DATABASE_PASSWORD": "app",
+		"POSTGRES_DB":                    "appdb",
+		"WORKER_DATABASE_URI":            "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err != nil {
+		t.Fatalf("a set host var must skip the conflicting raw pair entirely, got error: %v", err)
+	}
+	if cfg.DomainDatabaseURI.Reveal() != "postgresql://app:app@db.internal:5432/appdb" {
+		t.Fatalf("expected the component-built DSN, got %q", cfg.DomainDatabaseURI.Reveal())
+	}
+}

@@ -372,24 +372,29 @@ func Load(spec Spec) (Config, error) {
 		{name: "PAGER_DUTY_SECRET", target: &cfg.PagerDutyOAuthSecret},
 		{name: "WORKER_OPERATIONAL_BRIDGE_TOKEN", target: &cfg.OperationalBridgeToken},
 	}
-	for _, item := range secretTargets {
-		value, _, resolveErr := secrets.Resolve(item.name, lookup)
-		if resolveErr != nil {
-			return Config{}, resolveErr
-		}
-		*item.target = value
-	}
-	// CHAOS-5560: a pre-built URI (above) requires whoever assembles it (a
-	// compose file, a shell script, an operator's own tooling) to correctly
-	// URL-encode every credential component -- a `#`/`@`/`/`/`?` in a
-	// password silently truncates or corrupts the DSN, and that failure
-	// mode was hit repeatedly at the deploy-manifest layer, never here.
-	// The component form below lets each URI be assembled from its own
-	// host/port/user/password/db pieces instead, encoded correctly by
-	// net/url regardless of their content. Components win outright when
-	// the HOST var is set; the pre-built URI stays for compatibility when
-	// it isn't.
-	for _, spec := range []ComponentSpec{
+	// CHAOS-5560: a pre-built URI (POSTGRES_URI/WORKER_DATABASE_URI/
+	// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI) requires whoever assembles it
+	// (a compose file, a shell script, an operator's own tooling) to
+	// correctly URL-encode every credential component -- a `#`/`@`/`/`/`?`
+	// in a password silently truncates or corrupts the DSN, and that
+	// failure mode was hit repeatedly at the deploy-manifest layer, never
+	// here. The component form below lets each URI be assembled from its
+	// own host/port/user/password/db pieces instead, encoded correctly by
+	// net/url regardless of their content. Components win outright when the
+	// HOST var is set; the pre-built URI (and its `_FILE` variant) stay for
+	// compatibility when it isn't.
+	//
+	// Round-1 (2026-09-11) finding: the pre-built key's own resolution --
+	// including its `KEY`/`KEY_FILE` mutual-exclusivity check -- used to run
+	// unconditionally, before this component check, for every one of these
+	// four keys. An operator who set the matching HOST var specifically to
+	// bypass a stale/conflicting pre-built pair (leftover `_FILE` mount from
+	// an earlier config generation, say) was refused before the code ever
+	// looked at HOST, on a conflict irrelevant to the path actually taken.
+	// dsnComponentSpecs below is now consulted FIRST so a set HOST var skips
+	// the raw key's resolution (and that check) entirely, not just its
+	// result.
+	dsnComponentSpecs := []ComponentSpec{
 		{
 			HostKey: "POSTGRES_DOMAIN_HOST", PortKey: "POSTGRES_DOMAIN_PORT", DefaultPort: "5432",
 			UserKey: "RIVER_DOMAIN_DATABASE_ROLE", PasswordKey: "RIVER_DOMAIN_DATABASE_PASSWORD",
@@ -414,7 +419,30 @@ func Load(spec Spec) (Config, error) {
 			DBKey: "CLICKHOUSE_DB", DefaultDB: "default", Scheme: "clickhouse",
 			Target: &cfg.ClickHouseURI,
 		},
-	} {
+	}
+	rawKeyByHostKey := map[string]string{
+		"POSTGRES_DOMAIN_HOST":      "POSTGRES_URI",
+		"POSTGRES_QUEUE_HOST":       "WORKER_DATABASE_URI",
+		"POSTGRES_COORDINATOR_HOST": "COORDINATOR_DATABASE_URI",
+		"CLICKHOUSE_HOST":           "CLICKHOUSE_URI",
+	}
+	componentOverridden := make(map[string]bool, len(dsnComponentSpecs))
+	for _, spec := range dsnComponentSpecs {
+		if host, present := lookup(spec.HostKey); present && strings.TrimSpace(host) != "" {
+			componentOverridden[rawKeyByHostKey[spec.HostKey]] = true
+		}
+	}
+	for _, item := range secretTargets {
+		if componentOverridden[item.name] {
+			continue
+		}
+		value, _, resolveErr := secrets.Resolve(item.name, lookup)
+		if resolveErr != nil {
+			return Config{}, resolveErr
+		}
+		*item.target = value
+	}
+	for _, spec := range dsnComponentSpecs {
 		built, used, buildErr := ResolveDSNFromComponents(lookup, spec)
 		if buildErr != nil {
 			return Config{}, buildErr

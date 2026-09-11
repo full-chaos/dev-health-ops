@@ -310,9 +310,6 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 		}
 		fmt.Fprintf(w, "dropped symbolic link %s (%s); the copy holds an inert self-loop in its place\n", d.Path, d.Reason)
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, cleanup, fmt.Errorf("cancelled before generating: %w", err)
-	}
 
 	// The config is read from the COPY, which is byte-identical to the tree,
 	// so the enumeration describes the file the generator is about to read.
@@ -341,10 +338,12 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	if err := gen.Generate(ctx, filepath.Join(copyDir, filepath.FromSlash(plan.ConfigDir))); err != nil {
 		return nil, cleanup, fmt.Errorf("refusing: the generator failed: %w (nothing was written to %s)", err, moduleAbs)
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, cleanup, fmt.Errorf("cancelled after generating: %w", err)
-	}
-
+	// No separate "cancelled after generating" check, and none after the copy
+	// either: every walk here (the copy and both snapshots) checks ctx before
+	// its first entry, so each explicit check that used to sit between them
+	// was subsumed by the next walk's own first check. Mutant M17 removed one
+	// and survived every test, which is how that was found; a guard that
+	// cannot fail is not a guard.
 	after, err := TakeSnapshotContext(ctx, copyRoot, skipVCS)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("snapshot private copy after generating: %w", err)

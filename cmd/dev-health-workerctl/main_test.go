@@ -1016,6 +1016,31 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRequiresClickHouse
 	}
 }
 
+// TestDispatchProvidersyncRetireStaleLinearProjectOwnershipLogsResolvedDatabase
+// mirrors TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase
+// for this dispatcher's own, separate lazy CLICKHOUSE_URI resolution site
+// (round-7 review, 2026-09-11, P3: the sibling site had this coverage, this
+// one did not -- removing only this dispatcher's logResolvedDatabase call
+// passed the whole suite).
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipLogsResolvedDatabase(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{})
+	runtime.lookup = dsnTestLookup(map[string]string{
+		"DEV_HEALTH_CH_HOST": "127.0.0.1",
+		"DEV_HEALTH_CH_PORT": "1",
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(ctx, runtime, nil, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1 (unroutable ClickHouse host)", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, `"dsn":{"name":"clickhouse","form":"components","database":"default"}`) {
+		t.Fatalf("expected a components-form resolution record, got: %s", out)
+	}
+}
+
 // TestDispatchSyncDispatchOutboxUnknownSubcommandIsInvalidRequest mirrors
 // TestDispatchProvidersyncUnknownSubcommandIsInvalidRequest for the CHAOS-4583
 // `sync-dispatch-outbox` verb group.

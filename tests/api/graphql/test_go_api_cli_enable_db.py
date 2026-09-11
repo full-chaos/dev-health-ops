@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -616,3 +617,33 @@ async def test_status_renders_a_drifted_row_with_its_proof_and_its_document(
         f"no line names the document actually serving the drifted row -- the "
         f"only question DOCUMENT_DRIFT raises\n{out}"
     )
+
+    # The other consumers of digest_state, on the SAME rows: `--json` and the
+    # `reachable` property. The drifted row is live and proven but NOT
+    # reachable -- the edge dispatches through the catalog, so no request can
+    # land on it -- and the catalog's canary row is reachable and unproven.
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_status(
+                argparse.Namespace(query_api_url=url, json=True)
+            )
+            == 0
+        )
+    payload = json.loads(capsys.readouterr().out)
+    rows = {
+        (row["digest_state"], row["document_digest"]): row
+        for row in payload["operations"]
+        if row["operation"] == "featureFlags"
+    }
+    drift_json = rows[("DOCUMENT_DRIFT", drifted)]
+    match_json = rows[("MATCH", catalog["featureFlags"])]
+    assert (drift_json["mode"], drift_json["proven"], drift_json["reachable"]) == (
+        "primary",
+        True,
+        False,
+    ), f"--json disagrees with the terminal about the drifted row: {drift_json}"
+    assert (match_json["mode"], match_json["proven"], match_json["reachable"]) == (
+        "canary",
+        False,
+        True,
+    ), f"--json misreports the catalog's row: {match_json}"

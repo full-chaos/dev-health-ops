@@ -3,6 +3,8 @@ package gqlgenguard
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -266,6 +269,20 @@ func Generate(ctx context.Context, opts Options) (*Result, error) {
 	return res, nil
 }
 
+// testStageHook, when set (tests only), runs at named points between a check
+// and the writes it guards, so a test can change the filesystem exactly there:
+// "copy-parent-checked" (the copy's parent passed its check, nothing created),
+// "scratch-created" (the generator's scratch directory exists, nothing written
+// in it), "copy-created" (the private copy exists, nothing copied into it),
+// "before-generator" (every check has passed; dir is "<copy>\x00<scratch>").
+var testStageHook func(stage, dir string)
+
+func stageHook(stage, dir string) {
+	if testStageHook != nil {
+		testStageHook(stage, dir)
+	}
+}
+
 // generateIntoCopy performs every step both verbs share: copy the module,
 // enumerate the generator's declared output surface from its own config, run
 // the generator inside the copy, and classify everything it touched.
@@ -293,44 +310,82 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	// first is inside the second, copying the module copies the copy into
 	// itself without end -- measured on the real binary before this check: 91
 	// nested levels and 11 GB in nine minutes.
-	if err := refuseCopyInsideModule(moduleAbs, opts.TempParent); err != nil {
+	parentPhys, err := refuseCopyInsideModule(moduleAbs, opts.TempParent)
+	if err != nil {
 		return nil, nil, err
 	}
+	stageHook("copy-parent-checked", parentPhys)
 
-	copyDir, err := os.MkdirTemp(opts.TempParent, "gqlgen-guard-")
+	// Every write the guard makes outside the tree goes through an os.Root
+	// opened on the copy's parent: the check above names a PATH, and a link
+	// swapped into that path afterwards would move every later write with it.
+	// The root is a handle on the directory itself -- nothing done to a path
+	// afterwards moves it -- and where the kernel says that directory is, is
+	// checked once more; the private copy and the generator's scratch are
+	// created and written only through it (and roots opened beneath it, which
+	// refuse any link that leads out of them).
+	parentRoot, err := os.OpenRoot(parentPhys)
 	if err != nil {
+		return nil, nil, fmt.Errorf("open the private copy's parent %q: %w", parentPhys, err)
+	}
+	parentLoc, err := rootLocation(parentRoot)
+	if err != nil {
+		parentRoot.Close()
+		return nil, nil, err
+	}
+	if within(resolvedPath(moduleAbs), parentLoc) {
+		parentRoot.Close()
+		return nil, nil, fmt.Errorf("refusing: the private copy's parent %s is physically inside the module (the kernel resolves the opened directory to %s). Point TMPDIR outside the module", parentPhys, parentLoc)
+	}
+	copyName, err := mkdirTempIn(parentRoot, "gqlgen-guard-")
+	if err != nil {
+		parentRoot.Close()
 		return nil, nil, fmt.Errorf("create private module copy: %w", err)
 	}
 	// The generator's HOME and TMPDIR: beside the copy, never inside it (a
 	// file there would be an undeclared output) and never inherited.
-	scratchDir, err := os.MkdirTemp(opts.TempParent, "gqlgen-guard-env-")
+	scratchName, err := mkdirTempIn(parentRoot, "gqlgen-guard-env-")
 	if err != nil {
-		_ = os.RemoveAll(copyDir)
+		_ = parentRoot.RemoveAll(copyName)
+		parentRoot.Close()
 		return nil, nil, fmt.Errorf("create the generator's scratch directory: %w", err)
 	}
 	cleanup := func() {
-		_ = os.RemoveAll(copyDir)
-		_ = os.RemoveAll(scratchDir)
+		_ = parentRoot.RemoveAll(copyName)
+		_ = parentRoot.RemoveAll(scratchName)
+		parentRoot.Close()
 	}
+	copyDir := filepath.Join(parentLoc, copyName)
+	scratchDir := filepath.Join(parentLoc, scratchName)
+	scratchRoot, err := parentRoot.OpenRoot(scratchName)
+	if err != nil {
+		return nil, cleanup, fmt.Errorf("open the generator's scratch directory: %w", err)
+	}
+	defer scratchRoot.Close()
+	stageHook("scratch-created", scratchDir)
 
-	copyRoot, err := os.OpenRoot(copyDir)
+	copyRoot, err := parentRoot.OpenRoot(copyName)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("open private module copy %q: %w", copyDir, err)
 	}
 	defer copyRoot.Close()
+	stageHook("copy-created", copyDir)
 
 	w := opts.report()
 	fmt.Fprintf(w, "module: %s\n", moduleAbs)
-	if real := resolvedPath(copyDir); real != copyDir {
-		fmt.Fprintf(w, "private copy: %s (physically %s)\n", copyDir, real)
-	} else {
-		fmt.Fprintf(w, "private copy: %s\n", copyDir)
-	}
+	fmt.Fprintf(w, "private copy: %s (created through the parent's root; the kernel resolves the parent to %s)\n", copyDir, parentLoc)
 
 	dropped, err := CopyTree(ctx, moduleRoot, copyRoot, skipVCS)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("copy module into %q: %w", copyDir, err)
 	}
+	// From here on the copy is also used by PATH -- gqlgen's loader and the
+	// go command read it, the generator runs in it -- and a path can be
+	// swapped for a link after the directory was created through the root.
+	// The reads in between write nothing; before the first step that writes
+	// by path, each path is checked to still name the directory its root
+	// holds (stillNamed): the scratch directory before the go command runs
+	// with HOME in it, both directories before the generator.
 	// Every link the copy does NOT carry is named, so the generator's view of
 	// the module is observable: a schema or output that fails below because a
 	// link was dropped shows its cause on the line above the failure.
@@ -362,7 +417,12 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	}
 
 	workDir := filepath.Join(copyDir, filepath.FromSlash(plan.ConfigDir))
-	childEnv, err := childEnvironment(ctx, scratchDir, workDir, copyDir, moduleAbs, w)
+	// The go command is about to run with HOME and TMPDIR in the scratch
+	// directory, by path.
+	if err := stillNamed(scratchRoot, scratchDir, "generator's scratch directory"); err != nil {
+		return nil, cleanup, err
+	}
+	childEnv, err := childEnvironment(ctx, scratchRoot, scratchDir, workDir, copyDir, moduleAbs, w)
 	if err != nil {
 		return nil, cleanup, err
 	}
@@ -384,6 +444,17 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 		gen = NewGoRunGenerator(w, w)
 	}
 	fmt.Fprintf(w, "generator: %s (cwd %s)\n", gen.Describe(), plan.ConfigDir)
+
+	// The last path-based check before the generator -- a separate process
+	// that can only be handed paths -- starts in the copy with its HOME and
+	// TMPDIR in the scratch directory.
+	stageHook("before-generator", copyDir+"\x00"+scratchDir)
+	if err := stillNamed(copyRoot, copyDir, "private copy"); err != nil {
+		return nil, cleanup, err
+	}
+	if err := stillNamed(scratchRoot, scratchDir, "generator's scratch directory"); err != nil {
+		return nil, cleanup, err
+	}
 
 	if err := gen.Generate(ctx, workDir, path.Base(plan.ConfigPath), childEnv); err != nil {
 		return nil, cleanup, fmt.Errorf("refusing: the generator failed: %w (nothing was written to %s)", err, moduleAbs)
@@ -504,7 +575,7 @@ func goBinary() (string, error) {
 // childEnvironment builds the generator's environment from the allowlist, and
 // then ASSERTS it by asking the go command, in the directory the generator
 // will run in and with exactly that environment, for its effective settings.
-func childEnvironment(ctx context.Context, scratch, workDir, copyDir, moduleAbs string, w io.Writer) ([]string, error) {
+func childEnvironment(ctx context.Context, scratchRoot *os.Root, scratch, workDir, copyDir, moduleAbs string, w io.Writer) ([]string, error) {
 	goBin, err := goBinary()
 	if err != nil {
 		return nil, err
@@ -540,8 +611,10 @@ func childEnvironment(ctx context.Context, scratch, workDir, copyDir, moduleAbs 
 
 	home := filepath.Join(scratch, "home")
 	tmp := filepath.Join(scratch, "tmp")
-	for _, d := range []string{home, tmp} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
+	// Written through the scratch directory's root: a link planted in it --
+	// `home` pointing into the module -- is refused, never followed.
+	for _, d := range []string{"home", "tmp"} {
+		if err := scratchRoot.MkdirAll(d, 0o700); err != nil {
 			return nil, fmt.Errorf("create the generator's scratch %q: %w", d, err)
 		}
 	}
@@ -550,11 +623,11 @@ func childEnvironment(ctx context.Context, scratch, workDir, copyDir, moduleAbs 
 	// process that can outlive the command -- measured: files appearing in the
 	// scratch directory after the guard had returned and removed it. "off" is
 	// the mode file's documented value (x/telemetry internal/telemetry dir.go).
-	modeFile := filepath.Join(home, ".config", "go", "telemetry", "mode")
-	if err := os.MkdirAll(filepath.Dir(modeFile), 0o700); err != nil {
+	const modeFile = "home/.config/go/telemetry/mode"
+	if err := scratchRoot.MkdirAll(path.Dir(modeFile), 0o700); err != nil {
 		return nil, fmt.Errorf("create the generator's telemetry config: %w", err)
 	}
-	if err := os.WriteFile(modeFile, []byte("off\n"), 0o600); err != nil {
+	if err := scratchRoot.WriteFile(modeFile, []byte("off\n"), 0o600); err != nil {
 		return nil, fmt.Errorf("write the generator's telemetry mode: %w", err)
 	}
 	env := []string{
@@ -800,7 +873,7 @@ func stateLabel(s string) string {
 // refuseCopyInsideModule refuses a temporary parent that resolves to the module
 // root or anywhere beneath it. Both sides are resolved through symbolic links,
 // so an alias of an in-module directory is caught too.
-func refuseCopyInsideModule(moduleAbs, tempParent string) error {
+func refuseCopyInsideModule(moduleAbs, tempParent string) (string, error) {
 	parent := tempParent
 	if parent == "" {
 		parent = os.TempDir()
@@ -811,16 +884,73 @@ func refuseCopyInsideModule(moduleAbs, tempParent string) error {
 	// the self-copy in the tree with exactly that TMPDIR.
 	parentAbs, err := physicalPath(parent)
 	if err != nil {
-		return fmt.Errorf("refusing: the private copy's parent %q cannot be resolved: %w", parent, err)
+		return "", fmt.Errorf("refusing: the private copy's parent %q cannot be resolved: %w", parent, err)
 	}
 	moduleReal := resolvedPath(moduleAbs)
 	rel, err := filepath.Rel(moduleReal, parentAbs)
 	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf(
+		return "", fmt.Errorf(
 			"refusing: the private copy would be made inside the module (%s is under %s), and copying the module would copy the copy into itself. Point TMPDIR outside the module",
 			parentAbs, moduleReal)
 	}
+	return parentAbs, nil
+}
+
+// rootLocation is where the kernel says the directory a root is open on is,
+// read from the open handle itself (/proc/self/fd on Linux), so a link swapped
+// into the path it was opened by cannot change the answer. Elsewhere the name
+// is resolved physically (no /proc: the window between open and check is
+// then not closed).
+func rootLocation(r *os.Root) (string, error) {
+	f, err := r.Open(".")
+	if err != nil {
+		return "", fmt.Errorf("open %q through its root: %w", r.Name(), err)
+	}
+	defer f.Close()
+	if runtime.GOOS == "linux" {
+		loc, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", f.Fd()))
+		if err != nil {
+			return "", fmt.Errorf("read where %q is open: %w", r.Name(), err)
+		}
+		return loc, nil
+	}
+	return physicalPath(r.Name())
+}
+
+// stillNamed refuses when path p no longer names the directory root is open
+// on -- a link, or another directory, swapped in at p after the directory was
+// created through its parent's root. The comparison is by file identity
+// (device and inode), not by name.
+func stillNamed(root *os.Root, p, what string) error {
+	held, err := root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("refusing: stat the %s through its root: %w", what, err)
+	}
+	named, err := os.Stat(p)
+	if err != nil || !os.SameFile(held, named) {
+		return fmt.Errorf("refusing: the %s's path %s no longer names the directory the guard created (%v); something replaced it while the guard ran", what, p, err)
+	}
 	return nil
+}
+
+// mkdirTempIn creates a new directory named prefix+random inside root and
+// returns its name, the way os.MkdirTemp does for a path.
+func mkdirTempIn(root *os.Root, prefix string) (string, error) {
+	for try := 0; try < 10000; try++ {
+		var b [6]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return "", err
+		}
+		name := prefix + hex.EncodeToString(b[:])
+		err := root.Mkdir(name, 0o700)
+		if err == nil {
+			return name, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("could not create a unique %s* directory in %q", prefix, root.Name())
 }
 
 // refuseHandWrittenCollisions refuses a configuration whose declared outputs

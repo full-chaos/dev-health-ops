@@ -437,7 +437,13 @@ func assertRealGenerationStaysInsideThePlan(t *testing.T, f *fixture, plan *Plan
 
 	var out strings.Builder
 	gen := NewGoRunGenerator(&out, &out)
-	env, err := childEnvironment(context.Background(), f.t.TempDir(), f.dir, f.dir, f.dir, io.Discard)
+	scratch := f.t.TempDir()
+	scratchRoot, err := os.OpenRoot(scratch)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer scratchRoot.Close()
+	env, err := childEnvironment(context.Background(), scratchRoot, scratch, f.dir, f.dir, f.dir, io.Discard)
 	if err != nil {
 		t.Fatalf("build the generator's environment: %v", err)
 	}

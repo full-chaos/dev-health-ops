@@ -150,6 +150,30 @@ func assertAllowlistedEnv(t *testing.T, env []string) {
 	if strings.Join(keys, ",") != strings.Join(childEnvKeys, ",") {
 		t.Fatalf("the generator's environment has keys %v, want exactly %v", keys, childEnvKeys)
 	}
+	// The values that are not the fixed ones: PATH is the go binary's own
+	// directory, and HOME/TMPDIR are the guard's scratch, never the parent's.
+	val := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		val[k] = v
+	}
+	goBin, err := goBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val["PATH"] != filepath.Dir(goBin) {
+		t.Fatalf("the generator's PATH is %q, want only the go binary's directory %q", val["PATH"], filepath.Dir(goBin))
+	}
+	for _, k := range []string{"HOME", "TMPDIR"} {
+		if val[k] == os.Getenv(k) || !strings.Contains(val[k], "gqlgen-guard-env-") {
+			t.Fatalf("the generator's %s is %q, want the guard's scratch (the guard's own is %q)", k, val[k], os.Getenv(k))
+		}
+	}
+	for k, want := range map[string]string{"GOFLAGS": "-mod=readonly", "GOENV": "off", "GOWORK": "off", "GOTOOLCHAIN": "local"} {
+		if val[k] != want {
+			t.Fatalf("the generator's %s is %q, want %q", k, val[k], want)
+		}
+	}
 }
 
 // TestTheRealChildSeesOnlyTheAllowlist executes the claim in a real child

@@ -390,3 +390,111 @@ func TestTheGuardsOwnInputsAreInBothParsedPathLists(t *testing.T) {
 }
 
 func sortStrings(s []string) { sort.Strings(s) }
+
+// TestChildGoEnvAssertionInputDomain is the input domain of the assertion over
+// the child's effective go settings (checkChildGoEnv), executed directly: the
+// allowlist means no guard input reaches these values, so each field's wrong
+// shapes are fed in here.
+func TestChildGoEnvAssertionInputDomain(t *testing.T) {
+	copyDir := t.TempDir()
+	module := t.TempDir()
+	inside := func(p string) bool { return within(module, p) || within(copyDir, p) }
+	good := func() map[string]string {
+		return map[string]string{"GOMOD": filepath.Join(copyDir, "go.mod"), "GOFLAGS": "-mod=readonly", "GOENV": "", "GOWORK": "off", "GOTOOLCHAIN": "local", "GOMODCACHE": "/cache/mod", "GOCACHE": "/cache/build", "GOTMPDIR": ""}
+	}
+	cells := []struct {
+		shape   string
+		edit    func(m map[string]string)
+		wantErr string
+	}{
+		{"canonical", func(map[string]string) {}, ""},
+		{"GOMOD absent (no module)", func(m map[string]string) { m["GOMOD"] = "" }, ""},
+		{"GOMOD os.DevNull (module mode, no go.mod)", func(m map[string]string) { m["GOMOD"] = os.DevNull }, ""},
+		{"GOMOD outside the copy", func(m map[string]string) { m["GOMOD"] = filepath.Join(module, "..", "x", "go.mod") }, "outside the private copy"},
+		{"GOFLAGS empty", func(m map[string]string) { m["GOFLAGS"] = "" }, "does not honour"},
+		{"GOFLAGS with -modfile added", func(m map[string]string) { m["GOFLAGS"] = "-mod=readonly -modfile=/x.mod" }, "does not honour"},
+		{"GOENV a file path", func(m map[string]string) { m["GOENV"] = "/home/u/.config/go/env" }, "does not honour"},
+		{"GOENV off (literal)", func(m map[string]string) { m["GOENV"] = "off" }, ""},
+		{"GOWORK empty", func(m map[string]string) { m["GOWORK"] = "" }, "does not honour"},
+		{"GOWORK a go.work path", func(m map[string]string) { m["GOWORK"] = "/w/go.work" }, "does not honour"},
+		{"GOTOOLCHAIN auto", func(m map[string]string) { m["GOTOOLCHAIN"] = "auto" }, "does not honour"},
+		{"GOTOOLCHAIN local+path (a valid local form)", func(m map[string]string) { m["GOTOOLCHAIN"] = "local+path" }, ""},
+		{"GOMODCACHE inside the module", func(m map[string]string) { m["GOMODCACHE"] = filepath.Join(module, "mod") }, `GOMODCACHE="`},
+		{"GOCACHE inside the copy", func(m map[string]string) { m["GOCACHE"] = filepath.Join(copyDir, "c") }, `GOCACHE="`},
+		{"GOTMPDIR inside the module", func(m map[string]string) { m["GOTMPDIR"] = filepath.Join(module, "t") }, `GOTMPDIR="`},
+	}
+	for i, c := range cells {
+		t.Run(cellID("G15", i)+" "+c.shape, func(t *testing.T) {
+			m := good()
+			c.edit(m)
+			err := checkChildGoEnv(m, copyDir, inside)
+			logCell(t, err, "accepted")
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("cell REFUSED but its contract says accept: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("want a refusal containing %q, got %v", c.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestAGoCommandThatIgnoresTheEnvironmentIsRefused drives the assertion at its
+// call site with a real process: the guard's PATH resolves `go` to a wrapper
+// that runs the real go command but misreports one effective setting on the
+// query made with the child's environment (the one naming GOMOD). The contract
+// is a refusal before the generator runs, and an untouched tree.
+func TestAGoCommandThatIgnoresTheEnvironmentIsRefused(t *testing.T) {
+	goAvailable(t)
+	realGo, err := goBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells := []struct {
+		shape   string
+		sed     func(f *fixture) string
+		wantErr string
+	}{
+		{"GOFLAGS reported as -mod=mod", func(*fixture) string { return `s/"GOFLAGS": "-mod=readonly"/"GOFLAGS": "-mod=mod"/` }, "does not honour"},
+		{"GOWORK reported as a workspace", func(*fixture) string { return `s#"GOWORK": "off"#"GOWORK": "/w/go.work"#` }, "does not honour"},
+		{"GOTOOLCHAIN reported as auto", func(*fixture) string { return `s/"GOTOOLCHAIN": "local"/"GOTOOLCHAIN": "auto"/` }, "does not honour"},
+		{"GOCACHE reported inside the module", func(f *fixture) string {
+			return `s#"GOCACHE": "[^"]*"#"GOCACHE": "` + filepath.Join(f.dir, ".gocache") + `"#`
+		}, `GOCACHE="`},
+		{"GOTMPDIR reported inside the module", func(f *fixture) string {
+			return `s#"GOTMPDIR": "[^"]*"#"GOTMPDIR": "` + filepath.Join(f.dir, ".gotmp") + `"#`
+		}, `GOTMPDIR="`},
+	}
+	for i, c := range cells {
+		t.Run(cellID("G16", i)+" "+c.shape, func(t *testing.T) {
+			f := guardFixture(t).withModuleFiles()
+			if strings.Contains(f.dir, c.wantErr) {
+				t.Fatalf("wantErr %q also occurs in the fixture path %s", c.wantErr, f.dir)
+			}
+			bin := t.TempDir()
+			script := "#!/usr/bin/sh\ncase \" $* \" in\n*\" GOMOD \"*) " + realGo + " \"$@\" | /usr/bin/sed '" + c.sed(f) + "'; exit ;;\nesac\nexec " + realGo + " \"$@\"\n"
+			if err := os.WriteFile(filepath.Join(bin, "go"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			opts := guardOptions(f, nil)
+			before := f.digests()
+			gen := &fakeGenerator{fn: rewriteOutputs("generated")}
+			opts.Generator = gen
+			var report strings.Builder
+			opts.Report = &report
+			_, err := CheckDrift(context.Background(), opts)
+			logCell(t, err, "accepted")
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("want a refusal containing %q, got %v\n%s", c.wantErr, err, report.String())
+			}
+			if gen.ran {
+				t.Fatal("the generator ran under a go command that does not honour its environment")
+			}
+			assertUnchanged(t, before, f.digests(), c.shape)
+		})
+	}
+}

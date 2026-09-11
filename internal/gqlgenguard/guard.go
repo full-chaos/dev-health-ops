@@ -541,19 +541,32 @@ func childEnvironment(ctx context.Context, scratch, workDir, copyDir, moduleAbs 
 	}
 	fmt.Fprintf(w, "generator env (allowlist %s; nothing inherited): GOMOD=%s GOFLAGS=%s GOENV=%q GOWORK=%s GOTOOLCHAIN=%s\n",
 		strings.Join(childEnvKeys, ","), eff["GOMOD"], eff["GOFLAGS"], eff["GOENV"], eff["GOWORK"], eff["GOTOOLCHAIN"])
+	if err := checkChildGoEnv(eff, copyReal, inside); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+// checkChildGoEnv is the assertion over the go command's effective settings
+// under the child's environment: the main module is the private copy's (or
+// none), the fixed values took effect, and nothing it writes lands inside the
+// module. It is a separate function so its own input domain can be executed
+// (G15): under the allowlist no input of the guard can make these values
+// wrong, so without that table the assertion could not be shown to fail.
+func checkChildGoEnv(eff map[string]string, copyReal string, inside func(string) bool) error {
 	if m := eff["GOMOD"]; m != "" && m != os.DevNull && !within(copyReal, resolvedPath(m)) {
-		return nil, fmt.Errorf("refusing: the go command resolves the main module to %q, outside the private copy", m)
+		return fmt.Errorf("refusing: the go command resolves the main module to %q, outside the private copy", m)
 	}
 	// `go env GOENV` reports "" when GOENV=off (measured, go1.27), a path otherwise.
 	if eff["GOFLAGS"] != "-mod=readonly" || (eff["GOENV"] != "" && eff["GOENV"] != "off") || eff["GOWORK"] != "off" || !strings.HasPrefix(eff["GOTOOLCHAIN"], "local") {
-		return nil, fmt.Errorf("refusing: the go command does not honour the generator's environment (GOFLAGS=%q GOENV=%q GOWORK=%q GOTOOLCHAIN=%q)", eff["GOFLAGS"], eff["GOENV"], eff["GOWORK"], eff["GOTOOLCHAIN"])
+		return fmt.Errorf("refusing: the go command does not honour the generator's environment (GOFLAGS=%q GOENV=%q GOWORK=%q GOTOOLCHAIN=%q)", eff["GOFLAGS"], eff["GOENV"], eff["GOWORK"], eff["GOTOOLCHAIN"])
 	}
 	for _, key := range []string{"GOMODCACHE", "GOCACHE", "GOTMPDIR"} {
 		if v := eff[key]; v != "" && inside(v) {
-			return nil, fmt.Errorf("refusing: the generator's effective %s=%q is inside the module", key, v)
+			return fmt.Errorf("refusing: the generator's effective %s=%q is inside the module", key, v)
 		}
 	}
-	return env, nil
+	return nil
 }
 
 func goEnv(ctx context.Context, goBin, dir string, env []string, keys ...string) (map[string]string, error) {

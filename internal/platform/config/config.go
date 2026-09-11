@@ -457,7 +457,7 @@ func Load(spec Spec) (Config, error) {
 		// directly, needing no parsing and carrying none of that risk.
 		if host, present := lookup(binding.spec.HostKey); present && host != "" {
 			*binding.formTarget = "components"
-			*binding.nameTarget = ComponentDatabaseName(lookup, binding.spec)
+			*binding.nameTarget = ComponentDatabaseIdentity(binding.spec.Scheme, value)
 		} else {
 			*binding.formTarget = "uri"
 		}
@@ -831,22 +831,32 @@ func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
 	return fallback
 }
 
-// ComponentDatabaseName returns the database identifier a caller should
-// publish at Info for spec's connection -- the raw env-key value (or
-// DefaultDB), NEVER derived by parsing an assembled DSN.
+// ComponentDatabaseIdentity reports the database an assembled component
+// DSN will ACTUALLY connect to, by asking the driver that will consume it
+// -- never the requested string an operator typed.
 //
-// A malformed pre-built URI can still "successfully" parse with net/url
-// attributing credential material to Path, and a denylist of "suspicious"
-// characters is a heuristic, not a guarantee, against every way a
-// general-purpose URL parser can be confused -- so a URI is never parsed
-// for telemetry, ever. For the component form the database name was never embedded in
-// an opaque string in the first place -- it is exactly this already
-// separate, non-secret env value -- so publishing it needs no parsing and
-// carries none of that risk. Exported so
-// cmd/dev-health-worker-migrate's own Info-resolution record applies the
-// identical rule to MIGRATION_DATABASE_URI's component form.
-func ComponentDatabaseName(lookup secrets.LookupEnv, spec ComponentSpec) string {
-	return rawOrDefault(lookup, spec.DBKey, spec.DefaultDB)
+// The two can only differ if the assembly is lossy, which
+// ResolveDSNFromComponents now refuses outright; publishing the parsed
+// value anyway means a regression in that refusal shows up in telemetry
+// instead of hiding behind it. That is exactly the failure this rule
+// exists for: a component database of "/app" once reached the database
+// "app" while Info reported "/app".
+//
+// A pre-built URI is still never parsed for telemetry: a malformed,
+// unescaped URI can "successfully" parse with credential material
+// misattributed into the path, and no denylist of suspicious characters
+// guards against that. Callers report form="uri" with no name at all.
+// Exported so cmd/dev-health-worker-migrate and cmd/dev-health-workerctl
+// apply the identical rule.
+func ComponentDatabaseIdentity(scheme string, built secrets.Value) string {
+	if !built.Configured() {
+		return ""
+	}
+	parsed, err := parseWithDriver(scheme, built.Reveal())
+	if err != nil {
+		return ""
+	}
+	return parsed.database
 }
 
 // WriteConfigError writes a single-line JSON configuration-error
@@ -1293,10 +1303,26 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 		}
 	}
 	assembled := target.String()
-	if driverErr := acceptedByDriver(spec, assembled); driverErr != nil {
+	if driverErr := acceptedByDriver(spec, assembled, componentValues{
+		host: host, port: port, database: db, user: user, password: password,
+	}); driverErr != nil {
 		return secrets.Value{}, true, driverErr
 	}
 	return secrets.NewValue(assembled), true, nil
+}
+
+// componentValues carries what the operator configured, so the driver's
+// parsed result can be compared back against it field by field.
+type componentValues struct {
+	host, port, database string
+	user, password       secrets.Value
+}
+
+// parsedDSN is what a driver made of an assembled DSN: the identity it
+// will actually connect with, plus how many endpoints it resolved to.
+type parsedDSN struct {
+	host, port, user, password, database string
+	endpoints                            int
 }
 
 // acceptedByDriver is the component form's only validation: hand the
@@ -1310,12 +1336,12 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 // through url.Parse untouched while the live driver still reached the
 // second host. Only the parsed config says how many endpoints the driver
 // actually ended up with.
-func acceptedByDriver(spec ComponentSpec, assembled string) error {
+func acceptedByDriver(spec ComponentSpec, assembled string, configured componentValues) error {
 	control, known := canonicalDSN[spec.Scheme]
 	if !known {
 		return fmt.Errorf("%s: no driver parser is registered for scheme %q", spec.HostKey, spec.Scheme)
 	}
-	endpoints, parseErr := parseWithDriver(spec.Scheme, assembled)
+	parsed, parseErr := parseWithDriver(spec.Scheme, assembled)
 	if parseErr != nil {
 		// Whose fault is it? pgconn reads the ambient PG* environment
 		// while parsing (PGSSLROOTCERT, PGCONNECT_TIMEOUT and friends),
@@ -1333,8 +1359,49 @@ func acceptedByDriver(spec ComponentSpec, assembled string) error {
 		}
 		return componentDriverError(spec, assembled, parseErr)
 	}
-	if endpoints != 1 {
+	if parsed.endpoints != 1 {
 		return componentEndpointError(spec)
+	}
+	return identicalAfterRoundTrip(spec, configured, parsed)
+}
+
+// identicalAfterRoundTrip is the difference between "the driver accepted
+// it" and "the driver will use it". Acceptance alone is not enough: a
+// database named "/app" assembles into a URL path of "//app", which
+// pgconn parses back as "app" -- accepted, single endpoint, and connected
+// to a DIFFERENT existing database than the one configured, with nothing
+// anywhere saying so.
+//
+// So every component is compared against what the driver parsed, not just
+// the ones a reviewer happened to probe. A component the assembly cannot
+// carry losslessly is refused, naming the setting and both forms of the
+// identifier -- neither of which is a credential; the password is compared
+// but never quoted.
+func identicalAfterRoundTrip(spec ComponentSpec, configured componentValues, parsed parsedDSN) error {
+	for _, field := range []struct {
+		key            string
+		want, got      string
+		compare, quote bool
+	}{
+		{key: spec.HostKey, want: configured.host, got: parsed.host, compare: true, quote: true},
+		{key: spec.PortKey, want: configured.port, got: parsed.port, compare: true, quote: true},
+		{key: spec.DBKey, want: configured.database, got: parsed.database, compare: true, quote: true},
+		{key: spec.UserKey, want: configured.user.Reveal(), got: parsed.user, compare: configured.user.Configured(), quote: true},
+		{key: spec.PasswordKey, want: configured.password.Reveal(), got: parsed.password, compare: configured.password.Configured(), quote: false},
+	} {
+		if !field.compare || field.want == field.got {
+			continue
+		}
+		if field.quote {
+			return fmt.Errorf(
+				"%s is %q, but the %s driver reads the assembled DSN as %q -- the component form cannot carry this value unchanged, so it is refused rather than silently connecting to something else",
+				field.key, field.want, spec.Scheme, field.got,
+			)
+		}
+		return fmt.Errorf(
+			"%s does not survive assembly unchanged: the %s driver reads a different value back out of the DSN, so it is refused rather than silently authenticating with something else",
+			field.key, spec.Scheme,
+		)
 	}
 	return nil
 }
@@ -1356,28 +1423,51 @@ var canonicalDSN = map[string]string{
 // that is pgx's own sslmode negotiation retry against the SAME endpoint,
 // not a second one. Only a fallback naming a different host or port is
 // another endpoint.
-func parseWithDriver(scheme, dsn string) (endpoints int, err error) {
+func parseWithDriver(scheme, dsn string) (parsedDSN, error) {
 	switch scheme {
 	case "postgresql":
-		parsed, parseErr := pgconn.ParseConfig(dsn)
+		cfg, parseErr := pgconn.ParseConfig(dsn)
 		if parseErr != nil {
-			return 0, parseErr
+			return parsedDSN{}, parseErr
 		}
-		endpoints = 1
-		for _, fallback := range parsed.Fallbacks {
-			if fallback.Host != parsed.Host || fallback.Port != parsed.Port {
-				endpoints++
+		parsed := parsedDSN{
+			host:      cfg.Host,
+			port:      strconv.FormatUint(uint64(cfg.Port), 10),
+			user:      cfg.User,
+			password:  cfg.Password,
+			database:  cfg.Database,
+			endpoints: 1,
+		}
+		for _, fallback := range cfg.Fallbacks {
+			if fallback.Host != cfg.Host || fallback.Port != cfg.Port {
+				parsed.endpoints++
 			}
 		}
-		return endpoints, nil
+		return parsed, nil
 	case "clickhouse":
-		parsed, parseErr := clickhouse.ParseDSN(dsn)
+		options, parseErr := clickhouse.ParseDSN(dsn)
 		if parseErr != nil {
-			return 0, parseErr
+			return parsedDSN{}, parseErr
 		}
-		return len(parsed.Addr), nil
+		parsed := parsedDSN{
+			user:      options.Auth.Username,
+			password:  options.Auth.Password,
+			database:  options.Auth.Database,
+			endpoints: len(options.Addr),
+		}
+		if parsed.endpoints == 1 {
+			// SplitHostPort also unwraps the brackets net.JoinHostPort
+			// put around an IPv6 literal, so host compares against the
+			// bare form the operator configured.
+			host, port, splitErr := net.SplitHostPort(options.Addr[0])
+			if splitErr != nil {
+				return parsedDSN{}, splitErr
+			}
+			parsed.host, parsed.port = host, port
+		}
+		return parsed, nil
 	}
-	return 0, fmt.Errorf("no driver parser is registered for scheme %q", scheme)
+	return parsedDSN{}, fmt.Errorf("no driver parser is registered for scheme %q", scheme)
 }
 
 // redactDriverError scrubs a driver's own message three ways before it is

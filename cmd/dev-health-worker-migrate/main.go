@@ -93,13 +93,14 @@ func execute(
 	// resolveMigrationDatabaseURI/config.ResolveDSN's own hostSet check
 	// does. No telemetry field is ever derived by
 	// parsing a DSN -- for the URI form, "database" is omitted entirely;
-	// for the component form, config.ComponentDatabaseName reads the
+	// for the component form, config.ComponentDatabaseIdentity asks the driver for the
 	// separate, non-secret DEV_HEALTH_MIGRATION_PG_DB env value directly,
 	// needing no parsing of the assembled DSN.
 	infoLogger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if host, present := lookup(migrationDatabaseSpec.HostKey); present && host != "" {
 		infoLogger.InfoContext(parent, "migration database resolved",
-			"form", "components", "database", config.ComponentDatabaseName(lookup, migrationDatabaseSpec))
+			"form", "components",
+			"database", config.ComponentDatabaseIdentity(migrationDatabaseSpec.Scheme, migrationURI))
 	} else {
 		infoLogger.InfoContext(parent, "migration database resolved", "form", "uri")
 	}
@@ -286,7 +287,7 @@ func requiredName(key string, lookup platformsecrets.LookupEnv, stderr io.Writer
 // precedence winner.
 // migrationDatabaseSpec is the ONE ComponentSpec for MIGRATION_DATABASE_URI,
 // shared by resolveMigrationDatabaseURI and execute's own Info-resolution
-// record (config.ComponentDatabaseName) so the two never risk drifting
+// record (config.ComponentDatabaseIdentity) so the two never risk drifting
 // into two different definitions of "the migration database's component
 // form".
 var migrationDatabaseSpec = config.ComponentSpec{

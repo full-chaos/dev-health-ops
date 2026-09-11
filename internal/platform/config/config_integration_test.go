@@ -12,25 +12,38 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// reservedIdentifierClasses names five proof characters for the rule
-// that a component is never refused on character grounds when the
-// assembler can encode it. Each class is executed against a REAL,
-// live-created identifier of that shape -- not merely a driver's DSN
-// parser -- for all three of database, user, and password, on both
-// PostgreSQL and ClickHouse.
-var reservedIdentifierClasses = []struct {
-	name string
-	char string
-}{
-	{"hash", "#"},
-	{"question", "?"},
-	{"slash", "/"},
-	{"space", " "},
-	{"percent", "%"},
-}
+// liveIdentifierCells is the axis the character-only list missed: the
+// same reserved character behaves differently depending on WHERE in the
+// identifier it sits. A database named "/app" assembles into a URL path
+// of "//app", which pgconn reads back as "app" -- a successful LIVE
+// connection to a different existing database. Each cell below is
+// executed against a REAL server, for database, user and password at
+// once, on both drivers.
+var liveIdentifierCells = func() []struct{ name, db, user, password string } {
+	chars := []struct{ name, char string }{
+		{"hash", "#"}, {"question", "?"}, {"slash", "/"}, {"space", " "}, {"percent", "%"},
+	}
+	positions := []struct{ name, format string }{
+		{"leading", "%sbase"}, {"middle", "ba%sse"}, {"trailing", "base%s"}, {"only", "%s"},
+	}
+	var cells []struct{ name, db, user, password string }
+	for _, c := range chars {
+		for _, p := range positions {
+			infix := fmt.Sprintf(p.format, c.char)
+			cells = append(cells, struct{ name, db, user, password string }{
+				name:     c.name + "-" + p.name,
+				db:       "d" + infix + "b",
+				user:     "u" + infix + "r",
+				password: "p" + infix + "w",
+			})
+		}
+	}
+	return cells
+}()
 
 func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
@@ -67,11 +80,9 @@ func TestComponentFormReservedCharacterClassesConnectLivePostgreSQL(t *testing.T
 	host := adminURL.Hostname()
 	port := adminURL.Port()
 
-	for _, class := range reservedIdentifierClasses {
-		t.Run(class.name, func(t *testing.T) {
-			db := "app" + class.char + "db"
-			role := "app" + class.char + "role"
-			password := "app" + class.char + "pass"
+	for _, cell := range liveIdentifierCells {
+		t.Run(cell.name, func(t *testing.T) {
+			db, role, password := cell.db, cell.user, cell.password
 
 			if _, err := adminPool.Exec(ctx, fmt.Sprintf(
 				"CREATE ROLE %s LOGIN PASSWORD %s", quoteIdent(role), quoteLiteral(password),
@@ -88,15 +99,27 @@ func TestComponentFormReservedCharacterClassesConnectLivePostgreSQL(t *testing.T
 				t.Fatalf("create database %q: %v", db, err)
 			}
 
-			value, used, resolveErr := ResolveDSNFromComponents(lookup(map[string]string{
+			env := map[string]string{
 				"DEV_HEALTH_PG_DOMAIN_HOST":     host,
 				"DEV_HEALTH_PG_DOMAIN_PORT":     port,
 				"DEV_HEALTH_PG_DOMAIN_USER":     role,
 				"DEV_HEALTH_PG_DOMAIN_PASSWORD": password,
 				"DEV_HEALTH_PG_DB":              db,
-			}), DomainDatabaseSpec)
-			if !used || resolveErr != nil {
-				t.Fatalf("used=%v err=%v", used, resolveErr)
+			}
+			value, used, resolveErr := ResolveDSNFromComponents(lookup(env), DomainDatabaseSpec)
+			if !used {
+				t.Fatal("expected used=true once HOST is set")
+			}
+			if resolveErr != nil {
+				// A refused cell is not a skipped cell: prove LIVE that
+				// the refusal prevents a real mis-connection. The DSN the
+				// assembly would have produced is built here and used
+				// against the same server; it must reach a DIFFERENT
+				// database than the one configured, which is precisely
+				// what the resolver now refuses to let happen.
+				assertRefusalPreventsAWrongLiveDatabase(ctx, t, adminPool,
+					assembleWithNetURL("postgresql", host, port, role, password, db), db, resolveErr)
+				return
 			}
 
 			conn, connErr := pgx.Connect(ctx, value.Reveal())
@@ -116,8 +139,8 @@ func TestComponentFormReservedCharacterClassesConnectLivePostgreSQL(t *testing.T
 				t.Fatalf("connected as WRONG role: got %q, want %q", gotUser, role)
 			}
 
-			if got := ComponentDatabaseName(lookup(map[string]string{"DEV_HEALTH_PG_DB": db}), DomainDatabaseSpec); got != db {
-				t.Fatalf("telemetry identifier mismatch: got %q, want %q", got, db)
+			if got := ComponentDatabaseIdentity(DomainDatabaseSpec.Scheme, value); got != gotDB {
+				t.Fatalf("telemetry reports %q but the connection reached %q", got, gotDB)
 			}
 		})
 	}
@@ -146,11 +169,9 @@ func TestComponentFormReservedCharacterClassesConnectLiveClickHouse(t *testing.T
 
 	host := adminOptions.Addr[0]
 
-	for _, class := range reservedIdentifierClasses {
-		t.Run(class.name, func(t *testing.T) {
-			db := "app" + class.char + "db"
-			user := "app" + class.char + "user"
-			password := "app" + class.char + "pass"
+	for _, cell := range liveIdentifierCells {
+		t.Run(cell.name, func(t *testing.T) {
+			db, user, password := cell.db, cell.user, cell.password
 
 			if err := adminConn.Exec(ctx, fmt.Sprintf(
 				"CREATE USER %s IDENTIFIED WITH plaintext_password BY %s",
@@ -185,8 +206,26 @@ func TestComponentFormReservedCharacterClassesConnectLiveClickHouse(t *testing.T
 				"DEV_HEALTH_CH_PASSWORD": password,
 				"DEV_HEALTH_CH_DB":       db,
 			}), ClickHouseSpec)
-			if !used || resolveErr != nil {
-				t.Fatalf("used=%v err=%v", used, resolveErr)
+			if !used {
+				t.Fatal("expected used=true once HOST is set")
+			}
+			if resolveErr != nil {
+				// Same as the PostgreSQL side: a refused cell proves its
+				// refusal, it does not skip. The database the driver
+				// would have reached must differ from the configured one.
+				assembled := assembleWithNetURL("clickhouse", hostOnly, portOnly, user, password, db)
+				wouldBe, parseWouldErr := clickhouse.ParseDSN(assembled)
+				if parseWouldErr != nil {
+					return // the driver refuses it outright; nothing silent to prevent
+				}
+				if wouldBe.Auth.Database == db {
+					t.Fatalf("database %q was refused (%v) but the driver reads it back unchanged -- the refusal is wrong",
+						db, resolveErr)
+				}
+				if !strings.Contains(resolveErr.Error(), "DEV_HEALTH_CH_DB") {
+					t.Fatalf("the refusal does not name the setting responsible: %v", resolveErr)
+				}
+				return
 			}
 
 			options, parseErr := clickhouse.ParseDSN(value.Reveal())
@@ -214,8 +253,8 @@ func TestComponentFormReservedCharacterClassesConnectLiveClickHouse(t *testing.T
 				t.Fatalf("connected as WRONG user: got %q, want %q", gotUser, user)
 			}
 
-			if got := ComponentDatabaseName(lookup(map[string]string{"DEV_HEALTH_CH_DB": db}), ClickHouseSpec); got != db {
-				t.Fatalf("telemetry identifier mismatch: got %q, want %q", got, db)
+			if got := ComponentDatabaseIdentity(ClickHouseSpec.Scheme, value); got != gotDB {
+				t.Fatalf("telemetry reports %q but the connection reached %q", got, gotDB)
 			}
 		})
 	}
@@ -227,4 +266,47 @@ func splitHostPort(hostPort string) (host, port string, err error) {
 		return "", "", fmt.Errorf("no port in address %q", hostPort)
 	}
 	return hostPort[:idx], hostPort[idx+1:], nil
+}
+
+// assertRefusalPreventsAWrongLiveDatabase is the live half of a refused
+// cell. It creates BOTH the configured database and the one the driver
+// would have rewritten it to, connects with the DSN the assembly would
+// have produced, and requires that connection to land on the rewritten
+// name -- the silent wrong-database connection the refusal exists to
+// prevent, demonstrated against a real server rather than argued.
+func assertRefusalPreventsAWrongLiveDatabase(
+	ctx context.Context, t *testing.T, adminPool *pgxpool.Pool, assembled, configured string, refusal error,
+) {
+	t.Helper()
+
+	if !strings.Contains(refusal.Error(), "DEV_HEALTH_PG_DB") {
+		t.Fatalf("the refusal does not name the setting responsible: %v", refusal)
+	}
+	cfg, parseErr := pgconn.ParseConfig(assembled)
+	if parseErr != nil {
+		return // the driver refuses it outright; there is nothing silent to prevent
+	}
+	if cfg.Database == configured {
+		t.Fatalf("database %q was refused (%v) but the driver reads it back unchanged -- the refusal is wrong",
+			configured, refusal)
+	}
+	if _, err := adminPool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", quoteIdent(cfg.Database))); err != nil {
+		t.Fatalf("create the rewritten database %q: %v", cfg.Database, err)
+	}
+	t.Cleanup(func() {
+		_, _ = adminPool.Exec(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS %s", quoteIdent(cfg.Database)))
+	})
+
+	conn, connErr := pgx.Connect(ctx, assembled)
+	if connErr != nil {
+		t.Fatalf("the assembled DSN was expected to connect (to the WRONG database): %v", connErr)
+	}
+	t.Cleanup(func() { _ = conn.Close(ctx) })
+	var reached string
+	if scanErr := conn.QueryRow(ctx, "SELECT current_database()").Scan(&reached); scanErr != nil {
+		t.Fatalf("query failed: %v", scanErr)
+	}
+	if reached == configured {
+		t.Fatalf("expected the assembled DSN to reach a DIFFERENT database than %q, but it reached it", configured)
+	}
 }

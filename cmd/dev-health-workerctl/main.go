@@ -288,12 +288,12 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(stderr, lookup, platformconfig.DomainDatabaseSpec, "domain")
+	logResolvedDatabase(stderr, lookup, platformconfig.DomainDatabaseSpec, "domain", domainURI)
 	queueURI, err := resolveDSNRequired("WORKER_DATABASE_URI", platformconfig.QueueDatabaseSpec, lookup)
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(stderr, lookup, platformconfig.QueueDatabaseSpec, "queue")
+	logResolvedDatabase(stderr, lookup, platformconfig.QueueDatabaseSpec, "queue", queueURI)
 	// Required, not optional: workerctl is a coordinator binary. Its very first
 	// database action (authenticating the operator token against
 	// internal_service_credentials) is a coordinator-exclusive read, so without
@@ -304,7 +304,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(stderr, lookup, platformconfig.CoordinatorDatabaseSpec, "coordinator")
+	logResolvedDatabase(stderr, lookup, platformconfig.CoordinatorDatabaseSpec, "coordinator", coordinatorURI)
 	token, ok := resolveRequired("WORKER_OPERATOR_TOKEN", lookup)
 	if !ok {
 		return nil, writeError(stderr, joboperator.ReasonAuthenticationFailed)
@@ -1498,7 +1498,7 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 	if err != nil {
 		return writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse")
+	logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse", dsn)
 	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
@@ -1591,7 +1591,7 @@ func dispatchProvidersyncRetireStaleLinearProjectOwnership(
 	if err != nil {
 		return writeConfigError(stderr, err)
 	}
-	logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse")
+	logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse", dsn)
 	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
@@ -2557,17 +2557,18 @@ func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup
 
 // logResolvedDatabase writes one structured JSON line to stderr recording
 // which form (uri|components) name's DSN resolved through -- and, for the
-// component form only, the database identifier read directly from
-// spec.DBKey. Mirrors cmd/dev-health-worker-migrate's identical rule and
+// component form only, the database identifier the DRIVER reports for
+// the assembled DSN -- what will actually be connected to, not the
+// string the operator requested. Mirrors cmd/dev-health-worker-migrate's identical rule and
 // internal/platform/config's own Load() binding loop: the rule that
 // every entry point resolving one of these DSNs must make the resolution
 // observable applies here too -- workerctl resolves these same five DSNs
 // through its own resolveDSNRequired, bypassing config.Load entirely, so
 // it needs its own wiring for this. A pre-built
 // URI is NEVER parsed for this purpose: the URI form's record omits
-// "database" entirely; the component form's database name is the
-// separate, non-secret spec.DBKey env value, requiring no parsing of the
-// assembled DSN.
+// "database" entirely. The component form's name comes from the driver
+// that will consume the DSN, so a lossy assembly shows up here instead
+// of hiding behind the requested string.
 //
 // workerctl has no slog logger of its own (unlike the four long-running
 // daemons and migrate) -- this emits in workerctl's OWN
@@ -2577,7 +2578,7 @@ func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup
 // terminal IS the observability -- without it, a
 // "database_unavailable" failure gives no way to tell which form/db had been
 // tried.
-func logResolvedDatabase(stderr io.Writer, lookup platformsecrets.LookupEnv, spec platformconfig.ComponentSpec, name string) {
+func logResolvedDatabase(stderr io.Writer, lookup platformsecrets.LookupEnv, spec platformconfig.ComponentSpec, name string, resolved platformsecrets.Value) {
 	var record struct {
 		DSN struct {
 			Name     string `json:"name"`
@@ -2588,7 +2589,7 @@ func logResolvedDatabase(stderr io.Writer, lookup platformsecrets.LookupEnv, spe
 	record.DSN.Name = name
 	if host, present := lookup(spec.HostKey); present && host != "" {
 		record.DSN.Form = "components"
-		record.DSN.Database = platformconfig.ComponentDatabaseName(lookup, spec)
+		record.DSN.Database = platformconfig.ComponentDatabaseIdentity(spec.Scheme, resolved)
 	} else {
 		record.DSN.Form = "uri"
 	}

@@ -141,7 +141,8 @@ func TestLogResolvedDatabaseReportsFormAndNameWithoutParsingAURI(t *testing.T) {
 		var stderr bytes.Buffer
 		logResolvedDatabase(&stderr, dsnTestLookup(map[string]string{
 			"POSTGRES_URI": "postgresql://app:app@db.internal:5432/appdb",
-		}), platformconfig.DomainDatabaseSpec, "domain")
+		}), platformconfig.DomainDatabaseSpec, "domain",
+			platformsecrets.NewValue("postgresql://app:app@db.internal:5432/appdb"))
 		out := stderr.String()
 		if !strings.Contains(out, `"dsn":{"name":"domain","form":"uri"}`) {
 			t.Fatalf("expected form=uri and no database field, got: %s", out)
@@ -160,10 +161,11 @@ func TestLogResolvedDatabaseReportsFormAndNameWithoutParsingAURI(t *testing.T) {
 			// Decoy: an unrelated raw URI naming a DIFFERENT database sits in
 			// the same environment (as it would once ResolveDSN itself has
 			// already rejected mixing forms) -- if logResolvedDatabase ever
-			// parsed a URI instead of reading spec.DBKey directly, this value
+			// took its name from anywhere but the resolved DSN, this value
 			// would leak into the record instead of "realdb".
 			"POSTGRES_URI": "postgresql://app:app@evil.invalid:5432/decoydb",
-		}), platformconfig.DomainDatabaseSpec, "domain")
+		}), platformconfig.DomainDatabaseSpec, "domain",
+			platformsecrets.NewValue("postgresql://app:app@db.internal:5432/realdb"))
 		out := stderr.String()
 		if !strings.Contains(out, `"form":"components"`) {
 			t.Fatalf("expected form=components, got: %s", out)

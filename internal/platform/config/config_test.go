@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -407,42 +408,70 @@ func TestSafeAttrsReportFormAndNameOfEachResolvedDSN(t *testing.T) {
 	}
 }
 
-// TestComponentDatabaseNameNeverParsesAURI pins the rule that no
-// telemetry field is ever derived by parsing a DSN. ComponentDatabaseName
-// reads the separate, non-secret DBKey env value directly -- proven here
-// by handing it a lookup where the ONLY sensible value comes from that
-// key, including a case where a raw MIGRATION_DATABASE_URI-shaped
-// pre-built value is ALSO present in the same environment (component
-// resolution never even looks at it for this purpose).
-func TestComponentDatabaseNameNeverParsesAURI(t *testing.T) {
+// TestComponentDatabaseIdentityReportsWhatWillBeConnectedTo pins the rule
+// that the database this package publishes at Info is the one the DRIVER
+// will actually open, not the string the operator requested. The two can
+// only diverge through a lossy assembly, which the resolver refuses --
+// reporting the parsed value anyway means a regression in that refusal
+// surfaces in telemetry instead of hiding behind it. A pre-built URI is
+// still never parsed for this purpose; those callers report form="uri"
+// with no name at all.
+func TestComponentDatabaseIdentityReportsWhatWillBeConnectedTo(t *testing.T) {
 	t.Parallel()
 
-	t.Run("reads the DBKey value directly", func(t *testing.T) {
+	t.Run("reports the identifier the driver parses back", func(t *testing.T) {
 		t.Parallel()
-		got := ComponentDatabaseName(lookup(map[string]string{
-			"DEV_HEALTH_PG_DOMAIN_DB": "appdb",
-		}), ComponentSpec{DBKey: "DEV_HEALTH_PG_DOMAIN_DB", DefaultDB: "postgres"})
-		if got != "appdb" {
-			t.Fatalf("got %q, want %q", got, "appdb")
+		built, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+			"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
+			"DEV_HEALTH_PG_DB":          "app#db",
+		}), DomainDatabaseSpec)
+		if !used || err != nil {
+			t.Fatalf("used=%v err=%v", used, err)
+		}
+		if got := ComponentDatabaseIdentity(DomainDatabaseSpec.Scheme, built); got != "app#db" {
+			t.Fatalf("got %q, want %q", got, "app#db")
 		}
 	})
 
-	t.Run("falls back to DefaultDB when unset", func(t *testing.T) {
+	t.Run("reports what the driver parses, not what was asked for", func(t *testing.T) {
 		t.Parallel()
-		got := ComponentDatabaseName(lookup(nil), ComponentSpec{DBKey: "DEV_HEALTH_PG_DOMAIN_DB", DefaultDB: "postgres"})
-		if got != "postgres" {
-			t.Fatalf("got %q, want %q", got, "postgres")
+		// The resolver refuses this shape, so it cannot arrive through
+		// Load. Handed the DSN directly, telemetry must still report the
+		// database the driver will OPEN ("appdb"), never the "/appdb"
+		// that was asked for -- otherwise a regression in that refusal
+		// would hide behind an honest-looking log line.
+		lossy := assembleWithNetURL("postgresql", "db.internal", "5432", "app", "pw", "/appdb")
+		if got := ComponentDatabaseIdentity("postgresql", secrets.NewValue(lossy)); got != "appdb" {
+			t.Fatalf("got %q, want the parsed identity %q", got, "appdb")
 		}
 	})
 
-	t.Run("never influenced by an unrelated raw URI in the same environment", func(t *testing.T) {
+	t.Run("reports nothing for an unconfigured value", func(t *testing.T) {
 		t.Parallel()
-		got := ComponentDatabaseName(lookup(map[string]string{
-			"DEV_HEALTH_PG_DOMAIN_DB": "appdb",
-			"POSTGRES_URI":            "postgresql://user:pass@word/extra@host:5432/realdb",
-		}), ComponentSpec{DBKey: "DEV_HEALTH_PG_DOMAIN_DB", DefaultDB: "postgres"})
-		if got != "appdb" {
-			t.Fatalf("got %q, want %q -- must never be influenced by an unrelated raw URI", got, "appdb")
+		if got := ComponentDatabaseIdentity(DomainDatabaseSpec.Scheme, secrets.Value{}); got != "" {
+			t.Fatalf("got %q, want empty", got)
+		}
+	})
+
+	t.Run("reports nothing rather than guessing when the driver cannot parse", func(t *testing.T) {
+		t.Parallel()
+		if got := ComponentDatabaseIdentity("postgresql", secrets.NewValue("postgresql://u:p@[[::1]]:5432/db")); got != "" {
+			t.Fatalf("got %q, want empty for a DSN the driver rejects", got)
+		}
+	})
+
+	t.Run("never derived from an unrelated raw URI in the same environment", func(t *testing.T) {
+		t.Parallel()
+		built, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+			"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
+			"DEV_HEALTH_PG_DB":          "realdb",
+			"POSTGRES_URI":              "postgresql://user:pass@word/extra@host:5432/decoydb",
+		}), DomainDatabaseSpec)
+		if !used || err != nil {
+			t.Fatalf("used=%v err=%v", used, err)
+		}
+		if got := ComponentDatabaseIdentity(DomainDatabaseSpec.Scheme, built); got != "realdb" {
+			t.Fatalf("got %q, want %q -- must never be influenced by an unrelated raw URI", got, "realdb")
 		}
 	})
 }
@@ -1011,31 +1040,69 @@ func assembleWithNetURL(scheme, host, port, user, password, db string) string {
 	return target.String()
 }
 
-// driverEndpoints asks the REAL driver what it makes of a DSN: an error,
-// or the number of distinct endpoints it resolved to. pgconn always
+// driverView is what the REAL driver makes of a DSN: the identity it will
+// connect with, and how many endpoints it resolved to. pgconn always
 // carries at least one Fallbacks entry for a single-host DSN (its own
 // sslmode negotiation retry against the same endpoint), so only a
 // fallback naming a different host or port counts as another endpoint.
-func driverEndpoints(t *testing.T, dsn string) (int, error) {
+type driverView struct {
+	host, port, user, password, database string
+	endpoints                            int
+	err                                  error
+}
+
+// usable reports the oracle's verdict for a component set: the driver
+// accepted the DSN, resolved it to exactly one endpoint, AND reads every
+// field back as the value that was configured. Acceptance alone is not
+// the contract -- a database named "/app" is accepted and then parsed as
+// "app", which is a connection to a different database that nothing
+// reports.
+func (v driverView) usable(host, port, user, password, database string) bool {
+	return v.err == nil && v.endpoints == 1 &&
+		v.host == host && v.port == port &&
+		v.user == user && v.password == password && v.database == database
+}
+
+func driverParse(t *testing.T, dsn string) driverView {
 	t.Helper()
 	if strings.HasPrefix(dsn, "clickhouse://") {
-		parsed, err := clickhouse.ParseDSN(dsn)
+		options, err := clickhouse.ParseDSN(dsn)
 		if err != nil {
-			return 0, err
+			return driverView{err: err}
 		}
-		return len(parsed.Addr), nil
+		view := driverView{
+			user:      options.Auth.Username,
+			password:  options.Auth.Password,
+			database:  options.Auth.Database,
+			endpoints: len(options.Addr),
+		}
+		if view.endpoints == 1 {
+			host, port, splitErr := net.SplitHostPort(options.Addr[0])
+			if splitErr != nil {
+				return driverView{err: splitErr}
+			}
+			view.host, view.port = host, port
+		}
+		return view
 	}
-	parsed, err := pgconn.ParseConfig(dsn)
+	cfg, err := pgconn.ParseConfig(dsn)
 	if err != nil {
-		return 0, err
+		return driverView{err: err}
 	}
-	endpoints := 1
-	for _, fallback := range parsed.Fallbacks {
-		if fallback.Host != parsed.Host || fallback.Port != parsed.Port {
-			endpoints++
+	view := driverView{
+		host:      cfg.Host,
+		port:      strconv.FormatUint(uint64(cfg.Port), 10),
+		user:      cfg.User,
+		password:  cfg.Password,
+		database:  cfg.Database,
+		endpoints: 1,
+	}
+	for _, fallback := range cfg.Fallbacks {
+		if fallback.Host != cfg.Host || fallback.Port != cfg.Port {
+			view.endpoints++
 		}
 	}
-	return endpoints, nil
+	return view
 }
 
 func rawOrFallback(value, fallback string) string {
@@ -1118,25 +1185,28 @@ func TestComponentAcceptanceIsExactlyTheDriversOwnParser(t *testing.T) {
 				}
 
 				oracle := assembleWithNetURL(spec.Scheme, host, spec.DefaultPort, user, password, database)
-				endpoints, oracleErr := driverEndpoints(t, oracle)
-				driverAccepts := oracleErr == nil && endpoints == 1
+				view := driverParse(t, oracle)
+				usable := view.usable(host, spec.DefaultPort, user, password, database)
 
 				switch {
-				case driverAccepts && err != nil:
-					t.Fatalf("the %s driver accepts host %q as exactly one endpoint, but the resolver refused it: %v",
+				case usable && err != nil:
+					t.Fatalf("the %s driver reads host %q back unchanged as exactly one endpoint, but the resolver refused it: %v",
 						spec.Scheme, host, err)
-				case !driverAccepts && err == nil:
-					t.Fatalf("the %s driver refuses host %q (endpoints=%d err=%v), but the resolver accepted it",
-						spec.Scheme, host, endpoints, oracleErr)
+				case !usable && err == nil:
+					t.Fatalf("the %s driver does not use host %q as configured (endpoints=%d host=%q err=%v), but the resolver accepted it",
+						spec.Scheme, host, view.endpoints, view.host, view.err)
 				}
 
 				if err != nil {
-					// A refusal names the settings that produced it and
-					// carries neither the credential nor its encoded form.
-					for _, key := range spec.componentKeyNames() {
-						if !strings.Contains(err.Error(), key) {
-							t.Fatalf("refusal for host %q does not name %s: %v", host, key, err)
-						}
+					// A refusal names the setting responsible and carries
+					// neither the credential nor its encoded form. Where
+					// the driver rejected the whole DSN the message names
+					// every setting that fed it; where one component did
+					// not survive the round trip it names just that one,
+					// which is the more useful answer and is why this
+					// asserts the relevant key rather than all of them.
+					if !strings.Contains(err.Error(), spec.HostKey) {
+						t.Fatalf("refusal for host %q does not name %s: %v", host, spec.HostKey, err)
 					}
 					for _, leak := range []string{password, url.QueryEscape(password), url.PathEscape(password)} {
 						if strings.Contains(err.Error(), leak) {
@@ -1168,7 +1238,7 @@ func TestComponentPortAcceptanceIsExactlyTheDriversOwnParser(t *testing.T) {
 		password = "s3cr3t#pw"
 		database = "appdb"
 	)
-	ports := []string{"5432", "1", "65535", "0", "65536", "99999", "5432,5433", "5432x", "+5432", "", " 5432", "5432 ", "   "}
+	ports := []string{"5432", "1", "65535", "0", "65536", "99999", "5432,5433", "5432x", "+5432", "", " 5432", "5432 ", "   ", "0443", "05432"}
 
 	for _, driver := range componentDrivers {
 		for _, port := range ports {
@@ -1189,16 +1259,17 @@ func TestComponentPortAcceptanceIsExactlyTheDriversOwnParser(t *testing.T) {
 				// An empty PORT is absent, not blank: it falls to the
 				// spec default, exactly as the resolver's own
 				// rawOrDefault does.
-				oracle := assembleWithNetURL(spec.Scheme, host, rawOrFallback(port, spec.DefaultPort), user, password, database)
-				endpoints, oracleErr := driverEndpoints(t, oracle)
-				driverAccepts := oracleErr == nil && endpoints == 1
+				effective := rawOrFallback(port, spec.DefaultPort)
+				oracle := assembleWithNetURL(spec.Scheme, host, effective, user, password, database)
+				view := driverParse(t, oracle)
+				usable := view.usable(host, effective, user, password, database)
 
 				switch {
-				case driverAccepts && err != nil:
-					t.Fatalf("the %s driver accepts port %q, but the resolver refused it: %v", spec.Scheme, port, err)
-				case !driverAccepts && err == nil:
-					t.Fatalf("the %s driver refuses port %q (endpoints=%d err=%v), but the resolver accepted it",
-						spec.Scheme, port, endpoints, oracleErr)
+				case usable && err != nil:
+					t.Fatalf("the %s driver reads port %q back unchanged, but the resolver refused it: %v", spec.Scheme, port, err)
+				case !usable && err == nil:
+					t.Fatalf("the %s driver does not use port %q as configured (endpoints=%d port=%q err=%v), but the resolver accepted it",
+						spec.Scheme, port, view.endpoints, view.port, view.err)
 				}
 				if err != nil {
 					if !strings.Contains(err.Error(), spec.PortKey) {
@@ -1287,6 +1358,145 @@ func TestAnUnregisteredSchemeIsRefusedLoudly(t *testing.T) {
 	}
 }
 
+// reservedCharacters and componentPositions are the axis a
+// character-only table misses. A reserved character behaves differently
+// depending on WHERE in the value it sits: a database named "/app"
+// assembles into a URL path of "//app", which pgconn reads back as "app"
+// -- accepted, one endpoint, and a live connection to a different
+// existing database. The same slash in the middle of the name survives
+// untouched, which is exactly why a table that only probed the middle
+// position reported the component form as safe.
+var (
+	reservedCharacters = []struct{ name, char string }{
+		{"slash", "/"}, {"hash", "#"}, {"question", "?"}, {"space", " "},
+		{"percent", "%"}, {"at", "@"}, {"colon", ":"}, {"dot", "."},
+		{"backslash", `\`}, {"ampersand", "&"}, {"equals", "="}, {"plus", "+"},
+	}
+	componentPositions = []struct{ name, format string }{
+		{"leading", "%sbase"}, {"middle", "ba%sse"}, {"trailing", "base%s"}, {"only", "%s"},
+	}
+)
+
+// TestEveryComponentSurvivesAssemblyOrIsRefused is the whole acceptance
+// contract on the axis that matters: character x POSITION x component x
+// driver, with every verdict derived from the driver's own answer rather
+// than written down. A component set is accepted if and only if the
+// driver reads every field back as the value that was configured; a value
+// the assembly cannot carry losslessly is refused naming that setting,
+// never accepted and quietly changed.
+func TestEveryComponentSurvivesAssemblyOrIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, driver := range componentDrivers {
+		for _, component := range []string{"user", "password", "database"} {
+			for _, char := range reservedCharacters {
+				for _, position := range componentPositions {
+					t.Run(driver.name+"/"+component+"/"+char.name+"/"+position.name, func(t *testing.T) {
+						t.Parallel()
+						spec := driver.spec
+						value := fmt.Sprintf(position.format, char.char)
+
+						host, port := "db.internal", spec.DefaultPort
+						user, password, database := "app", "pw", "appdb"
+						switch component {
+						case "user":
+							user = value
+						case "password":
+							password = value
+						case "database":
+							database = value
+						}
+
+						built, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+							spec.HostKey:     host,
+							spec.PortKey:     port,
+							spec.UserKey:     user,
+							spec.PasswordKey: password,
+							spec.DBKey:       database,
+						}), spec)
+						if !used {
+							t.Fatal("expected used=true once HOST is set")
+						}
+
+						view := driverParse(t, assembleWithNetURL(spec.Scheme, host, port, user, password, database))
+						usable := view.usable(host, port, user, password, database)
+
+						switch {
+						case usable && err != nil:
+							t.Fatalf("%s=%q survives the round trip through the %s driver, but the resolver refused it: %v",
+								component, value, spec.Scheme, err)
+						case !usable && err == nil:
+							t.Fatalf("%s=%q does NOT survive the round trip (the %s driver reads user=%q password-match=%v database=%q), but the resolver accepted it as %q",
+								component, value, spec.Scheme, view.user, view.password == password, view.database, built.Reveal())
+						}
+						if err != nil {
+							key := map[string]string{
+								"user":     spec.UserKey,
+								"password": spec.PasswordKey,
+								"database": spec.DBKey,
+							}[component]
+							if !strings.Contains(err.Error(), key) {
+								t.Fatalf("the refusal does not name %s, the setting responsible: %v", key, err)
+							}
+							if strings.Contains(err.Error(), password) {
+								t.Fatalf("the refusal leaked the credential: %v", err)
+							}
+							return
+						}
+						// Accepted: the telemetry identity must be the
+						// parsed one, which is now necessarily the
+						// configured one.
+						if got := ComponentDatabaseIdentity(spec.Scheme, built); got != database {
+							t.Fatalf("telemetry reports database %q, but the driver will connect to %q", got, database)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+// TestALeadingSlashDatabaseIsRefusedRatherThanSilentlyRewritten is the
+// finding itself, pinned on its own so a regression names it. pgconn
+// reads "//app" as the database "app": accepted, one endpoint, and a
+// successful connection to a DIFFERENT existing database while telemetry
+// reported the requested name.
+func TestALeadingSlashDatabaseIsRefusedRatherThanSilentlyRewritten(t *testing.T) {
+	t.Parallel()
+
+	for _, database := range []string{"/appdb", "/"} {
+		t.Run(database, func(t *testing.T) {
+			t.Parallel()
+
+			// Red: the driver accepts the assembled DSN and resolves it
+			// to one endpoint. Nothing about acceptance catches this.
+			assembled := assembleWithNetURL("postgresql", "db.internal", "5432", "app", "pw", database)
+			view := driverParse(t, assembled)
+			if view.err != nil || view.endpoints != 1 {
+				t.Fatalf("test setup: expected the driver to accept %q as one endpoint, got err=%v endpoints=%d",
+					assembled, view.err, view.endpoints)
+			}
+			if view.database == database {
+				t.Fatalf("test setup: expected pgconn to rewrite %q, got %q", database, view.database)
+			}
+
+			_, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+				"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
+				"DEV_HEALTH_PG_DB":          database,
+			}), DomainDatabaseSpec)
+			if !used {
+				t.Fatal("expected used=true once HOST is set")
+			}
+			if err == nil {
+				t.Fatalf("database %q is rewritten to %q by the driver and must be refused, not accepted", database, view.database)
+			}
+			if !strings.Contains(err.Error(), "DEV_HEALTH_PG_DB") {
+				t.Fatalf("the refusal does not name DEV_HEALTH_PG_DB: %v", err)
+			}
+		})
+	}
+}
+
 // TestMultiHostComponentsAreRefusedOnTheParsedConfigNotTheString pins
 // WHERE the single-endpoint rule lives. A comma-bearing host is not a
 // malformed DSN: both drivers parse it without complaint, and only the
@@ -1309,12 +1519,12 @@ func TestMultiHostComponentsAreRefusedOnTheParsedConfigNotTheString(t *testing.T
 			if _, parseErr := url.Parse(assembled); parseErr != nil {
 				t.Fatalf("test setup: the assembled DSN does not parse: %v", parseErr)
 			}
-			endpoints, oracleErr := driverEndpoints(t, assembled)
-			if oracleErr != nil {
-				t.Fatalf("test setup: the %s driver rejected the DSN outright (%v) -- this cell must prove the PARSED config is what catches it", spec.Scheme, oracleErr)
+			view := driverParse(t, assembled)
+			if view.err != nil {
+				t.Fatalf("test setup: the %s driver rejected the DSN outright (%v) -- this cell must prove the PARSED config is what catches it", spec.Scheme, view.err)
 			}
-			if endpoints < 2 {
-				t.Fatalf("test setup: the %s driver resolved %d endpoint(s), want at least 2", spec.Scheme, endpoints)
+			if view.endpoints < 2 {
+				t.Fatalf("test setup: the %s driver resolved %d endpoint(s), want at least 2", spec.Scheme, view.endpoints)
 			}
 
 			_, used, err := ResolveDSNFromComponents(lookup(map[string]string{

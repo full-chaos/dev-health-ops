@@ -1456,19 +1456,39 @@ func firstOrEmpty(value string, ok bool) string {
 // hostnameLabelPattern matches one RFC 1123 DNS label: 1-63 characters,
 // alphanumeric, with interior hyphens only (never a leading or trailing
 // one). isRFC1123Hostname below joins the requirement across every
-// dot-separated label so an empty label (a leading/trailing/doubled dot)
-// is rejected by construction, not by a separate check.
+// dot-separated label so an empty label (a leading/doubled dot, or more
+// than one trailing dot) is rejected by construction, not by a separate
+// check.
 var hostnameLabelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
 
 // isRFC1123Hostname reports whether host is a single, syntactically valid
 // DNS hostname -- never a comma-, space-, or slash-bearing value a
 // general-purpose URL parser would accept but a database driver's own DSN
 // parser would reinterpret (round-8, 2026-09-11).
+//
+// Round-9 (2026-09-11) finding: a SINGLE trailing dot ("localhost.")
+// denotes an absolute hostname per RFC 1123 S6.1.4.3 -- it suppresses
+// resolver search-list expansion, it does not name a second endpoint or
+// introduce an empty label the way a leading or doubled dot would. The
+// pre-built-URI form already accepted it (net/url does not special-case
+// a trailing dot), so rejecting it here broke an operator's ability to
+// keep an absolute hostname when switching to the component form,
+// reproduced live against both PostgreSQL and ClickHouse. Fixed by
+// stripping exactly one trailing dot before validating labels -- never
+// stripping it from the value validComponentHost actually returns, so
+// the assembled DSN preserves it exactly as configured.
 func isRFC1123Hostname(host string) bool {
 	if host == "" || len(host) > 253 {
 		return false
 	}
-	for _, label := range strings.Split(host, ".") {
+	labels := host
+	if strings.HasSuffix(labels, ".") {
+		labels = strings.TrimSuffix(labels, ".")
+		if labels == "" {
+			return false // host was exactly "."
+		}
+	}
+	for _, label := range strings.Split(labels, ".") {
 		if !hostnameLabelPattern.MatchString(label) {
 			return false
 		}

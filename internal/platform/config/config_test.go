@@ -1013,9 +1013,17 @@ func TestValidComponentHostAcceptsExactlyOneEndpoint(t *testing.T) {
 		{name: "inner comma (two hosts)", host: "127.0.0.1,evil.invalid", wantErr: true},
 		{name: "space", host: "127.0.0.1 evil.invalid", wantErr: true},
 		{name: "host:port stuffed into HOST", host: "127.0.0.1:5432", wantErr: true},
+		// Round-9 (2026-09-11) finding: a SINGLE trailing dot denotes an
+		// absolute hostname (RFC 1123 S6.1.4.3) -- it must be ACCEPTED,
+		// not treated as an empty label. Reviewer's own reproduction: the
+		// pre-built-URI form already accepted "localhost." (net/url does
+		// not special-case it) and connected live; the component form
+		// wrongly rejected the identical value.
+		{name: "absolute hostname (single trailing dot)", host: "db.internal."},
 		{name: "empty label (leading dot)", host: ".db.internal", wantErr: true},
-		{name: "empty label (trailing dot)", host: "db.internal.", wantErr: true},
+		{name: "empty label (doubled trailing dot)", host: "db.internal..", wantErr: true},
 		{name: "empty label (doubled dot)", host: "db..internal", wantErr: true},
+		{name: "empty label (only a dot)", host: ".", wantErr: true},
 		{name: "percent", host: "db%2einternal", wantErr: true},
 		{name: "at", host: "user@db.internal", wantErr: true},
 		{name: "slash", host: "db.internal/x", wantErr: true},
@@ -1086,6 +1094,31 @@ func TestValidComponentHostAcceptsExactlyOneEndpoint(t *testing.T) {
 				t.Fatalf("host %q: real clickhouse-go driver resolved %d address(es), want exactly 1: %v", c.host, len(options.Addr), options.Addr)
 			}
 		})
+	}
+}
+
+// TestAbsoluteHostnameTrailingDotIsPreservedVerbatim is round-9's
+// (2026-09-11) fix, proving the reviewer's own fix note ("preserve it in
+// the assembled DSN") rather than merely that ResolveDSNFromComponents no
+// longer errors: the trailing dot must reach the real driver exactly as
+// configured, never stripped -- host identifiers are never altered
+// anywhere in this resolver (the same Trap #140 discipline as every
+// other identifier field).
+func TestAbsoluteHostnameTrailingDotIsPreservedVerbatim(t *testing.T) {
+	t.Parallel()
+
+	value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+		"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal.",
+	}), DomainDatabaseSpec)
+	if !used || err != nil {
+		t.Fatalf("used=%v err=%v", used, err)
+	}
+	cfg, parseErr := pgconn.ParseConfig(value.Reveal())
+	if parseErr != nil {
+		t.Fatalf("real pgx driver could not parse the assembled DSN: %v", parseErr)
+	}
+	if cfg.Host != "db.internal." {
+		t.Fatalf("trailing dot was not preserved verbatim: driver saw host=%q, want %q", cfg.Host, "db.internal.")
 	}
 }
 

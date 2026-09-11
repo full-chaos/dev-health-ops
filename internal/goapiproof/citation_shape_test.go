@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -147,4 +148,118 @@ func TestTheWriterRecordsShapeDifferencesOutsideTheCitation(t *testing.T) {
 			t.Logf("cell %-46s receipt terminal=%s outside=%d cited=%v -> enablement-eligible=%v", cell.name, r.TerminalState, r.DifferencesOutsideBaselineDefect, r.BaselineDefects, eligible)
 		})
 	}
+}
+
+// Every finding site the comparator has, under a citation that reaches it.
+// The hotspots table above exercises lists, dict keys, nulls and types; this
+// one covers the remaining sites -- an order-insensitive (keyed) list, `data`
+// itself, the `errors` list, a non-finite number -- and the scalar kinds a
+// citation MUST still cover (a bool, an integer, a string), so the rule is
+// pinned in both directions at every site: a shape is never covered, a leaf
+// value always is.
+func TestEveryFindingSiteHonoursTheCitationRule(t *testing.T) {
+	keyed := Options{
+		OrderInsensitiveLists: []OrderInsensitiveList{{Path: "data.x.rows", KeyFields: []string{"id"}, Reason: "order carries no signal", Ticket: "CHAOS-0001"}},
+		BaselineDefects:       []BaselineDefect{{Ticket: "CHAOS-0002", Reason: "the cited defect", Paths: []string{"data.x.rows"}}},
+	}
+	cite := func(path string) Options {
+		return Options{BaselineDefects: []BaselineDefect{{Ticket: "CHAOS-0002", Reason: "the cited defect", Paths: []string{path}}}}
+	}
+	for _, c := range []struct {
+		name                string
+		opts                Options
+		baseline, candidate string
+		outside             int
+	}{
+		{"keyed list: one key on each side only (presence)", keyed,
+			`{"data":{"x":{"rows":[{"id":"1","v":1},{"id":"2","v":2}]}}}`, `{"data":{"x":{"rows":[{"id":"1","v":1},{"id":"3","v":2}]}}}`, 2},
+		{"keyed list: a value under a shared key (covered)", keyed,
+			`{"data":{"x":{"rows":[{"id":"1","v":1},{"id":"2","v":2}]}}}`, `{"data":{"x":{"rows":[{"id":"2","v":2},{"id":"1","v":9}]}}}`, 0},
+		{"data absent on the candidate (presence), citing data", cite("data"),
+			`{"data":{"x":1}}`, `{}`, 1},
+		{"an error on one side only (presence), citing errors", cite("errors"),
+			`{"data":{"x":1},"errors":[{"message":"boom","path":["x"]}]}`, `{"data":{"x":1}}`, 1},
+		{"a non-finite number (1e400) where Python has 1", cite("data.x"),
+			`{"data":{"x":1}}`, `{"data":{"x":1e400}}`, 1},
+		{"a bool value (covered)", cite("data.x"),
+			`{"data":{"x":true}}`, `{"data":{"x":false}}`, 0},
+		{"an integer value (covered)", cite("data.x"),
+			`{"data":{"x":1}}`, `{"data":{"x":2}}`, 0},
+		{"a string value (covered)", cite("data.x"),
+			`{"data":{"x":"a"}}`, `{"data":{"x":"b"}}`, 0},
+	} {
+		result := Compare(snapshotFromJSON(t, c.baseline), snapshotFromJSON(t, c.candidate), c.opts)
+		if result.TerminalState != TerminalStateMismatch || result.DifferencesOutsideBaselineDefect != c.outside ||
+			len(result.BaselineDefectsMatched) != 1 {
+			t.Fatalf("%s: terminal=%s outside=%d matched=%v, want mismatch outside=%d with the citation matched -- findings %+v",
+				c.name, result.TerminalState, result.DifferencesOutsideBaselineDefect, result.BaselineDefectsMatched, c.outside, result.Findings)
+		}
+		t.Logf("cell %-56s outside=%d", c.name, result.DifferencesOutsideBaselineDefect)
+	}
+}
+
+// Every BaselineDefect path DECLARED in operationSpecs, not only hotspots':
+// for each, the same five candidates at that exact path -- a leaf value
+// (covered), a null, another JSON type, the key absent, and a list whose
+// length differs (each outside). A new declaration is swept by this test
+// the day it is added.
+func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
+	nest := func(path string, leaf any, present bool) string {
+		segments := strings.Split(path, ".")
+		var value any = map[string]any{}
+		if present {
+			value = map[string]any{segments[len(segments)-1]: leaf}
+		}
+		for i := len(segments) - 2; i >= 0; i-- {
+			value = map[string]any{segments[i]: value}
+		}
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(body)
+	}
+	swept := 0
+	for _, operation := range KnownOperations() {
+		spec, err := SpecFor(operation)
+		if err != nil {
+			t.Fatalf("SpecFor(%s): %v", operation, err)
+		}
+		for _, defect := range spec.Parity.BaselineDefects {
+			for _, cited := range defect.Paths {
+				if !strings.HasPrefix(cited, "data.") {
+					t.Fatalf("%s %s: cited path %q is not under data", operation, defect.Ticket, cited)
+				}
+				opts := Options{BaselineDefects: []BaselineDefect{defect}}
+				baseline := nest(cited, "python", true)
+				for _, c := range []struct {
+					name      string
+					candidate string
+					outside   int
+				}{
+					{"leaf value", nest(cited, "go", true), 0},
+					{"null", nest(cited, nil, true), 1},
+					{"another type", nest(cited, 7, true), 1},
+					{"key absent", nest(cited, nil, false), 1},
+					{"list length", nest(cited, []any{}, true), 1},
+				} {
+					base := baseline
+					if c.name == "list length" {
+						base = nest(cited, []any{"python"}, true)
+					}
+					result := Compare(snapshotFromJSON(t, base), snapshotFromJSON(t, c.candidate), opts)
+					if result.DifferencesOutsideBaselineDefect != c.outside || len(result.BaselineDefectsMatched) != 1 {
+						t.Fatalf("%s %s %q, %s: outside=%d matched=%v, want outside=%d with %s matched -- findings %+v",
+							operation, defect.Ticket, cited, c.name, result.DifferencesOutsideBaselineDefect, result.BaselineDefectsMatched, c.outside, defect.Ticket, result.Findings)
+					}
+				}
+				swept++
+				t.Logf("path %-18s %-10s %-48s leaf value covered; null, another type, key absent, list length each outside", operation, defect.Ticket, cited)
+			}
+		}
+	}
+	if swept == 0 {
+		t.Fatal("no declared BaselineDefect path was swept")
+	}
+	t.Logf("declared citation paths swept: %d", swept)
 }

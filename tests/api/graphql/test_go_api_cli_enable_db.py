@@ -682,7 +682,9 @@ async def test_status_names_an_unregistered_live_row_on_both_outputs(
 ) -> None:
     """opus r7 (P2-1): a live row for an operation the catalog does not
     register was named nowhere by `status`, text or `--json`, while the
-    migration page named it. Both outputs now carry it, unreachable."""
+    migration page named it. Both outputs now carry it, unreachable, with
+    the proof `status` computes for it (an admissible receipt of its own
+    here, so PROOF reads ``ok`` and ``proven`` is true on both)."""
     retired = "e" * 64
     async with session_factory() as session:
         await register_candidate_build(
@@ -691,6 +693,21 @@ async def test_status_names_an_unregistered_live_row_on_both_outputs(
             document_digest=retired,
             selected_operation="retiredOperation",
             candidate_build=BUILD,
+        )
+        run = await record_proof_run(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=retired,
+            selected_operation="retiredOperation",
+            candidate_build=BUILD,
+            request_identity=f"test-{uuid.uuid4().hex[:8]}",
+            stage=ENABLEMENT_PROOF_STAGE,
+            terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+        )
+        await session.execute(
+            sa.update(ProofRun)
+            .where(ProofRun.id == run.id)
+            .values(measurement_route="edge", build_binding="per_request")
         )
         session.add(
             RoutingState(
@@ -714,6 +731,11 @@ async def test_status_names_an_unregistered_live_row_on_both_outputs(
     out = capsys.readouterr().out
     line = [line for line in out.splitlines() if line.startswith("retiredOperation ")]
     assert len(line) == 1 and "UNREGISTERED" in line[0], out
+    assert line[0].split()[-1] == "ok", (
+        f"the unregistered row HAS an admissible receipt of its own, and its "
+        f"PROOF column printed {line[0].split()[-1]!r}: the terminal disagrees "
+        f"with --json\n{out}"
+    )
     assert f"serving document {retired}" in out, out
     with FakeQueryAPI(registry_payload()) as url:
         assert (
@@ -727,6 +749,6 @@ async def test_status_names_an_unregistered_live_row_on_both_outputs(
         for r in json.loads(capsys.readouterr().out)["operations"]
         if r["operation"] == "retiredOperation"
     ]
-    assert [(r["digest_state"], r["mode"], r["reachable"]) for r in rows] == [
-        ("UNREGISTERED", "primary", False)
-    ], rows
+    assert [
+        (r["digest_state"], r["mode"], r["proven"], r["reachable"]) for r in rows
+    ] == [("UNREGISTERED", "primary", True, False)], rows

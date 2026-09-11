@@ -632,11 +632,12 @@ async def test_one_operation_at_two_catalog_documents_is_two_matches_not_drift(
     two documents, and the drift subtraction removed only the CURRENT
     catalog entry's digest -- so each catalog document flagged the other as
     DOCUMENT_DRIFT, and each document was reported both MATCH and drifted.
-    A document the catalog names is never drift.
+    A document the catalog names is never drift; one it does not name is
+    drift exactly ONCE, however many catalog documents the operation has.
     """
     operation = CATALOG[0][0]
-    doc_a, doc_b = "1" * 64, "2" * 64
-    for document, mode in ((doc_a, "canary"), (doc_b, "primary")):
+    doc_a, doc_b, doc_c = "1" * 64, "2" * 64, "3" * 64
+    for document, mode in ((doc_a, "canary"), (doc_b, "primary"), (doc_c, "canary")):
         await enable_operation(
             session,
             schema_digest=LIVE,
@@ -657,8 +658,9 @@ async def test_one_operation_at_two_catalog_documents_is_two_matches_not_drift(
         for s in statuses
         if s.operation == operation
     )
-    assert states == [("1", "MATCH"), ("2", "MATCH")], (
-        f"each catalog document must be reported once, as MATCH: {states}"
+    assert states == [("1", "MATCH"), ("2", "MATCH"), ("3", "DOCUMENT_DRIFT")], (
+        f"each catalog document must be reported once, as MATCH, and the "
+        f"unnamed document once, as DOCUMENT_DRIFT: {states}"
     )
 
 

@@ -1214,6 +1214,79 @@ func TestComponentPortAcceptanceIsExactlyTheDriversOwnParser(t *testing.T) {
 	}
 }
 
+// TestAmbientDriverEnvironmentIsNotBlamedOnTheComponentSettings pins
+// whose fault a driver refusal is said to be. pgconn reads the ambient
+// PG* environment while parsing, so a broken PGSSLROOTCERT or
+// PGCONNECT_TIMEOUT makes it refuse a DSN assembled from perfectly good
+// components. Naming those components as the cause sends an operator to
+// the wrong file entirely, so the resolver parses a canonical known-good
+// DSN as a control and says which of the two it is.
+func TestAmbientDriverEnvironmentIsNotBlamedOnTheComponentSettings(t *testing.T) {
+	env := map[string]string{
+		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER":     "app",
+		"DEV_HEALTH_PG_DOMAIN_PASSWORD": "s3cr3t#pw",
+		"DEV_HEALTH_PG_DB":              "appdb",
+	}
+
+	// Green first: with nothing ambient set, these components resolve.
+	if _, _, err := ResolveDSNFromComponents(lookup(env), DomainDatabaseSpec); err != nil {
+		t.Fatalf("control: expected the component set to resolve, got: %v", err)
+	}
+
+	for _, ambient := range []struct{ key, value string }{
+		{"PGSSLROOTCERT", "/nonexistent/ca.pem"},
+		{"PGCONNECT_TIMEOUT", "notanumber"},
+	} {
+		t.Run(ambient.key, func(t *testing.T) {
+			t.Setenv(ambient.key, ambient.value)
+
+			_, used, err := ResolveDSNFromComponents(lookup(env), DomainDatabaseSpec)
+			if !used {
+				t.Fatal("expected used=true once HOST is set")
+			}
+			if err == nil {
+				t.Fatalf("expected the driver to refuse while %s is broken", ambient.key)
+			}
+			if !strings.Contains(err.Error(), "are not the cause") {
+				t.Fatalf("the refusal blames the component settings for an ambient %s: %v", ambient.key, err)
+			}
+			if strings.Contains(err.Error(), "the assembled DSN") {
+				t.Fatalf("the refusal used the component-fault wording for an ambient %s: %v", ambient.key, err)
+			}
+			for _, leak := range []string{"s3cr3t#pw", url.QueryEscape("s3cr3t#pw")} {
+				if strings.Contains(err.Error(), leak) {
+					t.Fatalf("the refusal leaked the credential: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestAnUnregisteredSchemeIsRefusedLoudly pins the one branch no spec in
+// this package reaches: ComponentSpec is exported, so a caller can name a
+// scheme with no driver parser behind it, and silently skipping validation
+// for it would be the worst possible answer.
+func TestAnUnregisteredSchemeIsRefusedLoudly(t *testing.T) {
+	t.Parallel()
+
+	spec := ComponentSpec{
+		HostKey: "OTHER_HOST", PortKey: "OTHER_PORT", DefaultPort: "1",
+		UserKey: "OTHER_USER", PasswordKey: "OTHER_PASSWORD",
+		DBKey: "OTHER_DB", DefaultDB: "other", Scheme: "mysql",
+	}
+	_, used, err := ResolveDSNFromComponents(lookup(map[string]string{"OTHER_HOST": "db.internal"}), spec)
+	if !used {
+		t.Fatal("expected used=true once HOST is set")
+	}
+	if err == nil || !strings.Contains(err.Error(), "no driver parser is registered") {
+		t.Fatalf("expected a loud refusal for an unsupported scheme, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "OTHER_HOST") {
+		t.Fatalf("the refusal does not name the setting that activated the form: %v", err)
+	}
+}
+
 // TestMultiHostComponentsAreRefusedOnTheParsedConfigNotTheString pins
 // WHERE the single-endpoint rule lives. A comma-bearing host is not a
 // malformed DSN: both drivers parse it without complaint, and only the

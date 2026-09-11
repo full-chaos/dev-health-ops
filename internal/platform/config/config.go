@@ -1311,52 +1311,94 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 // second host. Only the parsed config says how many endpoints the driver
 // actually ended up with.
 func acceptedByDriver(spec ComponentSpec, assembled string) error {
-	switch spec.Scheme {
-	case "postgresql":
-		parsed, parseErr := pgconn.ParseConfig(assembled)
-		if parseErr != nil {
-			return componentDriverError(spec, assembled, parseErr)
-		}
-		// pgconn carries at least one Fallbacks entry even for a
-		// single-host DSN: that is pgx's own sslmode negotiation retry
-		// against the SAME endpoint, not a second one. Only a fallback
-		// naming a different host or port is another endpoint.
-		for _, fallback := range parsed.Fallbacks {
-			if fallback.Host != parsed.Host || fallback.Port != parsed.Port {
-				return componentEndpointError(spec)
-			}
-		}
-	case "clickhouse":
-		parsed, parseErr := clickhouse.ParseDSN(assembled)
-		if parseErr != nil {
-			return componentDriverError(spec, assembled, parseErr)
-		}
-		if len(parsed.Addr) != 1 {
-			return componentEndpointError(spec)
-		}
-	default:
+	control, known := canonicalDSN[spec.Scheme]
+	if !known {
 		return fmt.Errorf("%s: no driver parser is registered for scheme %q", spec.HostKey, spec.Scheme)
+	}
+	endpoints, parseErr := parseWithDriver(spec.Scheme, assembled)
+	if parseErr != nil {
+		// Whose fault is it? pgconn reads the ambient PG* environment
+		// while parsing (PGSSLROOTCERT, PGCONNECT_TIMEOUT and friends),
+		// so a DSN built from perfectly good components is refused when
+		// one of those is broken. Blaming the component settings for
+		// that sends the operator to the wrong file. A canonical,
+		// known-good DSN of the same scheme is parsed as a control: if
+		// the driver refuses that too, nothing about the components is
+		// wrong and the message has to say so.
+		if _, controlErr := parseWithDriver(spec.Scheme, control); controlErr != nil {
+			return fmt.Errorf(
+				"the %s driver cannot parse any DSN in this process's environment, so %s and its sibling settings are not the cause: %s",
+				spec.Scheme, spec.HostKey, redactDriverError(assembled, parseErr),
+			)
+		}
+		return componentDriverError(spec, assembled, parseErr)
+	}
+	if endpoints != 1 {
+		return componentEndpointError(spec)
 	}
 	return nil
 }
 
+// canonicalDSN is a known-good DSN per supported scheme, used only as the
+// control in acceptedByDriver. Its membership is also what says a scheme
+// has a driver parser at all, so adding one here and to parseWithDriver
+// is the whole of adding a scheme.
+var canonicalDSN = map[string]string{
+	"postgresql": "postgresql://user:password@127.0.0.1:5432/database",
+	"clickhouse": "clickhouse://user:password@127.0.0.1:9000/database",
+}
+
+// parseWithDriver hands dsn to the driver that will consume it and reports
+// how many distinct endpoints that driver resolved it to. Scheme dispatch
+// lives here and nowhere else.
+//
+// pgconn carries at least one Fallbacks entry even for a single-host DSN:
+// that is pgx's own sslmode negotiation retry against the SAME endpoint,
+// not a second one. Only a fallback naming a different host or port is
+// another endpoint.
+func parseWithDriver(scheme, dsn string) (endpoints int, err error) {
+	switch scheme {
+	case "postgresql":
+		parsed, parseErr := pgconn.ParseConfig(dsn)
+		if parseErr != nil {
+			return 0, parseErr
+		}
+		endpoints = 1
+		for _, fallback := range parsed.Fallbacks {
+			if fallback.Host != parsed.Host || fallback.Port != parsed.Port {
+				endpoints++
+			}
+		}
+		return endpoints, nil
+	case "clickhouse":
+		parsed, parseErr := clickhouse.ParseDSN(dsn)
+		if parseErr != nil {
+			return 0, parseErr
+		}
+		return len(parsed.Addr), nil
+	}
+	return 0, fmt.Errorf("no driver parser is registered for scheme %q", scheme)
+}
+
+// redactDriverError scrubs a driver's own message three ways before it is
+// surfaced, because a DSN parser's error routinely quotes the DSN back:
+// the assembled string is replaced literally (clickhouse-go echoes it
+// verbatim, credentials included), pgx's own parse error already masks the
+// password before it arrives, and logging.RedactText runs last as the
+// shared defense-in-depth pass that also catches a partially-quoted DSN.
+// What survives is the offending token the driver names -- a host or port
+// fragment, the same non-secret identifier class this package already
+// publishes at Info -- never a credential.
+func redactDriverError(assembled string, driverErr error) string {
+	return logging.RedactText(strings.ReplaceAll(driverErr.Error(), assembled, "[REDACTED]"))
+}
+
 // componentDriverError reports the driver's own refusal under the NAMES of
 // the settings that produced it.
-//
-// A DSN parser's error routinely quotes the DSN back, so the text is
-// scrubbed three ways before it is surfaced: the assembled string is
-// replaced literally (clickhouse-go echoes it verbatim, credentials
-// included), pgx's own parse error already masks the password before it
-// gets here, and logging.RedactText runs last as the shared
-// defense-in-depth pass that also catches a partially-quoted DSN. What
-// survives is the offending token the driver names -- a host or port
-// fragment, the same non-secret identifier class this package already
-// publishes at Info -- never a credential and never the whole value.
 func componentDriverError(spec ComponentSpec, assembled string, driverErr error) error {
-	detail := logging.RedactText(strings.ReplaceAll(driverErr.Error(), assembled, "[REDACTED]"))
 	return fmt.Errorf(
 		"%s: the %s driver refused the assembled DSN: %s",
-		strings.Join(spec.componentKeyNames(), ", "), spec.Scheme, detail,
+		strings.Join(spec.componentKeyNames(), ", "), spec.Scheme, redactDriverError(assembled, driverErr),
 	)
 }
 

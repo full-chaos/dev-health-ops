@@ -200,7 +200,7 @@
         "measurement_route": null
       },
       "admits": false,
-      "why": "A pre-0128 row records no route at all. 'Any route' is not the same as 'no route': admitting an unknown provenance is the same failure shape as reading the DEFAULT 0 as an assertion. The row is otherwise ADMISSIBLE -- bound per_request, a match, the right key -- so the NULL route is the only thing refusing it. opus r6 P2-3: this case used to carry a NULL build_binding too, and once the binding joined the rule the binding alone refused it, so the canary NULL-route clause could be deleted from the Python predicate with every Python test green.",
+      "why": "A pre-0128 row records no route at all. 'Any route' is not the same as 'no route': admitting an unknown provenance is the same failure shape as reading the DEFAULT 0 as an assertion. The row is otherwise ADMISSIBLE -- bound per_request, a match, the right key -- so the NULL route is the only thing refusing it.",
       "control": {
         "receipt": {
           "measurement_route": "edge"
@@ -262,7 +262,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "A mismatch that cites nothing, asked about for PRIMARY. Included so the mismatch arm cannot be read as 'mismatch now promotes': with nothing uncounted (outside = 0) and a bound edge measurement, the missing citation is the only thing refusing it. opus r6 P2-3: this case used to carry outside = 3 as well, so it was refused by two clauses and pinned neither.",
+      "why": "A mismatch that cites nothing, asked about for PRIMARY. Included so the mismatch arm cannot be read as 'mismatch now promotes': with nothing uncounted (outside = 0) and a bound edge measurement, the missing citation is the only thing refusing it.",
       "control": {
         "receipt": {
           "baseline_defect": [
@@ -427,7 +427,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "one-argument btrim() strips the SPACE only, so a tab citation passed both predicates and promoted to primary (opus r5 P1, executed through the CLI).",
+      "why": "one-argument btrim() strips the SPACE only, so a tab citation passed both predicates and promoted to primary, executed through the CLI.",
       "control": {
         "receipt": {
           "baseline_defect": [
@@ -607,7 +607,7 @@
         "build_binding": null
       },
       "admits": false,
-      "why": "a pre-0129 row: written before the column existed, and therefore before the counting rules that make a mismatch admissible. opus r5 P2 -- such rows became PRIMARY-admissible retroactively.",
+      "why": "a pre-0129 row: written before the column existed, and therefore before the counting rules that make a mismatch admissible -- such rows became PRIMARY-admissible retroactively without it.",
       "control": {
         "receipt": {
           "build_binding": "per_request"
@@ -662,7 +662,7 @@
       },
       "ask_with_overridden_key": true,
       "admits": false,
-      "why": "A build made only of spaces names no build, and `proven` is keyed on that column, so such a row looks present while matching nothing real. The question asks about the SAME blank build, so build equality holds and only the blank-build clause can refuse it -- opus r6 P3-1 found the only earlier pin asked about a DIFFERENT build and was refused by equality, leaving the clause unpinned in both languages.",
+      "why": "A build made only of spaces names no build, and `proven` is keyed on that column, so such a row looks present while matching nothing real. The question asks about the SAME blank build, so build equality holds and only the blank-build clause can refuse it -- the earlier pin for this class asked about a DIFFERENT build and was refused by equality instead, leaving this clause unpinned in both languages.",
       "control": {
         "key_override": null
       }
@@ -696,7 +696,7 @@
       },
       "ask_with_overridden_key": true,
       "admits": false,
-      "why": "Same rule, a vertical tab: the character whose SQL escape meant the LETTER v on PostgreSQL 16 (opus r6 P2-1). The suites are run against every server major they are pointed at.",
+      "why": "Same rule, a vertical tab: the character whose SQL escape meant the LETTER v on PostgreSQL 16. The suites are run against every server major they are pointed at.",
       "control": {
         "key_override": null
       }
@@ -714,7 +714,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'auth_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'auth_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "why": "a 'auth_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'auth_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -734,7 +734,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'validation_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'validation_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "why": "a 'validation_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'validation_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -754,7 +754,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'dependency_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'dependency_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "why": "a 'dependency_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'dependency_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -774,7 +774,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'timeout' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'timeout' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "why": "a 'timeout' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'timeout' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -794,7 +794,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'cancelled' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'cancelled' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "why": "a 'cancelled' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'cancelled' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -814,7 +814,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'resource_exhausted' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'resource_exhausted' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "why": "a 'resource_exhausted' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'resource_exhausted' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -834,7 +834,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'fallback' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'fallback' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "why": "a 'fallback' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'fallback' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -854,7 +854,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'unsupported' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'unsupported' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "why": "a 'unsupported' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'unsupported' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -874,7 +874,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'proof_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'proof_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "why": "a 'proof_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'proof_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -894,7 +894,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'auth_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'auth_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "why": "a 'auth_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'auth_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -914,7 +914,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'validation_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'validation_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "why": "a 'validation_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'validation_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -934,7 +934,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'dependency_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'dependency_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "why": "a 'dependency_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'dependency_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -954,7 +954,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'timeout' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'timeout' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "why": "a 'timeout' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'timeout' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -974,7 +974,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'cancelled' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'cancelled' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "why": "a 'cancelled' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'cancelled' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -994,7 +994,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'resource_exhausted' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'resource_exhausted' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "why": "a 'resource_exhausted' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'resource_exhausted' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -1014,7 +1014,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'fallback' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'fallback' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "why": "a 'fallback' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'fallback' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -1034,7 +1034,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'unsupported' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'unsupported' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "why": "a 'unsupported' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'unsupported' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"
@@ -1054,7 +1054,7 @@
         "differences_outside_baseline_defect": 0
       },
       "admits": false,
-      "why": "opus r8 P2-1: a 'proof_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'proof_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "why": "a 'proof_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'proof_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
       "control": {
         "receipt": {
           "terminal_state": "mismatch"

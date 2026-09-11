@@ -63,12 +63,11 @@ func runRepoint(argv []string) error {
 	// repro. Resolved HERE, after every other precondition (same ordering
 	// `TestEveryVerbRefusesItsOwnMissingPreconditions` pins), and BEFORE
 	// sanitizeEndpointURL, same reason as enable's.
-	var ok bool
-	if registryURL, ok = resolveEndpointURL(registryURL, "/registry"); !ok {
-		return refuse("no query-api URL: pass -registry-url or set %s. A measurement that did not happen is not a pass.", queryAPIURLEnvVar)
-	}
-	if buildInfoURL, ok = resolveEndpointURL(buildInfoURL, "/buildinfo"); !ok {
-		return refuse("no query-api URL: pass -buildinfo-url or set %s. A measurement that did not happen is not a pass.", queryAPIURLEnvVar)
+	// r7 F2 (reproduced): resolved TOGETHER, same reason as enable's
+	// identical fix -- see resolveQueryAPIEndpoints's own doc comment.
+	registryURL, buildInfoURL, err = resolveQueryAPIEndpoints(registryURL, buildInfoURL)
+	if err != nil {
+		return err
 	}
 	// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query or
 	// a fragment is printed verbatim by any transport error downstream.
@@ -141,7 +140,7 @@ func runRepoint(argv []string) error {
 	// r6 F5 observability (reproduced): same fix as enable's, so a
 	// wrong-process repoint looks the same way wrong on stdout.
 	fmt.Fprintf(stdout, "go-api-routing: registry=%s buildinfo=%s\n",
-		goapiproof.EndpointLabel(registryURL), goapiproof.EndpointLabel(buildInfoURL))
+		goapiproof.EndpointLabelWithPort(registryURL), goapiproof.EndpointLabelWithPort(buildInfoURL))
 	// Every counter prints, including the zeros: "no row needed changing"
 	// and "nobody looked" must not read alike.
 	fmt.Fprintf(stdout, "go-api-routing: schema_digest=%s running_build=%s dry_run=%t\n", registry.SchemaDigest, running, dryRun)

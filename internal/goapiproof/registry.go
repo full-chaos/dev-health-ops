@@ -237,6 +237,27 @@ func EndpointLabel(raw string) string {
 	return parsed.Scheme + "://" + parsed.Hostname()
 }
 
+// EndpointLabelWithPort is EndpointLabel's sibling for the ONE context
+// where the port is exactly the fact that matters: `enable`/`repoint`'s
+// own "which endpoint did I consult" success line (r7 F2, reproduced).
+//
+// Two local port-forwards to DIFFERENT deployed processes share a
+// hostname (127.0.0.1) and differ ONLY by port -- EndpointLabel's
+// port-omitted `http://127.0.0.1` prints identically for both, so the
+// very observability line meant to expose "registry and buildinfo came
+// from different processes" could not do so. The port carries no
+// credential (`safeEndpoint` has already refused any URL with userinfo,
+// an opaque body, or no host by the time this is called, so `.Host` is
+// exactly as safe to print as `.Hostname()` already was), and it is the
+// one thing that told S2/S2b's two stubs apart.
+func EndpointLabelWithPort(raw string) string {
+	parsed, err := safeEndpoint(raw)
+	if err != nil {
+		return "(unparseable endpoint)"
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
 // safeEndpoint is the ONE predicate that decides whether a URL can be
 // described, and every caller in this package goes through it -- the
 // refusal at the flag boundary, the label in an error, and the transport

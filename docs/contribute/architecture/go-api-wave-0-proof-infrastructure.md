@@ -347,8 +347,14 @@ go-api-routing disable -postgres-uri "$POSTGRES_URI" \
 GO_API_ROUTING_BEARER=<envelope> go-api-routing repoint ... -dry-run
 ```
 
-Three behaviours differ from the Python verbs on purpose, and all three
-are tightenings. Anything else that differs is a defect, not a decision:
+**r7 F8 (reproduced): the count below is stale and corrected.** This
+section originally closed the list at three; review since then has added
+several more deliberate behaviours, listed after the original three below.
+Every one is a tightening or an observability improvement, never a silent
+behaviour change, and the rule stands: anything else that differs from the
+Python verbs is a defect, not a decision.
+
+The original three:
 
 * **The candidate build cannot be typed.** `enable --candidate-build` in
   Python is documented "by CONVENTION, unverified"; the fifteen live rows
@@ -368,6 +374,38 @@ are tightenings. Anything else that differs is a defect, not a decision:
   columns; an append-only audit row carrying the same two fields on every
   write, independent of the current row, arrives with CHAOS-5505 (the
   audit PR that follows this one).
+
+Added since, all reproduced by review and pinned by a test:
+
+* **`disable -operations all-registered` does not refuse over an
+  operation whose ONLY rows sit at other schema digests.** The documented
+  rollback recipe (`-operations all-registered -mode python`) must be able
+  to turn everything off even when one operation's rows are all stale to
+  this checkout; naming that operation EXPLICITLY still refuses, because
+  an operator who typed its name is asking about exactly that operation.
+* **`-candidate-build` passed as an explicitly empty value is refused**,
+  not silently treated as "no guard" -- an empty value reads identically
+  to the flag never being passed at all otherwise, which would apply an
+  unguarded write when an operator's script meant to guard it (e.g. an
+  interpolated but unset shell variable).
+* **The write verbs' `-registry-url`/`-buildinfo-url` pair is resolved
+  TOGETHER, not independently.** Naming one explicitly while the other
+  falls back to `GO_API_QUERY_API_URL` (or nothing) can silently split a
+  single preflight across two different processes; only both-explicit or
+  neither is accepted.
+* **`status`'s `reachable` field is tri-state (`true`/`false`/`null`, not
+  a plain bool) and carries a `reachable_reason` naming the actual cause**
+  -- the row's own mode, the row's own digest_state, a schema-level
+  mismatch, a per-operation document-digest mismatch, or "the go plane
+  could not be reached" -- rather than requiring a JSON consumer to
+  cross-reference several other fields by hand to learn why.
+* **`status` never refuses**, even on an UNUSABLE (not merely unset)
+  `GO_API_QUERY_API_URL` inherited from the environment: it reports
+  `go_plane_error` and still prints everything that needed no registry
+  call (the local schema digest, the database census).
+* **`<verb> -h`/`-help` exits 0**, printing that verb's usage text, the
+  same as this binary's own top-level `-h` and Python's argparse --  not a
+  refusal (exit 2).
 
 `disable` also turns off **every** row an operation has at the live
 digest, not one of them. The routing primary key is `(schema_digest,
@@ -410,19 +448,23 @@ UNREACHABLE" and suppressed a census that had already succeeded — hiding
 the one number that says whether anything is enabled at all.
 
 The refusal exit code is 2 (a state the operator must resolve), on both
-planes. **r6 F4 (reproduced), corrected from an earlier version of this
-line that also claimed "1 for a crash":** the Go binary classifies every
-UNCLASSIFIED error as a refusal (`exitCodeFor` in `main.go` -- deliberately,
-so forgetting to mark something costs a retryable exit 2 rather than a
-misclassified alert) and nothing in the binary currently reaches its own
-`errInternal` exit-1 path (it exists as an explicit opt-out, `internal()`
-in main.go, but its one call site is inside `status`, whose own contract
-is "never fails" -- that error is printed and the command still exits 0).
-Executed: a deadlock abort (see F1's own reproduction), a synthetic
-server-side write failure, and an unrecovered Go panic in the built
-binary all exit **2**, never 1 -- Go's own runtime default for an
-unrecovered panic is 2, not 1. A script written to "1 means crashed"
-reads every one of those as an ordinary, operator-actionable refusal.
+planes. **r7 F8 (reproduced), corrected again -- this line previously said
+exit 1 "never happens" after r6 F4 first corrected an even earlier claim of
+"1 for a crash":** that is now false. `classifyWriteError` in `main.go`
+distinguishes a genuine, server-raised failure from a hand-authored
+refusal at the one place `enable`/`repoint`/`disable` reach the database
+write: a `*pgconn.PgError` -- a deadlock abort (SQLSTATE 40P01, see F1's
+own deterministic reproduction), a trigger's `RAISE EXCEPTION`, any other
+error the POSTGRES SERVER itself raised inside an already-open
+transaction -- now exits **1**, via `errInternal`/`internal()`. Everything
+else the binary can produce (a missing flag, a malformed DSN, a guard
+mismatch, an unproven operation, `connectPostgres`'s own dial/auth
+failures) is still an operator-actionable refusal and stays **2**. An
+unrecovered Go panic still exits 2 by the runtime's own default, not 1 --
+that gap is real and unclosed. A script written to "1 means the server
+itself broke, 2 means fix your input" now reads a genuine deadlock
+correctly; one written to "1 means crashed" still needs to know a panic is
+the one exception.
 
 ### How this is now detected
 

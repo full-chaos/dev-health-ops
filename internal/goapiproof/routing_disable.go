@@ -144,6 +144,24 @@ type DisableRequest struct {
 	// Apply writes. Without it nothing is written and the plan is
 	// returned for the operator to read.
 	Apply bool
+	// ExplicitOperations is true when the operator NAMED specific
+	// operations (`-operations flowMatrix,pr`), false for the
+	// `all-registered` default (r7 F1, reproduced).
+	//
+	// ErrDisableStaleDigestOnly (below) refuses when a named operation
+	// has no row at this checkout's live digest but has one elsewhere --
+	// correct for an operation the operator explicitly asked about, WRONG
+	// for `all-registered`: the documented rollback recipe
+	// (`-operations all-registered -mode python -apply`, the runbook's
+	// own step) auto-selects EVERY catalog operation, and one leftover
+	// row at an old digest for an operation nobody is touching (every SDL
+	// move leaves these behind; no verb deletes old rows) used to block
+	// the off-ramp for every operation that IS live -- exactly when the
+	// rollback is most likely to be needed. Under `all-registered`, a
+	// stale-only operation is reported (StaleSchemaDigests survives) but
+	// treated as "nothing to disable HERE", the same as any other
+	// operation with no live row, never a refusal.
+	ExplicitOperations bool
 }
 
 func (r DisableRequest) validate() error {
@@ -282,20 +300,31 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 			// the row it was actually trying to reach is untouched.
 			// Collected here and refused BELOW, before anything is
 			// written, the same shape guardProblems already uses.
-			if len(staleDigests[operation]) > 0 {
+			//
+			// r7 F1 (reproduced): scoped to EXPLICITLY named operations
+			// only -- see ExplicitOperations's own doc comment. Under
+			// `all-registered` (the documented rollback recipe's own
+			// flag value), a stale-only operation falls through to the
+			// SAME "nothing to disable HERE" branch every other no-row
+			// operation takes, just with StaleSchemaDigests still
+			// attached so the plan can still name it.
+			if request.ExplicitOperations && len(staleDigests[operation]) > 0 {
 				staleOnlyProblems = append(staleOnlyProblems, fmt.Sprintf(
 					"%s has no row at this checkout's schema digest (%s), but has one at: %v",
 					operation, request.SchemaDigest, staleDigests[operation]))
 				continue
 			}
-			// No row anywhere, at ANY digest: genuinely reported as
+			// No row anywhere at the live digest: genuinely reported as
 			// "nothing to disable", never invented. The catalog's digest
 			// is carried only so the plan can name the row it would have
-			// targeted.
+			// targeted. `StaleSchemaDigests` still survives (set below)
+			// so `all-registered` output can still note a stale-only
+			// operation without refusing the whole request over it.
 			changes = append(changes, DisableChange{
-				Operation:      operation,
-				DocumentDigest: request.DocumentDigest[operation],
-				NewMode:        request.NewMode,
+				Operation:          operation,
+				DocumentDigest:     request.DocumentDigest[operation],
+				NewMode:            request.NewMode,
+				StaleSchemaDigests: staleDigests[operation],
 			})
 			continue
 		}

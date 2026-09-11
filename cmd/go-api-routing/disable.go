@@ -17,7 +17,9 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
@@ -43,6 +45,24 @@ func runDisable(argv []string) error {
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "how long to wait for Postgres to answer. This verb makes no HTTP call; the timeout bounds the database connection only")
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
+	}
+	// r7 F3 (reproduced): `-candidate-build ""` -- e.g. `-candidate-build
+	// "$SEEN"` in a script where $SEEN happened to be unset -- silently
+	// read the SAME as never passing the flag at all: `""` is exactly
+	// what `ExpectedCandidateBuild == ""` already means as "no guard".
+	// Python refuses the identical command (`REFUSED: ...row points at
+	// candidate build ..., not the  you named`, exit 2); Go applied the
+	// write unguarded, exit 0. `set.Visit` only walks flags actually
+	// PASSED, so this tells "typed empty" from "never typed" -- the flag
+	// package itself cannot.
+	var candidateBuildPassedEmpty bool
+	set.Visit(func(f *flag.Flag) {
+		if f.Name == "candidate-build" && f.Value.String() == "" {
+			candidateBuildPassedEmpty = true
+		}
+	})
+	if candidateBuildPassedEmpty {
+		return refuse("-candidate-build was passed but empty -- an empty value is silently the SAME as no guard at all, which this refuses rather than applies unguarded. Omit the flag entirely to skip the guard on purpose, or pass a real build sha")
 	}
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
@@ -76,6 +96,10 @@ func runDisable(argv []string) error {
 	defer pool.Close()
 
 	local := localSchemaDigest()
+	// r7 F1 (reproduced): see DisableRequest.ExplicitOperations's own doc
+	// comment -- the stale-digest-only refusal must not fire under the
+	// documented rollback recipe's own `-operations all-registered`.
+	explicitOperations := strings.TrimSpace(common.operations) != "all-registered"
 	changes, err := goapiproof.Disable(ctx, pool, goapiproof.DisableRequest{
 		SchemaDigest:           local,
 		Operations:             operations,
@@ -85,6 +109,7 @@ func runDisable(argv []string) error {
 		RecordedBy:             common.recordedBy,
 		ReviewEvidence:         common.reviewEvidence,
 		Apply:                  apply,
+		ExplicitOperations:     explicitOperations,
 	})
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrDisableGuardMismatch) || errors.Is(err, goapiproof.ErrDisableRefusesEnablingMode) || errors.Is(err, goapiproof.ErrDisableStaleDigestOnly) {

@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -1005,6 +1006,87 @@ func TestDisableRefusesWhenAnOperationOnlyHasRowsAtOtherSchemaDigests(t *testing
 	}
 }
 
+// T1 M38/M40 (opus r7, reproduced): two lines in disable's -apply path
+// were unpinned by every prior test -- the r6 F2 stale-digest note in the
+// plan output (M38: neutralising the `if len(change.StaleSchemaDigests) >
+// 0` guard left both suites green) and the per-row
+// `go_api_routing.disabled` structured stderr line, the only durable log
+// of an off-ramp write (M40: neutralising the `if !change.Applied {
+// continue }` guard, so every row -- including no-ops -- logged, also left
+// both suites green). Unlike TestDisableAllRegisteredSkipsStaleOnlyOperationsInsteadOfRefusing
+// (two DIFFERENT operations, one wholly live, one wholly stale-only), this
+// seeds ONE operation with a LIVE row (which -apply actually disables) AND
+// a SEPARATE row at a stale schema digest for the SAME operation -- the
+// exact shape that exercises the stale-digest note on a row that is also
+// being written, matching the reviewer's own executed repro.
+func TestDisableAppliesLiveRowAndReportsStaleDigestAndLogsTheWrite(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	liveDigest := "6666666666666666666666666666666666666666666666666666666666666666"
+	staleDigest := "sha256:" + strings.Repeat("7", 64)
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: liveDigest})
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		localSchemaDigest(), liveDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed live candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded live', 'test')`,
+		localSchemaDigest(), liveDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed live routing row: %v", err)
+	}
+	// A SEPARATE row for the SAME operation, at a stale schema digest --
+	// this binary's own checkout does not match it, and disable's plan
+	// output must still name it even though the live row above is what
+	// actually gets written.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		staleDigest, liveDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed stale candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded at a stale digest', 'test')`,
+		staleDigest, liveDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed stale routing row: %v", err)
+	}
+
+	out, errOut, err := captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "T1 M38/M40 killer")
+	if err != nil {
+		t.Fatalf("disable -apply: %v", err)
+	}
+
+	// M38: the stale-digest note in stdout's plan output.
+	if !strings.Contains(out, "!! 1 row(s) for this operation exist at OTHER schema digest(s)") || !strings.Contains(out, staleDigest) {
+		t.Fatalf("stdout must name the stale-digest row even though the live row is what changed:\n%s", out)
+	}
+
+	// M40: the per-row structured log, the only durable record of the
+	// write -- stated in full so a mutant that logs an EMPTY line, or logs
+	// the wrong operation/transition, is caught too.
+	wantLog := fmt.Sprintf("go_api_routing.disabled operation=%s from=canary to=python schema_digest=%s recorded_by=lane-routing-verbs",
+		verbTestOperation, localSchemaDigest())
+	if !strings.Contains(errOut, wantLog) {
+		t.Fatalf("stderr missing the disabled-row log line.\nwant substring: %s\ngot:\n%s", wantLog, errOut)
+	}
+
+	var liveMode string
+	if err := pool.QueryRow(ctx, `SELECT mode FROM go_api_routing_state WHERE schema_digest = $1`, localSchemaDigest()).Scan(&liveMode); err != nil {
+		t.Fatal(err)
+	}
+	if liveMode != "python" {
+		t.Fatalf("the live row must actually be disabled: mode = %q, want python", liveMode)
+	}
+}
+
 // r6 F3(c) (reproduced): the `-candidate-build` guard used to check
 // EVERY row at the live schema digest, including DEAD ones (a document
 // digest the catalog does not carry) -- rows `status` never shows a
@@ -1253,5 +1335,254 @@ func TestEnableAndRepointEmitEndpointAndPerRowStructuredLines(t *testing.T) {
 		!strings.Contains(repointErrOut2, "build_before="+verbTestBuild) ||
 		!strings.Contains(repointErrOut2, "build_after="+movedBuild) {
 		t.Fatalf("repoint must emit a structured before/after line once a row actually changed:\n%s", repointErrOut2)
+	}
+}
+
+// r7 F1 (reproduced): the r6 F2 stale-digest-only refusal must NOT fire
+// under `-operations all-registered` -- the documented rollback recipe's
+// own flag value (docs/contribute/architecture/go-api-wave-0-proof-
+// infrastructure.md, "The same procedure with the Go verbs"). One
+// leftover old-digest row for an operation nobody explicitly asked about
+// must not block the off-ramp for every operation that IS live: every
+// schema move leaves rows like this behind (no verb deletes old rows),
+// so this is the state the rollback is MOST likely to be needed in.
+func TestDisableAllRegisteredSkipsStaleOnlyOperationsInsteadOfRefusing(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	liveDigest := "4444444444444444444444444444444444444444444444444444444444444444"
+	staleOnlyDigest := "5555555555555555555555555555555555555555555555555555555555555555"
+	staleSchemaDigest := "sha256:" + strings.Repeat("8", 64)
+	const staleOnlyOperation = "hotspots"
+	catalogPath := writeCatalog(t, map[string]string{
+		verbTestOperation:  liveDigest,
+		staleOnlyOperation: staleOnlyDigest,
+	})
+
+	// verbTestOperation has a LIVE row (canary, at this binary's own
+	// digest) -- the off-ramp must reach it.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		localSchemaDigest(), liveDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed live candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded live', 'test')`,
+		localSchemaDigest(), liveDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed live routing row: %v", err)
+	}
+
+	// staleOnlyOperation ONLY has a row at an OLD digest -- nobody named
+	// it explicitly; `all-registered` still auto-selects it.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		staleSchemaDigest, staleOnlyDigest, staleOnlyOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed stale-only candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded at a stale digest', 'test')`,
+		staleSchemaDigest, staleOnlyDigest, staleOnlyOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed stale-only routing row: %v", err)
+	}
+
+	out, _, err := captureVerb(t, "disable", "-operations", "all-registered", "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r7 F1 killer")
+	if err != nil {
+		t.Fatalf("disable -operations all-registered must NOT refuse over a stale-only operation nobody named: %v", err)
+	}
+	if !strings.Contains(out, "applied: 1 row(s)") {
+		t.Fatalf("the LIVE operation must still be disabled:\n%s", out)
+	}
+	if !strings.Contains(out, "!! 1 row(s) for this operation exist at OTHER schema digest(s)") || !strings.Contains(out, staleSchemaDigest) {
+		t.Fatalf("the stale-only operation must still be NAMED, just not refused over:\n%s", out)
+	}
+
+	var liveMode string
+	if err := pool.QueryRow(ctx, `SELECT mode FROM go_api_routing_state WHERE selected_operation = $1`, verbTestOperation).Scan(&liveMode); err != nil {
+		t.Fatal(err)
+	}
+	if liveMode != "python" {
+		t.Fatalf("the live operation's row must be disabled: mode = %q, want python", liveMode)
+	}
+	var staleMode string
+	if err := pool.QueryRow(ctx, `SELECT mode FROM go_api_routing_state WHERE selected_operation = $1`, staleOnlyOperation).Scan(&staleMode); err != nil {
+		t.Fatal(err)
+	}
+	if staleMode != "canary" {
+		t.Fatalf("the stale-only row must be genuinely untouched: mode = %q, want canary", staleMode)
+	}
+
+	// Control: naming the stale-only operation EXPLICITLY must still
+	// refuse -- this test proves the SCOPE of the fix, not its removal.
+	_, _, err = captureVerb(t, "disable", "-operations", staleOnlyOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r7 F1 control")
+	if err == nil {
+		t.Fatal("control: explicitly naming the stale-only operation must still refuse")
+	}
+}
+
+// r7 F2 (reproduced): ONE explicit URL flag plus GO_API_QUERY_API_URL set
+// to a DIFFERENT process used to split the preflight across two
+// processes silently -- no second flag was ever named on the command
+// line. Must now refuse instead.
+func TestEnableRefusesAMixOfOneExplicitURLFlagAndTheEnvVar(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "7777777777777777777777777777777777777777777777777777777777777770"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	deployedServer := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+	t.Setenv("GO_API_QUERY_API_URL", deployedServer.URL) // a DIFFERENT process than the explicit flag below
+	strayServer := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	_, _, err := captureVerb(t,
+		"enable", "-operations", verbTestOperation, "-mode", "canary",
+		"-registry-url", strayServer.URL+"/registry", // explicit -- buildinfo left to fall back to the env var
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-recorded-by", "lane-routing-verbs", "-review-evidence", "r7 F2 killer",
+	)
+	if err == nil {
+		t.Fatal("enable must refuse a mix of one explicit URL flag and the env var, not silently split the preflight across two processes")
+	}
+	if !strings.Contains(err.Error(), "-registry-url was named but -buildinfo-url was not") {
+		t.Fatalf("refused for a different reason: %v", err)
+	}
+	assertNoRows(t, dsn)
+}
+
+// r7 F2 (reproduced): the endpoint-print line must be able to tell two
+// LOCAL processes apart -- EndpointLabel (used elsewhere for credential
+// safety) drops the port, and 127.0.0.1:A vs 127.0.0.1:B differ ONLY by
+// port.
+func TestEnableEndpointLineDistinguishesTwoLocalProcessesByPort(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "7777777777777777777777777777777777777777777777777777777777777771"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	out, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	parsed, parseErr := url.Parse(server.URL)
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	if !strings.Contains(out, "registry=http://"+parsed.Host+" buildinfo=http://"+parsed.Host) {
+		t.Fatalf("the endpoint line must name the PORT (both routes are the same server here, so both must show it):\n%s", out)
+	}
+}
+
+// r7 F3 (reproduced): `-candidate-build ""` (e.g. `-candidate-build
+// "$SEEN"` where $SEEN happens to be unset in a script) must refuse, not
+// silently apply the write UNGUARDED -- Python refuses the identical
+// command.
+func TestDisableRefusesAnExplicitlyEmptyCandidateBuildGuard(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	digest := "9999999999999999999999999999999999999999999999999999999999999997"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded', 'test')`,
+		localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed routing row: %v", err)
+	}
+
+	_, _, err := captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath,
+		"-candidate-build", "", // EXPLICITLY passed, empty
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r7 F3 killer",
+	)
+	if err == nil {
+		t.Fatal("disable must refuse an explicitly empty -candidate-build, not silently apply the write unguarded")
+	}
+	if exitCodeFor(err) != 2 {
+		t.Fatalf("exit %d, want 2", exitCodeFor(err))
+	}
+	var mode string
+	if err := pool.QueryRow(ctx, `SELECT mode FROM go_api_routing_state`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "canary" {
+		t.Fatalf("the row must be genuinely untouched: mode = %q, want canary", mode)
+	}
+
+	// Control: OMITTING the flag entirely must still work (no guard, as
+	// always).
+	_, _, err = captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r7 F3 control",
+	)
+	if err != nil {
+		t.Fatalf("omitting -candidate-build entirely must still work unguarded: %v", err)
+	}
+}
+
+// r7 F4 (reproduced): the before-state log line used to be keyed by
+// OPERATION ALONE, with no ORDER BY -- so with a DEAD row (a document
+// digest not in the catalog) and the LIVE row both present at the live
+// schema digest, the log could name the dead row's state as if it were
+// what enable actually replaced.
+func TestEnableBeforeStateLogNamesTheCorrectRowNotADeadOne(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	liveDigest := "aaaa111111111111111111111111111111111111111111111111111111111111"
+	deadDigest := "bbbb222222222222222222222222222222222222222222222222222222222222"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: liveDigest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: liveDigest})
+
+	// The LIVE row (catalog's document digest): mode=python.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		localSchemaDigest(), liveDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed live candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'python', 0, 'seeded live', 'test')`,
+		localSchemaDigest(), liveDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed live routing row: %v", err)
+	}
+	// A DEAD row (a document digest the catalog does NOT carry), same
+	// operation, same live schema digest: mode=primary -- deliberately
+	// the state a wrong-row read would print instead.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		localSchemaDigest(), deadDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed dead candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'primary', 100, 'seeded dead', 'test')`,
+		localSchemaDigest(), deadDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed dead routing row: %v", err)
+	}
+
+	_, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if !strings.Contains(errOut, "mode_before=python") {
+		t.Fatalf("the log must name the LIVE row's prior state (python), not the dead row's (primary):\n%s", errOut)
+	}
+	if strings.Contains(errOut, "mode_before=primary") {
+		t.Fatalf("the log must NOT name the dead row's state:\n%s", errOut)
 	}
 }

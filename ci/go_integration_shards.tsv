@@ -198,7 +198,14 @@ cmd/dev-health-workerctl	13
 # genuine server-side-failure exit-code test, and an endpoint/per-row-log
 # test, among others). Re-measured, whole package, -count=1, twice:
 # 57.222s and 54.166s. Raised 45 -> 70 for CI headroom.
-cmd/go-api-routing	70
+# opus r7 fix round (2026-09-11): THREE more Testcontainers-backed tests
+# added (F1's all-registered/stale-only skip test, F4's before-state
+# value-naming test, and T1 M38/M40's combined live-row-plus-stale-digest
+# disable test), plus several plain-suite-only fixes (F2/F3/F5/F6/F7/F8)
+# that add no container. Re-measured, whole package, -count=1, twice:
+# 73.754s and 75.610s -- over the 70 ceiling both times. Raised 70 -> 90
+# for CI headroom.
+cmd/go-api-routing	90
 cmd/query-api	110
 cmd/query-api/internal/analytics	22
 # cmd/query-api/internal/featureflags (CHAOS-5523, 2026-09-09): TWO

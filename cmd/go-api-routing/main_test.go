@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -476,6 +477,87 @@ func TestStatusReportsNoQueryAPIURLWithoutProbingAnything(t *testing.T) {
 	}
 }
 
+// r7 F6 (reproduced): an UNUSABLE (not merely unset) GO_API_QUERY_API_URL
+// -- inherited from the environment, not typed as a flag -- used to make
+// `status` `return err` from sanitizeEndpointURL, which refuses the whole
+// command (non-zero exit, nothing printed): the write verbs' contract, not
+// this diagnostic's. Fixed: status reports go_plane_error and still prints
+// the schema digest / database census, neither of which needs the registry
+// call at all.
+func TestStatusReportsAnUnusableEnvURLInsteadOfRefusing(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	t.Setenv("POSTGRES_URI", "")
+	// No "//", so Go parses "not" as the scheme -- sanitizeEndpointURL's
+	// http(s)-only gate refuses it.
+	t.Setenv("GO_API_QUERY_API_URL", "not a url")
+	out, _, err := captureVerb(t, "status", "-timeout", "2s", "-json")
+	if err != nil {
+		t.Fatalf("status must never refuse, even on an unusable inherited env URL: %v", err)
+	}
+	if !strings.Contains(out, `"local_schema_digest"`) {
+		t.Fatalf("status printed nothing -- an unusable env URL must not suppress the schema digest, which needs no registry call:\n%s", out)
+	}
+	if strings.Contains(out, `"go_plane_error": null`) {
+		t.Fatalf("go_plane_error must name the unusable URL, not read null:\n%s", out)
+	}
+	if strings.Contains(out, `"go_plane_error": "no -registry-url and GO_API_QUERY_API_URL is unset"`) {
+		t.Fatalf("go_plane_error named the wrong cause -- something WAS set, it just could not be used safely:\n%s", out)
+	}
+}
+
+// r7 F7 (reproduced): `<verb> -h` on all four verbs used to fall through
+// parseVerbFlags's generic Parse-error handling and exit 2 ("refused: flag:
+// help requested") -- inconsistent with this binary's OWN top-level `-h`
+// (run's "help" case: exit 0) and with Python's `-h` (argparse: exit 0). A
+// script checking "did that succeed" after asking a verb what it does saw
+// a refusal for asking a question.
+func TestVerbHelpFlagExitsZeroLikeTopLevelHelp(t *testing.T) {
+	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+		for _, flag := range []string{"-h", "-help"} {
+			out, errOut, err := captureVerb(t, verb, flag)
+			if err != nil {
+				t.Fatalf("%s %s: run() = %v, want nil (help is not a refusal)", verb, flag, err)
+			}
+			if !strings.Contains(out+errOut, "Usage") && !strings.Contains(out+errOut, "usage") {
+				t.Fatalf("%s %s: no usage text printed:\nstdout:%s\nstderr:%s", verb, flag, out, errOut)
+			}
+		}
+	}
+}
+
+// T1 M48 (opus r7, reproduced): status's half of the r6 P2
+// GO_API_QUERY_API_URL fallback was unpinned -- a mutant that made
+// `haveRegistryURL` depend ONLY on the explicit `-registry-url` flag
+// (ignoring the env var entirely) left both suites green. With ONLY the
+// env var set (no -registry-url), the real binary reads the registry and
+// reports AGREE; the mutant never attempts the HTTP call at all and
+// reports the "nobody configured anything" sentence -- FALSE, since the
+// variable IS set.
+func TestStatusReadsTheRegistryFromTheEnvVarAloneNoFlag(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	t.Setenv("POSTGRES_URI", "")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/registry" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"schema_digest": %q, "operations": []}`, localSchemaDigest())
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("GO_API_QUERY_API_URL", server.URL)
+
+	out, _, err := captureVerb(t, "status", "-timeout", "2s", "-json")
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	if !strings.Contains(out, `"planes_agree": true`) {
+		t.Fatalf("status did not read the registry via the env-var fallback (no -registry-url flag was passed):\n%s", out)
+	}
+	if strings.Contains(out, "no -registry-url and GO_API_QUERY_API_URL is unset") {
+		t.Fatalf("go_plane_error falsely claims nothing was configured -- GO_API_QUERY_API_URL IS set:\n%s", out)
+	}
+}
+
 // Direct coverage of the shared resolver both write verbs and status now
 // go through.
 func TestResolveEndpointURL(t *testing.T) {
@@ -906,6 +988,22 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 	}
 	if unreachableLocalRowAndGoPlaneDown.ReachableReason == nil {
 		t.Fatal("reachable=false must still name why (r6 observability (6))")
+	}
+
+	// r7 F5 (reproduced): a MATCH row (digest_state IS live) that is
+	// unreachable because of its MODE must name the MODE, not
+	// digest_state -- digest_state="MATCH" is the one state that IS
+	// live, so naming it as the reason is actively misleading.
+	matchButWrongMode := toReportOperation(goapiproof.OperationStatus{
+		Operation:   "flowMatrix",
+		DigestState: goapiproof.DigestMatch,
+		Mode:        "python",
+	}, nil, true, false)
+	if matchButWrongMode.ReachableReason == nil || strings.Contains(*matchButWrongMode.ReachableReason, "MATCH") {
+		t.Fatalf("reason must not blame digest_state=MATCH for an unreachable row -- it must name the mode, got %v", matchButWrongMode.ReachableReason)
+	}
+	if matchButWrongMode.ReachableReason == nil || !strings.Contains(*matchButWrongMode.ReachableReason, "python") {
+		t.Fatalf("reason must name the actual cause (mode=python), got %v", matchButWrongMode.ReachableReason)
 	}
 }
 

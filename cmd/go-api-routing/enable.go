@@ -112,12 +112,13 @@ func runEnable(argv []string) error {
 	// must produce THIS refusal, not sanitizeEndpointURL's "must be
 	// http:// or https://" (a confusing message for an operator who typed
 	// nothing at all).
-	var ok bool
-	if registryURL, ok = resolveEndpointURL(registryURL, "/registry"); !ok {
-		return refuse("no query-api URL: pass -registry-url or set %s. Enabling rows without asking the running binary what it serves is how the 2026-09-01 rows were written; this command will not do it.", queryAPIURLEnvVar)
-	}
-	if buildInfoURL, ok = resolveEndpointURL(buildInfoURL, "/buildinfo"); !ok {
-		return refuse("no query-api URL: pass -buildinfo-url or set %s. Enabling rows without asking the running binary what it serves is how the 2026-09-01 rows were written; this command will not do it.", queryAPIURLEnvVar)
+	// r7 F2 (reproduced): resolved TOGETHER, not per-route -- see
+	// resolveQueryAPIEndpoints's own doc comment. A mix of one explicit
+	// flag and one env-derived route split the preflight across two
+	// different processes with no second flag named at all.
+	registryURL, buildInfoURL, err = resolveQueryAPIEndpoints(registryURL, buildInfoURL)
+	if err != nil {
+		return err
 	}
 	// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query or
 	// a fragment is printed verbatim by any transport error downstream.
@@ -176,15 +177,14 @@ func runEnable(argv []string) error {
 				fmt.Sprintf("%s: catalog=%s go=%s", operation, catalog[operation], registered))
 		}
 	}
-	// KNOWN GAP, CHAOS-5524, owner this lane, blocked on the go-api-prove
-	// hotfix merging (the fix belongs in internal/goapiproof/registry.go,
-	// inside that hotfix's file set).
-	//
-	// `FetchRegistry` accepts a /registry response that lists the SAME
-	// operation twice and silently keeps the last one, where the Python
-	// verb refuses outright. That map is what this preflight compares
-	// against, so a malformed or tampered registry decides which document
-	// digest a routing row is written with. Found by codex r1 (F6).
+	// r7 F8 (reproduced): CLOSED, not a known gap -- corrected, this
+	// comment used to describe a still-open defect. `FetchRegistry`
+	// (internal/goapiproof/registry.go) now REFUSES a /registry response
+	// that lists the same operation twice, matching the Python verb,
+	// rather than silently keeping the last one (codex r1 F6's original
+	// finding). This preflight's `registry.DocumentDigest` map can
+	// therefore no longer be decided by a malformed or tampered registry
+	// picking whichever duplicate the JSON decoder scanned last.
 	if len(notRegistered) > 0 {
 		return refuse("the running query-api does not register: %v. It serves %d operation(s); the catalog lists %d.\n"+
 			"  The deployed image is the authority -- an operation it does not serve cannot be enabled into it.",
@@ -224,19 +224,39 @@ func runEnable(argv []string) error {
 	// best-effort, unlocked read costs nothing there: if it fails, or a
 	// row was already gone the instant this read runs, the log line
 	// below just says "(unknown)" -- it never gates the write.
+	// r7 F4 (reproduced): keyed by `(selected_operation, document_digest)`
+	// -- the SAME composite key the upsert below actually writes to (r1
+	// F5 / r3 CONC-01's own class, missed by the r6 composite-key sweep
+	// at this new site) -- not by operation alone. One operation can have
+	// SEVERAL rows at the live schema digest (a live one under the
+	// catalog's document digest, a dead one under an old document
+	// digest); a map keyed by operation alone, filled with no ORDER BY,
+	// silently kept whichever row the driver happened to scan LAST.
+	// Executed: with a dead row (mode=python) and a live one
+	// (mode=primary) both present, the log named the DEAD row's state as
+	// if it were what enable replaced. `beforeReadFailed` distinguishes
+	// "the read itself failed" from "genuinely no prior row", so the log
+	// line can say "(unknown)" rather than reusing "(no row)" for both.
 	before := map[string]struct{ mode, build string }{}
-	if rows, err := pool.Query(ctx, `
-		SELECT selected_operation, mode, current_candidate_build
+	beforeReadFailed := false
+	rows, queryErr := pool.Query(ctx, `
+		SELECT selected_operation, document_digest, mode, current_candidate_build
 		  FROM public.go_api_routing_state
 		 WHERE schema_digest = $1 AND selected_operation = ANY($2)`,
-		registry.SchemaDigest, operations); err == nil {
+		registry.SchemaDigest, operations)
+	if queryErr != nil {
+		beforeReadFailed = true
+	} else {
 		for rows.Next() {
-			var op, rowMode, rowBuild string
-			if rows.Scan(&op, &rowMode, &rowBuild) == nil {
-				before[op] = struct{ mode, build string }{rowMode, rowBuild}
+			var op, docDigest, rowMode, rowBuild string
+			if rows.Scan(&op, &docDigest, &rowMode, &rowBuild) == nil {
+				before[op+"\x00"+docDigest] = struct{ mode, build string }{rowMode, rowBuild}
 			}
 		}
 		rows.Close()
+		if rows.Err() != nil {
+			beforeReadFailed = true
+		}
 	}
 
 	// --- Preflight 4 (inside Enable) + the write, one transaction ------
@@ -285,7 +305,7 @@ func runEnable(argv []string) error {
 	// its own doc comment) -- it cannot leak a credential even if one
 	// somehow ended up in the resolved URL.
 	fmt.Fprintf(stdout, "go-api-routing: registry=%s buildinfo=%s\n",
-		goapiproof.EndpointLabel(registryURL), goapiproof.EndpointLabel(buildInfoURL))
+		goapiproof.EndpointLabelWithPort(registryURL), goapiproof.EndpointLabelWithPort(buildInfoURL))
 	fmt.Fprintf(stdout, "go-api-routing: schema_digest=%s candidate_build=%s mode=%s rollout=%d dry_run=%t\n",
 		registry.SchemaDigest, running, mode, rollout, dryRun)
 	fmt.Fprintf(stdout, "go-api-routing: %s total=%d proven=%d unproven=%d\n",
@@ -303,8 +323,13 @@ func runEnable(argv []string) error {
 		// REPLACED, not just that it wrote something.
 		if !dryRun {
 			modeBefore, buildBefore := "(no row)", "-"
-			if row, ok := before[outcome.Operation]; ok {
-				modeBefore, buildBefore = row.mode, row.build
+			switch {
+			case beforeReadFailed:
+				modeBefore, buildBefore = "(unknown)", "(unknown)"
+			default:
+				if row, ok := before[outcome.Operation+"\x00"+outcome.DocumentDigest]; ok {
+					modeBefore, buildBefore = row.mode, row.build
+				}
 			}
 			fmt.Fprintf(stderr, "go_api_routing.enabled operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s recorded_by=%s\n",
 				outcome.Operation, modeBefore, outcome.Mode, buildBefore, outcome.CandidateBuild, registry.SchemaDigest, common.recordedBy)

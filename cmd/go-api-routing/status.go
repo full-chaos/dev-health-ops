@@ -125,12 +125,30 @@ func runStatus(argv []string) error {
 	// Python's `status`, which also never refuses on a missing URL --
 	// see resolveEndpointURL's doc comment (main.go).
 	registryURLResolved, haveRegistryURL := resolveEndpointURL(registryURL, "/registry")
+	// r7 F6 (reproduced): a `sanitizeEndpointURL` failure used to `return
+	// err` here, which -- via runVerb/main -- REFUSES the whole command,
+	// non-zero exit, nothing printed. That is the write verbs' contract,
+	// not this one's: this package's own doc comment says status NEVER
+	// refuses, precisely because it is what an operator runs when things
+	// are ALREADY broken. RISK-NOTES's refuse-on-bad-input carve-out was
+	// written for a bad FLAG an operator just typed; an unusable
+	// GO_API_QUERY_API_URL inherited from the environment (the r6
+	// env-fallback fix) is exactly the kind of already-broken state this
+	// verb exists to report, not die on. Executed: with
+	// GO_API_QUERY_API_URL="not a url" and no -registry-url, `status`
+	// used to exit 2 printing nothing about the schema digest or the
+	// database census (both of which need no registry call at all);
+	// fixed, it now reports go_plane_error and prints everything else.
+	// The error is stashed here (report does not exist yet) and applied
+	// to the report right after it is constructed, below.
+	var registryURLSanitizeErr error
 	if haveRegistryURL {
 		// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query
 		// or a fragment is printed verbatim by any transport error
 		// downstream. The REBUILT value is what is used from here on.
 		if sanitized, err := sanitizeEndpointURL("-registry-url", registryURLResolved); err != nil {
-			return err
+			registryURLSanitizeErr = err
+			haveRegistryURL = false
 		} else {
 			registryURL = sanitized
 		}
@@ -142,6 +160,9 @@ func runStatus(argv []string) error {
 		LocalSchemaDigest:  local,
 		RowsBySchemaDigest: map[string]int{},
 		Operations:         []statusReportOperation{},
+	}
+	if registryURLSanitizeErr != nil {
+		report.GoPlaneError = stringPtr(registryURLSanitizeErr.Error())
 	}
 
 	catalog, catalogErr := goapiproof.LoadOperationCatalog(common.catalogPath)
@@ -172,7 +193,12 @@ func runStatus(argv []string) error {
 	// is now threaded into the per-operation report below so it can say
 	// the same thing `enable` would.
 	var deployedDigests map[string]string
-	if !haveRegistryURL {
+	if !haveRegistryURL && registryURLSanitizeErr != nil {
+		// r7 F6: GoPlaneError is ALREADY set to the sanitize failure above
+		// -- do not overwrite it with the generic "nothing was named"
+		// sentence, which would be false (something WAS named; it just
+		// could not be used safely).
+	} else if !haveRegistryURL {
 		// Parity with Python's `status`: no HTTP attempt at all when
 		// nothing names an endpoint (no probing whatever happens to
 		// answer on a hardcoded default), and the SAME sentence Python's
@@ -424,7 +450,20 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 	switch {
 	case !localReachable:
 		reported.Reachable = boolPtr(false)
-		reported.ReachableReason = stringPtr(fmt.Sprintf("this row's own digest_state/mode (%s) is not a live, dispatchable row", status.DigestState))
+		// r7 F5 (reproduced): this used to ALWAYS name digest_state, even
+		// when digest_state IS "MATCH" (a live row) and the row is
+		// unreachable ONLY because of its MODE (python/disabled/shadow --
+		// see goapiproof.OperationStatus.Reachable's own doc comment: only
+		// canary/primary are reachable). Executed: a MATCH row in mode
+		// python reported `reason=... digest_state/mode (MATCH) is not a
+		// live, dispatchable row`, naming the one state that IS live and
+		// omitting `python`, the actual cause. Name whichever ACTUALLY
+		// applies.
+		if status.DigestState == goapiproof.DigestMatch {
+			reported.ReachableReason = stringPtr(fmt.Sprintf("this row's own mode (%s) is not canary or primary, the only two dispatchable modes", status.Mode))
+		} else {
+			reported.ReachableReason = stringPtr(fmt.Sprintf("this row's own digest_state (%s) is not a live, dispatchable row", status.DigestState))
+		}
 	case goPlaneUnreachable:
 		reported.Reachable = nil
 		reported.ReachableReason = stringPtr("the go plane could not be reached, so deployed agreement is genuinely unknown")

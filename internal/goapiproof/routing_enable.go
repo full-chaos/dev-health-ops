@@ -67,8 +67,11 @@ package goapiproof
 // follow-up PR rather than folded in here, per team-lead ruling.
 // CHAOS-5507 is the ticket that fix belongs to; this PR's contribution is
 // correcting the false claim and pinning the reproduced behaviour with a
-// test (TestEnableAndRepointDeadlockUnderConcurrentAccess), so the
-// follow-up starts from what the code actually does.
+// test (r7 F8, reproduced: corrected the test's own name here --
+// TestEnableAndRepointLockOrderInversionDeadlocks, in
+// routing_repoint_integration_test.go -- this comment used to cite a name
+// that was never the test's actual name), so the follow-up starts from
+// what the code actually does.
 
 import (
 	"context"
@@ -313,9 +316,20 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 	now := time.Now().UTC()
 	for _, outcome := range outcomes {
 		// Candidate build FIRST. The routing row's 4-column foreign key
-		// makes the order mandatory, and it is also this package's
-		// lock-order convention (CHAOS-5507): never touch a routing row
-		// before the build it will name is registered.
+		// makes the order mandatory -- but this is NOT a deadlock-avoiding
+		// "lock-order convention" (r7 F8, reproduced: corrected, this
+		// comment used to claim the opposite of what the package's own
+		// doc comment above now says). `repoint` locks the routing row
+		// FIRST, then registers the build; this locks the build FIRST,
+		// then the routing row. That is the exact lock-order INVERSION
+		// the package comment (above, "WHY THERE IS NO PRE-READ OF THE
+		// ROW") documents as a genuine, executed, reproduced deadlock
+		// between enable and repoint -- not something this order avoids.
+		// The FK dependency (a routing row cannot name a build that does
+		// not exist yet) is why THIS order is mandatory on its own; fixing
+		// the inversion means making `repoint` acquire its lock in this
+		// SAME order instead, tracked against the same follow-up PR named
+		// above.
 		if _, err := tx.Exec(ctx, registerCandidateBuildSQL,
 			request.SchemaDigest, outcome.DocumentDigest, outcome.Operation, request.RunningBuild); err != nil {
 			return nil, fmt.Errorf("goapiproof: register candidate build for %s: %w", outcome.Operation, err)

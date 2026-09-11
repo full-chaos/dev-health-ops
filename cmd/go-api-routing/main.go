@@ -109,6 +109,18 @@ var errRefused = errors.New("refused")
 // an operator can fix. It exits 1.
 var errInternal = errors.New("internal error")
 
+// errHelpRequested marks `-h`/`-help` on a VERB's own flag set (r7 F7,
+// reproduced -- see parseVerbFlags). It is not a refusal and not a crash:
+// asking what a command does must exit 0, matching this binary's own
+// top-level `-h` (run's "help" case, below) and Python's argparse `-h`.
+// parseVerbFlags returns this so the verb's own early
+// `if err != nil { return err }` still stops the verb (nothing past the
+// flag parse runs, e.g. no "-mode is required"), and run()'s
+// helpAsSuccess turns it back into a plain nil before it ever reaches a
+// caller -- captureVerb/run() sees a HELP request as a SUCCESS, exactly
+// like the top-level case already does.
+var errHelpRequested = errors.New("help requested")
+
 // THE DEFAULT IS REFUSAL, and that inversion is deliberate.
 //
 // Every failure this command can produce is environmental -- an
@@ -183,13 +195,13 @@ func run(argv []string) error {
 	verb, rest := splitVerb(argv)
 	switch verb {
 	case "repoint":
-		return runRepoint(rest)
+		return helpAsSuccess(runRepoint(rest))
 	case "enable":
-		return runEnable(rest)
+		return helpAsSuccess(runEnable(rest))
 	case "disable":
-		return runDisable(rest)
+		return helpAsSuccess(runDisable(rest))
 	case "status":
-		return runStatus(rest)
+		return helpAsSuccess(runStatus(rest))
 	case "help", "-h", "--help":
 		fmt.Fprintln(stdout, usage)
 		return nil
@@ -201,6 +213,17 @@ func run(argv []string) error {
 		// to it.
 		return refuse("unknown verb %q\n\n%s", verb, usage)
 	}
+}
+
+// helpAsSuccess turns errHelpRequested (r7 F7) into a plain nil -- a verb
+// asked to explain itself already printed its usage text via
+// flag.ContinueOnError, and asking is not a failure.  Any other error
+// (including nil) passes through unchanged.
+func helpAsSuccess(err error) error {
+	if errors.Is(err, errHelpRequested) {
+		return nil
+	}
+	return err
 }
 
 // splitVerb picks the verb off the front of the argument list.
@@ -362,10 +385,18 @@ const queryAPIURLEnvVar = "GO_API_QUERY_API_URL"
 // not the process GO_API_QUERY_API_URL pointed at.
 //
 // Deriving BOTH routes from the SAME env-var base closes the silent-
-// default half of this: the only way the two can still diverge is an
-// operator EXPLICITLY naming two different URLs on the command line,
-// which is a deliberate override an operator chose, not a default
-// nobody chose.
+// default half of this. r7 F2 (reproduced) CORRECTS the claim that used
+// to stand here -- "the only way the two can still diverge is an
+// operator EXPLICITLY naming two different URLs" was false: ONE explicit
+// flag plus GO_API_QUERY_API_URL set to something ELSE also splits the
+// two routes across different processes, silently, with no second flag
+// named on the command line at all. Executed: `-registry-url <A>` with
+// GO_API_QUERY_API_URL=<B> read the registry from A and sent the
+// effective-principal envelope to, and took the build from, B -- `enable`
+// wrote a row naming B's build under A's digests, exit 0. This low-level
+// function is now called ONLY through resolveQueryAPIEndpoints (below),
+// which refuses that exact mix; it is kept as the single-route primitive
+// `status` still uses (status has no /buildinfo route to split against).
 func resolveEndpointURL(explicit, path string) (resolved string, ok bool) {
 	if explicit != "" {
 		return explicit, true
@@ -374,6 +405,41 @@ func resolveEndpointURL(explicit, path string) (resolved string, ok bool) {
 		return strings.TrimRight(base, "/") + path, true
 	}
 	return "", false
+}
+
+// resolveQueryAPIEndpoints resolves BOTH of query-api's routes together,
+// for the two write verbs (r7 F2, reproduced -- see resolveEndpointURL's
+// corrected doc comment for the executed repro). It refuses the one
+// shape `resolveEndpointURL` alone cannot catch: ONE route named
+// explicitly and the OTHER left to a DIFFERENT source (the env var, or
+// nothing) -- that is not a deliberate two-URL override, it is a half-set
+// flag quietly picking up whatever else is lying around in the
+// environment. Only two shapes are accepted: BOTH routes explicit (a
+// genuine, deliberate override -- an operator who typed two flags
+// clearly meant it, even if they happen to name different processes),
+// or NEITHER explicit (both derived from the SAME GO_API_QUERY_API_URL
+// base, so they cannot diverge by construction).
+func resolveQueryAPIEndpoints(explicitRegistry, explicitBuildInfo string) (registryURL, buildInfoURL string, err error) {
+	switch {
+	case explicitRegistry != "" && explicitBuildInfo != "":
+		return explicitRegistry, explicitBuildInfo, nil
+	case explicitRegistry == "" && explicitBuildInfo == "":
+		var ok bool
+		if registryURL, ok = resolveEndpointURL("", "/registry"); !ok {
+			return "", "", refuse("no query-api URL: pass -registry-url and -buildinfo-url, or set %s. A measurement that did not happen is not a pass.", queryAPIURLEnvVar)
+		}
+		if buildInfoURL, ok = resolveEndpointURL("", "/buildinfo"); !ok {
+			return "", "", refuse("no query-api URL: pass -registry-url and -buildinfo-url, or set %s. A measurement that did not happen is not a pass.", queryAPIURLEnvVar)
+		}
+		return registryURL, buildInfoURL, nil
+	default:
+		named, other := "-registry-url", "-buildinfo-url"
+		if explicitBuildInfo != "" {
+			named, other = "-buildinfo-url", "-registry-url"
+		}
+		return "", "", refuse("%s was named but %s was not: naming just one route lets the OTHER silently fall back to %s (or nothing) and split the preflight across two different processes. Name BOTH explicitly, or neither (let %s serve both).",
+			named, other, queryAPIURLEnvVar, queryAPIURLEnvVar)
+	}
 }
 
 // stdout and stderr are where this command writes.
@@ -449,6 +515,24 @@ func newVerbFlagSet(name string) *flag.FlagSet {
 // operator nothing about which word broke their command.
 func parseVerbFlags(set *flag.FlagSet, argv []string) error {
 	if err := set.Parse(argv); err != nil {
+		// r7 F7 (reproduced): `-h`/`-help` on any of the four verbs used to
+		// fall through to the refuse() below like any other malformed flag
+		// -- `go-api-routing disable -h` printed its usage text (via
+		// ContinueOnError) and then STILL exited 2, "refused: flag: help
+		// requested". That is inconsistent with THIS binary's own top-level
+		// `-h` (run's "help" case, above: prints usage, returns nil, exit
+		// 0) and with Python's `-h` (argparse: exit 0). A script piping
+		// `<verb> -h --help-only` into a "did it work" check saw a refusal
+		// for asking what a flag does. `flag.ErrHelp` is the one Parse
+		// error that is not a mistake -- the usage text it already printed
+		// (ContinueOnError) IS the requested output, so this returns
+		// errHelpRequested (see its own doc comment) rather than wrapping
+		// it as a refusal: the verb still stops HERE, but run()'s
+		// helpAsSuccess turns it into a plain nil before any caller sees
+		// it.
+		if errors.Is(err, flag.ErrHelp) {
+			return errHelpRequested
+		}
 		// ContinueOnError has already written the usage text; this turns
 		// `flag`'s error into THIS command's classification rather than
 		// letting the process exit with `flag`'s own constant.

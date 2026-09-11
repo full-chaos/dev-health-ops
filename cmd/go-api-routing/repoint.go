@@ -81,6 +81,13 @@ func runRepoint(argv []string) error {
 		return refuse("cannot read the running query-api's registry: %v.\n"+
 			"  A measurement that did not happen is not a pass -- fix the deployment or point -registry-url at the right process.", err)
 	}
+	// r5 P1 (reproduced): same shape as enable's identical preflight --
+	// `FetchRegistry` itself no longer refuses on an empty registry
+	// (status needs the schema digest it still reports), so the write
+	// verb refuses here instead.
+	if len(registry.DocumentDigest) == 0 {
+		return refuse("%s registers no operations -- there is nothing to prove", goapiproof.EndpointLabel(registryURL))
+	}
 	running, err := goapiproof.FetchBuildIdentity(ctx, client, buildInfoURL, credential)
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {

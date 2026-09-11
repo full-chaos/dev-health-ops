@@ -62,7 +62,13 @@ type statusReportOperation struct {
 	StaleDigests               []string `json:"stale_digests"`
 	UnreachableDocumentDigests []string `json:"unreachable_document_digests"`
 	Proven                     bool     `json:"proven"`
-	Reachable                  bool     `json:"reachable"`
+	// r5 P1 (reproduced): a plain `bool` can only ever say "yes" or "no",
+	// so the moment reachability genuinely CANNOT be told (the go plane
+	// is unreachable) it defaulted to the local row's own classification
+	// -- which reads as "yes". Tri-state, matching every other "we could
+	// not tell" field on this report (see the type's own doc comment):
+	// nil is UNKNOWN, not a silent true.
+	Reachable *bool `json:"reachable"`
 
 	// DeployedDigestState and DeployedDocumentDigest report what the
 	// RUNNING go plane's own /registry says about this operation, cross-
@@ -207,8 +213,15 @@ func runStatus(argv []string) error {
 			}
 		}
 	}
+	// r5 P1 (reproduced): schema-level disagreement must prevent a
+	// positive `reachable` answer the same way a per-operation document
+	// digest disagreement already does -- `enable`'s preflight 2 refuses
+	// on it BEFORE preflight 3 (the per-operation check) ever runs, so
+	// nothing under a schema mismatch is writable regardless of what an
+	// individual row's document digest says.
+	schemaMismatch := report.PlanesAgree != nil && !*report.PlanesAgree
 	for _, status := range statuses {
-		report.Operations = append(report.Operations, toReportOperation(status, deployedDigests, report.GoPlaneError != nil))
+		report.Operations = append(report.Operations, toReportOperation(status, deployedDigests, report.GoPlaneError != nil, schemaMismatch))
 	}
 
 	if asJSON {
@@ -276,6 +289,12 @@ func printStatusText(report statusReport, local string) {
 		fmt.Fprintln(stdout, "  The per-digest census above is still accurate; only the per-operation table could not be built.")
 		return
 	}
+	// r5 P1 (reproduced): the PROOF column must degrade to MISMATCH on a
+	// schema-level disagreement too, not only a per-operation document
+	// digest one -- the top-of-report banner above already says [MISMATCH]
+	// once; this is the same fact, per row, where an operator's eye
+	// actually lands.
+	schemaMismatch := report.PlanesAgree != nil && !*report.PlanesAgree
 	fmt.Fprintf(stdout, "%-24s %-8s %-10s %-8s PROOF\n", "OPERATION", "DIGEST", "MODE", "ROLLOUT")
 	for _, operation := range report.Operations {
 		mode := derefOr(operation.Mode, "-")
@@ -296,7 +315,7 @@ func printStatusText(report statusReport, local string) {
 			// the reviewer's repro caught: `enable -dry-run` refused the
 			// identical operation with a document digest MISMATCH while
 			// this line still read "ok".
-			if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" {
+			if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" || schemaMismatch {
 				proof = "MISMATCH"
 			}
 		}
@@ -323,7 +342,7 @@ func printStatusText(report statusReport, local string) {
 	}
 }
 
-func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[string]string, goPlaneUnreachable bool) statusReportOperation {
+func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[string]string, goPlaneUnreachable bool, schemaMismatch bool) statusReportOperation {
 	reported := statusReportOperation{
 		Operation:                  status.Operation,
 		DocumentDigest:             status.DocumentDigest,
@@ -331,7 +350,6 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 		StaleDigests:               status.StaleDigests,
 		UnreachableDocumentDigests: status.UnreachableDocumentDigests,
 		Proven:                     status.Proven,
-		Reachable:                  status.Reachable(),
 	}
 	if reported.StaleDigests == nil {
 		reported.StaleDigests = []string{}
@@ -356,15 +374,30 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 			}
 		}
 	}
-	// r4 P1 (reproduced): a row this binary classifies MATCH/reachable is
-	// only ACTUALLY reachable if the deployed process agrees on the
-	// document digest too -- `enable`'s own preflight refuses on exactly
-	// this disagreement. Downgrading Reachable here, rather than only
-	// adding the new field, is what stops the JSON `reachable: true` a
-	// caller already depends on from being the healthier-than-true answer
-	// the reviewer's repro printed.
-	if reported.DeployedDigestState == "MISMATCH" || reported.DeployedDigestState == "UNREGISTERED" {
-		reported.Reachable = false
+	// r5 P1 (reproduced): the r4 fix downgraded Reachable on a per-
+	// operation document-digest disagreement, but left TWO other ways to
+	// report a positive answer that `enable`'s own preflights would
+	// refuse: an unreachable/down go plane (preflight 1) and a SCHEMA-
+	// level digest disagreement (preflight 2, which runs and refuses
+	// BEFORE preflight 3's per-operation check ever does). Executed: a
+	// schema-mismatch fixture printed `reachable=true` in JSON while
+	// `enable -dry-run` exited 2 with "schema digest MISMATCH", and a
+	// down plane (HTTP 503) printed `reachable=true` too, both while
+	// `deployed_digest_state=UNKNOWN` on the same row -- an admission
+	// this binary could not tell, sitting next to a claim that it could.
+	// Order matters: an unreachable go plane is checked FIRST, because it
+	// makes the schema comparison itself impossible to have made (nothing
+	// downstream of "we could not even ask" gets to claim a known state).
+	localReachable := status.Reachable()
+	switch {
+	case goPlaneUnreachable:
+		reported.Reachable = nil
+	case schemaMismatch:
+		reported.Reachable = boolPtr(false)
+	case reported.DeployedDigestState == "MISMATCH" || reported.DeployedDigestState == "UNREGISTERED":
+		reported.Reachable = boolPtr(false)
+	default:
+		reported.Reachable = boolPtr(localReachable)
 	}
 	if status.DigestState != goapiproof.DigestMatch {
 		return reported
@@ -382,6 +415,8 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 }
 
 func stringPtr(value string) *string { return &value }
+
+func boolPtr(value bool) *bool { return &value }
 
 func derefOr(value *string, fallback string) string {
 	if value == nil || *value == "" {

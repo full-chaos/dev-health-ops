@@ -117,6 +117,17 @@ func runEnable(argv []string) error {
 		return refuse("cannot read the running query-api's registry: %v.\n"+
 			"  A measurement that did not happen is not a pass -- fix the deployment or point -registry-url at the right process.", err)
 	}
+	// r5 P1 (reproduced): `FetchRegistry` no longer refuses on an empty
+	// `operations` array by itself (that refusal moved here, and to
+	// repoint's identical preflight) -- `status` shares the same function
+	// and needs the schema_digest from an otherwise-empty registry for its
+	// own diagnostic, which the old shared refusal destroyed. A WRITE verb
+	// still has nothing to prove or write against an empty registry, so it
+	// still refuses, just at its own call site rather than inside the
+	// shared reader.
+	if len(registry.DocumentDigest) == 0 {
+		return refuse("%s registers no operations -- there is nothing to prove", goapiproof.EndpointLabel(registryURL))
+	}
 
 	// --- Preflight 2: do both planes hash the same SDL? ----------------
 	local := localSchemaDigest()

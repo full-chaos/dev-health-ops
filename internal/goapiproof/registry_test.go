@@ -261,13 +261,32 @@ func TestRowsAgreeingWithTheRunningBuildPassTheCheck(t *testing.T) {
 	}
 }
 
-func TestFetchRegistryRefusesAnEmptyRegistration(t *testing.T) {
+// r5 P1 (reproduced): FetchRegistry used to refuse OUTRIGHT on an empty
+// `operations` array -- correct for a write verb, wrong for `status`,
+// which shares this exact function and needs the schema_digest a
+// refusal destroyed along with everything else. Executed: `status`
+// against a process that agrees on schema_digest but currently registers
+// nothing reported `go plane schema_digest: UNREACHABLE (... registers no
+// operations -- there is nothing to prove)`, identical to a genuinely
+// DOWN process -- collapsing two facts an operator needs to tell apart.
+// The refusal moved to enable's and repoint's own preflights (each tested
+// separately); FetchRegistry itself now succeeds with an empty
+// DocumentDigest map, matching the Python reader's own tolerance for
+// this shape (`GoPlaneRegistry(schema_digest=..., operations={})`).
+func TestFetchRegistryAcceptsAnEmptyRegistration(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[]}`))
 	}))
 	t.Cleanup(server.Close)
-	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
-		t.Fatal("a process registering no operations has nothing to prove")
+	view, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("a process agreeing on schema_digest but registering nothing must not refuse -- status needs the digest: %v", err)
+	}
+	if view.SchemaDigest != "sha256:abc" {
+		t.Fatalf("schema_digest = %q, want it preserved even with an empty registration", view.SchemaDigest)
+	}
+	if view.DocumentDigest == nil || len(view.DocumentDigest) != 0 {
+		t.Fatalf("DocumentDigest = %v, want a non-nil empty map (distinguishable from 'the go plane is unreachable')", view.DocumentDigest)
 	}
 }
 

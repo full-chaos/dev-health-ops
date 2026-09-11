@@ -456,9 +456,20 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 			return RegistryView{}, fmt.Errorf("goapiproof: %s operations field is malformed: %w", EndpointLabel(registryURL), err)
 		}
 	}
-	if len(rawOperations) == 0 {
-		return RegistryView{}, fmt.Errorf("goapiproof: %s registers no operations -- there is nothing to prove", EndpointLabel(registryURL))
-	}
+	// r5 P1 (reproduced): this used to refuse HERE, unconditionally, on an
+	// empty `operations` array -- which is correct for a WRITE verb (there
+	// is nothing to prove or write against) but wrong for a DIAGNOSTIC:
+	// `status` shares this exact function, and the refusal destroyed the
+	// schema_digest this call had ALREADY successfully read, collapsing
+	// "the deployed process is up, agrees on schema, and currently
+	// registers nothing" into the identical "UNREACHABLE" report a
+	// genuinely down process produces. Python's reader (the parity target
+	// this whole package exists to match) tolerates exactly this shape:
+	// executed against the identical response, it returns
+	// `GoPlaneRegistry(schema_digest=..., operations={})`, not a refusal.
+	// The refusal moves to the WRITE-verb call sites instead (enable.go,
+	// repoint.go -- `disable` calls neither by design), which are the
+	// only callers for which "nothing to prove" is actually true.
 	operations := make([]registryOperation, 0, len(rawOperations))
 	for index, rawOp := range rawOperations {
 		operationName, _, err := exactStringField(rawOp, "operation")

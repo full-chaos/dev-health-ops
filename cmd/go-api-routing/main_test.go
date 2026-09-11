@@ -680,15 +680,15 @@ func TestToReportOperationProjectsEveryStateFaithfully(t *testing.T) {
 		RecordedBy:            "who",
 		Proven:                true,
 	}
-	got := toReportOperation(match, map[string]string{"featureFlags": "abc"}, false)
+	got := toReportOperation(match, map[string]string{"featureFlags": "abc"}, false, false)
 	if got.Mode == nil || *got.Mode != "canary" || got.CurrentCandidateBuild == nil || *got.CurrentCandidateBuild != "build-1" {
 		t.Fatalf("MATCH projection lost the row: %+v", got)
 	}
 	if got.UpdatedAt == nil || *got.UpdatedAt != "2026-09-09T12:00:00Z" {
 		t.Fatalf("updated_at = %v, want RFC3339 UTC", got.UpdatedAt)
 	}
-	if !got.Reachable || !got.Proven {
-		t.Fatalf("a proven canary row at the live digest is reachable and proven: %+v", got)
+	if got.Reachable == nil || !*got.Reachable || !got.Proven {
+		t.Fatalf("a proven canary row at the live digest, deployed plane agreeing, is reachable and proven: %+v", got)
 	}
 	if got.ReviewEvidence == nil || got.RecordedBy == nil {
 		t.Fatal("the provenance an operator needs to read must survive the projection")
@@ -703,11 +703,11 @@ func TestToReportOperationProjectsEveryStateFaithfully(t *testing.T) {
 		StaleDigests:               []string{"sha256:old"},
 		UnreachableDocumentDigests: []string{"ghi"},
 	}
-	got = toReportOperation(stale, nil, false)
+	got = toReportOperation(stale, nil, false, false)
 	if got.Mode != nil || got.CurrentCandidateBuild != nil || got.RolloutPercentage != nil || got.UpdatedAt != nil {
 		t.Fatalf("a STALE row must project no row fields: %+v", got)
 	}
-	if got.Reachable {
+	if got.Reachable == nil || *got.Reachable {
 		t.Fatal("a STALE row is never reachable")
 	}
 	if len(got.StaleDigests) != 1 || len(got.UnreachableDocumentDigests) != 1 {
@@ -718,7 +718,7 @@ func TestToReportOperationProjectsEveryStateFaithfully(t *testing.T) {
 	// have to tell `null` from `[]` to answer "are there other rows".
 	missing := toReportOperation(goapiproof.OperationStatus{
 		Operation: "flowMatrix", DocumentDigest: "jkl", DigestState: goapiproof.DigestMissing,
-	}, nil, false)
+	}, nil, false, false)
 	if missing.StaleDigests == nil || missing.UnreachableDocumentDigests == nil {
 		t.Fatalf("empty digest lists must render as [] not null: %+v", missing)
 	}
@@ -739,39 +739,58 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 		Proven:         true,
 	}
 
-	agree := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false)
+	agree := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false, false)
 	if agree.DeployedDigestState != "AGREE" {
 		t.Fatalf("deployed_digest_state = %q, want AGREE", agree.DeployedDigestState)
 	}
-	if !agree.Reachable {
-		t.Fatal("a row the deployed plane agrees with must stay reachable")
+	if agree.Reachable == nil || !*agree.Reachable {
+		t.Fatalf("a row the deployed plane agrees with must stay reachable, got %v", agree.Reachable)
 	}
 
-	mismatch := toReportOperation(base, map[string]string{"flowMatrix": "deployed-digest"}, false)
+	mismatch := toReportOperation(base, map[string]string{"flowMatrix": "deployed-digest"}, false, false)
 	if mismatch.DeployedDigestState != "MISMATCH" {
 		t.Fatalf("deployed_digest_state = %q, want MISMATCH", mismatch.DeployedDigestState)
 	}
 	if mismatch.DeployedDocumentDigest == nil || *mismatch.DeployedDocumentDigest != "deployed-digest" {
 		t.Fatalf("deployed_document_digest = %v, want the deployed value named", mismatch.DeployedDocumentDigest)
 	}
-	if mismatch.Reachable {
-		t.Fatal("a MATCH row the deployed plane disagrees with must NOT be reported reachable -- enable would refuse it")
+	if mismatch.Reachable == nil || *mismatch.Reachable {
+		t.Fatalf("a MATCH row the deployed plane disagrees with must be reported reachable=false (known, not unknown) -- enable would refuse it, got %v", mismatch.Reachable)
 	}
 
-	unregistered := toReportOperation(base, map[string]string{"otherOperation": "x"}, false)
+	unregistered := toReportOperation(base, map[string]string{"otherOperation": "x"}, false, false)
 	if unregistered.DeployedDigestState != "UNREGISTERED" {
 		t.Fatalf("deployed_digest_state = %q, want UNREGISTERED", unregistered.DeployedDigestState)
 	}
-	if unregistered.Reachable {
-		t.Fatal("an operation the deployed plane does not register at all must not be reported reachable")
+	if unregistered.Reachable == nil || *unregistered.Reachable {
+		t.Fatalf("an operation the deployed plane does not register at all must be reachable=false, got %v", unregistered.Reachable)
 	}
 
-	unreachableGoPlane := toReportOperation(base, nil, true)
+	// r5 P1 (reproduced): the go plane being genuinely UNREACHABLE means
+	// reachability cannot be told at all -- it must report as UNKNOWN
+	// (nil), never as a silent `true` inherited from the local row alone.
+	// GoPlaneError already names WHY it is unknown; Reachable must not
+	// separately claim to know the answer anyway.
+	unreachableGoPlane := toReportOperation(base, nil, true, false)
 	if unreachableGoPlane.DeployedDigestState != "UNKNOWN" {
 		t.Fatalf("deployed_digest_state = %q, want UNKNOWN when the go plane could not be reached", unreachableGoPlane.DeployedDigestState)
 	}
-	if !unreachableGoPlane.Reachable {
-		t.Fatal("an UNKNOWN deployed digest state (go plane unreachable) must not downgrade a row that was otherwise reachable -- that is what GoPlaneError already reports")
+	if unreachableGoPlane.Reachable != nil {
+		t.Fatalf("reachable must be nil (unknown) when the go plane is unreachable, got %v", *unreachableGoPlane.Reachable)
+	}
+
+	// r5 P1 (reproduced): a SCHEMA-level disagreement must also force
+	// reachable=false, even when the per-operation document digest still
+	// happens to agree -- `enable`'s preflight 2 (schema) refuses BEFORE
+	// preflight 3 (per-operation document digest) ever runs, so nothing
+	// is writable once the schemas disagree, regardless of what an
+	// individual operation's digest says.
+	schemaMismatchButDigestAgrees := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false, true)
+	if schemaMismatchButDigestAgrees.DeployedDigestState != "AGREE" {
+		t.Fatalf("deployed_digest_state = %q, want AGREE (the per-operation digest itself still matches)", schemaMismatchButDigestAgrees.DeployedDigestState)
+	}
+	if schemaMismatchButDigestAgrees.Reachable == nil || *schemaMismatchButDigestAgrees.Reachable {
+		t.Fatalf("reachable must be false under a schema mismatch even when the per-operation document digest agrees, got %v", schemaMismatchButDigestAgrees.Reachable)
 	}
 }
 

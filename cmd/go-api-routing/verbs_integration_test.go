@@ -339,9 +339,10 @@ func TestEnableRefusesAnOperationTheRunningProcessDoesNotRegister(t *testing.T) 
 	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
 	// The running process registers SOME operation, agreeing on the
 	// schema digest -- but not the one this run asks for. Without at
-	// least one operation, FetchRegistry itself would refuse first
-	// ("registers no operations"), which would prove nothing about
-	// preflight 3.
+	// least one operation, enable's OWN "registers no operations" check
+	// (r5 P1: moved out of the shared FetchRegistry so status can read an
+	// empty registry's schema digest without being refused) would fire
+	// first, which would prove nothing about preflight 3.
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{"someOtherOperation": "3333333333333333333333333333333333333333333333333333333333333333"})
 
 	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
@@ -662,7 +663,7 @@ func TestStatusReportsDeployedDocumentDigestMismatchNotHealthy(t *testing.T) {
 		Operations  []struct {
 			Operation           string `json:"operation"`
 			DigestState         string `json:"digest_state"`
-			Reachable           bool   `json:"reachable"`
+			Reachable           *bool  `json:"reachable"`
 			DeployedDigestState string `json:"deployed_digest_state"`
 		} `json:"operations"`
 	}
@@ -682,10 +683,168 @@ func TestStatusReportsDeployedDocumentDigestMismatchNotHealthy(t *testing.T) {
 		if operation.DeployedDigestState != "MISMATCH" {
 			t.Fatalf("deployed_digest_state = %q, want MISMATCH", operation.DeployedDigestState)
 		}
-		if operation.Reachable {
-			t.Fatal("reachable=true for an operation enable would refuse right now -- the exact 'output that merely looks healthy' the reviewer found")
+		if operation.Reachable == nil || *operation.Reachable {
+			t.Fatalf("reachable must be false (known, not unknown) for an operation enable would refuse right now -- the exact 'output that merely looks healthy' the reviewer found, got %v", operation.Reachable)
 		}
 		return
 	}
 	t.Fatalf("no operation %s in the JSON report:\n%s", verbTestOperation, jsonOut)
+}
+
+// r5 P1 (reproduced): `enable`'s Preflight 1 used to rely entirely on
+// `FetchRegistry` refusing an empty `operations` array by itself; now
+// that the refusal moved out of the shared reader (so `status` can read
+// an otherwise-empty registry's schema digest -- see registry_test.go's
+// TestFetchRegistryAcceptsAnEmptyRegistration), `enable` needs its OWN
+// check at the real call site, not just a unit test of the removed
+// behavior.
+func TestEnableRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "4444444444444444444444444444444444444444444444444444444444444444"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{})
+
+	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...)
+	if err == nil {
+		t.Fatal("enable wrote/reported against a registry that registers nothing at all")
+	}
+	if !strings.Contains(err.Error(), "registers no operations") {
+		t.Fatalf("refused for a different reason, so the moved 'nothing to prove' check is not what stopped it: %v", err)
+	}
+	assertNoRows(t, dsn)
+}
+
+// r5 P1 (reproduced), repoint's identical preflight.
+func TestRepointRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "5555555555555555555555555555555555555555555555555555555555555555"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	// Seed a row first with a REGISTERING fixture, then point repoint at
+	// an EMPTY one -- proves the check fires from repoint's own preflight
+	// against the registry it actually reads, not from an incidental
+	// empty-table refusal.
+	seedServer := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+	if _, _, err := captureVerb(t, enableArgs(seedServer, dsn, catalogPath, "-acknowledge-unproven")...); err != nil {
+		t.Fatalf("seeding enable: %v", err)
+	}
+	emptyServer := startQueryAPI(t, localSchemaDigest(), map[string]string{})
+
+	_, _, err := captureVerb(t,
+		"repoint",
+		"-registry-url", emptyServer.URL+"/registry",
+		"-buildinfo-url", emptyServer.URL+"/buildinfo",
+		"-postgres-uri", dsn,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "repoint empty-registry killer",
+	)
+	if err == nil {
+		t.Fatal("repoint wrote/reported against a registry that registers nothing at all")
+	}
+	if !strings.Contains(err.Error(), "registers no operations") {
+		t.Fatalf("refused for a different reason: %v", err)
+	}
+}
+
+// r5 P1 (reproduced): the reviewer's own repro, end to end. Two ways
+// `status` used to report a positive `reachable` answer that `enable`
+// would refuse: a SCHEMA-level digest disagreement (checked before the
+// per-operation document digest ever is), and the go plane being
+// genuinely UNREACHABLE (down). Both must now report reachable=false or
+// nil (unknown) respectively -- never a silent true.
+func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	digest := "6666666666666666666666666666666666666666666666666666666666666666"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+		localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("register candidate build: %v", err)
+	}
+	if _, err := goapiproof.Write(ctx, pool, goapiproof.Receipt{
+		SchemaDigest:      localSchemaDigest(),
+		DocumentDigest:    digest,
+		SelectedOperation: verbTestOperation,
+		CandidateBuild:    verbTestBuild,
+		RequestIdentity:   "status-reachable-degrade",
+		Stage:             goapiproof.EnablementProofStage,
+		TerminalState:     goapiproof.EnablementProofTerminalState,
+		MeasurementRoute:  goapiproof.RouteEdge,
+		RecordedBy:        "lane-routing-verbs",
+		ReviewEvidence:    "r5 P1 killer: reachable must degrade on schema mismatch and on a down plane",
+	}); err != nil {
+		t.Fatalf("write receipt: %v", err)
+	}
+	if _, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...); err != nil {
+		t.Fatalf("enable a genuinely proven operation must succeed: %v", err)
+	}
+
+	type reportShape struct {
+		PlanesAgree *bool `json:"planes_agree"`
+		Operations  []struct {
+			Operation string `json:"operation"`
+			Reachable *bool  `json:"reachable"`
+		} `json:"operations"`
+	}
+	findOperation := func(t *testing.T, jsonOut string) *struct {
+		Operation string `json:"operation"`
+		Reachable *bool  `json:"reachable"`
+	} {
+		t.Helper()
+		var report reportShape
+		if err := json.Unmarshal([]byte(jsonOut), &report); err != nil {
+			t.Fatalf("decode status -json: %v\n%s", err, jsonOut)
+		}
+		for i := range report.Operations {
+			if report.Operations[i].Operation == verbTestOperation {
+				return &report.Operations[i]
+			}
+		}
+		t.Fatalf("no operation %s in the JSON report:\n%s", verbTestOperation, jsonOut)
+		return nil
+	}
+
+	// --- Schema mismatch: the deployed plane serves a DIFFERENT
+	// schema_digest, but happens to still agree on THIS operation's
+	// document digest -- proving the downgrade is not just piggybacking
+	// on the existing document-digest check.
+	mismatchedServer := startQueryAPI(t, "sha256:"+strings.Repeat("f", 64), map[string]string{verbTestOperation: digest})
+	schemaJSONOut, _, err := captureVerb(t, "status", "-registry-url", mismatchedServer.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath, "-json")
+	if err != nil {
+		t.Fatalf("status -json must never refuse: %v", err)
+	}
+	schemaOperation := findOperation(t, schemaJSONOut)
+	if schemaOperation.Reachable == nil || *schemaOperation.Reachable {
+		t.Fatalf("reachable must be false (known, not unknown) under a schema mismatch, got %v", schemaOperation.Reachable)
+	}
+
+	// --- Down: the go plane cannot be reached at all.
+	downServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(downServer.Close)
+	downJSONOut, _, err := captureVerb(t, "status", "-registry-url", downServer.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath, "-json")
+	if err != nil {
+		t.Fatalf("status -json must never refuse: %v", err)
+	}
+	downOperation := findOperation(t, downJSONOut)
+	if downOperation.Reachable != nil {
+		t.Fatalf("reachable must be nil (unknown) when the go plane is unreachable, got %v", *downOperation.Reachable)
+	}
+
+	// --- Control: the ORIGINAL, agreeing server must still report true.
+	healthyJSONOut, _, err := captureVerb(t, "status", "-registry-url", server.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath, "-json")
+	if err != nil {
+		t.Fatalf("status -json must never refuse: %v", err)
+	}
+	healthyOperation := findOperation(t, healthyJSONOut)
+	if healthyOperation.Reachable == nil || !*healthyOperation.Reachable {
+		t.Fatalf("control: a genuinely healthy, agreeing deployment must report reachable=true, got %v", healthyOperation.Reachable)
+	}
 }

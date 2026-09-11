@@ -72,6 +72,18 @@ on:
       # under testdata/ or fixtures/, so the shared glob above does not
       # reach it.
       - 'cmd/query-api/internal/investmentexplain/prompts/**'
+      # gqlgen.yml is the generator's configuration -- the schema it
+      # reads and every path it writes. Editing it changes the generated Go
+      # layer as surely as editing the SDL does, and go-quality now runs a drift
+      # check that regenerates from it. Without this line a gqlgen.yml-only
+      # change is classified non-Go and that check passes vacuously.
+      - 'cmd/query-api/gqlgen.yml'
+      # ci/go_relevance.py decides whether go-quality's steps run at all, and
+      # internal/gqlgenguard's wiring test executes it -- so it is an input of
+      # a Go test. It was named only in comments here, never as a path, so a
+      # change to the relevance decider alone was classified non-Go and the gate
+      # that depends on it passed vacuously.
+      - 'ci/go_relevance.py'
       - 'docker/go-worker.Dockerfile'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'
@@ -178,6 +190,18 @@ on:
       # under testdata/ or fixtures/, so the shared glob above does not
       # reach it.
       - 'cmd/query-api/internal/investmentexplain/prompts/**'
+      # gqlgen.yml is the generator's configuration -- the schema it
+      # reads and every path it writes. Editing it changes the generated Go
+      # layer as surely as editing the SDL does, and go-quality now runs a drift
+      # check that regenerates from it. Without this line a gqlgen.yml-only
+      # change is classified non-Go and that check passes vacuously.
+      - 'cmd/query-api/gqlgen.yml'
+      # ci/go_relevance.py decides whether go-quality's steps run at all, and
+      # internal/gqlgenguard's wiring test executes it -- so it is an input of
+      # a Go test. It was named only in comments here, never as a path, so a
+      # change to the relevance decider alone was classified non-Go and the gate
+      # that depends on it passed vacuously.
+      - 'ci/go_relevance.py'
       - 'docker/go-worker.Dockerfile'
       - 'docker/query-api.Dockerfile'
       - 'tests/compatibility/river/**'

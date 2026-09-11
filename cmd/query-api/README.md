@@ -235,13 +235,49 @@ is enabled." What exists in this Wave:
 
 `gqlgen.yml` points directly at
 [`contracts/graphql/v1/schema.graphql`](../../contracts/graphql/v1/README.md)
-— the CI-checked export of the Strawberry schema — never a copy. To
-regenerate after a schema change:
+— the CI-checked export of the Strawberry schema — never a copy.
+
+Regeneration goes through `cmd/gqlgen-guard`, never the generator directly:
 
 ```bash
-cd cmd/query-api
-go run github.com/99designs/gqlgen generate --config gqlgen.yml
+# from the repository root
+go run ./cmd/gqlgen-guard check-drift   # compare, write nothing, exit non-zero on drift
+go run ./cmd/gqlgen-guard generate      # regenerate and copy the outputs back
 ```
+
+`generate` REFUSES, writing nothing, whenever the record cannot account for
+what it is about to overwrite: a hand-edit the record describes as deliberate
+(it names each file and both digests), a record that is absent, mistyped, empty
+or stripped of its digest table, or a record that describes other bytes than a
+file now holds. Being unable to read the record is not permission to overwrite;
+`-revert-recorded` is the only override. `-update` likewise never replaces a
+destination that is not already a record. That is the ordinary state of this
+repository, so regenerating on purpose is:
+
+```bash
+go run ./cmd/gqlgen-guard generate -revert-recorded    # names what it reverts as it writes
+go run ./cmd/gqlgen-guard check-drift -update          # then refresh the record
+```
+
+The guard runs the generator inside a private copy of the module and copies
+back only the paths `gqlgen.yml` itself declares. That matters here because the
+checked-in generated files carry deliberate hand-edits — the nullability
+rulings recorded in the file comments — that a bare `gqlgen generate` reverts,
+and because the generator runs `go mod tidy`, which in a reduced module rewrites
+`go.mod` wholesale. Neither can reach the working tree through the guard.
+The private copy carries no symbolic link that leaves the module: each one is
+reported (`dropped symbolic link …`), and a schema reached through one is a
+refusal, so keep every schema the config names inside the module.
+The copy is made under `TMPDIR`, which must therefore be outside the module; the
+guard refuses one inside it.
+
+Every difference between the checked-in files and a fresh generation is
+recorded in [`contracts/gqlgen/v1/expected-drift.record`](../../contracts/gqlgen/v1/expected-drift.record),
+which `go-quality` compares byte for byte. New drift fails, and so does a
+recorded hand-edit that has silently vanished. When a difference is a
+deliberate change, rewrite the record with
+`go run ./cmd/gqlgen-guard check-drift -update` and review the diff of that
+file as part of the change.
 
 Review the diff; it is the same drift-review contract as web's codegen
 against the same SDL pin.

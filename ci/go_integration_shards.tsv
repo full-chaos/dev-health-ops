@@ -205,7 +205,12 @@ cmd/dev-health-workerctl	13
 # that add no container. Re-measured, whole package, -count=1, twice:
 # 73.754s and 75.610s -- over the 70 ceiling both times. Raised 70 -> 90
 # for CI headroom.
-cmd/go-api-routing	90
+# opus r9 fix round (2026-09-11): ONE more Testcontainers-backed test
+# added (enable -dry-run's row-count invariance, killing the mutant that
+# silently applied a dry run). Re-measured, whole package, -count=1,
+# three times under concurrent host load: 79.329s, 88.456s, 92.720s --
+# over the 90 ceiling on the third run. Raised 90 -> 110 for CI headroom.
+cmd/go-api-routing	110
 cmd/query-api	110
 cmd/query-api/internal/analytics	22
 # cmd/query-api/internal/featureflags (CHAOS-5523, 2026-09-09): TWO

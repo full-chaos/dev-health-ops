@@ -172,15 +172,20 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # CHAOS-5484 added internal/migrationmatrix, which drives the exported
     # ReadRoutingState against a real Postgres instead of reconstructing its
     # SQL: 54 -> 55.
-    # CURRENT TOTAL: 55. Adding one -tags=integration package bumps every
+    # CHAOS-5560 added internal/platform/config's first //go:build
+    # integration file (config_integration_test.go: a DSN assembled from
+    # discrete components reaching a real PostgreSQL and a real ClickHouse
+    # with reserved characters intact). 55 -> 56.
+    # CURRENT TOTAL: 56. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "55 package(s) discovered, 0 denylisted, 55 will run" in result.stdout
+    assert "56 package(s) discovered, 0 denylisted, 56 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
     assert "  RUN  internal/jobs/investment" in result.stdout
     assert "  RUN  internal/goapiproof" in result.stdout
+    assert "  RUN  internal/platform/config" in result.stdout
     assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
     assert "  RUN  cmd/query-api/internal/featureflags" in result.stdout
     assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

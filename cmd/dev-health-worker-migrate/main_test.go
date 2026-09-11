@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -30,6 +31,28 @@ func TestExecuteHelpAndVersionDoNotRequireDatabase(t *testing.T) {
 		var stderr bytes.Buffer
 		if status := execute(context.Background(), args, env(nil), &stdout, &stderr); status != 0 {
 			t.Fatalf("execute(%v) = %d, stderr=%s", args, status, stderr.String())
+		}
+	}
+}
+
+// TestHelpDocumentsBothDSNForms pins that --help must document both DSN
+// forms: leaving it at zero environment variables (not even the
+// pre-existing MIGRATION_DATABASE_URI) would give an operator no way to
+// discover either DSN form from this binary itself.
+func TestHelpDocumentsBothDSNForms(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	if status := execute(context.Background(), []string{"--help"}, env(nil), &stdout, &stderr); status != 0 {
+		t.Fatalf("execute(--help) = %d, stderr=%s", status, stderr.String())
+	}
+	for _, want := range []string{
+		"MIGRATION_DATABASE_URI",
+		"DEV_HEALTH_MIGRATION_PG_HOST",
+		"DEV_HEALTH_MIGRATION_PG_PASSWORD",
+		"mutually exclusive",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("--help output missing %q, got: %s", want, stderr.String())
 		}
 	}
 }
@@ -204,6 +227,312 @@ func TestExecuteRequiresThreeSeparatedRolesBeforeConnecting(t *testing.T) {
 					t.Fatalf("stderr leaked %q: %s", secret, stderr.String())
 				}
 			}
+			if !json.Valid([]byte(strings.TrimSpace(strings.SplitN(stderr.String(), "\n", 2)[0]))) {
+				t.Fatalf("configuration error was not emitted as valid JSON: %s", stderr.String())
+			}
 		})
 	}
+}
+
+// TestExecuteEmitsAnInfoRecordOfTheResolvedForm pins that a successful
+// resolution must leave an observable record of which form
+// (uri|components) and database it reached: the URI form's record names
+// ONLY the form, never a database identifier parsed out of the DSN --
+// only the component form's record includes a database name, read
+// directly from the env key. The DSN itself (and its credentials) must
+// never appear in either record.
+func TestExecuteEmitsAnInfoRecordOfTheResolvedForm(t *testing.T) {
+	t.Parallel()
+
+	t.Run("URI form -- form only, no database name is ever parsed from the DSN", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		status := execute(context.Background(), []string{"--check"}, env(map[string]string{
+			"MIGRATION_DATABASE_URI":     "postgresql://migration:s3cr3t@unreachable.invalid:5432/migrationdb",
+			"RIVER_DOMAIN_DATABASE_ROLE": "domain",
+			"RIVER_QUEUE_DATABASE_ROLE":  "queue",
+		}), &stdout, &stderr)
+		if status != 1 {
+			t.Fatalf("execute() = %d, want 1 (unreachable database)", status)
+		}
+		out := stderr.String()
+		if !strings.Contains(out, `"msg":"migration database resolved"`) || !strings.Contains(out, `"form":"uri"`) {
+			t.Fatalf("expected the resolution Info record, got: %s", out)
+		}
+		if strings.Contains(out, `"database"`) {
+			t.Fatalf("the URI form must never include a parsed database name, got: %s", out)
+		}
+		if strings.Contains(out, "s3cr3t") || strings.Contains(out, "postgresql://") || strings.Contains(out, "migrationdb") {
+			t.Fatalf("the resolution Info record leaked the DSN or a credential: %s", out)
+		}
+	})
+
+	t.Run("component form -- form and the database name read directly from the env key", func(t *testing.T) {
+		t.Parallel()
+		var stdout, stderr bytes.Buffer
+		status := execute(context.Background(), []string{"--check"}, env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_HOST":     "unreachable.invalid",
+			"DEV_HEALTH_MIGRATION_PG_USER":     "migration",
+			"DEV_HEALTH_MIGRATION_PG_PASSWORD": "s3cr3t",
+			"DEV_HEALTH_MIGRATION_PG_DB":       "migrationdb",
+			"RIVER_DOMAIN_DATABASE_ROLE":       "domain",
+			"RIVER_QUEUE_DATABASE_ROLE":        "queue",
+		}), &stdout, &stderr)
+		if status != 1 {
+			t.Fatalf("execute() = %d, want 1 (unreachable database)", status)
+		}
+		out := stderr.String()
+		if !strings.Contains(out, `"msg":"migration database resolved"`) ||
+			!strings.Contains(out, `"form":"components"`) ||
+			!strings.Contains(out, `"database":"migrationdb"`) {
+			t.Fatalf("expected the resolution Info record naming the component database, got: %s", out)
+		}
+		if strings.Contains(out, "s3cr3t") {
+			t.Fatalf("the resolution Info record leaked a credential: %s", out)
+		}
+	})
+}
+
+// TestResolveMigrationDatabaseURIComponentForm pins CHAOS-5560's fix at this
+// binary's own entry point: compose.yml's entrypoint falls back to a raw
+// shell-interpolated postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB
+// when MIGRATION_DATABASE_URI is unset -- the exact unescaped-password shape
+// this ticket exists to fix, one layer further out than internal/platform/
+// config's own URIs. The component path here must survive it, using
+// DEV_HEALTH_MIGRATION_PG_* names (never POSTGRES_HOST/_PORT/_USER/
+// _PASSWORD/_DB, which deploy/docker-compose/compose.go-workers.yml --
+// not touched by this PR -- already sets unconditionally for that same
+// shell fallback; reusing those names would make
+// this function silently discard a real, working MIGRATION_DATABASE_URI
+// override the instant that compose service ran).
+func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
+	t.Parallel()
+
+	t.Run("neither form set -- required error", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(nil), &stderr)
+		if ok {
+			t.Fatal("expected failure: neither the component host var nor MIGRATION_DATABASE_URI is set")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") {
+			t.Fatalf("expected the MIGRATION_DATABASE_URI required-secret message, got: %s", stderr.String())
+		}
+	})
+
+	t.Run("pre-built URI only -- still works", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI": "postgresql://postgres:postgres@postgres:5432/postgres",
+		}), &stderr)
+		if !ok {
+			t.Fatalf("expected success, stderr=%s", stderr.String())
+		}
+		if got.Reveal() != "postgresql://postgres:postgres@postgres:5432/postgres" {
+			t.Fatalf("got %q", got.Reveal())
+		}
+	})
+
+	t.Run("component form only survives a reserved-character password", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		reserved := "p#ss/w@rd"
+		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_HOST":     "postgres",
+			"DEV_HEALTH_MIGRATION_PG_USER":     "postgres",
+			"DEV_HEALTH_MIGRATION_PG_PASSWORD": reserved,
+			"DEV_HEALTH_MIGRATION_PG_DB":       "postgres",
+		}), &stderr)
+		if !ok {
+			t.Fatalf("expected success, stderr=%s", stderr.String())
+		}
+		role, err := postgresstore.ConnectionUser(got.Reveal())
+		if err != nil {
+			t.Fatalf("assembled URI does not parse via the real caller (postgresstore.ConnectionUser): %v (%q)", err, got.Reveal())
+		}
+		if role != "postgres" {
+			t.Fatalf("connection user = %q, want postgres", role)
+		}
+	})
+
+	// URI and component forms are mutually
+	// exclusive, refused loudly naming both keys -- neither silently wins.
+	t.Run("both forms set -- refused naming both keys", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI":       "postgresql://real:real@real-host:5432/real",
+			"DEV_HEALTH_MIGRATION_PG_HOST": "postgres",
+			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure when both forms are set")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_HOST") ||
+			!strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("expected an error naming both keys, got: %s", stderr.String())
+		}
+	})
+
+	// The exact overlay scenario this matters for: this binary
+	// must behave EXACTLY as it did before this ticket when
+	// deploy/docker-compose/compose.go-workers.yml's own POSTGRES_HOST
+	// default (or any of its raw shell-fallback vars) is present --
+	// POSTGRES_HOST is not a component key this binary reads at all
+	// anymore, so it has zero effect on which form wins.
+	t.Run("compose overlay's own POSTGRES_HOST default has no effect", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI": "postgresql://postgres:postgres@postgres:5432/postgres",
+			"POSTGRES_HOST":          "postgres",
+			"POSTGRES_USER":          "postgres",
+			"POSTGRES_PASSWORD":      "postgres",
+			"POSTGRES_DB":            "postgres",
+		}), &stderr)
+		if !ok {
+			t.Fatalf("expected success, stderr=%s", stderr.String())
+		}
+		if got.Reveal() != "postgresql://postgres:postgres@postgres:5432/postgres" {
+			t.Fatalf("POSTGRES_HOST must not be read as a component trigger by this binary, got %q", got.Reveal())
+		}
+	})
+
+	t.Run("bad port with component host set is refused, not silently defaulted", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_HOST": "postgres",
+			"DEV_HEALTH_MIGRATION_PG_PORT": "not-a-port",
+			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
+			"DEV_HEALTH_MIGRATION_PG_DB":   "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure on a non-numeric port")
+		}
+	})
+
+	// A non-host component set with the component HOST absent, and no
+	// MIGRATION_DATABASE_URI either, must not silently report
+	// "MIGRATION_DATABASE_URI is required" -- true, but hiding that the
+	// operator had already started configuring components and only
+	// forgot the host var.
+	t.Run("non-host component set without host or URI names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_USER") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_HOST") {
+			t.Fatalf("expected an error naming the missing host key, got: %s", stderr.String())
+		}
+	})
+
+	// Both forms set AND a non-host component: the mutual-exclusion check
+	// still fires first (checked before the missing-key check), naming the
+	// non-host component, not a spurious "missing host" message.
+	t.Run("both forms plus a non-host component -- mutual exclusion still wins", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI":       "postgresql://real:real@real-host:5432/real",
+			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_USER") ||
+			!strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("expected the mutual-exclusion error, got: %s", stderr.String())
+		}
+	})
+
+	// Unlike the four internal/platform/config
+	// DSNs, migrate's DB key is NOT shared with any sibling connection, so
+	// it must still be swept by the detection -- a blanket
+	// DBKey exclusion would wrongly cover this binary too.
+	t.Run("component DB alone (no host, no URI) names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_DB": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_DB") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_HOST") {
+			t.Fatalf("expected the missing-host error naming DEV_HEALTH_MIGRATION_PG_DB, got: %s", stderr.String())
+		}
+	})
+
+	t.Run("component DB plus a raw MIGRATION_DATABASE_URI is refused", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI":     "postgresql://real:real@real-host:5432/real",
+			"DEV_HEALTH_MIGRATION_PG_DB": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_DB") ||
+			!strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_MIGRATION_PG_DB, got: %s", stderr.String())
+		}
+	})
+
+	// PASSWORD_FILE is a real, supported activation path
+	// (ResolveDSNFromComponents resolves DEV_HEALTH_MIGRATION_PG_PASSWORD
+	// through secrets.Resolve, which supports its own `_FILE` form) that the
+	// detection sweep must check too.
+	t.Run("PASSWORD_FILE alone (no host, no URI) names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		passwordFile := dir + "/password"
+		if err := os.WriteFile(passwordFile, []byte("s3cret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_PASSWORD_FILE": passwordFile,
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_PASSWORD_FILE") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_HOST") {
+			t.Fatalf("expected the missing-host error naming DEV_HEALTH_MIGRATION_PG_PASSWORD_FILE, got: %s", stderr.String())
+		}
+	})
+
+	t.Run("USER_FILE plus a raw MIGRATION_DATABASE_URI is refused", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		userFile := dir + "/user"
+		if err := os.WriteFile(userFile, []byte("migrator\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI":            "postgresql://real:real@real-host:5432/real",
+			"DEV_HEALTH_MIGRATION_PG_USER_FILE": userFile,
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_USER_FILE") ||
+			!strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("expected a mutual-exclusivity error naming DEV_HEALTH_MIGRATION_PG_USER_FILE, got: %s", stderr.String())
+		}
+	})
 }

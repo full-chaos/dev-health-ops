@@ -898,8 +898,42 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *
 	runtime := commandRuntime(t, commandAuthorizer{})
 	runtime.lookup = func(string) (string, bool) { return "", false }
 	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, nil, &stdout, &stderr)
-	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"configuration_error\"}}\n" {
+	// Assert the stable "code" AND the "detail" field naming the missing
+	// key, rather than an exact string, so this test does not itself pin
+	// a less useful shape in place.
+	if code != 1 ||
+		!strings.Contains(stderr.String(), `"code":"configuration_error"`) ||
+		!strings.Contains(stderr.String(), "CLICKHOUSE_URI") {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase
+// pins that this dispatcher, which resolves CLICKHOUSE_URI
+// lazily through resolveDSNRequired, entirely bypassing config.Load and
+// configureRuntime's own resolution, must still emit the Info resolution
+// record every other successful DSN resolution promises.
+// The eventual chclickhouse.Open against an unroutable host (127.0.0.1:1,
+// refused immediately) fails closed with operator_backend_unavailable, same
+// as before this fix -- what changed is that the Info record is now
+// emitted first, on the path to that failure, proving the wiring rather
+// than only the helper in isolation.
+func TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{})
+	runtime.lookup = dsnTestLookup(map[string]string{
+		"DEV_HEALTH_CH_HOST": "127.0.0.1",
+		"DEV_HEALTH_CH_PORT": "1",
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	code := dispatchProvidersyncRetireLinearPseudoProjects(ctx, runtime, nil, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1 (unroutable ClickHouse host)", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, `"dsn":{"name":"clickhouse","form":"components","database":"default"}`) {
+		t.Fatalf("expected a components-form resolution record, got: %s", out)
 	}
 }
 
@@ -972,8 +1006,37 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRequiresClickHouse
 	runtime := commandRuntime(t, commandAuthorizer{})
 	runtime.lookup = func(string) (string, bool) { return "", false }
 	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, nil, &stdout, &stderr)
-	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"configuration_error\"}}\n" {
+	// See the sibling test above -- the stable "code" plus a "detail"
+	// field naming the missing key.
+	if code != 1 ||
+		!strings.Contains(stderr.String(), `"code":"configuration_error"`) ||
+		!strings.Contains(stderr.String(), "CLICKHOUSE_URI") {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestDispatchProvidersyncRetireStaleLinearProjectOwnershipLogsResolvedDatabase
+// mirrors TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase
+// for this dispatcher's own, separate lazy CLICKHOUSE_URI resolution
+// site: the sibling site had this coverage, this
+// one did not -- removing only this dispatcher's logResolvedDatabase call
+// still passed the whole suite without it.
+func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipLogsResolvedDatabase(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{})
+	runtime.lookup = dsnTestLookup(map[string]string{
+		"DEV_HEALTH_CH_HOST": "127.0.0.1",
+		"DEV_HEALTH_CH_PORT": "1",
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(ctx, runtime, nil, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1 (unroutable ClickHouse host)", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, `"dsn":{"name":"clickhouse","form":"components","database":"default"}`) {
+		t.Fatalf("expected a components-form resolution record, got: %s", out)
 	}
 }
 

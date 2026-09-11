@@ -215,6 +215,82 @@ var optionRegistry = []Option{
 		Default: defaultCoordinatorDatabaseRole, Group: GroupDatabase,
 		Usage: "PostgreSQL role for the coordinator pool",
 	},
+	// CHAOS-5560: component alternative to POSTGRES_URI/WORKER_DATABASE_URI/
+	// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI. Setting a *_HOST value (flag
+	// or env) assembles that connection's URI from these components instead
+	// of the pre-built URI, URL-encoded correctly regardless of content
+	// (see ResolveDSNFromComponents); leaving it unset changes nothing.
+	// Passwords are the credential half and are registered separately above
+	// as Secret, never as a flag.
+	//
+	// Every one of these env names carries a DEV_HEALTH_ prefix, on purpose:
+	// the shorter, more "natural"
+	// names (POSTGRES_DOMAIN_HOST, CLICKHOUSE_USER, and
+	// POSTGRES_HOST/_USER/_PASSWORD/_DB for the migrate binary) were either
+	// already deployed elsewhere in this repo's compose/helm surface for an
+	// unrelated purpose, or would collide the moment a future manifest
+	// defaulted them the way deploy/docker-compose/compose.go-workers.yml
+	// already defaults POSTGRES_HOST. Every name below was swept against
+	// compose.yml, both overlays, deploy/helm values and templates, and
+	// docs before being chosen -- zero hits, so it can never collide with
+	// anything deployed or documented today.
+	{
+		Flag: "domain-database-host", Env: "DEV_HEALTH_PG_DOMAIN_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "domain PostgreSQL host; set to assemble POSTGRES_URI from components",
+	},
+	{
+		Flag: "domain-database-port", Env: "DEV_HEALTH_PG_DOMAIN_PORT", Kind: KindString,
+		Default: "5432", Group: GroupDatabase, Usage: "domain PostgreSQL port (component form)",
+	},
+	{
+		Flag: "domain-database-user", Env: "DEV_HEALTH_PG_DOMAIN_USER", Kind: KindString, Group: GroupDatabase,
+		Usage: "domain PostgreSQL user (component form; distinct from --domain-database-role, which names the grantee role for migrations)",
+	},
+	{
+		Flag: "queue-database-host", Env: "DEV_HEALTH_PG_QUEUE_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "queue-control PostgreSQL host; set to assemble WORKER_DATABASE_URI from components",
+	},
+	{
+		Flag: "queue-database-port", Env: "DEV_HEALTH_PG_QUEUE_PORT", Kind: KindString,
+		Default: "5432", Group: GroupDatabase, Usage: "queue-control PostgreSQL port (component form)",
+	},
+	{
+		Flag: "queue-database-user", Env: "DEV_HEALTH_PG_QUEUE_USER", Kind: KindString, Group: GroupDatabase,
+		Usage: "queue-control PostgreSQL user (component form)",
+	},
+	{
+		Flag: "coordinator-database-host", Env: "DEV_HEALTH_PG_COORDINATOR_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "coordinator PostgreSQL host; set to assemble COORDINATOR_DATABASE_URI from components",
+	},
+	{
+		Flag: "coordinator-database-port", Env: "DEV_HEALTH_PG_COORDINATOR_PORT", Kind: KindString,
+		Default: "5432", Group: GroupDatabase, Usage: "coordinator PostgreSQL port (component form)",
+	},
+	{
+		Flag: "coordinator-database-user", Env: "DEV_HEALTH_PG_COORDINATOR_USER", Kind: KindString, Group: GroupDatabase,
+		Usage: "coordinator PostgreSQL user (component form)",
+	},
+	{
+		Flag: "postgres-db", Env: "DEV_HEALTH_PG_DB", Kind: KindString,
+		Default: "postgres", Group: GroupDatabase,
+		Usage: "Postgres database name shared by the three component-form connections above",
+	},
+	{
+		Flag: "clickhouse-host", Env: "DEV_HEALTH_CH_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "ClickHouse host; set to assemble CLICKHOUSE_URI from components",
+	},
+	{
+		Flag: "clickhouse-port", Env: "DEV_HEALTH_CH_PORT", Kind: KindString,
+		Default: "9000", Group: GroupDatabase, Usage: "ClickHouse native-protocol port (component form)",
+	},
+	{
+		Flag: "clickhouse-user", Env: "DEV_HEALTH_CH_USER", Kind: KindString, Group: GroupDatabase,
+		Usage: "ClickHouse user (component form)",
+	},
+	{
+		Flag: "clickhouse-db", Env: "DEV_HEALTH_CH_DB", Kind: KindString,
+		Default: "default", Group: GroupDatabase, Usage: "ClickHouse database name (component form)",
+	},
 	{
 		Flag: "domain-max-conns", Env: "WORKER_DOMAIN_DATABASE_MAX_CONNS", Kind: KindInt,
 		Default: "4", Group: GroupDatabase,
@@ -303,6 +379,21 @@ var optionRegistry = []Option{
 	{Env: "WORKER_DATABASE_URI", Secret: true, Group: GroupCredentials, Usage: "queue-control PostgreSQL DSN"},
 	{Env: "COORDINATOR_DATABASE_URI", Secret: true, Group: GroupCredentials, Usage: "coordinator PostgreSQL DSN; required by coordinator binaries"},
 	{Env: "CLICKHOUSE_URI", Secret: true, Group: GroupCredentials, Usage: "ClickHouse DSN; native protocol, port 9000"},
+	// CHAOS-5560: component PASSWORDS for the four URIs above. Non-secret
+	// components (host/port/user/db) are registered in GroupDatabase above
+	// -- only the password half of a DSN is credential-shaped. Setting the
+	// matching *_HOST flag/var for a connection assembles its URI from
+	// components instead (URL-encoded correctly regardless of content) and
+	// -- is mutually exclusive with that
+	// connection's pre-built URI, refused loudly if both are set; leaving
+	// *_HOST unset changes nothing. See the naming note above these fields'
+	// GroupDatabase siblings for why every name here is DEV_HEALTH_-prefixed
+	// rather than reusing CLICKHOUSE_PASSWORD/RIVER_*_DATABASE_PASSWORD-shaped
+	// names.
+	{Env: "DEV_HEALTH_CH_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "ClickHouse password (component form)"},
+	{Env: "DEV_HEALTH_PG_DOMAIN_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "domain PostgreSQL password (component form)"},
+	{Env: "DEV_HEALTH_PG_QUEUE_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "queue-control PostgreSQL password (component form)"},
+	{Env: "DEV_HEALTH_PG_COORDINATOR_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "coordinator PostgreSQL password (component form)"},
 	{Env: "VALKEY_URI", Secret: true, Group: GroupCredentials, Usage: "Valkey/Redis DSN"},
 	{Env: "SETTINGS_ENCRYPTION_KEY", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption key"},
 	{Env: "SETTINGS_ENCRYPTION_SALT", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption salt"},

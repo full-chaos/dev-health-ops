@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -42,6 +43,26 @@ func execute(
 	flags.SetOutput(stderr)
 	check := flags.Bool("check", false, "verify the pinned River schema without applying DDL")
 	showVersion := flags.Bool("version", false, "print build metadata as JSON and exit")
+	// This binary's own flag.NewFlagSet must document both DSN forms --
+	// leaving MIGRATION_DATABASE_URI (and the component form)
+	// undocumented would make this file's source the only place either
+	// was discoverable. defaultUsage
+	// is flag's own generated text; appending the env section keeps it
+	// rather than replacing it.
+	defaultUsage := flags.Usage
+	flags.Usage = func() {
+		defaultUsage()
+		fmt.Fprint(stderr, "\nEnvironment:\n"+
+			"  MIGRATION_DATABASE_URI (or _FILE)   pre-built PostgreSQL DSN\n"+
+			"  DEV_HEALTH_MIGRATION_PG_HOST         component form: host (also enables _PORT/_USER/_PASSWORD/_DB below)\n"+
+			"  DEV_HEALTH_MIGRATION_PG_PORT         component form: port (default 5432)\n"+
+			"  DEV_HEALTH_MIGRATION_PG_USER         component form: user\n"+
+			"  DEV_HEALTH_MIGRATION_PG_PASSWORD     component form: password\n"+
+			"  DEV_HEALTH_MIGRATION_PG_DB           component form: database name (default postgres)\n"+
+			"  RIVER_DOMAIN_DATABASE_ROLE, RIVER_QUEUE_DATABASE_ROLE, RIVER_COORDINATOR_DATABASE_ROLE (optional)\n"+
+			"  RIVER_DATABASE_SCHEMA (optional)\n"+
+			"MIGRATION_DATABASE_URI and the DEV_HEALTH_MIGRATION_PG_* component form are mutually exclusive; set exactly one.\n")
+	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -60,13 +81,32 @@ func execute(
 		return 0
 	}
 
-	migrationURI, ok := requiredSecret("MIGRATION_DATABASE_URI", lookup, stderr)
+	migrationURI, ok := resolveMigrationDatabaseURI(lookup, stderr)
 	if !ok {
 		return 1
 	}
+	// A successful resolution must leave an observable record of which
+	// form (uri|components) or database it reached -- otherwise a silent
+	// regression there (a wrong, but reachable, database) would be
+	// invisible even after this ticket's other fixes. Form presence-checks
+	// DEV_HEALTH_MIGRATION_PG_HOST the same way
+	// resolveMigrationDatabaseURI/config.ResolveDSN's own hostSet check
+	// does. No telemetry field is ever derived by
+	// parsing a DSN -- for the URI form, "database" is omitted entirely;
+	// for the component form, config.ComponentDatabaseIdentity asks the driver for the
+	// separate, non-secret DEV_HEALTH_MIGRATION_PG_DB env value directly,
+	// needing no parsing of the assembled DSN.
+	infoLogger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if host, present := lookup(migrationDatabaseSpec.HostKey); present && host != "" {
+		infoLogger.InfoContext(parent, "migration database resolved",
+			"form", "components",
+			"database", config.ComponentDatabaseIdentity(migrationDatabaseSpec.Scheme, migrationURI))
+	} else {
+		infoLogger.InfoContext(parent, "migration database resolved", "form", "uri")
+	}
 	migrationRole, err := postgresstore.ConnectionUser(migrationURI.Reveal())
 	if err != nil {
-		fmt.Fprintln(stderr, "configuration error: invalid MIGRATION_DATABASE_URI")
+		config.WriteConfigError(stderr, errors.New("invalid MIGRATION_DATABASE_URI"))
 		return 1
 	}
 	domainRole, ok := requiredName("RIVER_DOMAIN_DATABASE_ROLE", lookup, stderr)
@@ -124,7 +164,7 @@ func execute(
 	}
 	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil ||
 		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole {
-		fmt.Fprintln(stderr, "configuration error: migration, domain, queue-control, and coordinator PostgreSQL roles must be distinct")
+		config.WriteConfigError(stderr, errors.New("migration, domain, queue-control, and coordinator PostgreSQL roles must be distinct"))
 		return 1
 	}
 
@@ -220,24 +260,53 @@ func reportSchemaCheck(
 func requiredName(key string, lookup platformsecrets.LookupEnv, stderr io.Writer) (string, bool) {
 	value, configured := lookup(key)
 	if !configured || strings.TrimSpace(value) == "" {
-		fmt.Fprintf(stderr, "configuration error: %s is required\n", key)
+		config.WriteConfigError(stderr, fmt.Errorf("%s is required", key))
 		return "", false
 	}
 	return value, true
 }
 
-func requiredSecret(
-	key string,
+// resolveMigrationDatabaseURI is CHAOS-5560's component alternative to a
+// pre-built MIGRATION_DATABASE_URI: compose.yml's own entrypoint already
+// assembles a fallback DSN by raw shell interpolation
+// (postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB)
+// when MIGRATION_DATABASE_URI is unset -- exactly the unescaped-password
+// class this ticket fixes, just one shell layer further out.
+//
+// The component var names are deliberately NOT POSTGRES_HOST/_PORT/_USER/
+// _PASSWORD/_DB: deploy/docker-compose/compose.go-workers.yml (not touched
+// by this PR) already sets every one of those, unconditionally, for its own
+// pre-existing shell fallback -- reusing those names would make this
+// function activate every time that compose
+// service ran, silently discarding a perfectly valid, already-working
+// MIGRATION_DATABASE_URI override. DEV_HEALTH_MIGRATION_PG_* is a prefix
+// swept against compose.yml, both overlays, deploy/helm, and docs before
+// being chosen (zero hits) so setting it can never collide with anything
+// today, deployed or documented. See config.ResolveDSN for the shared
+// mutual-exclusion contract this now defers to instead of picking a
+// precedence winner.
+// migrationDatabaseSpec is the ONE ComponentSpec for MIGRATION_DATABASE_URI,
+// shared by resolveMigrationDatabaseURI and execute's own Info-resolution
+// record (config.ComponentDatabaseIdentity) so the two never risk drifting
+// into two different definitions of "the migration database's component
+// form".
+var migrationDatabaseSpec = config.ComponentSpec{
+	HostKey: "DEV_HEALTH_MIGRATION_PG_HOST", PortKey: "DEV_HEALTH_MIGRATION_PG_PORT", DefaultPort: "5432",
+	UserKey: "DEV_HEALTH_MIGRATION_PG_USER", PasswordKey: "DEV_HEALTH_MIGRATION_PG_PASSWORD",
+	DBKey: "DEV_HEALTH_MIGRATION_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+}
+
+func resolveMigrationDatabaseURI(
 	lookup platformsecrets.LookupEnv,
 	stderr io.Writer,
 ) (platformsecrets.Value, bool) {
-	value, configured, err := platformsecrets.Resolve(key, lookup)
+	value, configured, err := config.ResolveDSN(lookup, "MIGRATION_DATABASE_URI", migrationDatabaseSpec)
 	if err != nil {
-		fmt.Fprintf(stderr, "configuration error: could not resolve %s\n", key)
+		config.WriteConfigError(stderr, err)
 		return platformsecrets.Value{}, false
 	}
 	if !configured {
-		fmt.Fprintf(stderr, "configuration error: %s is required\n", key)
+		config.WriteConfigError(stderr, errors.New("MIGRATION_DATABASE_URI is required"))
 		return platformsecrets.Value{}, false
 	}
 	return value, true

@@ -52,7 +52,15 @@ func TestHelpDeclaresTheDocumentedEnvironmentHandful(t *testing.T) {
 	t.Parallel()
 
 	required := RequiredEnvironment()
-	if len(required) > 12 {
+	// 10 -> 14 (CHAOS-5560): DEV_HEALTH_CH_PASSWORD, DEV_HEALTH_PG_DOMAIN_PASSWORD,
+	// DEV_HEALTH_PG_QUEUE_PASSWORD, DEV_HEALTH_PG_COORDINATOR_PASSWORD added --
+	// all four are the component-form password fields for the pre-built-URI
+	// credentials this test already counted (POSTGRES_URI/WORKER_DATABASE_URI/
+	// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI); none is required for a
+	// standard deployment (the pre-built URI form still works unset), but all
+	// four hold a real secret value and so are Secret-marked env-only like
+	// every other credential here.
+	if len(required) > 14 {
 		t.Fatalf("required environment grew to %d settings: %v", len(required), required)
 	}
 	for _, name := range required {

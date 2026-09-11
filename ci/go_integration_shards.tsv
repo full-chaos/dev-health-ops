@@ -25,6 +25,15 @@
 # nothing. This is an ESTIMATE, not a measurement: re-time it from a completed
 # go-storage-integration runner and correct it, and re-time it if the file
 # gains tests.
+# internal/platform/config (CHAOS-5560): two tests, each taking a fresh
+# container -- one PostgreSQL, one ClickHouse -- to prove a DSN assembled
+# from discrete components reaches the real server with reserved characters
+# intact. Container-dominated, so the header's rule applies: scale with test
+# count, not assertions. 30s is the local wall time of two consecutive
+# `go test -count=1 -tags=integration` runs (15.89s, 15.42s) rounded up with
+# margin for a slower hosted runner. This is an ESTIMATE, not a CI
+# measurement: re-time it from a completed go-storage-integration runner and
+# correct it, and re-time it if that file gains tests.
 # cmd/query-api/internal/analytics (CHAOS-4730): un-denylisted (CHAOS-4643's
 # reason no longer held once the package got real Testcontainers coverage,
 # see ci/check_go.sh's INTEGRATION_DENYLIST comment). Weight 22s, ceil() of a
@@ -232,6 +241,7 @@ internal/jobs/workgraph/issueprlinks	20
 internal/jobs/workgraph/operationaledges	65
 internal/jobs/workgraph/prcommit	26
 internal/llmorgsettings	15
+internal/platform/config	30
 internal/providerfoundation	12
 internal/providersync	1166
 internal/scheduler/fixed	143

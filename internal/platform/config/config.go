@@ -2,18 +2,24 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/url"
 	"os"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // DefaultShutdownTimeout is the shutdown grace used when neither
@@ -154,11 +160,27 @@ type Config struct {
 	QueueDatabaseURI       secrets.Value
 	CoordinatorDatabaseURI secrets.Value
 	ClickHouseURI          secrets.Value
-	ValkeyURI              secrets.Value
-	SettingsEncryptionKey  secrets.Value
-	SettingsEncryptionSalt secrets.Value
-	PagerDutyOAuthClientID secrets.Value
-	PagerDutyOAuthSecret   secrets.Value
+	// Successful resolution previously left only a boolean ("*_database_configured")
+	// observable -- which of the two DSN forms was actually honored, and
+	// which database an operator's config ultimately reaches, was invisible
+	// at Info. Neither field ever carries a credential: Form is the literal
+	// "uri" or "components"; Name is the identifier segment of the already-
+	// assembled DSN (its URL path with the leading "/" trimmed), the same
+	// value a bare `psql`/`clickhouse-client` invocation would show in its
+	// own prompt, never the DSN itself.
+	DomainDatabaseForm      string
+	DomainDatabaseName      string
+	QueueDatabaseForm       string
+	QueueDatabaseName       string
+	CoordinatorDatabaseForm string
+	CoordinatorDatabaseName string
+	ClickHouseForm          string
+	ClickHouseName          string
+	ValkeyURI               secrets.Value
+	SettingsEncryptionKey   secrets.Value
+	SettingsEncryptionSalt  secrets.Value
+	PagerDutyOAuthClientID  secrets.Value
+	PagerDutyOAuthSecret    secrets.Value
 
 	QueueDatabaseMode           QueueControlMode
 	CoordinatorDatabaseMode     QueueControlMode
@@ -357,14 +379,6 @@ func Load(spec Spec) (Config, error) {
 		name   string
 		target *secrets.Value
 	}{
-		{name: "POSTGRES_URI", target: &cfg.DomainDatabaseURI},
-		{name: "WORKER_DATABASE_URI", target: &cfg.QueueDatabaseURI},
-		// Optional here on purpose: only coordinator binaries require it, and
-		// they enforce that themselves through
-		// postgres.RuntimeConfig.RequireCoordinator. A domain-only worker must
-		// not fail to start merely because this is unset.
-		{name: "COORDINATOR_DATABASE_URI", target: &cfg.CoordinatorDatabaseURI},
-		{name: "CLICKHOUSE_URI", target: &cfg.ClickHouseURI},
 		{name: "VALKEY_URI", target: &cfg.ValkeyURI},
 		{name: "SETTINGS_ENCRYPTION_KEY", target: &cfg.SettingsEncryptionKey},
 		{name: "SETTINGS_ENCRYPTION_SALT", target: &cfg.SettingsEncryptionSalt},
@@ -378,6 +392,75 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, resolveErr
 		}
 		*item.target = value
+	}
+	// CHAOS-5560: a pre-built URI (POSTGRES_URI/WORKER_DATABASE_URI/
+	// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI) requires whoever assembles it
+	// (a compose file, a shell script, an operator's own tooling) to
+	// correctly URL-encode every credential component -- a `#`/`@`/`/`/`?`
+	// in a password silently truncates or corrupts the DSN, and that
+	// failure mode was hit repeatedly at the deploy-manifest layer, never
+	// here. ResolveDSN below lets each URI be assembled from its own
+	// host/port/user/password/db pieces instead, encoded correctly by
+	// net/url regardless of their content.
+	//
+	// "One form wins outright over the other" has two problems: (1)
+	// whichever precedence direction is chosen, the LOSING form's value
+	// still sits in the environment with no way to tell a deliberate
+	// override from a stale leftover, and (2) a component HOST name that
+	// happens to match something a deploy manifest already defaults
+	// (e.g. POSTGRES_HOST) risks exactly this ambiguity. Fixed at the
+	// root: every component key below is a name NOTHING in compose.yml,
+	// either overlay, deploy/helm, or the docs sets today (swept before
+	// choosing), and ResolveDSN refuses
+	// outright -- naming both keys in one message -- if BOTH a HOST var and
+	// its DSN's pre-built key (or that key's `_FILE` variant) are set,
+	// rather than silently picking one. Neither set keeps today's
+	// "%s is required" behavior unchanged.
+	dsnBindings := []struct {
+		rawKey     string
+		spec       ComponentSpec
+		target     *secrets.Value
+		formTarget *string
+		nameTarget *string
+	}{
+		{rawKey: "POSTGRES_URI", spec: DomainDatabaseSpec, target: &cfg.DomainDatabaseURI, formTarget: &cfg.DomainDatabaseForm, nameTarget: &cfg.DomainDatabaseName},
+		{rawKey: "WORKER_DATABASE_URI", spec: QueueDatabaseSpec, target: &cfg.QueueDatabaseURI, formTarget: &cfg.QueueDatabaseForm, nameTarget: &cfg.QueueDatabaseName},
+		// COORDINATOR_DATABASE_URI is optional here on purpose: only
+		// coordinator binaries require it, and they enforce that themselves
+		// through postgres.RuntimeConfig.RequireCoordinator. A domain-only
+		// worker must not fail to start merely because this is unset.
+		{rawKey: "COORDINATOR_DATABASE_URI", spec: CoordinatorDatabaseSpec, target: &cfg.CoordinatorDatabaseURI, formTarget: &cfg.CoordinatorDatabaseForm, nameTarget: &cfg.CoordinatorDatabaseName},
+		{rawKey: "CLICKHOUSE_URI", spec: ClickHouseSpec, target: &cfg.ClickHouseURI, formTarget: &cfg.ClickHouseForm, nameTarget: &cfg.ClickHouseName},
+	}
+	for _, binding := range dsnBindings {
+		value, _, resolveErr := ResolveDSN(lookup, binding.rawKey, binding.spec)
+		if resolveErr != nil {
+			return Config{}, resolveErr
+		}
+		*binding.target = value
+		if !value.Configured() {
+			continue
+		}
+		// Which FORM won is exactly what hostSet decided inside
+		// ResolveDSN -- recomputed here the same way (a set, non-empty
+		// HostKey), never guessed from the assembled DSN's shape.
+		//
+		// For the pre-built-URI form, Info reports form="uri" ONLY -- no
+		// Name is ever derived by parsing the DSN. A malformed, unescaped
+		// URI can still "successfully" parse via net/url with credential
+		// material misattributed into Path, and no denylist of
+		// "suspicious" characters is a guarantee against a general-
+		// purpose URL parser being confused -- the only guarantee is to
+		// never parse a URI for telemetry at all. For the component form, the database name was
+		// never embedded in an opaque string to begin with: it is the
+		// separate, non-secret DBKey env value ComponentDatabaseName reads
+		// directly, needing no parsing and carrying none of that risk.
+		if host, present := lookup(binding.spec.HostKey); present && host != "" {
+			*binding.formTarget = "components"
+			*binding.nameTarget = ComponentDatabaseIdentity(binding.spec.Scheme, value)
+		} else {
+			*binding.formTarget = "uri"
+		}
 	}
 	cfg.OperationalBridgeURL = envOrDefault(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_URL", "",
@@ -596,6 +679,13 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("domain_database_configured", c.DomainDatabaseURI.Configured()),
 		slog.Bool("coordinator_database_configured", c.CoordinatorDatabaseURI.Configured()),
 		slog.Bool("queue_database_configured", c.QueueDatabaseURI.Configured()),
+		// A successful resolution used
+		// to leave only the booleans above observable -- which of the two
+		// DSN forms actually won, and which database an operator's config
+		// reaches, was invisible at Info, so selecting the wrong (but
+		// reachable) database was a silent regression. Neither field is a
+		// credential: Form is the literal "uri"/"components"; Name is the
+		// identifier segment of the already-assembled DSN.
 		slog.String("queue_database_mode", string(c.QueueDatabaseMode)),
 		slog.String("coordinator_database_mode", string(c.CoordinatorDatabaseMode)),
 		slog.String("river_database_schema", c.RiverDatabaseSchema),
@@ -644,6 +734,33 @@ func (c Config) SafeAttrs() []slog.Attr {
 			slog.String("worker_group", c.WorkerGroup),
 			slog.String("queue_workers", formatQueueConcurrency(c.WorkerQueueConcurrency)),
 		)
+	}
+	// Emitted only for a DSN that actually resolved -- an unconfigured
+	// DSN already reports "false" above and has no form or database
+	// identifier to name.
+	for _, observed := range []struct {
+		configured bool
+		formKey    string
+		form       string
+		nameKey    string
+		name       string
+	}{
+		{c.DomainDatabaseURI.Configured(), "domain_database_form", c.DomainDatabaseForm, "domain_database_name", c.DomainDatabaseName},
+		{c.QueueDatabaseURI.Configured(), "queue_database_form", c.QueueDatabaseForm, "queue_database_name", c.QueueDatabaseName},
+		{c.CoordinatorDatabaseURI.Configured(), "coordinator_database_form", c.CoordinatorDatabaseForm, "coordinator_database_name", c.CoordinatorDatabaseName},
+		{c.ClickHouseURI.Configured(), "clickhouse_form", c.ClickHouseForm, "clickhouse_name", c.ClickHouseName},
+	} {
+		if !observed.configured {
+			continue
+		}
+		attrs = append(attrs, slog.String(observed.formKey, observed.form))
+		// The pre-built-URI form never has a Name -- telemetry never
+		// parses a URI, so there is nothing to name -- omit the key
+		// entirely rather than emit a misleading empty string that could
+		// read as "the database name really is blank".
+		if observed.name != "" {
+			attrs = append(attrs, slog.String(observed.nameKey, observed.name))
+		}
 	}
 	return attrs
 }
@@ -709,6 +826,78 @@ func boundedIntEnv(
 
 func envOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
 	if value, ok := lookup(key); ok && strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
+// ComponentDatabaseIdentity reports the database an assembled component
+// DSN will ACTUALLY connect to, by asking the driver that will consume it
+// -- never the requested string an operator typed.
+//
+// The two can only differ if the assembly is lossy, which
+// ResolveDSNFromComponents now refuses outright; publishing the parsed
+// value anyway means a regression in that refusal shows up in telemetry
+// instead of hiding behind it. That is exactly the failure this rule
+// exists for: a component database of "/app" once reached the database
+// "app" while Info reported "/app".
+//
+// A pre-built URI is still never parsed for telemetry: a malformed,
+// unescaped URI can "successfully" parse with credential material
+// misattributed into the path, and no denylist of suspicious characters
+// guards against that. Callers report form="uri" with no name at all.
+// Exported so cmd/dev-health-worker-migrate and cmd/dev-health-workerctl
+// apply the identical rule.
+func ComponentDatabaseIdentity(scheme string, built secrets.Value) string {
+	if !built.Configured() {
+		return ""
+	}
+	parsed, err := parseWithDriver(scheme, built.Reveal())
+	if err != nil {
+		return ""
+	}
+	return parsed.database
+}
+
+// WriteConfigError writes a single-line JSON configuration-error
+// diagnostic to w: `{"error":{"code":"configuration_error","detail":"..."}}`.
+// The stable "code" lets an operator script keep matching on it unchanged;
+// "detail" carries err's message run through logging.RedactText as
+// defense in depth.
+//
+// One JSON diagnostic writer, shared by cmd/dev-health-workerctl and
+// cmd/dev-health-worker-migrate (the entry points that can surface a
+// ResolveDSN/ResolveDSNFromComponents/secrets.Resolve error) rather than
+// each inventing its own safe-error convention. Every error these
+// packages build is already assembled purely from key-name strings,
+// never a resolved value; the redaction below is defense in depth on top
+// of that, matching the same rule internal/platform/shell/shell.go's own
+// pre-existing error path already applies for its own configuration
+// errors.
+func WriteConfigError(w io.Writer, err error) {
+	payload := struct {
+		Error struct {
+			Code   string `json:"code"`
+			Detail string `json:"detail"`
+		} `json:"error"`
+	}{}
+	payload.Error.Code = "configuration_error"
+	payload.Error.Detail = logging.RedactText(err.Error())
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// rawOrDefault is envOrDefault's UNTRIMMED counterpart: presence is a raw,
+// non-empty check, never TrimSpace-based. envOrDefault's own trimmed
+// presence check is wrong for PortKey/DBKey specifically: it silently
+// treats a whitespace-only value as absent and substitutes the default --
+// BEFORE the component's own
+// explicit whitespace-refusal guard ever saw it. Every other setting
+// envOrDefault serves (HTTP address, role names, schema, ...) keeps its
+// existing "whitespace means unset" convention unchanged; only the two
+// identifiers this ticket's own whitespace guard is responsible for use
+// this stricter counterpart.
+func rawOrDefault(lookup secrets.LookupEnv, key, fallback string) string {
+	if value, ok := lookup(key); ok && value != "" {
 		return value
 	}
 	return fallback
@@ -894,4 +1083,514 @@ func validateURI(key string, value secrets.Value, schemes ...string) error {
 		return fmt.Errorf("%s must be a valid supported URI", key)
 	}
 	return nil
+}
+
+// ComponentSpec names the env vars that together describe one DSN's
+// connection components -- CHAOS-5560's alternative to a single pre-built
+// URI, which requires the assembler (a compose file, a shell script) to
+// URL-encode every credential component correctly. It never does.
+type ComponentSpec struct {
+	HostKey, PortKey, DefaultPort string
+	// UserKey and PasswordKey also accept a `_FILE` suffix, exactly like
+	// secrets.Resolve's own KEY/KEY_FILE convention (ResolveDSNFromComponents
+	// resolves both through secrets.Resolve) -- tagged `dsnKey:"file"` so
+	// componentKeys' reflection sweep knows to check both forms without a
+	// second, hand-maintained list naming them again.
+	UserKey, PasswordKey string `dsnKey:"file"`
+	DBKey, DefaultDB     string
+	// DBKeyShared marks DBKey as shared across sibling connections -- true
+	// only for the three Postgres specs below, which all read the same
+	// DEV_HEALTH_PG_DB. componentKeys excludes DBKey from its sweep when
+	// this is set, since a shared field's mere presence says nothing about
+	// which one connection, if any, is moving to components; every OTHER
+	// component key, including a connection-specific DB name (ClickHouse's
+	// or migrate's own), has no such ambiguity and stays in the sweep.
+	DBKeyShared bool
+	Scheme      string
+}
+
+// componentKeys returns every env var name this spec's component form can
+// read from -- host/port/user/password/db, and the `_FILE` variant of any
+// field tagged `dsnKey:"file"` -- derived from the struct's own fields via
+// reflection, never a second hand-maintained list -- a hand-picked slice
+// naming the fields explicitly would omit DBKey (for connections where it
+// is NOT shared) and both `_FILE` forms unless updated by hand every
+// time a field is added; deriving the set from the struct itself means
+// adding a field to ComponentSpec later automatically joins the sweep.
+func (spec ComponentSpec) componentKeys() []string {
+	return spec.sweepKeys(true, true)
+}
+
+// componentKeyNames answers a different question from componentKeys: not
+// "which keys may TRIGGER the component form" but "which settings fed the
+// DSN that was just built", for naming in a diagnostic. So a shared DBKey
+// is included (it genuinely reached the driver, whatever its presence
+// says about intent) and the `_FILE` spellings are left out (an operator
+// reading an error wants the setting, not both ways to spell it).
+func (spec ComponentSpec) componentKeyNames() []string {
+	return spec.sweepKeys(false, false)
+}
+
+func (spec ComponentSpec) sweepKeys(skipSharedDB, withFileForms bool) []string {
+	var keys []string
+	v := reflect.ValueOf(spec)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if !strings.HasSuffix(field.Name, "Key") {
+			continue
+		}
+		value, ok := v.Field(i).Interface().(string)
+		if !ok || value == "" {
+			continue
+		}
+		if skipSharedDB && field.Name == "DBKey" && spec.DBKeyShared {
+			continue
+		}
+		keys = append(keys, value)
+		if withFileForms && field.Tag.Get("dsnKey") == "file" {
+			keys = append(keys, value+"_FILE")
+		}
+	}
+	return keys
+}
+
+// setComponentKeys reports which of spec's component keys are ACTUALLY set
+// in lookup's environment -- the runtime counterpart to componentKeys'
+// static enumeration, and (like componentKeys) derived from the struct's
+// own fields via reflection rather than a second hand-maintained list.
+//
+// Never TrimSpace an identifier or a secret: a presence check that trims
+// every value before testing it for emptiness would make a password
+// consisting only of whitespace -- non-empty, and therefore Configured()
+// to secrets.Resolve, which deliberately never trims a secret's
+// meaningful content -- invisible here, letting a raw URI and that
+// whitespace-only component coexist unflagged. Presence for
+// HostKey/PortKey/DBKey is a plain, UNTRIMMED
+// non-empty lookup (an identifier's whitespace is never used to decide
+// whether it is "really" set, matching ResolveDSNFromComponents' own
+// explicit-refusal handling of it above); presence for UserKey/PasswordKey
+// (tagged `dsnKey:"file"`) is secrets.Resolve's own Configured() result --
+// the exact predicate ResolveDSNFromComponents itself uses, including its
+// transparent `_FILE` handling, so this can never drift from it again.
+func (spec ComponentSpec) setComponentKeys(lookup secrets.LookupEnv) (keys []string, err error) {
+	v := reflect.ValueOf(spec)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if !strings.HasSuffix(field.Name, "Key") {
+			continue
+		}
+		key, ok := v.Field(i).Interface().(string)
+		if !ok || key == "" {
+			continue
+		}
+		if field.Name == "DBKey" && spec.DBKeyShared {
+			continue
+		}
+		if field.Tag.Get("dsnKey") == "file" {
+			resolved, _, resolveErr := secrets.Resolve(key, lookup)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if !resolved.Configured() {
+				continue
+			}
+			if _, direct := lookup(key); direct {
+				keys = append(keys, key)
+			} else {
+				keys = append(keys, key+"_FILE")
+			}
+			continue
+		}
+		if value, present := lookup(key); present && value != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys, nil
+}
+
+// DomainDatabaseSpec, QueueDatabaseSpec, CoordinatorDatabaseSpec, and
+// ClickHouseSpec are the canonical component definitions for CHAOS-5560's
+// four Load()-resolved DSNs, exported so every caller that needs one of
+// these connections shares the exact same field names and defaults:
+// cmd/dev-health-workerctl once read
+// POSTGRES_URI/WORKER_DATABASE_URI/COORDINATOR_DATABASE_URI/CLICKHOUSE_URI
+// directly instead of going through Load(), which meant it could not use
+// the component form at all; it now calls ResolveDSN with these same specs
+// rather than re-declaring (and risking drifting from) its own copy.
+var (
+	DomainDatabaseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_PG_DOMAIN_HOST", PortKey: "DEV_HEALTH_PG_DOMAIN_PORT", DefaultPort: "5432",
+		UserKey: "DEV_HEALTH_PG_DOMAIN_USER", PasswordKey: "DEV_HEALTH_PG_DOMAIN_PASSWORD",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", DBKeyShared: true, Scheme: "postgresql",
+	}
+	QueueDatabaseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_PG_QUEUE_HOST", PortKey: "DEV_HEALTH_PG_QUEUE_PORT", DefaultPort: "5432",
+		UserKey: "DEV_HEALTH_PG_QUEUE_USER", PasswordKey: "DEV_HEALTH_PG_QUEUE_PASSWORD",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", DBKeyShared: true, Scheme: "postgresql",
+	}
+	CoordinatorDatabaseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_PG_COORDINATOR_HOST", PortKey: "DEV_HEALTH_PG_COORDINATOR_PORT", DefaultPort: "5432",
+		UserKey: "DEV_HEALTH_PG_COORDINATOR_USER", PasswordKey: "DEV_HEALTH_PG_COORDINATOR_PASSWORD",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", DBKeyShared: true, Scheme: "postgresql",
+	}
+	ClickHouseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_CH_HOST", PortKey: "DEV_HEALTH_CH_PORT", DefaultPort: "9000",
+		UserKey: "DEV_HEALTH_CH_USER", PasswordKey: "DEV_HEALTH_CH_PASSWORD",
+		DBKey: "DEV_HEALTH_CH_DB", DefaultDB: "default", Scheme: "clickhouse",
+	}
+)
+
+// ResolveDSNFromComponents builds a DSN from spec's component env vars.
+// used is false (built is the zero Value, never an error) when the host var
+// is unset or blank. It never looks at any pre-built-URI env var itself --
+// ResolveDSN is the caller that decides which of the two forms a given
+// environment is allowed to use at all.
+//
+// There is no DSN grammar in this package. Assembly is stdlib net/url
+// alone -- url.URL, url.UserPassword and net.JoinHostPort each
+// percent-encode a component correctly for the position it occupies --
+// and the sole judge of whether the result is usable is the driver that
+// will consume it, so the assembled string is round-tripped through that
+// driver's OWN parser and refused only where the driver refuses it.
+//
+// Hand-written host and port grammar here refused, one at a time, a
+// succession of values both drivers accept: an absolute hostname's
+// trailing dot, an underscore in a label, a non-ASCII label, a name at
+// the 253-byte limit, a database or credential carrying a reserved
+// character. Each was a separate discovery because a grammar can only
+// ever approximate the parser it stands in front of. Deleting it removes
+// the whole class: what the driver accepts is what this accepts.
+func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (built secrets.Value, used bool, err error) {
+	host := firstOrEmpty(lookup(spec.HostKey))
+	if host == "" {
+		return secrets.Value{}, false, nil
+	}
+	// rawOrDefault, not envOrDefault: envOrDefault's presence check trims
+	// before testing for emptiness, so a whitespace-bearing PORT or DB
+	// would be silently replaced by the default instead of reaching the
+	// driver as the operator wrote it.
+	port := rawOrDefault(lookup, spec.PortKey, spec.DefaultPort)
+	if port == "" {
+		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.PortKey)
+	}
+	db := rawOrDefault(lookup, spec.DBKey, spec.DefaultDB)
+	if db == "" {
+		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.DBKey)
+	}
+	user, _, resolveErr := secrets.Resolve(spec.UserKey, lookup)
+	if resolveErr != nil {
+		return secrets.Value{}, true, resolveErr
+	}
+	password, _, resolveErr := secrets.Resolve(spec.PasswordKey, lookup)
+	if resolveErr != nil {
+		return secrets.Value{}, true, resolveErr
+	}
+	if password.Configured() && !user.Configured() {
+		return secrets.Value{}, true, fmt.Errorf("%s is set without %s", spec.PasswordKey, spec.UserKey)
+	}
+	target := &url.URL{
+		Scheme: spec.Scheme,
+		Host:   net.JoinHostPort(host, port),
+		Path:   "/" + db,
+	}
+	if user.Configured() {
+		if password.Configured() {
+			target.User = url.UserPassword(user.Reveal(), password.Reveal())
+		} else {
+			target.User = url.User(user.Reveal())
+		}
+	}
+	assembled := target.String()
+	if driverErr := acceptedByDriver(spec, assembled, componentValues{
+		host: host, port: port, database: db, user: user, password: password,
+	}); driverErr != nil {
+		return secrets.Value{}, true, driverErr
+	}
+	return secrets.NewValue(assembled), true, nil
+}
+
+// componentValues carries what the operator configured, so the driver's
+// parsed result can be compared back against it field by field.
+type componentValues struct {
+	host, port, database string
+	user, password       secrets.Value
+}
+
+// parsedDSN is what a driver made of an assembled DSN: the identity it
+// will actually connect with, plus how many endpoints it resolved to.
+type parsedDSN struct {
+	host, port, user, password, database string
+	endpoints                            int
+}
+
+// acceptedByDriver is the component form's only validation: hand the
+// assembled DSN to the driver that will consume it, and refuse exactly
+// what that driver refuses.
+//
+// The single-endpoint rule is checked on the driver's PARSED result,
+// never on the raw input. Both pgx and clickhouse-go read a comma inside
+// the host field as a multi-host list -- a convention net/url knows
+// nothing about, which is why "127.0.0.1,evil.invalid" once round-tripped
+// through url.Parse untouched while the live driver still reached the
+// second host. Only the parsed config says how many endpoints the driver
+// actually ended up with.
+func acceptedByDriver(spec ComponentSpec, assembled string, configured componentValues) error {
+	control, known := canonicalDSN[spec.Scheme]
+	if !known {
+		return fmt.Errorf("%s: no driver parser is registered for scheme %q", spec.HostKey, spec.Scheme)
+	}
+	parsed, parseErr := parseWithDriver(spec.Scheme, assembled)
+	if parseErr != nil {
+		// Whose fault is it? pgconn reads the ambient PG* environment
+		// while parsing (PGSSLROOTCERT, PGCONNECT_TIMEOUT and friends),
+		// so a DSN built from perfectly good components is refused when
+		// one of those is broken. Blaming the component settings for
+		// that sends the operator to the wrong file. A canonical,
+		// known-good DSN of the same scheme is parsed as a control: if
+		// the driver refuses that too, nothing about the components is
+		// wrong and the message has to say so.
+		if _, controlErr := parseWithDriver(spec.Scheme, control); controlErr != nil {
+			return fmt.Errorf(
+				"the %s driver cannot parse any DSN in this process's environment, so %s and its sibling settings are not the cause: %s",
+				spec.Scheme, spec.HostKey, redactDriverError(assembled, parseErr),
+			)
+		}
+		return componentDriverError(spec, assembled, parseErr)
+	}
+	if parsed.endpoints != 1 {
+		return componentEndpointError(spec)
+	}
+	return identicalAfterRoundTrip(spec, configured, parsed)
+}
+
+// identicalAfterRoundTrip is the difference between "the driver accepted
+// it" and "the driver will use it". Acceptance alone is not enough: a
+// database named "/app" assembles into a URL path of "//app", which
+// pgconn parses back as "app" -- accepted, single endpoint, and connected
+// to a DIFFERENT existing database than the one configured, with nothing
+// anywhere saying so.
+//
+// So every component is compared against what the driver parsed, not just
+// the ones a reviewer happened to probe. A component the assembly cannot
+// carry losslessly is refused, naming the setting and both forms of the
+// identifier -- neither of which is a credential; the password is compared
+// but never quoted.
+func identicalAfterRoundTrip(spec ComponentSpec, configured componentValues, parsed parsedDSN) error {
+	for _, field := range []struct {
+		key            string
+		want, got      string
+		compare, quote bool
+	}{
+		{key: spec.HostKey, want: configured.host, got: parsed.host, compare: true, quote: true},
+		{key: spec.PortKey, want: configured.port, got: parsed.port, compare: true, quote: true},
+		{key: spec.DBKey, want: configured.database, got: parsed.database, compare: true, quote: true},
+		{key: spec.UserKey, want: configured.user.Reveal(), got: parsed.user, compare: configured.user.Configured(), quote: true},
+		{key: spec.PasswordKey, want: configured.password.Reveal(), got: parsed.password, compare: configured.password.Configured(), quote: false},
+	} {
+		if !field.compare || field.want == field.got {
+			continue
+		}
+		if field.quote {
+			return fmt.Errorf(
+				"%s is %q, but the %s driver reads the assembled DSN as %q -- the component form cannot carry this value unchanged, so it is refused rather than silently connecting to something else",
+				field.key, field.want, spec.Scheme, field.got,
+			)
+		}
+		return fmt.Errorf(
+			"%s does not survive assembly unchanged: the %s driver reads a different value back out of the DSN, so it is refused rather than silently authenticating with something else",
+			field.key, spec.Scheme,
+		)
+	}
+	return nil
+}
+
+// canonicalDSN is a known-good DSN per supported scheme, used only as the
+// control in acceptedByDriver. Its membership is also what says a scheme
+// has a driver parser at all, so adding one here and to parseWithDriver
+// is the whole of adding a scheme.
+var canonicalDSN = map[string]string{
+	"postgresql": "postgresql://user:password@127.0.0.1:5432/database",
+	"clickhouse": "clickhouse://user:password@127.0.0.1:9000/database",
+}
+
+// parseWithDriver hands dsn to the driver that will consume it and reports
+// how many distinct endpoints that driver resolved it to. Scheme dispatch
+// lives here and nowhere else.
+//
+// pgconn carries at least one Fallbacks entry even for a single-host DSN:
+// that is pgx's own sslmode negotiation retry against the SAME endpoint,
+// not a second one. Only a fallback naming a different host or port is
+// another endpoint.
+func parseWithDriver(scheme, dsn string) (parsedDSN, error) {
+	switch scheme {
+	case "postgresql":
+		cfg, parseErr := pgconn.ParseConfig(dsn)
+		if parseErr != nil {
+			return parsedDSN{}, parseErr
+		}
+		parsed := parsedDSN{
+			host:      cfg.Host,
+			port:      strconv.FormatUint(uint64(cfg.Port), 10),
+			user:      cfg.User,
+			password:  cfg.Password,
+			database:  cfg.Database,
+			endpoints: 1,
+		}
+		for _, fallback := range cfg.Fallbacks {
+			if fallback.Host != cfg.Host || fallback.Port != cfg.Port {
+				parsed.endpoints++
+			}
+		}
+		return parsed, nil
+	case "clickhouse":
+		options, parseErr := clickhouse.ParseDSN(dsn)
+		if parseErr != nil {
+			return parsedDSN{}, parseErr
+		}
+		parsed := parsedDSN{
+			user:      options.Auth.Username,
+			password:  options.Auth.Password,
+			database:  options.Auth.Database,
+			endpoints: len(options.Addr),
+		}
+		if parsed.endpoints == 1 {
+			// SplitHostPort also unwraps the brackets net.JoinHostPort
+			// put around an IPv6 literal, so host compares against the
+			// bare form the operator configured.
+			host, port, splitErr := net.SplitHostPort(options.Addr[0])
+			if splitErr != nil {
+				return parsedDSN{}, splitErr
+			}
+			parsed.host, parsed.port = host, port
+		}
+		return parsed, nil
+	}
+	return parsedDSN{}, fmt.Errorf("no driver parser is registered for scheme %q", scheme)
+}
+
+// redactDriverError scrubs a driver's own message three ways before it is
+// surfaced, because a DSN parser's error routinely quotes the DSN back:
+// the assembled string is replaced literally (clickhouse-go echoes it
+// verbatim, credentials included), pgx's own parse error already masks the
+// password before it arrives, and logging.RedactText runs last as the
+// shared defense-in-depth pass that also catches a partially-quoted DSN.
+// What survives is the offending token the driver names -- a host or port
+// fragment, the same non-secret identifier class this package already
+// publishes at Info -- never a credential.
+func redactDriverError(assembled string, driverErr error) string {
+	return logging.RedactText(strings.ReplaceAll(driverErr.Error(), assembled, "[REDACTED]"))
+}
+
+// componentDriverError reports the driver's own refusal under the NAMES of
+// the settings that produced it.
+func componentDriverError(spec ComponentSpec, assembled string, driverErr error) error {
+	return fmt.Errorf(
+		"%s: the %s driver refused the assembled DSN: %s",
+		strings.Join(spec.componentKeyNames(), ", "), spec.Scheme, redactDriverError(assembled, driverErr),
+	)
+}
+
+// componentEndpointError refuses a component set the driver resolved to
+// more than one endpoint. The component form names exactly one; multi-host
+// stays available through the pre-built URI form, where each driver's own
+// multi-host syntax is untouched.
+func componentEndpointError(spec ComponentSpec) error {
+	return fmt.Errorf(
+		"%s: together resolve to more than one endpoint -- the component form configures exactly one; use the pre-built URI form for a multi-host DSN",
+		strings.Join(spec.componentKeyNames(), ", "),
+	)
+}
+
+// ResolveDSN resolves one DSN as EITHER a pre-built URI (rawKey, and its
+// rawKey_FILE variant, exactly as secrets.Resolve already handles) OR a set
+// of discrete components (spec) -- never both, and never one silently
+// overriding the other.
+//
+// Letting one form win over the other by precedence is unsafe either
+// direction: whichever form loses is still sitting in the environment,
+// with nothing to say whether that was a deliberate override or a stale
+// leftover from an earlier config generation -- and a deploy manifest
+// that already defaults the "losing" var (as
+// deploy/docker-compose/compose.go-workers.yml does for POSTGRES_HOST)
+// makes the ambiguity permanent, not occasional. Setting both is refused
+// outright, naming both keys in one message, checked before rawKey's own
+// KEY/KEY_FILE exclusivity rule ever runs (a caller with both a stale
+// rawKey_FILE mount AND a HOST var is refused for the real reason, not an
+// unrelated file-conflict message). Setting neither returns
+// configured=false, unchanged from calling secrets.Resolve(rawKey, lookup)
+// directly -- every existing "%s is required" caller keeps working exactly
+// as before this function existed.
+//
+// The exclusivity check inspects every per-connection component field
+// (host/port/user/password), not just HostKey: a non-host component set
+// alongside a pre-built URI must not be silently ignored just because
+// ResolveDSNFromComponents itself never activates without a host.
+//
+// The trigger set is spec.componentKeys() -- derived from the struct's
+// own fields via reflection, never a hand-picked slice naming them again
+// -- which covers every key correctly, DBKey included wherever it is not
+// marked shared (DBKeyShared is correct for the three Postgres specs,
+// where DBKey is genuinely shared -- it would be wrong for ClickHouse
+// and migrate, where it is not), and both `_FILE` forms of any field
+// resolved through secrets.Resolve.
+//
+// The mutual-exclusion check for the RAW form uses the SAME predicate
+// secrets.Resolve applies before it ever reads a `_FILE`, never a bare
+// env-var presence test: present-and-non-empty for the direct key, OR
+// present at all for its `_FILE` variant (a set `_FILE` var can only
+// ever resolve to configured=true or an error -- never to unconfigured
+// -- so testing its presence here, without reading it, is exactly
+// secrets.Resolve's own predicate, not an approximation of it). This
+// also means a decoy/misconfigured `_FILE` path is never opened just to
+// answer "is the raw form configured" when components are what actually
+// win -- the read only happens where it already happens regardless, in
+// the tail secrets.Resolve call and inside ResolveDSNFromComponents. A
+// raw value that is merely whitespace-only (never trimmed by
+// secrets.Resolve) is still "configured" under this same rule -- unlike
+// a component field, the raw form has no separate whitespace refusal, so
+// whitespace-only counts as set and still triggers exclusivity exactly
+// like any other non-empty raw value.
+func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (value secrets.Value, configured bool, err error) {
+	foundKeys, setErr := spec.setComponentKeys(lookup)
+	if setErr != nil {
+		return secrets.Value{}, false, setErr
+	}
+	hostSet := firstOrEmpty(lookup(spec.HostKey)) != ""
+	directValue, directPresent := lookup(rawKey)
+	_, rawFilePresent := lookup(rawKey + "_FILE")
+	rawConfigured := (directPresent && directValue != "") || rawFilePresent
+	if len(foundKeys) > 0 && rawConfigured {
+		return secrets.Value{}, false, fmt.Errorf(
+			"%s (or %s_FILE) and %s are mutually exclusive -- set exactly one to configure this connection",
+			rawKey, rawKey, strings.Join(foundKeys, ", "),
+		)
+	}
+	if hostSet {
+		return ResolveDSNFromComponents(lookup, spec)
+	}
+	if len(foundKeys) > 0 {
+		// A non-host component set with HOST itself absent must not fall
+		// straight through to secrets.Resolve(rawKey, lookup) -- if the
+		// raw key is also unset, that would silently report "not
+		// configured" with no sign the operator had already set (and
+		// presumably intended to use) a component field. HostKey is the
+		// only genuinely REQUIRED component (Port/DB
+		// have defaults; User/Password are an optional pair) -- since
+		// hostSet is false here, HostKey is necessarily among what is
+		// missing, whether or not it appears in foundKeys.
+		return secrets.Value{}, false, fmt.Errorf(
+			"%s is set without %s -- the component form requires %s to be set",
+			strings.Join(foundKeys, ", "), spec.HostKey, spec.HostKey,
+		)
+	}
+	return secrets.Resolve(rawKey, lookup)
+}
+
+func firstOrEmpty(value string, ok bool) string {
+	if !ok {
+		return ""
+	}
+	return value
 }

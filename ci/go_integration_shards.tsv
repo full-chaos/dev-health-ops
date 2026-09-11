@@ -229,7 +229,7 @@ cmd/query-api/internal/routeswitch	5
 cmd/query-api/internal/workgraph	60
 internal/cacheinvalidation	2
 internal/externalrecompute	30
-internal/goapiproof	175
+internal/goapiproof	235
 internal/joboperator	13
 internal/joboutbox	12
 internal/jobrescue	5
@@ -321,11 +321,14 @@ internal/migrationmatrix	5
 # re-run against the rebased tree (2026-09-11, bigboy) landed at 252s
 # wall clock, but with ~10 other lanes' go test/build processes
 # concurrent on the same host at the time (6% CPU utilisation for the
-# whole run) -- not a usable number. 175 is kept as-is rather than
-# ratcheted off it; the real weight comes from the hosted CI shard's own
-# job duration on this PR's first green run, corrected here in a
-# follow-up commit if it differs from 175 by more than this file's own
-# tolerance.
+# whole run) -- not a usable number. 175 was kept as PR #2448's tip
+# rather than ratcheted off a loaded local run.
+# CORRECTED per this file's own stated plan: PR #2448's first hosted CI
+# run (isolated GH runner, no local contention), commit 82f16c385, shard
+# 2 job 103446098966 -- `ok github.com/full-chaos/dev-health-ops/internal/goapiproof
+# 234.482s`. This is the first REAL measurement since the 175 ceiling was
+# set from noisy local runs; corrected 175 -> 235 (ceil + headroom, same
+# rounding convention as every raise above).
 # internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
 # measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run),
 # rounded up one further second to 35 for shard-balance headroom -- combined

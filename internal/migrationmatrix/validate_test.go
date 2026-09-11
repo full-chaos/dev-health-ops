@@ -847,12 +847,16 @@ func TestAnUnregisteredRowIsNamedAsStatusNamesIt(t *testing.T) {
 	drifted.DocumentDigest = strings.Repeat("0", 64)
 	orphan := liveRow("retiredOperation", "primary")
 	orphan.DocumentDigest = strings.Repeat("e", 64)
-	page := RenderOpsBlock(snapshot(drifted, orphan), catalog)
+	// Two UNREGISTERED rows against one DOCUMENT_DRIFT row: the two counts
+	// differ, so neither can pass by reading the other state's count.
+	orphanTwo := liveRow("renamedOperation", "canary")
+	orphanTwo.DocumentDigest = strings.Repeat("f", 64)
+	page := RenderOpsBlock(snapshot(drifted, orphan, orphanTwo), catalog)
 	for _, want := range []string{
 		"**DOCUMENT_DRIFT** (serves document `000000000000…`, which the catalog does not name)",
 		"**UNREGISTERED** (serves document `eeeeeeeeeeee…`; the catalog does not register this operation)",
 		"(DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **1**",
-		"(UNREGISTERED, as `dev-hops go-api routing status` reports it): **1**",
+		"(UNREGISTERED, as `dev-hops go-api routing status` reports it): **2**",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("the page does not contain %q:\n%s", want, page)

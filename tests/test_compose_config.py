@@ -609,7 +609,7 @@ def test_provision_river_roles_sql_is_not_a_grant_authority() -> None:
     # follows from the checks below. This script's only string literals are
     # role names and passwords passed in as psql variables, none of which
     # contain `--` today, so this is a latent gap in the guard rather than a
-    # live false negative -- flagged by codex round 2 on CHAOS-4261's PR. A
+    # live false negative -- found on CHAOS-4261's PR. A
     # full quote-aware tokenizer was judged disproportionate for a ~100-line
     # bootstrap script; if this script ever grows a literal containing `--`,
     # this comment is the signal to revisit that judgment.
@@ -1545,7 +1545,7 @@ def test_go_profile_overlay_never_depends_on_python_migrate() -> None:
         "go-river-provision",
         "go-river-migrate",
         "go-contractcheck",
-        # R98: the route-activation chain's own credential-minting step
+        # The route-activation chain's own credential-minting step
         # reuses the Python `service-credentials create` CLI (no Go-native
         # equivalent exists) and, like go-river-provision, legitimately
         # waits on `migrate` for the same reason -- it is a one-shot setup
@@ -1618,7 +1618,7 @@ def test_go_workers_run_at_one_replica_by_default() -> None:
     long-running Go processes must actually run on a bare `docker compose
     up`, not merely be buildable and scalable.
 
-    codex review (r2, P3): this property was asserted nowhere -- mutating
+    This property was asserted nowhere -- mutating
     `replicas: 1` to `replicas: 0` on the shared `&go-worker-resources`
     anchor survived the full focused suite (55 passed). Pin it directly.
 
@@ -1674,7 +1674,7 @@ def test_go_worker_family_has_no_pull_policy_override() -> None:
 
 
 def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
-    """codex review (r2, P1/fixed): go-river-provision and go-river-migrate
+    """go-river-provision and go-river-migrate
     defaulted their Postgres connection to devhealth/devhealth, inherited
     unchanged from deploy/docker-compose/compose.go-workers.yml (which
     assumes compose.production.yml's postgres identity). Root compose.yml's
@@ -2199,7 +2199,7 @@ def test_helm_go_workers_wire_operational_ordering_contract() -> None:
 
 
 def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
-    """codex review (delta round 2, P1): migration 067 itself checks
+    """Migration 067 itself checks
     OPERATIONAL_ORDERING_CONTRACT to decide whether to apply the
     ordering-contract cutover. Wiring only the workers (the tests above)
     left the migrate job/Job unable to receive an operator's export at all
@@ -2248,7 +2248,7 @@ def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
 
 
 def test_readme_documents_the_kubernetes_cutover_has_no_shell_export() -> None:
-    """codex review (delta round 4, P1): unlike Compose/Swarm/Helm, the raw
+    """Unlike Compose/Swarm/Helm, the raw
     Kubernetes manifests have no shell-interpolation surface -- exporting
     OPERATIONAL_ORDERING_CONTRACT=2 before `kubectl apply` silently does
     nothing, because the ConfigMap value is a literal. The only correct

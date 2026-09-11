@@ -79,6 +79,25 @@ models:
   JSON:
     model:
       - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqljson.JSON
+  # The four types whose Go shape is a decision, not a transcription: their
+  # nullable value fields carry `json:"value"` WITHOUT `omitempty`, so a nil
+  # renders as an explicit null rather than vanishing. gqlgen's generator emits
+  # `,omitempty` for a nullable field, so these lived in models_gen.go as
+  # hand-edits that every regeneration reverted. Bound here, gqlgen uses the
+  # declarations in internal/graph/model/models_bound.go and does not rewrite
+  # them. The reasoning is in that file and in each resolver's doc comment.
+  BreakdownItem:
+    model:
+      - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model.BreakdownItem
+  SankeyEdge:
+    model:
+      - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model.SankeyEdge
+  SankeyNode:
+    model:
+      - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model.SankeyNode
+  TimeseriesBucket:
+    model:
+      - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model.TimeseriesBucket
 
 # autobind intentionally omitted: Wave 0 has no Go domain model package to
 # bind generated GraphQL types to yet (no resolver logic exists). Every

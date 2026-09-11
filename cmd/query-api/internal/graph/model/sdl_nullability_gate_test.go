@@ -149,18 +149,30 @@ type goFieldInfo struct {
 // none in a gqlgen-generated model file, but fail loudly rather than
 // silently skip if one ever appears) are reported as a structural error by
 // the caller, not silently dropped.
-func parseGoModelFields(t *testing.T, path string) (map[string]map[string]goFieldInfo, []string) {
+// parseGoModelFields reads the model PACKAGE, not one file in it. A type gqlgen
+// is told to bind (gqlgen.yml `models:`) is declared by hand elsewhere in the
+// package and is deliberately absent from models_gen.go; reading only the
+// generated file would report every bound type as missing.
+func parseGoModelFields(t *testing.T, dir string) (map[string]map[string]goFieldInfo, []string) {
 	t.Helper()
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+	var files []*goast.File
+	for _, path := range modelPackageFiles(t, dir) {
+		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		files = append(files, file)
 	}
 
 	structs := map[string]map[string]goFieldInfo{}
 	var structuralErrors []string
 
-	for _, decl := range file.Decls {
+	var decls []goast.Decl
+	for _, f := range files {
+		decls = append(decls, f.Decls...)
+	}
+	for _, decl := range decls {
 		genDecl, ok := decl.(*goast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
 			continue
@@ -340,7 +352,7 @@ func compareNullability(
 		goFields, ok := goStructs[typeName]
 		if !ok {
 			structuralErrors = append(structuralErrors, fmt.Sprintf(
-				"SDL type %q has no corresponding Go struct in models_gen.go -- either the "+
+				"SDL type %q has no corresponding Go struct in the model package -- either the "+
 					"SDL-type-name-equals-Go-struct-name convention broke, or this gate's Go-side "+
 					"parser is out of date", typeName))
 			continue
@@ -358,7 +370,7 @@ func compareNullability(
 			if !ok {
 				structuralErrors = append(structuralErrors, fmt.Sprintf(
 					"SDL field %s.%s has no corresponding Go struct field (matched by json tag) in "+
-						"models_gen.go", typeName, field.Name))
+						"the model package", typeName, field.Name))
 				continue
 			}
 
@@ -619,10 +631,10 @@ func TestGoModelNullabilityMatchesPublishedSDL(t *testing.T) {
 		t.Fatalf("parse SDL pin %s: %v", sdlPath, gqlErr)
 	}
 
-	modelPath := filepath.Join(repoRoot, "cmd", "query-api", "internal", "graph", "model", "models_gen.go")
-	goStructs, parseErrs := parseGoModelFields(t, modelPath)
+	modelDir := filepath.Join(repoRoot, "cmd", "query-api", "internal", "graph", "model")
+	goStructs, parseErrs := parseGoModelFields(t, modelDir)
 	for _, e := range parseErrs {
-		t.Errorf("models_gen.go parse issue: %s", e)
+		t.Errorf("model package parse issue: %s", e)
 	}
 
 	violations, stats, structuralErrors := compareNullability(schema, goStructs)
@@ -1073,4 +1085,27 @@ func TestExclusionIntegrityFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// modelPackageFiles is every non-test Go file of the model package, sorted, so
+// a type is found wherever the package declares it -- generated or bound.
+func modelPackageFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the model package %s: %v", dir, err)
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		out = append(out, filepath.Join(dir, name))
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		t.Fatalf("the model package %s holds no Go file", dir)
+	}
+	return out
 }

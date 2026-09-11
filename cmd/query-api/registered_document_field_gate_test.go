@@ -406,20 +406,40 @@ func isNilableFieldType(expr goast.Expr) bool {
 	}
 }
 
-// parseModelStructFields walks models_gen.go and returns, for every
+// parseModelStructFields walks the model PACKAGE and returns, for every
 // top-level `type X struct { ... }`, its fields keyed by GraphQL field
 // name (the json tag -- gqlgen's own convention, the same one
 // sdl_nullability_gate_test.go's parseGoModelFields relies on).
+//
+// The whole package, not models_gen.go alone: a type gqlgen is told to bind
+// (gqlgen.yml `models:`) is declared by hand in another file of the same
+// package and is deliberately absent from the generated one.
 func parseModelStructFields(t *testing.T, repoRoot string) map[string]map[string]modelFieldInfo {
 	t.Helper()
-	path := filepath.Join(repoRoot, "cmd", "query-api", "internal", "graph", "model", "models_gen.go")
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, 0)
+	dir := filepath.Join(repoRoot, "cmd", "query-api", "internal", "graph", "model")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+		t.Fatalf("read the model package %s: %v", dir, err)
+	}
+	fset := token.NewFileSet()
+	var decls []goast.Decl
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		file, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", path, perr)
+		}
+		decls = append(decls, file.Decls...)
+	}
+	if len(decls) == 0 {
+		t.Fatalf("the model package %s holds no declaration", dir)
 	}
 	structs := map[string]map[string]modelFieldInfo{}
-	for _, decl := range file.Decls {
+	for _, decl := range decls {
 		genDecl, ok := decl.(*goast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
 			continue
@@ -448,7 +468,7 @@ func parseModelStructFields(t *testing.T, repoRoot string) map[string]map[string
 		}
 	}
 	if len(structs) == 0 {
-		t.Fatalf("%s: found zero struct declarations -- extraction is broken", path)
+		t.Fatalf("%s: found zero struct declarations -- extraction is broken", dir)
 	}
 	return structs
 }
@@ -797,7 +817,7 @@ func TestRegisteredDocumentFieldsArePopulatable(t *testing.T) {
 
 			fields, knownType := structFields[f.typeName]
 			if !knownType {
-				t.Fatalf("operation %q selects a field on type %q, but models_gen.go declares no such struct -- SDL/Go drift, not this gate's normal finding", sel.operation, f.typeName)
+				t.Fatalf("operation %q selects a field on type %q, but the model package declares no such struct -- SDL/Go drift, not this gate's normal finding", sel.operation, f.typeName)
 			}
 			info, knownField := fields[f.fieldName]
 			if !knownField {

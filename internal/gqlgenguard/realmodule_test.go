@@ -2,6 +2,7 @@ package gqlgenguard
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -127,8 +128,26 @@ func TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDigests(t *testing.T)
 	if err != nil {
 		t.Fatalf("generate in the copy: %v", err)
 	}
-	if !strings.Contains(applied.String(), "reverting 3 recorded hand-edit(s)") {
-		t.Fatalf("the applied run did not name the hand-edits it reverted:\n%s", applied.String())
+	// How many hand-edits this repository records is a property of the
+	// repository, not of the guard: it falls as they are expressed through
+	// gqlgen's own configuration instead. The count is read from the record
+	// rather than written here, so this cell pins that the run NAMES what it
+	// reverts, and keeps pinning it as that number moves.
+	recordBytes, err := os.ReadFile(filepath.Join(copyDir, DefaultDriftPath))
+	if err != nil {
+		t.Fatalf("read the copy's expected-drift record: %v", err)
+	}
+	recorded := 0
+	for line := range strings.SplitSeq(string(recordBytes), "\n") {
+		if strings.HasPrefix(line, "digest drift ") {
+			recorded++
+		}
+	}
+	if recorded == 0 {
+		t.Fatal("the repository records no drift, so the applied run has nothing to name")
+	}
+	if want := fmt.Sprintf("reverting %d recorded hand-edit(s)", recorded); !strings.Contains(applied.String(), want) {
+		t.Fatalf("the applied run did not name the hand-edits it reverted (want %q):\n%s", want, applied.String())
 	}
 	t.Logf("CELL-OUTPUT: accepted under -revert-recorded: %s", firstLine(applied.String()))
 	if len(res.Applied) == 0 {

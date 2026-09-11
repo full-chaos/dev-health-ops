@@ -696,6 +696,7 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	// len(defects) shapes x 2 modes, asserted from the slice itself so
 	// the number cannot go stale the way the three hand-written copies of
 	// it did (opus r5, P3).
+	t.Logf("exercised %d combinations (4 stages x 11 terminal states x 3 routes x 3 bindings x 2 outside x %d citation shapes x 2 modes); every one matched the rule derived in prose", combinations, len(defects))
 	if combinations != 4*11*3*3*2*len(defects)*2 {
 		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 4*11*3*3*2*len(defects)*2)
 	}
@@ -890,9 +891,17 @@ func TestTheBlankDefinitionIsIdenticalInBothEngines(t *testing.T) {
 			disagree = append(disagree, fmt.Sprintf("U+%04X %q: in cutset=%v Go blank=%v Postgres blank=%v", r, value, inCutset, goSaysBlank, sqlSaysBlank))
 		}
 	}
+	var version string
+	_ = pool.QueryRow(ctx, `SELECT current_setting('server_version')`).Scan(&version)
+	var blanks []string
+	for _, r := range sweep {
+		if strings.Trim(string(r), blankCitationCutset) == "" {
+			blanks = append(blanks, fmt.Sprintf("U+%04X", r))
+		}
+	}
+	t.Logf("PostgreSQL %s: %d runes swept (U+0001..U+00FF + 8 Unicode spaces/invisibles); blank in BOTH engines: %s; every other rune real in both; disagreements: %d",
+		version, len(sweep), strings.Join(blanks, " "), len(disagree))
 	if len(disagree) > 0 {
-		var version string
-		_ = pool.QueryRow(ctx, `SELECT current_setting('server_version')`).Scan(&version)
 		t.Fatalf("on PostgreSQL %s the two engines, or an engine and the constant, DISAGREE on %d rune(s):\n  %s",
 			version, len(disagree), strings.Join(disagree, "\n  "))
 	}
@@ -945,6 +954,7 @@ func TestTheBlankBuildClauseOverEveryCutsetRune(t *testing.T) {
 			if found[operation] {
 				admitted++
 			}
+			t.Logf("cell candidate_build=%-24q mode=%-7s observed admitted=%v", build, mode, found[operation])
 		}
 	}
 	if admitted != 6 {
@@ -975,10 +985,11 @@ func TestTheGeneratedLiteralRoundTripsThroughPostgres(t *testing.T) {
 		if err := pool.QueryRow(ctx, `SELECT `+escapeStringLiteral(value)).Scan(&got); err != nil {
 			t.Fatalf("PostgreSQL rejected escapeStringLiteral(%q) = %s: %v", value, escapeStringLiteral(value), err)
 		}
+		var version string
+		_ = pool.QueryRow(ctx, `SELECT current_setting('server_version')`).Scan(&version)
 		if got != value {
-			var version string
-			_ = pool.QueryRow(ctx, `SELECT current_setting('server_version')`).Scan(&version)
 			t.Fatalf("on PostgreSQL %s, escapeStringLiteral(%q) = %s decodes to %q", version, value, escapeStringLiteral(value), got)
 		}
+		t.Logf("cell %-24q PostgreSQL %s decodes the generated literal back to the input: true", value, version)
 	}
 }

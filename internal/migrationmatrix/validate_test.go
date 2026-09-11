@@ -596,6 +596,8 @@ func TestLoadCatalogOverItsInputDomain(t *testing.T) {
 		{"digest absent", `[{"operation":"featureFlags"}]`, false},
 		{"operation empty", `[{"operation":"","digest":"` + d1 + `"}]`, false},
 		{"digest blank", `[{"operation":"featureFlags","digest":"  "}]`, false},
+		{"digest = the blank cutset (JSON escapes)", `[{"operation":"featureFlags","digest":" \t\n\u000b\f\r\u00a0"}]`, false},
+		{"operation U+2028 (outside the cutset: a name, as Python also loads it)", `[{"operation":"\u2028","digest":"` + d1 + `"}]`, true},
 		{"digest wrong scalar type (number)", `[{"operation":"featureFlags","digest":7}]`, false},
 		{"digest null", `[{"operation":"featureFlags","digest":null}]`, false},
 		{"duplicate digest, two operations", `[{"operation":"featureFlags","digest":"` + d1 + `"},{"operation":"hotspots","digest":"` + d1 + `"}]`, false},
@@ -609,6 +611,7 @@ func TestLoadCatalogOverItsInputDomain(t *testing.T) {
 		if (err == nil) != c.accept {
 			t.Fatalf("%s: accepted=%v, the contract says %v (err=%v)", c.name, err == nil, c.accept, err)
 		}
+		t.Logf("cell %-62s observed accepted=%-5v contract accepted=%v", c.name, err == nil, c.accept)
 	}
 }
 
@@ -643,6 +646,8 @@ func TestParseRoutingSnapshotOverItsInputDomain(t *testing.T) {
 		{"rows wrong container type", `{"proof_run_total":0,"rows":{}}`, false, 0, 0, ""},
 		{"document digest absent", `{"proof_run_total":0,"rows":[{"selected_operation":"featureFlags","mode":"canary","schema_digest":"sha256:pin","current_candidate_build":"b","proof_run_id":null}]}`, false, 0, 0, ""},
 		{"document digest blank", `{"proof_run_total":0,"rows":[` + strings.Replace(row(""), `"document_digest":"d"`, `"document_digest":" "`, 1) + `]}`, false, 0, 0, ""},
+		{"document digest = the blank cutset (JSON escapes)", `{"proof_run_total":0,"rows":[` + strings.Replace(row(""), `"document_digest":"d"`, `"document_digest":" \t\n\u000b\f\r\u00a0"`, 1) + `]}`, false, 0, 0, ""},
+		{"document digest U+2028 (outside the cutset: accepted, then judged by the catalog)", `{"proof_run_total":0,"rows":[` + strings.Replace(row(""), `"document_digest":"d"`, `"document_digest":"\u2028"`, 1) + `]}`, true, 1, 0, NoProof},
 		{"out-of-vocabulary key", `{"proof_run_total":0,"rows":[` + row(`,"proven":true`) + `]}`, false, 0, 0, ""},
 		{"out-of-vocabulary top-level key", `{"proof_run_total":0,"rows":[],"extra":1}`, false, 0, 0, ""},
 		{"psql -At text, not JSON (the r6 P3-3 file)", `featureFlags|d|canary|sha256:pin|b|`, false, 0, 0, ""},
@@ -651,6 +656,7 @@ func TestParseRoutingSnapshotOverItsInputDomain(t *testing.T) {
 		if (err == nil) != c.accept {
 			t.Fatalf("%s: accepted=%v, the contract says %v (err=%v)", c.name, err == nil, c.accept, err)
 		}
+		t.Logf("cell %-62s observed accepted=%-5v rows=%d total=%d contract accepted=%v", c.name, err == nil, len(rows), total, c.accept)
 		if !c.accept {
 			continue
 		}
@@ -676,6 +682,8 @@ func TestDocumentDriftOverItsInputDomain(t *testing.T) {
 		{"live, a document the catalog registers for ANOTHER operation", func(r *OperationRow) { r.DocumentDigest = documentOf("hotspots") }, true, false},
 		{"live, an operation the catalog does not register", func(r *OperationRow) { r.Operation = "retired" }, true, false},
 		{"live, no document digest", func(r *OperationRow) { r.DocumentDigest = "" }, false, true},
+		{"live, a document digest made of the blank cutset", func(r *OperationRow) { r.DocumentDigest = " \t\u00a0" }, false, true},
+		{"live, a document digest of U+2028 (outside the cutset: a real, undispatchable value)", func(r *OperationRow) { r.DocumentDigest = "\u2028" }, true, false},
 		{"dead, another document", func(r *OperationRow) { r.Live = false; r.DocumentDigest = strings.Repeat("0", 64) }, false, false},
 		{"dead, no document digest", func(r *OperationRow) { r.Live = false; r.DocumentDigest = "" }, false, false},
 		{"live, the catalog's document with different case", func(r *OperationRow) { r.DocumentDigest = strings.ToUpper(r.DocumentDigest) }, true, false},
@@ -691,5 +699,6 @@ func TestDocumentDriftOverItsInputDomain(t *testing.T) {
 		if got := len(ValidateDocumentDrift(snapshot(row), catalog)); got != map[bool]int{true: 1, false: 0}[c.drift] {
 			t.Fatalf("%s: %d R14 violations, want drift=%v", c.name, got, c.drift)
 		}
+		t.Logf("cell %-80s observed drift=%-5v unjudged=%-5v R14=%d", c.name, DocumentDrift(row, catalog), DocumentUnjudged(row), len(ValidateDocumentDrift(snapshot(row), catalog)))
 	}
 }

@@ -2,7 +2,10 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +186,11 @@ func TestEscapeStringLiteralOverItsInputDomain(t *testing.T) {
 		if decoded != c.want {
 			t.Fatalf("%s: escapeStringLiteral(%q) = %q decodes to %q, want %q", c.name, c.value, literal, decoded, c.want)
 		}
+		shown := literal
+		if len(shown) > 72 {
+			shown = shown[:72] + "..."
+		}
+		t.Logf("cell %-40s observed literal=%s decodes to the input: true", c.name, shown)
 	}
 }
 
@@ -237,4 +245,38 @@ func decodeNumericEscapeLiteral(literal string) (string, error) {
 		body = body[2+width:]
 	}
 	return decoded.String(), nil
+}
+
+// The ONE value every engine's "names nothing" is pinned to. The shared
+// admission fixture states it as data, so neither language owns it: this
+// asserts Go's constant (and, through TestTheBlankCutsetLiteralIsGenerated
+// FromTheConstant, the SQL literal generated from it) equals it, and the
+// Python half asserts _BLANK_CUTSET equals it. A rune added on one side and
+// not the other fails here, on a runner with no database, before any
+// behavioural case could disagree.
+func TestTheCutsetIsTheOneTheSharedFixtureStates(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "enablement_proof_admission_cases.json"))
+	if err != nil {
+		t.Fatalf("read the shared fixture: %v", err)
+	}
+	var fixture struct {
+		BlankCutset *string `json:"blank_cutset"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("parse the shared fixture: %v", err)
+	}
+	if fixture.BlankCutset == nil {
+		t.Fatal("the shared fixture states no blank_cutset: the three definitions of \"names nothing\" would have nothing in common to be pinned to")
+	}
+	if *fixture.BlankCutset != blankCitationCutset {
+		t.Fatalf("blankCitationCutset is %q but the shared fixture states %q: Go and Python would disagree about which citations name nothing", blankCitationCutset, *fixture.BlankCutset)
+	}
+	for _, r := range blankCitationCutset {
+		if !NamesNothing(string(r)) {
+			t.Fatalf("NamesNothing(%q) = false for a rune of the cutset", r)
+		}
+	}
+	if NamesNothing("v") || NamesNothing("\u2028") || NamesNothing("a") {
+		t.Fatal("NamesNothing called a real value blank")
+	}
 }

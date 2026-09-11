@@ -385,3 +385,55 @@ func TestARoutingSnapshotWithoutAProofTotalIsRefused(t *testing.T) {
 		t.Fatalf("the control snapshot was misread: rows=%+v total=%d err=%v", rows, total, err)
 	}
 }
+
+// Every pair of flags that name one resource, or one flag another mode never
+// reads: each cell is set, and the result is either an explicit refusal, an
+// explicit notice, or the flag is read. Executed before the fix, on the
+// shipped binary: `-render -dsn X -routing F` rendered from F without a word
+// about X, and `-check -dsn X -routing /nonexistent -fleet /nonexistent`
+// printed "migration matrix OK".
+func TestNoFlagIsSilentlyIgnored(t *testing.T) {
+	type flags = map[string]bool
+	for _, c := range []struct {
+		name                 string
+		explicit             flags
+		print, render, check bool
+		fleet                string
+		envDSN               bool
+		refuse               bool
+		notice               bool
+	}{
+		{"-print-routing-sql alone", flags{"print-routing-sql": true}, true, false, false, "docker", false, false, false},
+		{"-print-routing-sql with $POSTGRES_URI set (an env var, not a flag -- nothing is claimed)", flags{"print-routing-sql": true}, true, false, false, "docker", true, false, false},
+		{"-print-routing-sql -dsn", flags{"print-routing-sql": true, "dsn": true}, true, false, false, "docker", false, true, false},
+		{"-print-routing-sql -routing", flags{"print-routing-sql": true, "routing": true}, true, false, false, "docker", false, true, false},
+		{"-print-routing-sql -root", flags{"print-routing-sql": true, "root": true}, true, false, false, "docker", false, true, false},
+		{"-print-routing-sql -render", flags{"print-routing-sql": true, "render": true}, true, true, false, "docker", false, true, false},
+		{"-print-routing-sql -check", flags{"print-routing-sql": true, "check": true}, true, false, true, "docker", false, true, false},
+		{"-check alone", flags{"check": true}, false, false, true, "docker", false, false, false},
+		{"-check -root", flags{"check": true, "root": true}, false, false, true, "docker", false, false, false},
+		{"-check with $POSTGRES_URI set", flags{"check": true}, false, false, true, "docker", true, false, false},
+		{"-check -dsn", flags{"check": true, "dsn": true}, false, false, true, "docker", false, true, false},
+		{"-check -routing", flags{"check": true, "routing": true}, false, false, true, "docker", false, true, false},
+		{"-check -fleet", flags{"check": true, "fleet": true}, false, false, true, "none", false, true, false},
+		{"-check -containers", flags{"check": true, "containers": true}, false, false, true, "docker", false, true, false},
+		{"-render -check=false (set, false: not -check)", flags{"render": true, "check": true}, false, true, false, "docker", false, false, false},
+		{"-render -dsn", flags{"render": true, "dsn": true}, false, true, false, "docker", false, false, false},
+		{"-render -routing", flags{"render": true, "routing": true}, false, true, false, "docker", false, false, false},
+		{"-render -dsn -routing", flags{"render": true, "dsn": true, "routing": true}, false, true, false, "docker", false, true, false},
+		{"-render -routing with $POSTGRES_URI set", flags{"render": true, "routing": true}, false, true, false, "docker", true, false, true},
+		{"-render with $POSTGRES_URI set (it IS the -dsn default, and is read)", flags{"render": true}, false, true, false, "docker", true, false, false},
+		{"-render -fleet docker -containers", flags{"render": true, "fleet": true, "containers": true}, false, true, false, "docker", false, false, false},
+		{"-render -fleet none -containers", flags{"render": true, "fleet": true, "containers": true}, false, true, false, "none", false, true, false},
+		{"-render -fleet <file> -containers", flags{"render": true, "fleet": true, "containers": true}, false, true, false, "/tmp/fleet.json", false, true, false},
+	} {
+		notice, err := checkFlagCombination(c.explicit, c.print, c.render, c.check, c.fleet, c.envDSN)
+		if (err != nil) != c.refuse {
+			t.Fatalf("%s: refused=%v, want %v (err=%v)", c.name, err != nil, c.refuse, err)
+		}
+		if (notice != "") != c.notice {
+			t.Fatalf("%s: notice=%q, want a notice=%v", c.name, notice, c.notice)
+		}
+		t.Logf("cell %-86s observed refused=%-5v notice=%v", c.name, err != nil, notice != "")
+	}
+}

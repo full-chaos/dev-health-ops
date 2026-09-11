@@ -293,3 +293,21 @@ def test_every_refused_case_names_the_control_that_removes_its_reason() -> None:
             assert case.get("key_override"), (
                 f"case {case['name']!r} asks with an overridden key it does not declare"
             )
+
+
+def test_the_cutset_is_the_one_the_shared_fixture_states() -> None:
+    """The Python half of the one-definition pin (opus r6, P2-1 swept).
+
+    ``_BLANK_CUTSET`` is bound as a parameter, so it is version-independent
+    -- but a rune added to Go's constant and not here would still split the
+    engines. Both sides are asserted equal to the value the fixture states.
+    """
+    from dev_health_ops.api.graphql.go_api_routing_admin import _BLANK_CUTSET
+
+    stated = _load().get("blank_cutset")
+    assert stated is not None, "the shared fixture states no blank_cutset"
+    assert _BLANK_CUTSET == stated, (
+        f"_BLANK_CUTSET is {_BLANK_CUTSET!r} but the shared fixture states "
+        f"{stated!r}: Go and Python would disagree about which citations name "
+        "nothing"
+    )

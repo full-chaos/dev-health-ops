@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -87,6 +88,17 @@ func main() {
 	)
 	flag.Parse()
 
+	explicit := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	notice, err := checkFlagCombination(explicit, *printSQL, *render, *check, *fleet, os.Getenv("POSTGRES_URI") != "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", err)
+		os.Exit(2)
+	}
+	if notice != "" {
+		fmt.Fprintf(os.Stderr, "notice: %s\n", notice)
+	}
+
 	// Printing the statement is not a render or a check, so it is answered
 	// before the -render/-check exclusivity rule: an operator asking how to
 	// produce a routing snapshot has neither yet.
@@ -103,7 +115,6 @@ func main() {
 		os.Exit(2)
 	}
 
-	var err error
 	if *render {
 		err = runRender(*root, *dsn, *routing, *fleet, splitCSV(*containers))
 	} else {
@@ -113,6 +124,70 @@ func main() {
 		fmt.Fprintf(os.Stderr, "dev-health-migration-matrix: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// checkFlagCombination refuses every pair of flags in which one would be
+// silently ignored, and names the one pair that is honoured on purpose.
+//
+// Executed before this existed: `-render -dsn X -routing F` rendered from F
+// and never mentioned X, and `-check -dsn X -routing /nonexistent -fleet
+// /nonexistent` printed "migration matrix OK" -- three flags naming three
+// sources, none read, no word said. An operator who passes a source and is
+// not told it was ignored believes the page describes that source. Two
+// knobs naming one resource must never resolve silently.
+//
+//   - -print-routing-sql prints a statement and reads nothing, so any other
+//     flag with it is refused.
+//   - -check reads ONLY committed files, so -dsn, -routing, -fleet and
+//     -containers with it are refused.
+//   - -render takes ONE routing source: -dsn and -routing together are
+//     refused. -routing while $POSTGRES_URI is set (the -dsn DEFAULT) is
+//     honoured -- the explicit flag wins -- and says so in a notice.
+//   - -containers applies only to `-fleet docker`; with any other -fleet it
+//     is refused.
+func checkFlagCombination(explicit map[string]bool, printSQL, render, check bool, fleet string, envDSN bool) (string, error) {
+	// The mode flags are judged by VALUE (`-check=false` is set but is not
+	// -check); only the source flags are judged by presence.
+	sources := []string{"dsn", "routing", "fleet", "containers", "root"}
+	others := func(allowed ...string) []string {
+		allow := map[string]bool{}
+		for _, name := range allowed {
+			allow[name] = true
+		}
+		var out []string
+		for _, name := range sources {
+			if explicit[name] && !allow[name] {
+				out = append(out, "-"+name)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
+	switch {
+	case printSQL:
+		if render || check {
+			return "", fmt.Errorf("-print-routing-sql prints a statement and exits; it cannot be combined with -render or -check")
+		}
+		if extra := others(); len(extra) > 0 {
+			return "", fmt.Errorf("-print-routing-sql prints a statement and reads nothing; %s would be ignored -- pass it alone", strings.Join(extra, " "))
+		}
+		return "", nil
+	case check:
+		if extra := others("root"); len(extra) > 0 {
+			return "", fmt.Errorf("-check reads only committed files; %s would be ignored -- those flags apply to -render", strings.Join(extra, " "))
+		}
+		return "", nil
+	}
+	if explicit["dsn"] && explicit["routing"] {
+		return "", fmt.Errorf("-dsn and -routing both name the routing source and only one can be read -- pass one")
+	}
+	if explicit["containers"] && fleet != "docker" {
+		return "", fmt.Errorf("-containers applies only to -fleet docker; with -fleet %q it would be ignored", fleet)
+	}
+	if explicit["routing"] && envDSN {
+		return "reading routing rows from -routing; $POSTGRES_URI (the -dsn default) is set and is NOT read", nil
+	}
+	return "", nil
 }
 
 // legacyBlocks renders the four blocks CHAOS-5473 absorbed from the deleted

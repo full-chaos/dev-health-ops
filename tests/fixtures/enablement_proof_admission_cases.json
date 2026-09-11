@@ -18,8 +18,11 @@
     "",
     "Each case seeds ONE go_api_proof_run row and asks: does this receipt authorize",
     "'dev-hops go-api routing enable --mode <target_mode>' for that operation? Fields left",
-    "out of 'receipt' take the defaults below."
+    "out of 'receipt' take the defaults below.",
+    "",
+    "`blank_cutset` is THE set of characters a citation or build may be made of and still name nothing. It is data here so that neither language owns it: Go's blankCitationCutset, the SQL literal generated from it, and Python's _BLANK_CUTSET are each asserted EQUAL to this value by a database-free test on each side."
   ],
+  "blank_cutset": " \t\n\u000b\f\r ",
   "key": {
     "schema_digest": "sha256:5484aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "document_digest": "sha256:5484bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

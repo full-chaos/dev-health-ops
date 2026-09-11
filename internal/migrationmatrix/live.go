@@ -185,7 +185,7 @@ func ParseRoutingSnapshot(raw []byte, currentDigest string) ([]OperationRow, int
 	}
 	out := make([]OperationRow, 0, len(payload.Rows))
 	for _, row := range payload.Rows {
-		if strings.TrimSpace(row.DocumentDigest) == "" {
+		if goapiproof.NamesNothing(row.DocumentDigest) {
 			return nil, 0, fmt.Errorf(
 				"routing snapshot row %q at schema %q has no document_digest; "+
 					"the routing key is (schema_digest, document_digest, selected_operation), "+
@@ -194,8 +194,8 @@ func ParseRoutingSnapshot(raw []byte, currentDigest string) ([]OperationRow, int
 				row.Operation, row.SchemaDigest)
 		}
 		proven := NoProof
-		if row.ProofRunID != nil && strings.TrimSpace(*row.ProofRunID) != "" {
-			proven = strings.TrimSpace(*row.ProofRunID)
+		if row.ProofRunID != nil && !goapiproof.NamesNothing(*row.ProofRunID) {
+			proven = *row.ProofRunID
 		}
 		out = append(out, OperationRow{
 			Operation:      row.Operation,

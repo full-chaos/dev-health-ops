@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
 var (
@@ -248,7 +250,7 @@ func ValidateRender(render *Render) []Violation {
 // routing key can hold one: ReadRoutingState scans a NOT NULL column and
 // the offline -routing reader refuses an empty one.
 func DocumentDrift(row OperationRow, catalog Catalog) bool {
-	return row.Live && row.DocumentDigest != "" && !catalog.Names(row.Operation, row.DocumentDigest)
+	return row.Live && !goapiproof.NamesNothing(row.DocumentDigest) && !catalog.Names(row.Operation, row.DocumentDigest)
 }
 
 // DocumentUnjudged reports whether a LIVE row carries no document digest,
@@ -257,7 +259,7 @@ func DocumentDrift(row OperationRow, catalog Catalog) bool {
 // the silence opus r6 (P2-2) found, and calling it drifted would fail every
 // page rendered before the key was carried.
 func DocumentUnjudged(row OperationRow) bool {
-	return row.Live && row.DocumentDigest == ""
+	return row.Live && goapiproof.NamesNothing(row.DocumentDigest)
 }
 
 // UnprovenReachable counts the rows a real client request can be served by

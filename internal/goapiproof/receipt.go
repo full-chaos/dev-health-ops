@@ -144,7 +144,7 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 	if err := validateVocabulary(receipt); err != nil {
 		return uuid.Nil, err
 	}
-	if strings.Trim(receipt.CandidateBuild, blankCitationCutset) == "" {
+	if NamesNothing(receipt.CandidateBuild) {
 		// Trimmed with blankCitationCutset, not `== ""`: `proven` is
 		// keyed on this column, and a
 		// whitespace-only build is as unmatchable as an absent one while
@@ -167,7 +167,7 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 	// the defect r2 found in this very PR. The writer is the one place
 	// that can refuse it once.
 	for _, ticket := range receipt.BaselineDefects {
-		if strings.Trim(ticket, blankCitationCutset) == "" {
+		if NamesNothing(ticket) {
 			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt whose baseline_defect array contains an empty citation (%d entries) -- cardinality() counts it, so the enablement predicate would read this as a fully-cited mismatch while it cites nothing", len(receipt.BaselineDefects))
 		}
 	}
@@ -376,6 +376,21 @@ const blankCitationCutset = " \t\n\v\f\r\u00a0"
 // DEV_HEALTH_TEST_POSTGRES_DSN at each.
 func blankCitationSQL() string {
 	return escapeStringLiteral(blankCitationCutset)
+}
+
+// NamesNothing is THE Go definition of "blank": true when value is empty or
+// made only of blankCitationCutset's runes. Every blank judgment this change
+// makes in Go calls it -- the writer's citation and build guards here, the
+// migration matrix's routing-snapshot and catalog guards and its
+// DOCUMENT_DRIFT "cannot be judged" state -- so a sibling check cannot
+// quietly use strings.TrimSpace (Unicode's open-ended space class) while
+// this one uses the enumerated set (opus r6 swept the class: a rule applied
+// to one field is a rule for every field of that shape). The SQL side is
+// blankCitationSQL, generated from the same constant; the Python side binds
+// _BLANK_CUTSET, and all three are pinned to the one value the shared
+// admission fixture states as `blank_cutset`.
+func NamesNothing(value string) bool {
+	return strings.Trim(value, blankCitationCutset) == ""
 }
 
 // escapeStringLiteral renders value as a PostgreSQL escape-string literal

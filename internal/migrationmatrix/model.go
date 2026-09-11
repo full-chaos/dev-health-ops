@@ -26,8 +26,9 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
 // ParityStatus is the correctness claim for a family: does its Go executor
@@ -373,7 +374,7 @@ func NewCatalog(pairs [][2]string) (Catalog, error) {
 	owner := map[string]string{}
 	for _, pair := range pairs {
 		operation, digest := pair[0], pair[1]
-		if strings.TrimSpace(operation) == "" || strings.TrimSpace(digest) == "" {
+		if goapiproof.NamesNothing(operation) || goapiproof.NamesNothing(digest) {
 			return Catalog{}, fmt.Errorf("catalog entry %q/%q: operation and digest must both be non-empty", operation, digest)
 		}
 		if previous, seen := owner[digest]; seen {

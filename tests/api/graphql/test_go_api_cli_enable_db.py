@@ -911,3 +911,36 @@ async def test_enable_json_names_the_authorizing_receipt(
         )
     [row] = json.loads(capsys.readouterr().out)["operations"]
     assert (row["proven"], row["receipt"]) == (False, None), row
+
+
+@pytest.mark.asyncio
+async def test_enable_names_the_newest_admissible_receipt(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Two admissible receipts for one row: the one named is the newest --
+    the latest measurement that satisfies every clause -- and it is the one
+    the row's review_evidence records."""
+    catalog = dict(catalog_entries())
+    for terminal_state, defects in (("match", None), ("mismatch", ["CHAOS-5447"])):
+        await _seed_receipt(
+            session_factory,
+            document_digest=catalog["featureFlags"],
+            measurement_route="edge",
+            build_binding="per_request",
+            terminal_state=terminal_state,
+            baseline_defect=defects,
+            differences_outside_baseline_defect=0,
+        )
+    async with session_factory() as session:
+        newest = (
+            await session.execute(
+                sa.select(ProofRun.id).order_by(ProofRun.observed_at.desc()).limit(1)
+            )
+        ).scalar_one()
+    out, _err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="canary", as_json=True
+    )
+    [row] = json.loads(out)["operations"]
+    assert row["receipt"]["receipt_id"] == str(newest), (row, newest)
+    assert row["receipt"]["terminal_state"] == "mismatch", row
+    assert evidence.startswith(f"proof_receipt={newest} "), evidence

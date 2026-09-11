@@ -1699,8 +1699,9 @@ def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     postgres_env = services["postgres"]["environment"]
-    # go-river-provision/migrate's
-    # entrypoints already read POSTGRES_USER/_PASSWORD overrides to
+    # go-river-provision's entrypoint and go-river-migrate's
+    # DEV_HEALTH_MIGRATION_PG_USER/_PASSWORD already read these same
+    # POSTGRES_USER/_PASSWORD overrides as their own defaults, to
     # authenticate against this exact server -- only the server itself
     # hardcoded past them (same class as POSTGRES_DB below).
     assert postgres_env["POSTGRES_USER"] == "${POSTGRES_USER:-postgres}"
@@ -1723,9 +1724,12 @@ def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
     )
 
     migrate_env = services["go-river-migrate"]["environment"]
-    assert migrate_env["POSTGRES_USER"] == "${POSTGRES_USER:-postgres}"
-    assert migrate_env["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD:-postgres}"
-    assert migrate_env["POSTGRES_DB"] == "${POSTGRES_DB:-postgres}"
+    assert migrate_env["DEV_HEALTH_MIGRATION_PG_HOST"] == "${POSTGRES_HOST:-postgres}"
+    assert migrate_env["DEV_HEALTH_MIGRATION_PG_USER"] == "${POSTGRES_USER:-postgres}"
+    assert migrate_env["DEV_HEALTH_MIGRATION_PG_PASSWORD"] == (
+        "${POSTGRES_PASSWORD:-postgres}"
+    )
+    assert migrate_env["DEV_HEALTH_MIGRATION_PG_DB"] == "${POSTGRES_DB:-postgres}"
 
 
 def test_go_workers_select_manifest_queues_without_runtime_profile() -> None:

@@ -71,7 +71,9 @@ def _render(*sets: str) -> list[dict]:
 
 def _jobs(*sets: str) -> dict[str, dict]:
     return {
-        doc["metadata"]["name"]: doc for doc in _render(*sets) if doc.get("kind") == "Job"
+        doc["metadata"]["name"]: doc
+        for doc in _render(*sets)
+        if doc.get("kind") == "Job"
     }
 
 
@@ -164,7 +166,10 @@ def test_route_activate_weight_follows_river_migrate() -> None:
         for name in (_MIGRATE, _PROVISION, _RIVER, _ROUTE_ACTIVATE)
     }
     assert (
-        weights[_MIGRATE] < weights[_PROVISION] < weights[_RIVER] < weights[_ROUTE_ACTIVATE]
+        weights[_MIGRATE]
+        < weights[_PROVISION]
+        < weights[_RIVER]
+        < weights[_ROUTE_ACTIVATE]
     ), weights
 
 
@@ -177,7 +182,9 @@ def test_route_activate_runs_on_install_and_upgrade() -> None:
 
 def test_failed_route_activate_pod_is_retained_for_its_logs() -> None:
     jobs = _jobs(*_FULL_CHAIN_ON)
-    policy = jobs[_ROUTE_ACTIVATE]["metadata"]["annotations"]["helm.sh/hook-delete-policy"]
+    policy = jobs[_ROUTE_ACTIVATE]["metadata"]["annotations"][
+        "helm.sh/hook-delete-policy"
+    ]
     assert "before-hook-creation" in policy
     assert "hook-succeeded" not in policy, (
         "a failed activation's pod must survive for its logs, same as "
@@ -190,7 +197,9 @@ def test_failed_route_activate_pod_is_retained_for_its_logs() -> None:
 
 def test_all_four_kinds_are_present_as_ordered_initcontainers() -> None:
     jobs = _jobs(*_FULL_CHAIN_ON)
-    init_containers = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
+    init_containers = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"][
+        "initContainers"
+    ]
     names = [c["name"] for c in init_containers]
     assert names[0] == "operator-credential", names
     assert names[1] == "route-dsn", (
@@ -249,7 +258,10 @@ def test_each_kind_invokes_routes_apply_with_that_exact_kind(kind: str) -> None:
     env = {item["name"]: item.get("value") for item in container["env"]}
     assert env["POSTGRES_URI_FILE"] == "/run/route-dsn/POSTGRES_URI", env
     assert env["WORKER_DATABASE_URI_FILE"] == "/run/route-dsn/WORKER_DATABASE_URI", env
-    assert env["COORDINATOR_DATABASE_URI_FILE"] == "/run/route-dsn/COORDINATOR_DATABASE_URI", env
+    assert (
+        env["COORDINATOR_DATABASE_URI_FILE"]
+        == "/run/route-dsn/COORDINATOR_DATABASE_URI"
+    ), env
     assert env["WORKER_OPERATOR_TOKEN_FILE"] == "/run/go-worker-operator/token", env
     assert env["RIVER_DATABASE_SCHEMA"] == "river", env
 
@@ -302,7 +314,9 @@ def test_operator_credential_uses_the_ops_image_that_carries_the_cli() -> None:
     )
 
 
-def test_route_dsn_uses_the_ops_image_that_has_a_shell_and_python(tmp_path: Path) -> None:
+def test_route_dsn_uses_the_ops_image_that_has_a_shell_and_python(
+    tmp_path: Path,
+) -> None:
     """codex review (r1, P1 -- executed): the operator image is built FROM
     gcr.io/distroless/static-debian12:nonroot and has no /bin/sh at all --
     confirmed executing `docker run --entrypoint /bin/sh <operator image>`,
@@ -335,7 +349,8 @@ def test_route_activate_containers_never_invoke_a_shell(kind: str) -> None:
     container = init_containers[f"route-activate-{kind.replace('_', '-')}"]
     assert "command" not in container, container.get("command")
     assert not any(
-        arg in ("/bin/sh", "/bin/bash", "sh", "bash") for arg in container.get("args", [])
+        arg in ("/bin/sh", "/bin/bash", "sh", "bash")
+        for arg in container.get("args", [])
     ), container["args"]
 
 
@@ -349,7 +364,9 @@ def test_pod_sets_fsgroup_so_non_root_containers_share_emptydirs() -> None:
     own primary UID) a supplementary member of that GID, and Kubernetes
     chowns/chmods each mounted volume to it."""
     jobs = _jobs(*_FULL_CHAIN_ON)
-    pod_security_context = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["securityContext"]
+    pod_security_context = jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"][
+        "securityContext"
+    ]
     assert pod_security_context.get("fsGroup") is not None, pod_security_context
     assert pod_security_context["runAsNonRoot"] is True
 
@@ -399,7 +416,9 @@ def test_expected_worker_groups_actually_render_as_deployments() -> None:
             f"{name!r} is expected but has no rendered Deployment: "
             f"{sorted(deployments)}"
         )
-        containers = deployments[deployment_name]["spec"]["template"]["spec"]["containers"]
+        containers = deployments[deployment_name]["spec"]["template"]["spec"][
+            "containers"
+        ]
         assert len(containers) == 1, containers
 
 
@@ -445,10 +464,34 @@ def test_worker_group_deployment_uses_that_groups_own_declared_image(
     deployment = next(
         d
         for d in docs
-        if d.get("kind") == "Deployment" and d["metadata"]["name"].endswith("-go-sync-provider")
+        if d.get("kind") == "Deployment"
+        and d["metadata"]["name"].endswith("-go-sync-provider")
     )
     image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
     assert image == "ghcr.io/example/sync-provider-test-pin:v42", image
+
+
+def test_sync_provider_checked_in_default_image_is_the_published_go_worker_image() -> (
+    None
+):
+    """codex review (r4, P3 -- executed): the sibling test above proves the
+    template CONSUMES `$group.image` (via an independent override) but
+    cannot prove the CHECKED-IN default in values.yaml itself is correct --
+    overriding it removes the very value under test. This asserts the
+    UNMODIFIED default render's `sync-provider` image against a hardcoded,
+    independently-typed literal (the same pattern
+    `test_route_activate_uses_the_published_operator_image` already uses
+    for the operator image, not read back from the same file being
+    checked)."""
+    docs = _render("goWorkers.enabled=true")
+    deployment = next(
+        d
+        for d in docs
+        if d.get("kind") == "Deployment"
+        and d["metadata"]["name"].endswith("-go-sync-provider")
+    )
+    image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
+    assert image == "ghcr.io/full-chaos/dev-health-go-worker:latest", image
 
 
 # --- credentials never reach the JOB spec or the route-activate containers -
@@ -482,7 +525,9 @@ def test_role_passwords_reach_only_the_route_activate_secret_via_secretkeyref() 
         "the plaintext password must never be inlined into the Job spec itself"
     )
 
-    holders = [name for name, s in secrets.items() if "s3cret-route" in yaml.safe_dump(s)]
+    holders = [
+        name for name, s in secrets.items() if "s3cret-route" in yaml.safe_dump(s)
+    ]
     assert holders == [_ROUTE_ACTIVATE_SECRETS] or set(holders) == {
         _ROUTE_ACTIVATE_SECRETS,
         f"{_RELEASE}-dev-health-provision-roles-secrets",
@@ -501,7 +546,9 @@ def test_role_passwords_reach_only_the_route_activate_secret_via_secretkeyref() 
     for kind in _KINDS:
         route_env_names = {
             item["name"]
-            for item in init_containers[f"route-activate-{kind.replace('_', '-')}"]["env"]
+            for item in init_containers[f"route-activate-{kind.replace('_', '-')}"][
+                "env"
+            ]
         }
         assert not route_env_names & {
             "RIVER_DOMAIN_DATABASE_PASSWORD",
@@ -546,7 +593,9 @@ def test_route_activate_accepts_a_pre_created_external_secret() -> None:
         "RIVER_QUEUE_DATABASE_PASSWORD",
         "RIVER_COORDINATOR_DATABASE_PASSWORD",
     ):
-        assert env[key]["valueFrom"]["secretKeyRef"]["name"] == "river-role-credentials", key
+        assert (
+            env[key]["valueFrom"]["secretKeyRef"]["name"] == "river-role-credentials"
+        ), key
     secrets = _secrets(
         *_FULL_CHAIN_ON,
         "goWorkers.pgbouncer.secret.create=false",
@@ -611,9 +660,11 @@ def test_operator_credential_script_mints_only_once(tmp_path: Path) -> None:
 
     def _run() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["/bin/sh", "-ec", script.replace(
-                "/run/go-worker-operator/token", str(run_dir / "token")
-            )],
+            [
+                "/bin/sh",
+                "-ec",
+                script.replace("/run/go-worker-operator/token", str(run_dir / "token")),
+            ],
             capture_output=True,
             text=True,
             env=env,
@@ -623,9 +674,7 @@ def test_operator_credential_script_mints_only_once(tmp_path: Path) -> None:
     assert first.returncode == 0, first.stderr
     assert (run_dir / "token").read_text(encoding="utf-8").strip() == "minted-token"
     mint_call = calls_log.read_text(encoding="utf-8")
-    assert mint_call.count("\n") == 1, (
-        "exactly one mint call on an empty token file"
-    )
+    assert mint_call.count("\n") == 1, "exactly one mint call on an empty token file"
     # codex review (r3 REPORT mutations `scope_operate`/`remove_scope_read` --
     # SURVIVED, now killed): the stub's received argv was logged but never
     # asserted against -- a mutation dropping either `--scope` flag from the
@@ -695,8 +744,14 @@ def test_route_dsn_script_builds_dsns_from_parts_and_never_from_a_dsn_value(
     postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
     worker_uri = (out_dir / "WORKER_DATABASE_URI").read_text(encoding="utf-8")
     coordinator_uri = (out_dir / "COORDINATOR_DATABASE_URI").read_text(encoding="utf-8")
-    assert postgres_uri == "postgresql://devhealth_domain:d-pw@postgres.internal:5432/devhealth"
-    assert worker_uri == "postgresql://devhealth_queue:q-pw@postgres.internal:5432/devhealth"
+    assert (
+        postgres_uri
+        == "postgresql://devhealth_domain:d-pw@postgres.internal:5432/devhealth"
+    )
+    assert (
+        worker_uri
+        == "postgresql://devhealth_queue:q-pw@postgres.internal:5432/devhealth"
+    )
     assert (
         coordinator_uri
         == "postgresql://devhealth_coordinator:c-pw@postgres.internal:5432/devhealth"
@@ -716,21 +771,19 @@ def test_route_dsn_script_builds_dsns_from_parts_and_never_from_a_dsn_value(
 _RFC3986_GEN_DELIMS = list(":/?#[]@")
 _RFC3986_SUB_DELIMS = list("!$&'()*+,;=")
 
-_URI_SPECIAL_PASSWORD_CASES = [
-    ("simple", "plainpassword123"),
-    ("percent", "pw%with%percent"),
-    ("space", "pw with space"),
-    ("unicode", "pw☃snowman"),
-    ("empty", ""),
-    ("all-gen-delims-combined", "".join(_RFC3986_GEN_DELIMS)),
-    ("all-sub-delims-combined", "".join(_RFC3986_SUB_DELIMS)),
-] + [
-    (f"gen-delim-{ord(c)}-{c!r}", f"pw{c}with{c}char")
-    for c in _RFC3986_GEN_DELIMS
-] + [
-    (f"sub-delim-{ord(c)}-{c!r}", f"pw{c}with{c}char")
-    for c in _RFC3986_SUB_DELIMS
-]
+_URI_SPECIAL_PASSWORD_CASES = (
+    [
+        ("simple", "plainpassword123"),
+        ("percent", "pw%with%percent"),
+        ("space", "pw with space"),
+        ("unicode", "pw☃snowman"),
+        ("empty", ""),
+        ("all-gen-delims-combined", "".join(_RFC3986_GEN_DELIMS)),
+        ("all-sub-delims-combined", "".join(_RFC3986_SUB_DELIMS)),
+    ]
+    + [(f"gen-delim-{ord(c)}-{c!r}", f"pw{c}with{c}char") for c in _RFC3986_GEN_DELIMS]
+    + [(f"sub-delim-{ord(c)}-{c!r}", f"pw{c}with{c}char") for c in _RFC3986_SUB_DELIMS]
+)
 
 
 @pytest.mark.parametrize(("case_id", "password"), _URI_SPECIAL_PASSWORD_CASES)
@@ -742,14 +795,19 @@ def test_route_dsn_script_percent_encodes_every_uri_special_password(
     out_dir = _run_route_dsn_script(tmp_path, RIVER_DOMAIN_DATABASE_PASSWORD=password)
     postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
     expected_pw = urllib.parse.quote(password, safe="")
-    expected = f"postgresql://devhealth_domain:{expected_pw}@postgres.internal:5432/devhealth"
+    expected = (
+        f"postgresql://devhealth_domain:{expected_pw}@postgres.internal:5432/devhealth"
+    )
     assert postgres_uri == expected, (case_id, postgres_uri, expected)
 
     # The written URI must actually PARSE to the original password -- the
     # real proof the encoding round-trips, not just that some encoding ran.
     parsed = urllib.parse.urlsplit(postgres_uri)
     assert urllib.parse.unquote(parsed.username or "") == "devhealth_domain"
-    assert urllib.parse.unquote(parsed.password or "") == password, (case_id, postgres_uri)
+    assert urllib.parse.unquote(parsed.password or "") == password, (
+        case_id,
+        postgres_uri,
+    )
 
 
 def test_route_dsn_script_percent_encodes_the_queue_and_coordinator_passwords_too(
@@ -763,16 +821,93 @@ def test_route_dsn_script_percent_encodes_the_queue_and_coordinator_passwords_to
     import urllib.parse
 
     out_dir = _run_route_dsn_script(
-        tmp_path, RIVER_QUEUE_DATABASE_PASSWORD="q#pw", RIVER_COORDINATOR_DATABASE_PASSWORD="c#pw"
+        tmp_path,
+        RIVER_QUEUE_DATABASE_PASSWORD="q#pw",
+        RIVER_COORDINATOR_DATABASE_PASSWORD="c#pw",
     )
     worker_uri = (out_dir / "WORKER_DATABASE_URI").read_text(encoding="utf-8")
     coordinator_uri = (out_dir / "COORDINATOR_DATABASE_URI").read_text(encoding="utf-8")
-    assert worker_uri == "postgresql://devhealth_queue:q%23pw@postgres.internal:5432/devhealth", worker_uri
     assert (
-        coordinator_uri == "postgresql://devhealth_coordinator:c%23pw@postgres.internal:5432/devhealth"
+        worker_uri
+        == "postgresql://devhealth_queue:q%23pw@postgres.internal:5432/devhealth"
+    ), worker_uri
+    assert (
+        coordinator_uri
+        == "postgresql://devhealth_coordinator:c%23pw@postgres.internal:5432/devhealth"
     ), coordinator_uri
-    assert urllib.parse.unquote(urllib.parse.urlsplit(worker_uri).password) == "q#pw"
-    assert urllib.parse.unquote(urllib.parse.urlsplit(coordinator_uri).password) == "c#pw"
+    assert (
+        urllib.parse.unquote(urllib.parse.urlsplit(worker_uri).password or "") == "q#pw"
+    )
+    assert (
+        urllib.parse.unquote(urllib.parse.urlsplit(coordinator_uri).password or "")
+        == "c#pw"
+    )
+
+
+def test_route_dsn_script_percent_encodes_the_queue_and_coordinator_roles_too(
+    tmp_path: Path,
+) -> None:
+    """codex review (r4, P3 -- executed, fixed): the r3 class-sweep test
+    (`test_route_dsn_script_percent_encodes_every_uri_component`) varies
+    ONLY `RIVER_DOMAIN_DATABASE_ROLE` and reads ONLY `POSTGRES_URI` -- the
+    domain role's own encode() call site is a DIFFERENT line from the
+    queue/coordinator role call sites, same shape as the password-sweep gap
+    the sibling test above already closes. Independently confirmed
+    (mutation): replacing `${queue_role}`/`${coordinator_role}` with the raw
+    env vars in their own printf lines survived the entire file -- this is
+    the regression pin that closes it."""
+    out_dir = _run_route_dsn_script(
+        tmp_path,
+        RIVER_QUEUE_DATABASE_ROLE="queue#role",
+        RIVER_COORDINATOR_DATABASE_ROLE="coordinator#role",
+    )
+    worker_uri = (out_dir / "WORKER_DATABASE_URI").read_text(encoding="utf-8")
+    coordinator_uri = (out_dir / "COORDINATOR_DATABASE_URI").read_text(encoding="utf-8")
+    assert (
+        worker_uri == "postgresql://queue%23role:q-pw@postgres.internal:5432/devhealth"
+    ), worker_uri
+    assert (
+        coordinator_uri
+        == "postgresql://coordinator%23role:c-pw@postgres.internal:5432/devhealth"
+    ), coordinator_uri
+
+
+def test_route_dsn_script_brackets_an_ipv6_host_instead_of_percent_encoding_it(
+    tmp_path: Path,
+) -> None:
+    """codex review (r4, P1 -- executed, fixed): a URI host is authority
+    syntax, not a percent-encodable component like the userinfo/path parts
+    -- an IPv6 literal MUST be wrapped in brackets, `[<addr>]`, verbatim.
+    Percent-encoding it (the r3 fix's treatment of the host, same as every
+    other component) escapes the colons that make it parseable as an
+    address at all -- reproduced against the real operator: an unbracketed
+    IPv4-mapped IPv6 host returns `database_unavailable`; only the bracketed
+    form connects. DNS names and IPv4 dotted-quads are unaffected -- they
+    still go through the ordinary percent-encoder (a no-op for their
+    always-safe characters)."""
+    import urllib.parse
+
+    for host, expected_authority in (
+        ("postgres.internal", "postgres.internal"),
+        ("127.0.0.1", "127.0.0.1"),
+        ("::ffff:127.0.0.1", "[::ffff:127.0.0.1]"),
+        ("::1", "[::1]"),
+        ("2001:db8::1", "[2001:db8::1]"),
+    ):
+        out_dir = _run_route_dsn_script(
+            tmp_path / host.replace(":", "_"), POSTGRES_HOST=host
+        )
+        postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
+        expected = (
+            f"postgresql://devhealth_domain:d-pw@{expected_authority}:5432/devhealth"
+        )
+        assert postgres_uri == expected, (host, postgres_uri, expected)
+        # The written URI must actually PARSE back to the original host --
+        # the real proof a Postgres client can extract it, not just that
+        # brackets appear somewhere in the string.
+        parsed = urllib.parse.urlsplit(postgres_uri)
+        assert parsed.hostname == host.lower(), (host, parsed.hostname)
+        assert parsed.port == 5432, (host, parsed.port)
 
 
 def test_route_dsn_script_percent_encodes_the_database_name(tmp_path: Path) -> None:
@@ -786,7 +921,10 @@ def test_route_dsn_script_percent_encodes_the_database_name(tmp_path: Path) -> N
 
     out_dir = _run_route_dsn_script(tmp_path, POSTGRES_DB="review#db")
     postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
-    assert postgres_uri == "postgresql://devhealth_domain:d-pw@postgres.internal:5432/review%23db", postgres_uri
+    assert (
+        postgres_uri
+        == "postgresql://devhealth_domain:d-pw@postgres.internal:5432/review%23db"
+    ), postgres_uri
     parsed = urllib.parse.urlsplit(postgres_uri)
     assert parsed.fragment == "", (
         "an unencoded `#` in the database name starts a URI fragment and "
@@ -826,8 +964,16 @@ def test_route_dsn_script_percent_encodes_every_uri_component(
     out_dir = _run_route_dsn_script(tmp_path, **{env_var: value})
     postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
 
-    role = urllib.parse.quote(value, safe="") if component == "role" else _URI_COMPONENT_BASE["role"]
-    host = urllib.parse.quote(value, safe="") if component == "host" else _URI_COMPONENT_BASE["host"]
+    role = (
+        urllib.parse.quote(value, safe="")
+        if component == "role"
+        else _URI_COMPONENT_BASE["role"]
+    )
+    host = (
+        urllib.parse.quote(value, safe="")
+        if component == "host"
+        else _URI_COMPONENT_BASE["host"]
+    )
     expected = f"postgresql://{role}:d-pw@{host}:5432/devhealth"
     assert postgres_uri == expected, (component, case_id, postgres_uri, expected)
 
@@ -848,7 +994,9 @@ def test_route_dsn_script_percent_encodes_every_uri_component(
         ("false", False),
     ],
 )
-def test_route_activate_enabled_input_domain(value: str | None, expect_job: bool) -> None:
+def test_route_activate_enabled_input_domain(
+    value: str | None, expect_job: bool
+) -> None:
     sets = list(_FULL_CHAIN_ON)
     if value is not None:
         sets.append(f"migrations.hook.routeActivate.enabled={value}")
@@ -880,7 +1028,9 @@ def test_route_activate_enabled_rejects_a_non_boolean_string() -> None:
         "an out-of-vocabulary string must now fail the render, not silently "
         "activate route-activate"
     )
-    assert "/migrations/hook/routeActivate/enabled" in completed.stderr, completed.stderr
+    assert "/migrations/hook/routeActivate/enabled" in completed.stderr, (
+        completed.stderr
+    )
     assert "boolean" in completed.stderr, completed.stderr
 
 
@@ -1012,7 +1162,9 @@ def test_route_activate_enabled_still_accepts_real_booleans(value: str) -> None:
 # real `dev-hops service-credentials create` CLI, see the docstring below).
 
 
-def test_route_activate_credential_secret_is_not_minted_when_secrets_are_external() -> None:
+def test_route_activate_credential_secret_is_not_minted_when_secrets_are_external() -> (
+    None
+):
     """Mirrors test_route_activate_accepts_a_pre_created_external_secret
     (pgbouncer Secret) but for the migration Secret this hook's
     operator-credential step actually reads.
@@ -1087,15 +1239,16 @@ def test_route_activate_credential_mint_reads_the_operators_own_secret(
     assert sources == [expected_secret], sources
 
 
-def test_route_activate_credential_secret_still_renders_when_secrets_are_bundled() -> None:
+def test_route_activate_credential_secret_still_renders_when_secrets_are_bundled() -> (
+    None
+):
     """The gate must not accidentally suppress the create=true path."""
     secrets = _secrets(*_FULL_CHAIN_ON, "postgresql.enabled=true")
     assert _ROUTE_ACTIVATE_CREDENTIAL_SECRETS in secrets
     assert secrets[_ROUTE_ACTIVATE_CREDENTIAL_SECRETS]["stringData"]["DATABASE_URI"]
 
 
-def test_route_activate_credential_secret_prefers_migration_database_uri(
-) -> None:
+def test_route_activate_credential_secret_prefers_migration_database_uri() -> None:
     """codex review (r3 REPORT mutation `fallback_migration_clause` --
     SURVIVED, now killed): `dev-health.riverMigrationDSN`'s own precedence
     (MIGRATION_DATABASE_URI first, then the Secret's other compatibility
@@ -1120,7 +1273,9 @@ def test_route_activate_credential_secret_prefers_migration_database_uri(
     ), secrets[_ROUTE_ACTIVATE_CREDENTIAL_SECRETS]["stringData"]
 
 
-def test_route_activate_credential_secret_is_absent_when_no_dsn_resolves_and_secrets_are_bundled() -> None:
+def test_route_activate_credential_secret_is_absent_when_no_dsn_resolves_and_secrets_are_bundled() -> (
+    None
+):
     """codex review (r2, P1 -- executed, fixed): secrets.create=true alone is
     not enough -- if NEITHER a bundled postgres NOR any secretData DSN is
     configured, riverMigrationDSN is empty and minting a Secret with an
@@ -1178,7 +1333,9 @@ def test_operator_credential_cli_fails_closed_without_any_dsn_env() -> None:
     assert "POSTGRES_URI/DATABASE_URI" in completed.stderr
 
 
-def _run_operator_credential_script(tmp_path: Path, **env: str) -> subprocess.CompletedProcess[str]:
+def _run_operator_credential_script(
+    tmp_path: Path, **env: str
+) -> subprocess.CompletedProcess[str]:
     """Execute the REAL rendered operator-credential script (post-fix) with a
     stub `dev-hops` that records the env it actually received, so the
     fallback logic is proven at the shell level, not argued from reading the
@@ -1219,7 +1376,8 @@ def _run_operator_credential_script(tmp_path: Path, **env: str) -> subprocess.Co
     )
     if completed.returncode == 0:
         completed.seen_env = dict(  # type: ignore[attr-defined]
-            line.split("=", 1) for line in seen_env_file.read_text(encoding="utf-8").splitlines()
+            line.split("=", 1)
+            for line in seen_env_file.read_text(encoding="utf-8").splitlines()
         )
     return completed
 
@@ -1296,7 +1454,9 @@ def test_operator_credential_script_does_not_clobber_an_explicit_database_uri(
 # operator image, a REGISTRY image that is never side-loaded.
 
 
-def test_route_activate_operator_pull_policy_is_independent_of_image_pull_policy() -> None:
+def test_route_activate_operator_pull_policy_is_independent_of_image_pull_policy() -> (
+    None
+):
     jobs = _jobs(*_FULL_CHAIN_ON, "image.pullPolicy=Never")
     init_containers = {
         c["name"]: c
@@ -1325,7 +1485,10 @@ def test_route_activate_operator_pull_policy_override_still_wins() -> None:
         c["name"]: c
         for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
     }
-    assert init_containers["route-activate-dispatch-sync-run"]["imagePullPolicy"] == "Always"
+    assert (
+        init_containers["route-activate-dispatch-sync-run"]["imagePullPolicy"]
+        == "Always"
+    )
 
 
 @pytest.mark.parametrize("policy", ["IfNotPresent", "Always", "Never"])
@@ -1341,4 +1504,6 @@ def test_route_activate_operator_pull_policy_default_input_domain(policy: str) -
         c["name"]: c
         for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
     }
-    assert init_containers["route-activate-dispatch-sync-run"]["imagePullPolicy"] == policy
+    assert (
+        init_containers["route-activate-dispatch-sync-run"]["imagePullPolicy"] == policy
+    )

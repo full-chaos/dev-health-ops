@@ -377,15 +377,26 @@ decision.
   columns; an append-only audit row carrying the same two fields on every
   write, independent of the current row, arrives with CHAOS-5505 (the
   audit PR that follows this one).
-* **`disable` never refuses over an operation whose ONLY rows sit at other
-  schema digests, named explicitly or picked up by `-operations
-  all-registered`** -- refusing here would contradict this verb's own
-  documented contract of working when the planes disagree. It is
-  SKIPPED, reported as "nothing to disable" with the other digest(s)
-  named in the plan, so
-  the documented rollback recipe (`-operations all-registered -mode
-  python`) can still turn everything off even when one operation's rows
-  are all stale to this checkout.
+* **`disable` never refuses the WHOLE run over one operation's per-row
+  guard state -- a stale schema digest, or a `-candidate-build` guard
+  named against an operation whose only live-digest rows are DEAD (no
+  catalog document digest)** -- refusing here would contradict this
+  verb's own documented contract of working when the planes disagree.
+  Either state is SKIPPED for that operation alone, reported on its own
+  plan line, so the documented rollback recipe (`-operations
+  all-registered -mode python`) can still turn everything else off when
+  one operation's rows are stale or dead to this checkout. Because
+  something was still skipped, the run exits non-zero (2) even though
+  the healthy operations were disabled -- an operator sees both facts:
+  what moved, and what needed a second look. **This is a declared
+  divergence from Python, in the STRONGER direction**: on the identical
+  fixture, Python's guarded `-operations all-registered` also exits 2,
+  but its plan LISTS the dead-only operation as if it would move, then
+  silently leaves it untouched at apply time and blames a misattributed
+  cause ("their candidate build moved between the plan and the write").
+  Go never lists a row it will not touch as moving, and names the real
+  reason (no catalog row to check the guard against) instead of a
+  generic race that did not happen.
 * **`-candidate-build` passed as an explicitly empty value is refused**,
   not silently treated as "no guard" -- an empty value reads identically
   to the flag never being passed at all otherwise, which would apply an

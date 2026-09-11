@@ -188,6 +188,16 @@ func TestCopyBackInputDomain(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, wantErr: `"gen/generated.go" changed in the working tree`},
+		{shape: "a declared output replaced by a link to an IDENTICAL copy (same bytes, different kind)", during: func(t *testing.T, f *fixture) {
+			f.write("elsewhere/same.go", markedExec)
+			full := filepath.Join(f.dir, "gen", "generated.go")
+			if err := os.Remove(full); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("../elsewhere/same.go", full); err != nil {
+				t.Fatal(err)
+			}
+		}, wantErr: `"gen/generated.go" changed in the working tree`},
 		{shape: "an output the generator does NOT change, edited during generation (still refused: the apply is all or nothing)", during: func(t *testing.T, f *fixture) {
 			f.write("gen/resolver.go", markedResolver+"// edited\n")
 		}, wantErr: `"gen/resolver.go" changed in the working tree`},

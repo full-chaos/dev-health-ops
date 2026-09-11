@@ -79,6 +79,40 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 			return map[string]string{"GOCACHE": "", "GOENV": goenvFile(t, "GOCACHE="+inTree(f, ".gocache"))}
 		}, wantErr: `GOCACHE="`},
 		{shape: "the module has no go.mod and one sits ABOVE the private copy (the go command would adopt it)", env: set(), wantErr: "outside the private copy"},
+		{shape: "GOINSECURE/GONOSUMDB/GOPRIVATE=* (not inherited)", env: set("GOINSECURE", "*", "GONOSUMDB", "*", "GOPRIVATE", "*")},
+		{shape: "GOPROXY=off (not inherited)", env: set("GOPROXY", "off")},
+		{shape: "HOME inside the working tree, cache locations set explicitly (HOME not inherited: the child's is scratch)", env: func(t *testing.T, f *fixture) map[string]string {
+			goBin, err := goBinary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			loc, err := goEnv(context.Background(), goBin, t.TempDir(), os.Environ(), sharedLocations...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return map[string]string{"HOME": inTree(f, ".home"), "GOCACHE": loc["GOCACHE"], "GOMODCACHE": loc["GOMODCACHE"], "GOPATH": loc["GOPATH"]}
+		}},
+		{shape: "HOME inside the working tree, cache locations left to their HOME defaults (a shared location: refused)", env: func(t *testing.T, f *fixture) map[string]string {
+			return map[string]string{"HOME": inTree(f, ".home"), "GOCACHE": "", "GOMODCACHE": "", "GOPATH": "", "XDG_CACHE_HOME": ""}
+		}, wantErr: "is inside the module, so the go command would write there"},
+		{shape: "the user's DEFAULT go env file (no GOENV set) carrying GOCACHE inside the working tree (still read for the shared location: refused)", env: func(t *testing.T, f *fixture) map[string]string {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, ".config", "go"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(home, ".config", "go", "env"), []byte("GOCACHE="+inTree(f, ".gocache")+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			goBin, err := goBinary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			loc, err := goEnv(context.Background(), goBin, t.TempDir(), os.Environ(), sharedLocations...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return map[string]string{"HOME": home, "XDG_CONFIG_HOME": "", "GOENV": "", "GOCACHE": "", "GOMODCACHE": loc["GOMODCACHE"], "GOPATH": loc["GOPATH"]}
+		}, wantErr: `GOCACHE="`},
 	}
 	for i, c := range cells {
 		t.Run(cellID("G12", i)+" "+c.shape, func(t *testing.T) {

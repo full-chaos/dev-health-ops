@@ -457,6 +457,32 @@ var childEnvKeys = []string{"PATH", "HOME", "TMPDIR", "GOCACHE", "GOMODCACHE", "
 var sharedLocations = []string{"GOPATH", "GOMODCACHE", "GOCACHE"}
 
 // goBinary resolves the go command once, from the guard's PATH.
+// GuardQueryEnv is the environment of the go commands the GUARD itself runs to
+// read the user's setup -- `go list -m` for the module root, `go env` for the
+// cache locations. Those queries exist to read the user's environment, so it is
+// passed, with three changes that stop them acting on anything:
+//
+//   - GOENV names the user's go env file explicitly (the same path the go
+//     command derives: $GOENV, else os.UserConfigDir()/go/env), so the file is
+//     still read after the next change;
+//   - XDG_CONFIG_HOME is os.DevNull: the go command's telemetry writes counters
+//     under the config directory -- measured: with HOME inside the module, 3
+//     files under <module>/.home/.config/go/telemetry/local from one `go env`
+//     -- and under /dev/null there is nowhere to create them (measured: exit 0,
+//     0 entries). os.UserConfigDir honours XDG_CONFIG_HOME on Linux, not on
+//     macOS (RISK-NOTES);
+//   - GOTOOLCHAIN=local: a query never downloads or switches toolchains.
+func GuardQueryEnv() []string {
+	goenv := os.Getenv("GOENV")
+	if goenv == "" {
+		goenv = "off" // what the go command does when there is no config dir
+		if dir, err := os.UserConfigDir(); err == nil {
+			goenv = filepath.Join(dir, "go", "env")
+		}
+	}
+	return append(os.Environ(), "GOENV="+goenv, "XDG_CONFIG_HOME="+os.DevNull, "GOTOOLCHAIN=local")
+}
+
 func goBinary() (string, error) {
 	p, err := exec.LookPath("go")
 	if err != nil {
@@ -489,7 +515,7 @@ func childEnvironment(ctx context.Context, scratch, workDir, copyDir, moduleAbs 
 	// guard's own lookup cannot switch toolchains or be redirected; the caches
 	// it reports come from the environment and the go env file as the user set
 	// them. (exec keeps the LAST value of a duplicated key.)
-	parent := append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off", "GOFLAGS=")
+	parent := append(GuardQueryEnv(), "GOWORK=off", "GOFLAGS=")
 	shared, err := goEnv(ctx, goBin, scratch, parent, sharedLocations...)
 	if err != nil {
 		return nil, err

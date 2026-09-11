@@ -191,6 +191,9 @@ func dashIfEmpty(s string) string {
 // refusal that says so, never a multi-line string used as a path.
 func discoverModuleRoot() (string, error) {
 	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}")
+	// Not the bare environment: see GuardQueryEnv (a HOME inside the module
+	// would otherwise receive the go command's telemetry counters).
+	cmd.Env = gqlgenguard.GuardQueryEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError

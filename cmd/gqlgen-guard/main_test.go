@@ -425,3 +425,41 @@ func exitCodeOf(t *testing.T, err error) int {
 	t.Fatalf("not an exit error: %v", err)
 	return -1
 }
+
+// TestAHomeInsideTheModuleReceivesNothing runs the real binary with HOME inside
+// the module (the cache locations set explicitly, outside it): every go
+// command the guard runs -- its own `go list -m` and `go env` queries, and the
+// generator child -- must leave the tree byte-identical. Before GuardQueryEnv
+// the guard's own queries wrote the go command's telemetry counters under
+// <module>/.home/.config/go/telemetry.
+func TestAHomeInsideTheModuleReceivesNothing(t *testing.T) {
+	bin := buildGuard(t)
+	dir := newGeneratableFixture(t)
+	q := exec.Command("go", "env", "GOCACHE", "GOMODCACHE", "GOPATH")
+	locs, err := q.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := strings.Split(strings.TrimSpace(string(locs)), "\n")
+	if len(l) != 3 {
+		t.Fatalf("go env printed %d lines, want 3", len(l))
+	}
+	before := treeDigests(t, dir)
+	cmd := exec.Command(bin, "check-drift", "-config", "gqlgen.yml")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "HOME="+filepath.Join(dir, ".home"), "GOCACHE="+l[0], "GOMODCACHE="+l[1], "GOPATH="+l[2], "TMPDIR="+t.TempDir())
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err = cmd.Run()
+	t.Logf("CELL-OUTPUT: exit %d; %s", exitCodeOf(t, err), lastLine(out.String()))
+	if !strings.Contains(out.String(), "generator env (allowlist") {
+		t.Fatalf("the generator was never reached, so the cell proves nothing:\n%s", out.String())
+	}
+	assertTreeUnchanged(t, before, treeDigests(t, dir), "check-drift with HOME inside the module")
+}
+
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return lines[len(lines)-1]
+}

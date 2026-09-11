@@ -209,6 +209,38 @@ func TestSchemaInputConfinementInputDomain(t *testing.T) {
 		{shape: "a glob whose literal directory climbs OUT of the module", schema: "../*.graphql",
 			wantErr: `schema pattern "../*.graphql" leaves the module`},
 		{shape: "a ../ that stays INSIDE the module (canonical-equivalent)", schema: "gen/../schema.graphql"},
+		{shape: "a ** walk passing a directory link out of the module at depth 2 (round 2's shape)", schema: `"sub/**/*.graphql"`,
+			setup: func(t *testing.T, f *fixture, outside string) {
+				f.write("sub/deep/inside.graphql", fixtureSchema)
+				linkOutsideDir("sub/deep/outdir")(t, f, outside)
+			}, wantErr: `schema pattern "sub/**/*.graphql" cannot be resolved: its ** walk passes "sub/deep/outdir"`},
+		{shape: "a ** walk passing a directory link out of the module at depth 3", schema: `"sub/**/*.graphql"`,
+			setup: func(t *testing.T, f *fixture, outside string) {
+				f.write("sub/a/b/inside.graphql", fixtureSchema)
+				linkOutsideDir("sub/a/b/outdir")(t, f, outside)
+			}, wantErr: `its ** walk passes "sub/a/b/outdir"`},
+		{shape: "a ** walk passing an absolute FILE link whose name does not match (a .venv-shaped interpreter)", schema: `"./**/*.graphql"`,
+			setup: func(t *testing.T, f *fixture, outside string) {
+				py := filepath.Join(outside, "python3")
+				if err := os.WriteFile(py, []byte("x"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				f.write(".venv/lib/keep", "x")
+				if err := os.MkdirAll(filepath.Join(f.dir, ".venv", "bin"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(py, filepath.Join(f.dir, ".venv", "bin", "python")); err != nil {
+					t.Fatal(err)
+				}
+			}, wantErr: `its ** walk passes ".venv/bin/python"`},
+		{shape: "a ** walk passing an IN-module directory link (reproduced; gqlgen does not follow it)", schema: `"sub/**/*.graphql"`,
+			setup: func(t *testing.T, f *fixture, outside string) {
+				f.write("sub/deep/inside.graphql", fixtureSchema)
+				f.write("other/x.txt", "x")
+				if err := os.Symlink("../../other", filepath.Join(f.dir, "sub", "deep", "inlink")); err != nil {
+					t.Fatal(err)
+				}
+			}},
 		{shape: "zero (the only pattern matches no file)", schema: "missing.graphql",
 			wantErr: "match no file"},
 		{shape: "zero (a glob that matches no file)", schema: "nothing/*.graphql",
@@ -576,56 +608,37 @@ func TestTheRealGeneratorUsesAnInModuleTemplate(t *testing.T) {
 	}
 }
 
-// TestARecursiveSchemaGlobPassesALinkedDirectoryExactlyAsGqlgenDoes is round
-// 2's second shape, executed both ways. gqlgen's `**` walk (filepath.Walk)
-// never follows a directory link -- in the working tree as much as in the copy
-// -- so a schema behind a nested directory link is left out by gqlgen itself.
-// The guard's generation must be byte-identical to gqlgen's own run in the
-// tree, and the dropped link must be named in the report.
-func TestARecursiveSchemaGlobPassesALinkedDirectoryExactlyAsGqlgenDoes(t *testing.T) {
+// TestARecursiveSchemaGlobRefusesALinkedDirectoryOutOfTheModule is round 2's
+// second shape with the real generator: a `**` schema walk that passes a
+// directory link out of the module. gqlgen's walk never follows a link -- the
+// schema behind it would be left out, with generation and the record update
+// both succeeding -- so the guard refuses the run instead, before anything is
+// generated, naming the link.
+func TestARecursiveSchemaGlobRefusesALinkedDirectoryOutOfTheModule(t *testing.T) {
 	goAvailable(t)
-	layout := func(t *testing.T) *fixture {
-		f := guardFixture(t).withModuleFiles()
-		outside := t.TempDir()
-		if err := os.WriteFile(filepath.Join(outside, "secret.graphql"), []byte("extend type Query { leakedFromOutside: String! }\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Remove(filepath.Join(f.dir, "schema.graphql")); err != nil {
-			t.Fatal(err)
-		}
-		f.write("sub/deep/inside.graphql", fixtureSchema)
-		if err := os.Symlink(outside, filepath.Join(f.dir, "sub", "deep", "outdir")); err != nil {
-			t.Fatal(err)
-		}
-		f.write("gqlgen.yml", strings.Replace(guardConfig, "schema: [schema.graphql]", `schema: ["sub/**/*.graphql"]`, 1))
-		return f
+	f := guardFixture(t).withModuleFiles()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.graphql"), []byte("type Query { leakedFromOutside: String! }\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-
-	direct := layout(t)
-	var out strings.Builder
-	if err := NewGoRunGenerator(&out, &out).Generate(context.Background(), direct.dir); err != nil {
-		t.Fatalf("gqlgen itself failed in the tree: %v\n%s", err, out.String())
+	f.write("sub/deep/inside.graphql", fixtureSchema)
+	if err := os.Symlink(outside, filepath.Join(f.dir, "sub", "deep", "outdir")); err != nil {
+		t.Fatal(err)
 	}
-
-	guarded := layout(t)
+	f.write("gqlgen.yml", strings.Replace(guardConfig, "schema: [schema.graphql]", `schema: ["sub/**/*.graphql"]`, 1))
+	before := f.digests()
 	var report strings.Builder
-	opts := guardOptions(guarded, nil)
+	opts := guardOptions(f, nil)
 	opts.Report = &report
-	if _, err := Generate(context.Background(), opts); err != nil {
-		t.Fatalf("the guard refused: %v\n%s", err, report.String())
+	_, err := UpdateDriftRecord(context.Background(), opts)
+	logCell(t, err, "")
+	if err == nil || !strings.Contains(err.Error(), `its ** walk passes "sub/deep/outdir"`) {
+		t.Fatalf("want a refusal naming the linked directory, got %v\n%s", err, report.String())
 	}
-	for _, rel := range []string{"gen/generated.go", "gen/model/models_gen.go", "gen/resolver.go"} {
-		if a, b := direct.read(rel), guarded.read(rel); a != b {
-			t.Fatalf("%s differs between gqlgen's own run in the tree and the guard's generation", rel)
-		}
+	if strings.Contains(report.String(), "generator: ") {
+		t.Fatalf("the generator was started before the refusal:\n%s", report.String())
 	}
-	if strings.Contains(guarded.read("gen/generated.go"), "leakedFromOutside") {
-		t.Fatal("a schema behind the directory link reached the output")
-	}
-	if !strings.Contains(report.String(), "dropped symbolic link sub/deep/outdir (absolute target)") {
-		t.Fatalf("the dropped link was not named:\n%s", report.String())
-	}
-	t.Logf("CELL-OUTPUT: accepted: byte-identical to gqlgen's own run in the tree; report names %q", "sub/deep/outdir")
+	assertUnchanged(t, before, f.digests(), "a recursive schema glob over a link out of the module")
 }
 
 // gqlgenModuleDir is where the gqlgen module this repository requires lives.
@@ -636,4 +649,114 @@ func gqlgenModuleDir(t *testing.T) string {
 		t.Fatalf("locate the gqlgen module: %v", err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// TestEveryConfigKeyThatNamesAPathInputDomain is the class, whole: every key
+// in gqlgen v0.17.66's codegen/config structs whose value names a file, a
+// directory or a Go package, one executed cell each, pointed OUTSIDE the
+// module. Filesystem keys -- the outputs gqlgen writes and the inputs it reads
+// -- are refused before generating. Go package keys (`models.*.model`,
+// `autobind`) are not filesystem paths: the go command resolves them against
+// go.mod/go.sum, so a DEPENDENCY package outside the module root is how the
+// real config binds DateTime (github.com/99designs/gqlgen/graphql.Time) and
+// must work; a package outside the module graph fails the generation.
+func TestEveryConfigKeyThatNamesAPathInputDomain(t *testing.T) {
+	const timeSchema = "scalar Time\n\ntype Query {\n  hello(name: String): String!\n  item: Item\n  at: Time\n}\n\ntype Item {\n  key: String!\n  value: Float\n}\n"
+	cases := []struct {
+		key     string
+		edit    func(cfg string) string
+		real    bool
+		wantErr string
+	}{
+		// ---- outputs gqlgen writes ----
+		{key: "exec.filename", edit: func(c string) string {
+			return strings.Replace(c, "exec: {filename: gen/generated.go, package: gen}", "exec: {filename: ../x/generated.go, package: gen}", 1)
+		}, wantErr: "resolves outside the module root"},
+		{key: "exec.dir (follow-schema)", edit: func(c string) string {
+			return strings.Replace(c, "exec: {filename: gen/generated.go, package: gen}", "exec: {layout: follow-schema, dir: ../outdir, package: gen}", 1)
+		}, wantErr: "resolves outside the module root"},
+		{key: "exec.filename_template (follow-schema)", edit: func(c string) string {
+			return strings.Replace(c, "exec: {filename: gen/generated.go, package: gen}", `exec: {layout: follow-schema, dir: gen, package: gen, filename_template: "../../{name}.go"}`, 1)
+		}, wantErr: "resolves outside the module root"},
+		{key: "model.filename", edit: func(c string) string {
+			return strings.Replace(c, "model: {filename: gen/model/models_gen.go, package: model}", "model: {filename: ../models_gen.go, package: model}", 1)
+		}, wantErr: "resolves outside the module root"},
+		{key: "federation.filename", edit: func(c string) string {
+			return c + "federation: {filename: ../federation.go, package: gen}\n"
+		}, wantErr: "resolves outside the module root"},
+		{key: "resolver.filename (single-file)", edit: func(c string) string {
+			return strings.Replace(c, "filename: gen/resolver.go", "filename: ../resolver.go", 1)
+		}, wantErr: "resolves outside the module root"},
+		{key: "resolver.dir (follow-schema)", edit: func(c string) string {
+			return strings.Replace(c, "resolver: {layout: single-file, filename: gen/resolver.go, package: gen}", "resolver: {layout: follow-schema, dir: ../outdir, package: gen}", 1)
+		}, wantErr: "resolves outside the module root"},
+		{key: "resolver.filename_template (follow-schema)", edit: func(c string) string {
+			return strings.Replace(c, "resolver: {layout: single-file, filename: gen/resolver.go, package: gen}", `resolver: {layout: follow-schema, dir: gen, package: gen, filename_template: "../../{name}.go"}`, 1)
+		}, wantErr: "resolves outside the module root"},
+		// ---- inputs gqlgen reads ----
+		{key: "schema", edit: func(c string) string {
+			return strings.Replace(c, "schema: [schema.graphql]", "schema: [../outside.graphql]", 1)
+		}, wantErr: "leaves the module"},
+		{key: "model.model_template", edit: func(c string) string {
+			return strings.Replace(c, "package: model}", "package: model, model_template: /etc/hostname}", 1)
+		}, wantErr: "leaves the module"},
+		{key: "resolver.resolver_template", edit: func(c string) string {
+			return strings.Replace(c, "filename: gen/resolver.go, package: gen}", "filename: gen/resolver.go, package: gen, resolver_template: /etc/hostname}", 1)
+		}, wantErr: "leaves the module"},
+		{key: "federation.model_template (parsed, never read by gqlgen)", edit: func(c string) string {
+			return c + "federation: {filename: gen/federation.go, package: gen, model_template: /etc/hostname}\n"
+		}, wantErr: "leaves the module"},
+		// ---- Go package keys: resolved by the go command, real generator ----
+		{key: "models.*.model -> a DEPENDENCY package (the real config's DateTime shape)", real: true, edit: func(c string) string {
+			return c + "models:\n  Time:\n    model:\n      - github.com/99designs/gqlgen/graphql.Time\n"
+		}},
+		{key: "models.*.model -> a package outside the module graph", real: true, edit: func(c string) string {
+			return c + "models:\n  Time:\n    model:\n      - example.com/not/in/graph.Time\n"
+		}, wantErr: "the generator failed"},
+		{key: "autobind -> a DEPENDENCY package", real: true, edit: func(c string) string {
+			return c + "autobind:\n  - github.com/99designs/gqlgen/graphql\nmodels:\n  Time:\n    model:\n      - github.com/99designs/gqlgen/graphql.Time\n"
+		}},
+		{key: "autobind -> a package outside the module graph", real: true, edit: func(c string) string {
+			return c + "autobind:\n  - example.com/not/in/graph\nmodels:\n  Time:\n    model:\n      - github.com/99designs/gqlgen/graphql.Time\n"
+		}, wantErr: "the generator failed"},
+	}
+	for i, tc := range cases {
+		t.Run(cellID("G9", i)+" "+tc.key, func(t *testing.T) {
+			f := guardFixture(t)
+			var gen Generator
+			fake := &fakeGenerator{fn: rewriteOutputs("generated")}
+			if tc.real {
+				goAvailable(t)
+				f.withModuleFiles()
+				f.write("schema.graphql", timeSchema)
+			} else {
+				gen = fake
+			}
+			f.write("gqlgen.yml", tc.edit(guardConfig))
+			before := f.digests()
+			var report strings.Builder
+			opts := guardOptions(f, gen)
+			opts.Report = &report
+			var err error
+			if tc.real {
+				_, err = Generate(context.Background(), opts)
+			} else {
+				_, err = UpdateDriftRecord(context.Background(), opts)
+			}
+			logCell(t, err, "generated")
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("cell REFUSED but its contract says accept: %v\n%s", err, report.String())
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want a refusal containing %q, got %v", tc.wantErr, err)
+			}
+			if !tc.real && fake.ran {
+				t.Fatal("the generator ran over a configuration that was already a refusal")
+			}
+			assertUnchanged(t, before, f.digests(), tc.key)
+		})
+	}
 }

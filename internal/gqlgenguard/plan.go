@@ -277,6 +277,12 @@ func readRawInputs(file string) (rawInputs, error) {
 	if raw.Resolver.ResolverTemplate != "" {
 		in.templates = append(in.templates, templateInput{"resolver.resolver_template", raw.Resolver.ResolverTemplate})
 	}
+	// federation shares PackageConfig, so `federation.model_template` parses,
+	// though no gqlgen v0.17.66 code reads it. A key that names a file is
+	// held to the same rule whether or not today's generator opens it.
+	if raw.Federation.ModelTemplate != "" {
+		in.templates = append(in.templates, templateInput{"federation.model_template", raw.Federation.ModelTemplate})
+	}
 	return in, nil
 }
 
@@ -382,6 +388,21 @@ func schemaTraversalErr(pattern string) error {
 	// last is matched or Lstat'd by Glob itself, and a dropped link THERE is an
 	// inert self-loop that fails gqlgen's own read loudly.
 	for _, c := range comps[:len(comps)-1] {
+		if strings.Contains(c, "**") {
+			// gqlgen's `**` is a filepath.Walk from here down, at EVERY depth,
+			// that never follows a link. A link the private copy left inert --
+			// one that went out of the module -- would have its whole subtree
+			// skipped without a word, so it refuses the run wherever in the
+			// walk it sits. (Stricter than gqlgen, which cannot tell it
+			// skipped anything: a dropped FILE link under the walk refuses
+			// too, since the copy cannot know what it pointed at.)
+			for _, d := range dirs {
+				if err := walkForDroppedLinks(d); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		var next []string
 		for _, d := range dirs {
 			if !strings.ContainsAny(c, globMeta) {
@@ -424,6 +445,24 @@ func schemaTraversalErr(pattern string) error {
 		dirs = next
 	}
 	return nil
+}
+
+// walkForDroppedLinks walks root at every depth without following links and
+// returns an error for the first link that does not resolve -- in the private
+// copy, the inert self-loop CopyTree leaves where a link out of the module was.
+func walkForDroppedLinks(root string) error {
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("its ** walk cannot read %q: %w", filepath.ToSlash(p), err)
+		}
+		if d.Type()&fs.ModeSymlink == 0 {
+			return nil
+		}
+		if _, serr := os.Stat(p); serr != nil && !errors.Is(serr, fs.ErrNotExist) {
+			return fmt.Errorf("its ** walk passes %q, a link that does not resolve inside the module (%v), and everything behind it would be skipped silently", filepath.ToSlash(filepath.Clean(p)), serr)
+		}
+		return nil
+	})
 }
 
 // withWorkingDir runs fn with the process working directory set to dir and

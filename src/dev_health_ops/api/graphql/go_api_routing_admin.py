@@ -59,10 +59,13 @@ __all__ = [
     "ENABLEMENT_TARGET_MODE_EDGE_ONLY",
     "MEASUREMENT_ROUTE_EDGE",
     "MEASUREMENT_ROUTE_PROOF",
+    "AuthorizingReceipt",
     "build_enablement_proof_select",
+    "build_enablement_receipt_select",
     "OperationStatus",
     "count_rows_by_schema_digest",
     "enable_operation",
+    "enablement_receipts",
     "operations_with_enablement_proof",
     "routing_status_rows",
     "upsert_routing_state",
@@ -684,32 +687,169 @@ def build_enablement_proof_select(
             "to compile a predicate whose route rule is undefined."
         )
 
+    return (
+        select(ProofRun.selected_operation)
+        .where(
+            *_enablement_proof_conditions(
+                schema_digest=schema_digest,
+                candidate_build=candidate_build,
+                operations=operations,
+                target_mode=target_mode,
+            )
+        )
+        .distinct()
+    )
+
+
+def _enablement_proof_conditions(
+    *,
+    schema_digest: str,
+    candidate_build: str,
+    operations: Mapping[str, str],
+    target_mode: str,
+) -> list[ColumnElement[bool]]:
+    """The WHERE clauses of the rule -- ONE list, read by both selects.
+
+    :func:`build_enablement_proof_select` (which operations are proven) and
+    :func:`build_enablement_receipt_select` (WHICH receipt proves each) must
+    never disagree about admissibility, so neither restates a clause.
+    """
     # The key is FOUR columns, and `document_digest` is not optional
     # (codex r1, P2 -- it was missing, so a proof recorded against a
     # DIFFERENT registered document could authorize an enablement).
     # Matched as an explicit tuple-OR rather than two independent `IN`
     # lists: `selected_operation IN (...) AND document_digest IN (...)`
     # is a cross product and would accept exactly the mismatch under test.
-    return (
-        select(ProofRun.selected_operation)
-        .where(
-            ProofRun.schema_digest == schema_digest,
-            ProofRun.candidate_build == candidate_build,
-            ProofRun.stage == ENABLEMENT_PROOF_STAGE,
-            _admissible_terminal_state(),
-            _admissible_route(target_mode),
-            or_(
-                *(
-                    and_(
-                        ProofRun.selected_operation == operation,
-                        ProofRun.document_digest == document_digest,
-                    )
-                    for operation, document_digest in operations.items()
+    return [
+        ProofRun.schema_digest == schema_digest,
+        ProofRun.candidate_build == candidate_build,
+        ProofRun.stage == ENABLEMENT_PROOF_STAGE,
+        _admissible_terminal_state(),
+        _admissible_route(target_mode),
+        or_(
+            *(
+                and_(
+                    ProofRun.selected_operation == operation,
+                    ProofRun.document_digest == document_digest,
                 )
-            ),
+                for operation, document_digest in operations.items()
+            )
+        ),
+    ]
+
+
+@dataclass(frozen=True)
+class AuthorizingReceipt:
+    """The receipt that authorizes enabling one operation.
+
+    opus r7 (observability): `enable` printed the same output for a
+    ``match`` admission and a fully-cited ``mismatch`` admission, and
+    nothing -- not the output, not the routing row, not a log line -- named
+    the receipt that carried the decision. A predicate regression that
+    admitted the wrong receipt would have looked exactly like a correct
+    enablement. This is what `enable` now prints, logs and writes into the
+    row's ``review_evidence``.
+    """
+
+    operation: str
+    receipt_id: str
+    terminal_state: str
+    baseline_defect: tuple[str, ...]
+    measurement_route: str | None
+    build_binding: str | None
+    observed_at: datetime | None
+
+    def evidence(self) -> str:
+        """One line naming the receipt, for logs and ``review_evidence``."""
+        cited = (
+            f" baseline_defect={','.join(self.baseline_defect)}"
+            if self.baseline_defect
+            else ""
         )
-        .distinct()
+        return (
+            f"proof_receipt={self.receipt_id} terminal_state={self.terminal_state}"
+            f"{cited} measurement_route={self.measurement_route} "
+            f"build_binding={self.build_binding}"
+        )
+
+
+def build_enablement_receipt_select(
+    *,
+    schema_digest: str,
+    candidate_build: str,
+    operations: Mapping[str, str],
+    target_mode: str,
+) -> Select[Any]:
+    """The newest admissible receipt per operation, under the SAME rule.
+
+    ``DISTINCT ON (selected_operation)`` ordered by ``observed_at`` DESC
+    then ``id``, so the receipt named is deterministic and is the latest
+    measurement that satisfies every clause.
+    """
+    if target_mode not in ENABLEMENT_TARGET_MODES:
+        raise ValueError(
+            f"build_enablement_receipt_select: unknown target mode {target_mode!r} "
+            f"-- expected one of {', '.join(ENABLEMENT_TARGET_MODES)}"
+        )
+    return (
+        select(
+            ProofRun.selected_operation,
+            ProofRun.id,
+            ProofRun.terminal_state,
+            ProofRun.baseline_defect,
+            ProofRun.measurement_route,
+            ProofRun.build_binding,
+            ProofRun.observed_at,
+        )
+        .where(
+            *_enablement_proof_conditions(
+                schema_digest=schema_digest,
+                candidate_build=candidate_build,
+                operations=operations,
+                target_mode=target_mode,
+            )
+        )
+        .order_by(
+            ProofRun.selected_operation,
+            ProofRun.observed_at.desc(),
+            ProofRun.id,
+        )
+        .distinct(ProofRun.selected_operation)
     )
+
+
+async def enablement_receipts(
+    session: AsyncSession,
+    *,
+    schema_digest: str,
+    candidate_build: str,
+    operations: Mapping[str, str],
+    target_mode: str,
+) -> dict[str, AuthorizingReceipt]:
+    """``{operation: the receipt that authorizes it}`` -- the proven set
+    :func:`operations_with_enablement_proof` returns, plus WHICH receipt."""
+    if not operations:
+        return {}
+    result = await session.execute(
+        build_enablement_receipt_select(
+            schema_digest=schema_digest,
+            candidate_build=candidate_build,
+            operations=operations,
+            target_mode=target_mode,
+        )
+    )
+    return {
+        row[0]: AuthorizingReceipt(
+            operation=row[0],
+            receipt_id=str(row[1]),
+            terminal_state=row[2],
+            baseline_defect=tuple(row[3] or ()),
+            measurement_route=row[4],
+            build_binding=row[5],
+            observed_at=row[6],
+        )
+        for row in result.all()
+    }
 
 
 async def count_rows_by_schema_digest(session: AsyncSession) -> dict[str, int]:

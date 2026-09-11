@@ -752,3 +752,162 @@ async def test_status_names_an_unregistered_live_row_on_both_outputs(
     assert [
         (r["digest_state"], r["mode"], r["proven"], r["reachable"]) for r in rows
     ] == [("UNREGISTERED", "primary", True, False)], rows
+
+
+async def _enable_and_capture(
+    session_factory: Any,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    mode: str,
+    as_json: bool = False,
+) -> tuple[str, str, str]:
+    """Run the real `enable`; return (stdout, stderr, the routing row's
+    review_evidence)."""
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(
+                _ns(query_api_url=url, mode=mode, json=as_json)
+            )
+            == 0
+        )
+    captured = capsys.readouterr()
+    rows = await _rows(session_factory)
+    assert len(rows) == 1, rows
+    return captured.out, captured.err, rows[0].review_evidence or ""
+
+
+async def _only_receipt_id(factory: Any) -> str:
+    async with factory() as session:
+        ids = (await session.execute(sa.select(ProofRun.id))).scalars().all()
+    assert len(ids) == 1, ids
+    return str(ids[0])
+
+
+async def _reset(factory: Any) -> None:
+    async with factory() as session:
+        await session.execute(sa.delete(RoutingState))
+        await session.execute(sa.delete(ProofRun))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_enable_names_the_receipt_that_authorized_each_row(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """opus r7 (observability; team-lead, telemetry rule): `enable` printed
+    the same output for a `match` admission and a fully-cited `mismatch`
+    admission, and nothing named the receipt that authorized the row -- a
+    predicate regression admitting the wrong receipt looked exactly like a
+    correct enablement. Now the stdout line, a structured stderr line and
+    the row's review_evidence each name the receipt id the database holds,
+    its terminal state and, for a cited mismatch, the citations."""
+    catalog = dict(catalog_entries())
+
+    # A `match` admission.
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+    )
+    match_id = await _only_receipt_id(session_factory)
+    out, err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="primary"
+    )
+    match_line = next(
+        line for line in out.splitlines() if line.strip().startswith("featureFlags")
+    )
+    assert f"receipt {match_id}" in match_line, out
+    assert "terminal_state=match" in match_line, out
+    assert "baseline_defect" not in match_line, out
+    assert (
+        f"go_api_routing.enabled operation=featureFlags receipt_id={match_id} "
+        "terminal_state=match" in err
+    ), err
+    assert f"proof_receipt={match_id} terminal_state=match" in evidence, evidence
+
+    # A fully-cited `mismatch` admission of the same operation.
+    await _reset(session_factory)
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+        terminal_state="mismatch",
+        baseline_defect=["CHAOS-5447"],
+        differences_outside_baseline_defect=0,
+    )
+    cited_id = await _only_receipt_id(session_factory)
+    out, err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="primary"
+    )
+    cited_line = next(
+        line for line in out.splitlines() if line.strip().startswith("featureFlags")
+    )
+    assert f"receipt {cited_id}" in cited_line, out
+    assert "terminal_state=mismatch" in cited_line, out
+    assert "baseline_defect=CHAOS-5447" in cited_line, out
+    assert (
+        f"go_api_routing.enabled operation=featureFlags receipt_id={cited_id} "
+        "terminal_state=mismatch baseline_defect=CHAOS-5447" in err
+    ), err
+    assert (
+        f"proof_receipt={cited_id} terminal_state=mismatch baseline_defect=CHAOS-5447"
+        in evidence
+    ), evidence
+
+    # The two admissions print visibly different lines, not the same line
+    # with a different id.
+    assert match_line.replace(match_id, "<id>") != cited_line.replace(
+        cited_id, "<id>"
+    ), (match_line, cited_line)
+
+
+@pytest.mark.asyncio
+async def test_enable_json_names_the_authorizing_receipt(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The same, on `enable --json`: stdout is one JSON document whose
+    receipt id is the stored one; an unproven row carries `receipt: null`."""
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+        terminal_state="mismatch",
+        baseline_defect=["CHAOS-5447"],
+        differences_outside_baseline_defect=0,
+    )
+    stored = await _only_receipt_id(session_factory)
+    out, _err, _evidence = await _enable_and_capture(
+        session_factory, capsys, mode="canary", as_json=True
+    )
+    payload = json.loads(out)
+    [row] = payload["operations"]
+    assert (row["operation"], row["proven"]) == ("featureFlags", True), row
+    receipt = row["receipt"]
+    assert receipt["receipt_id"] == stored, (receipt, stored)
+    assert (
+        receipt["terminal_state"],
+        receipt["baseline_defect"],
+        receipt["measurement_route"],
+        receipt["build_binding"],
+    ) == ("mismatch", ["CHAOS-5447"], "edge", "per_request"), receipt
+
+    # Unproven, acknowledged: no receipt, said so.
+    await _reset(session_factory)
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(
+                _ns(
+                    query_api_url=url,
+                    mode="canary",
+                    json=True,
+                    acknowledge_unproven=True,
+                )
+            )
+            == 0
+        )
+    [row] = json.loads(capsys.readouterr().out)["operations"]
+    assert (row["proven"], row["receipt"]) == (False, None), row

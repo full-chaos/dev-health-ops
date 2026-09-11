@@ -271,10 +271,20 @@ dev-hops go-api routing status
 `enable` refuses (exit 2, writing nothing) when query-api is unreachable,
 when the two planes' digests disagree, when the running binary does not
 register an operation or registers it under a different document digest,
-or when no `deployed_executed`/`match` proof run exists for the candidate
-build. The last of these is waivable with `--acknowledge-unproven`, which
-logs one warning per row and makes `status` report those rows as
-`UNPROVEN` for as long as they are in force.
+or when no admissible proof run exists for the candidate build: a
+`deployed_executed` run bound to the serving build per request that ended
+in `match`, or in a `mismatch` whose every difference is cited against a
+declared Python baseline defect (primary also requires the edge route).
+The last of these is waivable with `--acknowledge-unproven`, which logs
+one warning per row and makes `status` report those rows as `UNPROVEN` for
+as long as they are in force.
+
+On success `enable` names, for every proven row, the receipt that
+authorized it -- its id, terminal state, citations (for a cited mismatch),
+route and binding -- on stdout (and in `--json`), on an
+`INFO: go_api_routing.enabled` line on stderr, and in the routing row's
+`review_evidence` (`proof_receipt=<id> ...`). A `match` admission and a
+cited-`mismatch` admission print different lines.
 
 ### After alembic 0129: every earlier proof reads UNPROVEN until re-proven
 

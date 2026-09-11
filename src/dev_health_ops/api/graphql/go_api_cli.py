@@ -58,12 +58,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .go_api_operation_catalog import (
     catalog_entries,
     catalog_loaded_successfully,
 )
 from .go_api_schema_digest import current_schema_digest
+
+if TYPE_CHECKING:
+    from .go_api_routing_admin import AuthorizingReceipt
 
 __all__ = ["register_commands"]
 
@@ -286,7 +290,9 @@ def _resolve_requested_operations(
     return sorted(set(names)), None
 
 
-def _enable_review_evidence(ns: argparse.Namespace, unproven: bool) -> str | None:
+def _enable_review_evidence(
+    ns: argparse.Namespace, unproven: bool, receipt: AuthorizingReceipt | None = None
+) -> str | None:
     """What goes in the row's `review_evidence`.
 
     An acknowledged-unproven enablement carries its reason DURABLY, on the
@@ -300,6 +306,12 @@ def _enable_review_evidence(ns: argparse.Namespace, unproven: bool) -> str | Non
     if unproven:
         prefix = "ACKNOWLEDGED-UNPROVEN: "
         return prefix + (supplied or "no reason given")
+    # A proven row names the receipt that authorized it (opus r7,
+    # observability): without it the row records nothing about WHICH
+    # evidence carried the decision, and a predicate that admitted the
+    # wrong receipt is indistinguishable from one that admitted the right one.
+    if receipt is not None:
+        return receipt.evidence() + (f"; {supplied}" if supplied else "")
     return supplied or None
 
 
@@ -311,7 +323,7 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
         ENABLEMENT_TARGET_MODE_EDGE_ONLY,
         MEASUREMENT_ROUTE_EDGE,
         enable_operation,
-        operations_with_enablement_proof,
+        enablement_receipts,
     )
 
     catalog = dict(catalog_entries())
@@ -387,7 +399,7 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
 
     # --- Preflight 4: is this candidate build proven? ------------------
     async with get_postgres_session() as session:
-        proven = await operations_with_enablement_proof(
+        proven = await enablement_receipts(
             session,
             schema_digest=local_digest,
             candidate_build=ns.candidate_build,
@@ -451,6 +463,26 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
                     f"schema_digest={local_digest} mode={ns.mode}",
                     file=sys.stderr,
                 )
+            else:
+                # The proven twin of the line above: which receipt turned
+                # this row on, so a log search finds the evidence behind
+                # every enablement, not only behind the unproven ones.
+                receipt = proven[operation]
+                print(
+                    f"INFO: go_api_routing.enabled operation={operation} "
+                    f"receipt_id={receipt.receipt_id} "
+                    f"terminal_state={receipt.terminal_state}"
+                    + (
+                        f" baseline_defect={','.join(receipt.baseline_defect)}"
+                        if receipt.baseline_defect
+                        else ""
+                    )
+                    + f" measurement_route={receipt.measurement_route} "
+                    f"build_binding={receipt.build_binding} "
+                    f"candidate_build={ns.candidate_build} "
+                    f"schema_digest={local_digest} mode={ns.mode}",
+                    file=sys.stderr,
+                )
             await enable_operation(
                 session,
                 schema_digest=local_digest,
@@ -459,20 +491,75 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
                 candidate_build=ns.candidate_build,
                 mode=ns.mode,
                 rollout_percentage=ns.rollout,
-                review_evidence=_enable_review_evidence(ns, operation in unproven),
+                review_evidence=_enable_review_evidence(
+                    ns, operation in unproven, proven.get(operation)
+                ),
                 recorded_by=_recorded_by(),
             )
         await session.commit()
 
+    if getattr(ns, "json", False):
+        print(
+            json.dumps(
+                {
+                    "schema_digest": local_digest,
+                    "candidate_build": ns.candidate_build,
+                    "mode": ns.mode,
+                    "rollout": ns.rollout,
+                    "operations": [
+                        {
+                            "operation": operation,
+                            "document_digest": catalog[operation],
+                            "proven": operation in proven,
+                            "receipt": _receipt_json(proven.get(operation)),
+                        }
+                        for operation in operations
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return 0
     print(
         f"enabled {len(operations)} operation(s) at schema_digest="
         f"{local_digest} candidate_build={ns.candidate_build} mode={ns.mode} "
         f"rollout={ns.rollout}"
     )
     for operation in operations:
-        flag = " (UNPROVEN)" if operation in unproven else ""
-        print(f"  {operation}{flag}")
+        authorizing = proven.get(operation)
+        if authorizing is None:
+            print(f"  {operation} (UNPROVEN)")
+            continue
+        # A cited mismatch and a match must not print the same line: the
+        # operator is told which kind of evidence turned the row on.
+        cited = (
+            f" baseline_defect={','.join(authorizing.baseline_defect)} "
+            "(every difference cited)"
+            if authorizing.baseline_defect
+            else ""
+        )
+        print(
+            f"  {operation}  proof: receipt {authorizing.receipt_id} "
+            f"terminal_state={authorizing.terminal_state}{cited} "
+            f"measurement_route={authorizing.measurement_route} "
+            f"build_binding={authorizing.build_binding}"
+        )
     return 0
+
+
+def _receipt_json(receipt: AuthorizingReceipt | None) -> dict[str, object] | None:
+    if receipt is None:
+        return None
+    return {
+        "receipt_id": receipt.receipt_id,
+        "terminal_state": receipt.terminal_state,
+        "baseline_defect": list(receipt.baseline_defect),
+        "measurement_route": receipt.measurement_route,
+        "build_binding": receipt.build_binding,
+        "observed_at": (
+            receipt.observed_at.isoformat() if receipt.observed_at else None
+        ),
+    }
 
 
 async def _cmd_routing_disable(ns: argparse.Namespace) -> int:
@@ -854,6 +941,14 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         dest="query_api_url",
         default=None,
         help="Base URL of the running query-api. Env: GO_API_QUERY_API_URL",
+    )
+    enable.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Print the result as one JSON document on stdout: each operation, "
+            "whether it is proven, and the receipt that authorized it."
+        ),
     )
     enable.add_argument(
         "--acknowledge-unproven",

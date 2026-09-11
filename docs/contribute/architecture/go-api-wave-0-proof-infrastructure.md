@@ -304,18 +304,17 @@ proofs. Do not `--acknowledge-unproven` around it.
 
 `cmd/go-api-routing` is the Go implementation of the same contract, built
 because the cutover rule forbids new Python compute on the critical path
-of a rollout operation (ruling R49). The Python verbs above are
-UNTOUCHED and still work; these are the ones to reach for on a Go-only
-fleet, and they are the only ones that can re-point a `shadow` row.
+of a rollout operation. The Python verbs above are UNTOUCHED and still
+work; these are the ones to reach for on a Go-only fleet, and they are the
+only ones that can re-point a `shadow` row.
 
 ```bash
-# r8 F4 (reproduced): every -postgres-uri below used to be typed as a
-# FLAG, "$POSTGRES_URI" included -- reaching /proc/<pid>/cmdline and
-# shell history, the exact leak class this package's own bindPostgresURI
-# fix (finding (a)) closed for the usage TEXT. This recipe is the
-# operator's document of record; the same rule applies to it. The binary
-# already falls back to the POSTGRES_URI environment variable on its own
-# (main.go) -- set it in the environment and omit the flag entirely.
+# A typed -postgres-uri flag value reaches /proc/<pid>/cmdline and shell
+# history, the same leak class this package's own bindPostgresURI guard
+# closes for the usage TEXT -- so this recipe, the operator's document of
+# record, follows the same rule. The binary already falls back to the
+# POSTGRES_URI environment variable on its own (main.go) -- set it in the
+# environment and omit the flag entirely.
 export POSTGRES_URI=<dsn>
 
 # 1. Same question. Never refuses, works with query-api down.
@@ -323,9 +322,9 @@ go-api-routing status -registry-url http://query-api:8090/registry
 
 # 2. Re-enable. NOTE the difference that matters: there is no
 #    -candidate-build to type. The build is READ from the deployed
-#    process's authenticated /buildinfo (ruling R51); -expect-build is a
-#    cross-check that can only FAIL a run, never the source of what is
-#    written. The credential is the effective-principal ENVELOPE in
+#    process's authenticated /buildinfo; -expect-build is a cross-check
+#    that can only FAIL a run, never the source of what is written. The
+#    credential is the effective-principal ENVELOPE in
 #    GO_API_ROUTING_BEARER -- an env var, not a flag, because a flag value
 #    reaches `ps` and shell history.
 GO_API_ROUTING_BEARER=<envelope> go-api-routing enable \
@@ -354,14 +353,11 @@ go-api-routing disable \
 GO_API_ROUTING_BEARER=<envelope> go-api-routing repoint ... -dry-run
 ```
 
-**r7 F8 (reproduced): the count below is stale and corrected.** This
-section originally closed the list at three; review since then has added
-several more deliberate behaviours, listed after the original three below.
-Every one is a tightening or an observability improvement, never a silent
-behaviour change, and the rule stands: anything else that differs from the
-Python verbs is a defect, not a decision.
-
-The original three:
+This is every point where the Go verbs deliberately behave differently
+from the Python ones. Every one is a tightening or an observability
+improvement, never a silent behaviour change, and the rule stands:
+anything else that differs from the Python verbs is a defect, not a
+decision.
 
 * **The candidate build cannot be typed.** `enable --candidate-build` in
   Python is documented "by CONVENTION, unverified"; the fifteen live rows
@@ -381,16 +377,12 @@ The original three:
   columns; an append-only audit row carrying the same two fields on every
   write, independent of the current row, arrives with CHAOS-5505 (the
   audit PR that follows this one).
-
-Added since, all reproduced by review and pinned by a test:
-
 * **`disable` never refuses over an operation whose ONLY rows sit at other
   schema digests, named explicitly or picked up by `-operations
-  all-registered`** (r8 F3, corrected -- an earlier version of this line
-  claimed naming the operation explicitly still refuses this way; that
-  was true only briefly and contradicts this verb's own documented
-  contract of working when the planes disagree). It is SKIPPED, reported
-  as "nothing to disable" with the other digest(s) named in the plan, so
+  all-registered`** -- refusing here would contradict this verb's own
+  documented contract of working when the planes disagree. It is
+  SKIPPED, reported as "nothing to disable" with the other digest(s)
+  named in the plan, so
   the documented rollback recipe (`-operations all-registered -mode
   python`) can still turn everything off even when one operation's rows
   are all stale to this checkout.
@@ -417,16 +409,14 @@ Added since, all reproduced by review and pinned by a test:
 * **`<verb> -h`/`-help` exits 0**, printing that verb's usage text, the
   same as this binary's own top-level `-h` and Python's argparse --  not a
   refusal (exit 2).
-* **A dead database exits 1, matching Python** (r8 F6, corrected --
-  team-lead ruling R126 required fixing this, not declaring it; an
-  earlier version of this line left it exit 2 and only named the gap).
-  Python's `disable`/`enable`/`repoint` against a dead database crash
-  with an unhandled `ConnectionRefusedError`, exit 1; `connectPostgres`'s
-  dial-failure path now classifies the same way. A malformed DSN (a
+* **A dead database exits 1, matching Python.** Python's
+  `disable`/`enable`/`repoint` against a dead database crash with an
+  unhandled `ConnectionRefusedError`, exit 1; `connectPostgres`'s
+  dial-failure path classifies the same way. A malformed DSN (a
   parse-time failure, the operator's own typo) is unaffected and stays
   exit 2.
-* **`status -json`'s key names match Python's exactly** (r8 F6,
-  corrected, same ruling): `python_plane_schema_digest` and
+* **`status -json`'s key names match Python's exactly**:
+  `python_plane_schema_digest` and
   `python_plane_digest_error` (always `null` -- computing this value has
   no runtime failure mode in Go, present for key-set parity only), not
   the earlier `local_schema_digest` with no digest-error key at all.
@@ -455,11 +445,10 @@ and what the command actually uses is rebuilt from scheme, host and path.**
 a header, so none of those components has a legitimate use — and
 `goapiproof.FetchRegistry` interpolates the URL it is handed into its
 error text, so anything carried in one is printed verbatim on a transport
-failure. Three review rounds found three variants of that leak (userinfo;
-the no-`//` form, where Go parses the *username* as the scheme and
-`url.Redacted()` returns the password unchanged; then a query string), so
-the check is an allowlist over URL components rather than a list of shapes
-to reject.
+failure. Three variants of that leak exist: userinfo; the no-`//` form,
+where Go parses the *username* as the scheme and `url.Redacted()` returns
+the password unchanged; and a query string -- so the check is an
+allowlist over URL components rather than a list of shapes to reject.
 
 The residual, stated rather than left implicit: **a credential placed in a
 path segment is not distinguishable from the route itself** and would
@@ -474,13 +463,11 @@ UNREACHABLE" and suppressed a census that had already succeeded — hiding
 the one number that says whether anything is enabled at all.
 
 The refusal exit code is 2 (a state the operator must resolve), on both
-planes. **r7 F8 (reproduced), corrected again -- this line previously said
-exit 1 "never happens" after r6 F4 first corrected an even earlier claim of
-"1 for a crash":** that is now false. `classifyWriteError` in `main.go`
+planes, with one exception. `classifyWriteError` in `main.go`
 distinguishes a genuine, server-raised failure from a hand-authored
 refusal at the one place `enable`/`repoint`/`disable` reach the database
-write: a `*pgconn.PgError` -- a deadlock abort (SQLSTATE 40P01, see F1's
-own deterministic reproduction), a trigger's `RAISE EXCEPTION`, any other
+write: a `*pgconn.PgError` -- a deadlock abort (SQLSTATE 40P01), a
+trigger's `RAISE EXCEPTION`, any other
 error the POSTGRES SERVER itself raised inside an already-open
 transaction -- now exits **1**, via `errInternal`/`internal()`. Everything
 else the binary can produce (a missing flag, a malformed DSN, a guard

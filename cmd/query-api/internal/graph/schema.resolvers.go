@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
-	"go.opentelemetry.io/otel/attribute"
-
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/capacityforecast"
@@ -25,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/throughputforecast"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // CreateSavedReport is the resolver for the createSavedReport field.

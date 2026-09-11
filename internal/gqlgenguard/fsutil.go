@@ -144,9 +144,9 @@ const (
 // Both ends are *os.Root handles, so neither a link nor a crafted name can make
 // THIS function read or write outside the two trees. But the copy is handed to
 // the generator, an ordinary child process the roots do not confine: a link
-// reproduced in the copy is a link the generator follows. Round 1 of review
-// proved it -- a schema symlinked from outside the module was read by the real
-// CLI and landed in the generated output. So the copy carries only links that
+// reproduced in the copy is a link the generator follows -- a schema
+// symlinked from outside the module is read by the real CLI and lands in the
+// generated output. So the copy carries only links that
 // stay inside the module:
 //
 //   - an absolute target is dropped even when it names a path inside the
@@ -251,8 +251,8 @@ func linkDropReason(src *os.Root, rel, target string) (reason, detail string) {
 	// is a cycle, and it is the one shape through which `..` climbs PHYSICALLY
 	// out of the module while climbing lexically inside it: after
 	// `a/b/L -> ../..` (the root), `a/b/L/..` is the root's PARENT to the
-	// operating system and `a/b` to filepath.Clean. Round 5b of review read a
-	// schema, a template and a config directory outside the module that way.
+	// operating system and `a/b` to filepath.Clean, which is how a schema, a
+	// template or a config directory outside the module can be read.
 	// Nothing needs such a link to generate, so it is never reproduced.
 	linkDir, derr := physicalPath(filepath.Join(src.Name(), filepath.FromSlash(path.Dir(rel))))
 	target, terr := physicalPath(filepath.Join(src.Name(), filepath.FromSlash(rel)))
@@ -268,8 +268,8 @@ func linkDropReason(src *os.Root, rel, target string) (reason, detail string) {
 // physicalPath resolves p the way the operating system does when it opens it:
 // component by component, following every link where it stands, so a `..`
 // after a link climbs from the link's TARGET. filepath.Clean, Abs and Join
-// climb from the link's NAME instead, which is the difference round 5b of
-// review executed three escapes through. Nothing is cleaned first. A relative
+// climb from the link's NAME instead, and every confinement decision made on
+// that name is wrong through such a link. Nothing is cleaned first. A relative
 // p is taken from the working directory. Components that do not exist are
 // kept as written (there is nothing to follow), so the result also says where
 // a create -- os.MkdirAll, os.MkdirTemp -- would land.

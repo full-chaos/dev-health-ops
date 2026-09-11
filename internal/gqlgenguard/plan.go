@@ -113,8 +113,8 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	}
 
 	// The config path is confined BEFORE anything is changed into or read: a
-	// config outside the module is a file the guard itself would otherwise
-	// open, which round 4 of review executed with `-config ../outside.yml`.
+	// config outside the module (`-config ../outside.yml`) is a file the guard
+	// itself would otherwise open.
 	if _, err := moduleRelative(moduleAbs, filepath.Join(moduleAbs, filepath.FromSlash(configPath))); err != nil {
 		return nil, fmt.Errorf("refusing: gqlgen config %q leaves the module or names its root (%v)", configPath, err)
 	}
@@ -123,10 +123,9 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	}
 	// Where the config physically is. gqlgen changes into the config's
 	// directory as the operating system resolves it, so every relative path in
-	// the config is judged from THAT directory, never from the lexical one --
-	// round 5b of review executed `-config a/b/cfg/custom.yml` with
-	// `a/b/cfg -> ../..`: the guard judged the schema from a/b/cfg, gqlgen read
-	// it from above the module.
+	// the config is judged from THAT directory, never from the lexical one:
+	// with `-config a/b/cfg/custom.yml` and `a/b/cfg -> ../..`, a schema judged
+	// from a/b/cfg is read by gqlgen from above the module.
 	//
 	// The DIRECTORY is what matters: the generator runs there and gqlgen
 	// (handed --config <base name>) resolves every relative path in the file

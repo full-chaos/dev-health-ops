@@ -16,9 +16,9 @@ import (
 // setting in the GUARD's environment -- directly or through a GOENV file -- and
 // the contract is that it does not reach the child: generation proceeds and
 // nothing outside the private copy moves. The only inherited values are the
-// three cache locations, and a location inside the module is refused. Round 4
-// executed `GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod` writing into the
-// working tree while check-drift passed.
+// three cache locations, and a location inside the module is refused. An
+// inherited `GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod` once made the
+// child write into the working tree while check-drift passed.
 func TestGoEnvironmentInputDomain(t *testing.T) {
 	goAvailable(t)
 	type cell struct {
@@ -48,7 +48,7 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 		{shape: "GOFLAGS=-modfile=<tree>/alternate.mod (not inherited)", env: func(t *testing.T, f *fixture) map[string]string {
 			return map[string]string{"GOFLAGS": "-modfile=" + inTree(f, "alternate.mod")}
 		}},
-		{shape: "GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod (round 4's shape; not inherited)", env: func(t *testing.T, f *fixture) map[string]string {
+		{shape: "GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod (writes the tree when inherited; not inherited)", env: func(t *testing.T, f *fixture) map[string]string {
 			return map[string]string{"GOFLAGS": "-mod=mod -modfile=" + inTree(f, "alternate.mod")}
 		}},
 		{shape: "a GOENV file carrying GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod (GOENV=off for the child)", env: func(t *testing.T, f *fixture) map[string]string {
@@ -262,11 +262,11 @@ func TestTheRealChildSeesOnlyTheAllowlist(t *testing.T) {
 	t.Logf("CELL-OUTPUT: accepted: child environment keys = %s", got)
 }
 
-// TestTheReviewersModfileReproWritesNothing is round 4's P1-1 run for real:
-// a committed record, then check-drift with the reviewer's GOFLAGS -- and the
-// same through a GOENV file. Before the allowlist the child wrote
+// TestAnInheritedModfileFlagWritesNothingInTheTree runs the -modfile escape
+// for real: a committed record, then check-drift with GOFLAGS naming a modfile
+// in the tree -- and the same through a GOENV file. Before the allowlist the child wrote
 // alternate.mod/alternate.sum in the working tree and check-drift still passed.
-func TestTheReviewersModfileReproWritesNothing(t *testing.T) {
+func TestAnInheritedModfileFlagWritesNothingInTheTree(t *testing.T) {
 	goAvailable(t)
 	for _, via := range []string{"GOFLAGS", "GOENV"} {
 		t.Run(via, func(t *testing.T) {
@@ -293,16 +293,16 @@ func TestTheReviewersModfileReproWritesNothing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("check-drift: %v", err)
 			}
-			assertUnchanged(t, before, f.digests(), "check-drift under the reviewer's "+via)
+			assertUnchanged(t, before, f.digests(), "check-drift under an inherited -modfile via "+via)
 		})
 	}
 }
 
 // TestGoModReplaceInputDomain: a filesystem `replace` in go.mod is an input of
 // the generation -- the generator loads that directory's packages to bind
-// models -- so it is confined like every other input. Round 4 executed an
-// absolute replace outside the module whose package, edited alone, changed the
-// output copied back. Version replaces resolve through the module cache and
+// models -- so it is confined like every other input: an absolute replace
+// outside the module lets a package edited outside it change the output that
+// is copied back. Version replaces resolve through the module cache and
 // go.sum, like any dependency.
 func TestGoModReplaceInputDomain(t *testing.T) {
 	goAvailable(t)
@@ -319,7 +319,7 @@ func TestGoModReplaceInputDomain(t *testing.T) {
 		{shape: "a version replace (module cache, go.sum)", replace: func(t *testing.T, f *fixture, beside string) string {
 			return "replace example.com/versioned => example.com/other v1.0.0\n"
 		}},
-		{shape: "an ABSOLUTE replace outside the module (round 4's shape)", replace: func(t *testing.T, f *fixture, beside string) string {
+		{shape: "an ABSOLUTE replace outside the module (its package changes the output)", replace: func(t *testing.T, f *fixture, beside string) string {
 			ext := t.TempDir()
 			if err := os.WriteFile(filepath.Join(ext, "go.mod"), []byte("module example.com/ext\n\ngo 1.25\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -385,8 +385,8 @@ func TestGoModReplaceInputDomain(t *testing.T) {
 }
 
 // TestConfigPathInputDomain: the config path is confined BEFORE anything is
-// changed into or read. Round 4 executed `-config ../outside.yml` being parsed
-// from outside the module before the refusal.
+// changed into or read: otherwise `-config ../outside.yml` is parsed from
+// outside the module before any refusal.
 func TestConfigPathInputDomain(t *testing.T) {
 	cells := []struct {
 		shape, path string
@@ -394,7 +394,7 @@ func TestConfigPathInputDomain(t *testing.T) {
 	}{
 		{"canonical", "gqlgen.yml", ""},
 		{"a ../ after a directory name, lexically inside the module (refused)", "gen/../gqlgen.yml", "has a `..` after a directory name"},
-		{"../ out of the module (round 4's shape)", "../outside.yml", "leaves the module"},
+		{"../ out of the module", "../outside.yml", "leaves the module"},
 		{"a deeper escape", "gen/../../outside.yml", "leaves the module"},
 		{"absolute", "/etc/hostname", "module-relative"},
 		{"the module root itself", ".", "leaves the module"},
@@ -404,7 +404,7 @@ func TestConfigPathInputDomain(t *testing.T) {
 			f := guardFixture(t)
 			// A sentinel beside the module that a pre-check read would parse.
 			sentinel := filepath.Join(filepath.Dir(f.dir), "outside.yml")
-			if err := os.WriteFile(sentinel, []byte("REVIEW_OUTSIDE_CONFIG_SENTINEL: true\n"), 0o644); err != nil {
+			if err := os.WriteFile(sentinel, []byte("OUTSIDE_CONFIG_SENTINEL: true\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			_, err := EnumerateOutputs(f.dir, c.path)
@@ -418,15 +418,15 @@ func TestConfigPathInputDomain(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("want a refusal containing %q, got %v", c.wantErr, err)
 			}
-			if strings.Contains(err.Error(), "REVIEW_OUTSIDE_CONFIG_SENTINEL") || strings.Contains(err.Error(), "unable to parse config") {
+			if strings.Contains(err.Error(), "OUTSIDE_CONFIG_SENTINEL") || strings.Contains(err.Error(), "unable to parse config") {
 				t.Fatalf("the config outside the module was READ before the refusal: %v", err)
 			}
 		})
 	}
 }
 
-// TestTheGuardsOwnInputsAreInBothParsedPathLists is round 4's P3: the path
-// filters are asserted as YAML values, so a pattern that survives only in a
+// TestTheGuardsOwnInputsAreInBothParsedPathLists: the path filters are
+// asserted as YAML values, so a pattern that survives only in a
 // comment is missing.
 func TestTheGuardsOwnInputsAreInBothParsedPathLists(t *testing.T) {
 	var wf struct {

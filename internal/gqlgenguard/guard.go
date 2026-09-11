@@ -214,8 +214,8 @@ func Generate(ctx context.Context, opts Options) (*Result, error) {
 	}
 	// There is deliberately no second cancellation check here. generateIntoCopy
 	// already refuses on a cancelled context after the generator returns, so a
-	// check at this point is unreachable -- proved by a mutant that removed it
-	// and survived every test. A guard that cannot fail is not a guard.
+	// check at this point is unreachable, and a guard that cannot fail is not a
+	// guard.
 
 	moduleRoot, err := os.OpenRoot(opts.ModuleDir)
 	if err != nil {
@@ -462,9 +462,8 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	// No separate "cancelled after generating" check, and none after the copy
 	// either: every walk here (the copy and both snapshots) checks ctx before
 	// its first entry, so each explicit check that used to sit between them
-	// was subsumed by the next walk's own first check. Mutant M17 removed one
-	// and survived every test, which is how that was found; a guard that
-	// cannot fail is not a guard.
+	// was subsumed by the next walk's own first check; a guard that cannot
+	// fail is not a guard.
 	after, err := TakeSnapshotContext(ctx, copyRoot, skipVCS)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("snapshot private copy after generating: %w", err)
@@ -517,9 +516,10 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 // childEnvKeys is the WHOLE environment the generator child gets: an
 // allowlist, built from nothing, never a filtered copy of the guard's own. A
 // setting a future Go release adds cannot reach the child, because nothing is
-// inherited that is not named here. Round 4 of review executed an inherited
-// `GOFLAGS=-mod=mod -modfile=<tree>/x.mod` (and the same through a GOENV file)
-// making the child write into the working tree while check-drift passed.
+// inherited that is not named here. An inherited
+// `GOFLAGS=-mod=mod -modfile=<tree>/x.mod` (or the same through a GOENV file)
+// would otherwise make the child write into the working tree while check-drift
+// passes.
 //
 //	PATH        the directory of the go binary the guard resolved, only
 //	HOME        a scratch directory beside the private copy
@@ -880,8 +880,8 @@ func refuseCopyInsideModule(moduleAbs, tempParent string) (string, error) {
 	}
 	// Resolved PHYSICALLY, never cleaned first: `<a link to an in-module
 	// dir>/../<dir>` is inside the module to the operating system that creates
-	// the copy and outside it to filepath.Abs -- round 5b of review restarted
-	// the self-copy in the tree with exactly that TMPDIR.
+	// the copy and outside it to filepath.Abs, and such a TMPDIR would restart
+	// the self-copy in the tree.
 	parentAbs, err := physicalPath(parent)
 	if err != nil {
 		return "", fmt.Errorf("refusing: the private copy's parent %q cannot be resolved: %w", parent, err)

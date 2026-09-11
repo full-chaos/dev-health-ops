@@ -20,13 +20,13 @@ resolver: {layout: single-file, filename: ../gen/resolver.go, package: gen}
 
 // TestEveryInputPathIsJudgedWhereItPhysicallyResolves is the input domain of
 // the one rule every path the config names is held to: it is judged where the
-// operating system resolves it, never where filepath.Clean says. Round 5b of
-// review executed a schema, a template and a config directory read from
-// OUTSIDE the module through an in-module link: after `a/b/L -> ../..` (the
-// root), `a/b/L/..` is the root's parent to the kernel and `a/b` to Clean.
+// operating system resolves it, never where filepath.Clean says. Through an
+// in-module link a schema, a template or a config directory can otherwise be
+// read from OUTSIDE the module: after `a/b/L -> ../..` (the root), `a/b/L/..`
+// is the root's parent to the kernel and `a/b` to Clean.
 //
 // Shapes, per key: (S1) an in-module link to an ANCESTOR followed by `..`
-// (round 5b's shape); (S2) no `..` after any name, but the config's directory
+// (the escape above); (S2) no `..` after any name, but the config's directory
 // reached through an in-module link whose target sits SHALLOWER than its name
 // -- `a/b/c/cfg -> ../../../x` -- so a leading `../..` climbs out of the
 // module physically while staying inside it lexically; (S3) an in-module link
@@ -227,8 +227,8 @@ func lineWith(report, prefix string) string {
 // TestTheRealGeneratorRunsWhereTheConfigPhysicallyIs executes S2's canonical
 // cell with the real generator: the config reached through a link whose target
 // is shallower than its name. The plan's outputs, judged from the physical
-// directory, are exactly the files gqlgen writes there; before round 5b's fix
-// the guard judged them from the lexical directory, two levels deeper.
+// directory, are exactly the files gqlgen writes there; judged from the
+// lexical directory they would be two levels deeper.
 func TestTheRealGeneratorRunsWhereTheConfigPhysicallyIs(t *testing.T) {
 	goAvailable(t)
 	f := guardFixture(t).withModuleFiles()
@@ -257,8 +257,7 @@ func TestTheRealGeneratorRunsWhereTheConfigPhysicallyIs(t *testing.T) {
 	}
 }
 
-// TestLocationInputsAreJudgedWhereTheyPhysicallyResolve is round 5b's F2/F3:
-// the copy's parent and the go command's locations, each named as
+// TestLocationInputsAreJudgedWhereTheyPhysicallyResolve: the copy's parent and the go command's locations, each named as
 // `<a link OUTSIDE the module to an in-module dir>/../<dir>` -- lexically
 // outside, physically inside. Each refuses before anything is created in the
 // tree.

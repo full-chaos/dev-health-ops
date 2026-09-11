@@ -249,8 +249,7 @@ func TestInterruptingTheBinaryLeavesTheTreeUntouched(t *testing.T) {
 
 			// Read until the guard reports that it is running the generator.
 			// A mutex guards the buffer because the reader runs in its own
-			// goroutine; without it the race detector, not a reviewer, would
-			// be the one to find this.
+			// goroutine and the test reads it concurrently.
 			reached := make(chan struct{})
 			var (
 				mu   sync.Mutex
@@ -467,8 +466,8 @@ func lastLine(s string) string {
 // TestTheWorkspaceModuleIsTheDeepestContainingTheWorkingDirectory: a
 // workspace holding the root module AND a module nested inside it, with the
 // working directory in the nested one. Both listed directories contain the
-// working directory; the module is the DEEPEST (round 5b's mutant X27 picked
-// the root and survived every test).
+// working directory; the module is the DEEPEST (picking the root instead
+// generates the wrong module).
 func TestTheWorkspaceModuleIsTheDeepestContainingTheWorkingDirectory(t *testing.T) {
 	bin := buildGuard(t)
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -492,8 +491,7 @@ func TestTheWorkspaceModuleIsTheDeepestContainingTheWorkingDirectory(t *testing.
 // TestTheWorkingDirectoryIsResolvedThroughLinksInAWorkspace: the working
 // directory reached through a symbolic link to the workspace. go lists the
 // modules by their real paths; the working directory must be resolved the
-// same way before it is compared (round 5b's mutant X28 dropped that and
-// survived).
+// same way before it is compared, or no listed module contains it.
 func TestTheWorkingDirectoryIsResolvedThroughLinksInAWorkspace(t *testing.T) {
 	bin := buildGuard(t)
 	real, err := filepath.EvalSymlinks(t.TempDir())

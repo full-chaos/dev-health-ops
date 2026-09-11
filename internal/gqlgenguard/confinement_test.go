@@ -16,9 +16,8 @@ import (
 // in-process Go that the test wrote; it proves nothing about what `go run
 // github.com/99designs/gqlgen` will open.
 
-// TestTheRealGeneratorCannotReadASchemaOutsideTheModuleThroughALink is round
-// 1's reproduction, kept verbatim in shape: a schema file symlinked from outside
-// the module, named by the config. Before the fix the link was reproduced in
+// TestTheRealGeneratorCannotReadASchemaOutsideTheModuleThroughALink: a schema
+// file symlinked from outside the module, named by the config. Before the fix the link was reproduced in
 // the copy, the child followed it, and `leakedFromOutside` landed in the
 // generated output in the working tree.
 func TestTheRealGeneratorCannotReadASchemaOutsideTheModuleThroughALink(t *testing.T) {
@@ -62,8 +61,8 @@ func TestTheRealGeneratorCannotReadASchemaOutsideTheModuleThroughALink(t *testin
 	assertUnchanged(t, before, f.digests(), "a refused generation over an outside schema")
 }
 
-// TestTheRealGeneratorCannotWriteThroughAnEscapingDirectoryLink is round 1's
-// second adversarial probe: an output directory that is a link out of the
+// TestTheRealGeneratorCannotWriteThroughAnEscapingDirectoryLink: an output
+// directory that is a link out of the
 // module. It was already refused before the fix -- the root handle refuses the
 // Lstat -- and this pins that it still is, with the outside directory empty.
 func TestTheRealGeneratorCannotWriteThroughAnEscapingDirectoryLink(t *testing.T) {
@@ -188,7 +187,7 @@ func TestSchemaInputConfinementInputDomain(t *testing.T) {
 					t.Fatal(err)
 				}
 			}, wantErr: "too many levels of symbolic links"},
-		{shape: "a schema file that IS a link out of the module (round 1's shape)", schema: "schema-link.graphql",
+		{shape: "a schema file that IS a link out of the module (the real CLI reads it)", schema: "schema-link.graphql",
 			setup: func(t *testing.T, f *fixture, outside string) {
 				secret := filepath.Join(outside, "secret.graphql")
 				if err := os.WriteFile(secret, []byte("type Query { leakedFromOutside: String! }\n"), 0o644); err != nil {
@@ -209,7 +208,7 @@ func TestSchemaInputConfinementInputDomain(t *testing.T) {
 		{shape: "a glob whose literal directory climbs OUT of the module", schema: "../*.graphql",
 			wantErr: `schema pattern "../*.graphql" leaves the module`},
 		{shape: "a ../ after a directory name, lexically inside the module (refused: it climbs from wherever the name resolves)", schema: "gen/../schema.graphql", wantErr: "has a `..` after a directory name"},
-		{shape: "a ** walk passing a directory link out of the module at depth 2 (round 2's shape)", schema: `"sub/**/*.graphql"`,
+		{shape: "a ** walk passing a directory link out of the module at depth 2 (its schema would be skipped silently)", schema: `"sub/**/*.graphql"`,
 			setup: func(t *testing.T, f *fixture, outside string) {
 				f.write("sub/deep/inside.graphql", fixtureSchema)
 				linkOutsideDir("sub/deep/outdir")(t, f, outside)
@@ -484,8 +483,8 @@ func TestTakeSnapshotContextStopsWhenCancelled(t *testing.T) {
 // schema-input confinement over the other two configuration keys gqlgen READS
 // as files (v0.17.66: codegen/config/package.go ModelTemplate,
 // codegen/config/resolver.go ResolverTemplate; both read with os.ReadFile from
-// the generator's working directory). Round 2 executed an absolute template
-// outside the module reaching the generated output through `generate`; every
+// the generator's working directory). An absolute template outside the
+// module otherwise reaches the generated output through `generate`; every
 // row here is refused before the generator runs, except the canonical one.
 func TestTemplateInputConfinementInputDomain(t *testing.T) {
 	type knob struct{ name, section, key, from string }
@@ -608,8 +607,8 @@ func TestTheRealGeneratorUsesAnInModuleTemplate(t *testing.T) {
 	}
 }
 
-// TestARecursiveSchemaGlobRefusesALinkedDirectoryOutOfTheModule is round 2's
-// second shape with the real generator: a `**` schema walk that passes a
+// TestARecursiveSchemaGlobRefusesALinkedDirectoryOutOfTheModule, with the real
+// generator: a `**` schema walk that passes a
 // directory link out of the module. gqlgen's walk never follows a link -- the
 // schema behind it would be left out, with generation and the record update
 // both succeeding -- so the guard refuses the run instead, before anything is

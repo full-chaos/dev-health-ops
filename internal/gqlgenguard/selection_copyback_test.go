@@ -37,8 +37,8 @@ func TestTheDiscoveryNamesAreGqlgens(t *testing.T) {
 // TestConfigDiscoveryInputDomain: the generator is told the validated config
 // explicitly, and the private copy may hold no other file gqlgen's discovery
 // would pick up -- beside the validated config or in any directory above it
-// inside the module. Round 3 executed a shadow `.gqlgen.yml` (discovery's
-// FIRST name) driving the generator past every check.
+// inside the module: a shadow `.gqlgen.yml` (discovery's FIRST name) would
+// otherwise drive the generator past every check.
 func TestConfigDiscoveryInputDomain(t *testing.T) {
 	sub := strings.ReplaceAll(guardConfig, "gen/", "../gen/")
 	sub = strings.Replace(sub, "schema: [schema.graphql]", "schema: [../schema.graphql]", 1)
@@ -105,8 +105,7 @@ func TestConfigDiscoveryInputDomain(t *testing.T) {
 	}
 }
 
-// TestAShadowConfigCannotWriteIntoTheTree is round 3's first reproduction with
-// the real generator: a `.gqlgen.yml` whose exec output is an ABSOLUTE path
+// TestAShadowConfigCannotWriteIntoTheTree, with the real generator: a `.gqlgen.yml` whose exec output is an ABSOLUTE path
 // into the working tree. Before the fix gqlgen discovered it instead of the
 // validated gqlgen.yml, and even a refused check-drift left the file behind.
 func TestAShadowConfigCannotWriteIntoTheTree(t *testing.T) {
@@ -154,8 +153,8 @@ func TestTheRealGeneratorReadsTheValidatedConfigByName(t *testing.T) {
 
 // TestCopyBackInputDomain: every destination is re-verified against the state
 // the generation was checked against, and ANY difference refuses the whole
-// apply with nothing written. Round 3 executed an edit made while the
-// generator ran being overwritten.
+// apply with nothing written, so an edit made while the generator runs is
+// never overwritten.
 func TestCopyBackInputDomain(t *testing.T) {
 	cases := []struct {
 		shape   string
@@ -164,7 +163,7 @@ func TestCopyBackInputDomain(t *testing.T) {
 		wantErr string
 	}{
 		{shape: "canonical (the tree does not move during generation)"},
-		{shape: "a declared output EDITED during generation (round 3's shape)", during: func(t *testing.T, f *fixture) {
+		{shape: "a declared output EDITED during generation (the edit would be overwritten)", during: func(t *testing.T, f *fixture) {
 			f.write("gen/generated.go", headerLine+"\n\npackage gen\n// HAND EDIT DURING GENERATION\n")
 		}, wantErr: `"gen/generated.go" changed in the working tree`},
 		{shape: "a declared output CREATED during generation where it was absent", setup: func(t *testing.T, f *fixture) {

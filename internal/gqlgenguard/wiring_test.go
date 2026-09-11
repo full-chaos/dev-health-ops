@@ -33,10 +33,9 @@ func readRepoFile(t *testing.T, rel string) string {
 var guardStepPattern = regexp.MustCompile(`(?m)^\s*run:\s*go run \./cmd/gqlgen-guard\s+(\S+)(.*)$`)
 
 func TestTheDriftCheckIsWiredIntoGoQualityAndIsActive(t *testing.T) {
-	// The workflow is PARSED, not scanned as text. Round 3 of review executed
-	// the text version accepting `if: false # if: steps.relevance...` -- the
-	// operative condition was false and the old gate text survived in a
-	// comment. YAML discards comments, so what is asserted here is what the
+	// The workflow is PARSED, not scanned as text: a text scan accepts
+	// `if: false # if: steps.relevance...`, where the operative condition is
+	// false and the gate text survives only in a comment. YAML discards comments, so what is asserted here is what the
 	// Actions runner evaluates.
 	var wf struct {
 		Jobs map[string]struct {

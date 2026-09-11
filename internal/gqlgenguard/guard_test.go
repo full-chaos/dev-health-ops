@@ -218,9 +218,8 @@ func TestGuardRefusesAndLeavesTheTreeUntouched(t *testing.T) {
 //
 // The generator is an ORDINARY child process. The *os.Root handles confine the
 // guard's own reads and writes, not the child's: a link reproduced in the copy
-// is a link the generator follows. Round 1 proved it -- a schema symlinked from
-// outside the module was read by the real CLI and landed in the generated
-// output. So the copy carries a link only when its target is relative AND it
+// is a link the generator follows -- a schema symlinked from outside the
+// module is read by the real CLI and lands in the generated output. So the copy carries a link only when its target is relative AND it
 // resolves, through the module's root handle, to something that exists inside
 // the module. Every other link is DROPPED from the copy (never refused -- a
 // checkout carrying a virtual environment is full of absolute links): its name
@@ -273,7 +272,7 @@ func TestSymlinkCopyPolicyInputDomain(t *testing.T) {
 	cells = append(cells, cell{"inside/nested-escape", "../../" + filepath.Base(outsideDir) + "/outside.txt", "does not resolve inside the module"})
 	// Links whose target is their own directory or an ancestor: inside the
 	// module, but cycles, and the one shape through which a later `..` climbs
-	// out physically while staying in lexically (round 5b). Never reproduced.
+	// out physically while staying in lexically. Never reproduced.
 	// A link to a SIBLING directory is not an ancestor and stays.
 	f.write("inside/deeper/keep.txt", "x\n")
 	for _, c := range []cell{
@@ -738,10 +737,8 @@ func TestAtomicWriteCannotLeaveItsRoot(t *testing.T) {
 		t.Fatalf("a file outside the root was modified: %q", got)
 	}
 	// Nothing may be CREATED outside the root either -- not even the
-	// temporary. Round 1's mutant that opened the temporary with a joined path
-	// was reported killed, but by a compile error (an unimported package), not
-	// by this test; with the import present it survived, because the stray
-	// temporary it left beside the root was never looked for.
+	// temporary: a temporary opened with a joined path would be left beside
+	// the root, and without this listing nothing would look for it.
 	if after := listing(); strings.Join(after, "\n") != strings.Join(before, "\n") {
 		t.Fatalf("AtomicWrite created something outside its root:\n  before %v\n  after  %v", before, after)
 	}

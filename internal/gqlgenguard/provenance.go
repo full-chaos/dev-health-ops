@@ -15,10 +15,9 @@ import (
 //
 // gqlgen writes its notices at fixed positions, in fixed shapes, and which
 // shape depends on which generator wrote the file. The guard accepts exactly
-// those shapes at exactly those positions. Round 1 of review found the earlier
-// "does the marker appear anywhere in the first 4096 bytes" scan accepting a
-// hand-written file whose comment merely QUOTED the marker -- and then
-// overwriting it. A notice is evidence only where gqlgen puts it.
+// those shapes at exactly those positions. A "does the marker appear anywhere
+// in the first 4096 bytes" scan accepts a hand-written file whose comment
+// merely QUOTES the marker -- and then overwrites it. A notice is evidence only where gqlgen puts it.
 //
 // Every shape below is typed from the gqlgen v0.17.66 source it cites, and the
 // knob matrix (assertRealGenerationStaysInsideThePlan) regenerates with the real

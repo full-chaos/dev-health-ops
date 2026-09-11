@@ -113,3 +113,14 @@ d1f5bb1f5:internal/jobs/investment/nativeexecutor_test.go:generic-api-key:83
 # (CI emits full SHAs, gitleaks >=8.3x matches on the short id).
 43d0e17879177195ace1fdda2a352d99c292a87c:internal/jobs/metrics/daily/icfinalize/parity_golden_test.go:generic-api-key:462
 43d0e1787:internal/jobs/metrics/daily/icfinalize/parity_golden_test.go:generic-api-key:462
+# CHAOS-5505 (PR #2448, feat/goapi-routing-audit-row): both fixtures are
+# fabricated, unsigned credentials never accepted by any real verifier --
+# verbTestBearer (a syntactically valid but unsigned envelope) and the
+# TestEnvelopeSubjectErrorsNeverContainTheCredential `secret` constant.
+# Findings are pinned to the PR's earlier commits, which an inline
+# gitleaks:allow on the tip cannot reach (Trap #173) -- both full-SHA and
+# short-id forms listed per this file's own convention above.
+b1a8b551d0488ca836ac050956eab0b2baf08cd2:cmd/go-api-routing/verbs_integration_test.go:jwt:56
+b1a8b551d:cmd/go-api-routing/verbs_integration_test.go:jwt:56
+34403706667c2c8cee4bd0d9629ca1d1de9ae872:internal/goapiproof/routing_verbs_test.go:generic-api-key:601
+344037066:internal/goapiproof/routing_verbs_test.go:generic-api-key:601

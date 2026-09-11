@@ -798,10 +798,16 @@ def _recorded_shape_counts(
 ) -> tuple[dict[str, int] | None, dict[str, int] | None]:
     """The per-shape counts the Go writer put in a receipt's provenance.
 
-    The writer's provenance is a JSON object; the counts are omitted when
-    empty, so an object without them is "nothing of that kind" (``{}``). A
-    value that is not the writer's object (older rows, operator text) is
-    "unrecorded" (``None``). Counts are only ever integers.
+    The writer's provenance is a JSON object; either key is omitted by the
+    writer's own ``omitempty`` when its map is empty, so a key's ABSENCE
+    from a recognised provenance object is "nothing of that kind" (``{}``).
+    Recognised means at least one of the two keys is present -- an object
+    with neither (``{}``, an operator's own JSON, or free text that is not
+    JSON at all) is "unrecorded" (``None``), and so is a key that IS
+    present but is not the writer's shape: not a JSON object, or holding a
+    non-integer (bool included) count -- a malformed key invalidates the
+    whole object rather than being read as "nothing of that kind" (F3,
+    CHAOS-5484 opus-r9). Counts are only ever integers.
     """
     try:
         payload = json.loads(review_evidence) if review_evidence else None
@@ -809,18 +815,26 @@ def _recorded_shape_counts(
         return None, None
     if not isinstance(payload, dict):
         return None, None
+    if "covered_by_shape" not in payload and "outside_by_shape" not in payload:
+        return None, None
 
-    def counts(key: str) -> dict[str, int]:
-        value = payload.get(key) or {}
-        if not isinstance(value, dict):
+    def counts(key: str) -> dict[str, int] | None:
+        if key not in payload:
             return {}
-        return {
-            str(name): number
-            for name, number in value.items()
-            if isinstance(number, int) and not isinstance(number, bool)
-        }
+        value = payload[key]
+        if not isinstance(value, dict):
+            return None
+        result: dict[str, int] = {}
+        for name, number in value.items():
+            if not isinstance(number, int) or isinstance(number, bool):
+                return None
+            result[str(name)] = number
+        return result
 
-    return counts("covered_by_shape"), counts("outside_by_shape")
+    covered, outside = counts("covered_by_shape"), counts("outside_by_shape")
+    if covered is None or outside is None:
+        return None, None
+    return covered, outside
 
 
 def build_enablement_receipt_select(

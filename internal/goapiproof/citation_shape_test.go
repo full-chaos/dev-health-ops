@@ -261,6 +261,60 @@ func TestEveryFindingSiteHonoursTheCitationRule(t *testing.T) {
 	}
 }
 
+// F1 (CHAOS-5484 opus-r9): citedSegments resolved a citation of exactly
+// "data" the same way as one not under `data` at all -- nil, "nothing to
+// count" -- so nonNullLeaves saw 0 on both sides of the empty-result
+// addendum's guard and it always short-circuited to "nothing to
+// relabel". defectCovers meanwhile matches "data" against every finding
+// (every finding path starts "data."), so a candidate that returned no
+// data at all covered its own absence: outside=0, admitted.
+//
+// This is the axis the rest of the suite never sweeps: the shape of the
+// CITED PATH STRING itself, independent of which payload it points at.
+// One payload -- every leaf under `x.y` null in the candidate, present in
+// the baseline -- swept over the path domain: the root ("data"), a
+// malformed root (trailing dot, double dot), a path one and two segments
+// deep, and a path not under `data` at all (bare segment, empty string).
+// Only "data" ever disagreed with what defectCovers matched -- fixed by
+// treating "data" as the empty segment list (walk everything) rather than
+// as "not under data" (nil, walk nothing).
+func TestCitationPathDomainForTheEmptyResultAddendum(t *testing.T) {
+	baseline := `{"data":{"x":{"y":"python"}}}`
+	candidate := `{"data":{"x":{"y":null}}}`
+	for _, c := range []struct {
+		cited   string
+		matched bool // the citation is live (defectCovers hits the finding) rather than stale
+	}{
+		{"data", true},     // the root: every leaf under it, addendum applies
+		{"data.x", true},   // one segment in: contains the null leaf
+		{"data.x.y", true}, // the exact leaf
+		{"data.", false},   // malformed: an empty final segment matches no key
+		{"data..x", false}, // malformed: an empty segment before "x" matches no key
+		{"x", false},       // not under `data` at all
+		{"", false},        // not under `data` at all
+	} {
+		opts := Options{BaselineDefects: []BaselineDefect{{Ticket: "CHAOS-5484", Reason: "path-domain sweep", Paths: []string{c.cited}}}}
+		result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), opts)
+		if result.TerminalState != TerminalStateMismatch || result.DifferencesOutsideBaselineDefect != 1 {
+			t.Fatalf("cited=%q: terminal=%s outside=%d, want mismatch outside=1 (an empty result must never admit) -- findings %+v",
+				c.cited, result.TerminalState, result.DifferencesOutsideBaselineDefect, result.Findings)
+		}
+		matched := len(result.BaselineDefectsMatched) == 1
+		if matched != c.matched {
+			t.Fatalf("cited=%q: matched=%v stale=%v, want matched=%v", c.cited, result.BaselineDefectsMatched, result.StaleBaselineDefects, c.matched)
+		}
+		counts := FormatShapeCounts(result.CoveredByShape, result.OutsideByShape)
+		wantCounts := "covered[] outside[null=1]"
+		if c.matched {
+			wantCounts = "covered[] outside[empty_result=1]"
+		}
+		if counts != wantCounts {
+			t.Fatalf("cited=%q: shape counts %s, want %s -- findings %+v", c.cited, counts, wantCounts, result.Findings)
+		}
+		t.Logf("cited=%-10q outside=1 matched=%v %s", c.cited, matched, counts)
+	}
+}
+
 // Every BaselineDefect path DECLARED in operationSpecs, not only hotspots':
 // for each, eight candidates at that exact path -- three leaf differences (a
 // value, a null leaf beside a non-null one, another scalar type: covered)

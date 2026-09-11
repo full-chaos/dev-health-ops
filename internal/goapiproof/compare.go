@@ -597,8 +597,16 @@ func shapeLabel(shape string) string {
 
 // citedSegments splits a cited path ("data.hotspots.rows") into the keys
 // under the response's `data` value. A path not under `data` has no
-// segments there, so nothing under it is counted.
+// segments there, so nothing under it is counted. The root itself
+// ("data", naming the whole payload) is the empty segment list, not "not
+// under data" -- conflating the two is F1 (CHAOS-5484 opus-r9): the empty
+// list is what tells nonNullLeaves to walk everything under the value, and
+// nil is what tells it there is nothing to walk, so a bare "data" citation
+// silently disabled the empty-result addendum for its entire payload.
 func citedSegments(cited string) []string {
+	if cited == "data" {
+		return []string{}
+	}
 	rest, ok := strings.CutPrefix(cited, "data.")
 	if !ok {
 		return nil

@@ -134,8 +134,18 @@ SELECT rs.selected_operation,
                END
          -- The newest admissible receipt, then the lowest id: the SAME
          -- selection enable uses (build_enablement_receipt_select,
-         -- observed_at DESC, id), so the page and the routing row's
-         -- review_evidence name one receipt even when two tie.
+         -- observed_at DESC, id), so at enable time the page and the
+         -- routing row's review_evidence name one receipt, including the
+         -- tie-break. That agreement is only at enable time: the row's
+         -- review_evidence is stamped once, when it authorised the row,
+         -- and this query recomputes newest-admissible on every read, so
+         -- a later go-api-prove run makes the two names diverge. The row
+         -- still names the receipt that AUTHORISED it; the page still
+         -- names the receipt that PROVES it NOW; after a re-prove those
+         -- are different receipts, and that is the design (F2, CHAOS-5484
+         -- opus-r9) -- RISK-NOTES already requires re-proving every
+         -- operation after alembic 0129, so the divergence is expected
+         -- during that rollout, not a bug.
          ORDER BY pr.observed_at DESC, pr.id
          LIMIT 1
        ) AS proof_run_id

@@ -100,6 +100,21 @@ func TestFetchBuildIdentityRefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
+// r3 P1 (team-lead's decoder sweep): /buildinfo must accept an
+// unrecognised key the same way the catalog does -- refusing on it would
+// disagree with a Python reader that simply never looks at it.
+func TestFetchBuildIdentityAcceptsAnUnknownKey(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa7","modified":false,"unexpected_future_field":"x"}`)
+	commit, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err != nil {
+		t.Fatalf("an unrecognised key must not refuse the buildinfo body: %v", err)
+	}
+	if commit != "b18e56fa7" {
+		t.Fatalf("commit = %q", commit)
+	}
+}
+
 func TestFetchBuildIdentitySendsTheEnvelope(t *testing.T) {
 	server := buildInfoServer(t, http.StatusOK, `{"commit":"abc","modified":false}`)
 	// No Authorization header: the stub answers 401, and that must be a
@@ -312,6 +327,26 @@ func TestFetchRegistryOperationFieldIsNeverShadowedByADifferentlyCasedKey(t *tes
 	}
 }
 
+// r3 P1 (team-lead's decoder sweep): /registry must accept an
+// unrecognised top-level or operation-entry key -- Python's dict
+// subscript ignores them too, so refusing would be a disagreement in
+// the opposite direction from the case-shadow bug.
+func TestFetchRegistryAcceptsAnUnknownKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","unexpected_future_field":"x","operations":[
+			{"operation":"flowMatrix","document_digest":"good","unexpected_future_field":"y"}
+		]}`))
+	}))
+	t.Cleanup(server.Close)
+	view, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("an unrecognised key must not refuse the registry: %v", err)
+	}
+	if view.DocumentDigest["flowMatrix"] != "good" {
+		t.Fatalf("DocumentDigest[flowMatrix] = %q", view.DocumentDigest["flowMatrix"])
+	}
+}
+
 // r3 P1 (reproduced): "a valid operation followed by {} or null also
 // passes Go's whole-response validation and permits a write" -- an empty
 // or null registry entry decoded to an empty-string operation/digest
@@ -351,6 +386,45 @@ func TestLoadDocumentsRefusesInvalidUTF8(t *testing.T) {
 	}
 	if _, err := LoadDocuments(path); err == nil {
 		t.Fatal("a documents file containing invalid UTF-8 must refuse")
+	}
+}
+
+// r3 P1 (team-lead's decoder sweep): LoadDocuments was the LAST plain
+// struct-tag decode in this file -- the same case-shadow class closed
+// for /registry and /buildinfo applied to it too.
+func TestLoadDocumentsFieldsAreNeverShadowedByADifferentlyCasedKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	body := `[{"operation":"flowMatrix","document":"good query text","Document":"tampered"}]`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := LoadDocuments(path)
+	if err != nil {
+		t.Fatalf("LoadDocuments: %v", err)
+	}
+	if got := documents["flowMatrix"]; got != "good query text" {
+		t.Fatalf("documents[flowMatrix] = %q, want the exact \"document\" key's value, not the shadow", got)
+	}
+}
+
+// Every decoder in this package accepts an unrecognised key rather than
+// refusing the whole file on it -- Python's dict subscript ignores extra
+// keys too, so accepting them is AGREEMENT, and refusing them would be
+// the same disagreement pointed the other way (team-lead's decoder
+// sweep: catalog already documents and tests this; the others did not
+// have an explicit executed case).
+func TestLoadDocumentsAcceptsAnUnknownKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	body := `[{"operation":"flowMatrix","document":"good query text","unexpected_future_field":"anything"}]`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := LoadDocuments(path)
+	if err != nil {
+		t.Fatalf("an unrecognised key must not refuse the file: %v", err)
+	}
+	if got := documents["flowMatrix"]; got != "good query text" {
+		t.Fatalf("documents[flowMatrix] = %q", got)
 	}
 }
 

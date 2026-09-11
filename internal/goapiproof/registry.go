@@ -608,13 +608,10 @@ func sortedOperations(m map[string]string) []string {
 	return keys
 }
 
-// registrydumpDocument is one element of `registrydump -file
-// cmd/query-api/query_route.go`'s JSON output.
-type registrydumpDocument struct {
-	Operation string `json:"operation"`
-	Document  string `json:"document"`
-	Digest    string `json:"digest"`
-}
+// registrydump's JSON output is one array of {operation, document,
+// digest} objects (produced by `registrydump -file
+// cmd/query-api/query_route.go`). LoadDocuments reads it by exact key,
+// not through a struct tag -- see the comment at its call site.
 
 // LoadDocuments reads registrydump's JSON output and returns operation ->
 // registered document TEXT.
@@ -645,20 +642,35 @@ func LoadDocuments(path string) (map[string]string, error) {
 	if !utf8.Valid(raw) {
 		return nil, fmt.Errorf("goapiproof: documents file %s is not valid UTF-8", path)
 	}
-	var documents []registrydumpDocument
-	if err := json.Unmarshal(raw, &documents); err != nil {
+	// This was the last plain struct-tag decode left in the package
+	// (team-lead's decoder sweep, 01:0xZ): `registrydumpDocument`'s
+	// `json:"operation"`/`json:"document"` tags carry the SAME
+	// case-shadow exposure closed for /registry and /buildinfo above --
+	// a file with both "document" and "Document" keys would let the
+	// wrong one win depending on which came last. Read via the same
+	// exact-key map lookup as every other decoder in this file now uses.
+	var rawDocuments []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawDocuments); err != nil {
 		return nil, fmt.Errorf("goapiproof: decode documents file (expected `registrydump -file ...` output): %w", err)
 	}
-	if len(documents) == 0 {
+	if len(rawDocuments) == 0 {
 		return nil, fmt.Errorf("goapiproof: documents file %s is empty", path)
 	}
 
-	byOperation := make(map[string]string, len(documents))
-	for _, document := range documents {
-		if document.Document == "" {
-			return nil, fmt.Errorf("goapiproof: documents file carries no text for %q", document.Operation)
+	byOperation := make(map[string]string, len(rawDocuments))
+	for index, rawDoc := range rawDocuments {
+		operation, _, err := exactStringField(rawDoc, "operation")
+		if err != nil {
+			return nil, fmt.Errorf("goapiproof: documents file %s entry %d: %w", path, index, err)
 		}
-		byOperation[document.Operation] = document.Document
+		documentText, _, err := exactStringField(rawDoc, "document")
+		if err != nil {
+			return nil, fmt.Errorf("goapiproof: documents file %s entry %d: %w", path, index, err)
+		}
+		if documentText == "" {
+			return nil, fmt.Errorf("goapiproof: documents file carries no text for %q", operation)
+		}
+		byOperation[operation] = documentText
 	}
 	return byOperation, nil
 }

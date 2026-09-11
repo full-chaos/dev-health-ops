@@ -331,6 +331,40 @@ func TestDecodeSnapshotRefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
+// r3 P1 (team-lead's decoder sweep): DecodeSnapshot's envelope is
+// already a map[string]json.RawMessage keyed by exact string, so a
+// "Data"/"DATA" sibling of "data" cannot shadow it -- proven here
+// rather than assumed from the mechanism alone, the same discipline
+// applied to every other decoder in this package.
+func TestDecodeSnapshotDataFieldIsNeverShadowedByADifferentlyCasedKey(t *testing.T) {
+	snapshot, err := DecodeSnapshot([]byte(`{"data":{"real":true},"Data":{"tampered":true}}`))
+	if err != nil {
+		t.Fatalf("DecodeSnapshot: %v", err)
+	}
+	got, ok := snapshot.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot.Data is not a map: %#v", snapshot.Data)
+	}
+	if _, tampered := got["tampered"]; tampered {
+		t.Fatalf("the shadow-cased \"Data\" key was read instead of the exact \"data\" one: %#v", got)
+	}
+	if _, real := got["real"]; !real {
+		t.Fatalf("the exact \"data\" key's own content is missing: %#v", got)
+	}
+}
+
+// An unrecognised top-level key in the envelope must not refuse the
+// whole response -- only "data" and "errors" are ever read.
+func TestDecodeSnapshotAcceptsAnUnknownEnvelopeKey(t *testing.T) {
+	snapshot, err := DecodeSnapshot([]byte(`{"data":{"x":1},"extensions":{"anything":"here"}}`))
+	if err != nil {
+		t.Fatalf("an unrecognised envelope key must not refuse: %v", err)
+	}
+	if !snapshot.DataPresent {
+		t.Fatal("data must still be read")
+	}
+}
+
 // The masking case, made concrete: a genuinely invalid byte and an
 // already-replacement-charactered baseline must NOT decode to Snapshots
 // that compare as a match, which is exactly what happened before the

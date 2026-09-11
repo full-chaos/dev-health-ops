@@ -71,6 +71,34 @@ func TestLoadOperationCatalogAcceptsTheCheckedInEdgeCatalog(t *testing.T) {
 	}
 }
 
+// r3 P1 (team-lead's decoder sweep, executed evidence for a claim the
+// package comment only argued): "extra keys stay ACCEPTED, deliberately"
+// -- Python's subscript ignores them, so this file must too.
+func TestLoadOperationCatalogAcceptsAnUnknownKey(t *testing.T) {
+	catalog, err := LoadOperationCatalog(writeCatalog(t, `[{"operation":"flowMatrix","digest":"b","unexpected_future_field":"anything"}]`))
+	if err != nil {
+		t.Fatalf("an unrecognised key must not refuse the catalog: %v", err)
+	}
+	if catalog["flowMatrix"] != "b" {
+		t.Fatalf("catalog[flowMatrix] = %q", catalog["flowMatrix"])
+	}
+}
+
+// r3 P1 (team-lead's decoder sweep, executed evidence): catalogEntryKey
+// reads by EXACT key out of a raw map, which is why the catalog was
+// already immune to the case-shadow class that /registry, /buildinfo and
+// LoadDocuments needed a fix for -- proven here rather than assumed from
+// the mechanism alone.
+func TestLoadOperationCatalogFieldsAreNeverShadowedByADifferentlyCasedKey(t *testing.T) {
+	catalog, err := LoadOperationCatalog(writeCatalog(t, `[{"operation":"flowMatrix","digest":"good","Digest":"tampered"}]`))
+	if err != nil {
+		t.Fatalf("LoadOperationCatalog: %v", err)
+	}
+	if got := catalog["flowMatrix"]; got != "good" {
+		t.Fatalf("catalog[flowMatrix] = %q, want the exact \"digest\" key's value, not the shadow", got)
+	}
+}
+
 func TestResolveOperationsTreatsAllRegisteredAsTheWholeCatalog(t *testing.T) {
 	catalog := map[string]string{"b": "2", "a": "1"}
 	for _, raw := range []string{"all-registered", "  all-registered  "} {

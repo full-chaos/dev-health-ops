@@ -90,12 +90,12 @@ var ErrAuditRowRefused = errors.New("goapiproof: the routing audit row was refus
 // presented when one was.
 var ErrEnvelopeSubjectMissing = errors.New("goapiproof: the effective-principal envelope carries no subject, so no audit row can name who acted")
 
-// auditReviewEvidenceMax mirrors alembic 0129's CHECK. Bounded rather
+// auditReviewEvidenceMax mirrors alembic 0130's CHECK. Bounded rather
 // than truncated: this table is append-only, so a silently trimmed
 // explanation has no later remedy.
 const auditReviewEvidenceMax = 2000
 
-// auditRecordedByMax mirrors alembic 0129's CHECK.
+// auditRecordedByMax mirrors alembic 0130's CHECK.
 const auditRecordedByMax = 128
 
 // RoutingAuditEntry is one operation's row. Before-values are pointers so
@@ -152,10 +152,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
 func (a RoutingAudit) validate() error {
 	switch {
 	case !auditActions[a.Action]:
-		return fmt.Errorf("%w: %q is not a routing audit action; alembic 0129 admits %v",
+		return fmt.Errorf("%w: %q is not a routing audit action; alembic 0130 admits %v",
 			ErrAuditRowRefused, a.Action, []string{AuditActionEnable, AuditActionDisable, AuditActionRepoint})
 	case !auditCredentialClasses[a.CredentialClass]:
-		return fmt.Errorf("%w: %q is not a credential class; alembic 0129 admits %v",
+		return fmt.Errorf("%w: %q is not a credential class; alembic 0130 admits %v",
 			ErrAuditRowRefused, a.CredentialClass, []string{CredentialClassEnvelope, CredentialClassOperatorDirect})
 	case a.SchemaDigest == "":
 		return fmt.Errorf("%w: schema digest is required -- it is what CHAOS-5416 moved, and a row without it cannot tell a live write from one against a dead digest", ErrAuditRowRefused)
@@ -236,9 +236,9 @@ func writeRoutingAudit(ctx context.Context, tx pgx.Tx, audit RoutingAudit, now t
 	return audit.CorrelationID, nil
 }
 
-// ErrAuditTableNotMigrated reports that alembic 0129 has not been applied,
+// ErrAuditTableNotMigrated reports that alembic 0130 has not been applied,
 // so no routing verb can record what it did.
-var ErrAuditTableNotMigrated = errors.New("goapiproof: go_api_routing_audits does not exist: alembic 0129 has not been applied")
+var ErrAuditTableNotMigrated = errors.New("goapiproof: go_api_routing_audits does not exist: alembic 0130 has not been applied")
 
 // undefinedTableSQLState is Postgres's "relation does not exist".
 const undefinedTableSQLState = "42P01"
@@ -259,7 +259,7 @@ func describeAuditWriteFailure(operation string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == undefinedTableSQLState {
 		return fmt.Errorf("%w (writing the audit row for %s).\n"+
-			"  Apply alembic 0129 and rebuild the go-* images together -- a migration and the binaries that depend on it never move separately.\n"+
+			"  Apply alembic 0130 and rebuild the go-* images together -- a migration and the binaries that depend on it never move separately.\n"+
 			"  Nothing was written: the routing change and its audit row commit together or not at all",
 			ErrAuditTableNotMigrated, operation)
 	}

@@ -491,7 +491,7 @@ correctly; one written to "1 means crashed" still needs to know a panic is
 the one exception.
 
 Every Go routing write also appends to `go_api_routing_audits`
-(CHAOS-5505, alembic 0129), in the SAME transaction as the routing write:
+(CHAOS-5505, alembic 0130), in the SAME transaction as the routing write:
 one row per operation, sharing a `correlation_id` per invocation. The
 routing row's own `recorded_by` / `review_evidence` is overwritten by the
 next write; this table is append-only, so it is where "who moved this, and

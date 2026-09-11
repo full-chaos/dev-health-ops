@@ -314,12 +314,18 @@ internal/migrationmatrix	5
 # tests, and every routing verb's existing test now also builds
 # go_api_routing_audits so its write meets the real CHECK constraints.
 # First measured pre-rebase on bigboy 2026-09-09, -count=1: 126.50s on a
-# quiet host, 190.29s under load1~25 with four codex rounds live -- the
+# quiet host, 190.29s under load1~25 with four other builds running -- the
 # loaded figure recorded and deliberately not used, same reasoning as
 # every entry above: this is a static balancing hint summed by
-# ci/check_go.sh, not a measurement of any particular run. Re-measured
-# against the merged tree; see the weight line for the number that
-# landed.
+# ci/check_go.sh, not a measurement of any particular run. A local
+# re-run against the rebased tree (2026-09-11, bigboy) landed at 252s
+# wall clock, but with ~10 other lanes' go test/build processes
+# concurrent on the same host at the time (6% CPU utilisation for the
+# whole run) -- not a usable number. 175 is kept as-is rather than
+# ratcheted off it; the real weight comes from the hosted CI shard's own
+# job duration on this PR's first green run, corrected here in a
+# follow-up commit if it differs from 175 by more than this file's own
+# tolerance.
 # internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
 # measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run),
 # rounded up one further second to 35 for shard-balance headroom -- combined

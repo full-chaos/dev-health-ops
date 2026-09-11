@@ -53,7 +53,7 @@ _POSTGRES_URI_ENV = "DEV_HEALTH_POSTGRES_TEST_URI"
 _ALEMBIC_DIR = Path(__file__).parents[1] / "src" / "dev_health_ops" / "alembic"
 _TABLE = "go_api_routing_audits"
 _GO_AUDIT_TEST = Path(__file__).parents[1] / (
-    "internal/goapiproof/routing_audit_integration_test.go"
+    "internal/testsupport/routingauditschema/schema.go"
 )
 
 _MIGRATION = importlib.import_module(
@@ -177,7 +177,7 @@ def test_0130_is_the_application_schema_head_and_chains_after_0129() -> None:
         "0130 must be the application_schema head; if another migration landed "
         "first, renumber this one and re-run"
     )
-    assert _MIGRATION.down_revision == "0130"
+    assert _MIGRATION.down_revision == "0129"
 
 
 def test_0130_creates_the_table_with_the_right_nullability(
@@ -389,17 +389,18 @@ def _named_go_raw_string(source: str, name: str) -> str:
 
 def test_audit_ddl_mirror_matches_the_migration() -> None:
     """The Go integration suite builds this table from a hand-kept DDL
-    string (``auditDDL`` in ``internal/goapiproof/routing_audit_integration_test.go``)
-    so the verbs' audit writes meet the REAL CHECKs. A mirror that fell
-    behind would let those tests pass against a schema Postgres does not
-    have.
+    string (``DDL`` in ``internal/testsupport/routingauditschema/schema.go``,
+    shared by internal/goapiproof's own suite and cmd/go-api-routing's
+    end-to-end verb tests) so the verbs' audit writes meet the REAL CHECKs.
+    A mirror that fell behind would let those tests pass against a schema
+    Postgres does not have.
 
     This check lives on the PYTHON side deliberately: reading the alembic
     files FROM a Go test makes them inputs to the Go workflow, and
     ``go.yml``'s path filters do not cover ``alembic/versions`` -- a
     migration-only PR would then satisfy ``go-quality`` vacuously.
     """
-    ddl = _named_go_raw_string(_GO_AUDIT_TEST.read_text(encoding="utf-8"), "auditDDL")
+    ddl = _named_go_raw_string(_GO_AUDIT_TEST.read_text(encoding="utf-8"), "DDL")
 
     for action in _MIGRATION.ACTIONS:
         assert f"'{action}'" in ddl, f"auditDDL does not admit action {action!r}"

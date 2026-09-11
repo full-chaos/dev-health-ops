@@ -287,7 +287,7 @@ func TestRepointRefusesWhenNothingMatches(t *testing.T) {
 // touches the row.
 func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "flowMatrix", testDocumentDigest, "canary", testCandidateBuild, pool)
 
 	if _, err := pool.Exec(ctx, `
@@ -308,6 +308,7 @@ func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
 		RunningBuild:   repointRunningBuild,
 		RecordedBy:     "lane-routing-verbs",
 		ReviewEvidence: "r2 M29 killer",
+		PrincipalID:    testPrincipalID,
 	})
 	if err == nil {
 		t.Fatal("repoint must refuse when mode moved during the write -- its whole contract is that it never touches reachability")

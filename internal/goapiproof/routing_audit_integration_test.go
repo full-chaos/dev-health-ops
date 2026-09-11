@@ -9,60 +9,15 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/routingauditschema"
 )
 
-// auditDDL mirrors alembic 0129, which creates go_api_routing_audits.
-//
-// The constraints are NOT trimmed to "what the test needs", for the same
-// reason registryDDL's are not: the action and credential-class CHECKs are
-// the DATABASE-level reason a routing write cannot be recorded under a
-// verb or a credential class nobody authorized, and the pairing CHECK is
-// the reason "a verified credential named this subject" cannot be
-// confused with "no credential was presented". A test against a relaxed
-// schema would pass while the real one rejected every write.
-//
-// The drift check for this mirror lives in PYTHON
-// (tests/test_0129_go_api_routing_audits_migration.py), deliberately, for
-// the reason registryDDL's own comment gives: reading the alembic files
-// FROM a Go test makes them inputs to the Go workflow, and go.yml's path
-// filters do not cover src/dev_health_ops/alembic -- so a PR changing only
-// a migration would satisfy go-quality vacuously.
-const auditDDL = `
-CREATE TABLE go_api_routing_audits (
-	id BIGSERIAL NOT NULL PRIMARY KEY,
-	correlation_id UUID NOT NULL,
-	action TEXT NOT NULL,
-	credential_class TEXT NOT NULL,
-	principal_id TEXT,
-	recorded_by TEXT NOT NULL,
-	review_evidence TEXT NOT NULL,
-	schema_digest TEXT NOT NULL,
-	document_digest TEXT NOT NULL,
-	selected_operation TEXT NOT NULL,
-	candidate_build_before TEXT,
-	candidate_build_after TEXT NOT NULL,
-	mode_before TEXT,
-	mode_after TEXT NOT NULL,
-	recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-	CONSTRAINT ck_go_api_routing_audits_action
-		CHECK (action IN ('enable', 'disable', 'repoint')),
-	CONSTRAINT ck_go_api_routing_audits_credential_class
-		CHECK (credential_class IN ('effective_principal_envelope', 'operator_direct')),
-	CONSTRAINT ck_go_api_routing_audits_principal_pairing
-		CHECK ((credential_class = 'effective_principal_envelope') = (principal_id IS NOT NULL)),
-	CONSTRAINT ck_go_api_routing_audits_mode_before
-		CHECK (mode_before IS NULL OR mode_before IN ('python', 'shadow', 'canary', 'primary', 'disabled')),
-	CONSTRAINT ck_go_api_routing_audits_mode_after
-		CHECK (mode_after IN ('python', 'shadow', 'canary', 'primary', 'disabled')),
-	CONSTRAINT ck_go_api_routing_audits_review_evidence_bounded
-		CHECK (char_length(review_evidence) BETWEEN 1 AND 2000),
-	CONSTRAINT ck_go_api_routing_audits_recorded_by_bounded
-		CHECK (char_length(recorded_by) BETWEEN 1 AND 128)
-);
-CREATE INDEX ix_go_api_routing_audits_correlation ON go_api_routing_audits (correlation_id);
-CREATE INDEX ix_go_api_routing_audits_operation_recorded
-	ON go_api_routing_audits (schema_digest, selected_operation, recorded_at DESC);
-`
+// auditDDL now lives in internal/testsupport/routingauditschema,
+// shared with cmd/go-api-routing's end-to-end verb tests, for the same
+// reason registryDDL does (this file's alias above). The alias keeps
+// this file's existing references and its one name for the thing.
+const auditDDL = routingauditschema.DDL
 
 // startAuditedRegistryPostgres is startRegistryPostgres plus the audit
 // table, so a verb's routing write and its audit row meet the SAME
@@ -70,7 +25,7 @@ CREATE INDEX ix_go_api_routing_audits_operation_recorded
 func startAuditedRegistryPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := startRegistryPostgres(t)
-	if _, err := pool.Exec(context.Background(), auditDDL); err != nil {
+	if err := routingauditschema.Create(context.Background(), pool); err != nil {
 		t.Fatalf("create audit schema: %v", err)
 	}
 	return pool
@@ -349,7 +304,7 @@ func TestRepointAuditsOnlyTheRowsThatMoved(t *testing.T) {
 	}
 }
 
-// The pairing CHECK 0129 adds is real, and this proves it against the
+// The pairing CHECK 0130 adds is real, and this proves it against the
 // database rather than trusting the writer to remember.
 func TestTheDatabaseEnforcesTheCredentialPairing(t *testing.T) {
 	ctx := t.Context()
@@ -385,7 +340,7 @@ func TestTheDatabaseEnforcesTheCredentialPairing(t *testing.T) {
 // preMigrationSchema is the registry WITHOUT go_api_routing_audits: a
 // binary ahead of its schema. The refusal must name the migration rather
 // than surface a raw Postgres error an operator cannot act on.
-func TestAVerbAgainstAPre0129SchemaNamesTheMissingMigration(t *testing.T) {
+func TestAVerbAgainstAPre0130SchemaNamesTheMissingMigration(t *testing.T) {
 	ctx := t.Context()
 	pool := startRegistryPostgres(t) // deliberately NOT the audited variant
 	seedRow(t, ctx, "featureFlags", testDocumentDigest, "canary", verbsRunningBuild, pool)
@@ -402,7 +357,7 @@ func TestAVerbAgainstAPre0129SchemaNamesTheMissingMigration(t *testing.T) {
 	if !errors.Is(err, ErrAuditTableNotMigrated) {
 		t.Fatalf("Disable = %v, want ErrAuditTableNotMigrated -- an operator reading a raw 42P01 cannot tell a missing migration from a code bug", err)
 	}
-	if !strings.Contains(err.Error(), "0129") {
+	if !strings.Contains(err.Error(), "0130") {
 		t.Fatalf("the refusal must name the migration to apply, got %q", err)
 	}
 	var mode string

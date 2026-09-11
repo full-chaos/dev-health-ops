@@ -817,7 +817,7 @@ func waitForALockWaiter(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 // `mode` at all.
 func TestRepointNeverBorrowsASiblingRowsModeAcrossTheTwoReachableModes(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	const canaryDigest = "7777777777777777777777777777777777777777777777777777777777777777"
 	const primaryDigest = "8888888888888888888888888888888888888888888888888888888888888888"
 	seedRow(t, ctx, "flowMatrix", canaryDigest, "canary", testCandidateBuild, pool)
@@ -828,6 +828,7 @@ func TestRepointNeverBorrowsASiblingRowsModeAcrossTheTwoReachableModes(t *testin
 		RunningBuild:   verbsRunningBuild,
 		RecordedBy:     "lane-routing-verbs",
 		ReviewEvidence: "CHAOS-5486: the astra canary/primary re-point shape",
+		PrincipalID:    testPrincipalID,
 	})
 	if err != nil {
 		t.Fatalf("Repoint: %v", err)
@@ -1091,7 +1092,7 @@ func TestEnableRefusesWhenTheRoutingRowWriteIsSwallowed(t *testing.T) {
 // non-concurrent half: does it read back what was actually there.
 func TestEnableOutcomeReportsThePriorRowWhenOneExisted(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedRow(t, ctx, "flowMatrix", testDocumentDigest, "python", "deaddeaddeaddeaddeaddeaddeaddeaddeaddead", pool)
 	seedProof(t, ctx, pool, "flowMatrix", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
 
@@ -1116,7 +1117,7 @@ func TestEnableOutcomeReportsThePriorRowWhenOneExisted(t *testing.T) {
 // The other half: no row existed at all.
 func TestEnableOutcomeReportsNoPriorRowWhenNoneExisted(t *testing.T) {
 	ctx := t.Context()
-	pool := startRegistryPostgres(t)
+	pool := startAuditedRegistryPostgres(t)
 	seedProof(t, ctx, pool, "flowMatrix", testDocumentDigest, verbsRunningBuild, EnablementProofStage, EnablementProofTerminalState)
 
 	outcomes, err := Enable(ctx, pool, enableRequest("flowMatrix"))

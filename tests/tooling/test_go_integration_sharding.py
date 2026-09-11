@@ -582,8 +582,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # r1's P3 fix then added cmd/go-api-routing at weight 10 (measured
     # 8.009s / 7.926s across two -count=1 runs): shards 2/3 land at
     # 939s/938s, still a gap of 1, so the tolerance stays tightened.
-    # Subsequent r2/r3 fix rounds raised internal/goapiproof 120 -> 175 (see
-    # ci/go_integration_shards.tsv for the full measurement history).
+    # internal/goapiproof's weight was subsequently raised further, 120 ->
+    # 175 (see ci/go_integration_shards.tsv for the full measurement
+    # history).
     # CHAOS-5505, rebased onto that 175, adds ten more audit-row tests, and
     # every routing verb's existing test now also builds
     # go_api_routing_audits. See ci/go_integration_shards.tsv for the

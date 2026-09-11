@@ -373,7 +373,7 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 	// CredentialClassOperatorDirect, and PrincipalID deliberately EMPTY.
 	// This verb verified no credential -- it contacts nothing, by
 	// contract, so the off-ramp works when the deployed process is down --
-	// and 0129's pairing CHECK makes "no credential, therefore no
+	// and 0130's pairing CHECK makes "no credential, therefore no
 	// subject" the only legal shape for the class. `recorded_by` still
 	// carries what the operator typed about themselves; it is simply not
 	// dressed up as something a credential asserted.

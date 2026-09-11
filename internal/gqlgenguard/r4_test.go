@@ -17,7 +17,10 @@ import (
 // guard asks the go command itself (`go env -json`, in the private copy, with
 // the child's exact environment) for the EFFECTIVE value before generating.
 // Round 4 executed `GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod` writing
-// into the working tree while check-drift passed.
+// into the working tree while check-drift passed. Each wantErr names the
+// setting as `KEY="` -- the fixture's own path carries the cell name, so a bare
+// key would match the path and let a mutant that checks the wrong key pass
+// (measured: N55 survived until this).
 func TestGoEnvironmentInputDomain(t *testing.T) {
 	goAvailable(t)
 	type cell struct {
@@ -40,22 +43,22 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 		{shape: "GOFLAGS=-mod=mod (writes go.mod -- in the copy only)", env: func(f *fixture) map[string]string { return map[string]string{"GOFLAGS": "-mod=mod"} }},
 		{shape: "GOFLAGS=-modfile=<tree>/alternate.mod", env: func(f *fixture) map[string]string {
 			return map[string]string{"GOFLAGS": "-modfile=" + inTree(f, "alternate.mod")}
-		}, wantErr: "-modfile"},
+		}, wantErr: `GOFLAGS carries "-modfile`},
 		{shape: "GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod (round 4's shape)", env: func(f *fixture) map[string]string {
 			return map[string]string{"GOFLAGS": "-mod=mod -modfile=" + inTree(f, "alternate.mod")}
-		}, wantErr: "-modfile"},
+		}, wantErr: `GOFLAGS carries "-modfile`},
 		{shape: "a GOENV file carrying GOFLAGS=-mod=mod -modfile=<tree>/alternate.mod", env: func(f *fixture) map[string]string {
 			return map[string]string{"GOFLAGS": "", "GOENV": goenvFile(tt, f, "GOFLAGS=-mod=mod -modfile="+inTree(f, "alternate.mod"))}
-		}, wantErr: "-modfile"},
-		{shape: "GOCACHE inside the working tree", env: func(f *fixture) map[string]string { return map[string]string{"GOCACHE": inTree(f, ".gocache")} }, wantErr: "GOCACHE"},
-		{shape: "GOMODCACHE inside the working tree", env: func(f *fixture) map[string]string { return map[string]string{"GOMODCACHE": inTree(f, ".modcache")} }, wantErr: "GOMODCACHE"},
+		}, wantErr: `GOFLAGS carries "-modfile`},
+		{shape: "GOCACHE inside the working tree", env: func(f *fixture) map[string]string { return map[string]string{"GOCACHE": inTree(f, ".gocache")} }, wantErr: `GOCACHE="`},
+		{shape: "GOMODCACHE inside the working tree", env: func(f *fixture) map[string]string { return map[string]string{"GOMODCACHE": inTree(f, ".modcache")} }, wantErr: `GOMODCACHE="`},
 		{shape: "GOPATH inside the working tree", env: func(f *fixture) map[string]string {
 			return map[string]string{"GOPATH": inTree(f, ".gopath"), "GOMODCACHE": ""}
-		}, wantErr: "GOPATH"},
-		{shape: "GOTMPDIR inside the working tree", env: func(f *fixture) map[string]string { return map[string]string{"GOTMPDIR": inTree(f, ".gotmp")} }, wantErr: "GOTMPDIR"},
+		}, wantErr: `GOPATH="`},
+		{shape: "GOTMPDIR inside the working tree", env: func(f *fixture) map[string]string { return map[string]string{"GOTMPDIR": inTree(f, ".gotmp")} }, wantErr: `GOTMPDIR="`},
 		{shape: "a GOENV file carrying GOCACHE inside the working tree", env: func(f *fixture) map[string]string {
 			return map[string]string{"GOCACHE": "", "GOENV": goenvFile(tt, f, "GOCACHE="+inTree(f, ".gocache"))}
-		}, wantErr: "GOCACHE"},
+		}, wantErr: `GOCACHE="`},
 	}
 	cells = append(cells, cell{shape: "the module has no go.mod and one sits ABOVE the private copy (the go command would adopt it)", env: func(f *fixture) map[string]string {
 		return map[string]string{"GOFLAGS": ""}
@@ -75,6 +78,9 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 			}
 			for k, v := range c.env(f) {
 				t.Setenv(k, v)
+			}
+			if c.wantErr != "" && strings.Contains(f.dir, c.wantErr) {
+				t.Fatalf("wantErr %q also occurs in the fixture path %s", c.wantErr, f.dir)
 			}
 			before := f.digests()
 			gen := &fakeGenerator{fn: rewriteOutputs("generated")}
@@ -125,14 +131,14 @@ func TestGoModReplaceInputDomain(t *testing.T) {
 				t.Fatal(err)
 			}
 			return "replace example.com/ext => " + ext + "\n"
-		}, wantErr: "replace"},
+		}, wantErr: "go.mod replaces example.com/"},
 		{shape: "a RELATIVE ../ replace outside the module", replace: func(t *testing.T, f *fixture) string {
 			return "replace example.com/ext => ../external-domain\n"
-		}, wantErr: "replace"},
+		}, wantErr: "go.mod replaces example.com/"},
 		{shape: "an absolute replace naming the REAL tree (outside the private copy)", replace: func(t *testing.T, f *fixture) string {
 			f.write("inmod/go.mod", "module example.com/inmod\n\ngo 1.25\n")
 			return "replace example.com/inmod => " + filepath.Join(f.dir, "inmod") + "\n"
-		}, wantErr: "replace"},
+		}, wantErr: "go.mod replaces example.com/"},
 		{shape: "a replace through a directory link out of the module", replace: func(t *testing.T, f *fixture) string {
 			ext := t.TempDir()
 			if err := os.WriteFile(filepath.Join(ext, "go.mod"), []byte("module example.com/ext\n\ngo 1.25\n"), 0o644); err != nil {
@@ -142,13 +148,16 @@ func TestGoModReplaceInputDomain(t *testing.T) {
 				t.Fatal(err)
 			}
 			return "replace example.com/ext => ./extlink\n"
-		}, wantErr: "replace"},
+		}, wantErr: "go.mod replaces example.com/"},
 	}
 	for i, c := range cells {
 		t.Run(cellID("G13", i)+" "+c.shape, func(t *testing.T) {
 			f := guardFixture(t).withModuleFiles()
 			if r := c.replace(t, f); r != "" {
 				f.write("go.mod", f.read("go.mod")+"\n"+r)
+			}
+			if c.wantErr != "" && strings.Contains(f.dir, c.wantErr) {
+				t.Fatalf("wantErr %q also occurs in the fixture path %s", c.wantErr, f.dir)
 			}
 			before := f.digests()
 			gen := &fakeGenerator{fn: rewriteOutputs("generated")}

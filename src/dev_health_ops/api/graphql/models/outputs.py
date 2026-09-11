@@ -125,10 +125,30 @@ class SankeyEdge:
 
 @strawberry.type
 class SankeyCoverage:
-    """Coverage metrics for the Sankey flow."""
+    """Coverage metrics for the Sankey flow.
+
+    The last three are ``float | None`` while the first two are ``float``, and
+    that asymmetry is the contract rather than an oversight. They split the
+    repository headline into the part attributed directly and the part reached
+    only through a team fallback, plus the width of that fallback -- and
+    neither plane can always measure them. A non-nullable ``Float`` would force
+    a 0 into the cases where the measurement is simply absent, and "0% of this
+    org's coverage is team-fallback" is a confident false claim where null is
+    an honest absent one.
+
+    This plane declares them and serves null: the three are a pure declaration
+    here, the schema half of a contract the Go plane computes. Adding them
+    needs no resolver change -- ``SankeyCoverage`` is built in one place with
+    keyword arguments, so the defaults below are what a client sees from
+    Python. The Go plane's own reasoning for each value lives in
+    cmd/query-api/internal/analytics/sankeycoverage.go.
+    """
 
     team_coverage: float
     repo_coverage: float
+    direct_repo_coverage: float | None = None
+    team_fallback_repo_coverage: float | None = None
+    repo_fanout_repos_per_unit: float | None = None
 
 
 @strawberry.enum

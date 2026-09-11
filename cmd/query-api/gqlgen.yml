@@ -98,6 +98,9 @@ models:
   TimeseriesBucket:
     model:
       - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model.TimeseriesBucket
+  SankeyCoverage:
+    model:
+      - github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model.SankeyCoverage
 
 # autobind intentionally omitted: Wave 0 has no Go domain model package to
 # bind generated GraphQL types to yet (no resolver logic exists). Every

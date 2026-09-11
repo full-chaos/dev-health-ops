@@ -36,9 +36,29 @@ func TestCheckDriftOnThisRepositoryMatchesTheCommittedRecord(t *testing.T) {
 	if len(res.Changes) == 0 {
 		t.Fatal("no declared outputs were enumerated, so this proves nothing")
 	}
-	if !res.Drifted() {
-		t.Fatal("this repository's generated files carry deliberate hand-edits, so a fresh generation MUST differ from them; no drift means the generator did not really run")
+	// The generator really ran, proved by what it produced rather than by the
+	// repository differing from it. Drift used to be that proof: every
+	// checked-in output carried a hand-edit, so a run that produced nothing
+	// looked identical to a run that produced the tree. Expressing those
+	// edits through gqlgen's own configuration ended the drift and took the
+	// signal with it -- so the proof is now the outputs themselves. A
+	// generator that no-ops leaves every declared output absent in the copy,
+	// which is an empty generated digest here (and a refusal one step later,
+	// because a checked-in output vanished).
+	produced := 0
+	for _, c := range res.Changes {
+		if c.TreeDigest == "" {
+			continue // not checked in; the generator may legitimately create it
+		}
+		if c.GeneratedDigest == "" {
+			t.Fatalf("%s is checked in but a fresh generation produced nothing for it, so the generator did not really run", c.Path)
+		}
+		produced++
 	}
+	if produced == 0 {
+		t.Fatal("no checked-in declared output was produced, so this proves nothing about the generator")
+	}
+	t.Logf("CELL-OUTPUT: accepted: %d checked-in declared output(s) reproduced, %d drifted", produced, len(res.Changes))
 	assertUnchanged(t, before, repoDigests(t, root), "CheckDrift against the real repository")
 }
 
@@ -88,34 +108,66 @@ func TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDigests(t *testing.T)
 		t.Fatalf("read go.sum: %v", err)
 	}
 
-	// On this repository the record describes the checked-in hand-edits, so a
-	// plain `generate` must refuse and write nothing rather than reverting
-	// them silently.
-	var refusal strings.Builder
+	// The repository records no drift now, so `generate` has nothing to
+	// revert: it must succeed, write nothing, and say so. What it MUST NOT do
+	// is decide that an empty record is permission to overwrite -- the arm
+	// below plants a difference the record does not describe and pins the
+	// refusal without depending on this repository carrying hand-edits, which
+	// is a property that has now gone away.
 	before, err := TakeSnapshot(dst, skipVCS)
 	if err != nil {
-		t.Fatalf("snapshot before the refused generate: %v", err)
+		t.Fatalf("snapshot before the no-op generate: %v", err)
 	}
-	_, err = Generate(context.Background(), Options{
+	var quiet strings.Builder
+	noop, err := Generate(context.Background(), Options{
+		ModuleDir:  copyDir,
+		TempParent: t.TempDir(),
+		Report:     &quiet,
+	})
+	if err != nil {
+		t.Fatalf("generate refused a tree a fresh generation already reproduces: %v\n%s", err, quiet.String())
+	}
+	if len(noop.Applied) != 0 {
+		t.Fatalf("generate wrote %v although nothing drifted", noop.Applied)
+	}
+	if !strings.Contains(quiet.String(), "no output changed") {
+		t.Fatalf("generate did not say it changed nothing:\n%s", quiet.String())
+	}
+	t.Logf("CELL-OUTPUT: accepted: %s", firstLine(quiet.String()))
+	afterNoop, err := TakeSnapshot(dst, skipVCS)
+	if err != nil {
+		t.Fatalf("snapshot after the no-op generate: %v", err)
+	}
+	for rel, e := range before {
+		if afterNoop[rel].Digest != e.Digest {
+			t.Fatalf("the no-op generate changed %s", rel)
+		}
+	}
+	if len(afterNoop) != len(before) {
+		t.Fatalf("the no-op generate changed the file set: %d -> %d", len(before), len(afterNoop))
+	}
+
+	// A difference the record does not describe: the fail-closed arm.
+	handEdited := filepath.Join(copyDir, "cmd", "query-api", "internal", "graph", "model", "models_gen.go")
+	original, err := os.ReadFile(handEdited)
+	if err != nil {
+		t.Fatalf("read a generated file to hand-edit: %v", err)
+	}
+	if err := os.WriteFile(handEdited, append(original, []byte("\n// a hand-edit the record does not describe\n")...), 0o644); err != nil {
+		t.Fatalf("plant the hand-edit: %v", err)
+	}
+	var refusal strings.Builder
+	if _, rerr := Generate(context.Background(), Options{
 		ModuleDir:  copyDir,
 		TempParent: t.TempDir(),
 		Report:     &refusal,
-	})
-	if err == nil || !strings.Contains(err.Error(), "records as deliberate") {
-		t.Fatalf("generate did not refuse to revert the recorded hand-edits: %v", err)
+	}); rerr == nil {
+		t.Fatal("generate overwrote a difference the record says nothing about")
+	} else {
+		t.Logf("CELL-OUTPUT: refused: %v", rerr)
 	}
-	t.Logf("CELL-OUTPUT: refused: %v", err)
-	afterRefusal, err := TakeSnapshot(dst, skipVCS)
-	if err != nil {
-		t.Fatalf("snapshot after the refused generate: %v", err)
-	}
-	for rel, e := range before {
-		if afterRefusal[rel].Digest != e.Digest {
-			t.Fatalf("the refused generate changed %s", rel)
-		}
-	}
-	if len(afterRefusal) != len(before) {
-		t.Fatalf("the refused generate changed the file set: %d -> %d", len(before), len(afterRefusal))
+	if err := os.WriteFile(handEdited, original, 0o644); err != nil {
+		t.Fatalf("restore the hand-edited file: %v", err)
 	}
 
 	var applied strings.Builder
@@ -129,10 +181,11 @@ func TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDigests(t *testing.T)
 		t.Fatalf("generate in the copy: %v", err)
 	}
 	// How many hand-edits this repository records is a property of the
-	// repository, not of the guard: it falls as they are expressed through
-	// gqlgen's own configuration instead. The count is read from the record
-	// rather than written here, so this cell pins that the run NAMES what it
-	// reverts, and keeps pinning it as that number moves.
+	// repository, not of the guard, and it is zero now: everything the
+	// generated files used to carry by hand is expressed through gqlgen's own
+	// configuration. So the run names what it reverts only when there is
+	// something to name, and writes nothing when there is not -- which is the
+	// same statement, and the one that survives the count reaching zero.
 	recordBytes, err := os.ReadFile(filepath.Join(copyDir, DefaultDriftPath))
 	if err != nil {
 		t.Fatalf("read the copy's expected-drift record: %v", err)
@@ -143,16 +196,24 @@ func TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDigests(t *testing.T)
 			recorded++
 		}
 	}
-	if recorded == 0 {
-		t.Fatal("the repository records no drift, so the applied run has nothing to name")
+	switch {
+	case recorded > 0:
+		want := fmt.Sprintf("reverting %d recorded hand-edit(s)", recorded)
+		if !strings.Contains(applied.String(), want) {
+			t.Fatalf("the applied run did not name the hand-edits it reverted (want %q):\n%s", want, applied.String())
+		}
+		if len(res.Applied) == 0 {
+			t.Fatal("generate applied nothing although the record describes drift")
+		}
+	default:
+		if strings.Contains(applied.String(), "reverting ") {
+			t.Fatalf("the run named hand-edits the record does not describe:\n%s", applied.String())
+		}
+		if len(res.Applied) != 0 {
+			t.Fatalf("generate wrote %v although the record describes no drift", res.Applied)
+		}
 	}
-	if want := fmt.Sprintf("reverting %d recorded hand-edit(s)", recorded); !strings.Contains(applied.String(), want) {
-		t.Fatalf("the applied run did not name the hand-edits it reverted (want %q):\n%s", want, applied.String())
-	}
-	t.Logf("CELL-OUTPUT: accepted under -revert-recorded: %s", firstLine(applied.String()))
-	if len(res.Applied) == 0 {
-		t.Fatal("generate applied nothing, so this proves nothing about the write path")
-	}
+	t.Logf("CELL-OUTPUT: accepted under -revert-recorded, %d recorded: %s", recorded, firstLine(applied.String()))
 
 	// Every file now on disk carries the digest the check said the generator
 	// produces. Comparing digests rather than "it changed" is what makes this
@@ -185,20 +246,32 @@ func TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDigests(t *testing.T)
 		t.Fatal("go.sum is not byte-identical after generate; the generator's tidy reached the module")
 	}
 
-	// A second check against the now-regenerated copy must report NO drift and
-	// therefore refuse against the committed record, which is the honest
-	// consequence of having reverted every hand-edit.
+	// A second check against the now-regenerated copy: the tree it leaves
+	// behind must be one a fresh generation reproduces exactly. Whether it
+	// still MATCHES the committed record depends on what the record described
+	// -- reverting recorded drift makes the record stale by construction, and
+	// reverting nothing leaves it accurate -- so the invariant asserted here
+	// is the one that holds either way, and it is the stronger of the two:
+	// generating twice converges.
 	regenerated, err := CheckDrift(context.Background(), Options{
 		ModuleDir:  copyDir,
 		TempParent: t.TempDir(),
 		Report:     io.Discard,
 	})
-	if err == nil {
-		t.Fatal("after regenerating over every hand-edit, the drift check still matched the record; the record cannot be describing the hand-edits")
+	if regenerated == nil {
+		t.Fatalf("the second drift check produced no result: %v", err)
 	}
-	if regenerated != nil && regenerated.Drifted() {
+	if regenerated.Drifted() {
 		t.Fatal("a freshly regenerated tree still drifts from a fresh generation, so the generator is not deterministic")
 	}
+	if recorded > 0 && err == nil {
+		t.Fatal("the record described drift that was just reverted, so the check should no longer match it")
+	}
+	if recorded == 0 && err != nil {
+		t.Fatalf("nothing was reverted, so the record should still match the tree: %v", err)
+	}
+	t.Logf("CELL-OUTPUT: accepted: regenerating twice converges; the record %s",
+		map[bool]string{true: "is now stale, as it must be", false: "still matches"}[recorded > 0])
 }
 
 // repoDigests digests a whole checkout through a root handle.

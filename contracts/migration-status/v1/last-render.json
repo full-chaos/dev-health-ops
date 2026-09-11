@@ -1,16 +1,17 @@
 {
   "schema_version": 1,
   "rendered_at": "2026-09-09T06:26:46Z",
-  "ops_sha": "720f64bffc7529f1413c84e46542ef7c8eb46241",
-  "render_commit": "720f64bffc7529f1413c84e46542ef7c8eb46241",
-  "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
-  "fleet_read_at": "2026-09-09T06:26:46.369607417Z",
+  "ops_sha": "b36d2dad35f3e5994f50671e3cc85a87f56ae7e3",
+  "render_commit": "9e144ff4027dde07a7277118a3a2f6cca4838314",
+  "schema_digest": "sha256:19485ec136d04de0935717dca8b4f5fd27dd0351fe96b854d40f433229468fd0",
+  "fleet_read_at": "2026-09-11T21:55:38.835459872Z",
   "fleet_source": "docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1",
   "operations": [
     {
       "operation": "capacityForecast",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -19,6 +20,7 @@
       "operation": "capacityForecasts",
       "mode": "shadow",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -27,6 +29,7 @@
       "operation": "cognitiveLoad",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -35,6 +38,7 @@
       "operation": "complexityTimeseries",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -43,6 +47,7 @@
       "operation": "featureFlags",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -51,6 +56,7 @@
       "operation": "flowMatrix",
       "mode": "shadow",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "458daedfd4998179df518304090517a3d4ea249f",
       "live": true,
       "proven": "none"
@@ -59,6 +65,7 @@
       "operation": "hotspots",
       "mode": "shadow",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -67,6 +74,7 @@
       "operation": "investmentBreakdown",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -75,6 +83,7 @@
       "operation": "investmentFull",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -83,6 +92,7 @@
       "operation": "operatingReview",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -91,6 +101,7 @@
       "operation": "reviewEdges",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -99,6 +110,7 @@
       "operation": "throughputForecast",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -107,6 +119,7 @@
       "operation": "workGraphArtifacts",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -115,6 +128,7 @@
       "operation": "workGraphEdges",
       "mode": "shadow",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -123,6 +137,7 @@
       "operation": "workGraphFlow",
       "mode": "canary",
       "schema_digest": "sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88",
+      "document_digest": "",
       "candidate_build": "b18e56fa79cfe20ce0f75df148144b832d92be36",
       "live": true,
       "proven": "none"
@@ -131,6 +146,7 @@
       "operation": "cognitiveLoad",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -139,6 +155,7 @@
       "operation": "complexityTimeseries",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -147,6 +164,7 @@
       "operation": "featureFlags",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -155,6 +173,7 @@
       "operation": "flowMatrix",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -163,6 +182,7 @@
       "operation": "hotspots",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -171,6 +191,7 @@
       "operation": "investmentBreakdown",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -179,6 +200,7 @@
       "operation": "investmentFull",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -187,6 +209,7 @@
       "operation": "operatingReview",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -195,6 +218,7 @@
       "operation": "reviewEdges",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -203,6 +227,7 @@
       "operation": "workGraphArtifacts",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -211,6 +236,7 @@
       "operation": "workGraphEdges",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"
@@ -219,6 +245,7 @@
       "operation": "workGraphFlow",
       "mode": "canary",
       "schema_digest": "sha256:67b87d38e46f767511b5d8435ffbfdd7dbe8aeab9dbe4073c7d7706de572f706",
+      "document_digest": "",
       "candidate_build": "78fc68815e8209834c6e5acc37eb7653b52a7aa4",
       "live": false,
       "proven": "none"

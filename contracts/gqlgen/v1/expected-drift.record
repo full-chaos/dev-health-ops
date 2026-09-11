@@ -19,31 +19,10 @@
 # declared output paths: 5
 #
 # digests: <status> <path> tree=<sha256> generated=<sha256>
-digest same cmd/query-api/internal/graph/generated.go tree=09fdbf71a23bf4ffb6175d216963caca1d939cbfc7be595594d0266a6e8f00a6 generated=09fdbf71a23bf4ffb6175d216963caca1d939cbfc7be595594d0266a6e8f00a6
-digest drift cmd/query-api/internal/graph/model/models_gen.go tree=b8d5a56375ed36b75a2bd7190720fd6516880c005d7a2b7384737df461420607 generated=458a62ba46f43f885d00a57d48755afa70c2ea6c72c9f2b3e8a495479a8538b3
+digest same cmd/query-api/internal/graph/generated.go tree=d55918fb82c3ee1ae3116652e9a8bcb68be9221431600ca27f556130faed2272 generated=d55918fb82c3ee1ae3116652e9a8bcb68be9221431600ca27f556130faed2272
+digest same cmd/query-api/internal/graph/model/models_gen.go tree=231731462a2fab09e7e6d7c5ea96d9466db69c9e5c3109a13479218cee2ee091 generated=231731462a2fab09e7e6d7c5ea96d9466db69c9e5c3109a13479218cee2ee091
 digest absent cmd/query-api/internal/graph/prelude.resolvers.go tree=- generated=-
 digest same cmd/query-api/internal/graph/resolver.go tree=768c5b27c8e49a52b3063947cf659a96d87c72dab66b5f8d88f2cb9632993814 generated=768c5b27c8e49a52b3063947cf659a96d87c72dab66b5f8d88f2cb9632993814
 digest same cmd/query-api/internal/graph/schema.resolvers.go tree=beb278dead71260390718d5eebc0e450e7c39df7bdefabbfb847abab103f5836 generated=beb278dead71260390718d5eebc0e450e7c39df7bdefabbfb847abab103f5836
 
---- a/cmd/query-api/internal/graph/model/models_gen.go
-+++ b/cmd/query-api/internal/graph/model/models_gen.go
-@@ -1581,17 +1581,9 @@
- 	ChurnLoc      int     `json:"churnLoc"`
- }
- 
--// The three nullable fields below are not in the published SDL yet, so a
--// regeneration removes them; that is the one difference the expected-drift
--// record is expected to carry until the SDL catches up. Why they are nullable
--// while the two above are not: analytics/sankeycoverage.go, above the
--// repoTotal guard in resolveSankeyCoverage.
- type SankeyCoverage struct {
--	TeamCoverage             float64  `json:"teamCoverage"`
--	RepoCoverage             float64  `json:"repoCoverage"`
--	DirectRepoCoverage       *float64 `json:"directRepoCoverage,omitempty"`
--	TeamFallbackRepoCoverage *float64 `json:"teamFallbackRepoCoverage,omitempty"`
--	RepoFanoutReposPerUnit   *float64 `json:"repoFanoutReposPerUnit,omitempty"`
-+	TeamCoverage float64 `json:"teamCoverage"`
-+	RepoCoverage float64 `json:"repoCoverage"`
- }
- 
- type SankeyRequestInput struct {
+# no drift: a fresh generation reproduces every checked-in output exactly.

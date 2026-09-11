@@ -1149,4 +1149,18 @@ func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 		!strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("expected a non-host component set alongside a raw URI to be refused, got: %v", err)
 	}
+
+	// Round-2 (2026-09-11) finding, second half: a non-host component set
+	// with HOST absent AND no raw URI either used to silently report
+	// "not configured" -- the same as if nothing had been set at all, with
+	// no sign the operator had already started configuring components.
+	_, err = Load(workerSpec(map[string]string{
+		"DEV_HEALTH_PG_DOMAIN_USER": "app",
+		"WORKER_DATABASE_URI":       "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err == nil ||
+		!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_USER") ||
+		!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
+		t.Fatalf("expected a partial component set (no HOST, no raw URI) to name the missing HOST key, got: %v", err)
+	}
 }

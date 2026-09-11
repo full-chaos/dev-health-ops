@@ -350,4 +350,44 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 			t.Fatal("expected failure on a non-numeric port")
 		}
 	})
+
+	// Round-2 (2026-09-11) finding, second half: a non-host component set
+	// with the component HOST absent, and no MIGRATION_DATABASE_URI either,
+	// used to silently report "MIGRATION_DATABASE_URI is required" -- true,
+	// but hiding that the operator had already started configuring
+	// components and only forgot the host var.
+	t.Run("non-host component set without host or URI names the missing host key", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_USER") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_HOST") {
+			t.Fatalf("expected an error naming the missing host key, got: %s", stderr.String())
+		}
+	})
+
+	// Both forms set AND a non-host component: the mutual-exclusion check
+	// still fires first (checked before the missing-key check), naming the
+	// non-host component, not a spurious "missing host" message.
+	t.Run("both forms plus a non-host component -- mutual exclusion still wins", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI":       "postgresql://real:real@real-host:5432/real",
+			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_USER") ||
+			!strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("expected the mutual-exclusion error, got: %s", stderr.String())
+		}
+	})
 }

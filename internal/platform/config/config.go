@@ -1097,6 +1097,21 @@ func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (va
 	if hostSet {
 		return ResolveDSNFromComponents(lookup, spec)
 	}
+	if len(setComponentKeys) > 0 {
+		// Round-2 (2026-09-11) finding, second half: a non-host component
+		// set with HOST itself absent used to fall straight through to
+		// secrets.Resolve(rawKey, lookup) -- if the raw key was also unset,
+		// this silently reported "not configured" with no sign the operator
+		// had already set (and presumably intended to use) a component
+		// field. HostKey is the only genuinely REQUIRED component (Port/DB
+		// have defaults; User/Password are an optional pair) -- since
+		// hostSet is false here, HostKey is necessarily among what is
+		// missing, whether or not it appears in setComponentKeys.
+		return secrets.Value{}, false, fmt.Errorf(
+			"%s is set without %s -- the component form requires %s to be set",
+			strings.Join(setComponentKeys, ", "), spec.HostKey, spec.HostKey,
+		)
+	}
 	return secrets.Resolve(rawKey, lookup)
 }
 

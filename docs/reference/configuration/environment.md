@@ -38,6 +38,8 @@ Document these as distinct responsibilities:
 
 Inline values and `_FILE` forms are mutually exclusive where both are supported. Do not generate secret contents.
 
+The Go worker fleet's five DSNs (`POSTGRES_URI`, `WORKER_DATABASE_URI`, `COORDINATOR_DATABASE_URI`, `CLICKHOUSE_URI`, `MIGRATION_DATABASE_URI`) also accept a component form -- discrete host/port/user/password/db environment variables (`DEV_HEALTH_PG_DOMAIN_*`, `DEV_HEALTH_PG_QUEUE_*`, `DEV_HEALTH_PG_COORDINATOR_*`, `DEV_HEALTH_CH_*`, `DEV_HEALTH_MIGRATION_PG_*`) that are assembled into the DSN safely, so a password containing `#`, `@`, `/`, or `:` never needs manual URL-encoding. The inline/`_FILE` form and the component form are mutually exclusive per DSN, refused if both are set; see each binary's `--help` and `internal/platform/config`'s `ResolveDSN` for the exact keys.
+
 ## Provider and integration credentials
 
 Include provider host/account identity, authentication mode, callback URL, scopes or selected datasets, and secret ownership for GitHub, GitLab, Jira, Linear, PagerDuty, Customer Push, and webhooks.

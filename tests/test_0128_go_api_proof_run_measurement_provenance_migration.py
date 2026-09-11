@@ -394,13 +394,16 @@ def test_registry_ddl_mirror_matches_live_column_nullability(
     thinks the two schemas say.
 
     This reads ``information_schema.columns`` from TWO real, freshly
-    built databases -- one migrated through alembic to 0128, one built
-    from nothing but ``registryschema.DDL`` -- and compares them
-    column-for-column, name AND nullability together, for every table the
-    mirror declares, so the next drift fails a test instead of waiting
-    for someone to run a comparison by hand.
+    built databases -- one migrated through alembic to 0129 (the current
+    head for these tables; the mirror declares 0129's own ``build_binding``
+    column, so comparing against anything short of it would compare the
+    mirror against a schema it never claimed to match), one built from
+    nothing but ``registryschema.DDL`` -- and compares them column-for-
+    column, name AND nullability together, for every table the mirror
+    declares, so the next drift fails a test instead of waiting for
+    someone to run a comparison by hand.
     """
-    command.upgrade(_config(), "0128")
+    command.upgrade(_config(), "0129")
     for table in ("go_api_candidate_build", "go_api_routing_state", "go_api_proof_run"):
         migrated_columns = _columns(migrated, table)
         mirror_columns = _columns(ddl_mirror_db, table)

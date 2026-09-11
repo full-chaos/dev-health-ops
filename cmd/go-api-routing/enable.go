@@ -53,8 +53,8 @@ func runEnable(argv []string) error {
 	var registryURL, buildInfoURL, expectBuild, mode string
 	var rollout int
 	var acknowledgeUnproven, dryRun bool
-	set.StringVar(&registryURL, "registry-url", "http://localhost:8090/registry", "GET /registry on the DEPLOYED query-api")
-	set.StringVar(&buildInfoURL, "buildinfo-url", "http://localhost:8090/buildinfo", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the candidate build written")
+	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED query-api (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
+	set.StringVar(&buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the candidate build written (falls back to "+queryAPIURLEnvVar+"+\"/buildinfo\")")
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
 	set.StringVar(&common.operations, "operations", "all-registered", "comma-separated operation names, or 'all-registered' (default)")
 	set.StringVar(&common.catalogPath, "catalog", goapiproof.DefaultCatalogPath, "the edge's registered-document catalog -- what the Python dispatcher can map a request to")
@@ -71,19 +71,6 @@ func runEnable(argv []string) error {
 	}
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
-	}
-	// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query or
-	// a fragment is printed verbatim by any transport error downstream.
-	// The REBUILT value is what is used from here on.
-	if sanitized, err := sanitizeEndpointURL("-registry-url", registryURL); err != nil {
-		return err
-	} else {
-		registryURL = sanitized
-	}
-	if sanitized, err := sanitizeEndpointURL("-buildinfo-url", buildInfoURL); err != nil {
-		return err
-	} else {
-		buildInfoURL = sanitized
 	}
 	if mode == "" {
 		return refuse("-mode is required and must be one of %v", goapiproof.EnableModes)
@@ -110,6 +97,41 @@ func runEnable(argv []string) error {
 
 	ctx := context.Background()
 	client := httpClient(common.timeout)
+
+	// r6 P2 (reproduced): both flags used to default to a HARDCODED
+	// `http://localhost:8090/...`, independently, so an operator who
+	// forgot ONE of the two silently sent that half of the preflight --
+	// and the effective-principal envelope -- to whatever happened to
+	// answer on localhost:8090, rather than refusing. See
+	// resolveEndpointURL's doc comment (main.go) for the executed repro.
+	// Resolved HERE, after every other precondition, so the FIRST thing
+	// an operator missing several is told is still the cheapest one to
+	// fix (-mode, provenance, -postgres-uri, the credential) -- the same
+	// ordering `TestEveryVerbRefusesItsOwnMissingPreconditions` pins.
+	// Resolved BEFORE sanitizeEndpointURL: an unresolved empty string
+	// must produce THIS refusal, not sanitizeEndpointURL's "must be
+	// http:// or https://" (a confusing message for an operator who typed
+	// nothing at all).
+	var ok bool
+	if registryURL, ok = resolveEndpointURL(registryURL, "/registry"); !ok {
+		return refuse("no query-api URL: pass -registry-url or set %s. Enabling rows without asking the running binary what it serves is how the 2026-09-01 rows were written; this command will not do it.", queryAPIURLEnvVar)
+	}
+	if buildInfoURL, ok = resolveEndpointURL(buildInfoURL, "/buildinfo"); !ok {
+		return refuse("no query-api URL: pass -buildinfo-url or set %s. Enabling rows without asking the running binary what it serves is how the 2026-09-01 rows were written; this command will not do it.", queryAPIURLEnvVar)
+	}
+	// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query or
+	// a fragment is printed verbatim by any transport error downstream.
+	// The REBUILT value is what is used from here on.
+	if sanitized, err := sanitizeEndpointURL("-registry-url", registryURL); err != nil {
+		return err
+	} else {
+		registryURL = sanitized
+	}
+	if sanitized, err := sanitizeEndpointURL("-buildinfo-url", buildInfoURL); err != nil {
+		return err
+	} else {
+		buildInfoURL = sanitized
+	}
 
 	// --- Preflight 1: is query-api reachable at all? -------------------
 	registry, err := goapiproof.FetchRegistry(ctx, client, registryURL)
@@ -193,6 +215,30 @@ func runEnable(argv []string) error {
 	}
 	defer pool.Close()
 
+	// r6 observability (1) (team-lead ruling): read the BEFORE state,
+	// plain and UNLOCKED, purely so the per-row log line below can say
+	// what a row replaced. Deliberately NOT a `FOR UPDATE` pre-read --
+	// the package comment on Enable (routing_enable.go) explains at
+	// length why this verb never pre-locks a routing row, and that
+	// reasoning is about LOCK ORDER, not about reading data at all. A
+	// best-effort, unlocked read costs nothing there: if it fails, or a
+	// row was already gone the instant this read runs, the log line
+	// below just says "(unknown)" -- it never gates the write.
+	before := map[string]struct{ mode, build string }{}
+	if rows, err := pool.Query(ctx, `
+		SELECT selected_operation, mode, current_candidate_build
+		  FROM public.go_api_routing_state
+		 WHERE schema_digest = $1 AND selected_operation = ANY($2)`,
+		registry.SchemaDigest, operations); err == nil {
+		for rows.Next() {
+			var op, rowMode, rowBuild string
+			if rows.Scan(&op, &rowMode, &rowBuild) == nil {
+				before[op] = struct{ mode, build string }{rowMode, rowBuild}
+			}
+		}
+		rows.Close()
+	}
+
 	// --- Preflight 4 (inside Enable) + the write, one transaction ------
 	outcomes, err := goapiproof.Enable(ctx, pool, goapiproof.EnableRequest{
 		SchemaDigest:        registry.SchemaDigest,
@@ -210,7 +256,7 @@ func runEnable(argv []string) error {
 		if errors.Is(err, goapiproof.ErrEnableUnproven) || errors.Is(err, goapiproof.ErrEnableRequestRefused) {
 			return refuse("%v", err)
 		}
-		return err
+		return classifyWriteError(err)
 	}
 
 	var unproven int
@@ -231,6 +277,15 @@ func runEnable(argv []string) error {
 	if dryRun {
 		verb = "would enable"
 	}
+	// r6 F5 observability (reproduced): on success this line never named
+	// WHICH endpoint was actually consulted -- so a wrong-process enable
+	// (F5's own repro: an omitted URL flag silently resolving to a
+	// different process) looked identical to a correct one except for
+	// the build value. EndpointLabel is host-only, never a full URL (see
+	// its own doc comment) -- it cannot leak a credential even if one
+	// somehow ended up in the resolved URL.
+	fmt.Fprintf(stdout, "go-api-routing: registry=%s buildinfo=%s\n",
+		goapiproof.EndpointLabel(registryURL), goapiproof.EndpointLabel(buildInfoURL))
 	fmt.Fprintf(stdout, "go-api-routing: schema_digest=%s candidate_build=%s mode=%s rollout=%d dry_run=%t\n",
 		registry.SchemaDigest, running, mode, rollout, dryRun)
 	fmt.Fprintf(stdout, "go-api-routing: %s total=%d proven=%d unproven=%d\n",
@@ -241,6 +296,19 @@ func runEnable(argv []string) error {
 			flag = "  (UNPROVEN)"
 		}
 		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %s%s\n", outcome.Operation, outcome.Mode, outcome.CandidateBuild, flag)
+		// r6 observability (1) (team-lead ruling): a structured line PER
+		// ROW, mirroring disable's `go_api_routing.disabled` and
+		// repoint's `go_api_routing.repointed` -- BEFORE-and-AFTER
+		// mode/build, so a log search finds what a specific enable
+		// REPLACED, not just that it wrote something.
+		if !dryRun {
+			modeBefore, buildBefore := "(no row)", "-"
+			if row, ok := before[outcome.Operation]; ok {
+				modeBefore, buildBefore = row.mode, row.build
+			}
+			fmt.Fprintf(stderr, "go_api_routing.enabled operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s recorded_by=%s\n",
+				outcome.Operation, modeBefore, outcome.Mode, buildBefore, outcome.CandidateBuild, registry.SchemaDigest, common.recordedBy)
+		}
 	}
 	return nil
 }

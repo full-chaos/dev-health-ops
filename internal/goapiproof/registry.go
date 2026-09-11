@@ -450,11 +450,24 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 		return RegistryView{}, fmt.Errorf("goapiproof: %s reported an empty schema digest", EndpointLabel(registryURL))
 	}
 	rawOperationsValue, present := rawTop["operations"]
+	// r6 F3(b) (reproduced): an ABSENT `operations` key or an EXPLICIT
+	// `"operations": null` used to fall through to the same empty-map
+	// success path r5's fix gives an honest `"operations": []` -- so
+	// `status` printed [AGREE] and "the deployed go plane does not
+	// register this operation at all" for a response that is actually
+	// MALFORMED, not merely empty. Python's dispatcher distinguishes them
+	// (`go_api_dispatcher.py`: `entries = payload.get("operations"); if
+	// not isinstance(entries, list): raise GoPlaneUnavailable(...)`) --
+	// `.get` returns None for BOTH absent and null, and only a genuine
+	// JSON array (empty array included) is a `list`. Matched here: absent
+	// or null refuses with the same "no usable operations list" Python
+	// reports; an explicit `[]` still succeeds via the r5 path below.
+	if !present || bytes.Equal(bytes.TrimSpace(rawOperationsValue), []byte("null")) {
+		return RegistryView{}, fmt.Errorf("goapiproof: %s returned no usable operations list -- the \"operations\" key is missing or null, not an empty array", EndpointLabel(registryURL))
+	}
 	var rawOperations []map[string]json.RawMessage
-	if present {
-		if err := json.Unmarshal(rawOperationsValue, &rawOperations); err != nil {
-			return RegistryView{}, fmt.Errorf("goapiproof: %s operations field is malformed: %w", EndpointLabel(registryURL), err)
-		}
+	if err := json.Unmarshal(rawOperationsValue, &rawOperations); err != nil {
+		return RegistryView{}, fmt.Errorf("goapiproof: %s operations field is malformed: %w", EndpointLabel(registryURL), err)
 	}
 	// r5 P1 (reproduced): this used to refuse HERE, unconditionally, on an
 	// empty `operations` array -- which is correct for a WRITE verb (there

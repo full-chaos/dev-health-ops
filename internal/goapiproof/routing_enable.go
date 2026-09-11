@@ -30,15 +30,45 @@ package goapiproof
 // only FAIL a run (team-lead ruling R51). A row's provenance must not rest
 // on somebody having typed the right thing.
 //
-// WHY THERE IS NO PRE-READ OF THE ROW. Enable inserts the candidate build
-// and then upserts the routing row, in that order, because the routing
-// row carries a 4-column foreign key to the candidate build. It does NOT
-// first SELECT ... FOR UPDATE the routing rows, even though a before/after
-// report would be nicer: that is the exact opposite lock order from the
-// re-point verb, and taking both would make two of this package's own
-// verbs deadlock against each other (CHAOS-5507). The convention is
-// "register the candidate build BEFORE touching a routing row", and this
-// verb follows it by having nothing to unlearn.
+// WHY THERE IS NO PRE-READ OF THE ROW, AND THE LIVE DEADLOCK THIS LEAVES
+// (r6 P3, reproduced -- CORRECTED from an earlier version of this
+// comment that claimed the opposite of the executed behaviour).
+//
+// Enable inserts the candidate build and then upserts the routing row,
+// per operation, in that order -- CB then RS. It does NOT first
+// SELECT ... FOR UPDATE the routing rows the way `repoint` does
+// (routing_rows.go's selectRepointCandidatesSQL locks EVERY routing row
+// at a schema digest, UP FRONT, before it registers a single candidate
+// build -- RS then, per row, CB then RS again). That is a genuine
+// LOCK-ORDER INVERSION, not the deadlock-AVOIDING opposite this comment
+// used to claim: the textbook rule for avoiding a deadlock between two
+// transactions is that they acquire contended resources in the SAME
+// order, and CB-then-RS vs RS-then-CB is exactly the shape that produces
+// one when they run concurrently over the same rows.
+//
+// Executed with the two real binaries: a third session holds one routing
+// row for 4s while `repoint` (queued first, so its FOR UPDATE lock lands
+// first) races `enable` (registering a candidate build the same
+// operation names). Result: `repoint` exit=0; `enable`:
+// `ERROR: deadlock detected (SQLSTATE 40P01)` exit=2. Postgres:
+// `Process 139 waits for ShareLock on transaction 799; blocked by
+// process 137. Process 137 waits for ShareLock on transaction 798;
+// blocked by process 139.` Both sides roll back cleanly -- Postgres
+// aborts one, and no row is left half-written -- so this is a FAILED
+// WRITE an operator retries, not corruption, which is why it is P3 and
+// not P1/P2.
+//
+// NOT FIXED IN THIS PR (RISK-NOTES names it explicitly, corrected to
+// describe the actual defect rather than a "convention" that does not
+// exist): the real fix is making `enable` acquire the SAME lock in the
+// SAME order `repoint` does -- pre-locking the target routing rows
+// (where one already exists) via routing_rows.go's shared reader BEFORE
+// touching go_api_candidate_build -- and it is deferred to a dedicated
+// follow-up PR rather than folded in here, per team-lead ruling.
+// CHAOS-5507 is the ticket that fix belongs to; this PR's contribution is
+// correcting the false claim and pinning the reproduced behaviour with a
+// test (TestEnableAndRepointDeadlockUnderConcurrentAccess), so the
+// follow-up starts from what the code actually does.
 
 import (
 	"context"

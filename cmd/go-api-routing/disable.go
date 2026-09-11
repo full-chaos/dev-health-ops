@@ -87,10 +87,10 @@ func runDisable(argv []string) error {
 		Apply:                  apply,
 	})
 	if err != nil {
-		if errors.Is(err, goapiproof.ErrDisableGuardMismatch) || errors.Is(err, goapiproof.ErrDisableRefusesEnablingMode) {
+		if errors.Is(err, goapiproof.ErrDisableGuardMismatch) || errors.Is(err, goapiproof.ErrDisableRefusesEnablingMode) || errors.Is(err, goapiproof.ErrDisableStaleDigestOnly) {
 			return refuse("%v", err)
 		}
-		return err
+		return classifyWriteError(err)
 	}
 
 	summary := goapiproof.SummarizeDisable(changes)
@@ -115,6 +115,17 @@ func runDisable(argv []string) error {
 		if change.CurrentMode == "primary" && change.NewMode == "disabled" {
 			fmt.Fprintln(stdout, "    NOTE: this removes Go entirely for this operation -- Python serves it from the next request.")
 		}
+		// r6 F2 (reproduced): this binary computes SchemaDigest from its
+		// OWN embedded SDL, and (unlike the Python verb, which runs
+		// inside the deployed edge image) is built from an operator
+		// checkout by design -- so a stale checkout silently no-ops here
+		// while leaving a real row, at the digest the deployed process
+		// actually uses, completely untouched. `status`'s census already
+		// has this fact; naming it here is the fix.
+		if len(change.StaleSchemaDigests) > 0 {
+			fmt.Fprintf(stdout, "    !! %d row(s) for this operation exist at OTHER schema digest(s) this checkout does not match: %v -- if you expected THOSE rows to change, this binary's embedded SDL is stale; see `status` or rebuild from the deployed revision\n",
+				len(change.StaleSchemaDigests), change.StaleSchemaDigests)
+		}
 	}
 
 	if !apply {
@@ -133,13 +144,12 @@ func runDisable(argv []string) error {
 			change.Operation, change.CurrentMode, change.NewMode, local, common.recordedBy)
 	}
 	fmt.Fprintf(stdout, "\napplied: %d row(s) now mode=%s\n", summary.Applied, mode)
-
-	expected := summary.Total - summary.NoRow
-	if summary.Applied != expected {
-		// Only possible with -candidate-build: a row was repointed between
-		// the read and the write, so the guarded UPDATE did not match it.
-		// Silence here would read as success.
-		return refuse("%d row(s) did NOT change -- their candidate build moved between the plan and the write. Re-run `status` and decide again", expected-summary.Applied)
-	}
+	// r6 T1 (reproduced): the `summary.Applied != expected` refusal that
+	// used to live here described a race ("a row was repointed between
+	// the read and the write") the r2 R2-08 `FOR UPDATE` plan read
+	// already makes impossible -- see goapiproof.Disable's own write
+	// loop, which now marks every row Applied unconditionally on a
+	// successful write for exactly this reason. Dead code removed rather
+	// than kept as unreachable dressing around a stale comment.
 	return nil
 }

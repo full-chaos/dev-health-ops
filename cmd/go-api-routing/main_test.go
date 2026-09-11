@@ -398,6 +398,42 @@ func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
 	}
 }
 
+// r6 P2 (reproduced): `-registry-url`/`-buildinfo-url` used to default to
+// a HARDCODED `http://localhost:8090/...`, independently, so `enable`/
+// `repoint` never refused on a genuinely unconfigured endpoint -- they
+// silently probed whatever happened to answer there. This is the LAST
+// precondition checked (mode/provenance/postgres/credential all resolve
+// first, matching TestEveryVerbRefusesItsOwnMissingPreconditions's
+// ordering), so every other required flag is supplied here.
+func TestEnableAndRepointRefuseWithNoQueryAPIURLConfiguredAtAll(t *testing.T) {
+	t.Setenv(bearerEnvVar, "envelope-for-the-test")
+	t.Setenv("GO_API_QUERY_API_URL", "")
+	// enable resolves the catalog before the URL (both are cheap, local
+	// preconditions ahead of any network attempt) -- a real one is
+	// supplied so THAT is not what refuses this specific test.
+	catalogPath := filepath.Join(t.TempDir(), "go_api_operations.json")
+	if err := os.WriteFile(catalogPath, []byte(`[{"operation":"flowMatrix","digest":"d"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, argv := range map[string][]string{
+		"enable, no registry-url":  {"enable", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x", "-catalog", catalogPath},
+		"repoint, no registry-url": {"repoint", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := run(argv)
+			if err == nil {
+				t.Fatalf("run(%v) = nil, want a refusal naming the missing query-api URL", argv)
+			}
+			if !strings.Contains(err.Error(), "no query-api URL") || !strings.Contains(err.Error(), "GO_API_QUERY_API_URL") {
+				t.Fatalf("run(%v) = %q, want it to name the missing query-api URL and GO_API_QUERY_API_URL", argv, err)
+			}
+			if got := exitCodeFor(err); got != 2 {
+				t.Fatalf("run(%v) exits %d, want 2", argv, got)
+			}
+		})
+	}
+}
+
 // `status` NEVER refuses, even with nothing configured at all. It is what
 // an operator runs when things are already broken, and a diagnostic that
 // dies because the thing it diagnoses is down is useless exactly when it
@@ -415,6 +451,62 @@ func TestStatusNeverFailsEvenWithNothingConfigured(t *testing.T) {
 			t.Fatalf("run(%v) = %v, want nil -- status never fails on an unhealthy state", argv, err)
 		}
 	}
+}
+
+// r6 P2 (reproduced): with NEITHER `-registry-url` NOR GO_API_QUERY_API_URL
+// set, `status` used to fall back to a hardcoded `http://localhost:8090/
+// registry` and probe it -- an actual, if usually fruitless, network
+// attempt against an address nobody named. Parity with Python's `status`
+// (`go_api_cli.py`'s `go_error = "no --query-api-url and
+// GO_API_QUERY_API_URL is unset"`): no HTTP attempt at all, and the exact
+// sentence Python's own fallback prints.
+func TestStatusReportsNoQueryAPIURLWithoutProbingAnything(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	t.Setenv("POSTGRES_URI", "")
+	t.Setenv("GO_API_QUERY_API_URL", "")
+	out, _, err := captureVerb(t, "status", "-timeout", "2s", "-json")
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	if !strings.Contains(out, `"go_plane_error": "no -registry-url and GO_API_QUERY_API_URL is unset"`) {
+		t.Fatalf("go_plane_error did not name the missing URL configuration:\n%s", out)
+	}
+	if strings.Contains(out, "connection_refused") || strings.Contains(out, "localhost:8090") {
+		t.Fatalf("status attempted an HTTP probe of a hardcoded default nobody configured:\n%s", out)
+	}
+}
+
+// Direct coverage of the shared resolver both write verbs and status now
+// go through.
+func TestResolveEndpointURL(t *testing.T) {
+	t.Run("explicit flag wins over the env var", func(t *testing.T) {
+		t.Setenv("GO_API_QUERY_API_URL", "http://env-base:1")
+		got, ok := resolveEndpointURL("http://explicit:2/registry", "/registry")
+		if !ok || got != "http://explicit:2/registry" {
+			t.Fatalf("got (%q, %v), want the explicit value unchanged", got, ok)
+		}
+	})
+	t.Run("env var derives the path when the flag is empty", func(t *testing.T) {
+		t.Setenv("GO_API_QUERY_API_URL", "http://env-base:1")
+		got, ok := resolveEndpointURL("", "/buildinfo")
+		if !ok || got != "http://env-base:1/buildinfo" {
+			t.Fatalf("got (%q, %v), want \"http://env-base:1/buildinfo\"", got, ok)
+		}
+	})
+	t.Run("a trailing slash on the env var is not doubled", func(t *testing.T) {
+		t.Setenv("GO_API_QUERY_API_URL", "http://env-base:1/")
+		got, ok := resolveEndpointURL("", "/registry")
+		if !ok || got != "http://env-base:1/registry" {
+			t.Fatalf("got (%q, %v), want \"http://env-base:1/registry\"", got, ok)
+		}
+	})
+	t.Run("neither set is unresolved, not a fabricated default", func(t *testing.T) {
+		t.Setenv("GO_API_QUERY_API_URL", "")
+		got, ok := resolveEndpointURL("", "/registry")
+		if ok || got != "" {
+			t.Fatalf("got (%q, %v), want (\"\", false) -- no hardcoded fallback", got, ok)
+		}
+	})
 }
 
 // r2 R2-01 and R2-10 together: `connectPostgres` was both unclassified
@@ -746,6 +838,9 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 	if agree.Reachable == nil || !*agree.Reachable {
 		t.Fatalf("a row the deployed plane agrees with must stay reachable, got %v", agree.Reachable)
 	}
+	if agree.ReachableReason != nil {
+		t.Fatalf("a genuinely reachable row needs no reason, got %q", *agree.ReachableReason)
+	}
 
 	mismatch := toReportOperation(base, map[string]string{"flowMatrix": "deployed-digest"}, false, false)
 	if mismatch.DeployedDigestState != "MISMATCH" {
@@ -778,6 +873,9 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 	if unreachableGoPlane.Reachable != nil {
 		t.Fatalf("reachable must be nil (unknown) when the go plane is unreachable, got %v", *unreachableGoPlane.Reachable)
 	}
+	if unreachableGoPlane.ReachableReason == nil {
+		t.Fatal("an UNKNOWN reachable state must still name why (r6 observability (6))")
+	}
 
 	// r5 P1 (reproduced): a SCHEMA-level disagreement must also force
 	// reachable=false, even when the per-operation document digest still
@@ -791,6 +889,23 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 	}
 	if schemaMismatchButDigestAgrees.Reachable == nil || *schemaMismatchButDigestAgrees.Reachable {
 		t.Fatalf("reachable must be false under a schema mismatch even when the per-operation document digest agrees, got %v", schemaMismatchButDigestAgrees.Reachable)
+	}
+
+	// r6 F3(a) (reproduced): a row this binary's OWN classification
+	// already knows is unreachable (STALE, MISSING, or a non-dispatchable
+	// mode) must report reachable=FALSE even when the go plane is
+	// unreachable -- "we don't know if the deployed plane agrees" does
+	// not make "this row cannot be reached at all" become unknown too.
+	// Python reports false here, never null.
+	unreachableLocalRowAndGoPlaneDown := toReportOperation(goapiproof.OperationStatus{
+		Operation:   "pr",
+		DigestState: goapiproof.DigestMissing,
+	}, nil, true, false)
+	if unreachableLocalRowAndGoPlaneDown.Reachable == nil || *unreachableLocalRowAndGoPlaneDown.Reachable {
+		t.Fatalf("a MISSING row with the go plane down must report reachable=false (known), not nil (unknown), got %v", unreachableLocalRowAndGoPlaneDown.Reachable)
+	}
+	if unreachableLocalRowAndGoPlaneDown.ReachableReason == nil {
+		t.Fatal("reachable=false must still name why (r6 observability (6))")
 	}
 }
 

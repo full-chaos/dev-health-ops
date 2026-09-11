@@ -29,8 +29,8 @@ func runRepoint(argv []string) error {
 	var common commonFlags
 	var registryURL, buildInfoURL, expectBuild string
 	var dryRun bool
-	set.StringVar(&registryURL, "registry-url", "http://localhost:8090/registry", "GET /registry on the DEPLOYED query-api -- the only authority on which schema digest is live")
-	set.StringVar(&buildInfoURL, "buildinfo-url", "http://localhost:8090/buildinfo", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the build every row is pointed at")
+	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED query-api -- the only authority on which schema digest is live (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
+	set.StringVar(&buildInfoURL, "buildinfo-url", "", "GET /buildinfo on the DEPLOYED query-api -- the ONLY source of the build every row is pointed at (falls back to "+queryAPIURLEnvVar+"+\"/buildinfo\")")
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
 	set.StringVar(&common.operations, "operations", "all-registered", "comma-separated operation names, or 'all-registered' (default)")
 	set.StringVar(&common.recordedBy, "recorded-by", "", "WHO is running this, recorded on every row touched (required)")
@@ -43,19 +43,6 @@ func runRepoint(argv []string) error {
 	}
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
-	}
-	// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query or
-	// a fragment is printed verbatim by any transport error downstream.
-	// The REBUILT value is what is used from here on.
-	if sanitized, err := sanitizeEndpointURL("-registry-url", registryURL); err != nil {
-		return err
-	} else {
-		registryURL = sanitized
-	}
-	if sanitized, err := sanitizeEndpointURL("-buildinfo-url", buildInfoURL); err != nil {
-		return err
-	} else {
-		buildInfoURL = sanitized
 	}
 	if err := common.requireProvenance(); err != nil {
 		return err
@@ -70,6 +57,32 @@ func runRepoint(argv []string) error {
 
 	ctx := context.Background()
 	client := httpClient(common.timeout)
+
+	// r6 P2 (reproduced): same shape as enable's identical preflight --
+	// see resolveEndpointURL's doc comment (main.go) for the executed
+	// repro. Resolved HERE, after every other precondition (same ordering
+	// `TestEveryVerbRefusesItsOwnMissingPreconditions` pins), and BEFORE
+	// sanitizeEndpointURL, same reason as enable's.
+	var ok bool
+	if registryURL, ok = resolveEndpointURL(registryURL, "/registry"); !ok {
+		return refuse("no query-api URL: pass -registry-url or set %s. A measurement that did not happen is not a pass.", queryAPIURLEnvVar)
+	}
+	if buildInfoURL, ok = resolveEndpointURL(buildInfoURL, "/buildinfo"); !ok {
+		return refuse("no query-api URL: pass -buildinfo-url or set %s. A measurement that did not happen is not a pass.", queryAPIURLEnvVar)
+	}
+	// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query or
+	// a fragment is printed verbatim by any transport error downstream.
+	// The REBUILT value is what is used from here on.
+	if sanitized, err := sanitizeEndpointURL("-registry-url", registryURL); err != nil {
+		return err
+	} else {
+		registryURL = sanitized
+	}
+	if sanitized, err := sanitizeEndpointURL("-buildinfo-url", buildInfoURL); err != nil {
+		return err
+	} else {
+		buildInfoURL = sanitized
+	}
 
 	// Every one of these is a state the OPERATOR resolves -- an
 	// unreachable process, a build the process cannot name, a filter that
@@ -117,7 +130,7 @@ func runRepoint(argv []string) error {
 		DryRun:         dryRun,
 	})
 	if err != nil {
-		return refuse("%v", err)
+		return classifyWriteError(err)
 	}
 
 	summary := goapiproof.Summarize(outcomes)
@@ -125,6 +138,10 @@ func runRepoint(argv []string) error {
 	if dryRun {
 		verb = "would repoint"
 	}
+	// r6 F5 observability (reproduced): same fix as enable's, so a
+	// wrong-process repoint looks the same way wrong on stdout.
+	fmt.Fprintf(stdout, "go-api-routing: registry=%s buildinfo=%s\n",
+		goapiproof.EndpointLabel(registryURL), goapiproof.EndpointLabel(buildInfoURL))
 	// Every counter prints, including the zeros: "no row needed changing"
 	// and "nobody looked" must not read alike.
 	fmt.Fprintf(stdout, "go-api-routing: schema_digest=%s running_build=%s dry_run=%t\n", registry.SchemaDigest, running, dryRun)
@@ -136,6 +153,17 @@ func runRepoint(argv []string) error {
 		}
 		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %s  %s -> %s\n",
 			outcome.Operation, outcome.ModeAfter, state, outcome.BuildFrom, outcome.BuildTo)
+		// r6 observability (1)/(5) (team-lead ruling): a structured line
+		// PER CHANGED ROW, mirroring disable's own `go_api_routing.disabled`
+		// line -- BEFORE-and-AFTER mode/build, not just "some rows moved".
+		// Unchanged rows are not logged here: they are already the whole
+		// point of `changed=0` in the summary line above, and a log line
+		// for every unchanged row on a large rollout would bury the ones
+		// that actually moved.
+		if outcome.Changed && !dryRun {
+			fmt.Fprintf(stderr, "go_api_routing.repointed operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s recorded_by=%s\n",
+				outcome.Operation, outcome.ModeBefore, outcome.ModeAfter, outcome.BuildFrom, outcome.BuildTo, registry.SchemaDigest, common.recordedBy)
+		}
 	}
 	return nil
 }

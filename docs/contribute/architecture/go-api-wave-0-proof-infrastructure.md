@@ -409,8 +409,20 @@ collapsing them meant a classification error printed "registry database
 UNREACHABLE" and suppressed a census that had already succeeded — hiding
 the one number that says whether anything is enabled at all.
 
-The refusal exit codes are the same on both planes: 2 for a refusal (a
-state the operator must resolve), 1 for a crash.
+The refusal exit code is 2 (a state the operator must resolve), on both
+planes. **r6 F4 (reproduced), corrected from an earlier version of this
+line that also claimed "1 for a crash":** the Go binary classifies every
+UNCLASSIFIED error as a refusal (`exitCodeFor` in `main.go` -- deliberately,
+so forgetting to mark something costs a retryable exit 2 rather than a
+misclassified alert) and nothing in the binary currently reaches its own
+`errInternal` exit-1 path (it exists as an explicit opt-out, `internal()`
+in main.go, but its one call site is inside `status`, whose own contract
+is "never fails" -- that error is printed and the command still exits 0).
+Executed: a deadlock abort (see F1's own reproduction), a synthetic
+server-side write failure, and an unrecovered Go panic in the built
+binary all exit **2**, never 1 -- Go's own runtime default for an
+unrecovered panic is 2, not 1. A script written to "1 means crashed"
+reads every one of those as an ordinary, operator-actionable refusal.
 
 ### How this is now detected
 

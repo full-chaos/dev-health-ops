@@ -75,6 +75,22 @@ var ErrDisableGuardMismatch = errors.New("goapiproof: a routing row points at a 
 // ON -- the one thing an off-ramp must never be able to do.
 var ErrDisableRefusesEnablingMode = errors.New("goapiproof: disable may only set an unreachable mode")
 
+// ErrDisableStaleDigestOnly reports that a named operation has NO row at
+// this binary's own live schema digest, but DOES have one at some OTHER
+// digest (r6 F2, reproduced -- team-lead ruling: this refuses, it does
+// not merely warn). `disable` computes its schema digest from THIS
+// BINARY's own embedded SDL, and -- unlike the Python verb, which runs
+// inside the deployed edge image, so its SDL is the edge's by
+// construction -- `go-api-routing` ships in no image and is built from
+// an operator checkout by design (disable.go's own package comment). A
+// stale checkout used to print `applied: 0`, exit 0, while the row it
+// was actually trying to reach sat completely untouched. There is no
+// flag on this verb to SELECT which digest to act against (CHAOS-5566 is
+// the ticket for that gap); until it exists, an operator hitting this
+// refusal has one honest option -- rebuild from the deployed revision --
+// which is exactly what the refusal message says.
+var ErrDisableStaleDigestOnly = errors.New("goapiproof: a named operation has no row at this checkout's schema digest, but does have one at another -- this checkout is stale")
+
 // DisableChange is one row `disable` would change, or did.
 type DisableChange struct {
 	Operation      string
@@ -86,6 +102,19 @@ type DisableChange struct {
 	// CandidateBuild is what the row points at. Reported, NEVER written.
 	CandidateBuild string
 	Applied        bool
+	// StaleSchemaDigests names every OTHER schema digest (not the live
+	// one) at which this operation currently has a row (r6 F2,
+	// reproduced): `disable` computes `SchemaDigest` from THIS BINARY's
+	// own embedded SDL, and unlike the Python verb (which runs INSIDE the
+	// deployed edge image, so its SDL is the edge's by construction),
+	// `go-api-routing` ships in no image and is built from an operator
+	// checkout by design -- so a stale checkout produces a schema digest
+	// nothing at the deployed process actually uses, and `disable -apply`
+	// against it printed `applied: 0`, exit 0, with the row it was
+	// actually trying to reach left completely untouched and NOTHING
+	// saying so. `status`'s census (`rows by schema_digest`) already has
+	// this fact; `disable` never consulted it before this fix.
+	StaleSchemaDigests []string
 }
 
 // IsNoop is true when there is no row, or the row is already in the
@@ -155,6 +184,18 @@ UPDATE public.go_api_routing_state
    AND selected_operation = $3
    AND ($6::text IS NULL OR current_candidate_build = $6)`
 
+// selectOtherSchemaDigestRowsSQL names every row a requested operation
+// has at a schema digest OTHER than the live one (r6 F2). Read-only,
+// never used to decide what gets written -- purely so the plan can tell
+// an operator "you asked to disable X and I found nothing, but X DOES
+// have a row, just not at the digest THIS checkout computed" rather than
+// staying silent about it.
+const selectOtherSchemaDigestRowsSQL = `
+SELECT selected_operation, schema_digest
+  FROM public.go_api_routing_state
+ WHERE selected_operation = ANY($1)
+   AND schema_digest <> $2`
+
 // Disable plans and (with Apply) writes the mode changes, in ONE
 // transaction.
 //
@@ -200,14 +241,57 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 	operations := append([]string(nil), request.Operations...)
 	sort.Strings(operations)
 
+	// r6 F2 (reproduced): every OTHER schema digest at which a named
+	// operation currently has a row -- the fact `status`'s census
+	// (`rows by schema_digest`) already carries, and `disable` never
+	// consulted before this fix. See DisableChange.StaleSchemaDigests.
+	staleDigests := map[string][]string{}
+	{
+		rows, err := tx.Query(ctx, selectOtherSchemaDigestRowsSQL, operations, request.SchemaDigest)
+		if err != nil {
+			return nil, fmt.Errorf("goapiproof: read stale-digest rows: %w", err)
+		}
+		for rows.Next() {
+			var operation, digest string
+			if err := rows.Scan(&operation, &digest); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("goapiproof: scan stale-digest row: %w", err)
+			}
+			staleDigests[operation] = append(staleDigests[operation], digest)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("goapiproof: read stale-digest rows: %w", err)
+		}
+		for operation := range staleDigests {
+			sort.Strings(staleDigests[operation])
+			staleDigests[operation] = dedupeSorted(staleDigests[operation])
+		}
+	}
+
 	changes := make([]DisableChange, 0, len(operations))
 	var guardProblems []string
+	var staleOnlyProblems []string
 	for _, operation := range operations {
 		rows := live[operation]
 		if len(rows) == 0 {
-			// No row anywhere at the live digest: reported as "nothing to
-			// disable", never invented. The catalog's digest is carried
-			// only so the plan can name the row it would have targeted.
+			// r6 F2 (reproduced, team-lead ruling: REFUSE, not warn): no
+			// row at THIS checkout's live digest is normally "nothing to
+			// disable" -- unless a row for the SAME operation DOES exist
+			// at another digest, which means this checkout is stale and
+			// the row it was actually trying to reach is untouched.
+			// Collected here and refused BELOW, before anything is
+			// written, the same shape guardProblems already uses.
+			if len(staleDigests[operation]) > 0 {
+				staleOnlyProblems = append(staleOnlyProblems, fmt.Sprintf(
+					"%s has no row at this checkout's schema digest (%s), but has one at: %v",
+					operation, request.SchemaDigest, staleDigests[operation]))
+				continue
+			}
+			// No row anywhere, at ANY digest: genuinely reported as
+			// "nothing to disable", never invented. The catalog's digest
+			// is carried only so the plan can name the row it would have
+			// targeted.
 			changes = append(changes, DisableChange{
 				Operation:      operation,
 				DocumentDigest: request.DocumentDigest[operation],
@@ -216,33 +300,47 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 			continue
 		}
 		for _, row := range rows {
-			if request.ExpectedCandidateBuild != "" && row.candidateBuild != request.ExpectedCandidateBuild {
+			// r6 F3(c) (reproduced): the guard used to check EVERY row at
+			// the live schema digest, including DEAD ones -- rows whose
+			// document digest is not the catalog's, so the edge could
+			// never dispatch to them and `status` never shows their
+			// build at all (only the reachable row's). An operator who
+			// copied `-candidate-build` from `status`'s own output got
+			// refused with "somebody has repointed it since you looked"
+			// for a row they were never shown and never asked about.
+			// Scoped to the row `status` would actually report: the one
+			// whose document digest matches the catalog's for this
+			// operation. A dead row is still eligible to be disabled --
+			// just never guarded against a build nobody could have
+			// compared it to.
+			isCatalogRow := row.documentDigest == request.DocumentDigest[operation]
+			if isCatalogRow && request.ExpectedCandidateBuild != "" && row.candidateBuild != request.ExpectedCandidateBuild {
 				guardProblems = append(guardProblems, fmt.Sprintf(
 					"%s (document digest %s) points at %s, not the %s you named -- somebody has repointed it since you looked; re-run `status` and decide again",
 					operation, row.documentDigest, row.candidateBuild, request.ExpectedCandidateBuild))
 				continue
 			}
 			changes = append(changes, DisableChange{
-				Operation:      operation,
-				DocumentDigest: row.documentDigest,
-				CurrentMode:    row.mode,
-				NewMode:        request.NewMode,
-				CandidateBuild: row.candidateBuild,
+				Operation:          operation,
+				DocumentDigest:     row.documentDigest,
+				CurrentMode:        row.mode,
+				NewMode:            request.NewMode,
+				CandidateBuild:     row.candidateBuild,
+				StaleSchemaDigests: staleDigests[operation],
 			})
 		}
 	}
 	if len(guardProblems) > 0 {
 		return nil, fmt.Errorf("%w: %v", ErrDisableGuardMismatch, guardProblems)
 	}
+	if len(staleOnlyProblems) > 0 {
+		return nil, fmt.Errorf("%w: %v -- there is no flag on this verb to select which digest to act against (CHAOS-5566); rebuild this binary from the deployed revision and re-run", ErrDisableStaleDigestOnly, staleOnlyProblems)
+	}
 	if !request.Apply {
 		return changes, nil
 	}
 
 	now := time.Now().UTC()
-	var guard any
-	if request.ExpectedCandidateBuild != "" {
-		guard = request.ExpectedCandidateBuild
-	}
 	for index := range changes {
 		change := &changes[index]
 		// No row means nothing to turn off. Never an INSERT: turning
@@ -252,17 +350,32 @@ func Disable(ctx context.Context, pool *pgxpool.Pool, request DisableRequest) ([
 		if change.CurrentMode == "" {
 			continue
 		}
-		tag, err := tx.Exec(ctx, disableRoutingRowSQL,
-			request.SchemaDigest, change.DocumentDigest, change.Operation,
-			request.NewMode, request.ReviewEvidence, guard, request.RecordedBy, now)
-		if err != nil {
-			return nil, fmt.Errorf("goapiproof: disable %s: %w", change.Operation, err)
+		// r6 F3(c) (reproduced): the WRITE-time guard, matching the plan-
+		// time one above -- applied ONLY to the row `status` would report
+		// (the catalog's document digest for this operation). A dead row
+		// (different document digest) is written UNGUARDED: it was never
+		// checked against -candidate-build at plan time either, so
+		// holding its write to that same guard would refuse a write the
+		// plan already promised, on a build nobody compared it to.
+		var guard any
+		if request.ExpectedCandidateBuild != "" && change.DocumentDigest == request.DocumentDigest[change.Operation] {
+			guard = request.ExpectedCandidateBuild
 		}
-		if tag.RowsAffected() == 0 {
-			// Only reachable with the guard on: the row moved between the
-			// read and the write. Reported by omission from the applied
-			// set -- never as a silent success.
-			continue
+		// r6 T1 (reproduced): this used to check `tag.RowsAffected() == 0`
+		// and skip marking the row Applied, with a comment describing a
+		// row "repointed between the read and the write". That race is
+		// now IMPOSSIBLE: the r2 R2-08 `FOR UPDATE` plan read above locks
+		// every targeted row continuously from the read through this
+		// exact write, and the guard is now checked at PLAN time too
+		// (`isCatalogRow` above refuses a mismatch before this loop ever
+		// runs) -- so nothing can move a row, or make this guarded UPDATE
+		// miss, between the plan and this write. Dead code removed rather
+		// than left as unreachable defensive dressing around a comment
+		// that described a scenario which cannot occur.
+		if _, err := tx.Exec(ctx, disableRoutingRowSQL,
+			request.SchemaDigest, change.DocumentDigest, change.Operation,
+			request.NewMode, request.ReviewEvidence, guard, request.RecordedBy, now); err != nil {
+			return nil, fmt.Errorf("goapiproof: disable %s: %w", change.Operation, err)
 		}
 		change.Applied = true
 	}

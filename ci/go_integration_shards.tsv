@@ -190,7 +190,15 @@ cmd/dev-health-workerctl	13
 # `status` discarding the deployed registry's per-operation document
 # digest). Re-measured, whole package, -count=1: 31.975s. Still comfortably
 # inside the existing 45 weight; not raised.
-cmd/go-api-routing	45
+#
+# opus r6 fix round (2026-09-11): TEN more Testcontainers-backed tests
+# added across F1-F5/T1/observability (a deterministic deadlock repro,
+# an empty-registry write-verb refusal pair, a dead-rows guard test, a
+# stale-digest refusal, a classification-vs-database-error separation, a
+# genuine server-side-failure exit-code test, and an endpoint/per-row-log
+# test, among others). Re-measured, whole package, -count=1, twice:
+# 57.222s and 54.166s. Raised 45 -> 70 for CI headroom.
+cmd/go-api-routing	70
 cmd/query-api	110
 cmd/query-api/internal/analytics	22
 # cmd/query-api/internal/featureflags (CHAOS-5523, 2026-09-09): TWO

@@ -62,6 +62,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
@@ -142,6 +143,40 @@ func refuse(format string, args ...any) error {
 
 func internal(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{errInternal}, args...)...)
+}
+
+// classifyWriteError distinguishes a genuine INTERNAL database failure --
+// a deadlock (SQLSTATE 40P01, see F1's own reproduction), a commit
+// failure, any other unclassified error the SERVER itself raised inside
+// an already-open transaction -- from an operator-actionable refusal.
+//
+// r6 F4 (reproduced): before this fix EVERY error out of
+// goapiproof.Enable/Repoint/Disable's write path exited 2, exactly like
+// an ordinary "-mode is required" typo -- so a script reading "2 means
+// fix your input" could not tell a deadlock, a commit failure or a Go
+// panic (which exits 2 by the RUNTIME's own default, not 1) from a
+// missing flag. The documented contract (this package's own doc comment,
+// and docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md)
+// is "1 for a crash" -- this is what makes that true for the one class of
+// crash this binary can actually distinguish: an error the POSTGRES
+// SERVER raised (`*pgconn.PgError`) reaching here from inside a
+// transaction that had already passed every preflight. A hand-authored
+// refusal (a guard mismatch, a RowsAffected()==0 check, a validation
+// error) is never wrapped in a *pgconn.PgError, so it is untouched by
+// this and keeps its exit 2.
+//
+// Deliberately NOT applied to connectPostgres's own errors (a malformed
+// DSN, a dead connection dial): those are operator-fixable by design
+// (r2 R2-01/R2-02) and stay refusals.
+func classifyWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return internal("%v", err)
+	}
+	return refuse("%v", err)
 }
 
 func run(argv []string) error {
@@ -293,6 +328,52 @@ func (c *commonFlags) resolvePostgresURI() {
 	if c.postgresURI == "" {
 		c.postgresURI = strings.TrimSpace(os.Getenv(postgresURIEnvVar))
 	}
+}
+
+// queryAPIURLEnvVar is the base-URL fallback Python's `go_api_cli.py`
+// reads (`_query_api_url`, `GO_API_QUERY_API_URL`) when no
+// `--query-api-url` flag is given -- ONE base URL serving BOTH of its
+// reads (/registry and /buildinfo). Named so usage text and refusals can
+// name the variable.
+const queryAPIURLEnvVar = "GO_API_QUERY_API_URL"
+
+// resolveEndpointURL answers ONE of query-api's two routes: the explicit
+// flag if the operator set one, otherwise queryAPIURLEnvVar with path
+// appended, otherwise "nothing is configured at all" (ok == false).
+//
+// r6 P2 (reproduced): `-registry-url` and `-buildinfo-url` used to
+// default to a HARDCODED `http://localhost:8090/...`, INDEPENDENTLY of
+// each other -- so an operator who forgot just ONE of the two flags
+// silently sent that half of the preflight, and for `-buildinfo-url`
+// specifically the effective-principal envelope too, to whatever
+// happened to be listening on localhost:8090 (a port-forward to another
+// environment, a stray local process, or on a shared host any
+// unprivileged process bound to 127.0.0.1:8090) rather than refusing.
+// Python's identical CLI has ONE `--query-api-url` (or
+// GO_API_QUERY_API_URL) serving BOTH reads and NO default at all --
+// unset, it refuses outright.
+//
+// Executed: two stub query-apis, one at the URL GO_API_QUERY_API_URL
+// named (build aaaa...), one answering on the OLD hardcoded default
+// (build cccc..., nothing "deployed" there). `enable` with no URL flags
+// at all wrote `flowMatrix|cccc...`, mode=canary, exit=0 -- the row named
+// a build the deployed process never ran, and the 8090 stub's log showed
+// the effective-principal envelope reached IT (`/buildinfo auth=yes`),
+// not the process GO_API_QUERY_API_URL pointed at.
+//
+// Deriving BOTH routes from the SAME env-var base closes the silent-
+// default half of this: the only way the two can still diverge is an
+// operator EXPLICITLY naming two different URLs on the command line,
+// which is a deliberate override an operator chose, not a default
+// nobody chose.
+func resolveEndpointURL(explicit, path string) (resolved string, ok bool) {
+	if explicit != "" {
+		return explicit, true
+	}
+	if base := strings.TrimSpace(os.Getenv(queryAPIURLEnvVar)); base != "" {
+		return strings.TrimRight(base, "/") + path, true
+	}
+	return "", false
 }
 
 // stdout and stderr are where this command writes.

@@ -69,6 +69,13 @@ type statusReportOperation struct {
 	// not tell" field on this report (see the type's own doc comment):
 	// nil is UNKNOWN, not a silent true.
 	Reachable *bool `json:"reachable"`
+	// ReachableReason names WHY, whenever Reachable is not true (r6
+	// observability (6), team-lead ruling): a JSON consumer reading
+	// `reachable: false` or `null` had to cross-reference DigestState,
+	// DeployedDigestState and PlanesAgree by hand to learn which of them
+	// is the actual cause. nil when Reachable is true -- a healthy row
+	// needs no explanation.
+	ReachableReason *string `json:"reachable_reason"`
 
 	// DeployedDigestState and DeployedDocumentDigest report what the
 	// RUNNING go plane's own /registry says about this operation, cross-
@@ -94,7 +101,7 @@ func runStatus(argv []string) error {
 	var common commonFlags
 	var registryURL string
 	var asJSON bool
-	set.StringVar(&registryURL, "registry-url", "http://localhost:8090/registry", "GET /registry on the DEPLOYED query-api. Unreachable is REPORTED, never fatal")
+	set.StringVar(&registryURL, "registry-url", "", "GET /registry on the DEPLOYED query-api. Unreachable is REPORTED, never fatal (falls back to "+queryAPIURLEnvVar+"+\"/registry\")")
 	common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state. Unreachable is REPORTED, never fatal")
 	set.StringVar(&common.catalogPath, "catalog", goapiproof.DefaultCatalogPath, "the edge's registered-document catalog")
 	set.BoolVar(&asJSON, "json", false, "emit machine-readable JSON instead of the text table")
@@ -110,13 +117,23 @@ func runStatus(argv []string) error {
 	// printed in full by `flag`'s usage text, and this one is a DSN with a
 	// password in it.
 	common.resolvePostgresURI()
-	// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query or
-	// a fragment is printed verbatim by any transport error downstream.
-	// The REBUILT value is what is used from here on.
-	if sanitized, err := sanitizeEndpointURL("-registry-url", registryURL); err != nil {
-		return err
-	} else {
-		registryURL = sanitized
+	// r6 P2 (reproduced): `-registry-url` used to default to a HARDCODED
+	// `http://localhost:8090/registry` -- an operator who never
+	// configured this at all got a silent probe of whatever happened to
+	// answer there, rather than the honest "nobody told me" this
+	// diagnostic can afford to print (status never refuses). Parity with
+	// Python's `status`, which also never refuses on a missing URL --
+	// see resolveEndpointURL's doc comment (main.go).
+	registryURLResolved, haveRegistryURL := resolveEndpointURL(registryURL, "/registry")
+	if haveRegistryURL {
+		// codex r3 SEC-01 / r4 CRED-01: a URL carrying userinfo, a query
+		// or a fragment is printed verbatim by any transport error
+		// downstream. The REBUILT value is what is used from here on.
+		if sanitized, err := sanitizeEndpointURL("-registry-url", registryURLResolved); err != nil {
+			return err
+		} else {
+			registryURL = sanitized
+		}
 	}
 
 	ctx := context.Background()
@@ -155,7 +172,13 @@ func runStatus(argv []string) error {
 	// is now threaded into the per-operation report below so it can say
 	// the same thing `enable` would.
 	var deployedDigests map[string]string
-	if registry, err := goapiproof.FetchRegistry(ctx, httpClient(common.timeout), registryURL); err != nil {
+	if !haveRegistryURL {
+		// Parity with Python's `status`: no HTTP attempt at all when
+		// nothing names an endpoint (no probing whatever happens to
+		// answer on a hardcoded default), and the SAME sentence Python's
+		// own `go_error` fallback uses.
+		report.GoPlaneError = stringPtr("no -registry-url and " + queryAPIURLEnvVar + " is unset")
+	} else if registry, err := goapiproof.FetchRegistry(ctx, httpClient(common.timeout), registryURL); err != nil {
 		report.GoPlaneError = stringPtr(err.Error())
 	} else {
 		report.GoPlaneSchemaDigest = stringPtr(registry.SchemaDigest)
@@ -388,16 +411,34 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 	// Order matters: an unreachable go plane is checked FIRST, because it
 	// makes the schema comparison itself impossible to have made (nothing
 	// downstream of "we could not even ask" gets to claim a known state).
+	// r6 F3(a) (reproduced): with the go plane down, EVERY row -- including
+	// a `pr` with no row at all (MISSING) -- reported `reachable: null`.
+	// That is wrong for a row this binary's OWN classification already
+	// knows is unreachable regardless of what the go plane says: a
+	// MISSING/STALE row, or one sitting in mode python/disabled/shadow,
+	// cannot become reachable no matter how the deployed plane answers.
+	// `!localReachable` is therefore checked FIRST -- a known false stays
+	// false even when the deployed plane's own agreement is unknown.
+	// Python reports `false` here, never `null`.
 	localReachable := status.Reachable()
 	switch {
+	case !localReachable:
+		reported.Reachable = boolPtr(false)
+		reported.ReachableReason = stringPtr(fmt.Sprintf("this row's own digest_state/mode (%s) is not a live, dispatchable row", status.DigestState))
 	case goPlaneUnreachable:
 		reported.Reachable = nil
+		reported.ReachableReason = stringPtr("the go plane could not be reached, so deployed agreement is genuinely unknown")
 	case schemaMismatch:
 		reported.Reachable = boolPtr(false)
-	case reported.DeployedDigestState == "MISMATCH" || reported.DeployedDigestState == "UNREGISTERED":
+		reported.ReachableReason = stringPtr("the two planes disagree on the SCHEMA digest -- enable's preflight 2 would refuse before ever checking this operation")
+	case reported.DeployedDigestState == "MISMATCH":
 		reported.Reachable = boolPtr(false)
+		reported.ReachableReason = stringPtr("the deployed plane registers this operation under a DIFFERENT document digest than the catalog's -- enable's preflight 3 would refuse it")
+	case reported.DeployedDigestState == "UNREGISTERED":
+		reported.Reachable = boolPtr(false)
+		reported.ReachableReason = stringPtr("the deployed plane does not register this operation at all -- enable's preflight 3 would refuse it")
 	default:
-		reported.Reachable = boolPtr(localReachable)
+		reported.Reachable = boolPtr(true)
 	}
 	if status.DigestState != goapiproof.DigestMatch {
 		return reported

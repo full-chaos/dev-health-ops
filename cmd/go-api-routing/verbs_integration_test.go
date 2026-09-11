@@ -824,6 +824,32 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 		t.Fatalf("reachable must be false (known, not unknown) under a schema mismatch, got %v", schemaOperation.Reachable)
 	}
 
+	// r6 T1 (M19, unpinned before this fix): the TEXT report's PROOF
+	// column must degrade to MISMATCH under a schema-level disagreement
+	// too -- not only a per-operation document-digest one -- even though
+	// DeployedDigestState reads AGREE (the per-operation digest itself
+	// still matches; only the SCHEMA disagrees). A mutant dropping
+	// `|| schemaMismatch` from that column's condition would print "ok"
+	// under a `[MISMATCH]` banner with nothing here to catch it.
+	schemaTextOut, _, err := captureVerb(t, "status", "-registry-url", mismatchedServer.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	if !strings.Contains(schemaTextOut, "[MISMATCH]") {
+		t.Fatalf("the top-of-report schema banner must say MISMATCH:\n%s", schemaTextOut)
+	}
+	for _, line := range strings.Split(schemaTextOut, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), verbTestOperation) {
+			if strings.Contains(line, "ok") {
+				t.Fatalf("the PROOF column must not print 'ok' under a schema-level disagreement:\n%s", schemaTextOut)
+			}
+			if !strings.Contains(line, "MISMATCH") {
+				t.Fatalf("the PROOF column must print MISMATCH under a schema-level disagreement:\n%s", schemaTextOut)
+			}
+			break
+		}
+	}
+
 	// --- Down: the go plane cannot be reached at all.
 	downServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -846,5 +872,386 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 	healthyOperation := findOperation(t, healthyJSONOut)
 	if healthyOperation.Reachable == nil || !*healthyOperation.Reachable {
 		t.Fatalf("control: a genuinely healthy, agreeing deployment must report reachable=true, got %v", healthyOperation.Reachable)
+	}
+}
+
+// r6 P2 (reproduced): `enable` used to default `-registry-url` and
+// `-buildinfo-url` INDEPENDENTLY to a hardcoded `http://localhost:8090/
+// ...` each -- so with neither flag given, it silently probed whatever
+// happened to answer there instead of refusing, and if the two flags
+// were given inconsistently it could write a row naming a DIFFERENT
+// process's build than the one its preflights checked. This proves the
+// fix's actual contract end to end: with ONLY GO_API_QUERY_API_URL set
+// (no -registry-url, no -buildinfo-url at all), BOTH routes resolve to
+// the SAME real process, and the row it writes names THAT process's
+// build.
+func TestEnableDerivesBothEndpointsFromTheEnvVarAloneNoFlags(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "7777777777777777777777777777777777777777777777777777777777777777"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+	t.Setenv("GO_API_QUERY_API_URL", server.URL)
+
+	_, _, err := captureVerb(t,
+		"enable",
+		"-operations", verbTestOperation,
+		"-mode", "canary",
+		// Deliberately NO -registry-url, NO -buildinfo-url.
+		"-postgres-uri", dsn,
+		"-catalog", catalogPath,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "r6 P2 killer: env-var-only endpoint resolution",
+		"-acknowledge-unproven",
+	)
+	if err != nil {
+		t.Fatalf("enable with only GO_API_QUERY_API_URL set must succeed: %v", err)
+	}
+	var mode, build string
+	if err := queryRow(t, dsn, `SELECT mode, current_candidate_build FROM go_api_routing_state`, &mode, &build); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "canary" || build != verbTestBuild {
+		t.Fatalf("row = mode=%q build=%q, want mode=canary build=%q -- the env-derived endpoints must both point at the SAME process", mode, build, verbTestBuild)
+	}
+}
+
+// The write-verb refusal, at the real call site: no flags, no env var.
+func TestEnableRefusesWithNoQueryAPIURLConfiguredAtAllRealBinary(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "8888888888888888888888888888888888888888888888888888888888888886"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	t.Setenv("GO_API_QUERY_API_URL", "")
+
+	_, _, err := captureVerb(t,
+		"enable",
+		"-operations", verbTestOperation,
+		"-mode", "canary",
+		"-postgres-uri", dsn,
+		"-catalog", catalogPath,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "r6 P2 killer: no endpoint configured at all",
+	)
+	if err == nil {
+		t.Fatal("enable with no query-api URL configured at all must refuse, not silently probe a hardcoded default")
+	}
+	if !strings.Contains(err.Error(), "no query-api URL") {
+		t.Fatalf("refused for a different reason: %v", err)
+	}
+	assertNoRows(t, dsn)
+}
+
+// r6 F2 (reproduced, team-lead ruling: REFUSE, not warn): `disable`
+// computes its schema digest from THIS BINARY's own embedded SDL and
+// never checked whether a named operation has a row at any OTHER digest
+// -- so a stale checkout (built from an operator's own tree, not the
+// deployed image -- see disable.go's own package comment) silently
+// reported `applied: 0`, exit 0, while the real row, at the digest the
+// deployed process actually uses, sat completely untouched. Fixed by
+// REFUSING outright (exit 2) rather than merely warning, both dry-run
+// and -apply, naming the digest(s) the row actually lives at.
+func TestDisableRefusesWhenAnOperationOnlyHasRowsAtOtherSchemaDigests(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	staleDigest := "sha256:" + strings.Repeat("9", 64) // deliberately NOT this binary's own digest
+	digest := "1111111111111111111111111111111111111111111111111111111111111111"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		staleDigest, digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed candidate build at the stale digest: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded at a stale digest', 'test')`,
+		staleDigest, digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed routing row at the stale digest: %v", err)
+	}
+
+	_, _, err := captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath)
+	if err == nil {
+		t.Fatal("disable must refuse (not silently no-op) when the named operation has rows ONLY at another schema digest")
+	}
+	if exitCodeFor(err) != 2 {
+		t.Fatalf("exit %d, want 2 -- this is operator-actionable, not a crash", exitCodeFor(err))
+	}
+	if !strings.Contains(err.Error(), staleDigest) {
+		t.Fatalf("the stale digest must be named in the refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "CHAOS-5566") {
+		t.Fatalf("the digest-selector gap ticket must be cited: %v", err)
+	}
+
+	// -apply refuses identically, BEFORE anything is written.
+	_, _, err = captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python", "-postgres-uri", dsn, "-catalog", catalogPath,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r6 F2 killer")
+	if err == nil {
+		t.Fatal("disable -apply must refuse identically")
+	}
+	if exitCodeFor(err) != 2 {
+		t.Fatalf("exit %d, want 2", exitCodeFor(err))
+	}
+
+	var mode string
+	if err := queryRow(t, dsn, `SELECT mode FROM go_api_routing_state`, &mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "canary" {
+		t.Fatalf("the stale-digest row must be genuinely untouched: mode = %q, want canary", mode)
+	}
+}
+
+// r6 F3(c) (reproduced): the `-candidate-build` guard used to check
+// EVERY row at the live schema digest, including DEAD ones (a document
+// digest the catalog does not carry) -- rows `status` never shows a
+// build for at all. An operator who copied `-candidate-build` from
+// `status`'s own output was refused with "somebody has repointed it
+// since you looked" for a row they were never shown and never asked
+// about.
+func TestDisableCandidateBuildGuardIgnoresDeadRows(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	liveDigest := "2222222222222222222222222222222222222222222222222222222222222222"
+	deadDigest := "3333333333333333333333333333333333333333333333333333333333333333" // NOT in the catalog
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: liveDigest})
+	const liveBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const deadBuild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // status never shows this one
+
+	for _, row := range []struct{ digest, build string }{
+		{liveDigest, liveBuild},
+		{deadDigest, deadBuild},
+	} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+			VALUES ($1, $2, $3, $4)`,
+			localSchemaDigest(), row.digest, verbTestOperation, row.build); err != nil {
+			t.Fatalf("seed candidate build (%s): %v", row.digest, err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.go_api_routing_state
+				(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+			VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded', 'test')`,
+			localSchemaDigest(), row.digest, verbTestOperation, row.build); err != nil {
+			t.Fatalf("seed routing row (%s): %v", row.digest, err)
+		}
+	}
+
+	// Guarded by the LIVE row's build only -- must succeed even though a
+	// DEAD row exists with a completely different build.
+	out, _, err := captureVerb(t, "disable",
+		"-operations", verbTestOperation, "-mode", "python",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-candidate-build", liveBuild,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "r6 F3(c) killer",
+	)
+	if err != nil {
+		t.Fatalf("the guard must not fire on a DEAD row's unrelated build: %v", err)
+	}
+	if !strings.Contains(out, "applied: 2 row(s)") {
+		t.Fatalf("both the live and the dead row must still be disabled (unguarded, always eligible): %s", out)
+	}
+
+	rows, err := pool.Query(ctx, `SELECT document_digest, mode FROM go_api_routing_state WHERE selected_operation = $1 ORDER BY document_digest`, verbTestOperation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var digest, mode string
+		if err := rows.Scan(&digest, &mode); err != nil {
+			t.Fatal(err)
+		}
+		if mode != "python" {
+			t.Fatalf("row at document digest %s = mode %q, want python (disabled)", digest, mode)
+		}
+		count++
+	}
+	if count != 2 {
+		t.Fatalf("expected both rows disabled, found %d", count)
+	}
+}
+
+// r6 T1 (M21, unpinned before this fix): a classification failure
+// (`RoutingStatusRows`) must file into `ClassificationError`, NEVER into
+// `RegistryDBError` -- the census (`CountRowsBySchemaDigest`) reads only
+// `go_api_routing_state` and can succeed on its own even when the
+// per-operation classification (which also needs `go_api_proof_run`)
+// cannot. A mutant that misfiles the classification error as a database
+// error would suppress the (successful) census silently -- exactly r2
+// R2-04's own defect, reintroduced.
+func TestStatusFilesAClassificationFailureSeparatelyFromADatabaseFailure(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	digest := "4444444444444444444444444444444444444444444444444444444444444445"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	ctx := context.Background()
+
+	// A real row, so the census has something to count.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded', 'test')`,
+		localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed routing row: %v", err)
+	}
+
+	// Break ONLY the per-operation classification's own dependency --
+	// the census's query never touches go_api_proof_run at all.
+	if _, err := pool.Exec(ctx, `DROP TABLE public.go_api_proof_run`); err != nil {
+		t.Fatalf("drop go_api_proof_run: %v", err)
+	}
+
+	jsonOut, _, err := captureVerb(t, "status", "-postgres-uri", dsn, "-catalog", catalogPath, "-json")
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	var report struct {
+		RegistryDBError     *string        `json:"registry_db_error"`
+		ClassificationError *string        `json:"classification_error"`
+		RowsBySchemaDigest  map[string]int `json:"rows_by_schema_digest"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &report); err != nil {
+		t.Fatalf("decode status -json: %v\n%s", err, jsonOut)
+	}
+	if report.RegistryDBError != nil {
+		t.Fatalf("the CENSUS query never touches go_api_proof_run and must still succeed: registry_db_error = %q", *report.RegistryDBError)
+	}
+	if len(report.RowsBySchemaDigest) == 0 {
+		t.Fatalf("the census must be populated and printed: %+v", report.RowsBySchemaDigest)
+	}
+	if report.ClassificationError == nil {
+		t.Fatal("the classification failure (go_api_proof_run missing) must be reported in ITS OWN field")
+	}
+
+	textOut, _, err := captureVerb(t, "status", "-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	if !strings.Contains(textOut, "per-operation classification: UNAVAILABLE") {
+		t.Fatalf("text report must name the classification failure, not print a blanket 'registry database: UNREACHABLE':\n%s", textOut)
+	}
+	if strings.Contains(textOut, "registry database          : UNREACHABLE") {
+		t.Fatalf("the census succeeded and must not be reported as an unreachable database:\n%s", textOut)
+	}
+}
+
+// r6 F4 (reproduced): a genuine server-side write failure -- here a
+// synthetic trigger, opus's own repro shape -- must exit 1, not 2. Before
+// this fix EVERY error out of Enable's write path exited 2, indistinguishable
+// from an ordinary "-mode is required" typo.
+func TestEnableExitsOneOnAGenuineServerSideWriteFailure(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	digest := "9999999999999999999999999999999999999999999999999999999999999998"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	if _, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION test_r6_f4_write_failure() RETURNS trigger AS $$
+		BEGIN
+			RAISE EXCEPTION 'r6 F4 synthetic write failure';
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER test_r6_f4_write_failure BEFORE INSERT ON go_api_routing_state
+			FOR EACH ROW EXECUTE FUNCTION test_r6_f4_write_failure();
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	if err == nil {
+		t.Fatal("enable must refuse when the database itself raises inside the write")
+	}
+	if !strings.Contains(err.Error(), "r6 F4 synthetic write failure") {
+		t.Fatalf("refused for a different reason: %v", err)
+	}
+	if got := exitCodeFor(err); got != 1 {
+		t.Fatalf("exit %d, want 1 -- a genuine server-side failure is a CRASH, not an ordinary operator-actionable refusal", got)
+	}
+}
+
+// r6 observability (1)/(2)/(5) (team-lead ruling): enable and repoint
+// must print which endpoint they consulted on success, and emit one
+// structured per-row line naming BEFORE-and-AFTER mode/build -- the same
+// shape disable's own `go_api_routing.disabled` line already had.
+func TestEnableAndRepointEmitEndpointAndPerRowStructuredLines(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "6666666666666666666666666666666666666666666666666666666666666667"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	enableOut, enableErrOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if !strings.Contains(enableOut, "go-api-routing: registry=") || !strings.Contains(enableOut, "buildinfo=") {
+		t.Fatalf("enable must print which endpoint it consulted:\n%s", enableOut)
+	}
+	if !strings.Contains(enableErrOut, "go_api_routing.enabled operation="+verbTestOperation) ||
+		!strings.Contains(enableErrOut, "mode_before=(no row)") ||
+		!strings.Contains(enableErrOut, "mode_after=canary") {
+		t.Fatalf("enable must emit a structured before/after line:\n%s", enableErrOut)
+	}
+
+	_, repointErrOut, err := captureVerb(t, "repoint",
+		"-registry-url", server.URL+"/registry",
+		"-buildinfo-url", server.URL+"/buildinfo",
+		"-postgres-uri", dsn,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "r6 observability killer",
+		"-expect-build", verbTestBuild,
+	)
+	if err != nil {
+		t.Fatalf("repoint: %v", err)
+	}
+	// The seeded row already names verbTestBuild (enable wrote it above),
+	// so repoint has nothing to CHANGE -- confirming the per-row line
+	// fires only on an actual change, matching disable's own convention.
+	if strings.Contains(repointErrOut, "go_api_routing.repointed") {
+		t.Fatalf("an UNCHANGED row must not emit a per-row line:\n%s", repointErrOut)
+	}
+
+	// Force an actual repoint by pointing -buildinfo-url at a fresh stub
+	// reporting a DIFFERENT build -- -registry-url stays the original
+	// server, so the schema-agreement preflight still passes.
+	movedBuild := "cccccccccccccccccccccccccccccccccccccccc"
+	buildinfoOnly := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writeJSON(t, w, map[string]any{"commit": movedBuild, "modified": false})
+	}))
+	t.Cleanup(buildinfoOnly.Close)
+
+	repointOut, repointErrOut2, err := captureVerb(t, "repoint",
+		"-registry-url", server.URL+"/registry",
+		"-buildinfo-url", buildinfoOnly.URL,
+		"-postgres-uri", dsn,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "r6 observability killer 2",
+	)
+	if err != nil {
+		t.Fatalf("repoint: %v", err)
+	}
+	if !strings.Contains(repointOut, "go-api-routing: registry=") || !strings.Contains(repointOut, "buildinfo=") {
+		t.Fatalf("repoint must print which endpoint it consulted:\n%s", repointOut)
+	}
+	if !strings.Contains(repointErrOut2, "go_api_routing.repointed operation="+verbTestOperation) ||
+		!strings.Contains(repointErrOut2, "build_before="+verbTestBuild) ||
+		!strings.Contains(repointErrOut2, "build_after="+movedBuild) {
+		t.Fatalf("repoint must emit a structured before/after line once a row actually changed:\n%s", repointErrOut2)
 	}
 }

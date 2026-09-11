@@ -978,3 +978,53 @@ func TestTheSharedReadReturnsRowsInTheirFullIdentityOrder(t *testing.T) {
 		})
 	}
 }
+
+// r6 T1 (M43, unpinned before this fix): the same class as r2's M29
+// (routing_repoint_integration_test.go's mode-drift trigger) at Enable's
+// OWN call site. A BEFORE INSERT trigger that swallows the routing-row
+// write (RowsAffected() == 0) must refuse the whole enable, leaving NO
+// orphan candidate-build row committed -- not silently report
+// "enabled total=1" while zero routing rows and one orphan candidate
+// build land, which is exactly the CHAOS-5416 silent-success shape.
+func TestEnableRefusesWhenTheRoutingRowWriteIsSwallowed(t *testing.T) {
+	ctx := t.Context()
+	pool := startRegistryPostgres(t)
+
+	if _, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION test_swallow_insert() RETURNS trigger AS $$
+		BEGIN
+			RETURN NULL; -- BEFORE INSERT returning NULL skips the row entirely
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER test_swallow_insert BEFORE INSERT ON go_api_routing_state
+			FOR EACH ROW EXECUTE FUNCTION test_swallow_insert();
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	request := enableRequest("featureFlags")
+	request.AcknowledgeUnproven = true
+	_, err := Enable(ctx, pool, request)
+	if err == nil {
+		t.Fatal("Enable must refuse when the routing-row write affected 0 rows -- CHAOS-5416's exact silent-success shape")
+	}
+	if !strings.Contains(err.Error(), "affected 0 rows") {
+		t.Fatalf("refused for a different reason, so the RowsAffected() check is not what caught it: %v", err)
+	}
+
+	// The candidate-build insert happens FIRST in the same transaction --
+	// the refusal must roll it back too, leaving no orphan.
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_candidate_build`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("candidate_build rows = %d, want 0 -- the whole transaction must roll back, not leave an orphan build registered for a rollout that never happened", count)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("routing_state rows = %d, want 0", count)
+	}
+}

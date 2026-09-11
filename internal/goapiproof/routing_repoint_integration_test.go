@@ -7,7 +7,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -304,5 +306,143 @@ func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mode changed") {
 		t.Fatalf("refused for a different reason, so the mode-drift assertion is not what caught it: %v", err)
+	}
+}
+
+// r6 P3 (reproduced): `enable` and `repoint` acquire the routing-state
+// row lock and the candidate-build row lock in OPPOSITE orders (see
+// routing_enable.go's package-level comment, corrected by this same
+// change) -- CB then RS in `enable`, RS (a FOR UPDATE pre-lock, up
+// front) then CB in `repoint`. Two transactions locking the same pair of
+// resources in opposite orders is the textbook shape of a deadlock, not
+// something that avoids one.
+//
+// This drives the EXACT statements Enable/Repoint execute (the same SQL
+// constants, same argument shapes), stepped through an explicit,
+// channel-synchronised interleaving -- deterministic, not a race against
+// real HTTP/subprocess timing the way two live binaries racing each
+// other would be. It exists to PIN the current, documented, deferred
+// defect (CHAOS-5507's actual fix is a separate PR) so a regression that
+// makes this WORSE -- data corruption instead of a clean rollback -- has
+// something to fail.
+func TestEnableAndRepointLockOrderInversionDeadlocks(t *testing.T) {
+	ctx := t.Context()
+	pool := startRegistryPostgres(t)
+	const operation = "flowMatrix"
+	const buildA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const buildB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	seedRow(t, ctx, operation, testDocumentDigest, "canary", buildA, pool)
+
+	repointTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin repoint side: %v", err)
+	}
+	defer func() { _ = repointTx.Rollback(ctx) }()
+	enableTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin enable side: %v", err)
+	}
+	defer func() { _ = enableTx.Rollback(ctx) }()
+
+	// Step 1: repoint's RS pre-lock lands FIRST -- exactly
+	// selectRepointCandidatesSQL, `FOR UPDATE`, iterated to completion so
+	// the lock is actually held server-side, not merely queued.
+	rows, err := repointTx.Query(ctx, selectRepointCandidatesSQL, testSchemaDigest)
+	if err != nil {
+		t.Fatalf("repoint FOR UPDATE select: %v", err)
+	}
+	rowCount := 0
+	for rows.Next() {
+		rowCount++
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("repoint FOR UPDATE select: %v", err)
+	}
+	if rowCount == 0 {
+		t.Fatal("the seeded row must be visible to repoint's own read")
+	}
+
+	// Step 2: enable's CB insert lands SECOND, for the SAME build both
+	// sides "read from /buildinfo" -- succeeds immediately (a different
+	// table, no lock held on it yet).
+	if _, err := enableTx.Exec(ctx, registerCandidateBuildSQL, testSchemaDigest, testDocumentDigest, operation, buildB); err != nil {
+		t.Fatalf("enable's candidate-build insert: %v", err)
+	}
+
+	// Step 3: BOTH sides now reach for the resource the OTHER already
+	// holds, concurrently -- repoint wants the CB row enable just locked,
+	// enable wants the RS row repoint has held since step 1. This is the
+	// cycle.
+	type outcome struct {
+		side string
+		err  error
+	}
+	results := make(chan outcome, 2)
+	go func() {
+		_, err := repointTx.Exec(ctx, registerCandidateBuildSQL, testSchemaDigest, testDocumentDigest, operation, buildB)
+		results <- outcome{"repoint", err}
+	}()
+	go func() {
+		now := time.Now().UTC()
+		_, err := enableTx.Exec(ctx, upsertRoutingStateSQL,
+			testSchemaDigest, testDocumentDigest, operation, buildB,
+			"canary", 100, "r6 F1 killer", "lane-routing-verbs", now)
+		results <- outcome{"enable", err}
+	}()
+
+	var first, second outcome
+	select {
+	case first = <-results:
+	case <-time.After(15 * time.Second):
+		t.Fatal("neither side returned within 15s -- Postgres's deadlock_timeout (default 1s) should have resolved this")
+	}
+	select {
+	case second = <-results:
+	case <-time.After(15 * time.Second):
+		t.Fatal("only one side returned within 15s of the first")
+	}
+
+	var deadlocked, survived outcome
+	switch {
+	case first.err != nil && second.err == nil:
+		deadlocked, survived = first, second
+	case second.err != nil && first.err == nil:
+		deadlocked, survived = second, first
+	default:
+		t.Fatalf("want exactly one side to fail with a deadlock and the other to succeed, got %s.err=%v %s.err=%v", first.side, first.err, second.side, second.err)
+	}
+
+	var pgErr *pgconn.PgError
+	if !errors.As(deadlocked.err, &pgErr) || pgErr.Code != "40P01" {
+		t.Fatalf("%s failed, but not with SQLSTATE 40P01 (deadlock_detected): %v", deadlocked.side, deadlocked.err)
+	}
+	t.Logf("%s deadlocked (SQLSTATE 40P01) as expected; %s survived", deadlocked.side, survived.side)
+
+	// Roll back the deadlocked side (Postgres already aborted it -- this
+	// just releases pgx's client-side tracking) and commit the survivor,
+	// then verify the DB is left CONSISTENT, not half-written: exactly
+	// the survivor's write landed, nothing orphaned.
+	if deadlocked.side == "repoint" {
+		_ = repointTx.Rollback(ctx)
+		if err := enableTx.Commit(ctx); err != nil {
+			t.Fatalf("commit the survivor (enable): %v", err)
+		}
+	} else {
+		_ = enableTx.Rollback(ctx)
+		if err := repointTx.Commit(ctx); err != nil {
+			t.Fatalf("commit the survivor (repoint): %v", err)
+		}
+	}
+
+	var mode, build string
+	if err := pool.QueryRow(ctx, `SELECT mode, current_candidate_build FROM go_api_routing_state WHERE selected_operation = $1`, operation).Scan(&mode, &build); err != nil {
+		t.Fatalf("read back the row: %v", err)
+	}
+	if mode != "canary" {
+		t.Fatalf("mode = %q, want canary (neither side changes mode) -- the deadlock must not have corrupted an UNRELATED column", mode)
+	}
+	if build != buildB {
+		t.Fatalf("current_candidate_build = %q, want %q -- the survivor's write, and only the survivor's write, must be visible", build, buildB)
 	}
 }

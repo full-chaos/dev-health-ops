@@ -290,6 +290,31 @@ func TestFetchRegistryAcceptsAnEmptyRegistration(t *testing.T) {
 	}
 }
 
+// r6 F3(b) (reproduced): an ABSENT `operations` key or an explicit
+// `"operations": null` used to fall through to the SAME empty-map
+// success path an honest `"operations": []` gets -- so `status` printed
+// [AGREE] and "the deployed go plane does not register this operation at
+// all" for a response that is MALFORMED, not merely empty. Python's
+// dispatcher refuses both (`payload.get("operations")` is None for
+// either, and `isinstance(None, list)` is False); only a genuine JSON
+// array -- empty included -- is accepted.
+func TestFetchRegistryRefusesAMissingOrNullOperationsKey(t *testing.T) {
+	for name, body := range map[string]string{
+		"operations key absent entirely": `{"schema_digest":"sha256:abc"}`,
+		"operations explicitly null":     `{"schema_digest":"sha256:abc","operations":null}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(server.Close)
+			if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+				t.Fatalf("a missing or null operations key must refuse, not silently report an empty (but genuinely present) registry")
+			}
+		})
+	}
+}
+
 // r2 P1 (reproduced, CHAOS-5524 folded in per team-lead ruling): a
 // /registry response naming the same operation twice, under CONFLICTING
 // document digests, used to collapse last-wins -- whichever entry
@@ -425,6 +450,21 @@ func TestFetchRegistryAcceptsAnUnknownKey(t *testing.T) {
 // or null registry entry decoded to an empty-string operation/digest
 // with NO error, because exactStringField correctly reports the key as
 // absent, not malformed, and nothing upstream checked for absence.
+// r6 T1 (M31, noted as production-subsumed but untested at this exact
+// line): an empty `schema_digest` must refuse HERE, at the raw-decode
+// boundary, not only be caught incidentally by a write verb's preflight
+// 2 (which compares it against a local digest that is never empty).
+// `status` calls FetchRegistry directly too and has no such preflight.
+func TestFetchRegistryRefusesAnEmptySchemaDigest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"","operations":[{"operation":"flowMatrix","document_digest":"good"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+		t.Fatal("an empty schema_digest must refuse -- it is not a real digest anything computed")
+	}
+}
+
 func TestFetchRegistryRefusesAnEmptyOrNullOperationsEntry(t *testing.T) {
 	for name, body := range map[string]string{
 		"empty object entry": `{"schema_digest":"sha256:abc","operations":[

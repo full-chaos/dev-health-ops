@@ -944,3 +944,133 @@ async def test_enable_names_the_newest_admissible_receipt(
     assert row["receipt"]["receipt_id"] == str(newest), (row, newest)
     assert row["receipt"]["terminal_state"] == "mismatch", row
     assert evidence.startswith(f"proof_receipt={newest} "), evidence
+
+
+@pytest.mark.asyncio
+async def test_enable_and_the_page_select_one_receipt_when_receipts_tie(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """opus r8 P3-1: three admissible receipts at ONE observed_at. `enable`
+    orders (observed_at DESC, id); the migration page ordered by observed_at
+    alone and named another receipt for the same row. One rule for both:
+    the newest, then the lowest id -- the Go twin is the tie cell in
+    TestTheMatrixShowsTheNewestAdmissibleReceipt, with the same ids."""
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+    )
+    ids = [
+        "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        "77777777-7777-4777-8777-777777777777",
+        "00000000-0000-4000-8000-000000000000",
+    ]
+    async with session_factory() as session:
+        template = (await session.execute(sa.select(ProofRun))).scalar_one()
+        tied_at = template.observed_at
+        await session.execute(sa.delete(ProofRun))
+        for receipt_id in ids:
+            session.add(
+                ProofRun(
+                    id=uuid.UUID(receipt_id),
+                    schema_digest=template.schema_digest,
+                    document_digest=template.document_digest,
+                    selected_operation=template.selected_operation,
+                    candidate_build=template.candidate_build,
+                    request_identity=f"tie-{receipt_id[:4]}",
+                    stage=template.stage,
+                    terminal_state=template.terminal_state,
+                    observed_at=tied_at,
+                    measurement_route="edge",
+                    build_binding="per_request",
+                )
+            )
+        await session.commit()
+    out, _err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="canary", as_json=True
+    )
+    [row] = json.loads(out)["operations"]
+    assert row["receipt"]["receipt_id"] == ids[2], row
+    assert evidence.startswith(f"proof_receipt={ids[2]} "), evidence
+
+
+@pytest.mark.asyncio
+async def test_the_model_refuses_a_binding_outside_its_vocabulary(
+    session_factory: Any,
+) -> None:
+    """opus r8 P3-4(b): the ORM CheckConstraint on build_binding was pinned by
+    nothing -- the migration test covers alembic, but tables created from this
+    metadata (SQLAlchemyStore.ensure_tables; this fixture) carry the model's
+    own copy. The same vocabulary as 0129: per_request, absent, NULL."""
+    catalog = dict(catalog_entries())
+    for binding in ("per_request", "absent", None):
+        await _reset(session_factory)
+        await _seed_receipt(
+            session_factory,
+            document_digest=catalog["featureFlags"],
+            build_binding=binding,
+        )
+    await _reset(session_factory)
+    with pytest.raises(
+        sa.exc.IntegrityError, match="ck_go_api_proof_run_build_binding"
+    ):
+        await _seed_receipt(
+            session_factory,
+            document_digest=catalog["featureFlags"],
+            build_binding="run_level",
+        )
+
+
+@pytest.mark.asyncio
+async def test_enable_names_what_the_citation_covered(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """opus r8 P3-5: the admission said `(every difference cited)` whatever
+    the citation covered, so "one value differed" and "Go returned no rows"
+    (under a regression) printed alike. The writer records per-shape counts
+    in the receipt's provenance; `enable` prints them on stdout, the INFO
+    line, --json and the row's review_evidence -- in the Go writer's own
+    format, `covered[...] outside[...]`. A receipt with no such provenance
+    says so rather than printing an empty coverage."""
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+        terminal_state="mismatch",
+        baseline_defect=["CHAOS-5447"],
+        differences_outside_baseline_defect=0,
+        review_evidence=json.dumps(
+            {"covered_by_shape": {"value": 384, "null": 7}, "measurement_route": "edge"}
+        ),
+    )
+    out, err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="primary"
+    )
+    counts = "covered[null=7 value=384] outside[]"
+    line = next(x for x in out.splitlines() if x.strip().startswith("featureFlags"))
+    assert counts in line, out
+    assert counts in next(
+        x for x in err.splitlines() if "go_api_routing.enabled " in x
+    ), err
+    assert counts in evidence, evidence
+
+    await _reset(session_factory)
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+        review_evidence="an operator's words, not the writer's provenance",
+    )
+    out, _err, _evidence = await _enable_and_capture(
+        session_factory, capsys, mode="canary", as_json=True
+    )
+    [row] = json.loads(out)["operations"]
+    assert (
+        row["receipt"]["covered_by_shape"],
+        row["receipt"]["outside_by_shape"],
+    ) == (None, None), row

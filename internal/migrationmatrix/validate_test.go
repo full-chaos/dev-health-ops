@@ -381,7 +381,7 @@ func TestADocumentDriftRowIsNamedCountedAndFailsThePage(t *testing.T) {
 	if !strings.Contains(servedLine, "| yes |") || strings.Contains(servedLine, "DOCUMENT_DRIFT") {
 		t.Fatalf("the catalog's row must render as live and served; got %q", servedLine)
 	}
-	if got := DriftedLive(render.Operations, catalog); got != 1 {
+	if got := DriftedLive(render.Operations, catalog, StateDocumentDrift); got != 1 {
 		t.Fatalf("DriftedLive = %d, want 1", got)
 	}
 	if got := UnprovenReachable(render.Operations, catalog); got != 1 {
@@ -428,7 +428,7 @@ func TestALiveRowWithNoDocumentDigestIsCountedAsUnjudged(t *testing.T) {
 		t.Fatalf("UnjudgedLive = %d, want 1", got)
 	}
 	block := RenderOpsBlock(snapshot(row), catalog)
-	if !strings.Contains(block, "DOCUMENT_DRIFT cannot be judged for them: **1**") {
+	if !strings.Contains(block, "so neither can be judged for them: **1**") {
 		t.Fatalf("the unjudged count must be on the page; got:\n%s", block)
 	}
 }
@@ -823,4 +823,45 @@ func TestR14NamesTheStatusStateAndAnExecutableRemedy(t *testing.T) {
 		}
 		t.Logf("cell %-16s R14 says %q and names the full-key removal", c.row.Operation, c.state)
 	}
+
+	// opus r8 P3-3: the remedy interpolated row values unquoted, so an
+	// operation named `x' OR ''='` printed a statement that deleted EVERY
+	// routing row. Each value is now a standard SQL literal, a quote
+	// doubled. (Executed against PostgreSQL in
+	// TestTheR14RemedyDeletesExactlyItsOwnRow.)
+	quoted := liveRow(`x' OR ''='`, "primary")
+	v := ValidateDocumentDrift(snapshot(quoted), catalog)
+	if len(v) != 1 || !strings.Contains(v[0].Detail, `selected_operation = 'x'' OR ''''=''' --`) {
+		t.Fatalf("a quote in the operation must be doubled in the printed remedy, got %v", v)
+	}
+	t.Logf("cell %-16s the remedy doubles the quote: selected_operation = 'x'' OR ''''='''", "quote in a value")
+}
+
+// opus r8 P3-2: the page labelled an UNREGISTERED row DOCUMENT_DRIFT and
+// counted it as "DOCUMENT_DRIFT, as routing status reports it", while status
+// reports UNREGISTERED. The cell names the state status names, and each
+// state has its own count.
+func TestAnUnregisteredRowIsNamedAsStatusNamesIt(t *testing.T) {
+	catalog := catalogFor(t, "featureFlags")
+	drifted := liveRow("featureFlags", "primary")
+	drifted.DocumentDigest = strings.Repeat("0", 64)
+	orphan := liveRow("retiredOperation", "primary")
+	orphan.DocumentDigest = strings.Repeat("e", 64)
+	page := RenderOpsBlock(snapshot(drifted, orphan), catalog)
+	for _, want := range []string{
+		"**DOCUMENT_DRIFT** (serves document `000000000000…`, which the catalog does not name)",
+		"**UNREGISTERED** (serves document `eeeeeeeeeeee…`; the catalog does not register this operation)",
+		"(DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **1**",
+		"(UNREGISTERED, as `dev-hops go-api routing status` reports it): **1**",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the page does not contain %q:\n%s", want, page)
+		}
+	}
+	for _, line := range strings.Split(page, "\n") {
+		if strings.Contains(line, "`retiredOperation`") && strings.Contains(line, "DOCUMENT_DRIFT") {
+			t.Fatalf("the unregistered row is labelled DOCUMENT_DRIFT: %s", line)
+		}
+	}
+	t.Logf("cell DOCUMENT_DRIFT row and UNREGISTERED row: each named and counted as status names it")
 }

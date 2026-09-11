@@ -149,8 +149,9 @@ func RenderOpsBlock(render *Render, catalog Catalog) string {
 	))
 	// Always printed, zero included: a count that appears only when it is
 	// non-zero reads the same as a count nobody computed.
-	b.WriteString(fmt.Sprintf("_Live rows serving a document the operation catalog does not name, so the edge cannot dispatch them (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **%d**. Live rows with no recorded document digest, read before the reader carried it, so DOCUMENT_DRIFT cannot be judged for them: **%d**._\n\n",
-		DriftedLive(render.Operations, catalog),
+	b.WriteString(fmt.Sprintf("_Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **%d**; for an operation the catalog does not register (UNREGISTERED, as `dev-hops go-api routing status` reports it): **%d**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **%d**._\n\n",
+		DriftedLive(render.Operations, catalog, StateDocumentDrift),
+		DriftedLive(render.Operations, catalog, StateUnregistered),
 		UnjudgedLive(render.Operations),
 	))
 
@@ -177,11 +178,15 @@ func RenderOpsBlock(render *Render, catalog Catalog) string {
 
 	for _, row := range rows {
 		live := "**DEAD** (digest moved)"
-		switch {
-		case DocumentDrift(row, catalog):
+		switch DispatchState(row, catalog) {
+		case StateDocumentDrift:
 			live = "**DOCUMENT_DRIFT** (serves document `" + shortHex(row.DocumentDigest) + "`, which the catalog does not name)"
-		case row.Live:
-			live = "yes"
+		case StateUnregistered:
+			live = "**UNREGISTERED** (serves document `" + shortHex(row.DocumentDigest) + "`; the catalog does not register this operation)"
+		default:
+			if row.Live {
+				live = "yes"
+			}
 		}
 		proven := "**none**"
 		if row.Proven != NoProof {

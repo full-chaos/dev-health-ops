@@ -113,7 +113,7 @@ type Finding struct {
 // scalar. It never covers a STRUCTURAL difference -- a list of another
 // length, a container (object or list) against null or a scalar, an object
 // against a list, a key or element present on one side only -- whatever the
-// cited path (team-lead ruling on opus r7 P1-1).
+// cited path (ruling R115, on opus r7 P1-1).
 //
 // opus r7 (P1-1): before shapes existed a cited path covered EVERY finding
 // beneath it, and compareList reports a LENGTH difference at the list's own
@@ -139,9 +139,17 @@ const (
 	// ShapePresence (structural): a key, an element (by key), an error or
 	// `data` itself present on one side only.
 	ShapePresence = "presence"
-	// ShapeNonFinite: NaN or Infinity on either side -- parity rule 3's
-	// "always mismatches", reported even when both sides carry the same
-	// literal, so no Python defect can explain it. Never covered.
+	// ShapeEmptyResult (structural, R115 addendum): a leaf difference under
+	// a cited path whose CANDIDATE subtree has no non-null leaf while the
+	// baseline's has at least one -- an empty result in disguise (every
+	// field null, the right shape). Assigned by classifyBaselineDefects in
+	// place of the leaf shape the comparator gave.
+	ShapeEmptyResult = "empty_result"
+	// ShapeNonFinite: NaN or Infinity on either side. Never covered (R115):
+	// R73 forbids a non-finite value in Go output (null per field at the
+	// write boundary), so one reaching a response is a Go defect no Python
+	// baseline defect can explain; parity rule 3 also reports it even when
+	// both sides carry the same literal.
 	ShapeNonFinite = "non_finite"
 )
 
@@ -185,6 +193,13 @@ func nonFinite(value any) bool {
 type Result struct {
 	TerminalState string    `json:"terminal_state"`
 	Findings      []Finding `json:"findings"`
+	// CoveredByShape and OutsideByShape count the mismatch findings a
+	// citation covered and did not cover, by Shape (opus r8 P3-5): the
+	// receipt, the go-api-prove line and `enable` show WHAT was counted,
+	// so "one value differed" and "Go returned no rows" are not the same
+	// line. Their sums are the covered count and the outside count.
+	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
+	OutsideByShape map[string]int `json:"outside_by_shape,omitempty"`
 	// UnusedExclusions names every VolatileFields entry that matched no
 	// path in this comparison. An exclusion that excuses nothing is
 	// either stale or misspelled, and a misspelled exclusion silently
@@ -428,7 +443,14 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 	result := Result{TerminalState: terminal, Findings: findings}
 	result.UnusedExclusions = unmatched(opts.VolatileFields, track.volatile)
 	result.UnusedTierB = unmatched(opts.FloatTierB, track.tierB)
-	classifyBaselineDefects(&result, opts.BaselineDefects)
+	var baselineData, candidateData any
+	if baseline.DataPresent {
+		baselineData = baseline.Data
+	}
+	if candidate.DataPresent {
+		candidateData = candidate.Data
+	}
+	classifyBaselineDefects(&result, opts.BaselineDefects, baselineData, candidateData)
 
 	declaredOrderInsensitive := make(map[string]string, len(opts.OrderInsensitiveLists))
 	for _, decl := range opts.OrderInsensitiveLists {
@@ -471,7 +493,28 @@ func unmatched(declared map[string]string, used map[string]bool) []string {
 // It never touches result.TerminalState. That is the whole contract: a
 // declared, understood, ticketed Python defect is still a divergence, and
 // the receipt still says mismatch.
-func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
+func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineData, candidateData any) {
+	// R115 addendum: under a cited path, a candidate with NO non-null leaf
+	// while the baseline has at least one is an empty result in disguise.
+	// Its leaf differences are relabelled structural before anything is
+	// covered, so "Go returned every field null" can never pass as the
+	// cited defect. One non-null leaf anywhere under the path keeps the
+	// rule leaf-by-leaf (hotspots' JOB 5 receipt: 7 null of 391 leaves).
+	for _, defect := range defects {
+		for _, cited := range defect.Paths {
+			if nonNullLeaves(candidateData, citedSegments(cited)) > 0 || nonNullLeaves(baselineData, citedSegments(cited)) == 0 {
+				continue
+			}
+			for i := range result.Findings {
+				finding := &result.Findings[i]
+				path := tieredPath(finding.Path)
+				if finding.Kind == FindingMismatch && leafDifference(finding.Shape) && (path == cited || strings.HasPrefix(path, cited+".")) {
+					finding.Shape = ShapeEmptyResult
+				}
+			}
+		}
+	}
+
 	var mismatches, shapes []string
 	for _, finding := range result.Findings {
 		if finding.Kind == FindingMismatch {
@@ -507,15 +550,96 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
 	sort.Strings(stale)
 
 	outside := 0
-	for _, isCovered := range covered {
+	coveredByShape, outsideByShape := map[string]int{}, map[string]int{}
+	for i, isCovered := range covered {
 		if !isCovered {
 			outside++
+			outsideByShape[shapeLabel(shapes[i])]++
+			continue
 		}
+		coveredByShape[shapeLabel(shapes[i])]++
 	}
 
+	result.CoveredByShape = coveredByShape
+	result.OutsideByShape = outsideByShape
 	result.BaselineDefectsMatched = matched
 	result.StaleBaselineDefects = stale
 	result.DifferencesOutsideBaselineDefect = outside
+}
+
+// FormatShapeCounts renders per-shape counts as `covered[null=7 value=384]
+// outside[length=1]`, keys sorted, one form for every surface that prints
+// them (go-api-prove's line, the tests; `enable` renders the same JSON).
+func FormatShapeCounts(covered, outside map[string]int) string {
+	render := func(counts map[string]int) string {
+		keys := make([]string, 0, len(counts))
+		for key := range counts {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
+		}
+		return strings.Join(parts, " ")
+	}
+	return "covered[" + render(covered) + "] outside[" + render(outside) + "]"
+}
+
+// shapeLabel names a finding's shape for the per-shape counts; a finding
+// the comparator did not classify is counted, never dropped.
+func shapeLabel(shape string) string {
+	if shape == "" {
+		return "unclassified"
+	}
+	return shape
+}
+
+// citedSegments splits a cited path ("data.hotspots.rows") into the keys
+// under the response's `data` value. A path not under `data` has no
+// segments there, so nothing under it is counted.
+func citedSegments(cited string) []string {
+	rest, ok := strings.CutPrefix(cited, "data.")
+	if !ok {
+		return nil
+	}
+	return strings.Split(rest, ".")
+}
+
+// nonNullLeaves counts the non-null scalar leaves at and under an
+// index-free path: keys are followed, every list element is visited.
+func nonNullLeaves(value any, segments []string) int {
+	if segments == nil {
+		return 0
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		if len(segments) == 0 {
+			total := 0
+			for _, child := range typed {
+				total += nonNullLeaves(child, segments)
+			}
+			return total
+		}
+		child, present := typed[segments[0]]
+		if !present {
+			return 0
+		}
+		return nonNullLeaves(child, segments[1:])
+	case []any:
+		total := 0
+		for _, element := range typed {
+			total += nonNullLeaves(element, segments)
+		}
+		return total
+	case nil:
+		return 0
+	default:
+		if len(segments) == 0 {
+			return 1
+		}
+		return 0
+	}
 }
 
 // defectCovers reports whether a difference path lies under a declared
@@ -681,7 +805,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 	// Different JSON kinds. A container on either side is STRUCTURAL and
 	// no citation covers it; two leaves (scalar or null) are a leaf
 	// difference a citation may cover; a non-finite number is never
-	// covered (opus r7 P1-1 and the team-lead ruling on it). Detail text
+	// covered (opus r7 P1-1; R115, R73). Detail text
 	// unchanged.
 	if baselineKind, candidateKind := jsonKind(baseline), jsonKind(candidate); baselineKind != candidateKind {
 		shape := ShapeScalarType

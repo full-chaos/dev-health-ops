@@ -91,13 +91,12 @@ const (
 // and by candidate_build matching; this column adds the one fact that is
 // not implied.
 //
-// Today the value is a function of the route: proof stamps the header,
-// the edge cannot because the Python edge rebuilds the response with only
-// content, status and media_type (CHAOS-5479). Stored anyway, and the
-// redundancy is the point: when #2365 deletes that edge and edge
-// responses start carrying the header, the derivation silently becomes
-// wrong and every earlier edge row would read as strongly bound. A claim
-// is worth writing down while the writer can still vouch for it.
+// The value is read from the header the compared response actually
+// carried, never derived from the route: /query/proof stamps it, and the
+// Python edge passes x-dev-health-build through (CHAOS-5479), so an edge
+// response is bound exactly when the serving process sent the header. A
+// derivation from the route would read an unbound edge row as bound, or a
+// bound one as not; the column records what was observed.
 
 // planeHeader is the response header the Python edge stamps with the
 // plane that actually served a request (go_api_dispatcher's
@@ -223,10 +222,16 @@ type Outcome struct {
 	// DifferencesOutsideBaselineDefect is serialised even when zero: "every
 	// difference is a known Python defect" and "there were no differences"
 	// are different facts.
-	DifferencesOutsideBaselineDefect int          `json:"differences_outside_baseline_defect"`
-	Candidate                        *Observation `json:"candidate,omitempty"`
-	Baseline                         *Observation `json:"baseline,omitempty"`
-	ReceiptWritten                   bool         `json:"receipt_written"`
+	DifferencesOutsideBaselineDefect int `json:"differences_outside_baseline_defect"`
+	// CoveredByShape / OutsideByShape say WHAT the two counts are made of
+	// (opus r8 P3-5); OutsideByShape sums to DifferencesOutsideBaselineDefect,
+	// including the transport differences no citation can express ("http",
+	// "unbound_edge").
+	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
+	OutsideByShape map[string]int `json:"outside_by_shape,omitempty"`
+	Candidate      *Observation   `json:"candidate,omitempty"`
+	Baseline       *Observation   `json:"baseline,omitempty"`
+	ReceiptWritten bool           `json:"receipt_written"`
 }
 
 // sealedOutcome is what a measurement ACTUALLY established, captured by
@@ -267,6 +272,8 @@ type sealedOutcome struct {
 
 	baselineDefects                  []string
 	differencesOutsideBaselineDefect int
+	coveredByShape                   map[string]int
+	outsideByShape                   map[string]int
 }
 
 // Summary is the explicit-zero telemetry block. Every field is printed on
@@ -735,6 +742,14 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	outcome.Findings = result.Findings
 	outcome.BaselineDefects = result.BaselineDefectsMatched
 	outcome.DifferencesOutsideBaselineDefect = result.DifferencesOutsideBaselineDefect
+	outcome.CoveredByShape = copyCounts(result.CoveredByShape)
+	outcome.OutsideByShape = copyCounts(result.OutsideByShape)
+	countOutside := func(label string) {
+		if outcome.OutsideByShape == nil {
+			outcome.OutsideByShape = map[string]int{}
+		}
+		outcome.OutsideByShape[label]++
+	}
 
 	// Admission guarantees both legs are 2xx; it does NOT make them equal.
 	// 200 against 202 passes admission and is still a real divergence, so
@@ -768,6 +783,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 			Detail: detail,
 		})
 		outcome.DifferencesOutsideBaselineDefect++
+		countOutside("http")
 	}
 	if candidate.StatusCode != baseline.StatusCode {
 		httpDifference("$.http.status",
@@ -845,6 +861,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 			outcome.TerminalState = TerminalStateUnsupported
 		} else {
 			outcome.DifferencesOutsideBaselineDefect++
+			countOutside("unbound_edge")
 		}
 	}
 	// Sealed LAST, from whatever the run concluded after every adjustment
@@ -876,7 +893,22 @@ func (r *Runner) seal(outcome Outcome) sealedOutcome {
 		candidateRef:                     observationRef(outcome.Candidate),
 		baselineDefects:                  append([]string(nil), outcome.BaselineDefects...),
 		differencesOutsideBaselineDefect: outcome.DifferencesOutsideBaselineDefect,
+		coveredByShape:                   copyCounts(outcome.CoveredByShape),
+		outsideByShape:                   copyCounts(outcome.OutsideByShape),
 	}
+}
+
+// copyCounts returns an independent copy (nil stays nil), so a sealed
+// outcome shares no map with the report view.
+func copyCounts(counts map[string]int) map[string]int {
+	if counts == nil {
+		return nil
+	}
+	copied := make(map[string]int, len(counts))
+	for key, value := range counts {
+		copied[key] = value
+	}
+	return copied
 }
 
 // decodeLeg turns one leg's body into a Snapshot, or names why it cannot.
@@ -1057,6 +1089,12 @@ type ReceiptProvenance struct {
 	// proof_failed row says how much work it is reporting on.
 	Measured  int `json:"measured_operations,omitempty"`
 	Attempted int `json:"attempted_operations,omitempty"`
+	// CoveredByShape / OutsideByShape: what the receipt's citation covered
+	// and what it did not, by finding shape (opus r8 P3-5). `enable` prints
+	// them, so an admission says whether it rests on "one value differed"
+	// or on something else.
+	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
+	OutsideByShape map[string]int `json:"outside_by_shape,omitempty"`
 }
 
 // reviewEvidence renders the provenance for one receipt. ONE constructor
@@ -1070,6 +1108,8 @@ func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, 
 		EdgeBuildBinding: sealed.edgeBinding,
 		RoutingRowBuild:  sealed.routingRowBuild,
 		Refusal:          refusal,
+		CoveredByShape:   sealed.coveredByShape,
+		OutsideByShape:   sealed.outsideByShape,
 	}
 	if refusal != "" {
 		provenance.Measured, provenance.Attempted = measured, attempted

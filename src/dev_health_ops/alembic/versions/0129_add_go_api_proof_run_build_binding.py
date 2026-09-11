@@ -8,12 +8,11 @@ how strongly that measurement bound the SERVING BUILD to the request --
 the fact ``enable``'s new canary->primary rule leans on.
 
 * ``per_request`` -- the response that was compared carried the serving
-  build on itself. Only ``/query/proof`` stamps that header today, so
-  this is the proof route's normal strength.
-* ``absent`` -- nothing tied the build to THIS response. This is the edge
-  route's normal strength, because the Python edge rebuilds the response
-  with only content, status and media_type and drops every header
-  query-api sets (CHAOS-5479).
+  build on itself (``x-dev-health-build``): ``/query/proof`` stamps it,
+  and the Python edge passes it through (go_api_dispatcher.py's
+  pass-through list, CHAOS-5479).
+* ``absent`` -- nothing tied the build to THIS response: an edge response
+  from a process or replica that did not carry the header.
 
 Why ``absent`` and not ``run_level``. An earlier draft named the weak case
 for the evidence behind it: the build WAS established for the run, by an

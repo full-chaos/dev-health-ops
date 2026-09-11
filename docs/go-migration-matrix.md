@@ -215,7 +215,7 @@ _Rendered 2026-09-09T06:26:46Z against main merge-base `720f64bffc7529f1413c84e4
 
 _Rows in `go_api_proof_run` at read time: **0**. Operations reachable to real clients with no deployed-executed proof: **11**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **12**._
 
-_Live rows serving a document the operation catalog does not name, so the edge cannot dispatch them (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **0**. Live rows with no recorded document digest, read before the reader carried it, so DOCUMENT_DRIFT cannot be judged for them: **15**._
+_Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **0**; for an operation the catalog does not register (UNREGISTERED, as `dev-hops go-api routing status` reports it): **0**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **15**._
 
 | Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |
 | --- | --- | --- | --- | --- | --- | --- |

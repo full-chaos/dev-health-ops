@@ -31,6 +31,7 @@ subsystem exists to tell apart (the same reasoning
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -758,6 +759,26 @@ class AuthorizingReceipt:
     measurement_route: str | None
     build_binding: str | None
     observed_at: datetime | None
+    #: What the receipt's citation covered and did not, by finding shape, as
+    #: the Go writer recorded them in the receipt's provenance (opus r8
+    #: P3-5). ``None`` when the receipt carries no such provenance -- an
+    #: older writer, or an operator's free text -- which is said, never
+    #: printed as an empty coverage.
+    covered_by_shape: Mapping[str, int] | None = None
+    outside_by_shape: Mapping[str, int] | None = None
+
+    def shape_counts(self) -> str:
+        """``covered[null=7 value=384] outside[]`` -- go-api-prove's format."""
+        if self.covered_by_shape is None or self.outside_by_shape is None:
+            return "shape counts unrecorded"
+
+        def render(counts: Mapping[str, int]) -> str:
+            return " ".join(f"{key}={counts[key]}" for key in sorted(counts))
+
+        return (
+            f"covered[{render(self.covered_by_shape)}] "
+            f"outside[{render(self.outside_by_shape)}]"
+        )
 
     def evidence(self) -> str:
         """One line naming the receipt, for logs and ``review_evidence``."""
@@ -769,8 +790,38 @@ class AuthorizingReceipt:
         return (
             f"proof_receipt={self.receipt_id} terminal_state={self.terminal_state}"
             f"{cited} measurement_route={self.measurement_route} "
-            f"build_binding={self.build_binding}"
+            f"build_binding={self.build_binding} {self.shape_counts()}"
         )
+
+
+def _recorded_shape_counts(
+    review_evidence: str | None,
+) -> tuple[dict[str, int] | None, dict[str, int] | None]:
+    """The per-shape counts the Go writer put in a receipt's provenance.
+
+    The writer's provenance is a JSON object; the counts are omitted when
+    empty, so an object without them is "nothing of that kind" (``{}``). A
+    value that is not the writer's object (older rows, operator text) is
+    "unrecorded" (``None``). Counts are only ever integers.
+    """
+    try:
+        payload = json.loads(review_evidence) if review_evidence else None
+    except ValueError:
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+
+    def counts(key: str) -> dict[str, int]:
+        value = payload.get(key) or {}
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(name): number
+            for name, number in value.items()
+            if isinstance(number, int) and not isinstance(number, bool)
+        }
+
+    return counts("covered_by_shape"), counts("outside_by_shape")
 
 
 def build_enablement_receipt_select(
@@ -800,6 +851,7 @@ def build_enablement_receipt_select(
             ProofRun.measurement_route,
             ProofRun.build_binding,
             ProofRun.observed_at,
+            ProofRun.review_evidence,
         )
         .where(
             *_enablement_proof_conditions(
@@ -838,8 +890,10 @@ async def enablement_receipts(
             target_mode=target_mode,
         )
     )
-    return {
-        row[0]: AuthorizingReceipt(
+    receipts: dict[str, AuthorizingReceipt] = {}
+    for row in result.all():
+        covered, outside = _recorded_shape_counts(row[7])
+        receipts[row[0]] = AuthorizingReceipt(
             operation=row[0],
             receipt_id=str(row[1]),
             terminal_state=row[2],
@@ -847,9 +901,10 @@ async def enablement_receipts(
             measurement_route=row[4],
             build_binding=row[5],
             observed_at=row[6],
+            covered_by_shape=covered,
+            outside_by_shape=outside,
         )
-        for row in result.all()
-    }
+    return receipts
 
 
 async def count_rows_by_schema_digest(session: AsyncSession) -> dict[str, int]:

@@ -516,9 +516,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	}
 	for _, outcome := range outcomes {
 		if outcome.Executed {
-			fmt.Printf("go-api-prove:   %-22s mode=%-8s route=%-5s %s (%d findings, %d outside a declared baseline defect %v)\n",
-				outcome.Operation, outcome.Mode, outcome.Route, outcome.TerminalState,
-				len(outcome.Findings), outcome.DifferencesOutsideBaselineDefect, outcome.BaselineDefects)
+			fmt.Println(executedOutcomeLine(outcome))
 			continue
 		}
 		fmt.Printf("go-api-prove:   %-22s mode=%-8s REFUSED %s: %s\n",
@@ -808,4 +806,14 @@ func validateEndpointFlags(f flags) error {
 		}
 	}
 	return nil
+}
+
+// executedOutcomeLine is the terminal line for one executed measurement. It
+// names WHAT the citation covered and what it did not, by shape (opus r8
+// P3-5): "one value differed" and "Go returned no rows" never print alike.
+func executedOutcomeLine(outcome goapiproof.Outcome) string {
+	return fmt.Sprintf("go-api-prove:   %-22s mode=%-8s route=%-5s %s (%d findings, %d outside a declared baseline defect %v) %s",
+		outcome.Operation, outcome.Mode, outcome.Route, outcome.TerminalState,
+		len(outcome.Findings), outcome.DifferencesOutsideBaselineDefect, outcome.BaselineDefects,
+		goapiproof.FormatShapeCounts(outcome.CoveredByShape, outcome.OutsideByShape))
 }

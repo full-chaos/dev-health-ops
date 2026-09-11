@@ -257,7 +257,7 @@ func runCheck(root string) error {
 	violations = append(violations, migrationmatrix.ValidateRender(snapshot)...)
 	violations = append(violations, migrationmatrix.ValidateDocumentDrift(snapshot, catalog)...)
 	if unjudged := migrationmatrix.UnjudgedLive(snapshot.Operations); unjudged > 0 {
-		fmt.Fprintf(os.Stderr, "warning: %d live routing row(s) in the committed render carry no document digest -- the snapshot predates the reader carrying the routing key -- so DOCUMENT_DRIFT cannot be judged for them until the next -render. The page states the count.\n", unjudged)
+		fmt.Fprintf(os.Stderr, "warning: %d live routing row(s) in the committed render carry no document digest -- the snapshot predates the reader carrying the routing key -- so DOCUMENT_DRIFT / UNREGISTERED cannot be judged for them until the next -render. The page states the count.\n", unjudged)
 	}
 
 	// The digest pin is checked against the snapshot rather than the

@@ -285,15 +285,48 @@ func UnprovenReachable(rows []OperationRow, catalog Catalog) int {
 	return count
 }
 
-// DriftedLive counts the live rows in DOCUMENT_DRIFT, in any mode.
-func DriftedLive(rows []OperationRow, catalog Catalog) int {
+// The two states `dev-hops go-api routing status` names for a live row the
+// edge cannot dispatch.
+const (
+	StateDocumentDrift = "DOCUMENT_DRIFT"
+	StateUnregistered  = "UNREGISTERED"
+)
+
+// DispatchState names a row's state the way `routing status` does:
+// UNREGISTERED when the catalog does not register the operation at all,
+// DOCUMENT_DRIFT when it registers it at another document, "" otherwise.
+// ONE function for the cell, the counts and R14 (opus r8 P3-2: the cell and
+// the count said DOCUMENT_DRIFT for both while R14 and status did not).
+func DispatchState(row OperationRow, catalog Catalog) string {
+	if !DocumentDrift(row, catalog) {
+		return ""
+	}
+	if len(catalog.Documents(row.Operation)) == 0 {
+		return StateUnregistered
+	}
+	return StateDocumentDrift
+}
+
+// DriftedLive counts the live rows in the given dispatch state, in any
+// mode.
+func DriftedLive(rows []OperationRow, catalog Catalog, state string) int {
 	count := 0
 	for _, row := range rows {
-		if DocumentDrift(row, catalog) {
+		if DispatchState(row, catalog) == state {
 			count++
 		}
 	}
 	return count
+}
+
+// sqlLiteral renders a value as a standard SQL string literal, a quote
+// doubled, for the remedy R14 prints for an operator to run (opus r8 P3-3:
+// interpolated raw, an operation named `x' OR ”='` printed a statement
+// that deleted every routing row). Row values are text columns, so there is
+// no NUL to handle; with standard_conforming_strings on (PostgreSQL's
+// default since 9.1) a backslash inside '...' is an ordinary character.
+func sqlLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 // UnjudgedLive counts the live rows whose drift cannot be judged.
@@ -330,9 +363,10 @@ func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
 		// document, UNREGISTERED when it does not register the operation at
 		// all (opus r7 P2-1: this message used to claim DOCUMENT_DRIFT for
 		// both, and status named the second nowhere).
-		want, state := "the catalog does not register this operation at all", "UNREGISTERED"
-		if names := catalog.Documents(row.Operation); len(names) > 0 {
-			want, state = "the catalog names "+strings.Join(names, ", "), "DOCUMENT_DRIFT"
+		state := DispatchState(row, catalog)
+		want := "the catalog does not register this operation at all"
+		if state == StateDocumentDrift {
+			want = "the catalog names " + strings.Join(catalog.Documents(row.Operation), ", ")
 		}
 		// The remedy is the one the shipped verbs can perform (opus r7
 		// P3-2): `disable` keys on the CATALOG's document, so it cannot
@@ -340,8 +374,8 @@ func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
 		// it. Until a disable-by-document verb exists, the row is removed by
 		// its full key.
 		out = append(out, Violation{row.Operation, "R14-document-drift",
-			fmt.Sprintf("a live %s row at digest %s serves document %s, but %s: the edge resolves requests through the catalog, so this row cannot be dispatched and every request for it is served elsewhere. `dev-hops go-api routing status` reports it %s. No shipped verb reaches it (`routing disable` keys on the catalog's document): remove it by its full key -- DELETE FROM go_api_routing_state WHERE schema_digest = '%s' AND document_digest = '%s' AND selected_operation = '%s' -- then re-render",
-				row.Mode, row.SchemaDigest, row.DocumentDigest, want, state, row.SchemaDigest, row.DocumentDigest, row.Operation)})
+			fmt.Sprintf("a live %s row at digest %s serves document %s, but %s: the edge resolves requests through the catalog, so this row cannot be dispatched and every request for it is served elsewhere. `dev-hops go-api routing status` reports it %s. No shipped verb reaches it (`routing disable` keys on the catalog's document): remove it by its full key -- DELETE FROM go_api_routing_state WHERE schema_digest = %s AND document_digest = %s AND selected_operation = %s -- then re-render",
+				row.Mode, row.SchemaDigest, row.DocumentDigest, want, state, sqlLiteral(row.SchemaDigest), sqlLiteral(row.DocumentDigest), sqlLiteral(row.Operation))})
 	}
 	return out
 }

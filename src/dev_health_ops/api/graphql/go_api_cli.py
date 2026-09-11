@@ -479,6 +479,7 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
                     )
                     + f" measurement_route={receipt.measurement_route} "
                     f"build_binding={receipt.build_binding} "
+                    f"{receipt.shape_counts()} "
                     f"candidate_build={ns.candidate_build} "
                     f"schema_digest={local_digest} mode={ns.mode}",
                     file=sys.stderr,
@@ -542,7 +543,8 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
             f"  {operation}  proof: receipt {authorizing.receipt_id} "
             f"terminal_state={authorizing.terminal_state}{cited} "
             f"measurement_route={authorizing.measurement_route} "
-            f"build_binding={authorizing.build_binding}"
+            f"build_binding={authorizing.build_binding} "
+            f"{authorizing.shape_counts()}"
         )
     return 0
 
@@ -558,6 +560,16 @@ def _receipt_json(receipt: AuthorizingReceipt | None) -> dict[str, object] | Non
         "build_binding": receipt.build_binding,
         "observed_at": (
             receipt.observed_at.isoformat() if receipt.observed_at else None
+        ),
+        "covered_by_shape": (
+            dict(receipt.covered_by_shape)
+            if receipt.covered_by_shape is not None
+            else None
+        ),
+        "outside_by_shape": (
+            dict(receipt.outside_by_shape)
+            if receipt.outside_by_shape is not None
+            else None
         ),
     }
 

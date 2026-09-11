@@ -5,6 +5,7 @@ package migrationmatrix
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -630,4 +631,80 @@ func TestTheMatrixShowsTheNewestAdmissibleReceipt(t *testing.T) {
 		t.Fatalf("proven=%q, want the newest receipt %q (the older is %q)", rows[0].Proven, newer, older)
 	}
 	t.Logf("cell two admissible receipts -> page shows the newest: %v", rows[0].Proven == newer)
+
+	// opus r8 P3-1: three admissible receipts at ONE observed_at. The page
+	// ordered by observed_at alone, so it named whichever row the plan
+	// returned, while `enable` names the lowest id among the newest (its
+	// ORDER BY observed_at DESC, id). One selection rule for both readers:
+	// the newest, then the lowest id.
+	// Inserted highest first, so a plan that returns ties in heap order
+	// names the wrong one.
+	for _, id := range []string{"ffffffff-ffff-4fff-8fff-ffffffffffff", "77777777-7777-4777-8777-777777777777", "00000000-0000-4000-8000-000000000000"} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO go_api_proof_run
+			   (id, schema_digest, document_digest, selected_operation, candidate_build,
+			    request_identity, stage, terminal_state, observed_at, recorded_by,
+			    measurement_route, build_binding, differences_outside_baseline_defect)
+			 VALUES ($1::uuid,$2,$3,$4,$5,'x','deployed_executed','match','2026-09-11T00:00:00Z'::timestamptz,'test','edge','per_request',0)`,
+			id, digest, document, op, build); err != nil {
+			t.Fatalf("seed tied receipt: %v", err)
+		}
+	}
+	rows, _, err = ReadRoutingState(ctx, uri, digest)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ReadRoutingState: %v %+v", err, rows)
+	}
+	if want := "00000000-0000-4000-8000-000000000000"; rows[0].Proven != want {
+		t.Fatalf("three receipts tied on observed_at: page names %q, want %q -- the receipt `enable` names (observed_at DESC, id)", rows[0].Proven, want)
+	}
+	t.Logf("cell three admissible receipts tied on observed_at -> page names the lowest id, as enable does: %s", rows[0].Proven)
+}
+
+// opus r8 P3-3, executed: R14's printed remedy is run AS PRINTED against
+// PostgreSQL. A routing row whose operation carries a quote (`x' OR ”='`,
+// the reviewer's cell) used to print a statement that deleted every routing
+// row. It must delete exactly that row, and a backslash in a value must be
+// read literally too.
+func TestTheR14RemedyDeletesExactlyItsOwnRow(t *testing.T) {
+	ctx, pool, uri := startMatrixPostgres(t)
+	const (
+		digest = "sha256:live"
+		build  = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	)
+	catalog, err := NewCatalog([][2]string{{"featureFlags", "doc-served"}, {"keptOperation", "doc-other"}})
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
+	seedMatrixRow(ctx, t, pool, digest, "doc-served", "featureFlags", "canary", build)
+	seedMatrixRow(ctx, t, pool, digest, "doc-other", "keptOperation", "canary", build)
+	for _, op := range []string{`x' OR ''='`, `back\slash' OR true --`} {
+		seedMatrixRow(ctx, t, pool, digest, "doc-unregistered", op, "primary", build)
+		rows, _, err := ReadRoutingState(ctx, uri, digest)
+		if err != nil {
+			t.Fatalf("ReadRoutingState: %v", err)
+		}
+		var statement string
+		for _, v := range ValidateDocumentDrift(&Render{Operations: rows}, catalog) {
+			if v.Subject == op {
+				_, after, _ := strings.Cut(v.Detail, "remove it by its full key -- ")
+				statement, _, _ = strings.Cut(after, " -- then re-render")
+			}
+		}
+		if statement == "" {
+			t.Fatalf("%q: no R14 remedy printed", op)
+		}
+		var before, after int
+		_ = pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&before)
+		tag, err := pool.Exec(ctx, statement)
+		if err != nil {
+			t.Fatalf("%q: the printed remedy does not run: %v\n%s", op, err, statement)
+		}
+		_ = pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state`).Scan(&after)
+		var left int
+		_ = pool.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state WHERE selected_operation = $1`, op).Scan(&left)
+		if tag.RowsAffected() != 1 || after != before-1 || left != 0 {
+			t.Fatalf("%q: the printed remedy deleted %d row(s) (%d -> %d, %d of its own left), want exactly its own row\n%s", op, tag.RowsAffected(), before, after, left, statement)
+		}
+		t.Logf("cell operation %-26q printed remedy run as printed: DELETE %d (%d -> %d rows)", op, tag.RowsAffected(), before, after)
+	}
 }

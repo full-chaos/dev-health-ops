@@ -132,7 +132,11 @@ SELECT rs.selected_operation,
                     THEN (` + primaryClause + `)
                     ELSE (` + canaryClause + `)
                END
-         ORDER BY pr.observed_at DESC
+         -- The newest admissible receipt, then the lowest id: the SAME
+         -- selection enable uses (build_enablement_receipt_select,
+         -- observed_at DESC, id), so the page and the routing row's
+         -- review_evidence name one receipt even when two tie (opus r8 P3-1).
+         ORDER BY pr.observed_at DESC, pr.id
          LIMIT 1
        ) AS proof_run_id
 FROM go_api_routing_state rs

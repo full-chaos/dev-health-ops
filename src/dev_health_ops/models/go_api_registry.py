@@ -263,10 +263,10 @@ class ProofRun(Base):
     #: How strongly the receipt's measurement bound the SERVING BUILD to
     #: the request that was compared (alembic 0129, CHAOS-5484):
     #: ``per_request`` when the compared response carried the build on
-    #: itself (only ``/query/proof`` stamps that header today), or
-    #: ``absent`` when nothing tied the build to THIS response (the edge
-    #: route, because the Python edge drops every header query-api sets
-    #: -- CHAOS-5479).
+    #: itself (``x-dev-health-build``: ``/query/proof`` stamps it and the
+    #: Python edge passes it through, CHAOS-5479), or ``absent`` when
+    #: nothing tied the build to THIS response (an edge response without
+    #: the header).
     #:
     #: The column asks exactly one question -- was the build bound PER
     #: RESPONSE? -- so there is no third value for "bound at run level".

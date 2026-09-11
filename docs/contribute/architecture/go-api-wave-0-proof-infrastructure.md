@@ -281,7 +281,9 @@ as long as they are in force.
 
 On success `enable` names, for every proven row, the receipt that
 authorized it -- its id, terminal state, citations (for a cited mismatch),
-route and binding -- on stdout (and in `--json`), on an
+route, binding and what the citation covered by finding shape
+(`covered[null=7 value=384] outside[]`, as `go-api-prove` records it in the
+receipt's provenance) -- on stdout (and in `--json`), on an
 `INFO: go_api_routing.enabled` line on stderr, and in the routing row's
 `review_evidence` (`proof_receipt=<id> ...`). A `match` admission and a
 cited-`mismatch` admission print different lines.

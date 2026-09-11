@@ -11,14 +11,15 @@ import (
 	"net/url"
 	"os"
 	"reflect"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // DefaultShutdownTimeout is the shutdown grace used when neither
@@ -1107,6 +1108,20 @@ type ComponentSpec struct {
 // time a field is added; deriving the set from the struct itself means
 // adding a field to ComponentSpec later automatically joins the sweep.
 func (spec ComponentSpec) componentKeys() []string {
+	return spec.sweepKeys(true, true)
+}
+
+// componentKeyNames answers a different question from componentKeys: not
+// "which keys may TRIGGER the component form" but "which settings fed the
+// DSN that was just built", for naming in a diagnostic. So a shared DBKey
+// is included (it genuinely reached the driver, whatever its presence
+// says about intent) and the `_FILE` spellings are left out (an operator
+// reading an error wants the setting, not both ways to spell it).
+func (spec ComponentSpec) componentKeyNames() []string {
+	return spec.sweepKeys(false, false)
+}
+
+func (spec ComponentSpec) sweepKeys(skipSharedDB, withFileForms bool) []string {
 	var keys []string
 	v := reflect.ValueOf(spec)
 	t := v.Type()
@@ -1119,11 +1134,11 @@ func (spec ComponentSpec) componentKeys() []string {
 		if !ok || value == "" {
 			continue
 		}
-		if field.Name == "DBKey" && spec.DBKeyShared {
+		if skipSharedDB && field.Name == "DBKey" && spec.DBKeyShared {
 			continue
 		}
 		keys = append(keys, value)
-		if field.Tag.Get("dsnKey") == "file" {
+		if withFileForms && field.Tag.Get("dsnKey") == "file" {
 			keys = append(keys, value+"_FILE")
 		}
 	}
@@ -1223,106 +1238,41 @@ var (
 // ResolveDSN is the caller that decides which of the two forms a given
 // environment is allowed to use at all.
 //
-// host/port are round-tripped through a fresh url.Parse of the assembled
-// URI and compared back against the inputs (Hostname()/Port()) before
-// anything is returned -- this is what catches a host/port value that would
-// otherwise inject a path, another userinfo, or a second host into the
-// DSN's authority section (the same class of bug as an unvalidated
-// url.URL.Host copy: see the URL-secret-leak lessons on why a component
-// "known safe by construction" still needs its own shape check before use).
+// There is no DSN grammar in this package. Assembly is stdlib net/url
+// alone -- url.URL, url.UserPassword and net.JoinHostPort each
+// percent-encode a component correctly for the position it occupies --
+// and the sole judge of whether the result is usable is the driver that
+// will consume it, so the assembled string is round-tripped through that
+// driver's OWN parser and refused only where the driver refuses it.
+//
+// Hand-written host and port grammar here refused, one at a time, a
+// succession of values both drivers accept: an absolute hostname's
+// trailing dot, an underscore in a label, a non-ASCII label, a name at
+// the 253-byte limit, a database or credential carrying a reserved
+// character. Each was a separate discovery because a grammar can only
+// ever approximate the parser it stands in front of. Deleting it removes
+// the whole class: what the driver accepts is what this accepts.
 func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (built secrets.Value, used bool, err error) {
-	// Never TrimSpace an identifier or a secret: storing host/port/db
-	// TRIMMED, while the pre-built-URI form takes a database name
-	// verbatim from the URL path, means an identifier with meaningful
-	// leading/trailing whitespace (unusual, but valid) silently connects
-	// to a DIFFERENT existing resource depending on which form was used
-	// -- proven against two real, distinctly-named databases. Every identifier below is
-	// preserved EXACTLY (never trimmed) and explicitly refused if it has
-	// leading/trailing whitespace, rather than having that whitespace
-	// silently discarded.
 	host := firstOrEmpty(lookup(spec.HostKey))
 	if host == "" {
 		return secrets.Value{}, false, nil
 	}
-	if strings.TrimSpace(host) != host {
-		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.HostKey)
-	}
-	// The round-trip check further below
-	// (net/url structural correctness) is not enough -- both pgx and
-	// clickhouse-go's own DSN parsers treat a comma inside the host field
-	// as a MULTI-HOST list delimiter, a driver-level convention net/url
-	// knows nothing about. A HOST value like ",127.0.0.1" or
-	// "127.0.0.1,evil.invalid" round-trips through url.Parse perfectly
-	// (Hostname()/Port()/Path all match) yet the live driver still
-	// connects -- proven against real pgx and clickhouse-go address
-	// parsing. Fixed structurally, not by denylisting the comma: the host
-	// component must be EXACTLY one of an RFC 1123 hostname, an IPv4
-	// literal, or an IPv6 literal (optionally wrapped in the operator's
-	// own brackets, which are stripped here -- net.JoinHostPort brackets
-	// an IPv6 host itself just below, so the bare form is what it must
-	// receive, never a value that is already bracketed). Anything else --
-	// a second host, a bare port stuffed into HOST, a stray '/', '?',
-	// '#', '@', or space -- is refused, naming spec.HostKey. Multi-host
-	// support stays available through the pre-built URI form only (both
-	// drivers' own multi-host DSN syntax already works there unchanged;
-	// see docs/reference/configuration/environment.md).
-	host, err = validComponentHost(host)
-	if err != nil {
-		return secrets.Value{}, true, fmt.Errorf("%s %w", spec.HostKey, err)
-	}
-	// envOrDefault's OWN presence check trims
-	// before testing for emptiness (a whitespace-only value is treated as
-	// absent, so the DEFAULT is substituted) -- a whitespace-only PORT/DB
-	// never reached the explicit whitespace refusal below at all, silently
-	// falling back to the default instead of being refused. rawOrDefault
-	// below is envOrDefault's exact untrimmed counterpart, matching how
-	// HostKey is already handled two lines up.
+	// rawOrDefault, not envOrDefault: envOrDefault's presence check trims
+	// before testing for emptiness, so a whitespace-bearing PORT or DB
+	// would be silently replaced by the default instead of reaching the
+	// driver as the operator wrote it.
 	port := rawOrDefault(lookup, spec.PortKey, spec.DefaultPort)
 	if port == "" {
 		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.PortKey)
-	}
-	if strings.TrimSpace(port) != port {
-		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.PortKey)
-	}
-	// PORT gets the identical, same-family
-	// exactly-one-value discipline -- digits only, 1-65535. A driver-
-	// specific list/range syntax in PORT is refused here rather than
-	// discovered downstream.
-	if err := validComponentPort(port); err != nil {
-		return secrets.Value{}, true, fmt.Errorf("%s %w", spec.PortKey, err)
 	}
 	db := rawOrDefault(lookup, spec.DBKey, spec.DefaultDB)
 	if db == "" {
 		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.DBKey)
 	}
-	if strings.TrimSpace(db) != db {
-		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.DBKey)
-	}
-	// A literal '/', '?', or '#' is a valid PostgreSQL/ClickHouse database
-	// identifier character (a double-quoted CREATE DATABASE name may
-	// contain any of them) -- refusing them here violated the same
-	// exact-preservation contract every other identifier in this resolver
-	// gets. They do not need a denylist because the round-trip re-parse
-	// below already proves they are safe: url.URL's own path encoder
-	// percent-escapes '?' and '#' (both are path/query/fragment
-	// delimiters) when assembling the DSN and correctly decodes them back
-	// to the literal character on the far side (pgconn.ParseConfig,
-	// clickhouse.ParseDSN); '/' is a legitimate literal byte within a
-	// single path segment and neither driver splits the database name on
-	// it. The round-trip check further below still verifies this for any
-	// future Go stdlib/driver behavior change -- this is proof, not an
-	// assumption.
 	user, _, resolveErr := secrets.Resolve(spec.UserKey, lookup)
 	if resolveErr != nil {
 		return secrets.Value{}, true, resolveErr
 	}
-	if user.Configured() && strings.TrimSpace(user.Reveal()) != user.Reveal() {
-		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.UserKey)
-	}
-	// PasswordKey is deliberately NOT subject to the whitespace guard
-	// above: a password's characters, leading/trailing whitespace
-	// included, are meaningful and must reach url.UserPassword exactly as
-	// configured -- that is this whole ticket's reason to exist.
 	password, _, resolveErr := secrets.Resolve(spec.PasswordKey, lookup)
 	if resolveErr != nil {
 		return secrets.Value{}, true, resolveErr
@@ -1330,11 +1280,11 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if password.Configured() && !user.Configured() {
 		return secrets.Value{}, true, fmt.Errorf("%s is set without %s", spec.PasswordKey, spec.UserKey)
 	}
-	// net.JoinHostPort brackets a literal IPv6 host automatically; it does
-	// not validate host/port content at all, which is exactly why the
-	// round-trip check below exists.
-	hostPort := net.JoinHostPort(host, port)
-	target := &url.URL{Scheme: spec.Scheme, Host: hostPort, Path: "/" + db}
+	target := &url.URL{
+		Scheme: spec.Scheme,
+		Host:   net.JoinHostPort(host, port),
+		Path:   "/" + db,
+	}
 	if user.Configured() {
 		if password.Configured() {
 			target.User = url.UserPassword(user.Reveal(), password.Reveal())
@@ -1343,16 +1293,82 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 		}
 	}
 	assembled := target.String()
-	reparsed, parseErr := url.Parse(assembled)
-	if parseErr != nil || reparsed == nil ||
-		reparsed.Hostname() != host || reparsed.Port() != port ||
-		reparsed.Path != "/"+db {
-		return secrets.Value{}, true, fmt.Errorf(
-			"%s/%s could not be assembled into a valid URI (check for characters not valid in a hostname)",
-			spec.HostKey, spec.PortKey,
-		)
+	if driverErr := acceptedByDriver(spec, assembled); driverErr != nil {
+		return secrets.Value{}, true, driverErr
 	}
 	return secrets.NewValue(assembled), true, nil
+}
+
+// acceptedByDriver is the component form's only validation: hand the
+// assembled DSN to the driver that will consume it, and refuse exactly
+// what that driver refuses.
+//
+// The single-endpoint rule is checked on the driver's PARSED result,
+// never on the raw input. Both pgx and clickhouse-go read a comma inside
+// the host field as a multi-host list -- a convention net/url knows
+// nothing about, which is why "127.0.0.1,evil.invalid" once round-tripped
+// through url.Parse untouched while the live driver still reached the
+// second host. Only the parsed config says how many endpoints the driver
+// actually ended up with.
+func acceptedByDriver(spec ComponentSpec, assembled string) error {
+	switch spec.Scheme {
+	case "postgresql":
+		parsed, parseErr := pgconn.ParseConfig(assembled)
+		if parseErr != nil {
+			return componentDriverError(spec, assembled, parseErr)
+		}
+		// pgconn carries at least one Fallbacks entry even for a
+		// single-host DSN: that is pgx's own sslmode negotiation retry
+		// against the SAME endpoint, not a second one. Only a fallback
+		// naming a different host or port is another endpoint.
+		for _, fallback := range parsed.Fallbacks {
+			if fallback.Host != parsed.Host || fallback.Port != parsed.Port {
+				return componentEndpointError(spec)
+			}
+		}
+	case "clickhouse":
+		parsed, parseErr := clickhouse.ParseDSN(assembled)
+		if parseErr != nil {
+			return componentDriverError(spec, assembled, parseErr)
+		}
+		if len(parsed.Addr) != 1 {
+			return componentEndpointError(spec)
+		}
+	default:
+		return fmt.Errorf("%s: no driver parser is registered for scheme %q", spec.HostKey, spec.Scheme)
+	}
+	return nil
+}
+
+// componentDriverError reports the driver's own refusal under the NAMES of
+// the settings that produced it.
+//
+// A DSN parser's error routinely quotes the DSN back, so the text is
+// scrubbed three ways before it is surfaced: the assembled string is
+// replaced literally (clickhouse-go echoes it verbatim, credentials
+// included), pgx's own parse error already masks the password before it
+// gets here, and logging.RedactText runs last as the shared
+// defense-in-depth pass that also catches a partially-quoted DSN. What
+// survives is the offending token the driver names -- a host or port
+// fragment, the same non-secret identifier class this package already
+// publishes at Info -- never a credential and never the whole value.
+func componentDriverError(spec ComponentSpec, assembled string, driverErr error) error {
+	detail := logging.RedactText(strings.ReplaceAll(driverErr.Error(), assembled, "[REDACTED]"))
+	return fmt.Errorf(
+		"%s: the %s driver refused the assembled DSN: %s",
+		strings.Join(spec.componentKeyNames(), ", "), spec.Scheme, detail,
+	)
+}
+
+// componentEndpointError refuses a component set the driver resolved to
+// more than one endpoint. The component form names exactly one; multi-host
+// stays available through the pre-built URI form, where each driver's own
+// multi-host syntax is untouched.
+func componentEndpointError(spec ComponentSpec) error {
+	return fmt.Errorf(
+		"%s: together resolve to more than one endpoint -- the component form configures exactly one; use the pre-built URI form for a multi-host DSN",
+		strings.Join(spec.componentKeyNames(), ", "),
+	)
 }
 
 // ResolveDSN resolves one DSN as EITHER a pre-built URI (rawKey, and its
@@ -1445,115 +1461,4 @@ func firstOrEmpty(value string, ok bool) string {
 		return ""
 	}
 	return value
-}
-
-// hostnameLabelPattern matches one RFC 1123 DNS label: 1-63 characters,
-// alphanumeric, with interior hyphens only (never a leading or trailing
-// one). isRFC1123Hostname below joins the requirement across every
-// dot-separated label so an empty label (a leading/doubled dot, or more
-// than one trailing dot) is rejected by construction, not by a separate
-// check.
-var hostnameLabelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
-
-// isRFC1123Hostname reports whether host is a single, syntactically valid
-// DNS hostname -- never a comma-, space-, or slash-bearing value a
-// general-purpose URL parser would accept but a database driver's own DSN
-// parser would reinterpret.
-//
-// A SINGLE trailing dot ("localhost.")
-// denotes an absolute hostname per RFC 1123 S6.1.4.3 -- it suppresses
-// resolver search-list expansion, it does not name a second endpoint or
-// introduce an empty label the way a leading or doubled dot would. The
-// pre-built-URI form already accepted it (net/url does not special-case
-// a trailing dot), so rejecting it here broke an operator's ability to
-// keep an absolute hostname when switching to the component form,
-// reproduced live against both PostgreSQL and ClickHouse. Fixed by
-// stripping exactly one trailing dot before validating labels -- never
-// stripping it from the value validComponentHost actually returns, so
-// the assembled DSN preserves it exactly as configured.
-func isRFC1123Hostname(host string) bool {
-	if host == "" {
-		return false
-	}
-	labels := host
-	if strings.HasSuffix(labels, ".") {
-		labels = strings.TrimSuffix(labels, ".")
-		if labels == "" {
-			return false // host was exactly "."
-		}
-	}
-	// The 253-character limit applies to the hostname itself, not to the
-	// absolute-form marker appended to it, so it is checked after the
-	// trailing dot is stripped.
-	if len(labels) > 253 {
-		return false
-	}
-	for _, label := range strings.Split(labels, ".") {
-		if !hostnameLabelPattern.MatchString(label) {
-			return false
-		}
-	}
-	return true
-}
-
-// validComponentHost enforces that host names EXACTLY one endpoint -- an
-// RFC 1123 hostname, an IPv4 literal, or an IPv6 literal -- returning the
-// BARE (never operator-bracketed) form ResolveDSNFromComponents' later
-// net.JoinHostPort call must receive, since JoinHostPort brackets an IPv6
-// host itself and a value bracketed twice is a different, broken host.
-//
-// net/url's own round-trip check (further
-// below in ResolveDSNFromComponents) verifies only that the ASSEMBLED URI
-// parses back to the same Hostname()/Port()/Path -- it says nothing about
-// what the eventual database driver's OWN DSN parser does with that host
-// string. Both pgx and clickhouse-go treat a comma inside the host as a
-// multi-host failover list delimiter, so ",127.0.0.1" or
-// "127.0.0.1,evil.invalid" pass net/url's round-trip unchanged yet the
-// live driver still connects, potentially to a second, unintended host.
-// This function is the fix: reject everything that is not exactly one
-// hostname or IP literal, rather than denylisting the comma specifically
-// (a denylist is a heuristic for the next reviewer to break; an allowlist
-// of the three shapes a single endpoint can take is not).
-func validComponentHost(host string) (string, error) {
-	bracketed := strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") && len(host) >= 2
-	candidate := host
-	if bracketed {
-		candidate = host[1 : len(host)-1]
-	}
-	if ip := net.ParseIP(candidate); ip != nil {
-		// ip.To4() alone is not the right test here: it also succeeds for
-		// an IPv4-MAPPED IPv6 literal ("::ffff:192.0.2.1"), which is
-		// legitimately colon-shaped and correctly bracketable. The actual
-		// question is whether candidate's own TEXT is IPv6-shaped (a
-		// colon present), not whether the parsed address happens to be
-		// 4-byte-representable.
-		if bracketed && !strings.Contains(candidate, ":") {
-			return "", errors.New("must not bracket an IPv4 address")
-		}
-		return candidate, nil
-	}
-	if bracketed {
-		return "", errors.New("is bracketed but its contents are not a valid IPv6 address")
-	}
-	if isRFC1123Hostname(host) {
-		return host, nil
-	}
-	return "", errors.New("must be exactly one hostname, IPv4 address, or IPv6 address -- not a list, a port, or any other value")
-}
-
-// validComponentPort enforces the identical exactly-one-value discipline
-// for the port component, same family as validComponentHost: digits
-// only, 1-65535 -- never a driver-specific list/range syntax net/url's
-// own round-trip check would not catch either.
-func validComponentPort(port string) error {
-	for _, r := range port {
-		if r < '0' || r > '9' {
-			return errors.New("must contain only digits")
-		}
-	}
-	value, err := strconv.Atoi(port)
-	if err != nil || value < 1 || value > 65535 {
-		return errors.New("must be between 1 and 65535")
-	}
-	return nil
 }

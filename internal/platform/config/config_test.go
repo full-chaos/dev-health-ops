@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"slices"
@@ -982,114 +983,281 @@ func TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException(t *testing.T) {
 	}
 }
 
-// TestValidComponentHostAcceptsExactlyOneEndpoint pins, red-first, that a
-// HOST value like ",127.0.0.1" round-tripped through
-// net/url perfectly (Hostname()/Port()/Path all matched) yet BOTH pgx and
-// clickhouse-go's own DSN parsers treat the comma as a multi-host list
-// delimiter and still connect. Every cell here is executed through
-// ResolveDSNFromComponents itself (not validComponentHost in isolation),
-// and every accepted cell is additionally re-parsed by the REAL driver
-// (pgconn.ParseConfig for the three PostgreSQL specs, clickhouse.ParseDSN
-// for ClickHouse) to prove it resolves to EXACTLY one address, not merely
-// that ResolveDSNFromComponents didn't error.
-func TestValidComponentHostAcceptsExactlyOneEndpoint(t *testing.T) {
+// componentDrivers are the two real driver/spec pairs every acceptance
+// cell below is executed against.
+var componentDrivers = []struct {
+	name string
+	spec ComponentSpec
+}{
+	{"PostgreSQL", DomainDatabaseSpec},
+	{"ClickHouse", ClickHouseSpec},
+}
+
+// assembleWithNetURL builds a DSN the way the resolver is required to
+// build one -- stdlib net/url and nothing else. It is deliberately a
+// second, independent implementation: an accepted cell asserts the
+// resolver's output is byte-identical to this, so any hand-written
+// encoder, escape or grammar reintroduced into the resolver shows up as a
+// byte difference rather than having to be spotted by eye.
+func assembleWithNetURL(scheme, host, port, user, password, db string) string {
+	target := &url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(host, port),
+		Path:   "/" + db,
+	}
+	if user != "" {
+		target.User = url.UserPassword(user, password)
+	}
+	return target.String()
+}
+
+// driverEndpoints asks the REAL driver what it makes of a DSN: an error,
+// or the number of distinct endpoints it resolved to. pgconn always
+// carries at least one Fallbacks entry for a single-host DSN (its own
+// sslmode negotiation retry against the same endpoint), so only a
+// fallback naming a different host or port counts as another endpoint.
+func driverEndpoints(t *testing.T, dsn string) (int, error) {
+	t.Helper()
+	if strings.HasPrefix(dsn, "clickhouse://") {
+		parsed, err := clickhouse.ParseDSN(dsn)
+		if err != nil {
+			return 0, err
+		}
+		return len(parsed.Addr), nil
+	}
+	parsed, err := pgconn.ParseConfig(dsn)
+	if err != nil {
+		return 0, err
+	}
+	endpoints := 1
+	for _, fallback := range parsed.Fallbacks {
+		if fallback.Host != parsed.Host || fallback.Port != parsed.Port {
+			endpoints++
+		}
+	}
+	return endpoints, nil
+}
+
+func rawOrFallback(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
+}
+
+// TestComponentAcceptanceIsExactlyTheDriversOwnParser executes the whole
+// acceptance contract as one property, one cell at a time: a component
+// set is accepted if and only if the driver it feeds accepts the DSN
+// assembled from it AND resolves that DSN to exactly one endpoint.
+//
+// No cell carries a verdict of its own. Each is compared against the
+// driver's live answer for the same inputs, so the table cannot drift
+// from the parser it stands in front of, and any character rule
+// reintroduced into the resolver breaks the equivalence on the first
+// value the driver accepts and the rule does not.
+//
+// The host values below are every shape a hand-written grammar had
+// refused: a multi-host list, a leading and a trailing comma, a space, a
+// bare port stuffed into HOST, an absolute hostname's trailing dot, empty
+// and doubled labels, a lone dot, a percent, an at, a slash, a hash, a
+// question mark, an underscore, a non-ASCII label, a name past 253 bytes,
+// an operator-bracketed IPv6 and IPv4 literal, whitespace-only, and a
+// leading space.
+func TestComponentAcceptanceIsExactlyTheDriversOwnParser(t *testing.T) {
 	t.Parallel()
 
-	type cell struct {
-		name    string
-		host    string
-		wantErr bool
-	}
-	cells := []cell{
-		{name: "plain hostname", host: "db.internal"},
-		{name: "IPv4 literal", host: "127.0.0.1"},
-		{name: "IPv6 literal unbracketed", host: "::1"},
-		{name: "IPv6 literal bracketed", host: "[::1]"},
-		{name: "IPv4-mapped IPv6 unbracketed", host: "::ffff:192.0.2.1"},
-		{name: "IPv4-mapped IPv6 bracketed", host: "[::ffff:192.0.2.1]"},
-		{name: "leading comma", host: ",127.0.0.1", wantErr: true},
-		{name: "trailing comma", host: "127.0.0.1,", wantErr: true},
-		{name: "inner comma (two hosts)", host: "127.0.0.1,evil.invalid", wantErr: true},
-		{name: "space", host: "127.0.0.1 evil.invalid", wantErr: true},
-		{name: "host:port stuffed into HOST", host: "127.0.0.1:5432", wantErr: true},
-		// A SINGLE trailing dot denotes an absolute hostname (RFC 1123
-		// S6.1.4.3) -- it must be ACCEPTED, not treated as an empty
-		// label. The pre-built-URI form already accepts "localhost."
-		// (net/url does not special-case it) and connects live; the
-		// component form must accept the identical value.
-		{name: "absolute hostname (single trailing dot)", host: "db.internal."},
-		{name: "empty label (leading dot)", host: ".db.internal", wantErr: true},
-		{name: "empty label (doubled trailing dot)", host: "db.internal..", wantErr: true},
-		{name: "empty label (doubled dot)", host: "db..internal", wantErr: true},
-		{name: "empty label (only a dot)", host: ".", wantErr: true},
-		{name: "percent", host: "db%2einternal", wantErr: true},
-		{name: "at", host: "user@db.internal", wantErr: true},
-		{name: "slash", host: "db.internal/x", wantErr: true},
-		{name: "hash", host: "db.internal#x", wantErr: true},
-		{name: "question", host: "db.internal?x", wantErr: true},
-		{name: "bracketed IPv4 (invalid)", host: "[127.0.0.1]", wantErr: true},
+	const (
+		user     = "app"
+		password = "s3cr3t#pw"
+		database = "appdb"
+	)
+	hosts := []string{
+		"db.internal",
+		"127.0.0.1",
+		"::1",
+		"[::1]",
+		"::ffff:192.0.2.1",
+		"[::ffff:192.0.2.1]",
+		"[127.0.0.1]",
+		",127.0.0.1",
+		"127.0.0.1,",
+		"127.0.0.1,evil.invalid",
+		"127.0.0.1 evil.invalid",
+		"127.0.0.1:5432",
+		"db.internal.",
+		".db.internal",
+		"db.internal..",
+		"db..internal",
+		".",
+		"db%2einternal",
+		"user@db.internal",
+		"db.internal/x",
+		"db.internal#x",
+		"db.internal?x",
+		"db_internal",
+		"db\u00e9.internal",
+		strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." +
+			strings.Repeat("c", 63) + "." + strings.Repeat("d", 62),
+		"   ",
+		" db.internal",
 	}
 
-	for _, c := range cells {
-		t.Run(c.name+" (PostgreSQL)", func(t *testing.T) {
+	for _, driver := range componentDrivers {
+		for _, host := range hosts {
+			t.Run(driver.name+"/"+host, func(t *testing.T) {
+				t.Parallel()
+				spec := driver.spec
+				built, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+					spec.HostKey:     host,
+					spec.UserKey:     user,
+					spec.PasswordKey: password,
+					spec.DBKey:       database,
+				}), spec)
+				if !used {
+					t.Fatal("expected used=true once HOST is set")
+				}
+
+				oracle := assembleWithNetURL(spec.Scheme, host, spec.DefaultPort, user, password, database)
+				endpoints, oracleErr := driverEndpoints(t, oracle)
+				driverAccepts := oracleErr == nil && endpoints == 1
+
+				switch {
+				case driverAccepts && err != nil:
+					t.Fatalf("the %s driver accepts host %q as exactly one endpoint, but the resolver refused it: %v",
+						spec.Scheme, host, err)
+				case !driverAccepts && err == nil:
+					t.Fatalf("the %s driver refuses host %q (endpoints=%d err=%v), but the resolver accepted it",
+						spec.Scheme, host, endpoints, oracleErr)
+				}
+
+				if err != nil {
+					// A refusal names the settings that produced it and
+					// carries neither the credential nor its encoded form.
+					for _, key := range spec.componentKeyNames() {
+						if !strings.Contains(err.Error(), key) {
+							t.Fatalf("refusal for host %q does not name %s: %v", host, key, err)
+						}
+					}
+					for _, leak := range []string{password, url.QueryEscape(password), url.PathEscape(password)} {
+						if strings.Contains(err.Error(), leak) {
+							t.Fatalf("refusal for host %q leaked the credential (%q): %v", host, leak, err)
+						}
+					}
+					return
+				}
+				if built.Reveal() != oracle {
+					t.Fatalf("host %q: resolver built %q, want the pure net/url assembly %q",
+						host, built.Reveal(), oracle)
+				}
+			})
+		}
+	}
+}
+
+// TestComponentPortAcceptanceIsExactlyTheDriversOwnParser is the same
+// property for PORT, which likewise has no grammar of its own any more:
+// the two drivers genuinely disagree about a port outside 1-65535, and
+// each connection is held to its own driver's answer rather than to a
+// range check that would have to pick one of them.
+func TestComponentPortAcceptanceIsExactlyTheDriversOwnParser(t *testing.T) {
+	t.Parallel()
+
+	const (
+		host     = "db.internal"
+		user     = "app"
+		password = "s3cr3t#pw"
+		database = "appdb"
+	)
+	ports := []string{"5432", "1", "65535", "0", "65536", "99999", "5432,5433", "5432x", "+5432", "", " 5432", "5432 ", "   "}
+
+	for _, driver := range componentDrivers {
+		for _, port := range ports {
+			t.Run(driver.name+"/"+port, func(t *testing.T) {
+				t.Parallel()
+				spec := driver.spec
+				built, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+					spec.HostKey:     host,
+					spec.PortKey:     port,
+					spec.UserKey:     user,
+					spec.PasswordKey: password,
+					spec.DBKey:       database,
+				}), spec)
+				if !used {
+					t.Fatal("expected used=true once HOST is set")
+				}
+
+				// An empty PORT is absent, not blank: it falls to the
+				// spec default, exactly as the resolver's own
+				// rawOrDefault does.
+				oracle := assembleWithNetURL(spec.Scheme, host, rawOrFallback(port, spec.DefaultPort), user, password, database)
+				endpoints, oracleErr := driverEndpoints(t, oracle)
+				driverAccepts := oracleErr == nil && endpoints == 1
+
+				switch {
+				case driverAccepts && err != nil:
+					t.Fatalf("the %s driver accepts port %q, but the resolver refused it: %v", spec.Scheme, port, err)
+				case !driverAccepts && err == nil:
+					t.Fatalf("the %s driver refuses port %q (endpoints=%d err=%v), but the resolver accepted it",
+						spec.Scheme, port, endpoints, oracleErr)
+				}
+				if err != nil {
+					if !strings.Contains(err.Error(), spec.PortKey) {
+						t.Fatalf("refusal for port %q does not name %s: %v", port, spec.PortKey, err)
+					}
+					return
+				}
+				if built.Reveal() != oracle {
+					t.Fatalf("port %q: resolver built %q, want the pure net/url assembly %q", port, built.Reveal(), oracle)
+				}
+			})
+		}
+	}
+}
+
+// TestMultiHostComponentsAreRefusedOnTheParsedConfigNotTheString pins
+// WHERE the single-endpoint rule lives. A comma-bearing host is not a
+// malformed DSN: both drivers parse it without complaint, and only the
+// parsed result -- pgconn's Fallbacks, clickhouse-go's Addr -- shows the
+// second endpoint. A check on the raw string or on net/url's own
+// round-trip sees nothing, which is how a second host reached a live
+// driver before.
+func TestMultiHostComponentsAreRefusedOnTheParsedConfigNotTheString(t *testing.T) {
+	t.Parallel()
+
+	for _, driver := range componentDrivers {
+		t.Run(driver.name, func(t *testing.T) {
 			t.Parallel()
-			value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
-				"DEV_HEALTH_PG_DOMAIN_HOST": c.host,
-			}), DomainDatabaseSpec)
+			spec := driver.spec
+			const multi = "db.internal,evil.invalid"
+
+			// Red first: the assembled DSN parses cleanly. Nothing about
+			// the string itself is wrong.
+			assembled := assembleWithNetURL(spec.Scheme, multi, spec.DefaultPort, "app", "app", "appdb")
+			if _, parseErr := url.Parse(assembled); parseErr != nil {
+				t.Fatalf("test setup: the assembled DSN does not parse: %v", parseErr)
+			}
+			endpoints, oracleErr := driverEndpoints(t, assembled)
+			if oracleErr != nil {
+				t.Fatalf("test setup: the %s driver rejected the DSN outright (%v) -- this cell must prove the PARSED config is what catches it", spec.Scheme, oracleErr)
+			}
+			if endpoints < 2 {
+				t.Fatalf("test setup: the %s driver resolved %d endpoint(s), want at least 2", spec.Scheme, endpoints)
+			}
+
+			_, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+				spec.HostKey:     multi,
+				spec.UserKey:     "app",
+				spec.PasswordKey: "app",
+				spec.DBKey:       "appdb",
+			}), spec)
 			if !used {
 				t.Fatal("expected used=true once HOST is set")
 			}
-			if c.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
-					t.Fatalf("host %q: expected an error naming DEV_HEALTH_PG_DOMAIN_HOST, got value=%v err=%v", c.host, value, err)
-				}
-				return
+			if err == nil || !strings.Contains(err.Error(), "more than one endpoint") {
+				t.Fatalf("expected a single-endpoint refusal naming the component settings, got: %v", err)
 			}
-			if err != nil {
-				t.Fatalf("host %q: expected success, got: %v", c.host, err)
-			}
-			cfg, parseErr := pgconn.ParseConfig(value.Reveal())
-			if parseErr != nil {
-				t.Fatalf("host %q: real pgx driver could not parse the assembled DSN: %v", c.host, parseErr)
-			}
-			// pgconn ALWAYS carries at least one Fallbacks entry for a
-			// single-host DSN -- it is pgx's own sslmode negotiation
-			// retry (same host, an alternate TLS config), not a second
-			// endpoint. The actual vulnerability this test guards against
-			// is a fallback naming a DIFFERENT host (proven live by the
-			// reviewer for ",127.0.0.1"/"127.0.0.1,evil.invalid" reaching
-			// a second, unintended endpoint) -- so assert every fallback
-			// agrees with the primary Host, never merely that the slice
-			// is non-empty.
-			for i, fallback := range cfg.Fallbacks {
-				if fallback.Host != cfg.Host {
-					t.Fatalf("host %q: real pgx driver's fallback[%d] names a DIFFERENT host %q than the primary %q -- multiple endpoints reached the driver", c.host, i, fallback.Host, cfg.Host)
-				}
-			}
-		})
-		t.Run(c.name+" (ClickHouse)", func(t *testing.T) {
-			t.Parallel()
-			value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
-				"DEV_HEALTH_CH_HOST": c.host,
-			}), ClickHouseSpec)
-			if !used {
-				t.Fatal("expected used=true once HOST is set")
-			}
-			if c.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_CH_HOST") {
-					t.Fatalf("host %q: expected an error naming DEV_HEALTH_CH_HOST, got value=%v err=%v", c.host, value, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("host %q: expected success, got: %v", c.host, err)
-			}
-			options, parseErr := clickhouse.ParseDSN(value.Reveal())
-			if parseErr != nil {
-				t.Fatalf("host %q: real clickhouse-go driver could not parse the assembled DSN: %v", c.host, parseErr)
-			}
-			if len(options.Addr) != 1 {
-				t.Fatalf("host %q: real clickhouse-go driver resolved %d address(es), want exactly 1: %v", c.host, len(options.Addr), options.Addr)
+			if !strings.Contains(err.Error(), spec.HostKey) {
+				t.Fatalf("refusal does not name %s: %v", spec.HostKey, err)
 			}
 		})
 	}
@@ -1099,7 +1267,7 @@ func TestValidComponentHostAcceptsExactlyOneEndpoint(t *testing.T) {
 // dot reaches the real driver exactly as configured, never stripped --
 // not merely that ResolveDSNFromComponents no longer errors on it. Host
 // identifiers are never altered
-// anywhere in this resolver (the same Trap #140 discipline as every
+// anywhere in this resolver (the same discipline as every
 // other identifier field).
 func TestAbsoluteHostnameTrailingDotIsPreservedVerbatim(t *testing.T) {
 	t.Parallel()
@@ -1119,46 +1287,37 @@ func TestAbsoluteHostnameTrailingDotIsPreservedVerbatim(t *testing.T) {
 	}
 }
 
-// TestAbsoluteHostnameAtTheMaximumLengthIsAccepted pins that
-// isRFC1123Hostname must not check len(host) BEFORE stripping the
-// trailing dot: doing so would reject a valid, maximum-length
-// (253-character) hostname the instant it is written in absolute form
-// (254 characters with the dot) -- the length limit must apply to the
-// hostname itself, not to the absolute-form marker appended to it.
-func TestAbsoluteHostnameAtTheMaximumLengthIsAccepted(t *testing.T) {
+// TestHostnameLengthIsNotThisPackagesRuleToEnforce pins that the classic
+// 253-byte DNS limit is the resolver's business no longer: the drivers
+// accept a longer name, so the resolver does too and hands it on
+// byte-for-byte. A length check here refused a valid maximum-length
+// hostname the moment it was written in absolute form, which is the
+// whole reason no length rule survives.
+func TestHostnameLengthIsNotThisPackagesRuleToEnforce(t *testing.T) {
 	t.Parallel()
 
-	// 63.63.63.61 + 3 dots = 253 characters -- the maximum valid
-	// non-absolute hostname. Appending "." makes 254.
+	// 63.63.63.61 + 3 dots = 253 bytes, the classic maximum; the
+	// absolute form adds a dot, and the third value is a byte past it.
 	maxHostname := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." +
 		strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
 	if len(maxHostname) != 253 {
-		t.Fatalf("test setup: maxHostname is %d characters, want 253", len(maxHostname))
-	}
-	absolute := maxHostname + "."
-
-	value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
-		"DEV_HEALTH_PG_DOMAIN_HOST": absolute,
-	}), DomainDatabaseSpec)
-	if !used || err != nil {
-		t.Fatalf("used=%v err=%v (254-character absolute hostname should be accepted)", used, err)
-	}
-	cfg, parseErr := pgconn.ParseConfig(value.Reveal())
-	if parseErr != nil {
-		t.Fatalf("real pgx driver could not parse the assembled DSN: %v", parseErr)
-	}
-	if cfg.Host != absolute {
-		t.Fatalf("host was not preserved verbatim: driver saw host=%q, want %q", cfg.Host, absolute)
+		t.Fatalf("test setup: maxHostname is %d bytes, want 253", len(maxHostname))
 	}
 
-	// One character longer (254-character non-absolute, or the absolute
-	// form one byte past the limit) must still be refused.
-	tooLong := maxHostname + "e"
-	_, used, err = ResolveDSNFromComponents(lookup(map[string]string{
-		"DEV_HEALTH_PG_DOMAIN_HOST": tooLong,
-	}), DomainDatabaseSpec)
-	if !used || err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
-		t.Fatalf("expected a 254-character non-absolute hostname to be refused, got used=%v err=%v", used, err)
+	for _, host := range []string{maxHostname, maxHostname + ".", maxHostname + "e"} {
+		value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+			"DEV_HEALTH_PG_DOMAIN_HOST": host,
+		}), DomainDatabaseSpec)
+		if !used || err != nil {
+			t.Fatalf("host of %d bytes: used=%v err=%v", len(host), used, err)
+		}
+		cfg, parseErr := pgconn.ParseConfig(value.Reveal())
+		if parseErr != nil {
+			t.Fatalf("host of %d bytes: real pgx driver could not parse the assembled DSN: %v", len(host), parseErr)
+		}
+		if cfg.Host != host {
+			t.Fatalf("host was not preserved verbatim: driver saw %q, want %q", cfg.Host, host)
+		}
 	}
 }
 
@@ -1168,13 +1327,11 @@ func TestAbsoluteHostnameAtTheMaximumLengthIsAccepted(t *testing.T) {
 // PostgreSQL/ClickHouse database identifier characters -- this resolver
 // must never refuse them with a denylist it never needed, since every
 // OTHER identifier in it is preserved exactly with no character denylist
-// at all. Executed through the real drivers' own DSN parsers, not merely
-// proving ResolveDSNFromComponents stops erroring -- separately verified
-// LIVE against real PostgreSQL and ClickHouse containers (both drivers
-// connected to each of these five database names and
-// current_database()/currentDatabase() matched exactly; not committed
-// here since this package's suite does not otherwise spin up
-// containers).
+// at all. Executed through the real drivers' own DSN parsers here, and
+// LIVE against real PostgreSQL and ClickHouse containers in this
+// package's integration suite (config_integration_test.go), where both
+// drivers connect to each of these five database names and
+// current_database()/currentDatabase() match exactly.
 func TestDatabaseNameReservedCharactersReachTheRealDriverExactly(t *testing.T) {
 	t.Parallel()
 
@@ -1216,47 +1373,6 @@ func TestDatabaseNameReservedCharactersReachTheRealDriverExactly(t *testing.T) {
 	}
 }
 
-// TestValidComponentPortAcceptsExactlyOneNumericPort pins that PORT gets
-// the identical exactly-one-value discipline as HOST.
-func TestValidComponentPortAcceptsExactlyOneNumericPort(t *testing.T) {
-	t.Parallel()
-
-	for _, c := range []struct {
-		name    string
-		port    string
-		wantErr bool
-	}{
-		{name: "plain port", port: "5432"},
-		{name: "min valid", port: "1"},
-		{name: "max valid", port: "65535"},
-		{name: "zero", port: "0", wantErr: true},
-		{name: "out of range", port: "65536", wantErr: true},
-		{name: "comma list", port: "5432,5433", wantErr: true},
-		{name: "non-numeric", port: "5432x", wantErr: true},
-		{name: "leading plus", port: "+5432", wantErr: true},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			_, used, err := ResolveDSNFromComponents(lookup(map[string]string{
-				"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
-				"DEV_HEALTH_PG_DOMAIN_PORT": c.port,
-			}), DomainDatabaseSpec)
-			if !used {
-				t.Fatal("expected used=true once HOST is set")
-			}
-			if c.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_PORT") {
-					t.Fatalf("port %q: expected an error naming DEV_HEALTH_PG_DOMAIN_PORT, got: %v", c.port, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("port %q: expected success, got: %v", c.port, err)
-			}
-		})
-	}
-}
-
 // TestResolveDSNFromComponentsInputDomain pins CHAOS-5560's per-field input
 // domain: the whole point of the component form is that url.UserPassword
 // percent-encodes whatever it is given, so none of the reserved-character
@@ -1290,10 +1406,11 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 	}{
 		{name: "absent host", mutate: func(m map[string]string) { delete(m, "TEST_HOST") }, wantUsed: false},
 		// Never TrimSpace an identifier: a whitespace-only host must not
-		// be treated as "absent" (trimmed to empty). It is non-empty raw input -- the
-		// component form now activates and explicitly refuses it, rather
-		// than silently treating it the same as no host at all.
-		{name: "whitespace-only host -- activates and is explicitly refused", mutate: func(m map[string]string) { m["TEST_HOST"] = "   " }, wantUsed: true, wantErr: true},
+		// be treated as "absent" (trimmed to empty). It is non-empty raw
+		// input, so the component form activates and the driver -- which
+		// cannot escape a space into a host -- refuses it, rather than
+		// this silently treating it the same as no host at all.
+		{name: "whitespace-only host -- activates and the driver refuses it", mutate: func(m map[string]string) { m["TEST_HOST"] = "   " }, wantUsed: true, wantErr: true},
 		{name: "canonical", wantUsed: true, wantHost: "db.internal"},
 		{
 			name: "password with # (RFC3986 reserved, fragment)", wantUsed: true,
@@ -1348,40 +1465,41 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 			mutate: func(m map[string]string) { m["TEST_PORT"] = "" },
 		},
 		{
-			name: "port non-numeric -- refused by the round-trip check", wantUsed: true, wantErr: true,
+			name: "port non-numeric -- refused by the driver", wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_PORT"] = "notaport" },
 		},
 		{
-			name: "port with leading whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
+			name: "port with leading whitespace -- passed through untrimmed and refused by the driver", wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_PORT"] = " 5432" },
 		},
 		// envOrDefault's own presence check trims for emptiness, so a
 		// whitespace-only PORT/DB would be treated as absent and
-		// silently fall to the default -- NEVER reaching the
-		// whitespace-refusal guard above at all. rawOrDefault avoids
-		// this; these cells pin it.
+		// silently fall to the default, substituting a value the
+		// operator never wrote. rawOrDefault passes it through instead,
+		// and what happens next is the driver's call: a space cannot be
+		// escaped into a port, but it is a perfectly ordinary byte in a
+		// database name or a user name.
 		{
-			name: "port whitespace-only -- explicitly refused, not silently defaulted", wantUsed: true, wantErr: true,
+			name: "port whitespace-only -- passed through undefaulted and refused by the driver", wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_PORT"] = "   " },
 		},
 		{
-			name: "db name whitespace-only -- explicitly refused, not silently defaulted", wantUsed: true, wantErr: true,
-			mutate: func(m map[string]string) { m["TEST_DB"] = "   " },
+			name: "db name whitespace-only -- passed through undefaulted and preserved exactly", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "   " }, wantDB: "   ",
 		},
 		{
-			name: "user with trailing whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
-			mutate: func(m map[string]string) { m["TEST_USER"] = "app " },
+			name: "user with trailing whitespace -- preserved exactly, not trimmed", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_USER"] = "app " }, wantUser: "app ", checkUser: true,
 		},
 		// '/', '?', and '#' are all valid
 		// PostgreSQL/ClickHouse database identifier characters (a
 		// double-quoted CREATE DATABASE name may contain any of them) --
 		// refusing them violated the same exact-preservation contract
-		// every other identifier in this resolver gets. Proven safe by
-		// the round-trip check immediately below: url.URL's own path
-		// encoder percent-escapes '?'/'#' when assembling the DSN and
-		// decodes them back to the literal character; '/' is a
-		// legitimate literal byte within one path segment and neither
-		// driver splits the database name on it.
+		// every other identifier in this resolver gets. url.URL's own
+		// path encoder percent-escapes '?'/'#' when assembling the DSN
+		// and both driver parsers decode them back to the literal
+		// character; '/' is a legitimate literal byte within one path
+		// segment and neither driver splits the database name on it.
 		{
 			name: "db name with / -- preserved exactly, not refused", wantUsed: true,
 			mutate: func(m map[string]string) { m["TEST_DB"] = "app/db" }, wantDB: "app/db",
@@ -1401,16 +1519,16 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 		// Leading/trailing whitespace on an identifier must never be
 		// silently trimmed: doing so connects (proven against a real
 		// live PostgreSQL) to a DIFFERENT existing database than the one
-		// actually configured. It is explicitly refused;
-		// meaningful INNER whitespace (not at either edge) is preserved
-		// exactly and connects correctly.
+		// actually configured. Both drivers accept such a name, so it is
+		// carried through percent-encoded and preserved exactly, edge
+		// whitespace and inner whitespace alike.
 		{
-			name: "db name with leading whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
-			mutate: func(m map[string]string) { m["TEST_DB"] = " appdb" },
+			name: "db name with leading whitespace -- preserved exactly, not trimmed", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = " appdb" }, wantDB: " appdb",
 		},
 		{
-			name: "db name with trailing whitespace -- explicitly refused, not silently trimmed", wantUsed: true, wantErr: true,
-			mutate: func(m map[string]string) { m["TEST_DB"] = "appdb " },
+			name: "db name with trailing whitespace -- preserved exactly, not trimmed", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "appdb " }, wantDB: "appdb ",
 		},
 		{
 			name: "db name with inner whitespace -- preserved exactly, not an edge case", wantUsed: true,
@@ -1425,12 +1543,12 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 			mutate: func(m map[string]string) { m["TEST_HOST"] = "::1" },
 		},
 		{
-			name:     "host containing a path-injection attempt -- refused by the round-trip check",
+			name:     "host containing a path-injection attempt -- refused by the driver",
 			wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_HOST"] = "db.internal/evil" },
 		},
 		{
-			name:     "host containing an authority-injection attempt -- refused by the round-trip check",
+			name:     "host containing an authority-injection attempt -- refused by the driver",
 			wantUsed: true, wantErr: true,
 			mutate: func(m map[string]string) { m["TEST_HOST"] = "db.internal@evil.example" },
 		},
@@ -1478,6 +1596,9 @@ func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
 			}
 			if tc.wantDB != "" && parsed.Path != "/"+tc.wantDB {
 				t.Fatalf("db path = %q, want %q -- the identifier must be preserved exactly", parsed.Path, "/"+tc.wantDB)
+			}
+			if tc.checkUser && parsed.User.Username() != tc.wantUser {
+				t.Fatalf("user = %q, want %q -- the identifier must be preserved exactly", parsed.User.Username(), tc.wantUser)
 			}
 			// The password (whatever reserved characters it contains) must
 			// round-trip byte-for-byte through Password() -- this is the

@@ -84,32 +84,44 @@ x-go-worker-flag:
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
 x-go-worker-env-base: &go-worker-env-base
-  # `POSTGRES_URI` here used to be
-  # `:?required` (deploy/docker-compose/compose.go-workers.yml's shape,
-  # fine for an opt-in overlay) and then just empty-default -- but the
-  # container env var the Go binary reads (`POSTGRES_URI`, hardcoded in
-  # internal/platform/config/config.go) is the SAME NAME `.env.example`
-  # already uses for unrelated host-side Python tooling
-  # (`postgresql+asyncpg://postgres:postgres@localhost:5555/postgres`,
-  # meaningless inside a container -- `localhost` there is the worker
-  # itself). An empty-default on that exact name never even applied: the
-  # shell variable IS set, just to the wrong thing, so the Go domain
-  # connection silently failed closed (`queue_control_config`... no,
-  # `domain_postgres` -- confirmed executed against this exact value).
-  # Fixed by reading a DEDICATED shell variable instead, same pattern as
-  # `go-river-migrate`'s `GO_WORKER_MIGRATION_DATABASE_URI` below, with a
-  # computed default through the dedicated poolers folded in above (domain
-  # via the existing `pgbouncer`, queue-control via `pgbouncer-river-queue`)
-  # -- adapted from the proven design already running the shared bigboy
-  # stack (compose/compose.go.workers.yml, untracked, outside this repo),
-  # to this file's own postgres identity (superuser/database `postgres`,
-  # not that stack's `devhealth`).
-  POSTGRES_URI: ${GO_WORKER_POSTGRES_URI:-postgresql://${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}:${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}@pgbouncer:6432/${POSTGRES_DB:-postgres}}
-  WORKER_DATABASE_URI: ${GO_WORKER_QUEUE_DATABASE_URI:-postgresql://${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}:${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}@pgbouncer-river-queue:6433/${POSTGRES_DB:-postgres}}
+  # CHAOS-5568: component form, not a pre-built URI. `POSTGRES_URI`/
+  # `WORKER_DATABASE_URI`/`CLICKHOUSE_URI` used hand-assembled
+  # `${VAR}` interpolation, which required every credential component to
+  # be pre-encoded for its position in the string -- a raw `#`, `@`, `/`
+  # or `:` in a password (or, for CLICKHOUSE_DB, a raw `/`) silently
+  # corrupted the DSN before the process even started, confirmed
+  # reproducible on main with each of the domain/queue/coordinator/
+  # ClickHouse passwords. `internal/platform/config` now
+  # accepts these as discrete `DEV_HEALTH_PG_*`/`DEV_HEALTH_CH_*` fields
+  # and assembles the DSN itself with stdlib `net/url`, which percent-
+  # encodes correctly by construction -- so no component here needs
+  # encoding, ever. URI and component forms are mutually exclusive per
+  # connection (refused if both are set); this base sets component vars
+  # only, so `POSTGRES_URI`/`WORKER_DATABASE_URI`/`CLICKHOUSE_URI` and
+  # their `GO_WORKER_*_URI` overrides are gone, not just unset -- an
+  # operator who needs a differently-shaped connection sets the matching
+  # `DEV_HEALTH_PG_*`/`DEV_HEALTH_CH_*` variable instead, never a raw URI.
+  DEV_HEALTH_PG_DOMAIN_HOST: pgbouncer
+  DEV_HEALTH_PG_DOMAIN_PORT: "6432"
+  DEV_HEALTH_PG_DOMAIN_USER: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
+  DEV_HEALTH_PG_DOMAIN_PASSWORD: ${RIVER_DOMAIN_DATABASE_PASSWORD:-devhealth_domain}
+  DEV_HEALTH_PG_QUEUE_HOST: pgbouncer-river-queue
+  DEV_HEALTH_PG_QUEUE_PORT: "6433"
+  DEV_HEALTH_PG_QUEUE_USER: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
+  DEV_HEALTH_PG_QUEUE_PASSWORD: ${RIVER_QUEUE_DATABASE_PASSWORD:-devhealth_queue}
+  # Shared across domain/queue/coordinator, same as the URI form's shared
+  # `${POSTGRES_DB:-postgres}` default -- this file's superuser identity
+  # is postgres/postgres/postgres (container_name: postgres), not a
+  # `devhealth` role or database (see `migrate`'s own comment above).
+  DEV_HEALTH_PG_DB: ${POSTGRES_DB:-postgres}
   # Port 9000 is the NATIVE protocol, not 8123 -- the Go worker speaks the
   # native wire protocol through clickhouse-go and eagerly Ping()s at
   # construction (CHAOS-3872, deploy/go-workers/README.md).
-  CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
+  DEV_HEALTH_CH_HOST: clickhouse
+  DEV_HEALTH_CH_PORT: "9000"
+  DEV_HEALTH_CH_USER: ${CLICKHOUSE_USER:-ch}
+  DEV_HEALTH_CH_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
+  DEV_HEALTH_CH_DB: ${CLICKHOUSE_DB:-default}
   VALKEY_URI: redis://valkey:6379/1
   # deploy/go-workers/deployment.json requires this for the sync group, and
   # provider-sync handler construction fails closed without it. Shared with
@@ -124,8 +136,13 @@ x-go-worker-env-base: &go-worker-env-base
   # unavailable" instead of the expected live-but-unready shape. Default
   # here, not just on go-reconciler/go-scheduler; the three stream
   # services neutralize it back to empty below, same as the overlay this
-  # was folded from.
-  COORDINATOR_DATABASE_URI: ${GO_WORKER_COORDINATOR_DATABASE_URI:-postgresql://${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}:${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}@pgbouncer-river-coordinator:6434/${POSTGRES_DB:-postgres}}
+  # was folded from -- an empty `DEV_HEALTH_PG_COORDINATOR_HOST` is the
+  # component form's own "not configured" (host absent = component form
+  # not in use), same effect the empty `COORDINATOR_DATABASE_URI` had.
+  DEV_HEALTH_PG_COORDINATOR_HOST: pgbouncer-river-coordinator
+  DEV_HEALTH_PG_COORDINATOR_PORT: "6434"
+  DEV_HEALTH_PG_COORDINATOR_USER: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
+  DEV_HEALTH_PG_COORDINATOR_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
   # Found by executing the required readyz proof:
   # internal/syncdispatchruntime.NewHTTPBridge rejects an empty bearer
   # token outright (pure validation, no network call) -- sync/ops/heavy
@@ -436,12 +453,12 @@ services:
     restart: on-failure
     environment:
       CLICKHOUSE_LISTEN_HOST: 0.0.0.0
-      # Class sweep over the whole file, not only the knob found: query-api and the
-      # go-worker fleet's CLICKHOUSE_URI already read CLICKHOUSE_USER/
-      # _PASSWORD/_DB overrides -- only the server that actually
-      # authenticates them (the official image takes all three as plain
-      # env vars, same mechanism as POSTGRES_USER/_DB above) hardcoded
-      # past them.
+      # Class sweep over the whole file, not only the knob found: query-api's
+      # CLICKHOUSE_URI and the go-worker fleet's DEV_HEALTH_CH_USER/
+      # _PASSWORD/_DB already read CLICKHOUSE_USER/_PASSWORD/_DB as their
+      # own defaults -- only the server that actually authenticates them
+      # (the official image takes all three as plain env vars, same
+      # mechanism as POSTGRES_USER/_DB above) hardcoded past them.
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-ch}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-ch}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
@@ -1167,21 +1184,27 @@ services:
     entrypoint:
       - /bin/sh
       - -ec
-      - >-
-        if [ -z "$$MIGRATION_DATABASE_URI" ];
-        then export MIGRATION_DATABASE_URI="postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:5432/$$POSTGRES_DB";
-        fi;
-        dev-health-worker-migrate
-        && dev-health-worker-migrate --check
+      - dev-health-worker-migrate && dev-health-worker-migrate --check
     environment:
-      MIGRATION_DATABASE_URI: ${GO_WORKER_MIGRATION_DATABASE_URI:-}
-      # Same fix as go-river-provision above -- the
-      # root `postgres` service's superuser identity is postgres/postgres,
-      # not `devhealth`.
-      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      # CHAOS-5568: component form. The shell fallback this replaced
+      # (`postgresql://$$POSTGRES_USER:$$POSTGRES_PASSWORD@$$POSTGRES_HOST:5432/$$POSTGRES_DB`)
+      # was exactly the unescaped-password class the config package's
+      # component form fixes, one shell layer further out than the Go
+      # binaries themselves -- `cmd/dev-health-worker-migrate`'s own
+      # `resolveMigrationDatabaseURI` now assembles this DSN internally
+      # from these fields via stdlib `net/url`, so no component needs
+      # encoding and no shell fallback is needed. Same
+      # fix as go-river-provision above for the identity -- the root
+      # `postgres` service's superuser identity is postgres/postgres, not
+      # `devhealth`. `DEV_HEALTH_MIGRATION_PG_*` deliberately, not
+      # `POSTGRES_HOST/PORT/USER/PASSWORD/DB`: see
+      # `resolveMigrationDatabaseURI`'s own comment for why reusing those
+      # names would collide with a pre-existing unconditional shell
+      # fallback elsewhere.
+      DEV_HEALTH_MIGRATION_PG_HOST: ${POSTGRES_HOST:-postgres}
+      DEV_HEALTH_MIGRATION_PG_USER: ${POSTGRES_USER:-postgres}
+      DEV_HEALTH_MIGRATION_PG_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DEV_HEALTH_MIGRATION_PG_DB: ${POSTGRES_DB:-postgres}
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
@@ -1466,8 +1489,8 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
-      # Every go-* service reads POSTGRES_URI
-      # (domain) and WORKER_DATABASE_URI (queue-control) from
+      # Every go-* service reads DEV_HEALTH_PG_DOMAIN_*
+      # (domain) and DEV_HEALTH_PG_QUEUE_* (queue-control) from
       # go-worker-env-base -- gate on both poolers' healthchecks, not just
       # container-started, so a worker doesn't attempt its first connection
       # before the pooler it targets can actually serve one.
@@ -1744,7 +1767,7 @@ services:
       # coordinator-claim path -- neutralize the shared base's coordinator
       # wiring rather than inherit it (same pattern the bigboy overlay this
       # was folded from uses for its own stream services).
-      COORDINATOR_DATABASE_URI: ""
+      DEV_HEALTH_PG_COORDINATOR_HOST: ""
     stop_grace_period: 60s
 
   go-stream-ingest:
@@ -1785,7 +1808,7 @@ services:
       # coordinator-claim path -- neutralize the shared base's coordinator
       # wiring rather than inherit it (same pattern the bigboy overlay this
       # was folded from uses for its own stream services).
-      COORDINATOR_DATABASE_URI: ""
+      DEV_HEALTH_PG_COORDINATOR_HOST: ""
     stop_grace_period: 60s
 
   # PagerDuty webhook delivery is independently routable from dataset sync,
@@ -1829,7 +1852,7 @@ services:
       # coordinator-claim path -- neutralize the shared base's coordinator
       # wiring rather than inherit it (same pattern the bigboy overlay this
       # was folded from uses for its own stream services).
-      COORDINATOR_DATABASE_URI: ""
+      DEV_HEALTH_PG_COORDINATOR_HOST: ""
     stop_grace_period: 60s
 
   # ---------------------------------------------------------------------------

@@ -195,8 +195,8 @@ def test_the_check_constraint_admits_only_the_two_strengths(
     # ``run_level`` is first in this list on purpose: it is the value an
     # earlier draft of CHAOS-5484 used for the weak case, so it is the one
     # a future writer is most likely to reinvent. It was dropped because
-    # every row that exists already has run-level evidence (R70 makes
-    # VerifyCandidateBuild a hard refusal), so the value would distinguish
+    # every row that exists already has run-level evidence (VerifyCandidateBuild
+    # is a hard refusal), so the value would distinguish
     # nothing -- see the 0129 docstring.
     for rejected in ("run_level", "per-request", "runlevel", "strong", ""):
         with migrated.connect() as c:

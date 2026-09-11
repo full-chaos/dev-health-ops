@@ -58,7 +58,7 @@ const (
 	// dispatches by -- the file `dev-hops go-api routing status` reports
 	// DOCUMENT_DRIFT against. Read by -check as well as -render, so a row
 	// the edge cannot dispatch fails the committed page (R14) rather than
-	// rendering as served (opus r6, P2-2). Trap #98: it is a non-Go input;
+	// rendering as served. Trap #98: it is a non-Go input;
 	// go.yml's `src/dev_health_ops/api/**` path filter already covers it.
 	catalogRelative = "src/dev_health_ops/api/graphql/go_api_operations.json"
 )
@@ -263,8 +263,8 @@ func runCheck(root string) error {
 	// The digest pin is checked against the snapshot rather than the
 	// database: if the SDL moved after the last render, every "live" row in
 	// the committed page is describing rows that can no longer be matched.
-	// That is precisely the 2026-09-01 failure, and it is a doc-level fact
-	// this offline check can catch.
+	// That is precisely the kind of failure a stale pin causes, and it is a
+	// doc-level fact this offline check can catch.
 	pin, err := migrationmatrix.SchemaDigestPin(filepath.Join(root, digestPinRelative))
 	if err != nil {
 		return err
@@ -529,10 +529,10 @@ func applyFleet(ledger *migrationmatrix.StatusLedger, reading *migrationmatrix.F
 //	dev-health-migration-matrix -render -routing routing.json
 //
 // The statement emits the whole snapshot payload as one JSON value, so the
-// file psql writes IS the -routing file, unedited (opus r6, P3-3: the r5
-// version printed only the row statement, whose `psql -At` output the
-// reader rejected, leaving the JSON wrapper and a second count query to be
-// written by hand). Credentials stay with psql -- its own environment or
+// file psql writes IS the -routing file, unedited: an earlier version
+// printed only the row statement, whose `psql -At` output the reader
+// rejected, leaving the JSON wrapper and a second count query to be
+// written by hand. Credentials stay with psql -- its own environment or
 // ~/.pgpass -- never in this tool's argv or the docs generator's code.
 func printRoutingSQL(w io.Writer) error {
 	statement, err := migrationmatrix.RoutingStateSQL()

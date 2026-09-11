@@ -5,8 +5,8 @@
 // `deployed_executed` receipt per operation in `go_api_proof_run`.
 //
 // Why this is a standalone Go binary and not a `dev-hops go-api routing
-// prove` subcommand beside enable/disable/status (team-lead ruling R49,
-// 2026-09-09): the Go cutover's standing rule is that no new Python
+// prove` subcommand beside enable/disable/status: the Go cutover's standing
+// rule is that no new Python
 // compute is written (chris: "move to go, do not straddle"), and a Python
 // shim that shells out to this binary would be new Python on the critical
 // path of a proof. The existing Python verbs stay exactly as they are.
@@ -66,7 +66,7 @@ import (
 // output; only these NAMES do.
 //
 // There are two because the two planes accept different credential KINDS,
-// measured on the deployed stack (JOB 4, 2026-09-09): an access token gets
+// measured on the deployed stack (JOB 4): an access token gets
 // HTTP 200 on the Python edge and 401 on /buildinfo; an effective-principal
 // envelope gets the reverse. GO_API_PROVE_BEARER keeps its old name and
 // its old meaning -- the EDGE token -- so an existing invocation does not
@@ -188,7 +188,7 @@ func run() error {
 	client := &http.Client{Timeout: f.timeout}
 
 	// The opening and closing /buildinfo reads get the SAME per-request
-	// deadline the measured legs get (r1 P2). They used to take
+	// deadline the measured legs get. They used to take
 	// context.Background(), so `-timeout` bounded every request except the
 	// two that bracket the run -- including the minting helper invoked
 	// before the first measurement, where a hang blocks the whole proof
@@ -214,7 +214,7 @@ func run() error {
 	// failure here stops the run rather than degrading into an
 	// operator-supplied name: the receipt is the whole deliverable, and
 	// one naming an unverifiable build is worse than none (CHAOS-5425
-	// acceptance, 2026-09-08: "Do not construct a receipt from a digest or
+	// acceptance: "Do not construct a receipt from a digest or
 	// an arbitrary build name").
 	buildCtx, cancelBuild := boundedCtx()
 	registry.BuildIdentity, err = goapiproof.FetchBuildIdentity(buildCtx, client, f.buildInfoURL, proofCredential)
@@ -261,7 +261,7 @@ func run() error {
 		return err
 	}
 	// A routing row naming a build the running process is not is a
-	// REFUSAL again (r1 P1). The demotion assumed /buildinfo identifies
+	// REFUSAL again. The demotion assumed /buildinfo identifies
 	// the replica that served the MEASURED request; with multiple
 	// query-api replicas and an edge that drops the per-request build
 	// header, it does not. Re-pointing the rows after a deploy is an
@@ -293,7 +293,7 @@ func run() error {
 	outcomes, summary, runErr := runner.Run(ctx)
 
 	// NOTHING has been written yet, and nothing will be until the build is
-	// shown to have held for the whole run (round 2's F3). Receipts used to
+	// shown to have held for the whole run. Receipts used to
 	// commit as each operation finished, so a build that moved mid-run left
 	// already-committed match receipts behind, enablement-eligible,
 	// describing a build that was not serving for all of it.
@@ -361,13 +361,13 @@ func run() error {
 // readRoutingState reads the rows AND verifies them against the running
 // build, returning both or neither.
 //
-// r8 killed the previous shape by replacing the CALLER's `return err` with
+// A mutation killed the previous shape by replacing the CALLER's `return err` with
 // `_ = err`: the check was a separate statement in run(), so it could be
 // ignored, and nothing failed. Folding it in means a caller cannot obtain
 // the rows without the check having run.
 //
 // It does NOT make the mutation unwritable -- an earlier version of this
-// comment claimed that, and the opus round disproved it with the exact
+// comment claimed that, and further testing disproved it with the exact
 // mutation the comment named: `if err := VerifyCandidateBuild(...); err
 // != nil { _ = err }` compiles here just as well as it did one level up.
 // What changed is that the guard now lives with the data it guards, and
@@ -475,12 +475,12 @@ func emitReport(f flags, registry goapiproof.RegistryView, outcomes []goapiproof
 	}
 	// Rebuilt labels even on the HAPPY path: this line is copied into
 	// tickets and pasted into chat, which is exactly how a credential
-	// outlives the terminal it was typed in. r3 found this one, and it is
+	// outlives the terminal it was typed in -- so it is
 	// printed on every successful run rather than only on failure.
 	fmt.Printf("go-api-prove: edge=%s proof_route=%s\n", goapiproof.EndpointLabel(f.edgeURL), labelledProofURL(proofURL))
 	// Report what this run ESTABLISHED, counted from the outcomes, rather
-	// than restating what each route usually provides. r4 found both of
-	// these lines missing: an earlier edit of mine reverted the computed
+	// than restating what each route usually provides. Both of
+	// these lines went missing once: an earlier edit reverted the computed
 	// version back to a hardcoded sentence and dropped the mint count
 	// entirely, and nothing failed, because no test read this output. Both
 	// are now pinned by TestTheReportCarriesTheCountersItComputes.
@@ -591,7 +591,7 @@ func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 	case os.Getenv(proofBearerEnvVar) != "":
 		// Validated HERE, at construction, so a malformed static envelope
 		// fails as a configuration error before anything is measured
-		// rather than as a 401 fifteen operations later (r1 P2). The
+		// rather than as a 401 fifteen operations later. The
 		// message never echoes the value.
 		static := "Bearer " + os.Getenv(proofBearerEnvVar)
 		if err := goapiproof.ValidateEnvelopeShape(static); err != nil {
@@ -613,7 +613,7 @@ const (
 	// mintStdoutLimit caps what is read. A helper that streams megabytes
 	// (a log, a core dump, /dev/urandom) must not be buffered whole just
 	// to be rejected as the wrong shape. Exceeding it is a REFUSAL, never
-	// a truncation: r2 built a helper emitting exactly 8192 JWT-shaped
+	// a truncation: a test built a helper emitting exactly 8192 JWT-shaped
 	// bytes followed by noise, and the truncated prefix passed the shape
 	// check and was installed as an Authorization header. A silently
 	// truncated credential fails remotely as another 401 that reads like a
@@ -627,10 +627,10 @@ const (
 
 // mintBearer runs the operator's helper and returns its stdout.
 //
-// Three properties, each from an executed r1 finding or its root cause:
+// Three properties, each from an executed finding or its root cause:
 //
 //  1. NOTHING from the helper reaches the error. Not its stderr, not its
-//     argv, not its output. r1 proved the previous version printed a
+//     argv, not its output. Testing proved the previous version printed a
 //     secret written to stderr straight into the operator-facing error --
 //     the helper's own diagnostics are not separable from its credential,
 //     so the only safe amount to quote is none. The error carries a fixed
@@ -665,7 +665,7 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	// WaitDelay bounds the wait on the OUTPUT PIPE, which Cancel does not
-	// reach. r4: a helper whose parent exits while a CHILD inherited
+	// reach. A helper whose parent exits while a CHILD inherited
 	// stdout leaves the write end open, and cmd.Run() blocks reading it
 	// long after the group has been signalled.
 	cmd.WaitDelay = time.Second
@@ -674,12 +674,12 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 	bounded := &limitedWriter{w: &stdout, remaining: mintStdoutLimit}
 	cmd.Stdout = bounded
 	// stderr is DISCARDED rather than captured. Captured, it would sit in
-	// memory waiting for somebody to decide it was safe to print, and r1
+	// memory waiting for somebody to decide it was safe to print, and testing
 	// showed how that decision goes.
 	cmd.Stderr = io.Discard
 
 	err := cmd.Run()
-	// r6: WaitDelay bounds the WAIT, not the descendants. The parent can
+	// WaitDelay bounds the WAIT, not the descendants. The parent can
 	// exit, mintBearer can return, and a grandchild the helper spawned is
 	// still running -- observed `State: S (sleeping)` after the deadline
 	// error was already returned. So the group is killed unconditionally
@@ -687,7 +687,7 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 	// and returning while part of it lives is reporting a termination that
 	// did not happen.
 	killHelperGroup(cmd)
-	// Overflow is checked FIRST. r3 found the specific message never
+	// Overflow is checked FIRST. Testing found the specific message never
 	// fired: a helper that overruns the limit also makes cmd.Run() return
 	// an error, so the run-failure branch classified it as "could not be
 	// run" and the operator was told the wrong thing about a case we
@@ -721,7 +721,7 @@ func mintBearer(ctx context.Context, argv []string) (string, error) {
 // It keeps accepting writes rather than returning an error, so the helper
 // is not killed by a broken pipe mid-sentence and the caller decides what
 // an overflow means -- and the caller refuses. Recording the overflow is
-// the part r2 found missing: dropping the excess silently left a truncated
+// the part once missing: dropping the excess silently left a truncated
 // prefix looking like a whole credential.
 type limitedWriter struct {
 	w          io.Writer
@@ -786,8 +786,8 @@ const helperReapTimeout = 2 * time.Second
 // validateEndpointFlags refuses any endpoint flag this package cannot
 // fully account for.
 //
-// A function rather than an inline loop so a test can call it. r7 killed
-// the inline version by bypassing the check, and nothing failed --
+// A function rather than an inline loop so a test can call it. A mutation
+// killed the inline version by bypassing the check, and nothing failed --
 // `run()` has no test at all, so a guard inside it is a guard nobody
 // holds. This is the smallest seam that makes the check testable without
 // a harness for the whole command.
@@ -809,8 +809,8 @@ func validateEndpointFlags(f flags) error {
 }
 
 // executedOutcomeLine is the terminal line for one executed measurement. It
-// names WHAT the citation covered and what it did not, by shape (opus r8
-// P3-5): "one value differed" and "Go returned no rows" never print alike.
+// names WHAT the citation covered and what it did not, by shape:
+// "one value differed" and "Go returned no rows" never print alike.
 func executedOutcomeLine(outcome goapiproof.Outcome) string {
 	return fmt.Sprintf("go-api-prove:   %-22s mode=%-8s route=%-5s %s (%d findings, %d outside a declared baseline defect %v) %s",
 		outcome.Operation, outcome.Mode, outcome.Route, outcome.TerminalState,

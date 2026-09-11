@@ -355,7 +355,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # QueryClient cannot exercise how ClickHouse itself resolves an argMax
     # tie), so the package picked up its first -tags=integration file.
     # Weight 26s, measured locally across both top-level test functions
-    # (the tie-break proof plus a second, codex-round-1-found regression
+    # (the tie-break proof plus a second regression
     # guard for a NULL-blame_concentration mixed-day row, each starting
     # its own container); LPT re-balanced shards 2/3 to 364s/363s (still
     # within 1s).
@@ -597,17 +597,17 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # window-blocking classification over (component, cause) PAIRS, BOTH
     # directions of the bidirectional comparator invariant (nil iff
     # window-blocking), the closed per-run vocabulary on both providers, and
-    # the codex round-1 regressions: a nested page-budget stop withholding the
+    # a regression where a nested page-budget stop withheld the
     # watermark on each provider, and the report-row bound holding both when
     # one artifact is oversized and when several small ones would otherwise
     # creep past it. All seventeen are ordinary -- they drive the routes
     # through in-memory HTTP doers and touch no database -- so the
     # integration-tagged count stays 113, the way 4130's nine did.
     #
-    # CHAOS-4142 codex round 2 then added 6 more ordinary top-level tests
+    # CHAOS-4142 then added 6 more ordinary top-level tests
     # (971 -> 977): three per provider, pinning the per-run PAGE BUDGET against
     # the item cap at its exact equality boundary, pinning the refutation of
-    # codex's challenge-1 reading -- a combined item-cap + page-budget stop is
+    # one challenged reading -- a combined item-cap + page-budget stop is
     # classified as the item cap and advances, because the committed prefix does
     # not depend on the page budget -- and the RED-FIRST pair asserting that a
     # starved per-run page budget never finalizes a unit with a withheld
@@ -615,7 +615,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # mechanism.
     #
     # (The seven new providerfoundation tests -- two paginator stop-reason,
-    # three per-run truncation metric, and two from round 2 pinning stop-reason
+    # three per-run truncation metric, and two pinning stop-reason
     # mutual exclusion and prefix independence -- live in
     # internal/providerfoundation and so do not move this providersync count.)
     #
@@ -806,7 +806,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # mechanism existed at all) and removal of either subject kind (no prior
     # mechanism existed for either).
     #
-    # A codex round-1 finding on that same producer then added 6 more ordinary
+    # A finding on that same producer then added 6 more ordinary
     # tests (1052 -> 1058, 116 unchanged): pure decision tests over
     # diffGitHubProjectV2Snapshot (additions restricted to work_item, removals
     # of either subject kind, unchanged-board emits nothing, an incomplete
@@ -821,7 +821,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # it saw) that suppresses removal computation, but not additions, for that
     # project this sync.
     #
-    # Codex round 2 verified the fix and sharpened one round-1 disposition
+    # A follow-up review verified the fix and sharpened one disposition
     # (the work_items-column fallback gap is not always a one-sync bootstrap
     # -- an issue removed from its board strictly BEFORE this producer's
     # first sync for that project never gets a first transition row at all,
@@ -896,7 +896,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # already-written row's stored source. Runs against a real migrated
     # ClickHouse container (chschema.Apply), so it is integration-tagged.
     #
-    # A codex round-2 finding (2026-08-24, MEDIUM) then added 2 more ordinary
+    # A later finding then added 2 more ordinary
     # tests (1073 -> 1075) in github_work_items_derivation_context_test.go:
     # the earlier cross-team falsifier tests injected the linked_issue
     # candidate directly, proving only that an already-supplied linked_issue
@@ -911,7 +911,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # over in-memory fixtures and touch no database, so the
     # integration-tagged count stays 117.
     #
-    # A codex round-3 finding (2026-08-24, HIGH + MEDIUM) then added 2 more
+    # Another finding then added 2 more
     # ordinary tests (1075 -> 1077) in github_work_item_derived_surfaces_test.go
     # and github_work_items_derivation_context_test.go:
     # TestGitHubTeamAttributionDedupeNeverErasesTheOnlyPrimaryRow pins the
@@ -924,7 +924,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # Both drive the dedup/resolver directly over in-memory fixtures and
     # touch no database, so the integration-tagged count stays 117.
     #
-    # A codex round-4 finding (2026-08-24, MEDIUM) then added 2 more ordinary
+    # Another finding then added 2 more ordinary
     # tests (1077 -> 1079): the PR-only gate above was GitHub-only ("ghpr:"
     # prefix), but this resolver is shared by GitHub, GitLab, and Jira --
     # silently diverging from Python's item.type in {"pr","merge_request"}
@@ -936,8 +936,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # directly over in-memory fixtures and touch no database, so the
     # integration-tagged count stays 117.
     #
-    # A codex round-5 finding (2026-08-25, BLOCK) then added 3 more ordinary
-    # tests (1079 -> 1082): the R4 gate checked WorkItemID STRING SHAPE
+    # Another finding then added 3 more ordinary
+    # tests (1079 -> 1082): that gate checked WorkItemID STRING SHAPE
     # ("gitlab:" prefix + contains "!") with no check that Provider actually
     # said "gitlab" -- a legacy/mismatched row (e.g. a Jira item whose
     # WorkItemID happened to look like a GitLab MR) could therefore wrongly
@@ -953,15 +953,15 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # over in-memory fixtures and touch no database, so the integration-tagged
     # count stays 117.
     #
-    # A codex round-6 finding (2026-08-25, BLOCK) then added 1 more ordinary
-    # test (1082 -> 1083): the round-5 fix's tests all built
+    # Another finding then added 1 more ordinary
+    # test (1082 -> 1083): the prior fix's tests all built
     # githubWorkItemDerivationSubject{} literals by hand, bypassing
     # githubWorkItemDerivationSubjectFromRow -- the actual production
     # row-to-subject conversion -- and no test anywhere in this package had
     # ever exercised loadDonors's Scan() with real returned data (every Rows
     # double's Next() returns false immediately), so a column-order
     # regression between the SELECT list and the Scan destinations could ship
-    # undetected. The three round-5 tests above were rewritten to build a
+    # undetected. The three tests above were rewritten to build a
     # githubWorkItemRow and convert it via githubWorkItemDerivationSubjectFromRow
     # (no new top-level test, just a rewrite -- doesn't change this count);
     # TestLoadGitHubWorkItemDerivationContextDonorScanPropagatesTypeInCorrectColumnOrder
@@ -969,9 +969,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # actually returns one row. Still no database, so the integration-tagged
     # count stays 117.
     #
-    # A codex round-7 finding (2026-08-25, BLOCK, 2 HIGH, both reproduced by
+    # Another finding (reproduced by
     # hand via mutate-and-rerun) then added 1 more ordinary test (1083 ->
-    # 1084): (1) the round-6 negative tests all use Provider "jira", so the
+    # 1084): (1) the earlier negative tests all use Provider "jira", so the
     # provider+type gate is already closed on Provider alone -- they stayed
     # green even with "Type: row.Type" deleted from
     # githubWorkItemDerivationSubjectFromRow entirely, never actually proving
@@ -989,7 +989,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # an added assertion) -- confirmed red when the SELECT column order is
     # swapped. Still no database, so the integration-tagged count stays 117.
     #
-    # CHAOS-4321's Round-1 commit (cbe8f65fe, "remove person-membership as a
+    # CHAOS-4321's first commit (cbe8f65fe, "remove person-membership as a
     # team source") then deleted all 19 of the CHAOS-4244 author-path
     # top-level tests named above (1084 -> 1065), under that round's
     # original, wider scope ("author_membership and assignee_membership are
@@ -1028,8 +1028,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # 1084, all four accounted for above as consolidated subtests, not lost
     # coverage).
     #
-    # CHAOS-4321 round 3 (team-lead ruling, 2026-08-26, codex adversarial
-    # review HIGH finding) then added ONE ordinary top-level test (1080 ->
+    # CHAOS-4321 then added ONE ordinary top-level test (1080 ->
     # 1081): TestGitHubWorkItemLoadMembersScopesTeamsMembersFallbackByProvider,
     # pinning that a bare (non-email) `teams.members` roster facet only
     # joins the provider-scoped fallback pool when
@@ -1048,7 +1047,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # against a real containers.StartPostgres instance. Both counts move:
     # 1081 -> 1083, 117 -> 119.
     #
-    # A codex round-3 finding (CHAOS-4078: folded telemetry not attributing
+    # A finding (CHAOS-4078: folded telemetry not attributing
     # to the enabled alias) added one more ordinary, non-integration-tagged
     # top-level test in internal/providersync
     # (work_item_alias_completion_test.go):
@@ -1112,7 +1111,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestLinearReferenceCatalogNonStrictCycleFailureKeepsOtherRows,
     # TestLinearReferenceCatalogStrictCycleFailureAbortsTheWholeCall,
     # TestLinearReferenceTeamRosterFromMembershipsExcludesRejectedMemberships,
-    # TestLinearReferenceTeamRosterFromMembershipsScopesByTeam -- round 2/3's
+    # TestLinearReferenceTeamRosterFromMembershipsScopesByTeam -- the
     # non-strict partial-prefix and roster-rebuild-after-guard fixes), 9
     # ordinary tests in team_membership_conflict_guard_test.go
     # (TestMembershipConflictsWithManualState* x8 + Test
@@ -1222,7 +1221,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # to look it up -- CHAOS-4458 part (b)'s reader). None is
     # integration-tagged. 1236 -> 1239 top-level; 145 unchanged.
     #
-    # CHAOS-4530 codex review round 2 (confirmed real: the per-response
+    # A later CHAOS-4530 review (confirmed real: the per-response
     # tombstone loop only revisits a team key present in the CURRENT Linear
     # response, so a team deleted or re-keyed between syncs never gets its
     # OLD pseudo-project identity retired) added 4 more ordinary top-level
@@ -1255,7 +1254,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # None is integration-tagged. Net +3 (-4/+7): 1243 -> 1246 top-level; 145
     # unchanged.
     #
-    # Codex review round 1 on the cleanup verb (P2, confirmed real) added 1
+    # A review of the cleanup verb (confirmed real) added 1
     # more ordinary top-level test in linear_pseudo_project_cleanup_test.go:
     # TestLinearPseudoProjectIdentityPredicateMatchesOwnOrgIDOnly, pinning
     # the fix that ties the identity predicate to each row's OWN org_id
@@ -1272,7 +1271,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # loading work_items at all -- fixed in the same change). 1247 -> 1248
     # top-level; 145 -> 146 integration-tagged.
     #
-    # Codex review round 1 on this PR (P1, confirmed real) found the same
+    # A review of this PR (confirmed real) found the same
     # change had removed a SEPARATE, still-necessary guard along with the
     # one above: if work_items/dependencyEdges/issuePRLinks are all empty
     # regardless of team_project_ownership's state (a transient partial-sync
@@ -1285,7 +1284,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap.
     # 1248 -> 1249 top-level; 146 -> 147 integration-tagged.
     #
-    # Codex review round 2 on this PR (P1, confirmed real) found
+    # A later review of this PR (confirmed real) found
     # resolveWorkItemTeamID's linear_team_key arm unconditionally trusted a
     # Linear work item's native_team_key with no validation against the org's
     # CURRENT team catalog -- diverging from the established "native_team"
@@ -1301,10 +1300,10 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestTeamRepoOwnershipDerivationRejectsUnknownNativeTeamKey.
     # 1249 -> 1251 top-level; 147 -> 148 integration-tagged.
     #
-    # Codex review round 3 (final) on this PR found 2 more findings against
-    # round 2's own fix. (P1, confirmed real) the projectLinks-empty guard
-    # round 1 removed unconditionally reopened the identical retraction
-    # hazard round 1 itself fixed, mirrored onto the opposite input
+    # A final review of this PR found 2 more issues against
+    # the prior fix: the projectLinks-empty guard removed earlier reopened
+    # the identical retraction hazard that same change had just fixed,
+    # mirrored onto the opposite input
     # combination (team_project_ownership transiently empty for a
     # NON-Linear org, or a Linear org with no native_team_key signal) --
     # fixed with a new hasResolvableLinearNativeTeamKey helper and a
@@ -1322,11 +1321,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (`//go:build integration`, team_repo_ownership_derivation_integration_test.go).
     # 1251 -> 1254 top-level; 148 -> 149 integration-tagged.
     #
-    # A delta-only re-review of round 3's own fix (the final allowed codex
+    # A delta-only re-review of the prior fix (the final allowed
     # pass per the round cap -- its finding gets a minimal fix, no further
     # round) found a second real P1: diffTeamRepoOwnershipRetractions is a
     # single GLOBAL diff over the whole org, not scoped per resolution arm.
-    # Round 3's hasResolvableLinearNativeTeamKey guard let a cycle proceed
+    # The prior hasResolvableLinearNativeTeamKey guard let a cycle proceed
     # with projectLinks empty on ONE Linear item's valid native key, but
     # `derived` can never reproduce a project_id-arm-derived pair in that
     # state -- retracting would wrongly wipe every previously-good
@@ -1350,7 +1349,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     #
     # CHAOS-4559 (sync_runs.completed_units/failed_units read 0/0 while units
     # actually succeeded -- the per-unit terminal commit never touched the
-    # parent row). A codex adversarial review round 1 found a real
+    # parent row). A review found a real
     # concurrency race in the fix's own recompute (uncorrelated COUNT(*)
     # subqueries plan as InitPlans, evaluated once at statement start, so a
     # second concurrent completion blocked on the row lock could resume
@@ -1402,7 +1401,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (later replaced, see below).
     # 1272 -> 1273 top-level; 152 -> 152 integration-tagged (unchanged).
     #
-    # CHAOS-4588 codex review round 1 (P1/P2 fixes): bounded provider-supplied
+    # CHAOS-4588: bounded provider-supplied
     # artifact names before they reach the cursor (githubTestsTruncateArtifactName,
     # unbounded growth could exceed maxChunkCursorBytes); fixed a missing
     # Name on the empty-archive skip marker; reset the new exclusion counters
@@ -1422,11 +1421,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # truncation fix. Net: -1 removed, +4 added.
     # 1273 -> 1276 top-level; 152 -> 152 integration-tagged (unchanged).
     #
-    # CHAOS-4588 codex review round 2 (P2 fixes): artifact_skip_total counted
+    # CHAOS-4588 (more fixes): artifact_skip_total counted
     # member-level malformed/unreadable causes as if the whole artifact were
     # skipped; narrowed to the three whole-artifact-skip causes only
     # (artifact_oversized/artifact_unavailable/unreadable_archive). Reverted
-    # round 1's exclusion-counter reset on page re-anchor -- it discarded
+    # the earlier exclusion-counter reset on page re-anchor -- it discarded
     # EARLIER pages' legitimate totals, not just the replayed page's; the
     # counters are a cursor-wide running total, not a per-walk gate input
     # like ArchivesSeen/Unreadable, so leaving them alone (accepting a bounded,
@@ -1453,7 +1452,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # malformed/unreadable, were never added to githubTestsWatermarkAdvancingPairs
     # when CHAOS-4394 fixed the three whole-artifact causes for the identical
     # reason -- an immutable historical CI artifact's bytes parse the same
-    # way on every re-attempt). Codex review round 1 (P1) found the aggregate
+    # way on every re-attempt). A review found the aggregate
     # SkippedArtifactsOverflow shortcut in
     # githubTestsReportMemberSkippedWithoutDurableMarker could let an
     # intermediate binary's cursor (post-CHAOS-4394, pre-CHAOS-4592) advance
@@ -1464,7 +1463,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # None are integration-tagged.
     # 1279 -> 1280 top-level; 152 -> 152 integration-tagged (unchanged).
     #
-    # CHAOS-4592 codex review round 2 (P1): round 1's overflow-shortcut
+    # CHAOS-4592 (more fixes): the earlier overflow-shortcut
     # narrowing still shared ONE aggregate SkippedArtifactsOverflow int
     # across every report_member cause, so it could not prove which cause
     # actually overflowed -- one cause's overflow could wrongly excuse an
@@ -1474,7 +1473,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # No new top-level tests (extended the existing overflow test in place).
     # 1280 -> 1280 top-level; 152 -> 152 integration-tagged (unchanged).
     #
-    # CHAOS-4592 codex review round 3 (P2): round 2's per-cause fix gated its
+    # CHAOS-4592 (more fixes): the prior per-cause fix gated its
     # legacy-cursor fallback on "causeOverflow has zero entries", which a
     # walk straddling this exact deploy would break the instant its own
     # post-upgrade marker-writing touched even one unrelated cause. Added
@@ -1519,7 +1518,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # integration-tagged.
     # 1283 -> 1284 top-level; 152 -> 152 integration-tagged (unchanged).
     #
-    # CHAOS-4592 fourth CHAOS-4588 fold-in (codex P1, round 5): shrinking the
+    # CHAOS-4592 fourth CHAOS-4588 fold-in: shrinking the
     # skipped-artifact caps only bounds a NEWLY appended record -- a cursor a
     # PRIOR binary version already wrote under the OLDER, larger caps
     # decodes with its sample exactly as written (up to 20 records with
@@ -1567,7 +1566,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsMalformedAndUnreadableReportsAdvanceWatermarkEndToEnd.
     # Not integration-tagged.
     # 1286 -> 1287 top-level; 152 -> 152 integration-tagged (unchanged).
-    # CHAOS-4592/4601 codex review gate round 2 (terra/xhigh, full-base +
+    # CHAOS-4592/4601 (full-base +
     # .codex-review-context.md): 1 P1 + 2 P2 findings, each fixed with a
     # regression test. P1 -- the durable-marker guard checked cause PRESENCE
     # not COUNT, so one marker could excuse an unrelated remainder of that
@@ -1587,9 +1586,9 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # chunked route through an HTTP-mocked walk. 3 new ordinary top-level
     # tests, none integration-tagged.
     # 1287 -> 1290 top-level; 152 -> 152 integration-tagged (unchanged).
-    # CHAOS-4592/4601 codex review gate round 3 (terra/xhigh, full-base +
+    # CHAOS-4592/4601 (full-base +
     # .codex-review-context.md): 2 P2 correctness bugs, both regressions in
-    # round 2's own P1 fix or its supporting normalize path, plus 2 P3 proof
+    # the prior fix or its supporting normalize path, plus 2 P3 proof
     # gaps in unrelated-package/test-double wiring. P2 #1 -- causeCount was
     # treated as authoritative the moment it was tracked at all, abandoning
     # the sampleCount/causeOverflow fallback -- a cursor with fully retained
@@ -1602,7 +1601,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # trim attributed dropped records' overflow to the RAW (often empty)
     # Cause field instead of resolving it through
     # githubTestsSkippedArtifactCause's SizeBytes fallback, mis-keying
-    # migration overflow under "" instead of artifact_oversized; the round-6
+    # migration overflow under "" instead of artifact_oversized; the prior
     # test that was supposed to cover this manufactured modern-shaped markers
     # (Cause already set) and never exercised the bug at all -- fixed both the
     # code and that test's marker construction (no new test func). The 2 P3s
@@ -1616,11 +1615,11 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # does NOT count toward this providersync-only pin). 2 new ordinary
     # top-level providersync tests, none integration-tagged.
     # 1290 -> 1292 top-level; 152 -> 152 integration-tagged (unchanged).
-    # CHAOS-4592/4601 codex review gate round 5 (terra/xhigh, full-base +
-    # ledger, chris's ruling: apply the CLASS fix, not the layer patch).
-    # Round 4 found causeOverflow[cause] was STILL a boolean with no
-    # magnitude check -- the identical defect as round 2's original bug
-    # (marker presence) and round 3's regression (causeCount trusted the
+    # CHAOS-4592/4601 (full-base +
+    # ledger, per the ruling to apply the CLASS fix, not the layer patch).
+    # A later pass found causeOverflow[cause] was STILL a boolean with no
+    # magnitude check -- the identical defect as the original bug
+    # (marker presence) and a later regression (causeCount trusted the
     # moment it was "tracked"), recurring a 3rd time at a new layer. Deleted
     # the generic causeOverflow[cause] fallback entirely (now provably
     # redundant: causeCount is unconditional/exact, so it already covers
@@ -1631,7 +1630,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # that manufactured a causeOverflow-without-causeCount cursor no real
     # binary could produce. Also fixed the P2 sibling: the totality-gate
     # ERROR log had its own separate copy of the skipped-sample attrs that
-    # silently missed skipped_sample_cause_overflow when round 2 added it to
+    # silently missed skipped_sample_cause_overflow when an earlier fix added it to
     # the OTHER copy -- extracted githubTestsSkippedArtifactMarkerAttrs so
     # both (and any future third caller) share one builder. Added 2 new
     # ordinary top-level tests, none integration-tagged:
@@ -1640,18 +1639,18 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestGitHubTestsReportMemberMagnitudeInvariant
     # (complete_route_comparator_decoded_test.go) -- the latter pins THE
     # class invariant ("watermark advances only when some signal proves the
-    # FULL Count; no boolean may excuse a magnitude") with the round
-    # 2/3/5 repros as its three sub-cases, so a 4th recurrence of this
-    # pattern fails loudly here instead of needing a round 6 to find it.
+    # FULL Count; no boolean may excuse a magnitude") with the three earlier
+    # repros as its three sub-cases, so a 4th recurrence of this
+    # pattern fails loudly here instead of needing yet another pass to find it.
     # 1292 -> 1294 top-level; 152 -> 152 integration-tagged (unchanged).
-    # CHAOS-4592/4601 codex review gate round 5's OWN merge-gate re-run
-    # (terra/xhigh, full-base + ledger, THE INVARIANT confirmed closed: "No
+    # CHAOS-4592/4601's OWN merge-gate re-run
+    # (full-base + ledger, THE INVARIANT confirmed closed: "No
     # additional watermark-advance defect found... the sole boolean legacy
     # fallback remains limited to artifact_oversized"). Found 1 P2 + 1 P3, a
     # DIFFERENT class from the invariant (not a watermark-advance defect --
     # both fixed the same commit). P2: RunID/ArtifactID (json.Number-decoded,
     # syntactically unbounded) were never length-bounded the way Name was
-    # (round 1's own fix) -- an oversized provider-supplied ID could blow
+    # (the earlier Name fix) -- an oversized provider-supplied ID could blow
     # maxChunkCursorBytes and fail the checkpoint outright, losing progress
     # instead of degrading into overflow. Fixed with
     # githubTestsMaxArtifactIDBytes (24) truncation at the same single append
@@ -1660,7 +1659,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # than realistic-looking-but-short values. P3: per-cause sample overflow
     # had no metric of its own, only RecordCicdPartialSuccess's single
     # dominant-reason label (indistinguishable from a single skip) and the
-    # round-2 log line. Added
+    # earlier log line. Added
     # dev_health_provider_skipped_artifact_cause_overflow_total, wired
     # through observeCicdPartialSuccess. 1 new ordinary top-level test:
     # TestGitHubTestsSkippedArtifactAppendTruncatesOversizedID
@@ -1668,7 +1667,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestObserveCicdPartialSuccessRecordsPerCauseOverflow (the P3 fix's
     # test) is in internal/jobs/providerunit, does not count toward this pin.
     # 1294 -> 1295 top-level; 152 -> 152 integration-tagged (unchanged).
-    # CHAOS-4592/4601 codex review gate round 6 (terra/xhigh, full-base +
+    # CHAOS-4592/4601 (full-base +
     # ledger; THE INVARIANT still confirmed closed -- these 2 findings are
     # in items 24/25's OWN robustness/telemetry class, not the invariant).
     # P2: item 24's ID truncation bounded only NEWLY appended markers --
@@ -1687,7 +1686,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestExtractGitHubClosingIssueReferencesRejectsMalformedNode
     # (github_work_items_rows_test.go). Not integration-tagged.
     # 1296 -> 1298 top-level; 152 -> 152 integration-tagged (unchanged).
-    # CHAOS-4757 (codex round 2b fix): 2 new ordinary top-level tests --
+    # CHAOS-4757 (a later fix): 2 new ordinary top-level tests --
     # TestGitHubWorkItemPRSocialFetcherSignalsClosingReferenceTruncation,
     # TestGitHubWorkItemPRSocialFetcherClosingReferenceCompletePageIsNotTruncated
     # (github_work_items_social_fetch_test.go). Not integration-tagged.
@@ -1701,29 +1700,29 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # (jira_dev_status_test.go); TestJiraWorkItemsRouteDevStatusSyncsPrimaryDependencyRow,
     # TestJiraWorkItemsRouteDevStatusUnavailableIsCleanNoOp (jira_work_items_route_test.go).
     # Not integration-tagged. 1300 -> 1307 top-level; 152 -> 152 integration-tagged (unchanged).
-    # codex round 1 (P1) moved the dev-status wiring from JiraWorkItemsRouteHandler
+    # A review moved the dev-status wiring from JiraWorkItemsRouteHandler
     # (never constructed by the worker) to JiraAtlassianRouteHandler (the real
     # route): -2 (jira_work_items_route_test.go) +3
     # (TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow,
     # TestJiraAtlassianRouteDevStatusUnavailableIsCleanNoOp,
-    # TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts). codex round 1 (P2)
+    # TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts). The same review
     # added a real-wire-attempt counting fix: +2
     # (TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsRetries,
     # TestFetchJiraDevStatusPullRequestsCountingAttemptsCountsExactlyOneOnSuccess,
     # jira_dev_status_test.go). Net +3. 1307 -> 1310 top-level; 152 -> 152
     # integration-tagged (unchanged).
-    # codex round 2 (P2): the cap must limit the retry policy itself, not just
+    # A follow-up review: the cap must limit the retry policy itself, not just
     # count after the fact -- TestJiraAtlassianRouteDevStatusCapCountsRealWireAttempts
     # renamed to TestJiraAtlassianRouteDevStatusCapLimitsRealWireAttempts (net 0) plus
     # 1 new test, TestFetchJiraDevStatusPullRequestsCountingAttemptsHonorsRemainingBudget
     # (jira_dev_status_test.go). Net +1. 1310 -> 1311 top-level; 152 -> 152
     # integration-tagged (unchanged).
-    # codex round 3 (CLEAN, coverage note): added
+    # A coverage note added
     # TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues, EXECUTED
-    # multi-issue coverage for the cross-issue budget invariant round 3 verified
-    # only statically. 1311 -> 1312 top-level; 152 -> 152 integration-tagged
+    # multi-issue coverage for the cross-issue budget invariant a prior review
+    # had verified only statically. 1311 -> 1312 top-level; 152 -> 152 integration-tagged
     # (unchanged).
-    # codex round 4 (scoped, P3): the multi-issue test above covered only
+    # A further, narrowly scoped finding: the multi-issue test above covered only
     # all-503 exhaustion, not proving a clean 400/404 no-op also debits the
     # shared budget. Added TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget
     # (production confirmed correct by codex's own mutation probes; this closes
@@ -1744,13 +1743,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # JiraWorkItemsRouteHandler is NOT reported wired -- its "intentionally
     # unregistered" comment is true and must stay). All three parse source with
     # go/ast and touch no database, so the integration-tagged count stays 152.
-    # codex round 2 (NOT CLEAN, 3x P2 EXECUTED) then showed the guard accepting
+    # A follow-up review then showed the guard accepting
     # a stale claim on a CONSTRUCTOR doc and on a type embedded two hops below a
     # wired handler. Discovery now walks func docs and closes over struct fields
     # to fixpoint, pinned by +1 ordinary test (1316 -> 1317):
     # TestDriftGuardCoversConstructorDocsAndDeepFields. Parses source only, so
     # the integration-tagged count stays 152.
-    # codex round 3 (NOT CLEAN, 2xP2+P3) then killed the prose-marker heuristic
+    # A later review then killed the prose-marker heuristic
     # outright in favour of a lexical SUPERSEDED: tag, and a reach probe found
     # discovery filtered `Recv == nil` and accepted only token.TYPE -- so method,
     # var and const docs were silently unread. Discovery now reads the closed set
@@ -1878,7 +1877,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # UNCHANGED at 153. TestGitHubWorkItemTeamAttributionRowSurvivesThe-
     # EffectsJSONRoundTrip and TestGitHubWorkItemTeamAttributionRowNo-
     # ExportedFieldReadsBackZero are both in-memory, non-integration tests.
-    # CHAOS-4320 round 3 (two codex P1 fixes, red-first pinned): +2 ordinary
+    # CHAOS-4320 (two fixes, red-first pinned): +2 ordinary
     # top-level (1339 -> 1341), integration-tagged UNCHANGED at 153.
     # TestWriteGitHubWorkItemEffectCountsOwnershipCheckedOnEveryMembershipRow
     # (the writer must count ownership_checked on every non-primary
@@ -1887,7 +1886,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CarriesOwnershipReasonFromTheRealResolver (a mutation-resistant pin
     # that the real builder, not a hand-built row, carries OwnershipReason
     # through) are both in-memory, non-integration tests.
-    # CHAOS-4320 round 4 (one codex P1 fix, three P3 test-strength fixes):
+    # CHAOS-4320 (one fix, three test-strength fixes):
     # +2 ordinary top-level (1341 -> 1343), integration-tagged UNCHANGED at
     # 153. TestRejectedMembershipsAreCountedByOwnershipChecked (a gate
     # REJECTION must reach ownership_checked -- it never became a row at
@@ -1896,7 +1895,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # FromTheRealResolver (the author/reporter path's sibling of the
     # existing assignee-path pin above) are both in-memory, non-integration
     # tests.
-    # CHAOS-4320 round 5 (two codex P1 fixes, two P3 test-strength fixes):
+    # CHAOS-4320 (two fixes, two test-strength fixes):
     # +3 top-level (1343 -> 1346), of which ONE is integration-tagged
     # (153 -> 154): TestGitHubWorkItemTeamAttributionsRejectionMarkerReadback-
     # StaysExact (`-tags=integration`, real ClickHouse -- a rejected marker
@@ -1909,10 +1908,10 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # TestWriteGitHubWorkItemEffectDoesNotCountOnAFailedSend (counting must
     # gate on a successful Send, not merely follow the Append loop in
     # source order).
-    # CHAOS-4320 round 6 (chris via team-lead, 2026-09-10: dropped the
+    # CHAOS-4320 dropped the
     # marker-row mechanism entirely -- rejections now travel on
-    # EffectBatch.MembershipRejections, never Rows): +2 ordinary top-level
-    # (1346 -> 1348), integration-tagged UNCHANGED at 154 (the round-5
+    # EffectBatch.MembershipRejections, never Rows. +2 ordinary top-level
+    # (1346 -> 1348), integration-tagged UNCHANGED at 154 (the earlier
     # integration test above was renamed to
     # TestGitHubWorkItemTeamAttributionsRejectionReadbackStaysExact for the
     # new mechanism, a rename not an addition).
@@ -1923,7 +1922,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # invariant this design is built on: every row in Rows reaches the
     # INSERT, no filtering path exists) are both in-memory, non-integration
     # tests.
-    # CHAOS-4320 round 7 (codex round 6, two P1 fixes, three P3
+    # CHAOS-4320 (two more fixes, three
     # test-strength fixes): +6 ordinary top-level (1348 -> 1354),
     # integration-tagged UNCHANGED at 154. TestPreparedRouteSnapshotRetainsMembershipRejections
     # (a rejection must survive the prepared-route recovery envelope, a
@@ -3351,7 +3350,7 @@ def test_every_compose_spelling_is_refused(command: str) -> None:
 # Definitions in tests/tooling that are dead TODAY and not this ticket's to fix.
 # Asserted STILL ORPHANED, so the list cannot rot into a silent exemption.
 _KNOWN_ORPHANS: dict[str, frozenset[str]] = {
-    # CHAOS-4843, round 2 of #2169's peer review: _code_filter_patterns is no
+    # CHAOS-4843: _code_filter_patterns is no
     # longer orphaned -- test_paths_filter_covers_lefthook_yml now calls it.
     "test_aggregate_gate_results.py": frozenset({"_job", "_steps"}),
     # `pytestmark` is pytest's own module-level skip-marker hook (CHAOS-4976):

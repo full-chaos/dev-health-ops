@@ -91,7 +91,7 @@ ENABLEMENT_PROOF_STAGE = "deployed_executed"
 #: gate worse than absent, because it would look enforced.
 ENABLEMENT_PROOF_TERMINAL_STATE = "match"
 
-#: The ONE exception, added by CHAOS-5484 (team-lead ruling R60): a
+#: The ONE exception, added by CHAOS-5484: a
 #: ``mismatch`` in which every difference is a named defect in the PYTHON
 #: baseline. Those are the divergences where Python is wrong and Go is
 #: right (CHAOS-5447/5448/5449/5450), so refusing them would mean an
@@ -118,7 +118,7 @@ MEASUREMENT_ROUTE_EDGE = "edge"
 MEASUREMENT_ROUTE_PROOF = "proof"
 
 #: Target modes `enable` can be asked for, and the route rule each one
-#: carries (team-lead ruling, 2026-09-09).
+#: carries.
 #:
 #: * ``canary``  -- any recorded route. A shadow operation can ONLY be
 #:                  measured through ``/query/proof``, because
@@ -181,18 +181,17 @@ class OperationStatus:
     * ``UNREGISTERED`` -- a row exists at the LIVE schema digest for an
       operation the catalog does not register at all (renamed or retired).
       Its own status row too: iterating the catalog alone named it
-      nowhere (opus r7, P2-1).
+      nowhere.
 
     ``DOCUMENT_DRIFT`` is the silent-death shape one level down: the edge
     resolves a request to an operation through the catalog, so such a row
     cannot be dispatched. It used to be reported ``MATCH`` under the
     CATALOG's digest -- a row an operator reads as serving that in fact
-    serves nothing (codex r2, P1). Folding it into ``STALE`` would widen
+    serves nothing. Folding it into ``STALE`` would widen
     what STALE means (rows at other SCHEMA digests), and reporting it
     ``MISSING`` would be the other half of the original error:
     ``count_rows_by_schema_digest`` groups by schema digest alone, so the
-    row would be named nowhere at all. Never silent, so it gets a name
-    (team-lead ruling, 2026-09-10).
+    row would be named nowhere at all. Never silent, so it gets a name.
 
     ``proven`` is separate from and orthogonal to ``digest_state``: a row
     can be live and reachable while nothing ever proved the deployed
@@ -383,9 +382,9 @@ async def plan_disable(
     # go_api_routing_state is keyed -- (schema_digest, document_digest,
     # selected_operation). Keying by operation alone collapses two
     # document versions under one schema onto whichever row the scan
-    # returned last, and r2 reproduced the consequence live: a rollback
-    # plan that named the wrong row's mode. A disable verb reporting the
-    # wrong current_mode is a verb an operator cannot check.
+    # returned last, producing a rollback plan that named the wrong row's
+    # mode. A disable verb reporting the wrong current_mode is a verb an
+    # operator cannot check.
     live = {
         (row.selected_operation, row.document_digest): row
         for row in result.scalars().all()
@@ -448,8 +447,8 @@ async def apply_disable(
     for change in changes:
         if change.current_mode is None:
             continue
-        # Enforced HERE, at the write, not only in plan_disable (codex r1,
-        # P1): a hand-built ModeChange(new_mode="primary") reached this
+        # Enforced HERE, at the write, not only in plan_disable: a
+        # hand-built ModeChange(new_mode="primary") reached this
         # function and turned routing ON -- the one thing an off-ramp must
         # never be able to do. An invariant checked only by the caller is
         # an invariant the next caller breaks.
@@ -466,7 +465,7 @@ async def apply_disable(
         ]
         if expected_candidate_build is not None:
             # The guard has to be part of the WRITE, not a separate earlier
-            # read (codex r1, P1): plan_disable checks it, then anyone can
+            # read: plan_disable checks it, then anyone can
             # repoint the row before apply_disable fires. Putting it in the
             # WHERE makes the check and the write one atomic statement, so
             # a repointed row is simply not matched.
@@ -577,7 +576,7 @@ def _admissible_terminal_state() -> ColumnElement[bool]:
         # proof route always binds per request, an edge match without the
         # header is downgraded to `unsupported`, and an edge mismatch
         # without it already has outside >= 1. It ALSO excludes the sound
-        # pre-0129 MATCH rows (opus r7 P3-3): after 0129 every operation
+        # pre-0129 MATCH rows: after 0129 every operation
         # proven before it reads UNPROVEN and `enable` refuses it until
         # go-api-prove re-runs at the deployed build (JOB 6 does).
         ProofRun.build_binding == BUILD_BINDING_PER_REQUEST,
@@ -637,8 +636,8 @@ def _terminal_state_admits() -> ColumnElement[bool]:
                     sa.or_(
                         # A SQL NULL element: cardinality() counts it and
                         # one-argument btrim(NULL) is NULL, not '', so it
-                        # passed BOTH predicates and promoted to primary
-                        # (opus r5 P1, executed through the CLI).
+                        # passed BOTH predicates and promoted to primary,
+                        # executed through the CLI.
                         sa.column("citation").is_(None),
                         sa.func.btrim(sa.column("citation"), _BLANK_CUTSET) == "",
                     )
@@ -671,7 +670,7 @@ def build_enablement_proof_select(
     """The SELECT :func:`operations_with_enablement_proof` executes.
 
     Extracted so a test can COMPILE THE PRODUCTION PREDICATE rather than a
-    hand-rebuilt copy of it (codex r3, P3). The previous test reconstructed
+    hand-rebuilt copy of it. The previous test reconstructed
     the same clauses and compiled those, which proves only that the test
     agrees with itself -- a regression in the real function would not have
     failed it. The behaviour needs no database to verify, so the seam is
@@ -715,9 +714,9 @@ def _enablement_proof_conditions(
     :func:`build_enablement_receipt_select` (WHICH receipt proves each) must
     never disagree about admissibility, so neither restates a clause.
     """
-    # The key is FOUR columns, and `document_digest` is not optional
-    # (codex r1, P2 -- it was missing, so a proof recorded against a
-    # DIFFERENT registered document could authorize an enablement).
+    # The key is FOUR columns, and `document_digest` is not optional --
+    # it was missing, so a proof recorded against a
+    # DIFFERENT registered document could authorize an enablement.
     # Matched as an explicit tuple-OR rather than two independent `IN`
     # lists: `selected_operation IN (...) AND document_digest IN (...)`
     # is a cross product and would accept exactly the mismatch under test.
@@ -743,8 +742,8 @@ def _enablement_proof_conditions(
 class AuthorizingReceipt:
     """The receipt that authorizes enabling one operation.
 
-    opus r7 (observability): `enable` printed the same output for a
-    ``match`` admission and a fully-cited ``mismatch`` admission, and
+    `enable` printed the same output for a ``match`` admission and a
+    fully-cited ``mismatch`` admission, and
     nothing -- not the output, not the routing row, not a log line -- named
     the receipt that carried the decision. A predicate regression that
     admitted the wrong receipt would have looked exactly like a correct
@@ -760,8 +759,8 @@ class AuthorizingReceipt:
     build_binding: str | None
     observed_at: datetime | None
     #: What the receipt's citation covered and did not, by finding shape, as
-    #: the Go writer recorded them in the receipt's provenance (opus r8
-    #: P3-5). ``None`` when the receipt carries no such provenance -- an
+    #: the Go writer recorded them in the receipt's provenance.
+    #: ``None`` when the receipt carries no such provenance -- an
     #: older writer, or an operator's free text -- which is said, never
     #: printed as an empty coverage.
     covered_by_shape: Mapping[str, int] | None = None
@@ -952,8 +951,8 @@ async def routing_status_rows(
     # document_digest, selected_operation). A map keyed on the operation
     # ALONE collapses two document versions under one schema onto
     # whichever row the scan returned last -- nondeterministically, so the
-    # answer changes between runs against the same data. r2 reproduced it
-    # live: status reported the wrong row's mode.
+    # answer changes between runs against the same data, and status
+    # reported the wrong row's mode.
     live_by_document: dict[tuple[str, str], RoutingState] = {}
     live_documents_by_operation: dict[str, set[str]] = {}
     stale_digests_by_operation: dict[str, set[str]] = {}
@@ -982,8 +981,8 @@ async def routing_status_rows(
     # collapsing. `grouped[...][operation] = document` keys the inner dict
     # by operation, so two documents sharing a (build, target mode) lost
     # one of them; and `operations_with_enablement_proof` returns operation
-    # NAMES, so proof found for either document marked BOTH proven. astra
-    # r3 reproduced it: `routing status --json` exited 0 reporting
+    # NAMES, so proof found for either document marked BOTH proven:
+    # `routing status --json` exited 0 reporting
     # "proven": true for a catalog document with no proof of its own,
     # borrowed from a drifted row at a different build and target mode.
     #
@@ -992,7 +991,7 @@ async def routing_status_rows(
     # to the lookup and back: the result set below is keyed by the same
     # (operation, document) pair the query asked about, never by name.
     proven: set[tuple[str, str]] = set()
-    # Keyed by (build, target mode, DOCUMENT). opus r5 found the document
+    # Keyed by (build, target mode, DOCUMENT): the document was found
     # missing from this key while the two downstream halves were already
     # fixed: `grouped[...][operation] = document` collapsed two live
     # documents of one operation that shared a build and a mode, BEFORE
@@ -1035,7 +1034,7 @@ async def routing_status_rows(
     # Every document the catalog registers per operation. A drifted row is a
     # live row at a document the catalog does not name AT ALL -- subtracting
     # only the current entry's digest made each of two registered documents
-    # flag the other as drift (opus r7, P3-1).
+    # flag the other as drift.
     catalog_documents: dict[str, set[str]] = {}
     for operation, document_digest in catalog:
         catalog_documents.setdefault(operation, set()).add(document_digest)
@@ -1114,8 +1113,8 @@ async def routing_status_rows(
     # A live row for an operation the catalog does not register at all
     # (renamed or retired) cannot be dispatched either -- the edge resolves
     # a request to an operation THROUGH the catalog -- and iterating the
-    # catalog named it nowhere, while the migration page named it (opus r7,
-    # P2-1). Its own state, its own row, after the catalog's.
+    # catalog named it nowhere, while the migration page named it.
+    # Its own state, its own row, after the catalog's.
     for operation, document_digest in sorted(live_by_document):
         if operation in catalog_documents:
             continue

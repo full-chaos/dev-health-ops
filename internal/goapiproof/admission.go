@@ -8,7 +8,7 @@ import (
 // This file is the whole answer to a defect class that survived two review
 // rounds and ten separate instances.
 //
-// Round 1 found five ways a pair of responses could produce a
+// There are five ways a pair of responses can produce a
 // `deployed_executed`/`match` receipt while the claim that receipt makes was
 // never established: a shadow candidate exempt from the plane check, a
 // baseline whose plane was checked only when a header happened to be
@@ -24,7 +24,7 @@ import (
 // shape nobody had thought of still produced a proof, and the seam kept
 // yielding new instances precisely because it had just been edited.
 //
-// R57 inverts it. `Admit` below is the ONLY door to `executed=true`, and it
+// This inverts it. `Admit` below is the ONLY door to `executed=true`, and it
 // admits nothing that does not satisfy every precondition by name. The
 // default is REFUSED. A response shape nobody has imagined yet is refused
 // on arrival rather than certified, which is the property that makes the
@@ -98,7 +98,7 @@ type AdmissionInput struct {
 	ResponseRoot string
 	// RootNullable is whether the SDL declares that field NULLABLE.
 	//
-	// Round 2's F4: refusing every null root made the two operations whose
+	// Refusing every null root made the two operations whose
 	// root IS nullable unprovable. `capacityForecast` and
 	// `throughputForecast` are declared without `!`, and their resolver
 	// says so in as many words -- "A null result is a TOLERATED empty (no
@@ -200,8 +200,8 @@ func admitPlanes(in AdmissionInput) Admission {
 // Python edge rebuilds the response with only content, status and
 // media_type and drops every header query-api sets. Requiring the header on
 // the edge route would refuse every legitimate canary measurement; NOT
-// requiring it on the proof route is how the confirmation pass's C1 got a
-// MATCH with no build evidence at all.
+// requiring it on the proof route is how a MATCH with no build evidence
+// at all was once produced.
 func admitBuild(in AdmissionInput) Admission {
 	switch in.Route {
 	case RouteProof:
@@ -287,8 +287,8 @@ func emptyRootDetail(leg, root string, nullable bool, snap Snapshot) string {
 		}
 		// An object carrying only __typename resolved no actual fields.
 		// gqlgen adds __typename to every selection set, so this shape is
-		// what a resolver returning nothing looks like on the wire (round
-		// 2's F5, reproduced: it was admitted).
+		// what a resolver returning nothing looks like on the wire
+		// (reproduced: it was admitted).
 		if len(typed) == 1 {
 			if _, only := typed["__typename"]; only {
 				return fmt.Sprintf("%s returned %q carrying only __typename: no field of the operation's own result resolved", leg, root)
@@ -307,11 +307,11 @@ func emptyRootDetail(leg, root string, nullable bool, snap Snapshot) string {
 		// EVERYTHING ELSE IS REFUSED. This case used to enumerate the
 		// scalar types it knew -- string, float64, bool, int, int64 --
 		// and json.Number was not among them, so `{"data":{"root":0}}`
-		// fell through to an admitting default. r8 proved it end to end:
+		// fell through to an admitting default. Testing proved it end to end:
 		// the run wrote a receipt that real PostgreSQL accepted for
 		// enablement.
 		//
-		// That is R57's own lesson inside R57's own file. A switch whose
+		// That is this design's own lesson inside its own file. A switch whose
 		// default admits is a blacklist, and the decoder produces
 		// json.Number precisely because decodeWithNumbers asks it to --
 		// so the one type this code was guaranteed to meet was the one

@@ -126,7 +126,7 @@ func renderRegressions(tickets []string) string {
 // catalog is the registered-operation catalog the edge dispatches by. It
 // decides DOCUMENT_DRIFT: a live row whose (operation, document) pair the
 // catalog does not name renders as such in the liveness cell and is
-// counted on its own line, never as a serving row (opus r6, P2-2).
+// counted on its own line, never as a serving row.
 func RenderOpsBlock(render *Render, catalog Catalog) string {
 	var b strings.Builder
 

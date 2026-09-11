@@ -11,7 +11,7 @@ import (
 // receipt's request_identity, because a proof run is evidence for one
 // request -- "the same operation over a different window" is a different
 // request and must not silently reuse another run's verdict. The defaults
-// below reproduce the window the 2026-09-07 live measurement used
+// below reproduce the window a live measurement used
 // (lane-goapi-enable's go_api_request_payloads.py), so a re-run of that
 // measurement is reproducible rather than "whatever today happens to be".
 //
@@ -26,7 +26,7 @@ type Window struct {
 	WeekStart string // "YYYY-MM-DD"
 }
 
-// DefaultWindow reproduces the 2026-09-07 measurement's window.
+// DefaultWindow reproduces that measurement's window.
 func DefaultWindow() Window {
 	return Window{
 		SinceUTC:  "2026-06-01T00:00:00Z",
@@ -119,7 +119,7 @@ const volatileForecastIdentity = "freshly generated per request: an identical re
 // the same rule -- a declaration that matches nothing FAILS the run:
 //
 //   - VolatileFields: values regenerated per request (forecastId,
-//     computedAt). Populated below from the 2026-09-07 live measurement.
+//     computedAt). Populated below from a live measurement.
 //   - FloatTierB: leaves whose value derives from a ClickHouse FLOATING-POINT
 //     aggregate, per CHAOS-5451. Populated below from lane-goapi-parity's
 //     read of the actual SQL, with the source line for each.
@@ -186,7 +186,7 @@ var operationSpecs = map[string]OperationSpec{
 	},
 	// CHAOS-5523 registered this operation; the table did not gain an
 	// entry with it, and AssertCoverage correctly refused the whole run
-	// (JOB 5, 2026-09-10). Its registered document declares
+	// (JOB 5). Its registered document declares
 	// `$orgId: String!` and `$limit: Int!` as REQUIRED and `$flagKey` /
 	// `$environment` as nullable, so all four are sent explicitly:
 	// omitting a nullable variable and sending it as null are the same
@@ -432,7 +432,7 @@ var operationSpecs = map[string]OperationSpec{
 	// un-deduped read undercounting distinct edgeIds against Go's argMax
 	// dedup) was MERGE-STATE DEPENDENT, not a permanent defect, and the
 	// first deployed-executed run correctly REFUSED it as vacuous:
-	// measured live at 12:59Z 2026-09-10 (JOB 5), ClickHouse's
+	// measured live (JOB 5), ClickHouse's
 	// work_graph_edges held 17,005 rows / 11,606 distinct edge_id, yet the
 	// first 1000 rows by the shared ORDER BY carried zero duplicates on
 	// EITHER plane (1000 edges / 1000 distinct edgeIds, Python and Go
@@ -456,7 +456,7 @@ var operationSpecs = map[string]OperationSpec{
 // nil, `resolveSankey` never ran (resolve.go:194), and both planes
 // answered null. The first deployed-executed run correctly REFUSED the
 // two declared FloatTierB sankey paths as vacuous rather than reporting a
-// match having measured nothing (JOB 5, 12:56Z 2026-09-10). See
+// match having measured nothing (JOB 5). See
 // investmentFullVariables below for investmentFull's own request.
 //
 // `useInvestment` is a field of AnalyticsRequestInput, NOT of

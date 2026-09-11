@@ -15,8 +15,8 @@ import (
 
 // ReadRoutingState, DRIVEN -- not reconstructed.
 //
-// astra r3 (P3) found the pin written for r2's third-reader finding
-// executing the matrix's query SHAPE against a container while never
+// The pin written for an earlier third-reader finding executed the
+// matrix's query SHAPE against a container while never
 // calling the matrix's CODE: `ReadRoutingState` and `routingStateQuery`
 // had 0% integration coverage, and mutating the production reader to use
 // canary rules for primary SURVIVED the whole suite.
@@ -126,7 +126,7 @@ func TestReadRoutingStateAppliesTheModesOwnRouteRule(t *testing.T) {
 
 // Trap #120, read back out of the database rather than out of the SQL text.
 //
-// opus r5 (P2c) asked for the offline -routing path to name a real query;
+// The offline -routing path must name a real query;
 // pinning "the statement selects the document digest" by substring turned out
 // to be VACUOUS -- the join predicate mentions the same identifier, so
 // deleting the output column left the substring in place and the unit test
@@ -306,11 +306,11 @@ CREATE TABLE go_api_proof_run (
 
 // ReadRoutingState under a concurrent mode flip: ONE snapshot, always.
 //
-// opus r5 (P2): the target-mode split briefly made this two queries on one
+// The target-mode split briefly made this two queries on one
 // connection with no enclosing transaction, partitioned by
 // `WHERE (rs.mode = 'primary') = $1`. Two queries are two snapshots, so a
 // row whose mode changed between them came back TWICE (primary -> canary)
-// or NOT AT ALL (canary -> primary). Measured by the reviewer with 60 rows
+// or NOT AT ALL (canary -> primary). Measured with 60 rows
 // and a concurrent updater: 60 duplicate reads, 4 missing reads.
 //
 // That is not cosmetic. cmd/dev-health-migration-matrix assigns these rows
@@ -483,10 +483,10 @@ func seedMatrixProof(ctx context.Context, t *testing.T, pool *pgxpool.Pool, dige
 	return id
 }
 
-// opus r6 (P3-2, mutant g35): deleting `pr.candidate_build =
+// Deleting `pr.candidate_build =
 // rs.current_candidate_build` from the matrix's proof subquery survived the
-// whole package, unit and integration. What that mutant does, executed by
-// the reviewer: a routing row at build B rendered PROVEN by a receipt
+// whole package, unit and integration suite (mutant g35). What that mutant
+// does: a routing row at build B rendered PROVEN by a receipt
 // recorded against build A. A proof is evidence for one immutable build;
 // the page must never carry it to another.
 func TestTheMatrixNeverCarriesProofAcrossBuilds(t *testing.T) {
@@ -525,8 +525,8 @@ func TestTheMatrixNeverCarriesProofAcrossBuilds(t *testing.T) {
 	}
 }
 
-// opus r6 (P3-3): the offline instruction produced a file the offline reader
-// rejected. The statement -print-routing-sql prints now emits the whole
+// An earlier version of the offline instruction produced a file the offline
+// reader rejected. The statement -print-routing-sql prints now emits the whole
 // snapshot payload, and ReadRoutingState itself reads through it. This runs
 // the printed statement the way an operator's psql does -- one statement,
 // one text value -- and feeds that value to ParseRoutingSnapshot, the same
@@ -596,9 +596,10 @@ func TestTheRoutingSnapshotStatementIsWhatTheOfflineReaderReads(t *testing.T) {
 	}
 }
 
-// opus r7 (mutant g25): the page shows the NEWEST admissible receipt for a
-// row. `ORDER BY observed_at ASC` survived every suite; with two receipts the
-// page would name the oldest -- evidence the next re-prove supersedes.
+// The page shows the NEWEST admissible receipt for a
+// row (mutant g25): `ORDER BY observed_at ASC` survived every suite; with
+// two receipts the page would name the oldest -- evidence the next
+// re-prove supersedes.
 func TestTheMatrixShowsTheNewestAdmissibleReceipt(t *testing.T) {
 	ctx, pool, uri := startMatrixPostgres(t)
 	const (
@@ -632,7 +633,7 @@ func TestTheMatrixShowsTheNewestAdmissibleReceipt(t *testing.T) {
 	}
 	t.Logf("cell two admissible receipts -> page shows the newest: %v", rows[0].Proven == newer)
 
-	// opus r8 P3-1: three admissible receipts at ONE observed_at. The page
+	// Three admissible receipts can land at ONE observed_at. The page
 	// ordered by observed_at alone, so it named whichever row the plan
 	// returned, while `enable` names the lowest id among the newest (its
 	// ORDER BY observed_at DESC, id). One selection rule for both readers:
@@ -660,9 +661,9 @@ func TestTheMatrixShowsTheNewestAdmissibleReceipt(t *testing.T) {
 	t.Logf("cell three admissible receipts tied on observed_at -> page names the lowest id, as enable does: %s", rows[0].Proven)
 }
 
-// opus r8 P3-3, executed: R14's printed remedy is run AS PRINTED against
-// PostgreSQL. A routing row whose operation carries a quote (`x' OR ”='`,
-// the reviewer's cell) used to print a statement that deleted every routing
+// R14's printed remedy is run AS PRINTED against
+// PostgreSQL. A routing row whose operation carries a quote (`x' OR ”='`)
+// used to print a statement that deleted every routing
 // row. It must delete exactly that row, and a backslash in a value must be
 // read literally too.
 func TestTheR14RemedyDeletesExactlyItsOwnRow(t *testing.T) {

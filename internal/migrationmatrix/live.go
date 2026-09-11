@@ -27,22 +27,22 @@ import (
 // written and false the moment CHAOS-5484 split the rule by target mode,
 // and nothing failed: this page went on rendering a primary proof-route
 // receipt PROVEN while enablement refused it, and a canary cited mismatch
-// UNPROVEN while enablement accepted it (codex r2, P1, reproduced against
-// live PostgreSQL).
+// UNPROVEN while enablement accepted it -- reproduced against live
+// PostgreSQL.
 //
 // A copy of a rule is a copy that will drift. goapiproof.EnablementProofClause
 // is the one source; this file composes it.
 
 // routingStateQuery reads every routing row -- live AND dead. Dead rows (rows
 // at a schema digest other than the current pin) are the whole reason this
-// table is rendered at all: on 2026-09-01 a digest move killed twelve canary
-// rows silently, and it was found six days later. A page that shows only the
+// table is rendered at all: a digest move once killed twelve canary
+// rows silently, and it went unnoticed for six days. A page that shows only the
 // live rows would have shown nothing wrong.
 // routingStateQuery is ONE statement, and that is the point.
 //
 // CHAOS-5484 briefly made it two -- one per target mode, partitioned by
 // `WHERE (rs.mode = 'primary') = $1` -- because admissibility depends on
-// where the row IS. opus r5 (P2) showed what that cost: two queries on
+// where the row IS. Splitting the query showed what that cost: two queries on
 // one connection with no enclosing transaction are two snapshots, so a
 // row whose mode changes between them is returned TWICE or NOT AT ALL.
 // Measured with 60 rows and a concurrent updater: 60 duplicate reads, 4
@@ -67,9 +67,9 @@ import (
 // offline reader uses. So the live and offline paths share not only the
 // rule but the statement, the snapshot and the parser.
 //
-// Why the whole payload (opus r6, P3-3). The r5 fix made the ROW statement
-// printable, but the -routing reader parses a JSON object: executed
-// literally, `-print-routing-sql | psql -At -f -` produced pipe-separated
+// Why the whole payload: printing the ROW statement alone was not enough,
+// because the -routing reader parses a JSON object: executed literally,
+// `-print-routing-sql | psql -At -f -` produced pipe-separated
 // text the reader rejected (`invalid character 'e' in literal false`), and
 // the operator still had to hand-write the JSON wrapper AND a second query
 // for proof_run_total -- the retyping this function exists to end. Emitting
@@ -77,7 +77,7 @@ import (
 // the rows; it used to be a second query on the connection (Trap #141's
 // shape, for the one number the page prints first).
 //
-// Before opus r5 the offline instruction named an unexported function, so
+// Before this, the offline instruction named an unexported function, so
 // the only way to comply was to retype the query by hand -- which is the
 // copy-of-a-rule failure this file's header is about, moved into the
 // operator's terminal.
@@ -135,7 +135,7 @@ SELECT rs.selected_operation,
          -- The newest admissible receipt, then the lowest id: the SAME
          -- selection enable uses (build_enablement_receipt_select,
          -- observed_at DESC, id), so the page and the routing row's
-         -- review_evidence name one receipt even when two tie (opus r8 P3-1).
+         -- review_evidence name one receipt even when two tie.
          ORDER BY pr.observed_at DESC, pr.id
          LIMIT 1
        ) AS proof_run_id
@@ -214,7 +214,7 @@ func ParseRoutingSnapshot(raw []byte, currentDigest string) ([]OperationRow, int
 
 	// Stable: two rows sharing (schema digest, operation) differ only by
 	// document, and an unstable sort would flip the render between runs on
-	// identical data (opus r5, P2). The statement already orders by the
+	// identical data. The statement already orders by the
 	// triple; a hand-assembled file need not, so the order is re-imposed
 	// here rather than trusted.
 	sort.SliceStable(out, func(i, j int) bool {

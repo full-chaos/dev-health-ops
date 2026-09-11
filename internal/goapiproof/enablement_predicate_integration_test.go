@@ -53,7 +53,7 @@ type admissionCase struct {
 	// Without it a key override can only ever test "a receipt for a
 	// different key is not proof" -- refused by equality -- and a clause
 	// about the key's own VALUE (a blank candidate_build) is never
-	// reached (opus r6, P3-1).
+	// reached.
 	AskWithOverriddenKey bool   `json:"ask_with_overridden_key"`
 	Admits               bool   `json:"admits"`
 	Why                  string `json:"why"`
@@ -177,12 +177,12 @@ func (r admissionRun) describe() string {
 // encoding/json cannot tell a typed struct which happened -- and returns
 // every case plus, for each refused case, its CONTROL.
 //
-// Why a control per refused case. opus r6 (P2-3) found
+// Why a control per refused case. Testing found
 // match_route_null_canary_refused carrying a NULL build_binding as well as
 // the NULL route it is named for. Once the binding became part of the rule,
 // the binding alone refused it, so the case asserted nothing about the
 // route: the Python NULL-route clause could be deleted and all 170 Python
-// tests stayed green. That is the same vacuity r5 found in a Go refusal
+// tests stayed green. That is the same vacuity found in a Go refusal
 // table, one level over, and a table-level "the base is admissible"
 // control cannot see it -- the base was admissible; THIS case was not
 // one-reason. So each refused case states what removes its reason, and
@@ -243,7 +243,7 @@ func admissionRuns(t *testing.T) []admissionRun {
 			continue
 		}
 		if !hasControl {
-			t.Fatalf("refused case %q declares no control: without one nothing shows it is refused for the reason it names rather than for another (opus r6, P2-3)", c.Name)
+			t.Fatalf("refused case %q declares no control: without one nothing shows it is refused for the reason it names rather than for another", c.Name)
 		}
 		controlReceipt := map[string]any{}
 		for k, v := range merged {
@@ -318,7 +318,7 @@ func mergeReceipt(t *testing.T, m map[string]any) seededReceipt {
 		// Kept as []any, NOT flattened to []string. A JSON `null` element
 		// is a SQL NULL citation, and coercing every item with
 		// `item.(string)` panicked on it -- so the loader itself could not
-		// REPRESENT the case that opus r5 found promoting to primary. A
+		// REPRESENT the case testing found promoting to primary. A
 		// harness that cannot express an input cannot test it.
 		tickets := make([]any, 0, len(v))
 		for _, item := range v {
@@ -391,7 +391,7 @@ func seedAdmissionRow(ctx context.Context, t *testing.T, pool *pgxpool.Pool, key
 
 // The THIRD reader, pinned to the same table.
 //
-// r2 (P1) found internal/migrationmatrix carrying its own copy of this
+// Testing found internal/migrationmatrix carrying its own copy of this
 // rule, written before CHAOS-5484 split it by target mode. Its comment
 // said it was "deliberately the same predicate the enablement command
 // uses" -- true when written, false the moment the rule moved, and
@@ -451,7 +451,7 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 
 			got := proofID != nil && *proofID != ""
 			if got != run.admits {
-				t.Fatalf("%s: the migration matrix would render proven=%v, the admission table says %v.\nwhy: %s\nA status page disagreeing with the command that enforces the rule is the shape r2 found.",
+				t.Fatalf("%s: the migration matrix would render proven=%v, the admission table says %v.\nwhy: %s\nA status page disagreeing with the command that enforces the rule is a real defect shape.",
 					run.describe(), got, run.admits, run.why)
 			}
 		})
@@ -461,7 +461,7 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 // The FULL input surface, not a sample.
 //
 // The shared table above is chosen cases. Chosen cases are a sample,
-// and a sample is exactly what r1 and r2 kept finding gaps in -- an
+// and a sample is exactly what repeated testing kept finding gaps in -- an
 // instrument that enumerates only the inputs its author thought of. This
 // enumerates every value the predicate can SEE and asserts the rule over
 // the whole cross-product, with `want` DERIVED from the rule as stated in
@@ -481,7 +481,7 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 //
 // build_binding IS in that list now. It was not when this test was
 // written -- the predicate did not read the column, and this comment said
-// so -- and opus r5 (P2) showed what that cost: every row the OLD writer
+// so -- and testing showed what that cost: every row the OLD writer
 // produced with mismatch/edge/outside=0/cited became primary-admissible
 // under the new counting rules. The predicate now requires per_request on
 // both arms, so the binding dimension is load-bearing rather than a
@@ -510,7 +510,7 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	ctx := context.Background()
 	pool := startRegistryPostgres(t)
 
-	// astra r4 P3: stage was FIXED at deployed_executed, so mutating the
+	// Stage was FIXED at deployed_executed, so mutating the
 	// predicate to accept stage='canary' or stage='shadow' survived this
 	// test entirely. A dimension held constant is a dimension unasserted,
 	// which is the same "enumerates only the inputs its author chose"
@@ -528,16 +528,16 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	// writer's input domain found that `cardinality(ARRAY[''])` is 1, so a
 	// citation naming nothing read as fully cited. A shape the predicate
 	// must reject belongs in the dimension, not in a separate test.
-	// opus r5 (P1): this dimension held only the space character, so a
+	// This dimension held only the space character, so a
 	// tab / newline / CR / VT / FF / NBSP / SQL-NULL citation passed both
-	// predicates while the writer refused it -- and the reviewer showed
+	// predicates while the writer refused it -- and testing showed
 	// that adding ONE cell here, with no production change, fails the
 	// test in its own words. Every character of the shared cutset is a
 	// cell now, plus a SQL NULL element and a NULL mixed with a real
 	// ticket, plus two Unicode spaces OUTSIDE the cutset which both
 	// engines must treat as real citations.
 	// Derived from the constant, one cell per rune of the cutset plus the
-	// empty string, never a hand copy of it (opus r6, P2-1: a hand copy is
+	// empty string, never a hand copy of it (a hand copy is
 	// how the SQL literal drifted from the constant it claimed to be
 	// generated from).
 	blankTicket := []any{""}
@@ -565,7 +565,7 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 		// The binding is part of the rule now, on both arms. A NULL is a
 		// pre-0129 row written under different counting semantics; an
 		// `absent` row is one this writer would have downgraded or
-		// counted. Neither is proof (opus r5, P2).
+		// counted. Neither is proof.
 		if binding != EdgeBuildPresent {
 			return false
 		}
@@ -695,14 +695,14 @@ func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
 	// 4 stages x 11 terminal states x 3 routes x 3 bindings x 2 outside x
 	// len(defects) shapes x 2 modes, asserted from the slice itself so
 	// the number cannot go stale the way the three hand-written copies of
-	// it did (opus r5, P3).
+	// it did.
 	t.Logf("exercised %d combinations (4 stages x 11 terminal states x 3 routes x 3 bindings x 2 outside x %d citation shapes x 2 modes); every one matched the rule derived in prose", combinations, len(defects))
 	if combinations != 4*11*3*3*2*len(defects)*2 {
 		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 4*11*3*3*2*len(defects)*2)
 	}
 }
 
-// astra r4 P3: every case above asks about ONE operation/document pair,
+// Every case above asks about ONE operation/document pair,
 // so deleting the operation equality from `JOIN unnest(...)` survived.
 //
 // With one pair, matching on the document alone still returns the right
@@ -731,7 +731,7 @@ func TestTheProofKeyPairsOperationWithItsOwnDocument(t *testing.T) {
 	// The ONLY receipt: operation A measured against document B. Neither
 	// requested pair is (opA, docB), so nothing may be proven.
 	//
-	// build_binding is stated on BOTH seeds here (opus r5, P1 made a bound
+	// build_binding is stated on BOTH seeds here (a bound
 	// measurement part of the rule). It matters most for the CONTROL at
 	// the end: without it the control row is refused for its binding, and
 	// the refusals above would then be indistinguishable from a predicate
@@ -802,7 +802,7 @@ func TestTheProofKeyPairsOperationWithItsOwnDocument(t *testing.T) {
 
 // The two engines agree on "names nothing", character by character.
 //
-// opus r5 (P1): the change shipped TWO definitions -- the writer's
+// The change shipped TWO definitions -- the writer's
 // strings.TrimSpace and the predicates' one-argument btrim() -- which
 // disagree on every whitespace character except the space itself. A tab,
 // newline, CR, VT, FF or NBSP citation was refused by the writer and
@@ -864,7 +864,7 @@ func TestTheBlankDefinitionIsIdenticalInBothEngines(t *testing.T) {
 
 	// Every single rune from U+0001 to U+00FF, plus the Unicode spaces
 	// named above and the invisible characters a citation could carry.
-	// opus r6 (P2-1): on PostgreSQL 16 the hand-typed literal's `\v` was the
+	// On PostgreSQL 16 the hand-typed literal's `\v` was the
 	// LETTER v, so the letter v was "blank" to Postgres and a vertical tab
 	// was not -- and the table above, which lists only spaces and one real
 	// ticket, had no cell for a letter. A letter is exactly the input
@@ -909,8 +909,8 @@ func TestTheBlankDefinitionIsIdenticalInBothEngines(t *testing.T) {
 
 // The blank-build clause over its whole input, in both modes.
 //
-// opus r6 (P3-1, mutants g08/p04 -- r5's g06/p04, carried): deleting
-// `btrim(candidate_build, <cutset>) <> ”` survived every test in both
+// Deleting
+// `btrim(candidate_build, <cutset>) <> ”` once survived every test in both
 // languages, because the only pin asked about a DIFFERENT build than the
 // receipt named, so build EQUALITY refused it before the blank clause was
 // reached. Here every receipt is otherwise admissible and is asked about
@@ -918,7 +918,7 @@ func TestTheBlankDefinitionIsIdenticalInBothEngines(t *testing.T) {
 // clause is the only thing that can refuse. One cell per rune of the
 // shared cutset (derived from the constant), all of them together, and
 // three real builds -- including one made of the letter v, which the
-// hand-typed PG16 literal (P2-1) would have stripped.
+// hand-typed PG16 literal would have stripped.
 func TestTheBlankBuildClauseOverEveryCutsetRune(t *testing.T) {
 	ctx := context.Background()
 	pool := startRegistryPostgres(t)
@@ -994,7 +994,7 @@ func TestTheGeneratedLiteralRoundTripsThroughPostgres(t *testing.T) {
 	}
 }
 
-// opus r7 (P1-1), end to end through the real writer and the real reader:
+// End to end through the real writer and the real reader:
 // a Go build returning NO hotspots rows wrote a receipt `enable --mode
 // primary` admitted. Here the same Runner writes the receipt with WriteAtomic
 // and the production predicate is asked, in both modes, for EVERY cell of the

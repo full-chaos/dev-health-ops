@@ -7,7 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
-// opus r8 P3-5: the terminal line for an executed measurement said only
+// The terminal line for an executed measurement said only
 // "(N findings, M outside ...)", so a receipt admitted because one leaf value
 // differed and one admitted because a regression covered "Go returned no
 // rows" printed the same line. It now names the shapes on both sides.

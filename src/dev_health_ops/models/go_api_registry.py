@@ -270,9 +270,9 @@ class ProofRun(Base):
     #:
     #: The column asks exactly one question -- was the build bound PER
     #: RESPONSE? -- so there is no third value for "bound at run level".
-    #: Under R70 ``VerifyCandidateBuild`` is a hard refusal, so every row
+    #: ``VerifyCandidateBuild`` is a hard refusal, so every row
     #: that exists already has that run-level evidence and naming it
-    #: would distinguish nothing (team-lead ruling, 2026-09-10).
+    #: would distinguish nothing.
     #:
     #: Derivable from ``measurement_route`` TODAY and deliberately stored
     #: anyway: the derivation stops holding the moment #2365 deletes the

@@ -28,7 +28,7 @@ type fakeEdge struct {
 	goBuild string
 	// goHeaders/pyHeaders let a test drive a HEADER divergence with
 	// identical bodies, which is the only way to prove the header
-	// comparison path counts what it finds (astra r4 P3).
+	// comparison path counts what it finds.
 	goHeaders map[string]string
 	pyHeaders map[string]string
 	seen      []string
@@ -560,7 +560,7 @@ func TestServingBuildAgreementStillMatches(t *testing.T) {
 	}
 }
 
-// F6: three sibling guards refuse a run whose declared relaxations matched
+// Three sibling guards refuse a run whose declared relaxations matched
 // nothing. Only RefusalStaleExclusion was pinned; the other two survived
 // removal under both suites.
 //
@@ -637,7 +637,7 @@ func withOverriddenParity(t *testing.T, operation string, parity Options) {
 }
 
 // TestRunRefusesOnAnOrderInsensitiveListDeclarationMatchingNothing is
-// CHAOS-5546 r1's P3 fix pin, first half: OrderInsensitiveList's stale-
+// CHAOS-5546's fix pin, first half: OrderInsensitiveList's stale-
 // declaration guard (run.go) must actually terminate the run as a
 // refusal, not just populate a Result field nothing reads. Deleting the
 // guard (`if len(result.UnusedOrderInsensitiveLists) > 0 { return
@@ -671,7 +671,7 @@ func TestRunRefusesOnAnOrderInsensitiveListDeclarationMatchingNothing(t *testing
 }
 
 // TestRunRefusesOnAnOrderInsensitiveListElementMissingItsKeyField is
-// CHAOS-5546 r1's P3 fix pin, second half: the missing-key-field guard
+// CHAOS-5546's fix pin, second half: the missing-key-field guard
 // must also actually terminate the run. Deleting it (`if
 // len(result.OrderInsensitiveListRefusals) > 0 { return refuse(...) }`)
 // left the full package green before this test existed.
@@ -701,7 +701,7 @@ func TestRunRefusesOnAnOrderInsensitiveListElementMissingItsKeyField(t *testing.
 	}
 }
 
-// r9 F11: Run resets r.sealed so a SECOND Run cannot emit receipts for the
+// Run resets r.sealed so a SECOND Run cannot emit receipts for the
 // FIRST one's measurements. Deleting the reset survived every test,
 // because no test ever called Run twice -- yet the whole point of sealing
 // is that a receipt describes what THIS run measured.
@@ -753,7 +753,7 @@ func TestASecondRunCannotEmitTheFirstRunsReceipts(t *testing.T) {
 	}
 }
 
-// r10 item (4), prover side: a serving-build header of "unknown" must
+// Prover side: a serving-build header of "unknown" must
 // never bind a receipt.
 //
 // "unknown" is internal/platform/version's default for a build with no
@@ -829,7 +829,7 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 	if len(outcomes) != 1 {
 		t.Fatalf("expected one outcome, got %d", len(outcomes))
 	}
-	// r1 P3: comparing against the constant under test is a tautology --
+	// Comparing against the constant under test is a tautology --
 	// renaming RefusalNeedsInstanceID passed this assertion. The WIRE
 	// string is what a reader of ByRefusalReason or review_evidence sees,
 	// so that is what is pinned.
@@ -843,7 +843,7 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 		t.Fatalf("the refusal must NAME the variable it cannot supply, got %q", outcomes[0].RefusalDetail)
 	}
 
-	// r1 P3: the point of refusing BEFORE the request is that no request
+	// The point of refusing BEFORE the request is that no request
 	// happens. Without this, moving the refusal below both HTTP legs left
 	// every assertion above green -- the run would have sent an invented
 	// id to both planes and merely declined to record the result.
@@ -875,7 +875,7 @@ func flowMatrixRunner(t *testing.T, edge *fakeEdge) *Runner {
 	return runner
 }
 
-// r2 P1: an HTTP-level difference must count as OUTSIDE the cited
+// An HTTP-level difference must count as OUTSIDE the cited
 // baseline defect.
 //
 // The counter was copied from the BODY comparison and the status/header
@@ -971,7 +971,7 @@ func TestACitedMismatchWithNoHTTPDifferenceStaysFullyCited(t *testing.T) {
 	}
 }
 
-// astra r3 P1, the case that actually reaches the hole: an unbound
+// The case that actually reaches the hole: an unbound
 // measurement whose every body difference IS cited.
 //
 // A test using an UNcited difference cannot pin this -- the uncited
@@ -1011,7 +1011,7 @@ func TestAnUnboundFullyCitedMismatchCannotAuthorizeAnything(t *testing.T) {
 		t.Fatal("the body difference must be CITED for this test to reach the hole: an uncited one makes outside non-zero on its own and the assertion below passes vacuously")
 	}
 	if outcome.DifferencesOutsideBaselineDefect < 1 {
-		t.Fatalf("outside=%d on an UNBOUND, fully-cited mismatch: the enablement predicate reads that as proof, for primary as well as canary, on a measurement tied to no replica (astra r3 reproduced `primary enable rc=0`)",
+		t.Fatalf("outside=%d on an UNBOUND, fully-cited mismatch: the enablement predicate reads that as proof, for primary as well as canary, on a measurement tied to no replica (reproduced with `primary enable rc=0`)",
 			outcome.DifferencesOutsideBaselineDefect)
 	}
 
@@ -1025,7 +1025,7 @@ func TestAnUnboundFullyCitedMismatchCannotAuthorizeAnything(t *testing.T) {
 	}
 }
 
-// astra r4 P3: the HTTP counter test used a STATUS difference only, so
+// The HTTP counter test used a STATUS difference only, so
 // undoing the increment for the HEADER path survived. Both go through
 // one helper now, but a test that exercises one branch cannot prove the
 // helper is used by the other.
@@ -1080,20 +1080,20 @@ func TestAnUncitedHeaderDifferenceAlsoCountsOutside(t *testing.T) {
 	}
 }
 
-// astra r4 P3: the persisted-binding readback started from a HAND-BUILT
+// The persisted-binding readback started from a HAND-BUILT
 // Receipt, so it proved Write stores what it is handed and nothing about
 // what the Runner hands it. Hardcoding either receipt binding to `absent`
 // survived every suite.
 //
-// opus r6 (P3-4, mutant g22 -- r5's g16, carried): hardcoding the REFUSAL
-// receipt's binding to `per_request` then survived, because this test ran
+// Hardcoding the REFUSAL
+// receipt's binding to `per_request` then survived too, because this test ran
 // only a BOUND measurement, where the hardcoded value and the measured one
 // are the same string. A pin on a copied value needs an input where the
 // copy and the constant DIFFER, so it runs both measurements: bound
 // (per_request) and unbound (absent), and asserts both the success and the
 // refusal receipt carry what THIS run measured.
 //
-// Why it matters now: since the r5-P1 fix every enablement reader requires
+// Why it matters now: every enablement reader requires
 // build_binding = 'per_request'. A refusal receipt is proof_failed and
 // never admissible, so a wrong binding there authorizes nothing -- but it
 // is the only record of how well that measurement knew its build, and a

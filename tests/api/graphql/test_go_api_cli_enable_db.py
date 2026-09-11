@@ -229,7 +229,7 @@ async def test_a_recorded_proof_run_lets_enable_proceed_without_acknowledgement(
             terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
         )
         # CHAOS-5484: admissibility now requires a RECORDED measurement
-        # route AND a BOUND one (opus r5, P1). record_proof_run writes
+        # route AND a BOUND one. record_proof_run writes
         # neither -- its only callers are tests, the real writer is
         # cmd/go-api-prove -- so stamp both here, or this receipt would
         # be refused for a reason that has nothing to do with what the
@@ -339,14 +339,14 @@ async def test_status_json_reports_plane_disagreement(
     assert payload["python_plane_schema_digest"] == current_schema_digest()
 
 
-# --- codex r1 fixes -------------------------------------------------------
+# --- Regression fixes ------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_a_proof_for_a_different_document_does_not_authorize_enablement(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """codex r1 P2: `document_digest` was missing from the proof lookup.
+    """`document_digest` was missing from the proof lookup.
 
     The proof key is FOUR columns (plan section 8.3 -- "a proof is evidence
     for exactly one tuple, never carried forward across any of the four
@@ -389,7 +389,7 @@ async def test_a_proof_for_a_different_document_does_not_authorize_enablement(
 async def test_the_cli_passes_its_own_mode_to_the_proof_predicate(
     session_factory: Any,
 ) -> None:
-    """r1 P3: hardcoding ``"canary"`` at the call site passed all 8 tests.
+    """Hardcoding ``"canary"`` at the call site once passed all 8 tests.
 
     That mutation is the mode split defeated in one word. The only proof
     on record here is a PROOF-route receipt, which ``canary`` admits and
@@ -491,12 +491,12 @@ async def _seed_receipt(factory: Any, *, document_digest: str, **columns: Any) -
 async def test_the_refusal_states_every_clause_of_the_rule(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """opus r6 (P2-4): the refusal printed a rule the receipt SATISFIED.
+    """The refusal printed a rule the receipt SATISFIED.
 
     The row is a pre-0129 receipt: a mismatch, on the edge, citing a real
     ticket, with nothing uncounted -- every condition the message used to
     print is true of it. It is refused by the ONE condition the message did
-    not print, ``build_binding = 'per_request'`` (added for r5's P1), so the
+    not print, ``build_binding = 'per_request'``, so the
     operator was told a rule their receipt meets and nothing named the
     column to check. The blank-citation and blank-build conditions were not
     printed either. A refusal that misattributes itself is loud and wrong.
@@ -518,7 +518,7 @@ async def test_the_refusal_states_every_clause_of_the_rule(
         )
     err = capsys.readouterr().err
     for clause in (
-        # The route rule of THE MODE ASKED FOR (opus r7 P3-5: swapping the
+        # The route rule of THE MODE ASKED FOR (swapping the
         # mode condition survived every suite and made the primary refusal
         # state the canary rule -- a rule the refused receipt satisfies).
         "measured on the edge route",
@@ -552,7 +552,7 @@ async def test_the_refusal_states_every_clause_of_the_rule(
 async def test_status_renders_a_drifted_row_with_its_proof_and_its_document(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """opus r6 (P3-4, mutants p17/p18): the r5-P3 renderer fix was unpinned.
+    """The renderer fix was unpinned, caught by mutants p17/p18.
 
     A DOCUMENT_DRIFT row is live and IS the row in the table, so its PROOF
     column must say ``ok``/``UNPROVEN`` -- as ``--json`` does -- not ``-``,
@@ -680,7 +680,7 @@ async def test_the_canary_refusal_states_the_canary_route_rule(
 async def test_status_names_an_unregistered_live_row_on_both_outputs(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """opus r7 (P2-1): a live row for an operation the catalog does not
+    """A live row for an operation the catalog does not
     register was named nowhere by `status`, text or `--json`, while the
     migration page named it. Both outputs now carry it, unreachable, with
     the proof `status` computes for it (an admissible receipt of its own
@@ -794,13 +794,13 @@ async def _reset(factory: Any) -> None:
 async def test_enable_names_the_receipt_that_authorized_each_row(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """opus r7 (observability; team-lead, telemetry rule): `enable` printed
-    the same output for a `match` admission and a fully-cited `mismatch`
-    admission, and nothing named the receipt that authorized the row -- a
-    predicate regression admitting the wrong receipt looked exactly like a
-    correct enablement. Now the stdout line, a structured stderr line and
-    the row's review_evidence each name the receipt id the database holds,
-    its terminal state and, for a cited mismatch, the citations."""
+    """`enable` printed the same output for a `match` admission and a
+    fully-cited `mismatch` admission, and nothing named the receipt that
+    authorized the row -- a predicate regression admitting the wrong
+    receipt looked exactly like a correct enablement. Now the stdout
+    line, a structured stderr line and the row's review_evidence each
+    name the receipt id the database holds, its terminal state and, for
+    a cited mismatch, the citations."""
     catalog = dict(catalog_entries())
 
     # A `match` admission.
@@ -950,7 +950,7 @@ async def test_enable_names_the_newest_admissible_receipt(
 async def test_enable_and_the_page_select_one_receipt_when_receipts_tie(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """opus r8 P3-1: three admissible receipts at ONE observed_at. `enable`
+    """Three admissible receipts at ONE observed_at. `enable`
     orders (observed_at DESC, id); the migration page ordered by observed_at
     alone and named another receipt for the same row. One rule for both:
     the newest, then the lowest id -- the Go twin is the tie cell in
@@ -1000,7 +1000,7 @@ async def test_enable_and_the_page_select_one_receipt_when_receipts_tie(
 async def test_the_model_refuses_a_binding_outside_its_vocabulary(
     session_factory: Any,
 ) -> None:
-    """opus r8 P3-4(b): the ORM CheckConstraint on build_binding was pinned by
+    """The ORM CheckConstraint on build_binding was pinned by
     nothing -- the migration test covers alembic, but tables created from this
     metadata (SQLAlchemyStore.ensure_tables; this fixture) carry the model's
     own copy. The same vocabulary as 0129: per_request, absent, NULL."""
@@ -1027,7 +1027,7 @@ async def test_the_model_refuses_a_binding_outside_its_vocabulary(
 async def test_enable_names_what_the_citation_covered(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """opus r8 P3-5: the admission said `(every difference cited)` whatever
+    """The admission said `(every difference cited)` whatever
     the citation covered, so "one value differed" and "Go returned no rows"
     (under a regression) printed alike. The writer records per-shape counts
     in the receipt's provenance; `enable` prints them on stdout, the INFO

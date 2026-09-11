@@ -18,13 +18,13 @@ Why ``absent`` and not ``run_level``. An earlier draft named the weak case
 for the evidence behind it: the build WAS established for the run, by an
 authenticated ``/buildinfo`` read before and after agreeing with every
 routing row's ``current_candidate_build``. That is true -- and it is true
-of every weak row, because under R70 ``VerifyCandidateBuild`` is a HARD
+of every weak row, because ``VerifyCandidateBuild`` is a HARD
 refusal, so no proof row is ever written without it. A ``run_level`` value
 would therefore never distinguish one row from another, and a third value
 would name a state no writer can produce. The column answers exactly one
 question -- was the build bound PER RESPONSE? -- and the run-level
 evidence is implied by the row existing at all and by ``candidate_build``
-matching. (Team-lead ruling, 2026-09-10.)
+matching.
 
 Why a column rather than a derivation. Today the value is a function of
 ``measurement_route``: proof implies per-request, edge implies absent.

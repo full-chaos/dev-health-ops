@@ -55,7 +55,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # CLICKHOUSE_URI instead (mirroring the Python dual-run slot harness) and
     # .github/workflows/go.yml never sets that var -- the enrolled test
     # skipped on every CI run and the skip reported as a pass. It is a
-    # discretionary, slot-only proof per orchestrator ruling 2026-08-29 (see
+    # discretionary, slot-only proof (see
     # the file's own STATUS header); denylisting it stops the shard from
     # implying coverage it structurally cannot deliver.
     # CHAOS-4684 added cmd/query-api/internal/hotspots (33 -> 34 discovered,

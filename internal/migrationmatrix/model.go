@@ -142,7 +142,7 @@ type OperationRow struct {
 	// Carried because two rows can share (schema_digest, operation) and
 	// differ only here -- the DOCUMENT_DRIFT shape the Python status
 	// surface names. Without it the two are indistinguishable in the
-	// render and R8 reports a duplicate (opus r5, P2).
+	// render and R8 reports a duplicate.
 	DocumentDigest string `json:"document_digest"`
 	// CandidateBuild is current_candidate_build.
 	CandidateBuild string `json:"candidate_build"`
@@ -157,7 +157,7 @@ type OperationRow struct {
 	// "deployed_executed/match", which stopped being the rule when
 	// CHAOS-5484 admitted a fully-cited mismatch and split admission by
 	// target mode -- and a comment describing a rule it does not own is
-	// how the copy in live.go drifted unnoticed (codex r2, P1).
+	// how the copy in live.go drifted unnoticed.
 	Proven string `json:"proven"`
 	// ParityTicket is the open parity ticket for this operation, if any.
 	ParityTicket string `json:"parity_ticket,omitempty"`
@@ -330,7 +330,7 @@ func LoadNativeFamilies(path string) (*NativeFamilies, error) {
 // (operation, document digest) pairs the edge dispatches by. It is the SAME
 // file `dev-hops go-api routing status` reports against.
 //
-// Why the matrix reads it (opus r6, P2-2). A routing row at the LIVE schema
+// Why the matrix reads it: a routing row at the LIVE schema
 // digest whose document the catalog does not name cannot be dispatched --
 // the edge resolves a request to an operation THROUGH the catalog -- and
 // `routing status` names that row DOCUMENT_DRIFT. This page had no way to:

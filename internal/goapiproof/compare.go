@@ -113,9 +113,9 @@ type Finding struct {
 // scalar. It never covers a STRUCTURAL difference -- a list of another
 // length, a container (object or list) against null or a scalar, an object
 // against a list, a key or element present on one side only -- whatever the
-// cited path (ruling R115, on opus r7 P1-1).
+// cited path.
 //
-// opus r7 (P1-1): before shapes existed a cited path covered EVERY finding
+// Before shapes existed a cited path covered EVERY finding
 // beneath it, and compareList reports a LENGTH difference at the list's own
 // path. hotspots cites the whole `data.hotspots.rows` subtree, so a Go build
 // returning `[]`, `null`, or rows of empty objects was a fully-cited mismatch
@@ -139,14 +139,14 @@ const (
 	// ShapePresence (structural): a key, an element (by key), an error or
 	// `data` itself present on one side only.
 	ShapePresence = "presence"
-	// ShapeEmptyResult (structural, R115 addendum): a leaf difference under
+	// ShapeEmptyResult (structural): a leaf difference under
 	// a cited path whose CANDIDATE subtree has no non-null leaf while the
 	// baseline's has at least one -- an empty result in disguise (every
 	// field null, the right shape). Assigned by classifyBaselineDefects in
 	// place of the leaf shape the comparator gave.
 	ShapeEmptyResult = "empty_result"
-	// ShapeNonFinite: NaN or Infinity on either side. Never covered (R115):
-	// R73 forbids a non-finite value in Go output (null per field at the
+	// ShapeNonFinite: NaN or Infinity on either side. Never covered: a
+	// non-finite value is forbidden in Go output (null per field at the
 	// write boundary), so one reaching a response is a Go defect no Python
 	// baseline defect can explain; parity rule 3 also reports it even when
 	// both sides carry the same literal.
@@ -194,7 +194,7 @@ type Result struct {
 	TerminalState string    `json:"terminal_state"`
 	Findings      []Finding `json:"findings"`
 	// CoveredByShape and OutsideByShape count the mismatch findings a
-	// citation covered and did not cover, by Shape (opus r8 P3-5): the
+	// citation covered and did not cover, by Shape: the
 	// receipt, the go-api-prove line and `enable` show WHAT was counted,
 	// so "one value differed" and "Go returned no rows" are not the same
 	// line. Their sums are the covered count and the outside count.
@@ -276,7 +276,7 @@ type Options struct {
 	// the same dotted, index-free path form. Reserved for values that are
 	// freshly generated per request and therefore cannot agree across two
 	// calls -- capacityForecast's forecastId/computedAt are the measured
-	// instance (CHAOS-5425 comment, 2026-09-07: identical request, Go
+	// instance (CHAOS-5425 comment: identical request, Go
 	// forecastId=33fb9f32..., Python 78296c67..., timestamps ~350ms
 	// apart). This is NOT a general "ignore a difference I do not like"
 	// knob: each entry carries a written reason in exclusions.go, and an
@@ -368,7 +368,7 @@ type BaselineDefect struct {
 	// beneath it, so naming a subtree root reaches its fields -- but only
 	// a LEAF difference (scalar or null on both sides) is covered. A
 	// length, presence or structure difference beneath a cited path is
-	// outside every citation (opus r7 P1-1; see leafDifference).
+	// outside every citation (see leafDifference).
 	Paths []string
 }
 
@@ -494,7 +494,7 @@ func unmatched(declared map[string]string, used map[string]bool) []string {
 // declared, understood, ticketed Python defect is still a divergence, and
 // the receipt still says mismatch.
 func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineData, candidateData any) {
-	// R115 addendum: under a cited path, a candidate with NO non-null leaf
+	// Under a cited path, a candidate with NO non-null leaf
 	// while the baseline has at least one is an empty result in disguise.
 	// Its leaf differences are relabelled structural before anything is
 	// covered, so "Go returned every field null" can never pass as the
@@ -534,7 +534,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 			// The citation is LIVE -- there is a difference under its
 			// path, so it is not stale -- but it COVERS only a leaf
 			// difference. A length / presence / structure finding under a
-			// cited subtree stays outside every citation (opus r7 P1-1).
+			// cited subtree stays outside every citation.
 			hit = true
 			if leafDifference(shapes[i]) {
 				covered[i] = true
@@ -805,7 +805,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 	// Different JSON kinds. A container on either side is STRUCTURAL and
 	// no citation covers it; two leaves (scalar or null) are a leaf
 	// difference a citation may cover; a non-finite number is never
-	// covered (opus r7 P1-1; R115, R73). Detail text
+	// covered. Detail text
 	// unchanged.
 	if baselineKind, candidateKind := jsonKind(baseline), jsonKind(candidate); baselineKind != candidateKind {
 		shape := ShapeScalarType
@@ -1102,7 +1102,7 @@ func orderInsensitiveKey(element any, keyFields []string) (string, bool) {
 // does not describe this data: the whole list is refused (tracked, never
 // silently downgraded to a finding) rather than guessing a partial
 // pairing that could hide a real divergence behind a comparison nobody
-// actually asked for. CHAOS-5546 r1 finding: a naive `byKey[key] =
+// actually asked for. CHAOS-5546 finding: a naive `byKey[key] =
 // element` silently let a LATER duplicate overwrite an EARLIER one,
 // which can make a materially different candidate compare as a clean
 // match (construction: baseline [{id:a,v:1},{id:a,v:2}], candidate
@@ -1157,7 +1157,7 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 	for i, key := range keys {
 		// elementPath uses an OPAQUE ORDINAL (the key's position in the
 		// sorted, deduplicated key list), never the raw key value.
-		// CHAOS-5546 r1 finding: embedding the key literally
+		// CHAOS-5546 finding: embedding the key literally
 		// (`[key="..."]`) let a key value containing `]` defeat
 		// tieredPath's bracket-stripping regex, which stops at the FIRST
 		// `]` it finds -- an embedded `]` inside the key closes the

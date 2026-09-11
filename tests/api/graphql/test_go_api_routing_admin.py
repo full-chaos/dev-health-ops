@@ -234,8 +234,8 @@ async def _record_measurement_provenance(
     this the rows below would be refused for a reason unrelated to what
     each test is actually about.
 
-    The default binding is ``per_request`` for the SAME reason, since
-    opus r5's P1 made a BOUND measurement part of admissibility too. It
+    The default binding is ``per_request`` for the SAME reason, since a
+    BOUND measurement is part of admissibility too. It
     defaulted to ``absent`` until then, which is a value the rule now
     refuses -- so every test here would have gone on passing while
     proving nothing, or (for the admitting ones) failed for a reason
@@ -294,7 +294,7 @@ async def test_proof_is_scoped_to_the_exact_build_and_digest(
     for schema_digest, build, doc, stage, terminal_state in (
         (LIVE, other_build, document_digest, ENABLEMENT_PROOF_STAGE, "match"),
         (SUPERSEDED, BUILD, document_digest, ENABLEMENT_PROOF_STAGE, "match"),
-        # codex r1 (P2): the 4th column. A proof against a DIFFERENT
+        # The 4th column. A proof against a DIFFERENT
         # registered document must not authorize this one.
         (LIVE, BUILD, other_document, ENABLEMENT_PROOF_STAGE, "match"),
         (LIVE, BUILD, document_digest, "dual_run", "match"),
@@ -379,7 +379,7 @@ async def test_count_rows_by_schema_digest_sees_every_digest(
 async def test_status_holds_a_primary_row_to_the_edge_rule(
     session: AsyncSession,
 ) -> None:
-    """r1 P3: disabling the primary branch of the grouping passed all 9 tests.
+    """Disabling the primary branch of the grouping passed all 9 tests.
 
     ``routing_status_rows`` groups by (candidate build, the mode's own
     route rule) precisely so a ``primary`` row is judged against the
@@ -458,8 +458,8 @@ async def test_status_proves_a_primary_row_on_edge_evidence(
     # The other direction, on the SAME row: unbind it and the primary row
     # stops being proven. Without this the test above passes for a row
     # that would also pass unbound, and "edge evidence proves primary"
-    # would be indistinguishable from "anything proves primary" (opus
-    # r5, P1 -- reproduced as `primary enable rc=0` on an unbound row).
+    # would be indistinguishable from "anything proves primary" --
+    # reproduced as `primary enable rc=0` on an unbound row.
     await _record_measurement_provenance(session, route="edge", binding="absent")
     await session.commit()
     unbound = {
@@ -478,7 +478,7 @@ async def test_status_proves_a_primary_row_on_edge_evidence(
 async def test_status_reads_the_catalogs_document_not_whichever_row_is_last(
     session: AsyncSession,
 ) -> None:
-    """r2 P1 / Trap #120: keying by operation alone collapses documents.
+    """Trap #120: keying by operation alone collapses documents.
 
     ``go_api_routing_state`` is keyed by ``(schema_digest,
     document_digest, selected_operation)``. A map keyed on the operation
@@ -574,8 +574,8 @@ async def test_status_reports_a_drifted_document_by_name_not_as_match(
     )
     assert catalog_row.digest_state == "MISSING", (
         f"the CATALOG's document has no row, so its state is MISSING, got "
-        f"{catalog_row.digest_state!r} -- reporting MATCH here is the r2 "
-        "defect: an operator reads it as serving when the edge cannot "
+        f"{catalog_row.digest_state!r} -- reporting MATCH here is the "
+        "old defect: an operator reads it as serving when the edge cannot "
         "dispatch it at all"
     )
     assert catalog_row.mode is None
@@ -594,7 +594,7 @@ async def test_status_reports_a_drifted_document_by_name_not_as_match(
 async def test_status_names_a_live_row_whose_operation_the_catalog_does_not_register(
     session: AsyncSession,
 ) -> None:
-    """opus r7 (P2-1): status iterated the CATALOG, so a live row for an
+    """Status iterated the CATALOG, so a live row for an
     operation the catalog no longer registers (renamed or retired) was named
     nowhere -- only counted in the per-digest totals -- while the edge cannot
     dispatch it and the migration page names it. Every live row the edge
@@ -628,7 +628,7 @@ async def test_status_names_a_live_row_whose_operation_the_catalog_does_not_regi
 async def test_one_operation_at_two_catalog_documents_is_two_matches_not_drift(
     session: AsyncSession,
 ) -> None:
-    """opus r7 (P3-1): both loaders accept a catalog naming one operation at
+    """Both loaders accept a catalog naming one operation at
     two documents, and the drift subtraction removed only the CURRENT
     catalog entry's digest -- so each catalog document flagged the other as
     DOCUMENT_DRIFT, and each document was reported both MATCH and drifted.
@@ -684,7 +684,7 @@ async def test_disable_plans_against_the_catalogs_document(
     # keeps, ONE of the two calls below must come back with the other
     # row's mode.
     #
-    # astra r4 caught the earlier version passing under the real revert.
+    # The earlier version passed under the real revert.
     # It asked about one document only, and the collapsed map happened to
     # keep that one. Reordering the seeds did not help either: the order
     # the rows come back in is Postgres's, not the order they were
@@ -740,7 +740,7 @@ async def test_disable_plans_against_the_catalogs_document(
 async def test_proof_never_transfers_between_documents_of_one_operation(
     session: AsyncSession,
 ) -> None:
-    """astra r3 P1: status reported a catalog document PROVEN on a drifted
+    """Status reported a catalog document PROVEN on a drifted
     row's proof, across a different build AND a different target mode.
 
     Two rows for one operation: the catalog's document at ``primary`` on
@@ -822,7 +822,7 @@ async def test_proof_never_transfers_between_documents_of_one_operation(
 async def test_two_documents_under_one_build_and_mode_each_keep_their_proof(
     session: AsyncSession,
 ) -> None:
-    """opus r5 P2: the proof GROUPING still collapsed on the operation.
+    """The proof GROUPING still collapsed on the operation.
 
     Every earlier test here differs the MODE between the two documents,
     which puts them in different groups and hides the defect. This one

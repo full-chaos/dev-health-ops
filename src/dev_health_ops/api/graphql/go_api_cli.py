@@ -225,7 +225,7 @@ def _fetch_go_plane_registry(base_url: str) -> GoPlaneRegistry:
             # Silently keeping the last one would let a malformed or
             # tampered registry hide a second, different document digest
             # for the same operation -- and preflight 3 would then compare
-            # against whichever copy happened to win (codex r1, P3).
+            # against whichever copy happened to win.
             raise GoPlaneUnavailable(
                 f"{endpoint}/registry lists operation {operation!r} more than once"
             )
@@ -306,8 +306,8 @@ def _enable_review_evidence(
     if unproven:
         prefix = "ACKNOWLEDGED-UNPROVEN: "
         return prefix + (supplied or "no reason given")
-    # A proven row names the receipt that authorized it (opus r7,
-    # observability): without it the row records nothing about WHICH
+    # A proven row names the receipt that authorized it: without it the
+    # row records nothing about WHICH
     # evidence carried the decision, and a predicate that admitted the
     # wrong receipt is indistinguishable from one that admitted the right one.
     if receipt is not None:
@@ -692,10 +692,10 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
 
     catalog = catalog_entries()
     catalog_ok = catalog_loaded_successfully()
-    # codex r2 (P1): this was unguarded, so an unreadable SDL raised out of
-    # `status` and emitted NOTHING -- not even invalid JSON. Same contract
-    # breach as the unguarded database read r1 found, one line higher up:
-    # this command reports what it can and never dies on what it cannot.
+    # Unguarded, this raised out of `status` and emitted NOTHING -- not
+    # even invalid JSON -- the same contract breach as the unguarded
+    # database read one line higher up: this command reports what it can
+    # and never dies on what it cannot.
     local_digest: str | None = None
     digest_error: str | None = None
     try:
@@ -721,9 +721,9 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
     else:
         go_error = "no --query-api-url and GO_API_QUERY_API_URL is unset"
 
-    # codex r1 (P1): this block used to be unguarded, so `status` raised a
-    # traceback and exited 1 whenever Postgres was unreachable -- directly
-    # contradicting this command's whole contract. `status` is what an
+    # Unguarded, this block raised a traceback and exited 1 whenever
+    # Postgres was unreachable -- directly contradicting this command's
+    # whole contract. `status` is what an
     # operator runs WHEN THINGS ARE BROKEN; a diagnostic that dies because
     # the thing it diagnoses is down is useless exactly when it is needed,
     # and it is the same "two states, one silence" mistake in a new place:
@@ -754,8 +754,8 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
                     "python_plane_digest_error": digest_error,
                     "go_plane_schema_digest": go_digest,
                     "go_plane_error": go_error,
-                    # None means UNKNOWN, not "different" (codex r3, P1).
-                    # A comparison against a digest this process could not
+                    # None means UNKNOWN, not "different". A comparison
+                    # against a digest this process could not
                     # compute has no truth value, and asserting one is the
                     # exact failure mode this whole change exists to end:
                     # stating a confident wrong answer instead of "unknown".
@@ -857,7 +857,7 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
         # and this command computes `proven` for it -- the JSON says so.
         # Printing `-` here told the operator nothing about the one row
         # they are being asked to notice, and the terminal disagreed with
-        # `--json` on the same run (opus r5, P3).
+        # `--json` on the same run.
         if status.digest_state in ("MATCH", "DOCUMENT_DRIFT", "UNREGISTERED"):
             proof = "ok" if status.proven else "UNPROVEN"
         else:

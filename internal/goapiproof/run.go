@@ -67,7 +67,7 @@ const (
 // only to measure, is registered only under an explicit env flag, and is
 // unreachable from the Python edge -- but a receipt that did not SAY which
 // route produced it would leave that distinction in a chat message
-// instead of in the row (team-lead ruling R50, 2026-09-09).
+// instead of in the row.
 const (
 	RouteEdge  = "edge"
 	RouteProof = "proof"
@@ -80,11 +80,11 @@ const (
 //
 // The column answers exactly ONE question -- was the build bound PER
 // RESPONSE? -- and the vocabulary is EdgeBuildPresent / EdgeBuildAbsent
-// accordingly (team-lead ruling, 2026-09-10). An earlier draft of 5484
+// accordingly. An earlier draft of 5484
 // named the weak case "run_level", for the run-level evidence behind it:
 // an authenticated /buildinfo read before and after, agreeing with every
 // routing row's current_candidate_build. That value was dropped, because
-// under R70 VerifyCandidateBuild is a HARD refusal -- so no proof row is
+// VerifyCandidateBuild is a HARD refusal -- so no proof row is
 // ever written WITHOUT that run-level evidence. "run_level" would be true
 // of every weak row and a third value would name a state no writer can
 // produce. The run-level evidence is implied by the row existing at all,
@@ -132,7 +132,7 @@ const contentTypeHeader = "content-type"
 // validation, execution and serialization; only the plane differs. A
 // GraphQL comment is ignored by the parser, so the two documents are
 // semantically identical. This is the same control lane-goapi-enable used
-// on 2026-09-07 (enablement artifact 51-harness-control.json, which
+// (enablement artifact 51-harness-control.json, which
 // recorded python_plane_header=python for every arm).
 //
 // The alternative -- flipping the routing row to python, measuring, and
@@ -156,7 +156,7 @@ type Observation struct {
 	// Content-Length differ on every pair of requests and would drown a
 	// real divergence in noise. An earlier version's doc comment claimed
 	// headers were observed while the struct recorded none, so a
-	// content-type divergence was invisible (codex r1 F4, reproduced:
+	// content-type divergence was invisible (reproduced:
 	// application/problem+json vs application/json compared as match).
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    []byte            `json:"-"`
@@ -179,10 +179,10 @@ type Outcome struct {
 	// admitted is the SEALED form of the field above, and the one every
 	// receipt constructor actually reads.
 	//
-	// r3 found the exported bool is not a boundary: a caller in any
+	// Testing found the exported bool is not a boundary: a caller in any
 	// package can build an Outcome with Admitted=true, hand it to
 	// ReceiptsFor, and get a deployed_executed/match receipt for a pair of
-	// responses that never passed Admit. R57 made Admit the only door on
+	// responses that never passed Admit. Admit is the only door on
 	// the PRODUCTION path; it did not make it the only door.
 	//
 	// This field is unexported, so nothing outside this package can set
@@ -191,7 +191,7 @@ type Outcome struct {
 	// what a human reads; this is what the code trusts.
 	admitted bool
 	// terminalState is the SEALED verdict, and the one every receipt
-	// carries. r4 showed that sealing `admitted` alone was half the job:
+	// carries. Testing showed that sealing `admitted` alone was half the job:
 	// after a real run, assigning the exported TerminalState turned an
 	// unbound `unsupported` result into a `match` receipt whose own
 	// provenance still said edge_build_binding=absent. The seal covered
@@ -223,8 +223,8 @@ type Outcome struct {
 	// difference is a known Python defect" and "there were no differences"
 	// are different facts.
 	DifferencesOutsideBaselineDefect int `json:"differences_outside_baseline_defect"`
-	// CoveredByShape / OutsideByShape say WHAT the two counts are made of
-	// (opus r8 P3-5); OutsideByShape sums to DifferencesOutsideBaselineDefect,
+	// CoveredByShape / OutsideByShape say WHAT the two counts are made of;
+	// OutsideByShape sums to DifferencesOutsideBaselineDefect,
 	// including the transport differences no citation can express ("http",
 	// "unbound_edge").
 	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
@@ -239,14 +239,15 @@ type Outcome struct {
 // is ever built from.
 //
 // This type exists because sealing one field at a time did not work, three
-// rounds running. r3 sealed `admitted` after a hand-built Outcome forged a
-// receipt; r4 sealed the verdict after a real outcome's TerminalState was
-// reassigned; r5 then relabelled the build, schema digest, org, document,
-// operation and route on a genuine admitted match and got
+// rounds running. Sealing `admitted` stopped a hand-built Outcome from
+// forging a receipt; sealing the verdict then stopped a real outcome's
+// TerminalState from being reassigned; relabelling the build, schema
+// digest, org, document, operation and route on a genuine admitted match
+// still got
 // `receipt build=never-measured-build terminal=match`. Each fix closed the
 // field that had just been used and left the rest open, which is a
-// blacklist whose default is TRUST -- the exact shape R57 was written to
-// end on the admission side and which I rebuilt here.
+// blacklist whose default is TRUST -- the exact shape this design was
+// built to end on the admission side and which is rebuilt here.
 //
 // So there is no field to reassign rather than a growing list of fields
 // that may not be. Every field is unexported; the struct never leaves this
@@ -325,7 +326,7 @@ type Config struct {
 	// kinds: measured on the stack, an access token gets 200 on the edge
 	// and 401 on /buildinfo, and an envelope gets the reverse. One map
 	// applied to both meant every run failed on one leg or the other
-	// (JOB 4, 2026-09-09). Two fields make that a compile-time
+	// (JOB 4). Two fields make that a compile-time
 	// distinction rather than a runtime discovery.
 	EdgeCredential *Credential
 
@@ -377,7 +378,7 @@ var ErrNothingMeasured = errors.New("goapiproof: no operation was executed -- th
 // Run executes every registered operation and returns one Outcome each plus
 // the summary. It WRITES NOTHING.
 //
-// Receipt writing is a separate, later phase on purpose (round 2's F3).
+// Receipt writing is a separate, later phase on purpose.
 // Receipts used to commit as each operation finished, before the run-level
 // build-stability check had a chance to run -- so a build that moved
 // mid-run left already-committed match receipts behind, eligible for
@@ -552,7 +553,7 @@ func (r *Runner) RefusalReceipts(observedAt time.Time, cause string) ([]Receipt,
 // `receipt_written` flag can be set from what really happened. Reporting a
 // run-level `receipts_written=N` while every outcome still said
 // `receipt_written: false` was a small lie of exactly the kind this
-// instrument exists not to tell (confirmation pass, P3).
+// instrument exists not to tell.
 //
 // A partial write is reported partially rather than rolled back: each
 // receipt is individually atomic, and losing a whole run's evidence to one
@@ -761,7 +762,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	// that is not bookkeeping -- it is what stops CHAOS-5484's fully-cited
 	// mismatch rule from admitting an UNcited one.
 	//
-	// r2 (P1) reproduced the hole end to end: these findings were appended
+	// Testing reproduced the hole end to end: these findings were appended
 	// AFTER the counter was copied from the body comparison, so a cited
 	// body defect plus an uncited HTTP 200-vs-202 produced
 	// terminal_state=mismatch with outside=0 -- which the enablement
@@ -801,7 +802,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	// measurement with no per-request build binding may never be
 	// enablement-eligible.
 	//
-	// r2 proved why with an executed test. A deployment that BEGINS during
+	// Testing proved why with an executed test. A deployment that BEGINS during
 	// the run defeats every other defence at once: the routing row can
 	// legitimately name the running build, /buildinfo answers from the old
 	// replica before and after, and the measured request is served by the
@@ -821,9 +822,8 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	//
 	// `binding_absent` would be more legible, and is deliberately not used:
 	// terminal_state's vocabulary is fixed by the signed plan and enforced
-	// by a CHECK constraint, and a hotfix does not widen it (team-lead
-	// ruling, 2026-09-09 -- the same trade #2395 made in choosing
-	// proof_failed over inventing `refused`).
+	// by a CHECK constraint, and a hotfix does not widen it -- the same
+	// trade #2395 made in choosing proof_failed over inventing `refused`.
 	//
 	// UNBOUND EVIDENCE AUTHORIZES NOTHING, in any mode, whatever the
 	// verdict.
@@ -834,7 +834,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	// on sitting here reading as current while the code it justified had
 	// become a hole: an edge measurement with no per-request binding,
 	// whose body differences were all cited, was admitted for primary.
-	// astra r3 reproduced it end to end (`primary enable rc=0`).
+	// Testing reproduced it end to end (`primary enable rc=0`).
 	//
 	// The two verdicts are handled differently because the truest RECORD
 	// differs, not because one is safe:
@@ -913,8 +913,8 @@ func copyCounts(counts map[string]int) map[string]int {
 
 // decodeLeg turns one leg's body into a Snapshot, or names why it cannot.
 //
-// Non-finite numbers are handled at TWO levels, and round 2's F9 was right
-// that the earlier comment blurred them:
+// Non-finite numbers are handled at TWO levels; an earlier comment
+// blurred them:
 //
 //   - In the COMPARATOR, parity rule 3 stands unchanged: a decoded value
 //     that is NaN or Infinity is always a mismatch, never tolerance-compared
@@ -1031,7 +1031,7 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 //
 // Same class as the 8 KiB bound on the minting helper's output, one column
 // over: an unbounded operator string flowing into a JSON document in a
-// Text column is an unbounded write nobody chose. r2 confirmed a 2 MiB note
+// Text column is an unbounded write nobody chose. Testing confirmed a 2 MiB note
 // stays valid JSON, which is the point -- it would be accepted, stored, and
 // read back by every future query against this table.
 //
@@ -1056,7 +1056,7 @@ func ValidateOperatorEvidence(evidence string) error {
 
 // ReceiptProvenance is what goes into go_api_proof_run.review_evidence.
 //
-// A JSON OBJECT rather than prose. r1 found the previous design appending
+// A JSON OBJECT rather than prose. Testing found the previous design appending
 // generated text to operator-authored text with a " | " separator, which
 // is ambiguous in both directions -- a reader cannot tell which half a
 // machine wrote, and an operator whose note contains the separator forges
@@ -1090,7 +1090,7 @@ type ReceiptProvenance struct {
 	Measured  int `json:"measured_operations,omitempty"`
 	Attempted int `json:"attempted_operations,omitempty"`
 	// CoveredByShape / OutsideByShape: what the receipt's citation covered
-	// and what it did not, by finding shape (opus r8 P3-5). `enable` prints
+	// and what it did not, by finding shape. `enable` prints
 	// them, so an admission says whether it rests on "one value differed"
 	// or on something else.
 	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
@@ -1098,7 +1098,7 @@ type ReceiptProvenance struct {
 }
 
 // reviewEvidence renders the provenance for one receipt. ONE constructor
-// for both the success and the refusal path (r1 P2): the refusal path used
+// for both the success and the refusal path: the refusal path used
 // to build its own prose and dropped the routing-row fact entirely, so the
 // receipts that most needed provenance had the least.
 func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, attempted int) string {

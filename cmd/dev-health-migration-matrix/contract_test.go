@@ -68,8 +68,8 @@ func TestCheckFailsWhenTheDocIsEditedByHand(t *testing.T) {
 	// The most tempting hand edit there is: soften the honest cell. Tampering
 	// with the PARITY column rather than the deployed one on purpose -- the
 	// deployed cell's text legitimately changes when the fleet is rebuilt
-	// (it read "**unknown**" until the Compose COMMIT build-arg landed on
-	// 2026-09-09, and a real sha after), so a test anchored on it would fail
+	// (it read "**unknown**" until the Compose COMMIT build-arg landed,
+	// and a real sha after), so a test anchored on it would fail
 	// for a reason that has nothing to do with tampering. "UNVERIFIED" is
 	// present for as long as any family is unverified, which is the state
 	// this whole section exists to keep visible.
@@ -137,7 +137,7 @@ func repoRoot(t *testing.T) string {
 }
 
 // The offline -routing path exists so an operator without a DSN can still
-// render the page. opus r5 (P2c) showed its instruction was unfollowable: it
+// render the page. Its instruction was once unfollowable: it
 // named an unexported function, so "produce rows with the reader's SQL" meant
 // retyping the SQL. These two tests pin the two halves of the fix -- that the
 // statement is reachable, and that a snapshot missing the routing KEY is
@@ -289,7 +289,7 @@ func writeSnapshotAndPage(t *testing.T, root string, rows []migrationmatrix.Oper
 	}
 }
 
-// opus r6 (P2-2), through the real -check: the drifted row rendered "live,
+// Through the real -check: the drifted row rendered "live,
 // primary, proven" and -check printed "migration matrix OK" with rc=0,
 // while `dev-hops go-api routing status` named the same row DOCUMENT_DRIFT.
 // The page's own reason for existing is that a silent death must not look
@@ -342,7 +342,7 @@ func TestCheckFailsOnALiveRowTheCatalogCannotDispatch(t *testing.T) {
 	}
 }
 
-// g40 (opus r6): -print-routing-sql could print anything and no test would
+// Mutant g40: -print-routing-sql could print anything and no test would
 // notice, because no test ran the flag's code. printRoutingSQL is that code;
 // what it prints must be exactly the statement ReadRoutingState executes,
 // and TestTheRoutingSnapshotStatementIsWhatTheOfflineReaderReads (in
@@ -439,7 +439,7 @@ func TestNoFlagIsSilentlyIgnored(t *testing.T) {
 	}
 }
 
-// opus r7 (mutant g35): R14 on -render was unpinned -- dropping it left
+// Mutant g35: R14 on -render was unpinned -- dropping it left
 // `-render` exiting 0 on a drift snapshot, caught only later by -check. The
 // real runRender, in a scratch git repository, on a -routing file whose live
 // row serves a document the catalog does not name.
@@ -478,7 +478,7 @@ func TestRenderFailsOnALiveRowTheCatalogCannotDispatch(t *testing.T) {
 	t.Logf("cell -render on a drifted live row -> err=%q, R14 printed: true", renderErr)
 }
 
-// opus r7 (mutant g36): -check's warning about rows it cannot judge was
+// Mutant g36: -check's warning about rows it cannot judge was
 // unpinned. On the committed tree (whose snapshot predates document digests)
 // the real -check must pass AND say how many rows it could not judge.
 func TestCheckWarnsAboutRowsItCannotJudge(t *testing.T) {

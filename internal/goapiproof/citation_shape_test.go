@@ -10,7 +10,7 @@ import (
 
 // A citation covers leaf VALUE differences under its path, and nothing else.
 //
-// opus r7 (P1-1): `hotspots` cites the whole `data.hotspots.rows` subtree for
+// `hotspots` cites the whole `data.hotspots.rows` subtree for
 // CHAOS-5447 (Python selects a different physical row per file), and a cited
 // path covered EVERY finding beneath it -- including the list's own LENGTH
 // finding, which is reported at the list path. So a Go build returning `[]`,
@@ -25,7 +25,7 @@ import (
 // cells run through the writer, WriteAtomic and the production reader on each
 // PostgreSQL major (TestAShapeDifferenceUnderACitationNeverBecomesProof).
 //
-// The rule (R115, on opus r7 P1-1): a citation covers a difference
+// The rule: a citation covers a difference
 // only where BOTH sides are leaves -- a scalar or null -- at the differing
 // path. A NULL leaf is covered: hotspots' defect is row selection, and a
 // different row surfaces as null in one plane and a value in the other.
@@ -55,7 +55,7 @@ func hotspotsCitationCells() (string, []citationShapeCell) {
 		{"a leaf null where Python has a value", hotspotsBody(hotspotsRow("a.go", "r1", 5, "null"), b), 0},
 		{"leaf values differ and a leaf is null", hotspotsBody(hotspotsRow("z.go", "r9", 7, "null"), hotspotsRow("b.go", "r1", 3, "0.25")), 0},
 		{"a leaf of another scalar type (string for number)", hotspotsBody(hotspotsRow("a.go", "r1", 5, `"0.5"`), b), 0},
-		// R115 addendum: under a cited path, a candidate with NO non-null
+		// Under a cited path, a candidate with NO non-null
 		// leaf while the baseline has one is an empty result in disguise --
 		// structural, outside. One non-null leaf left anywhere under the
 		// path keeps the null leaves covered (hotspots' real receipt: 7 null
@@ -123,7 +123,7 @@ func itoa(n int) string {
 
 // The same rule through the REAL writer: Runner -> admission -> Compare ->
 // ReceiptsFor, with the real hotspots declaration. This is the path the
-// reviewer executed end to end (opus r7 P1-1): a Go build returning no rows
+// reviewer executed end to end: a Go build returning no rows
 // produced a receipt with outside=0 that `enable --mode primary` admitted.
 // Every cell here must yield a receipt whose outside count keeps it out of
 // the enablement rule, except the ones the citation genuinely covers.
@@ -142,7 +142,7 @@ func TestTheWriterRecordsShapeDifferencesOutsideTheCitation(t *testing.T) {
 		{"a row that is null", `{"data":{"hotspots":{"rows":[null,{"filePath":"b.go","repoId":"r1","churnCommits30d":2,"blameConcentration":0.25}]}}}`, 1, false},
 		// A leaf null is a LEAF difference: hotspots' row selection surfaces
 		// as null in one plane and a value in the other (JOB 5 shows both
-		// directions). Covered, by R115.
+		// directions). Covered.
 		{"a leaf null where Python has a value", `{"data":{"hotspots":{"rows":[{"filePath":"a.go","repoId":"r1","churnCommits30d":3,"blameConcentration":null},{"filePath":"b.go","repoId":"r1","churnCommits30d":2,"blameConcentration":0.25}]}}}`, 0, true},
 		// The declared defect itself: Python selected another physical row,
 		// so values differ, shape identical. Covered -- this is what the
@@ -227,7 +227,7 @@ func TestEveryFindingSiteHonoursTheCitationRule(t *testing.T) {
 			`{"data":{"x":[1]}}`, `{"data":{"x":1}}`, 1, "covered[] outside[structure=1]"},
 		{"an object against a list (structure)", cite("data.x"),
 			`{"data":{"x":{"k":1}}}`, `{"data":{"x":[1]}}`, 1, "covered[] outside[structure=1]"},
-		{"a non-finite number against null (never covered: R73 forbids it in Go output)", cite("data.x"),
+		{"a non-finite number against null (never covered: forbidden in Go output)", cite("data.x"),
 			`{"data":{"x":1e400}}`, `{"data":{"x":null}}`, 1, "covered[] outside[non_finite=1]"},
 		{"a bool against a number (scalar type, covered)", cite("data.x"),
 			`{"data":{"x":[true,"k"]}}`, `{"data":{"x":[1,"k"]}}`, 0, "covered[scalar_type=1] outside[]"},
@@ -265,7 +265,7 @@ func TestEveryFindingSiteHonoursTheCitationRule(t *testing.T) {
 // for each, eight candidates at that exact path -- three leaf differences (a
 // value, a null leaf beside a non-null one, another scalar type: covered)
 // and five structural ones (the only leaf null -- an empty result in
-// disguise, R115 addendum -- key absent, list length, container against
+// disguise -- key absent, list length, container against
 // null, container against a scalar: outside). A new declaration is swept by
 // this test the day it is added.
 func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
@@ -327,7 +327,7 @@ func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
 	t.Logf("declared citation paths swept: %d", swept)
 }
 
-// opus r8 P3-5: the receipt stored only the outside COUNT and the tickets,
+// The receipt stored only the outside COUNT and the tickets,
 // so what a citation covered was invisible after the run. Every receipt's
 // provenance now carries the per-shape counts, and they add up: outside by
 // shape sums to differences_outside_baseline_defect -- including the

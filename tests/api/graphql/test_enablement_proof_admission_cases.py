@@ -52,8 +52,8 @@ POSTGRES_TEST_URI = os.environ.get("DEV_HEALTH_POSTGRES_TEST_URI")
 #:
 #: It used to be ``pytestmark``, i.e. module-level, which took the
 #: data-only assertions down with them: on a runner without the URI the
-#: whole cross-language guarantee evaporated with a green run of 25 skips
-#: (opus r5, P3). The fixture-shape checks read a JSON file and need no
+#: whole cross-language guarantee evaporated with a green run of 25 skips.
+#: The fixture-shape checks read a JSON file and need no
 #: database, so they now run everywhere -- a malformed or unexplained case
 #: is caught on any runner, and only the rows-against-Postgres half is
 #: conditional.
@@ -103,7 +103,7 @@ def _asked_key(document: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]
     the question uses the overridden key too. Without that, a key override
     can only test "a receipt for a different key is not proof" -- refused by
     equality -- and a clause about the key's own VALUE (a blank
-    ``candidate_build``) is never reached (opus r6, P3-1).
+    ``candidate_build``) is never reached.
     """
     if case.get("ask_with_overridden_key"):
         return _merged_key(document, case)
@@ -117,7 +117,7 @@ def _cases() -> list[dict[str, Any]]:
 def _control_of(case: dict[str, Any]) -> dict[str, Any]:
     """The refused ``case`` with exactly its stated reason removed.
 
-    opus r6 (P2-3): ``match_route_null_canary_refused`` carried a NULL
+    ``match_route_null_canary_refused`` carried a NULL
     ``build_binding`` beside the NULL route it is named for. Once the
     binding joined the rule, the binding alone refused it, so the case
     pinned nothing about the route -- the canary NULL-route clause could be
@@ -296,7 +296,7 @@ def test_every_refused_case_names_the_control_that_removes_its_reason() -> None:
 
 
 def test_the_cutset_is_the_one_the_shared_fixture_states() -> None:
-    """The Python half of the one-definition pin (opus r6, P2-1 swept).
+    """The Python half of the one-definition pin.
 
     ``_BLANK_CUTSET`` is bound as a parameter, so it is version-independent
     -- but a rune added to Go's constant and not here would still split the

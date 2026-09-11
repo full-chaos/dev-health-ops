@@ -160,7 +160,7 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
-		// per_request, not absent. Since opus r5's P1 the rule requires
+		// per_request, not absent. The rule now requires
 		// a BOUND measurement on both arms, so a receipt written with
 		// `absent` is refused for its BINDING -- which would make every
 		// assertion below hold for a reason that has nothing to do with
@@ -186,7 +186,7 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 		t.Fatal("a deployed_executed/match receipt must satisfy the enablement predicate")
 	}
 
-	// r1 P3: this test proved the receipt was READABLE by the predicate
+	// This test proved the receipt was READABLE by the predicate
 	// and never that what landed in the row was what Write was handed.
 	// Mutating Write's parameter to nullIfEmpty("") persisted NULL and
 	// this test still passed, because the predicate does not look at
@@ -210,7 +210,7 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 		t.Fatalf("build_binding read back as %q, want %q -- the row must carry the binding the run established, not another one", *storedBinding, EdgeBuildPresent)
 	}
 
-	// The other half of the same seam (opus r5, P1). An UNBOUND
+	// The other half of the same seam. An UNBOUND
 	// measurement is a real, recorded observation of a response nobody
 	// can attribute to a replica -- so it is written, and it authorizes
 	// nothing. Asserting only the admitting direction is how the hole
@@ -251,8 +251,8 @@ func TestEnablementPredicateRejectsEveryWrongKeyColumn(t *testing.T) {
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
 		// Admissible in every respect EXCEPT the column each subtest
-		// changes. With `absent` here (as this base had until opus r5's
-		// P1 landed) every subtest would pass on the BINDING, and the
+		// changes. With `absent` here (as this base once had) every
+		// subtest would pass on the BINDING, and the
 		// key columns it claims to pin would be doing no work at all.
 		BuildBinding: EdgeBuildPresent,
 		ObservedAt:   time.Now().UTC(),
@@ -261,8 +261,8 @@ func TestEnablementPredicateRejectsEveryWrongKeyColumn(t *testing.T) {
 	// The control: the UNMUTATED base IS admitted. Without it, "the base
 	// is admissible" is an assumption, and this whole table can go
 	// vacuous again the next time the rule gains a requirement -- which
-	// is exactly what happened when opus r5's P1 added the binding
-	// requirement to a base written with `absent`.
+	// is exactly what happened when the binding requirement was added
+	// to a base written with `absent`.
 	//
 	// It is written under its OWN operation, and asked about under that
 	// operation. Writing the base at `featureFlags` would leave an
@@ -326,7 +326,7 @@ func TestMismatchReceiptIsRecordedButAuthorizesNothing(t *testing.T) {
 		TerminalState:     TerminalStateMismatch,
 		MeasurementRoute:  RouteProof,
 		// Bound, so the refusal below is about the UNCITED MISMATCH this
-		// test is named for and not about the binding (opus r5, P1).
+		// test is named for and not about the binding.
 		BuildBinding: EdgeBuildPresent,
 		ObservedAt:   time.Now().UTC(),
 	}
@@ -554,7 +554,7 @@ func TestWriteAtomicCommitsBothRows(t *testing.T) {
 	}
 }
 
-// Round 2's F3, both directions, against a real database.
+// Exercises both directions, against a real database.
 //
 // Receipts used to commit as each operation finished, before the run-level
 // build-stability check ran -- so a build that moved mid-run left
@@ -569,7 +569,7 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 	ctx := context.Background()
 	pool := startRegistryPostgres(t)
 
-	// A REAL measurement, driven through Run against a fake edge. r5
+	// A REAL measurement, driven through Run against a fake edge. Testing
 	// found the previous version of this fixture hand-building an Outcome
 	// and setting the unexported admitted bit directly -- which the seal
 	// then made impossible to complete correctly, because it also had to
@@ -610,7 +610,7 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 	if state != "proof_failed" {
 		t.Fatalf("the recorded state must say the PROOF failed, got %q", state)
 	}
-	// review_evidence is a JSON provenance object, not prose (r1 P2), so
+	// review_evidence is a JSON provenance object, not prose, so
 	// this reads the fields rather than grepping a sentence -- which is
 	// the whole point of the change: a machine-written fact should be
 	// readable by a machine.

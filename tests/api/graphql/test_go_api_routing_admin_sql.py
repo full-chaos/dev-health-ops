@@ -1,9 +1,9 @@
 """The proof lookup's SQL, without a database.
 
-codex r2 (P3): the wrong-document regression test lives in a file gated on
+The wrong-document regression test lives in a file gated on
 ``DEV_HEALTH_POSTGRES_TEST_URI`` and therefore SKIPS in CI -- so the
 four-column proof key, a real correctness fix, had no CI-visible coverage.
-This is the same defect class as the P1 tests r1's fix had to be moved
+This is the same defect class as the tests the earlier fix had to be moved
 out of, and I missed it the first time while sweeping for exactly this.
 
 The behaviour is provable without a server: compile the statement against
@@ -29,7 +29,7 @@ def _compiled_proof_query(
 ) -> str:
     """Compile THE PRODUCTION statement.
 
-    codex r3 (P3): this used to rebuild the same clauses by hand and compile
+    This used to rebuild the same clauses by hand and compile
     the copy, which proves only that the test agrees with itself -- a
     regression in the real function would not have failed it. It now imports
     `build_enablement_proof_select`, the seam the async function actually
@@ -144,7 +144,7 @@ def test_sql_metacharacters_in_an_operation_name_stay_data() -> None:
 
 
 def test_an_unknown_target_mode_is_refused_rather_than_defaulted() -> None:
-    """r1 P3: disabling this guard passed all six tests in this file.
+    """Disabling this guard once passed all six tests in this file.
 
     Fail-closed on an unrecognised mode is not decoration. The two known
     modes have DIFFERENT route rules -- ``primary`` demands edge evidence,
@@ -209,7 +209,7 @@ def test_the_python_predicate_binds_the_cutset_rather_than_writing_a_literal(
 ) -> None:
     """The escape-literal fix, swept to the Python sibling and EXECUTED.
 
-    opus r6 (P2-1): the Go side's hand-typed ``E'...\\v...'`` meant the letter
+    The Go side's hand-typed ``E'...\\v...'`` meant the letter
     v on PostgreSQL 16. The Python predicate is only version-independent if
     it never writes the cutset into the SQL text at all -- so this compiles
     the production statement WITHOUT literal binds and requires that the SQL

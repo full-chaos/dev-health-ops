@@ -201,8 +201,8 @@ func ValidateRender(render *Render) []Violation {
 	// one operation at one schema digest, differing only by document, are
 	// a real and named state -- the Python status surface calls it
 	// DOCUMENT_DRIFT. Keyed on (digest, operation) this rule reported the
-	// legitimate shape as a duplicate and failed the render (opus r5, P2),
-	// which is the same silence one level down: the page whose job is to
+	// legitimate shape as a duplicate and failed the render, which is the
+	// same silence one level down: the page whose job is to
 	// show a row nobody noticed refused to show two.
 	//
 	// A genuine duplicate -- the SAME document twice -- is still a
@@ -222,7 +222,7 @@ func ValidateRender(render *Render) []Violation {
 		}
 		// NamesNothing, not strings.TrimSpace: a proof id is a routing-proof
 		// value, and every blank judgment over one uses the single definition
-		// (opus r6 P2-1, swept as a class).
+		// (swept as a class).
 		if goapiproof.NamesNothing(row.Proven) {
 			out = append(out, Violation{row.Operation, "R8-proven-empty",
 				fmt.Sprintf("proven is empty; write %q when no proof run matches this exact tuple", NoProof)})
@@ -258,9 +258,9 @@ func DocumentDrift(row OperationRow, catalog Catalog) bool {
 
 // DocumentUnjudged reports whether a LIVE row carries no document digest,
 // so whether it drifted cannot be decided from this snapshot. Counted on the
-// page rather than assumed either way: calling such a row served would be
-// the silence opus r6 (P2-2) found, and calling it drifted would fail every
-// page rendered before the key was carried.
+// page rather than assumed either way: calling such a row served would be a
+// silent false statement, and calling it drifted would fail every page
+// rendered before the key was carried.
 func DocumentUnjudged(row OperationRow) bool {
 	return row.Live && goapiproof.NamesNothing(row.DocumentDigest)
 }
@@ -274,7 +274,7 @@ func DocumentUnjudged(row OperationRow) bool {
 // A DOCUMENT_DRIFT row is NOT counted: the edge cannot dispatch it, so no
 // client reaches it. It has its own count (DriftedLive), because folding it
 // in here would report an undispatchable row as a served one -- the exact
-// misreading P2-2 found on this page.
+// misreading this page must not make.
 func UnprovenReachable(rows []OperationRow, catalog Catalog) int {
 	count := 0
 	for _, row := range rows {
@@ -295,8 +295,8 @@ const (
 // DispatchState names a row's state the way `routing status` does:
 // UNREGISTERED when the catalog does not register the operation at all,
 // DOCUMENT_DRIFT when it registers it at another document, "" otherwise.
-// ONE function for the cell, the counts and R14 (opus r8 P3-2: the cell and
-// the count said DOCUMENT_DRIFT for both while R14 and status did not).
+// ONE function for the cell, the counts and R14: the cell and the count once
+// said DOCUMENT_DRIFT for both while R14 and status did not.
 func DispatchState(row OperationRow, catalog Catalog) string {
 	if !DocumentDrift(row, catalog) {
 		return ""
@@ -320,9 +320,9 @@ func DriftedLive(rows []OperationRow, catalog Catalog, state string) int {
 }
 
 // sqlLiteral renders a value as a standard SQL string literal, a quote
-// doubled, for the remedy R14 prints for an operator to run (opus r8 P3-3:
-// interpolated raw, an operation named `x' OR ”='` printed a statement
-// that deleted every routing row). Row values are text columns, so there is
+// doubled, for the remedy R14 prints for an operator to run: interpolated
+// raw, an operation named `x' OR ”='` printed a statement that deleted
+// every routing row. Row values are text columns, so there is
 // no NUL to handle; with standard_conforming_strings on (PostgreSQL's
 // default since 9.1) a backslash inside '...' is an ordinary character.
 func sqlLiteral(value string) string {
@@ -347,7 +347,7 @@ func UnjudgedLive(rows []OperationRow) int {
 // one operation at one schema digest failed R8 and so failed the page --
 // loud, if by accident. Keying R8 on the triple (correctly) removed that,
 // and the drifted row then rendered as serving with -check green: a loud
-// failure turned into a quiet false statement (opus r6, P2-2). A row the
+// failure turned into a quiet false statement. A row the
 // edge cannot dispatch while its mode says it serves is an operator action
 // owed (disable it, or re-enable at the catalog's document) in the same
 // way R12's moved digest is, so it fails the same way. `routing status`
@@ -361,15 +361,15 @@ func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
 		// The state `dev-hops go-api routing status` names for this row:
 		// DOCUMENT_DRIFT when the catalog registers the operation at another
 		// document, UNREGISTERED when it does not register the operation at
-		// all (opus r7 P2-1: this message used to claim DOCUMENT_DRIFT for
-		// both, and status named the second nowhere).
+		// all -- this message used to claim DOCUMENT_DRIFT for both, and
+		// status named the second nowhere.
 		state := DispatchState(row, catalog)
 		want := "the catalog does not register this operation at all"
 		if state == StateDocumentDrift {
 			want = "the catalog names " + strings.Join(catalog.Documents(row.Operation), ", ")
 		}
-		// The remedy is the one the shipped verbs can perform (opus r7
-		// P3-2): `disable` keys on the CATALOG's document, so it cannot
+		// The remedy is the one the shipped verbs can perform:
+		// `disable` keys on the CATALOG's document, so it cannot
 		// reach this row, and re-enabling writes the catalog's row beside
 		// it. Until a disable-by-document verb exists, the row is removed by
 		// its full key.
@@ -383,7 +383,7 @@ func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
 // DeadReachable counts rows whose mode says a client can be served by Go but
 // whose schema digest no longer matches the pin -- so the router can never
 // match them and every request falls back to Python, silently. A non-zero
-// count here is the 2026-09-01 failure still on the board.
+// count here is that same failure mode still on the board.
 func DeadReachable(rows []OperationRow) int {
 	count := 0
 	for _, row := range rows {

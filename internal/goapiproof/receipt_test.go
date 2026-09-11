@@ -33,7 +33,7 @@ func wellFormedReceipt() Receipt {
 	}
 }
 
-// r9 F10a: the empty-candidate-build guard had no killer. Without it the
+// The empty-candidate-build guard had no killer. Without it the
 // INSERT reaches PostgreSQL and the composite FK refuses it there -- with a
 // constraint name instead of a sentence, which is the entire reason the
 // guard is stated at the call site.
@@ -52,10 +52,10 @@ func TestWriteRefusesAReceiptWithNoCandidateBuild(t *testing.T) {
 	}
 }
 
-// r9 F10b: the measurement-route guard had no killer either. An empty
+// The measurement-route guard had no killer either. An empty
 // route is the value a caller that never set the field would send, and
 // such a row cannot be told apart from served traffic later -- the whole
-// reason the column exists (R50).
+// reason the column exists.
 func TestWriteRefusesAReceiptWithNoMeasurementRoute(t *testing.T) {
 	for _, route := range []string{"", "served", "Edge"} {
 		receipt := wellFormedReceipt()
@@ -110,8 +110,8 @@ func TestWriteRefusesAReceiptWithNoBuildBinding(t *testing.T) {
 	// "run_level" is first in that list on purpose: it is what an earlier
 	// draft of CHAOS-5484 called the weak case, so it is the value a
 	// future writer is most likely to reinvent. It was dropped because
-	// every row that exists already carries run-level evidence -- R70
-	// makes VerifyCandidateBuild a hard refusal -- so the value would
+	// every row that exists already carries run-level evidence --
+	// VerifyCandidateBuild is a hard refusal -- so the value would
 	// distinguish nothing. The DB CHECK says the same thing; this says it
 	// before the round trip.
 
@@ -130,7 +130,7 @@ func TestWriteRefusesAReceiptWithNoBuildBinding(t *testing.T) {
 	}
 }
 
-// opus r6 (P2-1): the SQL cutset literal was HAND-TYPED beside the
+// The SQL cutset literal was HAND-TYPED beside the
 // constant it claimed to be generated from, and one of its escapes, `\v`,
 // is the letter v on PostgreSQL 16 and a vertical tab on 17 and 18. The Go
 // readers and the Python predicate (which binds the cutset as a parameter)

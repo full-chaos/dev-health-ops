@@ -320,9 +320,9 @@ func TestTwoRowsForOneOperationAtOneDigestFail(t *testing.T) {
 	assertRule(t, ValidateRender(snapshot(row, row)), "R8-duplicate-row")
 }
 
-// opus r6 (P2-2): the DOCUMENT_DRIFT shape -- the catalog's document at
+// The DOCUMENT_DRIFT shape -- the catalog's document at
 // canary and a second, drifted document at primary, one operation, one
-// schema digest -- rendered "live, primary, proven" and -check passed. The
+// schema digest -- once rendered "live, primary, proven" and -check passed. The
 // edge serves this operation at CANARY; the page said PRIMARY with proof.
 //
 // Each assertion below names what it pins, because each is a different
@@ -415,7 +415,7 @@ func TestALiveRowAtAnOperationTheCatalogDoesNotRegisterIsDrift(t *testing.T) {
 }
 
 // A live row with no document digest cannot be judged. It is counted on the
-// page -- neither assumed served (the silence P2-2 found) nor assumed
+// page -- neither assumed served (which would be a silent false statement) nor assumed
 // drifted (which would fail every page rendered before the key was carried).
 func TestALiveRowWithNoDocumentDigestIsCountedAsUnjudged(t *testing.T) {
 	row := liveRow("featureFlags", "canary")
@@ -515,8 +515,8 @@ func TestFreshnessRejectsAStampOlderThanTheBudget(t *testing.T) {
 	now := time.Date(2026, 9, 9, 3, 0, 0, 0, time.UTC)
 	sha := strings.Repeat("a", 40)
 
-	// The real stamp on 2026-09-09: five days old, forty merges behind, and
-	// still reading as current. Inside a seven-day budget it passes...
+	// A real stamp that is five days old and forty merges behind still
+	// reads as current. Inside a seven-day budget it passes...
 	assertClean(t, CheckFreshness(sha, now.AddDate(0, 0, -5), now, true, 7*24*time.Hour))
 	// ...and two days later it does not.
 	assertRule(t, CheckFreshness(sha, now.AddDate(0, 0, -8), now, true, 7*24*time.Hour), "R10-stale")
@@ -651,7 +651,7 @@ func TestParseRoutingSnapshotOverItsInputDomain(t *testing.T) {
 		{"document digest U+2028 (outside the cutset: accepted, then judged by the catalog)", `{"proof_run_total":0,"rows":[` + strings.Replace(row(""), `"document_digest":"d"`, `"document_digest":"\u2028"`, 1) + `]}`, true, 1, 0, NoProof},
 		{"out-of-vocabulary key", `{"proof_run_total":0,"rows":[` + row(`,"proven":true`) + `]}`, false, 0, 0, ""},
 		{"out-of-vocabulary top-level key", `{"proof_run_total":0,"rows":[],"extra":1}`, false, 0, 0, ""},
-		{"psql -At text, not JSON (the r6 P3-3 file)", `featureFlags|d|canary|sha256:pin|b|`, false, 0, 0, ""},
+		{"psql -At text, not JSON (the old pipe-text file)", `featureFlags|d|canary|sha256:pin|b|`, false, 0, 0, ""},
 	} {
 		rows, total, err := ParseRoutingSnapshot([]byte(c.body), "sha256:pin")
 		if (err == nil) != c.accept {
@@ -759,10 +759,10 @@ func TestTheRoutingStatementCarriesNoVersionDependentLiteral(t *testing.T) {
 	t.Logf("cell RoutingStateSQL: %d escape-string literals, all numeric-only; backslashes or E-strings elsewhere: none", len(literals))
 }
 
-// opus r7 (P3-4, mutant g26): the Live derivation moved into
+// Mutant g26: the Live derivation moved into
 // ParseRoutingSnapshot, and `Live: true` survived every suite -- a row at a
 // moved schema digest then rendered "yes" and the silent-fallback count read
-// 0: the 2026-09-01 silent death, on the page built to show it, all green.
+// 0: a silent death, on the page built to show it, all green.
 func TestParseRoutingSnapshotDerivesLiveFromTheSchemaDigest(t *testing.T) {
 	body := `{"proof_run_total":0,"rows":[` +
 		`{"selected_operation":"featureFlags","document_digest":"d","mode":"canary","schema_digest":"sha256:pin","current_candidate_build":"b","proof_run_id":null},` +
@@ -784,7 +784,7 @@ func TestParseRoutingSnapshotDerivesLiveFromTheSchemaDigest(t *testing.T) {
 	t.Logf("cell pin row -> live=%v ; moved-digest row -> live=%v ; silent-fallback count=%d", live["featureFlags"], live["hotspots"], DeadReachable(rows))
 }
 
-// opus r7 (mutant g28): the document tiebreak in ParseRoutingSnapshot's
+// Mutant g28: the document tiebreak in ParseRoutingSnapshot's
 // sort. A hand-built -routing file need not be ordered, and the snapshot is
 // COMMITTED as last-render.json: without the tiebreak two documents of one
 // operation keep the file's order, so the same rows commit differently.
@@ -803,7 +803,7 @@ func TestParseRoutingSnapshotOrdersRowsByTheFullRoutingKey(t *testing.T) {
 }
 
 // The R14 message names the state `routing status` reports and a remedy the
-// shipped tooling can perform (opus r7 P2-1, P3-2).
+// shipped tooling can perform.
 func TestR14NamesTheStatusStateAndAnExecutableRemedy(t *testing.T) {
 	catalog := catalogFor(t, "featureFlags")
 	drifted := liveRow("featureFlags", "primary")
@@ -824,7 +824,7 @@ func TestR14NamesTheStatusStateAndAnExecutableRemedy(t *testing.T) {
 		t.Logf("cell %-16s R14 says %q and names the full-key removal", c.row.Operation, c.state)
 	}
 
-	// opus r8 P3-3: the remedy interpolated row values unquoted, so an
+	// The remedy once interpolated row values unquoted, so an
 	// operation named `x' OR ''='` printed a statement that deleted EVERY
 	// routing row. Each value is now a standard SQL literal, a quote
 	// doubled. (Executed against PostgreSQL in
@@ -837,7 +837,7 @@ func TestR14NamesTheStatusStateAndAnExecutableRemedy(t *testing.T) {
 	t.Logf("cell %-16s the remedy doubles the quote: selected_operation = 'x'' OR ''''='''", "quote in a value")
 }
 
-// opus r8 P3-2: the page labelled an UNREGISTERED row DOCUMENT_DRIFT and
+// The page once labelled an UNREGISTERED row DOCUMENT_DRIFT and
 // counted it as "DOCUMENT_DRIFT, as routing status reports it", while status
 // reports UNREGISTERED. The cell names the state status names, and each
 // state has its own count.

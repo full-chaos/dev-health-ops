@@ -16,7 +16,7 @@ import (
 // stage x terminal state x route x binding x outside-count x citation
 // shape x target mode against real PostgreSQL. That test asserts its own
 // size from the slices it iterates, so no count is written down here --
-// a hand-copied number is what went stale three times (opus r5, P3).
+// a hand-copied number is what went stale three times.
 //
 // WHY SOME CELLS ARE ABSENT RATHER THAN FAILING. Go's type system makes
 // several cells UNREPRESENTABLE, and a test asserting them would not

@@ -52,7 +52,7 @@ type Receipt struct {
 
 	// MeasurementRoute is "edge" or "proof" -- which route executed the
 	// candidate leg. A proof-route receipt must never read as served
-	// traffic (team-lead ruling R50, 2026-09-09), and a receipt that did
+	// traffic, and a receipt that did
 	// not SAY which route produced it would leave that distinction in a
 	// chat message instead of in the row.
 	MeasurementRoute string
@@ -95,7 +95,7 @@ type TxBeginner interface {
 //
 // Write is two statements -- a candidate-build upsert and a proof-run
 // insert -- and the runner previously handed it a bare pool, so a failure
-// between them left a registered build with no receipt (codex r1 F7). That
+// between them left a registered build with no receipt. That
 // orphan is harmless on its own (the table is append-only and the upsert is
 // idempotent), but "harmless" was an argument, not a guarantee, and the
 // guarantee costs one BEGIN. The fallback exists so the in-memory tests can
@@ -164,7 +164,7 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 	//
 	// Refused HERE rather than widened in SQL, because both predicates
 	// read the column and a rule stated in two places drifts -- which is
-	// the defect r2 found in this very PR. The writer is the one place
+	// the defect found in this very PR. The writer is the one place
 	// that can refuse it once.
 	for _, ticket := range receipt.BaselineDefects {
 		if NamesNothing(ticket) {
@@ -254,7 +254,7 @@ func nullIfEmpty(value string) any {
 }
 
 // Target modes `dev-hops go-api routing enable` can be asked for, and the
-// route rule each carries (team-lead ruling, 2026-09-09; CHAOS-5484).
+// route rule each carries (CHAOS-5484).
 //
 // TargetModeCanary admits a receipt measured on ANY recorded route,
 // because a shadow operation can only ever be measured on /query/proof:
@@ -303,7 +303,7 @@ const EnablementCitedMismatchState = "mismatch"
 // `baseline_defect IS NOT NULL` is deliberately ABSENT. It reads as a
 // guard and is not one: `cardinality(NULL) > 0` evaluates to NULL, which
 // is not TRUE, so a NULL citation list is already excluded by the
-// cardinality clause alone. r1 proved it by removing the IS NOT NULL from
+// cardinality clause alone. Testing proved it by removing the IS NOT NULL from
 // both implementations and watching every case still pass. Both the NULL
 // and the empty-array cases are in the shared table
 // (`mismatch_cited_but_defect_null_refused`,
@@ -314,7 +314,7 @@ const EnablementCitedMismatchState = "mismatch"
 // blankCitationCutset is THE definition of "names nothing", and it is
 // deliberately an explicit character set rather than Unicode's space class.
 //
-// opus r5 (P1) found the change shipping TWO definitions: the writer used
+// Testing found the change shipping TWO definitions: the writer used
 // strings.TrimSpace, the predicates used one-argument btrim(). Measured,
 // they disagree on every whitespace character except the space itself --
 // a tab, newline, CR, vertical tab, form feed or NBSP citation was
@@ -352,7 +352,7 @@ const blankCitationCutset = " \t\n\v\f\r\u00a0"
 // literal, GENERATED from the constant one rune at a time, so the SQL below
 // and the Go check above cannot drift: there is one constant.
 //
-// opus r6 (P2-1) found that sentence false of the code it described. The
+// Testing found that sentence false of the code it described. The
 // literal was HAND-TYPED as `E' \t\n\v\f\r\u00a0'`, and `\v` in an
 // escape string is not one byte across server versions. Measured:
 //
@@ -384,7 +384,7 @@ func blankCitationSQL() string {
 // migration matrix's routing-snapshot and catalog guards and its
 // DOCUMENT_DRIFT "cannot be judged" state -- so a sibling check cannot
 // quietly use strings.TrimSpace (Unicode's open-ended space class) while
-// this one uses the enumerated set (opus r6 swept the class: a rule applied
+// this one uses the enumerated set (a rule applied
 // to one field is a rule for every field of that shape). The SQL side is
 // blankCitationSQL, generated from the same constant; the Python side binds
 // _BLANK_CUTSET, and all three are pinned to the one value the shared
@@ -418,7 +418,7 @@ func escapeStringLiteral(value string) string {
 
 // THE BINDING IS PART OF THE RULE, on both arms, uniformly.
 //
-// opus r5 (P2) found the new admission rule being applied retroactively
+// Testing found the new admission rule being applied retroactively
 // to rows the OLD writer produced under different counting semantics. At
 // the base build, proveOne did NOT count an $.http.* difference and did
 // NOT count an unbound edge mismatch into
@@ -443,7 +443,7 @@ func escapeStringLiteral(value string) string {
 // per_request. Saying it out loud closes the retroactive window; a NULL
 // binding now means what it is, a row written before the column existed.
 //
-// It is NOT free, and this comment used to say it was (opus r7 P3-3). The
+// It is NOT free, and this comment used to say it was. The
 // base writer could not produce an UNBOUND match either -- the proof route
 // required the header and an unbound edge match was downgraded -- so the
 // pre-0129 MATCH rows were sound evidence, and this clause discards them
@@ -470,7 +470,7 @@ func escapeStringLiteral(value string) string {
 // Every value here is a package CONSTANT, never caller input, so they are
 // inlined rather than bound: that lets EnablementProofClause compose into
 // a query of any shape, which is what makes ONE predicate serve every
-// reader (r2 P1 found a third reader that had drifted).
+// reader (a third reader had drifted before this).
 func enablementProofPredicate(alias string) string {
 	return alias + `.stage = '` + EnablementProofStage + `'
 		    AND (
@@ -490,7 +490,7 @@ func enablementProofPredicate(alias string) string {
 // EnablementProofClause is THE rule deciding whether a go_api_proof_run
 // row is enablement proof for targetMode, as a SQL fragment over `alias`.
 //
-// It exists because r2 (P1) found a THIRD reader of this rule --
+// It exists because testing found a THIRD reader of this rule --
 // internal/migrationmatrix's routingStateQuery -- carrying its own copy
 // that predated CHAOS-5484's route split. That copy still hardcoded
 // `terminal_state = 'match'` with no route clause at all, so the

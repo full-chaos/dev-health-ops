@@ -114,7 +114,7 @@ func runDisable(argv []string) error {
 	}
 
 	summary := goapiproof.SummarizeDisable(changes)
-	// R145: a per-operation guard state (no catalog row, a stale schema
+	// A per-operation guard state (no catalog row, a stale schema
 	// digest, no row at all) is a plan decision, named on that operation's
 	// own line, never a whole-run refusal -- but it still means something
 	// needed attention, so the run exits non-zero once it has said what it

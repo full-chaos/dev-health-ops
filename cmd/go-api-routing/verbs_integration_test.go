@@ -1612,7 +1612,7 @@ func TestDisableCandidateBuildGuardRefusesWhenNoCatalogRowExistsToCheck(t *testi
 	}
 }
 
-// R145: a guarded `-operations all-registered` rollback -- the runbook's
+// A guarded `-operations all-registered` rollback -- the runbook's
 // own documented recipe -- must not abort EVERY operation because ONE
 // unrelated operation's only live-schema rows are dead (no catalog
 // document digest). The healthy operation is disabled; the dead-rows-only

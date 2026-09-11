@@ -207,3 +207,93 @@ func TestExecuteRequiresThreeSeparatedRolesBeforeConnecting(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveMigrationDatabaseURIComponentForm pins CHAOS-5560's fix at this
+// binary's own entry point: compose.yml's entrypoint falls back to a raw
+// shell-interpolated postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB
+// when MIGRATION_DATABASE_URI is unset -- the exact unescaped-password shape
+// this ticket exists to fix, one layer further out than internal/platform/
+// config's own URIs. The component path here must survive it.
+func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no host var -- falls back to the required pre-built URI", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(nil), &stderr)
+		if ok {
+			t.Fatal("expected failure: neither POSTGRES_HOST nor MIGRATION_DATABASE_URI is set")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") {
+			t.Fatalf("expected the MIGRATION_DATABASE_URI required-secret message, got: %s", stderr.String())
+		}
+	})
+
+	t.Run("pre-built URI still works when host var is unset", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI": "postgresql://postgres:postgres@postgres:5432/postgres",
+		}), &stderr)
+		if !ok {
+			t.Fatalf("expected success, stderr=%s", stderr.String())
+		}
+		if got.Reveal() != "postgresql://postgres:postgres@postgres:5432/postgres" {
+			t.Fatalf("got %q", got.Reveal())
+		}
+	})
+
+	t.Run("component form survives a reserved-character password", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		reserved := "p#ss/w@rd"
+		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"POSTGRES_HOST":     "postgres",
+			"POSTGRES_USER":     "postgres",
+			"POSTGRES_PASSWORD": reserved,
+			"POSTGRES_DB":       "postgres",
+		}), &stderr)
+		if !ok {
+			t.Fatalf("expected success, stderr=%s", stderr.String())
+		}
+		role, err := postgresstore.ConnectionUser(got.Reveal())
+		if err != nil {
+			t.Fatalf("assembled URI does not parse via the real caller (postgresstore.ConnectionUser): %v (%q)", err, got.Reveal())
+		}
+		if role != "postgres" {
+			t.Fatalf("connection user = %q, want postgres", role)
+		}
+	})
+
+	t.Run("component form wins even when MIGRATION_DATABASE_URI is also set", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI": "postgresql://ignored:ignored@ignored:5432/ignored",
+			"POSTGRES_HOST":          "postgres",
+			"POSTGRES_USER":          "postgres",
+			"POSTGRES_PASSWORD":      "postgres",
+			"POSTGRES_DB":            "postgres",
+		}), &stderr)
+		if !ok {
+			t.Fatalf("expected success, stderr=%s", stderr.String())
+		}
+		if strings.Contains(got.Reveal(), "ignored") {
+			t.Fatalf("component form should have superseded MIGRATION_DATABASE_URI, got %q", got.Reveal())
+		}
+	})
+
+	t.Run("bad port with host set is refused, not silently defaulted", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"POSTGRES_HOST": "postgres",
+			"POSTGRES_PORT": "not-a-port",
+			"POSTGRES_USER": "postgres",
+			"POSTGRES_DB":   "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure on a non-numeric port")
+		}
+	})
+}

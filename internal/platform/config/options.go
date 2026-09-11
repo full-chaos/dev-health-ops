@@ -215,6 +215,58 @@ var optionRegistry = []Option{
 		Default: defaultCoordinatorDatabaseRole, Group: GroupDatabase,
 		Usage: "PostgreSQL role for the coordinator pool",
 	},
+	// CHAOS-5560: component alternative to POSTGRES_URI/WORKER_DATABASE_URI/
+	// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI. Setting a *_HOST value (flag
+	// or env) assembles that connection's URI from these components instead
+	// of the pre-built URI, URL-encoded correctly regardless of content
+	// (see resolveDSNFromComponents); leaving it unset changes nothing.
+	// Passwords are the credential half and are registered separately above
+	// as Secret, never as a flag.
+	{
+		Flag: "domain-database-host", Env: "POSTGRES_DOMAIN_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "domain PostgreSQL host; set to assemble POSTGRES_URI from components",
+	},
+	{
+		Flag: "domain-database-port", Env: "POSTGRES_DOMAIN_PORT", Kind: KindString,
+		Default: "5432", Group: GroupDatabase, Usage: "domain PostgreSQL port (component form)",
+	},
+	{
+		Flag: "queue-database-host", Env: "POSTGRES_QUEUE_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "queue-control PostgreSQL host; set to assemble WORKER_DATABASE_URI from components",
+	},
+	{
+		Flag: "queue-database-port", Env: "POSTGRES_QUEUE_PORT", Kind: KindString,
+		Default: "5432", Group: GroupDatabase, Usage: "queue-control PostgreSQL port (component form)",
+	},
+	{
+		Flag: "coordinator-database-host", Env: "POSTGRES_COORDINATOR_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "coordinator PostgreSQL host; set to assemble COORDINATOR_DATABASE_URI from components",
+	},
+	{
+		Flag: "coordinator-database-port", Env: "POSTGRES_COORDINATOR_PORT", Kind: KindString,
+		Default: "5432", Group: GroupDatabase, Usage: "coordinator PostgreSQL port (component form)",
+	},
+	{
+		Flag: "postgres-db", Env: "POSTGRES_DB", Kind: KindString,
+		Default: "postgres", Group: GroupDatabase,
+		Usage: "Postgres database name shared by the three component-form connections above",
+	},
+	{
+		Flag: "clickhouse-host", Env: "CLICKHOUSE_HOST", Kind: KindString, Group: GroupDatabase,
+		Usage: "ClickHouse host; set to assemble CLICKHOUSE_URI from components",
+	},
+	{
+		Flag: "clickhouse-port", Env: "CLICKHOUSE_PORT", Kind: KindString,
+		Default: "9000", Group: GroupDatabase, Usage: "ClickHouse native-protocol port (component form)",
+	},
+	{
+		Flag: "clickhouse-user", Env: "CLICKHOUSE_USER", Kind: KindString, Group: GroupDatabase,
+		Usage: "ClickHouse user (component form)",
+	},
+	{
+		Flag: "clickhouse-db", Env: "CLICKHOUSE_DB", Kind: KindString,
+		Default: "default", Group: GroupDatabase, Usage: "ClickHouse database name (component form)",
+	},
 	{
 		Flag: "domain-max-conns", Env: "WORKER_DOMAIN_DATABASE_MAX_CONNS", Kind: KindInt,
 		Default: "4", Group: GroupDatabase,
@@ -303,6 +355,18 @@ var optionRegistry = []Option{
 	{Env: "WORKER_DATABASE_URI", Secret: true, Group: GroupCredentials, Usage: "queue-control PostgreSQL DSN"},
 	{Env: "COORDINATOR_DATABASE_URI", Secret: true, Group: GroupCredentials, Usage: "coordinator PostgreSQL DSN; required by coordinator binaries"},
 	{Env: "CLICKHOUSE_URI", Secret: true, Group: GroupCredentials, Usage: "ClickHouse DSN; native protocol, port 9000"},
+	// CHAOS-5560: component PASSWORDS for the four URIs above. Non-secret
+	// components (host/port/user/db) are registered in GroupDatabase below,
+	// same pattern as the existing RIVER_*_DATABASE_ROLE flags -- only the
+	// password half of a DSN is credential-shaped. Setting the matching
+	// *_HOST flag/var for a connection assembles its URI from components
+	// instead (URL-encoded correctly regardless of content) and supersedes
+	// the pre-built URI for that connection; leaving *_HOST unset changes
+	// nothing.
+	{Env: "CLICKHOUSE_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "ClickHouse password (component form)"},
+	{Env: "RIVER_DOMAIN_DATABASE_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "domain PostgreSQL password (component form; role is RIVER_DOMAIN_DATABASE_ROLE)"},
+	{Env: "RIVER_QUEUE_DATABASE_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "queue-control PostgreSQL password (component form; role is RIVER_QUEUE_DATABASE_ROLE)"},
+	{Env: "RIVER_COORDINATOR_DATABASE_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "coordinator PostgreSQL password (component form; role is RIVER_COORDINATOR_DATABASE_ROLE)"},
 	{Env: "VALKEY_URI", Secret: true, Group: GroupCredentials, Usage: "Valkey/Redis DSN"},
 	{Env: "SETTINGS_ENCRYPTION_KEY", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption key"},
 	{Env: "SETTINGS_ENCRYPTION_SALT", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption salt"},

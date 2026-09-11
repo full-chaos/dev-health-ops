@@ -379,6 +379,50 @@ func Load(spec Spec) (Config, error) {
 		}
 		*item.target = value
 	}
+	// CHAOS-5560: a pre-built URI (above) requires whoever assembles it (a
+	// compose file, a shell script, an operator's own tooling) to correctly
+	// URL-encode every credential component -- a `#`/`@`/`/`/`?` in a
+	// password silently truncates or corrupts the DSN, and that failure
+	// mode was hit repeatedly at the deploy-manifest layer, never here.
+	// The component form below lets each URI be assembled from its own
+	// host/port/user/password/db pieces instead, encoded correctly by
+	// net/url regardless of their content. Components win outright when
+	// the HOST var is set; the pre-built URI stays for compatibility when
+	// it isn't.
+	for _, spec := range []ComponentSpec{
+		{
+			HostKey: "POSTGRES_DOMAIN_HOST", PortKey: "POSTGRES_DOMAIN_PORT", DefaultPort: "5432",
+			UserKey: "RIVER_DOMAIN_DATABASE_ROLE", PasswordKey: "RIVER_DOMAIN_DATABASE_PASSWORD",
+			DBKey: "POSTGRES_DB", DefaultDB: "postgres", Scheme: "postgresql",
+			Target: &cfg.DomainDatabaseURI,
+		},
+		{
+			HostKey: "POSTGRES_QUEUE_HOST", PortKey: "POSTGRES_QUEUE_PORT", DefaultPort: "5432",
+			UserKey: "RIVER_QUEUE_DATABASE_ROLE", PasswordKey: "RIVER_QUEUE_DATABASE_PASSWORD",
+			DBKey: "POSTGRES_DB", DefaultDB: "postgres", Scheme: "postgresql",
+			Target: &cfg.QueueDatabaseURI,
+		},
+		{
+			HostKey: "POSTGRES_COORDINATOR_HOST", PortKey: "POSTGRES_COORDINATOR_PORT", DefaultPort: "5432",
+			UserKey: "RIVER_COORDINATOR_DATABASE_ROLE", PasswordKey: "RIVER_COORDINATOR_DATABASE_PASSWORD",
+			DBKey: "POSTGRES_DB", DefaultDB: "postgres", Scheme: "postgresql",
+			Target: &cfg.CoordinatorDatabaseURI,
+		},
+		{
+			HostKey: "CLICKHOUSE_HOST", PortKey: "CLICKHOUSE_PORT", DefaultPort: "9000",
+			UserKey: "CLICKHOUSE_USER", PasswordKey: "CLICKHOUSE_PASSWORD",
+			DBKey: "CLICKHOUSE_DB", DefaultDB: "default", Scheme: "clickhouse",
+			Target: &cfg.ClickHouseURI,
+		},
+	} {
+		built, used, buildErr := ResolveDSNFromComponents(lookup, spec)
+		if buildErr != nil {
+			return Config{}, buildErr
+		}
+		if used {
+			*spec.Target = built
+		}
+	}
 	cfg.OperationalBridgeURL = envOrDefault(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_URL", "",
 	)
@@ -894,4 +938,89 @@ func validateURI(key string, value secrets.Value, schemes ...string) error {
 		return fmt.Errorf("%s must be a valid supported URI", key)
 	}
 	return nil
+}
+
+// ComponentSpec names the env vars that together describe one DSN's
+// connection components -- CHAOS-5560's alternative to a single pre-built
+// URI, which requires the assembler (a compose file, a shell script) to
+// URL-encode every credential component correctly. It never does.
+type ComponentSpec struct {
+	HostKey, PortKey, DefaultPort string
+	UserKey, PasswordKey          string
+	DBKey, DefaultDB              string
+	Scheme                        string
+	Target                        *secrets.Value
+}
+
+// ResolveDSNFromComponents builds a DSN from spec's component env vars.
+// used is false (built is the zero Value, never an error) when the host var
+// is unset or blank -- the caller keeps whatever the pre-built-URI form
+// already resolved. Once the host var is set, components win outright: the
+// pre-built URI for the same field, if also set, is silently superseded (not
+// merged), so the two forms can never disagree about their target.
+//
+// host/port are round-tripped through a fresh url.Parse of the assembled
+// URI and compared back against the inputs (Hostname()/Port()) before
+// anything is returned -- this is what catches a host/port value that would
+// otherwise inject a path, another userinfo, or a second host into the
+// DSN's authority section (the same class of bug as an unvalidated
+// url.URL.Host copy: see the URL-secret-leak lessons on why a component
+// "known safe by construction" still needs its own shape check before use).
+func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (built secrets.Value, used bool, err error) {
+	host := strings.TrimSpace(firstOrEmpty(lookup(spec.HostKey)))
+	if host == "" {
+		return secrets.Value{}, false, nil
+	}
+	port := strings.TrimSpace(envOrDefault(lookup, spec.PortKey, spec.DefaultPort))
+	if port == "" {
+		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.PortKey)
+	}
+	db := strings.TrimSpace(envOrDefault(lookup, spec.DBKey, spec.DefaultDB))
+	if db == "" {
+		return secrets.Value{}, true, fmt.Errorf("%s is set, so %s must not be empty", spec.HostKey, spec.DBKey)
+	}
+	if strings.ContainsAny(db, "/?#") {
+		return secrets.Value{}, true, fmt.Errorf("%s must not contain '/', '?', or '#'", spec.DBKey)
+	}
+	user, _, resolveErr := secrets.Resolve(spec.UserKey, lookup)
+	if resolveErr != nil {
+		return secrets.Value{}, true, resolveErr
+	}
+	password, _, resolveErr := secrets.Resolve(spec.PasswordKey, lookup)
+	if resolveErr != nil {
+		return secrets.Value{}, true, resolveErr
+	}
+	if password.Configured() && !user.Configured() {
+		return secrets.Value{}, true, fmt.Errorf("%s is set without %s", spec.PasswordKey, spec.UserKey)
+	}
+	// net.JoinHostPort brackets a literal IPv6 host automatically; it does
+	// not validate host/port content at all, which is exactly why the
+	// round-trip check below exists.
+	hostPort := net.JoinHostPort(host, port)
+	target := &url.URL{Scheme: spec.Scheme, Host: hostPort, Path: "/" + db}
+	if user.Configured() {
+		if password.Configured() {
+			target.User = url.UserPassword(user.Reveal(), password.Reveal())
+		} else {
+			target.User = url.User(user.Reveal())
+		}
+	}
+	assembled := target.String()
+	reparsed, parseErr := url.Parse(assembled)
+	if parseErr != nil || reparsed == nil ||
+		reparsed.Hostname() != host || reparsed.Port() != port ||
+		reparsed.Path != "/"+db {
+		return secrets.Value{}, true, fmt.Errorf(
+			"%s/%s could not be assembled into a valid URI (check for characters not valid in a hostname)",
+			spec.HostKey, spec.PortKey,
+		)
+	}
+	return secrets.NewValue(assembled), true, nil
+}
+
+func firstOrEmpty(value string, ok bool) string {
+	if !ok {
+		return ""
+	}
+	return value
 }

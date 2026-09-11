@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -825,5 +826,228 @@ func TestNoRouteEnablementSurfaceExists(t *testing.T) {
 	if strings.Contains(fmt.Sprint(withSwitches.SafeAttrs()), "_enabled=") {
 		t.Fatalf("startup evidence still reports a route switch: %s",
 			fmt.Sprint(withSwitches.SafeAttrs()))
+	}
+}
+
+// TestResolveDSNFromComponentsInputDomain pins CHAOS-5560's per-field input
+// domain: the whole point of the component form is that url.UserPassword
+// percent-encodes whatever it is given, so none of the reserved-character
+// classes below should behave any differently from the plain-ASCII case --
+// that IS the fix. Executed against the real function, one cell per row.
+func TestResolveDSNFromComponentsInputDomain(t *testing.T) {
+	t.Parallel()
+
+	base := map[string]string{
+		"TEST_HOST": "db.internal",
+		"TEST_PORT": "5432",
+		"TEST_USER": "app",
+		"TEST_PASS": "app",
+		"TEST_DB":   "appdb",
+	}
+	spec := ComponentSpec{
+		HostKey: "TEST_HOST", PortKey: "TEST_PORT", DefaultPort: "5432",
+		UserKey: "TEST_USER", PasswordKey: "TEST_PASS",
+		DBKey: "TEST_DB", DefaultDB: "postgres", Scheme: "postgresql",
+	}
+
+	cases := []struct {
+		name      string
+		mutate    func(map[string]string)
+		wantUsed  bool
+		wantErr   bool
+		wantHost  string // "" = don't check
+		wantUser  string
+		checkUser bool
+	}{
+		{name: "absent host", mutate: func(m map[string]string) { delete(m, "TEST_HOST") }, wantUsed: false},
+		{name: "empty host (whitespace)", mutate: func(m map[string]string) { m["TEST_HOST"] = "   " }, wantUsed: false},
+		{name: "canonical", wantUsed: true, wantHost: "db.internal"},
+		{
+			name: "password with # (RFC3986 reserved, fragment)", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_PASS"] = "p#ss" },
+		},
+		{
+			name: "password with @ (RFC3986 reserved, userinfo delimiter)", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_PASS"] = "p@ss" },
+		},
+		{
+			name: "password with : (RFC3986 reserved, userinfo separator)", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_PASS"] = "p:ss" },
+		},
+		{
+			name: "password with / (RFC3986 reserved, path delimiter)", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_PASS"] = "p/ss" },
+		},
+		{
+			name: "password with ? (RFC3986 reserved, query delimiter)", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_PASS"] = "p?ss" },
+		},
+		{
+			name: "password with space", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_PASS"] = "p ss" },
+		},
+		{
+			name: "password with unicode", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_PASS"] = "päßword" },
+		},
+		{
+			name: "password absent, user present (canonical: no auth)", wantUsed: true,
+			mutate: func(m map[string]string) { delete(m, "TEST_PASS") },
+		},
+		{
+			name: "password present, user absent -- refused", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { delete(m, "TEST_USER") },
+		},
+		{
+			name: "user and password both absent (canonical: no auth at all)", wantUsed: true,
+			mutate: func(m map[string]string) { delete(m, "TEST_USER"); delete(m, "TEST_PASS") },
+		},
+		{
+			name: "port absent -- falls to defaultPort", wantUsed: true,
+			mutate: func(m map[string]string) { delete(m, "TEST_PORT") },
+		},
+		{
+			// envOrDefault's established, codebase-wide convention: an
+			// explicitly empty value is treated the same as absent, not as
+			// "blank and therefore invalid" -- falls to defaultPort, same
+			// as the "port absent" cell above.
+			name: "port empty string -- same as absent, falls to defaultPort", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_PORT"] = "" },
+		},
+		{
+			name: "port non-numeric -- refused by the round-trip check", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_PORT"] = "notaport" },
+		},
+		{
+			name: "db name with / -- refused explicitly (would inject a path segment)", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "app/db" },
+		},
+		{
+			name: "db name with # -- refused explicitly (would inject a fragment)", wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "app#db" },
+		},
+		{
+			name: "db name empty -- falls to defaultDB", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_DB"] = "" },
+		},
+		{
+			name: "IPv6 host, bracketed by net.JoinHostPort", wantUsed: true,
+			mutate: func(m map[string]string) { m["TEST_HOST"] = "::1" },
+		},
+		{
+			name:     "host containing a path-injection attempt -- refused by the round-trip check",
+			wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_HOST"] = "db.internal/evil" },
+		},
+		{
+			name:     "host containing an authority-injection attempt -- refused by the round-trip check",
+			wantUsed: true, wantErr: true,
+			mutate: func(m map[string]string) { m["TEST_HOST"] = "db.internal@evil.example" },
+		},
+		{
+			name:     "duplicate: host set twice via the same key (idempotent, last value wins by map semantics)",
+			wantUsed: true,
+			mutate:   func(m map[string]string) { m["TEST_HOST"] = "db.internal" },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			values := make(map[string]string, len(base))
+			for k, v := range base {
+				values[k] = v
+			}
+			if tc.mutate != nil {
+				tc.mutate(values)
+			}
+			built, used, err := ResolveDSNFromComponents(lookup(values), spec)
+			if used != tc.wantUsed {
+				t.Fatalf("used = %v, want %v (err=%v)", used, tc.wantUsed, err)
+			}
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got built=%q", built.Reveal())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !tc.wantUsed {
+				return
+			}
+			if !built.Configured() {
+				t.Fatal("used=true but built value is not configured")
+			}
+			parsed, parseErr := url.Parse(built.Reveal())
+			if parseErr != nil {
+				t.Fatalf("assembled URI does not itself parse: %v (%q)", parseErr, built.Reveal())
+			}
+			if tc.wantHost != "" && parsed.Hostname() != tc.wantHost {
+				t.Fatalf("hostname = %q, want %q", parsed.Hostname(), tc.wantHost)
+			}
+			// The password (whatever reserved characters it contains) must
+			// round-trip byte-for-byte through Password() -- this is the
+			// actual acceptance criterion for CHAOS-5560, not merely "it
+			// parses."
+			wantPassword, havePassword := values["TEST_PASS"]
+			gotPassword, gotHasPassword := parsed.User.Password()
+			if havePassword && wantPassword != "" {
+				if !gotHasPassword || gotPassword != wantPassword {
+					t.Fatalf("password round-trip failed: got %q (present=%v), want %q",
+						gotPassword, gotHasPassword, wantPassword)
+				}
+			}
+		})
+	}
+}
+
+// TestLoadPrefersComponentFormAndSurvivesAReservedCharacterPassword is the
+// end-to-end proof: a raw '#' in a password breaks the pre-built-URI form
+// (CHAOS-5560's whole motivation, reproduced first) but the SAME password
+// through the component form loads cleanly and is byte-for-byte recoverable.
+func TestLoadPrefersComponentFormAndSurvivesAReservedCharacterPassword(t *testing.T) {
+	t.Parallel()
+
+	reservedPassword := "s#cr#t@pass/word"
+
+	// Red: reproduce the pre-built-URI failure this ticket exists to fix.
+	brokenURI := "postgresql://app:" + reservedPassword + "@db.internal:5432/appdb"
+	_, err := Load(workerSpec(map[string]string{
+		"POSTGRES_URI":        brokenURI,
+		"WORKER_DATABASE_URI": "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err == nil {
+		t.Fatal("expected the pre-built URI form to reject an unescaped reserved character")
+	}
+
+	// Green: the same password through the component form.
+	cfg, err := Load(workerSpec(map[string]string{
+		"POSTGRES_DOMAIN_HOST":           "db.internal",
+		"RIVER_DOMAIN_DATABASE_ROLE":     "app",
+		"RIVER_DOMAIN_DATABASE_PASSWORD": reservedPassword,
+		"POSTGRES_DB":                    "appdb",
+		"WORKER_DATABASE_URI":            "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err != nil {
+		t.Fatalf("component form should accept the reserved-character password: %v", err)
+	}
+	parsed, err := url.Parse(cfg.DomainDatabaseURI.Reveal())
+	if err != nil {
+		t.Fatalf("assembled DomainDatabaseURI does not parse: %v", err)
+	}
+	got, ok := parsed.User.Password()
+	if !ok || got != reservedPassword {
+		t.Fatalf("password round-trip failed: got %q (present=%v), want %q", got, ok, reservedPassword)
+	}
+	if parsed.Hostname() != "db.internal" || parsed.Port() != "5432" || parsed.Path != "/appdb" {
+		t.Fatalf("assembled URI has wrong host/port/path: %s", cfg.DomainDatabaseURI.Reveal())
+	}
+
+	// The pre-built form for a DIFFERENT connection (queue) is untouched --
+	// component and pre-built forms coexist per-connection, never merged.
+	if cfg.QueueDatabaseURI.Reveal() != "postgresql://app:app@db.internal:5432/appdb" {
+		t.Fatalf("queue DSN should be unaffected by the domain connection's component override: %q",
+			cfg.QueueDatabaseURI.Reveal())
 	}
 }

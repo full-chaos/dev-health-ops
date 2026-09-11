@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -60,7 +61,7 @@ func execute(
 		return 0
 	}
 
-	migrationURI, ok := requiredSecret("MIGRATION_DATABASE_URI", lookup, stderr)
+	migrationURI, ok := resolveMigrationDatabaseURI(lookup, stderr)
 	if !ok {
 		return 1
 	}
@@ -224,6 +225,35 @@ func requiredName(key string, lookup platformsecrets.LookupEnv, stderr io.Writer
 		return "", false
 	}
 	return value, true
+}
+
+// resolveMigrationDatabaseURI is CHAOS-5560's component alternative to a
+// pre-built MIGRATION_DATABASE_URI: compose.yml's own entrypoint already
+// assembles a fallback DSN by raw shell interpolation
+// (postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB)
+// when MIGRATION_DATABASE_URI is unset -- exactly the unescaped-password
+// class this ticket fixes, just one shell layer further out. Setting
+// POSTGRES_HOST here builds the same URI safely instead, sharing
+// config.ResolveDSNFromComponents with the runtime binaries rather than a
+// second hand-rolled DSN builder. MIGRATION_DATABASE_URI (still supported)
+// wins if POSTGRES_HOST is unset.
+func resolveMigrationDatabaseURI(
+	lookup platformsecrets.LookupEnv,
+	stderr io.Writer,
+) (platformsecrets.Value, bool) {
+	built, used, err := config.ResolveDSNFromComponents(lookup, config.ComponentSpec{
+		HostKey: "POSTGRES_HOST", PortKey: "POSTGRES_PORT", DefaultPort: "5432",
+		UserKey: "POSTGRES_USER", PasswordKey: "POSTGRES_PASSWORD",
+		DBKey: "POSTGRES_DB", DefaultDB: "postgres", Scheme: "postgresql",
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return platformsecrets.Value{}, false
+	}
+	if used {
+		return built, true
+	}
+	return requiredSecret("MIGRATION_DATABASE_URI", lookup, stderr)
 }
 
 func requiredSecret(

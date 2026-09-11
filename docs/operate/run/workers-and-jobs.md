@@ -334,7 +334,9 @@ downstream persistence.
   provider-specific consumer before changing global concurrency.
 - If a route or deployment group disagrees with the checked-in contract, stop
   the incompatible process and restore the reviewed Go worker deployment
-  configuration (Celery is retired and is not a rollback target).
+  configuration. The Celery transport is not a rollback target: no consumer
+  runs, so rolling back to it hands the work to nothing. Roll back to a
+  previously deployed Go revision instead.
 
 If a job looks stuck but reports no error, read
 [Job recovery lifecycle](job-recovery-lifecycle.md) first: recovery after a

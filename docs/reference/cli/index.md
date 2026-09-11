@@ -19,14 +19,13 @@ The CLI entry point is `dev-hops` (module `dev_health_ops.cli`). Command groups:
 - `ai` — AI governance allowlist
 - `migrate` — PostgreSQL (Alembic) and ClickHouse schema migrations
 - `api` — run the REST/GraphQL API server
-- `workers` — Celery worker and beat scheduler
 - `maintenance` — operational cleanup
 
-### Inline Execution vs. Celery-Backed Operations
+### Inline execution and its enforcement gaps
 
 Bare CLI commands run inline, executing immediately in your terminal session. However, several commands have argument-enforcement gaps (CHAOS-2475). These operations require credentials or inputs that the CLI doesn't enforce at startup. Running them inline without these inputs can lead to silent failures or incomplete runs.
 
-Until these gaps are fixed, we recommend triggering the equivalent Celery jobs instead of running the commands inline. Celery workers run in a managed environment where credentials and configurations are fully validated. You can find the list of Celery tasks and queue configurations in [Run workers and jobs](../../operate/run/workers-and-jobs.md).
+The advice that used to sit here -- trigger the equivalent Celery job instead -- no longer applies: there is no Celery runtime to trigger. The Go worker fleet runs this work on its own schedules, in an environment where the same credentials and configuration are validated before a job is admitted. Prefer letting the scheduled run do the work, and treat an inline invocation as a diagnostic you supply every input to yourself. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for the Go worker, scheduler, reconciler, and stream-runner processes.
 
 ---
 
@@ -320,7 +319,7 @@ The bundled `src/dev_health_ops/config/team_mapping.yaml` is intentionally empty
 
 > ⚠️ **Warning (CHAOS-2475):** Metrics commands run inline and require database connections and configurations that the CLI doesn't enforce at startup. Running them inline can cause silent failures or incomplete computations.
 >
-> **Interim Workaround:** We recommend triggering the equivalent Celery jobs on the `metrics` queue. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
+> **Interim Workaround:** Prefer the scheduled Go run over an inline invocation; it validates the same inputs before admitting the job. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
 ### `metrics daily`
 
@@ -1787,15 +1786,24 @@ The fixed kinds are `dispatch_sync_run`, `finalize_sync_run`, `post_sync`, and
 are serialized per semantic database, persist audit intent before changing
 state, and may return `outcome_unknown`; inspect the route before retrying.
 
-The checked-in transport for all four sync-dispatch kinds is River and the
-rollback transport is Celery. `routes apply` converges one unpaused Celery
-route to its checked-in River transport after proving the matching capability
-exists and no live outbox claim remains. It is idempotent when the route is
-already active. `routes resume --transport celery` remains the explicit
-rollback path. Before resuming on Celery, drain the external River queue for
-the kind as well as the database claims: there must be no queued or running
-River job and no pending or claimed outbox row. `routes drain` proves the
-database-claim condition only; it does not inspect River job state.
+The checked-in transport for all four sync-dispatch kinds is River, and the
+rollback transport recorded against them is `celery`. `routes apply` converges
+one unpaused Celery route to its checked-in River transport after proving the
+matching capability exists and no live outbox claim remains. It is idempotent
+when the route is already active.
+
+**`routes resume --transport celery` is not a supported rollback target.** The
+verb still exists and the recorded rollback transport is still `celery`, but no
+Celery consumer runs anywhere: resuming on it hands the work to nothing. It
+survives as a code-level mechanism only, until the code phase of the Celery
+removal deletes it. To roll back, redeploy a previously deployed Go revision
+from the rollback tag set.
+
+Were a consumer ever restored, the drain conditions would still apply: before
+resuming on Celery, drain the external River queue for the kind as well as the
+database claims, with no queued or running River job and no pending or claimed
+outbox row. `routes drain` proves the database-claim condition only; it does
+not inspect River job state.
 
 ---
 
@@ -1871,7 +1879,7 @@ dev-hops ai allowlist list
 
 > ⚠️ **Warning (CHAOS-2475):** The `work-graph build` command runs inline and requires configurations that the CLI doesn't enforce at startup. Running it inline can cause silent failures.
 >
-> **Interim Workaround:** We recommend triggering the equivalent Celery job on the `metrics` queue. See [Run workers and jobs](../../operate/run/workers-and-jobs.md) for details on Celery worker configuration.
+> **Interim Workaround:** Prefer the scheduled Go run over an inline invocation; it validates the same inputs before admitting the job. See [Run workers and jobs](../../operate/run/workers-and-jobs.md).
 
 Build work graph edges from raw data (issue → PR → commit linkages). Takes its ClickHouse DSN via its own **required** `--db` flag.
 

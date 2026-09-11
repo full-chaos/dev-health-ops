@@ -26,21 +26,22 @@ Use the deployment's API liveness and readiness endpoints for orchestrator decis
 - provider credential validation where required;
 - latest successful background work and product freshness.
 
-## Celery checks
+## Worker fleet checks
 
-For active Celery workers and Beat, verify:
+The Go worker fleet owns every production route; no Celery worker or Beat
+process runs in production. Verify:
 
 - each configured queue has a live consumer;
 - the scheduler is active exactly once;
 - queue depth and oldest age are bounded;
 - worker heartbeats are current;
-- tasks are completing rather than only starting;
+- jobs are completing rather than only starting;
 - retries and stale leases are not accumulating;
 - the latest expected scheduled work was actually created.
 
-## Go foundation endpoints
+## Go worker endpoints
 
-The additive Go worker exposes:
+Each Go worker process exposes:
 
 | Endpoint | Decision |
 | --- | --- |
@@ -57,7 +58,7 @@ Readiness remains closed when:
 - the River schema is incompatible;
 - a required dependency cannot be sampled.
 
-A Go process may be healthy while its deployment group remains disabled and Celery retains route ownership. That is expected during coexistence.
+A Go process can be healthy while its deployment group is scaled to zero, which means nothing about that group is consuming. Read the route's recorded owner and the queue's consumer count, not process health alone.
 
 ## Data-progress checks
 

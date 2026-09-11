@@ -41,7 +41,7 @@ Providers → Processors → Sinks → Metrics → API / Visualization
   consumers.
 
 Python remains the owner of the API, GraphQL schema, provider fetch and
-normalization, processors, and current Celery job implementations. The
+normalization, processors, and the job implementations the Go fleet runs. The
 repository also contains an additive Go worker-runtime foundation under `cmd/`
 and `internal/`; adding those process shells does not move a job out of Python
 or change its routing.

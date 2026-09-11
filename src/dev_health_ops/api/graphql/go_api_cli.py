@@ -264,6 +264,48 @@ def _refuse(message: str) -> int:
     return 2
 
 
+def _catalog_by_operation(
+    entries: tuple[tuple[str, str], ...],
+) -> tuple[dict[str, str], str | None]:
+    """``{operation: document_digest}`` -- refusing rather than collapsing
+    an operation registered under more than one document.
+
+    ``enable`` and ``disable`` key every preflight and every write on
+    operation name alone: an operator names an operation with
+    ``--operations``, not a (operation, document) pair, and every downstream
+    lookup is ``catalog[operation]``. ``status``, `plan_disable` and the Go
+    matrix all key the pair and can tell two documents of one operation
+    apart (Trap #120); these two verbs cannot, and ``dict(catalog_entries())``
+    silently keeps whichever digest sorts last for a repeated operation
+    name -- exactly the class ``NewCatalog`` (internal/migrationmatrix)
+    already refuses at the digest level ("catalog registers digest %s
+    twice"). Not reachable with the committed catalog (17 entries, 17
+    distinct operations), but the failure would be silent: the write
+    would target a real, registered digest, just not necessarily the one
+    the operator meant.
+    """
+    by_operation: dict[str, str] = {}
+    duplicates: dict[str, list[str]] = {}
+    for operation, digest in entries:
+        if operation in by_operation and by_operation[operation] != digest:
+            duplicates.setdefault(operation, [by_operation[operation]]).append(digest)
+        by_operation[operation] = digest
+    if duplicates:
+        detail = "; ".join(
+            f"{operation}: {', '.join(digests)}"
+            for operation, digests in sorted(duplicates.items())
+        )
+        return {}, (
+            f"the catalog registers {len(duplicates)} operation(s) under more "
+            f"than one document digest: {detail}. `enable`/`disable` key every "
+            "row by operation name alone and cannot say which document was "
+            "meant -- regenerate the catalog so each operation names exactly "
+            "one document, or use a verb that reads the full "
+            "(operation, document) pair."
+        )
+    return by_operation, None
+
+
 def _resolve_requested_operations(
     requested: str, catalog: dict[str, str]
 ) -> tuple[list[str], str | None]:
@@ -326,7 +368,9 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
         enablement_receipts,
     )
 
-    catalog = dict(catalog_entries())
+    catalog, error = _catalog_by_operation(catalog_entries())
+    if error:
+        return _refuse(error)
     if not catalog:
         return _refuse(
             "the registered-operation catalog is empty or failed to load "
@@ -588,7 +632,9 @@ async def _cmd_routing_disable(ns: argparse.Namespace) -> int:
 
     from .go_api_routing_admin import DISABLE_MODES, apply_disable, plan_disable
 
-    catalog = dict(catalog_entries())
+    catalog, error = _catalog_by_operation(catalog_entries())
+    if error:
+        return _refuse(error)
     if not catalog:
         return _refuse(
             "the registered-operation catalog is empty or failed to load "

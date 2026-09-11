@@ -189,6 +189,57 @@ def test_operations_are_resolved_from_the_catalog_not_a_hand_list() -> None:
     assert len(resolved) == len(catalog) > 0
 
 
+# F4 (CHAOS-5581, opus-r10): `dict(catalog_entries())` keys by operation
+# name alone, so an operation registered under two documents silently
+# collapses to whichever digest sorts last -- exactly the class
+# `NewCatalog` (internal/migrationmatrix) already refuses at the digest
+# level. `status`, `plan_disable` and the Go matrix all key the full pair
+# and can tell two documents apart; `enable`/`disable` cannot, because
+# every preflight and write downstream is `catalog[operation]`.
+def test_catalog_by_operation_refuses_an_operation_registered_twice() -> None:
+    by_operation, error = go_api_cli._catalog_by_operation(
+        (("featureFlags", "doc-a"), ("featureFlags", "doc-b"), ("reviewEdges", "doc-c"))
+    )
+    assert by_operation == {}
+    assert error is not None
+    assert "featureFlags" in error
+    assert "doc-a" in error and "doc-b" in error
+    assert "reviewEdges" not in error
+
+
+def test_catalog_by_operation_passes_through_with_no_duplicates() -> None:
+    by_operation, error = go_api_cli._catalog_by_operation(
+        (("featureFlags", "doc-a"), ("reviewEdges", "doc-c"))
+    )
+    assert error is None
+    assert by_operation == {"featureFlags": "doc-a", "reviewEdges": "doc-c"}
+
+
+def test_catalog_by_operation_is_not_confused_by_a_repeated_identical_pair() -> None:
+    """The same (operation, digest) pair twice is not a collision -- only
+    the SAME operation under DIFFERENT digests is."""
+    by_operation, error = go_api_cli._catalog_by_operation(
+        (("featureFlags", "doc-a"), ("featureFlags", "doc-a"))
+    )
+    assert error is None
+    assert by_operation == {"featureFlags": "doc-a"}
+
+
+def test_enable_refuses_a_catalog_that_registers_one_operation_twice(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        go_api_cli,
+        "catalog_entries",
+        lambda: (("featureFlags", "doc-a"), ("featureFlags", "doc-b")),
+    )
+    assert _enable() == 2
+    err = capsys.readouterr().err
+    assert "REFUSED" in err
+    assert "featureFlags" in err
+    assert "doc-a" in err and "doc-b" in err
+
+
 def test_a_non_http_query_api_url_is_refused_before_opening_anything(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

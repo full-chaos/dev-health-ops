@@ -60,6 +60,24 @@ def test_disable_offers_only_unreachable_modes() -> None:
     assert "primary" not in DISABLE_MODES
 
 
+def test_disable_refuses_a_catalog_that_registers_one_operation_twice(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """F4 (CHAOS-5581, opus-r10): the same Trap #120 defect as `enable` --
+    `dict(catalog_entries())` collapses an operation registered under two
+    documents to whichever digest sorts last."""
+    monkeypatch.setattr(
+        go_api_cli,
+        "catalog_entries",
+        lambda: (("featureFlags", "doc-a"), ("featureFlags", "doc-b")),
+    )
+    assert _disable() == 2
+    err = capsys.readouterr().err
+    assert "REFUSED" in err
+    assert "featureFlags" in err
+    assert "doc-a" in err and "doc-b" in err
+
+
 def test_apply_without_review_evidence_is_refused(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

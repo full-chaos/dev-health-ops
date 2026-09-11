@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -162,4 +163,37 @@ func repoDigests(t *testing.T, dir string) map[string]string {
 		out[rel] = e.Digest
 	}
 	return out
+}
+
+// TestCheckDriftOnThisRepositoryIgnoresAnInheritedWorkspace is the pairwise
+// cell for GOWORK against the private copy. The generator child inherits the
+// guard's environment; with a workspace naming the REAL module (and another),
+// the child's package loading resolved against the workspace instead of the
+// copy it runs in, and the generation silently changed -- executed before the
+// fix: schema.resolvers.go came out with its module imports pruned, so
+// check-drift refused on a record mismatch and `generate` would have written
+// that output into the tree. The child now runs with GOWORK=off.
+func TestCheckDriftOnThisRepositoryIgnoresAnInheritedWorkspace(t *testing.T) {
+	goAvailable(t)
+	root := repoRoot(t)
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, "go.mod"), []byte("module example.com/other\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(t.TempDir(), "go.work")
+	if err := os.WriteFile(work, []byte("go 1.27.0\n\nuse (\n\t"+other+"\n\t"+root+"\n)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOWORK", work)
+
+	before := repoDigests(t, root)
+	var report strings.Builder
+	_, err := CheckDrift(context.Background(), Options{ModuleDir: root, TempParent: t.TempDir(), Report: &report})
+	if err != nil {
+		t.Fatalf("with GOWORK set, the drift check no longer matches the committed record: %v", err)
+	}
+	if !strings.Contains(report.String(), "GOWORK=off") {
+		t.Fatalf("the report does not say the inherited workspace was switched off:\n%s", report.String())
+	}
+	assertUnchanged(t, before, repoDigests(t, root), "CheckDrift under an inherited GOWORK")
 }

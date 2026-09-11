@@ -133,6 +133,9 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 		if err != nil {
 			return fmt.Errorf("load gqlgen config %q: %w", configPath, err)
 		}
+		if err := refuseSchemaPatternsLeavingTheModule(patterns, moduleAbs, configDirAbs); err != nil {
+			return err
+		}
 		if err := refuseUnresolvableSchemaDirs(patterns); err != nil {
 			return err
 		}
@@ -248,6 +251,45 @@ func rawSchemaPatterns(file string) ([]string, error) {
 		return nil, fmt.Errorf("unable to parse config: %w", err)
 	}
 	return raw.SchemaFilename, nil
+}
+
+// refuseSchemaPatternsLeavingTheModule refuses a schema pattern whose literal
+// part -- every component before the first one carrying glob syntax -- resolves
+// lexically outside the module root. Run against the private copy, such a
+// pattern names a file BESIDE the copy, in the temporary directory, and gqlgen's
+// LoadConfig would read it before the plan's own "schema outside the module"
+// check ever saw the match. Refusing on the pattern means nothing outside the
+// module is opened for a schema at all.
+func refuseSchemaPatternsLeavingTheModule(patterns []string, moduleAbs, configDirAbs string) error {
+	for _, p := range patterns {
+		parts := strings.Split(filepath.ToSlash(p), "/")
+		lit := parts
+		for i, c := range parts {
+			if strings.ContainsAny(c, globMeta) {
+				lit = parts[:i]
+				break
+			}
+		}
+		prefix := strings.Join(lit, "/")
+		if prefix == "" {
+			if !strings.HasPrefix(p, "/") {
+				continue
+			}
+			prefix = "/"
+		}
+		abs := filepath.FromSlash(prefix)
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(configDirAbs, abs)
+		}
+		abs = filepath.Clean(abs)
+		if abs == moduleAbs {
+			continue
+		}
+		if _, err := moduleRelative(moduleAbs, abs); err != nil {
+			return fmt.Errorf("refusing: schema pattern %q leaves the module (%v); the generator's input must live inside it", p, err)
+		}
+	}
+	return nil
 }
 
 // globMeta are the characters filepath.Glob treats as pattern syntax on the

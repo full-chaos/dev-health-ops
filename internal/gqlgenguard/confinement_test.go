@@ -199,6 +199,15 @@ func TestSchemaInputConfinementInputDomain(t *testing.T) {
 			}, wantErr: "too many levels of symbolic links"},
 		{shape: "a schema path through a REGULAR FILE (not a directory)", schema: "schema.graphql/x.graphql",
 			wantErr: `"schema.graphql" is not a directory`},
+		{shape: "a schema path that climbs OUT of the module with ../ (gqlgen would read it before any output check)", schema: "../outside-schema.graphql",
+			setup: func(t *testing.T, f *fixture, outside string) {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(f.dir), "outside-schema.graphql"), []byte(fixtureSchema), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}, wantErr: `schema pattern "../outside-schema.graphql" leaves the module`},
+		{shape: "a glob whose literal directory climbs OUT of the module", schema: "../*.graphql",
+			wantErr: `schema pattern "../*.graphql" leaves the module`},
+		{shape: "a ../ that stays INSIDE the module (canonical-equivalent)", schema: "gen/../schema.graphql"},
 		{shape: "zero (the only pattern matches no file)", schema: "missing.graphql",
 			wantErr: "match no file"},
 		{shape: "zero (a glob that matches no file)", schema: "nothing/*.graphql",

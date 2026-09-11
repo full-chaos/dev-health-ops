@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -47,6 +48,34 @@ type GoRunGenerator struct {
 	// Stdout and Stderr receive the generator's output. A nil writer discards.
 	Stdout io.Writer
 	Stderr io.Writer
+
+	envNote string
+}
+
+// childEnv is the generator's environment: the guard's own, with GOWORK forced
+// off. The child runs in the private copy, which is a single module; an
+// inherited workspace (GOWORK, or a go.work the go command finds) names OTHER
+// directories -- the real checkout among them -- and the child's package
+// loading then resolves against those instead of the copy. Executed before
+// this: with a workspace naming the real module, schema.resolvers.go came out
+// with its module imports pruned. An env var beats a GOENV file, so a GOWORK
+// set there is overridden too. It returns the line the report prints, naming
+// what was overridden.
+func childEnv(parent []string) ([]string, string) {
+	env := make([]string, 0, len(parent)+1)
+	inherited := ""
+	for _, kv := range parent {
+		if v, ok := strings.CutPrefix(kv, "GOWORK="); ok {
+			inherited = v
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "GOWORK=off")
+	if inherited != "" && inherited != "off" {
+		return env, fmt.Sprintf("generator env: GOWORK=off (the inherited GOWORK=%s is not applied to the private copy)", inherited)
+	}
+	return env, "generator env: GOWORK=off"
 }
 
 // NewGoRunGenerator returns the generator the guard uses in production.
@@ -78,7 +107,10 @@ func (g *GoRunGenerator) Generate(ctx context.Context, workDir string) error {
 	if g.Env != nil {
 		cmd.Env = g.Env
 	} else {
-		cmd.Env = os.Environ()
+		cmd.Env, g.envNote = childEnv(os.Environ())
+	}
+	if g.envNote != "" && g.Stdout != nil {
+		fmt.Fprintln(g.Stdout, g.envNote)
 	}
 	// The generator runs in its own process group so cancellation reaches the
 	// whole tree -- `go run` plus the binary it execs -- rather than only the

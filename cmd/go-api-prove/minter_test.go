@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// r1 P1: the minting helper's output must never reach an operator-facing
+// The minting helper's output must never reach an operator-facing
 // error. The previous version put the shell command AND its complete
 // stderr into the error, and main printed it -- so a helper that wrote a
 // credential to stderr published it.
@@ -110,7 +110,7 @@ func TestHelperOutputIsBounded(t *testing.T) {
 	}
 }
 
-// r1 P2: a malformed STATIC envelope must fail at construction, with a
+// A malformed STATIC envelope must fail at construction, with a
 // message that does not echo it. Before, only the minted path was
 // validated, so a static value became a confusing 401 fifteen operations
 // later.
@@ -203,7 +203,7 @@ func writeHelper(t *testing.T, script string) string {
 	return path
 }
 
-// r1 P2: the opening and closing /buildinfo reads took context.Background(),
+// The opening and closing /buildinfo reads took context.Background(),
 // so `-timeout` bounded every request EXCEPT the two that bracket the run --
 // including the minting helper invoked before the first measurement, where a
 // hang blocks the whole proof with nothing measured to show for it.
@@ -225,13 +225,13 @@ func TestTheMinterRespectsACallerDeadline(t *testing.T) {
 	}
 }
 
-// r3 P2: the overflow refusal existed but never fired. A helper that
+// The overflow refusal existed but never fired. A helper that
 // overruns the limit also makes cmd.Run() return an error, and the
 // run-failure branch was checked first -- so the operator was told "could
 // not be run" about a case we deliberately detect and have a precise
-// message for. Truncation was fixed in r2; the diagnosis had moved.
+// message for. Truncation was already fixed; the diagnosis had moved.
 func TestOverflowIsReportedAsOverflowNotAsAFailedRun(t *testing.T) {
-	// Exactly the limit in JWT-shaped bytes, then more -- r2's attack.
+	// Exactly the limit in JWT-shaped bytes, then more.
 	helper := writeHelper(t, "#!/bin/sh\nhead -c 8192 /dev/zero | tr '\\0' 'a'\nprintf 'aaaa'\n")
 
 	_, err := mintBearer(context.Background(), []string{helper})
@@ -246,7 +246,7 @@ func TestOverflowIsReportedAsOverflowNotAsAFailedRun(t *testing.T) {
 	}
 }
 
-// r4 P1-2. The process-group kill fires, but cmd.Run() waits on the
+// The process-group kill fires, but cmd.Run() waits on the
 // STDOUT PIPE, and a child that inherited it keeps that pipe open after
 // the parent exits. Measured 2.0s against a 100ms deadline.
 //
@@ -266,7 +266,7 @@ func TestAnExitedParentWithALivingChildStillHonoursTheDeadline(t *testing.T) {
 	}
 }
 
-// r4 found the report was missing two counters it claimed to compute: an
+// The report was once found missing two counters it claimed to compute: an
 // earlier edit reverted the computed build-binding line to a hardcoded
 // sentence and dropped the mint count entirely. Nothing failed, because no
 // test read this output at all.
@@ -293,11 +293,24 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 		Admitted:         true,
 		EdgeBuildBinding: goapiproof.EdgeBuildAbsent,
 		TerminalState:    "unsupported",
+	}, {
+		// The fixture held only ADMITTED outcomes, so dropping the
+		// `if outcome.Admitted` filter changed nothing and passed. A
+		// refused outcome carries no binding -- counting it would print
+		// `build binding  = 1`, an empty name with a real count, which
+		// reads as a binding nobody can name rather than as an operation
+		// that never got one.
+		Operation:     "pr",
+		Route:         goapiproof.RouteEdge,
+		Executed:      false,
+		Admitted:      false,
+		RefusalReason: goapiproof.RefusalNotRouted,
+		TerminalState: "",
 	}}
-	summary := goapiproof.Summary{Attempted: 1, Admitted: 1, Executed: 1}
+	summary := goapiproof.Summary{Attempted: 2, Admitted: 1, Executed: 1, Refused: 1}
 
 	printed := captureStdout(t, func() {
-		// F5: the previous fixture used "http://edge.test/graphql", which is
+		// The previous fixture used "http://edge.test/graphql", which is
 		// IDENTICAL under the rebuilt label and the raw string -- so no
 		// assertion on that line could have distinguished them. The URL now
 		// carries a secret in its QUERY and its PATH -- both of which
@@ -316,11 +329,19 @@ func TestTheReportCarriesTheCountersItComputes(t *testing.T) {
 	if !strings.Contains(printed, "build binding "+goapiproof.EdgeBuildAbsent+" = 1") {
 		t.Fatalf("the build-binding counter must be COUNTED from the outcomes, not asserted as a sentence:\n%s", printed)
 	}
+	// Only ADMITTED outcomes have a binding. A refused one counted
+	// here prints an empty binding name with a real count.
+	if strings.Contains(printed, "build binding  =") {
+		t.Fatalf("a refused outcome was counted as a build binding, printing an empty name:\n%s", printed)
+	}
+	if strings.Contains(printed, goapiproof.EdgeBuildAbsent+" = 2") {
+		t.Fatalf("the refused outcome was folded into the admitted count:\n%s", printed)
+	}
 	// And it must never print the credential itself.
 	if strings.Contains(printed, minted) || strings.Contains(printed, strings.SplitN(minted, ".", 2)[0]) {
 		t.Fatalf("the report printed the credential:\n%s", printed)
 	}
-	// F5: the endpoint line is printed on EVERY successful run and is what
+	// The endpoint line is printed on EVERY successful run and is what
 	// gets pasted into a ticket. It must carry the rebuilt label, never the
 	// operator's raw URL.
 	for _, secret := range []string{"s3cret-happy-path", "s3cret-proof"} {
@@ -353,10 +374,10 @@ func captureStdout(t *testing.T, fn func()) string {
 	return <-done
 }
 
-// r5 P3: three surviving mutations in this command's guards.
+// Three surviving mutations in this command's guards.
 func TestThisCommandsGuardsAreKillable(t *testing.T) {
 	t.Run("the helper timeout stays short enough to diagnose", func(t *testing.T) {
-		// Raising it 20s -> 200s survived r5's suite. A hung helper that
+		// Raising it 20s -> 200s once survived unnoticed. A hung helper that
 		// takes three minutes to fail is one an operator will kill by
 		// hand and never diagnose.
 		if mintTimeout > 30*time.Second {
@@ -365,7 +386,7 @@ func TestThisCommandsGuardsAreKillable(t *testing.T) {
 	})
 
 	t.Run("the routing cross-check cannot be declined", func(t *testing.T) {
-		// r8 killed the previous version by replacing the caller's
+		// A mutation killed the previous version by replacing the caller's
 		// `return err` with `_ = err`: the check was a separate statement
 		// and could be ignored. It is now folded into readRoutingState,
 		// which returns the rows and the verdict together -- so this
@@ -390,9 +411,9 @@ func TestThisCommandsGuardsAreKillable(t *testing.T) {
 	})
 
 	t.Run("the binding line is counted, not hardcoded", func(t *testing.T) {
-		// Hardcoding `absent=1` survived r5, so this drives a PRESENT
+		// Hardcoding `absent=1` once survived undetected, so this drives a PRESENT
 		// binding and asserts the report says so.
-		// THREE outcomes across TWO bindings. r6 killed the single-element
+		// THREE outcomes across TWO bindings. A mutation killed the single-element
 		// version by hardcoding the counter to 1: a fixture with one
 		// element cannot tell a count from a constant.
 		outcomes := []goapiproof.Outcome{
@@ -419,7 +440,7 @@ func TestThisCommandsGuardsAreKillable(t *testing.T) {
 	})
 }
 
-// r6 P1: the previous test asserted ELAPSED TIME, which the WaitDelay fix
+// The previous test asserted ELAPSED TIME, which the WaitDelay fix
 // satisfied while the helper's grandchild kept running -- a test that
 // measured the symptom I picked rather than the property that matters.
 //
@@ -467,7 +488,7 @@ func TestACleanHelperStillReturnsItsCredential(t *testing.T) {
 	}
 }
 
-// r7 P3: mutations that bypassed URL validation, removed the bracketing
+// Mutations that bypassed URL validation, removed the bracketing
 // deadline, or stretched the credential freshness window all survived,
 // because `run()` has no test and a guard inside it is a guard nobody
 // holds. These pin the pieces that CAN be reached without a harness for
@@ -497,7 +518,7 @@ func TestTheCLIsOwnGuardsAreReachable(t *testing.T) {
 
 	t.Run("the credential freshness window stays well inside the TTL", func(t *testing.T) {
 		// ENVELOPE_DEFAULT_TTL_SECONDS is 60. Stretching this to 250s
-		// survived r7: a value at or past the TTL means every request
+		// once survived: a value at or past the TTL means every request
 		// after the first carries an expired envelope.
 		if proofCredentialFreshness >= 60*time.Second {
 			t.Fatalf("freshness %s is not inside the 60s envelope TTL", proofCredentialFreshness)
@@ -508,7 +529,7 @@ func TestTheCLIsOwnGuardsAreReachable(t *testing.T) {
 	})
 }
 
-// r8 P3: the minter test checked only the RETURNED error, so a version
+// The minter test checked only the RETURNED error, so a version
 // that forwarded the helper's stderr straight to the terminal passed. The
 // helper's diagnostics are not separable from its credential -- that is
 // the whole reason stderr is discarded -- so "not in the error" is only
@@ -547,7 +568,7 @@ func TestTheHelpersStderrNeverReachesTheTerminal(t *testing.T) {
 	}
 }
 
-// r9 F7: the one place in the shipped binary where the shape validator is
+// The one place in the shipped binary where the shape validator is
 // JOINED to the minted credential had no killer. ValidateEnvelopeShape is
 // well pinned and MintedCredential(...).WithShapeValidator(...) is
 // exercised, but dropping `.WithShapeValidator(...)` from credentials()
@@ -575,7 +596,7 @@ func TestTheMintedProofCredentialIsShapeValidated(t *testing.T) {
 	}
 }
 
-// r9 F8: mintBearer's TrimSpace had no killer, and the happy-path fixture
+// mintBearer's TrimSpace had no killer, and the happy-path fixture
 // deliberately avoided the case that guards it. `echo` -- the NORMAL way a
 // shell script writes a value -- appends a newline, and a header value
 // containing one makes Go's transport reject the request outright.
@@ -596,7 +617,7 @@ func TestAHelperUsingEchoStillYieldsAUsableHeader(t *testing.T) {
 	}
 }
 
-// r9 F9: the explicit-zero doctrine is pinned in the JSON report but not on
+// The explicit-zero doctrine is pinned in the JSON report but not on
 // STDOUT, which is the surface an operator reads and the one the comments
 // are attached to. Dropping admitted= / stale_routing_rows= from the
 // summary line, or the "build binding: none" line, survived every test.

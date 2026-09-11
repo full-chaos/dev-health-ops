@@ -271,10 +271,34 @@ dev-hops go-api routing status
 `enable` refuses (exit 2, writing nothing) when query-api is unreachable,
 when the two planes' digests disagree, when the running binary does not
 register an operation or registers it under a different document digest,
-or when no `deployed_executed`/`match` proof run exists for the candidate
-build. The last of these is waivable with `--acknowledge-unproven`, which
-logs one warning per row and makes `status` report those rows as
-`UNPROVEN` for as long as they are in force.
+or when no admissible proof run exists for the candidate build: a
+`deployed_executed` run bound to the serving build per request that ended
+in `match`, or in a `mismatch` whose every difference is cited against a
+declared Python baseline defect (primary also requires the edge route).
+The last of these is waivable with `--acknowledge-unproven`, which logs
+one warning per row and makes `status` report those rows as `UNPROVEN` for
+as long as they are in force.
+
+On success `enable` names, for every proven row, the receipt that
+authorized it -- its id, terminal state, citations (for a cited mismatch),
+route, binding and what the citation covered by finding shape
+(`covered[null=7 value=384] outside[]`, as `go-api-prove` records it in the
+receipt's provenance) -- on stdout (and in `--json`), on an
+`INFO: go_api_routing.enabled` line on stderr, and in the routing row's
+`review_evidence` (`proof_receipt=<id> ...`). A `match` admission and a
+cited-`mismatch` admission print different lines.
+
+### After alembic 0129: every earlier proof reads UNPROVEN until re-proven
+
+The enablement rule requires `build_binding = 'per_request'` on every
+receipt, and rows written before 0129 carry `build_binding` NULL. So the
+moment 0129 is applied, **every operation proven before it reads UNPROVEN**
+on `dev-hops go-api routing status` and on the migration-status page, and
+`routing enable` refuses it -- including operations whose old receipt was a
+sound `match`. Nothing is lost from the table; the old receipts stay as
+history. Re-run `go-api-prove` at the deployed build (JOB 6's re-prove step
+does exactly this) and the new receipts, bound per request, restore the
+proofs. Do not `--acknowledge-unproven` around it.
 
 ### How this is now detected
 

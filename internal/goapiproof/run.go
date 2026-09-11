@@ -17,8 +17,13 @@ import (
 // makes reaches a DEPLOYED build over HTTP through the real edge. The
 // shadow-mode operations get a deployed_executed receipt too -- they were
 // executed on the deployed build -- but their verdict is the comparator's
-// true one, so a divergence lands as `mismatch` and authorizes nothing.
-// Promotion is a separate decision that reads terminal_state = 'match'.
+// true one, so a divergence lands as `mismatch`.
+//
+// A mismatch is NOT automatically harmless: since CHAOS-5484 a
+// fully-cited one is enablement proof. Promotion reads the predicate in
+// goapiproof.EnablementProofClause, not `terminal_state = 'match'` -- an
+// earlier version of this comment said the latter and was left standing
+// after the rule moved.
 const Stage = EnablementProofStage
 
 // Refusal reasons. Every one of these is NAMED and printed: "prove
@@ -62,11 +67,36 @@ const (
 // only to measure, is registered only under an explicit env flag, and is
 // unreachable from the Python edge -- but a receipt that did not SAY which
 // route produced it would leave that distinction in a chat message
-// instead of in the row (team-lead ruling R50, 2026-09-09).
+// instead of in the row.
 const (
 	RouteEdge  = "edge"
 	RouteProof = "proof"
 )
+
+// The build binding is recorded on every receipt (alembic 0129,
+// CHAOS-5484) because "which build served this" and "how do we KNOW which
+// build served this" are different claims, and only the second one tells
+// an enablement rule how much the first is worth.
+//
+// The column answers exactly ONE question -- was the build bound PER
+// RESPONSE? -- and the vocabulary is EdgeBuildPresent / EdgeBuildAbsent
+// accordingly. An earlier draft of 5484
+// named the weak case "run_level", for the run-level evidence behind it:
+// an authenticated /buildinfo read before and after, agreeing with every
+// routing row's current_candidate_build. That value was dropped, because
+// VerifyCandidateBuild is a HARD refusal -- so no proof row is
+// ever written WITHOUT that run-level evidence. "run_level" would be true
+// of every weak row and a third value would name a state no writer can
+// produce. The run-level evidence is implied by the row existing at all,
+// and by candidate_build matching; this column adds the one fact that is
+// not implied.
+//
+// The value is read from the header the compared response actually
+// carried, never derived from the route: /query/proof stamps it, and the
+// Python edge passes x-dev-health-build through (CHAOS-5479), so an edge
+// response is bound exactly when the serving process sent the header. A
+// derivation from the route would read an unbound edge row as bound, or a
+// bound one as not; the column records what was observed.
 
 // planeHeader is the response header the Python edge stamps with the
 // plane that actually served a request (go_api_dispatcher's
@@ -102,7 +132,7 @@ const contentTypeHeader = "content-type"
 // validation, execution and serialization; only the plane differs. A
 // GraphQL comment is ignored by the parser, so the two documents are
 // semantically identical. This is the same control lane-goapi-enable used
-// on 2026-09-07 (enablement artifact 51-harness-control.json, which
+// (enablement artifact 51-harness-control.json, which
 // recorded python_plane_header=python for every arm).
 //
 // The alternative -- flipping the routing row to python, measuring, and
@@ -126,7 +156,7 @@ type Observation struct {
 	// Content-Length differ on every pair of requests and would drown a
 	// real divergence in noise. An earlier version's doc comment claimed
 	// headers were observed while the struct recorded none, so a
-	// content-type divergence was invisible (codex r1 F4, reproduced:
+	// content-type divergence was invisible (reproduced:
 	// application/problem+json vs application/json compared as match).
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    []byte            `json:"-"`
@@ -149,10 +179,10 @@ type Outcome struct {
 	// admitted is the SEALED form of the field above, and the one every
 	// receipt constructor actually reads.
 	//
-	// r3 found the exported bool is not a boundary: a caller in any
+	// Testing found the exported bool is not a boundary: a caller in any
 	// package can build an Outcome with Admitted=true, hand it to
 	// ReceiptsFor, and get a deployed_executed/match receipt for a pair of
-	// responses that never passed Admit. R57 made Admit the only door on
+	// responses that never passed Admit. Admit is the only door on
 	// the PRODUCTION path; it did not make it the only door.
 	//
 	// This field is unexported, so nothing outside this package can set
@@ -161,7 +191,7 @@ type Outcome struct {
 	// what a human reads; this is what the code trusts.
 	admitted bool
 	// terminalState is the SEALED verdict, and the one every receipt
-	// carries. r4 showed that sealing `admitted` alone was half the job:
+	// carries. Testing showed that sealing `admitted` alone was half the job:
 	// after a real run, assigning the exported TerminalState turned an
 	// unbound `unsupported` result into a `match` receipt whose own
 	// provenance still said edge_build_binding=absent. The seal covered
@@ -192,10 +222,16 @@ type Outcome struct {
 	// DifferencesOutsideBaselineDefect is serialised even when zero: "every
 	// difference is a known Python defect" and "there were no differences"
 	// are different facts.
-	DifferencesOutsideBaselineDefect int          `json:"differences_outside_baseline_defect"`
-	Candidate                        *Observation `json:"candidate,omitempty"`
-	Baseline                         *Observation `json:"baseline,omitempty"`
-	ReceiptWritten                   bool         `json:"receipt_written"`
+	DifferencesOutsideBaselineDefect int `json:"differences_outside_baseline_defect"`
+	// CoveredByShape / OutsideByShape say WHAT the two counts are made of;
+	// OutsideByShape sums to DifferencesOutsideBaselineDefect,
+	// including the transport differences no citation can express ("http",
+	// "unbound_edge").
+	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
+	OutsideByShape map[string]int `json:"outside_by_shape,omitempty"`
+	Candidate      *Observation   `json:"candidate,omitempty"`
+	Baseline       *Observation   `json:"baseline,omitempty"`
+	ReceiptWritten bool           `json:"receipt_written"`
 }
 
 // sealedOutcome is what a measurement ACTUALLY established, captured by
@@ -203,14 +239,15 @@ type Outcome struct {
 // is ever built from.
 //
 // This type exists because sealing one field at a time did not work, three
-// rounds running. r3 sealed `admitted` after a hand-built Outcome forged a
-// receipt; r4 sealed the verdict after a real outcome's TerminalState was
-// reassigned; r5 then relabelled the build, schema digest, org, document,
-// operation and route on a genuine admitted match and got
+// rounds running. Sealing `admitted` stopped a hand-built Outcome from
+// forging a receipt; sealing the verdict then stopped a real outcome's
+// TerminalState from being reassigned; relabelling the build, schema
+// digest, org, document, operation and route on a genuine admitted match
+// still got
 // `receipt build=never-measured-build terminal=match`. Each fix closed the
 // field that had just been used and left the rest open, which is a
-// blacklist whose default is TRUST -- the exact shape R57 was written to
-// end on the admission side and which I rebuilt here.
+// blacklist whose default is TRUST -- the exact shape this design was
+// built to end on the admission side and which is rebuilt here.
 //
 // So there is no field to reassign rather than a growing list of fields
 // that may not be. Every field is unexported; the struct never leaves this
@@ -236,6 +273,8 @@ type sealedOutcome struct {
 
 	baselineDefects                  []string
 	differencesOutsideBaselineDefect int
+	coveredByShape                   map[string]int
+	outsideByShape                   map[string]int
 }
 
 // Summary is the explicit-zero telemetry block. Every field is printed on
@@ -287,7 +326,7 @@ type Config struct {
 	// kinds: measured on the stack, an access token gets 200 on the edge
 	// and 401 on /buildinfo, and an envelope gets the reverse. One map
 	// applied to both meant every run failed on one leg or the other
-	// (JOB 4, 2026-09-09). Two fields make that a compile-time
+	// (JOB 4). Two fields make that a compile-time
 	// distinction rather than a runtime discovery.
 	EdgeCredential *Credential
 
@@ -339,7 +378,7 @@ var ErrNothingMeasured = errors.New("goapiproof: no operation was executed -- th
 // Run executes every registered operation and returns one Outcome each plus
 // the summary. It WRITES NOTHING.
 //
-// Receipt writing is a separate, later phase on purpose (round 2's F3).
+// Receipt writing is a separate, later phase on purpose.
 // Receipts used to commit as each operation finished, before the run-level
 // build-stability check had a chance to run -- so a build that moved
 // mid-run left already-committed match receipts behind, eligible for
@@ -443,6 +482,7 @@ func (r *Runner) ReceiptsFor(observedAt time.Time) ([]Receipt, error) {
 			BaselineResponseRef:              sealed.baselineRef,
 			CandidateResponseRef:             sealed.candidateRef,
 			MeasurementRoute:                 sealed.route,
+			BuildBinding:                     sealed.edgeBinding,
 			BaselineDefects:                  sealed.baselineDefects,
 			DifferencesOutsideBaselineDefect: sealed.differencesOutsideBaselineDefect,
 		})
@@ -500,6 +540,7 @@ func (r *Runner) RefusalReceipts(observedAt time.Time, cause string) ([]Receipt,
 			RecordedBy:        r.Config.RecordedBy,
 			ObservedAt:        observedAt,
 			MeasurementRoute:  sealed.route,
+			BuildBinding:      sealed.edgeBinding,
 		})
 	}
 	return receipts, nil
@@ -512,7 +553,7 @@ func (r *Runner) RefusalReceipts(observedAt time.Time, cause string) ([]Receipt,
 // `receipt_written` flag can be set from what really happened. Reporting a
 // run-level `receipts_written=N` while every outcome still said
 // `receipt_written: false` was a small lie of exactly the kind this
-// instrument exists not to tell (confirmation pass, P3).
+// instrument exists not to tell.
 //
 // A partial write is reported partially rather than rolled back: each
 // receipt is individually atomic, and losing a whole run's evidence to one
@@ -702,29 +743,58 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	outcome.Findings = result.Findings
 	outcome.BaselineDefects = result.BaselineDefectsMatched
 	outcome.DifferencesOutsideBaselineDefect = result.DifferencesOutsideBaselineDefect
+	outcome.CoveredByShape = copyCounts(result.CoveredByShape)
+	outcome.OutsideByShape = copyCounts(result.OutsideByShape)
+	countOutside := func(label string) {
+		if outcome.OutsideByShape == nil {
+			outcome.OutsideByShape = map[string]int{}
+		}
+		outcome.OutsideByShape[label]++
+	}
 
 	// Admission guarantees both legs are 2xx; it does NOT make them equal.
 	// 200 against 202 passes admission and is still a real divergence, so
 	// the status comparison stays a parity finding. Same for content type:
 	// identical bodies served under different types are not parity, because
 	// the client is told to interpret the same bytes differently.
-	if candidate.StatusCode != baseline.StatusCode {
+	//
+	// Each of these ALSO increments DifferencesOutsideBaselineDefect, and
+	// that is not bookkeeping -- it is what stops CHAOS-5484's fully-cited
+	// mismatch rule from admitting an UNcited one.
+	//
+	// Testing reproduced the hole end to end: these findings were appended
+	// AFTER the counter was copied from the body comparison, so a cited
+	// body defect plus an uncited HTTP 200-vs-202 produced
+	// terminal_state=mismatch with outside=0 -- which the enablement
+	// predicate reads as "every difference here is a known Python defect"
+	// and admits. Before 5484 a mismatch was never enablement-eligible at
+	// all, so the ordering did not matter; the new rule is precisely what
+	// makes it matter.
+	//
+	// They count as OUTSIDE by construction, never by omission: a
+	// BaselineDefect declares dotted BODY field paths (see
+	// BaselineDefect.Paths), so no declaration can cite `$.http.status` or
+	// `$.http.header.*` even in principle. A citation mechanism that
+	// cannot express these differences must not be read as covering them.
+	httpDifference := func(path, detail string) {
 		outcome.TerminalState = TerminalStateMismatch
 		outcome.Findings = append(outcome.Findings, Finding{
 			Kind:   FindingMismatch,
-			Path:   "$.http.status",
-			Detail: fmt.Sprintf("baseline %d != candidate %d", baseline.StatusCode, candidate.StatusCode),
+			Path:   path,
+			Detail: detail,
 		})
+		outcome.DifferencesOutsideBaselineDefect++
+		countOutside("http")
+	}
+	if candidate.StatusCode != baseline.StatusCode {
+		httpDifference("$.http.status",
+			fmt.Sprintf("baseline %d != candidate %d", baseline.StatusCode, candidate.StatusCode))
 	}
 	for _, header := range comparedHeaders {
 		baselineValue, candidateValue := baseline.Headers[header], candidate.Headers[header]
 		if baselineValue != candidateValue {
-			outcome.TerminalState = TerminalStateMismatch
-			outcome.Findings = append(outcome.Findings, Finding{
-				Kind:   FindingMismatch,
-				Path:   "$.http.header." + header,
-				Detail: fmt.Sprintf("baseline %q != candidate %q", baselineValue, candidateValue),
-			})
+			httpDifference("$.http.header."+header,
+				fmt.Sprintf("baseline %q != candidate %q", baselineValue, candidateValue))
 		}
 	}
 
@@ -732,7 +802,7 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	// measurement with no per-request build binding may never be
 	// enablement-eligible.
 	//
-	// r2 proved why with an executed test. A deployment that BEGINS during
+	// Testing proved why with an executed test. A deployment that BEGINS during
 	// the run defeats every other defence at once: the routing row can
 	// legitimately name the running build, /buildinfo answers from the old
 	// replica before and after, and the measured request is served by the
@@ -752,23 +822,47 @@ func (r *Runner) proveOne(ctx context.Context, operation string) Outcome {
 	//
 	// `binding_absent` would be more legible, and is deliberately not used:
 	// terminal_state's vocabulary is fixed by the signed plan and enforced
-	// by a CHECK constraint, and a hotfix does not widen it (team-lead
-	// ruling, 2026-09-09 -- the same trade #2395 made in choosing
-	// proof_failed over inventing `refused`).
+	// by a CHECK constraint, and a hotfix does not widen it -- the same
+	// trade #2395 made in choosing proof_failed over inventing `refused`.
 	//
-	// Scoped to `match` deliberately. A mismatch already authorizes
-	// nothing, and rewriting it as `unsupported` would DESTROY the
-	// divergence the run found -- turning "these planes disagree" into
-	// "we could not tell", which is a worse record and a false one. Only
-	// the enablement-eligible verdict is downgraded.
-	if outcome.TerminalState == TerminalStateMatch &&
-		outcome.Route == RouteEdge && outcome.EdgeBuildBinding == EdgeBuildAbsent {
-		outcome.TerminalState = TerminalStateUnsupported
+	// UNBOUND EVIDENCE AUTHORIZES NOTHING, in any mode, whatever the
+	// verdict.
+	//
+	// This used to be scoped to `match`, justified by "a mismatch already
+	// authorizes nothing". That was true until CHAOS-5484, which made a
+	// FULLY-CITED mismatch enablement proof -- and the justification went
+	// on sitting here reading as current while the code it justified had
+	// become a hole: an edge measurement with no per-request binding,
+	// whose body differences were all cited, was admitted for primary.
+	// Testing reproduced it end to end (`primary enable rc=0`).
+	//
+	// The two verdicts are handled differently because the truest RECORD
+	// differs, not because one is safe:
+	//
+	//   - a MATCH becomes `unsupported`. "The planes agreed, but nothing
+	//     ties that to a build" is genuinely "we could not tell".
+	//   - a MISMATCH stays a mismatch, because rewriting it would DESTROY
+	//     the divergence the run found -- turning "these planes disagree"
+	//     into "we could not tell", a worse record and a false one. It is
+	//     disqualified instead by counting the missing binding as a
+	//     difference OUTSIDE the cited baseline defect, which is what it
+	//     is: no BaselineDefect declares body paths that could cite "the
+	//     response carried no build header", so it is uncitable by
+	//     construction. Same mechanism as an $.http.* difference, for the
+	//     same reason.
+	if outcome.Route == RouteEdge && outcome.EdgeBuildBinding == EdgeBuildAbsent &&
+		(outcome.TerminalState == TerminalStateMatch || outcome.TerminalState == TerminalStateMismatch) {
 		outcome.Findings = append(outcome.Findings, Finding{
 			Kind:   FindingMismatch,
 			Path:   "$.http.header." + buildHeader,
-			Detail: "the measured response carried no serving-build header, so this measurement is not bound to a query-api process. A deployment beginning mid-run would be indistinguishable from a stable one, so this cannot authorize an enablement (CHAOS-5479 delivers the header; until every replica serves it, edge measurements stay unsupported)",
+			Detail: "the measured response carried no serving-build header, so this measurement is not bound to a query-api process. A deployment beginning mid-run would be indistinguishable from a stable one, so this cannot authorize an enablement in ANY mode (CHAOS-5479 delivers the header; until every replica serves it, edge measurements cannot be proof)",
 		})
+		if outcome.TerminalState == TerminalStateMatch {
+			outcome.TerminalState = TerminalStateUnsupported
+		} else {
+			outcome.DifferencesOutsideBaselineDefect++
+			countOutside("unbound_edge")
+		}
 	}
 	// Sealed LAST, from whatever the run concluded after every adjustment
 	// above. Assigning any exported field afterwards changes the report
@@ -799,13 +893,28 @@ func (r *Runner) seal(outcome Outcome) sealedOutcome {
 		candidateRef:                     observationRef(outcome.Candidate),
 		baselineDefects:                  append([]string(nil), outcome.BaselineDefects...),
 		differencesOutsideBaselineDefect: outcome.DifferencesOutsideBaselineDefect,
+		coveredByShape:                   copyCounts(outcome.CoveredByShape),
+		outsideByShape:                   copyCounts(outcome.OutsideByShape),
 	}
+}
+
+// copyCounts returns an independent copy (nil stays nil), so a sealed
+// outcome shares no map with the report view.
+func copyCounts(counts map[string]int) map[string]int {
+	if counts == nil {
+		return nil
+	}
+	copied := make(map[string]int, len(counts))
+	for key, value := range counts {
+		copied[key] = value
+	}
+	return copied
 }
 
 // decodeLeg turns one leg's body into a Snapshot, or names why it cannot.
 //
-// Non-finite numbers are handled at TWO levels, and round 2's F9 was right
-// that the earlier comment blurred them:
+// Non-finite numbers are handled at TWO levels; an earlier comment
+// blurred them:
 //
 //   - In the COMPARATOR, parity rule 3 stands unchanged: a decoded value
 //     that is NaN or Infinity is always a mismatch, never tolerance-compared
@@ -922,7 +1031,7 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 //
 // Same class as the 8 KiB bound on the minting helper's output, one column
 // over: an unbounded operator string flowing into a JSON document in a
-// Text column is an unbounded write nobody chose. r2 confirmed a 2 MiB note
+// Text column is an unbounded write nobody chose. Testing confirmed a 2 MiB note
 // stays valid JSON, which is the point -- it would be accepted, stored, and
 // read back by every future query against this table.
 //
@@ -947,7 +1056,7 @@ func ValidateOperatorEvidence(evidence string) error {
 
 // ReceiptProvenance is what goes into go_api_proof_run.review_evidence.
 //
-// A JSON OBJECT rather than prose. r1 found the previous design appending
+// A JSON OBJECT rather than prose. Testing found the previous design appending
 // generated text to operator-authored text with a " | " separator, which
 // is ambiguous in both directions -- a reader cannot tell which half a
 // machine wrote, and an operator whose note contains the separator forges
@@ -980,10 +1089,16 @@ type ReceiptProvenance struct {
 	// proof_failed row says how much work it is reporting on.
 	Measured  int `json:"measured_operations,omitempty"`
 	Attempted int `json:"attempted_operations,omitempty"`
+	// CoveredByShape / OutsideByShape: what the receipt's citation covered
+	// and what it did not, by finding shape. `enable` prints
+	// them, so an admission says whether it rests on "one value differed"
+	// or on something else.
+	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
+	OutsideByShape map[string]int `json:"outside_by_shape,omitempty"`
 }
 
 // reviewEvidence renders the provenance for one receipt. ONE constructor
-// for both the success and the refusal path (r1 P2): the refusal path used
+// for both the success and the refusal path: the refusal path used
 // to build its own prose and dropped the routing-row fact entirely, so the
 // receipts that most needed provenance had the least.
 func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, attempted int) string {
@@ -993,6 +1108,8 @@ func (r *Runner) reviewEvidence(sealed sealedOutcome, refusal string, measured, 
 		EdgeBuildBinding: sealed.edgeBinding,
 		RoutingRowBuild:  sealed.routingRowBuild,
 		Refusal:          refusal,
+		CoveredByShape:   sealed.coveredByShape,
+		OutsideByShape:   sealed.outsideByShape,
 	}
 	if refusal != "" {
 		provenance.Measured, provenance.Attempted = measured, attempted

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +18,7 @@ import (
 )
 
 // These tests reproduce the two credential defects JOB 4 found by running
-// the merged verb against the real compose stack on 2026-09-09. Each is
+// the merged verb against the real compose stack. Each is
 // written so it FAILS against the previous design -- one credential for
 // every request, read once at startup -- rather than merely passing
 // against the new one.
@@ -77,7 +78,7 @@ func newTwoPlaneServers(t *testing.T, body string, envelope func() string) *twoP
 	return s
 }
 
-// record APPENDS. r7 found the map version hiding a rejected candidate:
+// record APPENDS. Testing found the map version hiding a rejected candidate:
 // the baseline leg runs after the candidate and overwrote the recorded
 // value, so sending the proof credential on a canary candidate leg looked
 // identical to sending the right one. A fixture that keeps only the last
@@ -112,7 +113,7 @@ func TestEachPlaneReceivesItsOwnCredential(t *testing.T) {
 	servers := newTwoPlaneServers(t, `{"data":{"featureFlags":[{"key":"a"}]}}`,
 		func() string { return envelope })
 
-	// BOTH modes, not just shadow. r6 killed the shadow-only version by
+	// BOTH modes, not just shadow. A mutation killed the shadow-only version by
 	// sending the proof credential on a CANARY candidate leg: that leg
 	// goes to the edge, the fixture never exercised it, and the mutation
 	// survived.
@@ -473,7 +474,7 @@ func TestMintsCountsRefreshesAndNeverExposesAValue(t *testing.T) {
 	}
 }
 
-// r1 P1, adapted to the restored contract. The reviewer proved a run could
+// Adapted to the restored contract: a run could
 // produce a receipt naming build A while the measured request was served
 // by build B: /buildinfo answers from one replica, the measured /graphql
 // request is served by another, and the Python edge drops the per-request
@@ -550,7 +551,7 @@ func admissionWithData(servedBuild, namedBuild string) AdmissionInput {
 	}
 }
 
-// r2 P1, the last hole: a deployment that BEGINS during the run defeats
+// The last hole: a deployment that BEGINS during the run defeats
 // every other defence at once. The routing row legitimately names the
 // running build, /buildinfo answers from the old replica before and after,
 // and the measured request is served by the new one in between.
@@ -634,14 +635,20 @@ func TestAnOverLongOperatorNoteIsRefused(t *testing.T) {
 	}
 }
 
-// The downgrade is scoped to `match` on purpose, and this pins that.
+// An unbound MISMATCH keeps its verdict -- and is disqualified anyway.
 //
-// Rewriting an unbound MISMATCH as `unsupported` would destroy the
-// divergence the run found -- turning "these planes disagree" into "we
-// could not tell", which is both a worse record and a false one. A
-// mismatch already authorizes nothing, so there is nothing to protect
-// against.
-func TestAnUnboundMismatchStaysAMismatch(t *testing.T) {
+// This test used to pin the downgrade as "scoped to `match` on purpose",
+// on the reasoning that "a mismatch already authorizes nothing, so there
+// is nothing to protect against". CHAOS-5484 made that false in the same
+// PR this test lives in: a fully-cited mismatch IS enablement proof. The
+// test went on passing and pinned the hole shut.
+//
+// What is true, and what this pins now: rewriting the verdict would
+// DESTROY the divergence the run found -- "these planes disagree" is not
+// "we could not tell" -- so the mismatch stands, and the missing binding
+// is counted as a difference outside the cited baseline defect instead.
+// The record stays honest and the receipt cannot authorize anything.
+func TestAnUnboundMismatchStaysAMismatchAndCannotAuthorize(t *testing.T) {
 	runner := newRunner(t, &fakeEdge{
 		goBody:     `{"data":{"featureFlags":[{"key":"a"}]}}`,
 		pythonBody: `{"data":{"featureFlags":[{"key":"b"}]}}`,
@@ -657,19 +664,30 @@ func TestAnUnboundMismatchStaysAMismatch(t *testing.T) {
 	if outcomes[0].EdgeBuildBinding != EdgeBuildAbsent {
 		t.Fatalf("the absent binding must still be recorded: %q", outcomes[0].EdgeBuildBinding)
 	}
+	// ...and it authorizes nothing, which is the half this test used to
+	// assert away. An unbound measurement cannot be proof in ANY mode.
+	if outcomes[0].DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("an UNBOUND mismatch reports outside=%d: with every body difference cited it would be admitted as enablement proof, for primary as well as canary, on evidence tied to no replica",
+			outcomes[0].DifferencesOutsideBaselineDefect)
+	}
+	if !slices.ContainsFunc(outcomes[0].Findings, func(f Finding) bool {
+		return f.Path == "$.http.header."+buildHeader
+	}) {
+		t.Fatal("the missing build header must be a NAMED finding, not just a counter bump: an operator reading the receipt has to see why it was disqualified")
+	}
 }
 
-// r3 P1: the exported Admitted bool was not a boundary. A caller in any
+// The exported Admitted bool was not a boundary. A caller in any
 // package could build an Outcome with the bit already set and get an
 // enablement-shaped receipt for responses that never passed Admit.
 //
-// R57 made Admit the only door on the production path; this makes it the
+// Admit is the only door on the production path, and this makes it the
 // only door. The receipt constructors read an UNEXPORTED field that only
-// proveOne writes, so the hand-built outcome below produces nothing --
-// r5 P1. Sealing one field at a time did not work, three rounds running.
+// proveOne writes, so the hand-built outcome below produces nothing.
+// Sealing one field at a time did not work, three rounds running.
 //
-// r3 sealed `admitted`; r4 sealed the verdict; r5 then relabelled the
-// BUILD on a genuine admitted match and got
+// Sealing `admitted` stopped one hole; sealing the verdict stopped
+// another; relabelling the BUILD on a genuine admitted match then got
 // `receipt build=never-measured-build terminal=match`. Every fix closed
 // the field just used and left the rest open.
 //
@@ -774,7 +792,7 @@ func TestAnAdmittedOutcomeStillProducesAReceipt(t *testing.T) {
 	}
 }
 
-// r3 P1: a VALUE copy of a Credential leaked. The redaction methods had
+// A VALUE copy of a Credential leaked. The redaction methods had
 // pointer receivers, so fmt fell through to the struct printer for a copy.
 // My own tests passed because they only ever formatted the pointer -- so
 // this formats BOTH, through every verb that reaches fmt differently.
@@ -813,7 +831,7 @@ func TestCredentialRedactsAsBothValueAndPointer(t *testing.T) {
 	}
 }
 
-// r3 P2: whitespace is an empty credential wearing a disguise -- the
+// Whitespace is an empty credential wearing a disguise -- the
 // server answers the same 401 either way.
 func TestAWhitespaceOnlyCredentialIsRefused(t *testing.T) {
 	request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/x", nil)
@@ -825,7 +843,7 @@ func TestAWhitespaceOnlyCredentialIsRefused(t *testing.T) {
 	}
 }
 
-// r3 P1 / lane-routing-verbs: a URL is never printed raw, and the obvious
+// A URL is never printed raw, and the obvious
 // url.Redacted() is NOT safe -- on a URL with no "//" the parser reads the
 // username as the scheme, User is nil, and Redacted() returns the password
 // verbatim. EndpointLabel rebuilds instead.
@@ -864,7 +882,7 @@ func TestEndpointLabelNeverEmitsACredential(t *testing.T) {
 	}
 	// A URL carrying userinfo is NOT named, even though its scheme and
 	// host are safe to rebuild. One predicate decides both "may this be
-	// accepted" and "may this be described", because r4 showed what
+	// accepted" and "may this be described", because testing showed what
 	// happens when those two checks are separate and only one gets fixed:
 	// they agree right up until they do not. The flag guard refuses this
 	// shape long before an error could need to name it.
@@ -897,14 +915,14 @@ func TestRefuseCredentialsInURL(t *testing.T) {
 	}
 }
 
-// r4 P1-3. Sealing `admitted` stopped a HAND-BUILT outcome. It did not
+// Sealing `admitted` stopped a HAND-BUILT outcome. It did not
 // stop mutating a REAL one: after a genuine run, flipping only the
 // exported TerminalState from `unsupported` to `match` produced a
 // deployed_executed/match receipt whose own provenance still said
 // edge_build_binding=absent.
 //
 // The seal covered "this passed the gate" and left "what the gate
-// concluded" exported and writable, which is the same lesson as r3 one
+// concluded" exported and writable, which is the same lesson learned one
 // field over. Receipts now derive the terminal state from the sealed run.
 func TestTheTerminalStateCannotBeReplacedAfterTheRun(t *testing.T) {
 	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
@@ -952,7 +970,7 @@ func TestASealedMatchStillReachesTheReceipt(t *testing.T) {
 	}
 }
 
-// r5 P3: eight mutations survived their suites. Each is a guard this PR
+// Eight mutations survived their suites. Each is a guard this PR
 // adds, so each gets a killer here rather than a ticket. A guard nothing
 // can kill is a guard nobody is holding.
 func TestTheGuardsThisChangeAddsAreKillable(t *testing.T) {
@@ -970,7 +988,7 @@ func TestTheGuardsThisChangeAddsAreKillable(t *testing.T) {
 	t.Run("a positive freshness window still expires", func(t *testing.T) {
 		calls := 0
 		// A window shorter than the gap below: the second Apply must
-		// re-mint. Disabling only the positive-window branch survived r5.
+		// re-mint. Disabling only the positive-window branch once survived undetected.
 		credential := MintedCredential("Authorization", "envelope", time.Nanosecond,
 			func(context.Context) (string, error) {
 				calls++

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -227,6 +228,20 @@ async def test_a_recorded_proof_run_lets_enable_proceed_without_acknowledgement(
             stage=ENABLEMENT_PROOF_STAGE,
             terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
         )
+        # CHAOS-5484: admissibility now requires a RECORDED measurement
+        # route AND a BOUND one. record_proof_run writes
+        # neither -- its only callers are tests, the real writer is
+        # cmd/go-api-prove -- so stamp both here, or this receipt would
+        # be refused for a reason that has nothing to do with what the
+        # test asserts. `edge` because the enable below targets canary,
+        # which is served through the product edge; `per_request`
+        # because a response nobody can attribute to a serving build is
+        # not evidence that the build under test produced it.
+        await session.execute(
+            sa.update(ProofRun).values(
+                measurement_route="edge", build_binding="per_request"
+            )
+        )
         await session.commit()
 
     with FakeQueryAPI(registry_payload()) as url:
@@ -324,14 +339,14 @@ async def test_status_json_reports_plane_disagreement(
     assert payload["python_plane_schema_digest"] == current_schema_digest()
 
 
-# --- codex r1 fixes -------------------------------------------------------
+# --- Regression fixes ------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_a_proof_for_a_different_document_does_not_authorize_enablement(
     session_factory: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """codex r1 P2: `document_digest` was missing from the proof lookup.
+    """`document_digest` was missing from the proof lookup.
 
     The proof key is FOUR columns (plan section 8.3 -- "a proof is evidence
     for exactly one tuple, never carried forward across any of the four
@@ -368,3 +383,694 @@ async def test_a_proof_for_a_different_document_does_not_authorize_enablement(
 
     assert ENABLEMENT_PROOF_STAGE in capsys.readouterr().err
     assert await _rows(session_factory) == [], "a wrong-document proof enabled a row"
+
+
+@pytest.mark.asyncio
+async def test_the_cli_passes_its_own_mode_to_the_proof_predicate(
+    session_factory: Any,
+) -> None:
+    """Hardcoding ``"canary"`` at the call site once passed all 8 tests.
+
+    That mutation is the mode split defeated in one word. The only proof
+    on record here is a PROOF-route receipt, which ``canary`` admits and
+    ``primary`` must not: promotion to primary is promotion to real
+    traffic, so it demands evidence that traversed the real edge.
+
+    With the caller hardcoding canary, ``--mode primary`` would preflight
+    against the laxer rule and enable a row into served traffic on
+    measurement-only evidence -- silently, with a zero exit and no
+    warning. Every existing test used ``mode="canary"``, so the argument
+    was never observed to travel.
+    """
+    catalog = dict(catalog_entries())
+    async with session_factory() as session:
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=catalog["featureFlags"],
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+        )
+        await record_proof_run(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=catalog["featureFlags"],
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+            request_identity="test",
+            stage=ENABLEMENT_PROOF_STAGE,
+            terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+        )
+        # PROOF route: admissible for canary, inadmissible for primary.
+        await session.execute(
+            sa.update(ProofRun).values(
+                measurement_route="proof", build_binding="per_request"
+            )
+        )
+        await session.commit()
+
+    with FakeQueryAPI(registry_payload()) as url:
+        # canary accepts it...
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="canary"))
+            == 0
+        )
+
+    rows = await _rows(session_factory)
+    assert [row.mode for row in rows] == ["canary"]
+
+    with FakeQueryAPI(registry_payload()) as url:
+        # ...and primary REFUSES it, on the same row, differing only in
+        # the mode the CLI was asked for.
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="primary"))
+            != 0
+        ), (
+            "the CLI enabled a PRIMARY row on proof-route evidence: the "
+            "target mode is not reaching the preflight predicate, so the "
+            "canary/primary split authorizes nothing"
+        )
+
+    # And the refusal wrote nothing: the row is still canary.
+    rows = await _rows(session_factory)
+    assert [row.mode for row in rows] == ["canary"]
+
+
+async def _seed_receipt(factory: Any, *, document_digest: str, **columns: Any) -> None:
+    """One featureFlags receipt at BUILD, with ``columns`` set verbatim.
+
+    Direct column writes on purpose: the shapes under test (a NULL
+    build_binding, a cited mismatch) are rows the table really holds, and a
+    current writer would not produce every one of them.
+    """
+    async with factory() as session:
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=document_digest,
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+        )
+        run = await record_proof_run(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=document_digest,
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+            request_identity=f"test-{uuid.uuid4().hex[:8]}",
+            stage=ENABLEMENT_PROOF_STAGE,
+            terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+        )
+        await session.execute(
+            sa.update(ProofRun).where(ProofRun.id == run.id).values(**columns)
+        )
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_states_every_clause_of_the_rule(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The refusal printed a rule the receipt SATISFIED.
+
+    The row is a pre-0129 receipt: a mismatch, on the edge, citing a real
+    ticket, with nothing uncounted -- every condition the message used to
+    print is true of it. It is refused by the ONE condition the message did
+    not print, ``build_binding = 'per_request'``, so the
+    operator was told a rule their receipt meets and nothing named the
+    column to check. The blank-citation and blank-build conditions were not
+    printed either. A refusal that misattributes itself is loud and wrong.
+    """
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        terminal_state="mismatch",
+        measurement_route="edge",
+        baseline_defect=["CHAOS-5448"],
+        differences_outside_baseline_defect=0,
+        build_binding=None,
+    )
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="primary"))
+            == 2
+        )
+    err = capsys.readouterr().err
+    for clause in (
+        # The route rule of THE MODE ASKED FOR (swapping the
+        # mode condition survived every suite and made the primary refusal
+        # state the canary rule -- a rule the refused receipt satisfies).
+        "measured on the edge route",
+        "build_binding = 'per_request'",
+        "NULL build_binding",
+        "candidate_build",
+        "blank",
+        "baseline_defect non-empty",
+        "differences_outside_baseline_defect = 0",
+    ):
+        assert clause in err, (
+            f"the refusal does not state {clause!r}; an operator whose receipt "
+            f"is refused must be able to find the failing column from the "
+            f"message alone.\nmessage:\n{err}"
+        )
+    assert await _rows(session_factory) == []
+
+    # Control: the SAME receipt, bound per request, is admitted -- so the
+    # refusal above is the binding clause and the message is about it.
+    async with session_factory() as session:
+        await session.execute(sa.update(ProofRun).values(build_binding="per_request"))
+        await session.commit()
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="primary"))
+            == 0
+        )
+
+
+@pytest.mark.asyncio
+async def test_status_renders_a_drifted_row_with_its_proof_and_its_document(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The renderer fix was unpinned, caught by mutants p17/p18.
+
+    A DOCUMENT_DRIFT row is live and IS the row in the table, so its PROOF
+    column must say ``ok``/``UNPROVEN`` -- as ``--json`` does -- not ``-``,
+    and a line must name the document actually serving. Both regressions
+    passed every test: printing ``-`` (p18) and dropping the line (p17).
+    """
+    catalog = dict(catalog_entries())
+    drifted = "0" * 64
+    await _seed_receipt(
+        session_factory,
+        document_digest=drifted,
+        measurement_route="edge",
+        build_binding="per_request",
+    )
+    async with session_factory() as session:
+        session.add(
+            RoutingState(
+                schema_digest=current_schema_digest(),
+                document_digest=drifted,
+                selected_operation="featureFlags",
+                current_candidate_build=BUILD,
+                owner="go",
+                mode="primary",
+                rollout_percentage=100,
+            )
+        )
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=catalog["featureFlags"],
+            selected_operation="featureFlags",
+            candidate_build=BUILD,
+        )
+        session.add(
+            RoutingState(
+                schema_digest=current_schema_digest(),
+                document_digest=catalog["featureFlags"],
+                selected_operation="featureFlags",
+                current_candidate_build=BUILD,
+                owner="go",
+                mode="canary",
+                rollout_percentage=100,
+            )
+        )
+        await session.commit()
+
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_status(
+                argparse.Namespace(query_api_url=url, json=False)
+            )
+            == 0
+        )
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line.startswith("featureFlags ")]
+    drift_lines = [line for line in lines if "DOCUMENT_DRIFT" in line]
+    match_lines = [line for line in lines if " MATCH " in line]
+    assert len(drift_lines) == 1 and len(match_lines) == 1, out
+    assert drift_lines[0].split()[-1] == "ok", (
+        f"the drifted row HAS an admissible receipt of its own, and its PROOF "
+        f"column printed {drift_lines[0].split()[-1]!r}: the terminal disagrees "
+        f"with --json about the one row the operator is asked to notice\n{out}"
+    )
+    assert match_lines[0].split()[-1] == "UNPROVEN", out
+    assert f"serving document {drifted}" in out, (
+        f"no line names the document actually serving the drifted row -- the "
+        f"only question DOCUMENT_DRIFT raises\n{out}"
+    )
+
+    # The other consumers of digest_state, on the SAME rows: `--json` and the
+    # `reachable` property. The drifted row is live and proven but NOT
+    # reachable -- the edge dispatches through the catalog, so no request can
+    # land on it -- and the catalog's canary row is reachable and unproven.
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_status(
+                argparse.Namespace(query_api_url=url, json=True)
+            )
+            == 0
+        )
+    payload = json.loads(capsys.readouterr().out)
+    rows = {
+        (row["digest_state"], row["document_digest"]): row
+        for row in payload["operations"]
+        if row["operation"] == "featureFlags"
+    }
+    drift_json = rows[("DOCUMENT_DRIFT", drifted)]
+    match_json = rows[("MATCH", catalog["featureFlags"])]
+    assert (drift_json["mode"], drift_json["proven"], drift_json["reachable"]) == (
+        "primary",
+        True,
+        False,
+    ), f"--json disagrees with the terminal about the drifted row: {drift_json}"
+    assert (match_json["mode"], match_json["proven"], match_json["reachable"]) == (
+        "canary",
+        False,
+        True,
+    ), f"--json misreports the catalog's row: {match_json}"
+
+
+@pytest.mark.asyncio
+async def test_the_canary_refusal_states_the_canary_route_rule(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of the route-rule pin: a canary refusal states the
+    canary rule ("a recorded route"), never the primary one."""
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route=None,
+        build_binding="per_request",
+    )
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(_ns(query_api_url=url, mode="canary"))
+            == 2
+        )
+    err = capsys.readouterr().err
+    assert "measured on a recorded route" in err, err
+    assert "measured on the edge route" not in err, err
+
+
+@pytest.mark.asyncio
+async def test_status_names_an_unregistered_live_row_on_both_outputs(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A live row for an operation the catalog does not
+    register was named nowhere by `status`, text or `--json`, while the
+    migration page named it. Both outputs now carry it, unreachable, with
+    the proof `status` computes for it (an admissible receipt of its own
+    here, so PROOF reads ``ok`` and ``proven`` is true on both)."""
+    retired = "e" * 64
+    async with session_factory() as session:
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=retired,
+            selected_operation="retiredOperation",
+            candidate_build=BUILD,
+        )
+        run = await record_proof_run(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=retired,
+            selected_operation="retiredOperation",
+            candidate_build=BUILD,
+            request_identity=f"test-{uuid.uuid4().hex[:8]}",
+            stage=ENABLEMENT_PROOF_STAGE,
+            terminal_state=ENABLEMENT_PROOF_TERMINAL_STATE,
+        )
+        await session.execute(
+            sa.update(ProofRun)
+            .where(ProofRun.id == run.id)
+            .values(measurement_route="edge", build_binding="per_request")
+        )
+        session.add(
+            RoutingState(
+                schema_digest=current_schema_digest(),
+                document_digest=retired,
+                selected_operation="retiredOperation",
+                current_candidate_build=BUILD,
+                owner="go",
+                mode="primary",
+                rollout_percentage=100,
+            )
+        )
+        await session.commit()
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_status(
+                argparse.Namespace(query_api_url=url, json=False)
+            )
+            == 0
+        )
+    out = capsys.readouterr().out
+    line = [line for line in out.splitlines() if line.startswith("retiredOperation ")]
+    assert len(line) == 1 and "UNREGISTERED" in line[0], out
+    assert line[0].split()[-1] == "ok", (
+        f"the unregistered row HAS an admissible receipt of its own, and its "
+        f"PROOF column printed {line[0].split()[-1]!r}: the terminal disagrees "
+        f"with --json\n{out}"
+    )
+    assert f"serving document {retired}" in out, out
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_status(
+                argparse.Namespace(query_api_url=url, json=True)
+            )
+            == 0
+        )
+    rows = [
+        r
+        for r in json.loads(capsys.readouterr().out)["operations"]
+        if r["operation"] == "retiredOperation"
+    ]
+    assert [
+        (r["digest_state"], r["mode"], r["proven"], r["reachable"]) for r in rows
+    ] == [("UNREGISTERED", "primary", True, False)], rows
+
+
+async def _enable_and_capture(
+    session_factory: Any,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    mode: str,
+    as_json: bool = False,
+) -> tuple[str, str, str]:
+    """Run the real `enable`; return (stdout, stderr, the routing row's
+    review_evidence)."""
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(
+                _ns(query_api_url=url, mode=mode, json=as_json)
+            )
+            == 0
+        )
+    captured = capsys.readouterr()
+    rows = await _rows(session_factory)
+    assert len(rows) == 1, rows
+    return captured.out, captured.err, rows[0].review_evidence or ""
+
+
+async def _only_receipt_id(factory: Any) -> str:
+    async with factory() as session:
+        ids = (await session.execute(sa.select(ProofRun.id))).scalars().all()
+    assert len(ids) == 1, ids
+    return str(ids[0])
+
+
+async def _reset(factory: Any) -> None:
+    async with factory() as session:
+        await session.execute(sa.delete(RoutingState))
+        await session.execute(sa.delete(ProofRun))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_enable_names_the_receipt_that_authorized_each_row(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`enable` printed the same output for a `match` admission and a
+    fully-cited `mismatch` admission, and nothing named the receipt that
+    authorized the row -- a predicate regression admitting the wrong
+    receipt looked exactly like a correct enablement. Now the stdout
+    line, a structured stderr line and the row's review_evidence each
+    name the receipt id the database holds, its terminal state and, for
+    a cited mismatch, the citations."""
+    catalog = dict(catalog_entries())
+
+    # A `match` admission.
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+    )
+    match_id = await _only_receipt_id(session_factory)
+    out, err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="primary"
+    )
+    match_line = next(
+        line for line in out.splitlines() if line.strip().startswith("featureFlags")
+    )
+    assert f"receipt {match_id}" in match_line, out
+    assert "terminal_state=match" in match_line, out
+    assert "baseline_defect" not in match_line, out
+    assert (
+        f"go_api_routing.enabled operation=featureFlags receipt_id={match_id} "
+        "terminal_state=match" in err
+    ), err
+    assert f"proof_receipt={match_id} terminal_state=match" in evidence, evidence
+
+    # A fully-cited `mismatch` admission of the same operation.
+    await _reset(session_factory)
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+        terminal_state="mismatch",
+        baseline_defect=["CHAOS-5447"],
+        differences_outside_baseline_defect=0,
+    )
+    cited_id = await _only_receipt_id(session_factory)
+    out, err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="primary"
+    )
+    cited_line = next(
+        line for line in out.splitlines() if line.strip().startswith("featureFlags")
+    )
+    assert f"receipt {cited_id}" in cited_line, out
+    assert "terminal_state=mismatch" in cited_line, out
+    assert "baseline_defect=CHAOS-5447" in cited_line, out
+    assert (
+        f"go_api_routing.enabled operation=featureFlags receipt_id={cited_id} "
+        "terminal_state=mismatch baseline_defect=CHAOS-5447" in err
+    ), err
+    assert (
+        f"proof_receipt={cited_id} terminal_state=mismatch baseline_defect=CHAOS-5447"
+        in evidence
+    ), evidence
+
+    # The two admissions print visibly different lines, not the same line
+    # with a different id.
+    assert match_line.replace(match_id, "<id>") != cited_line.replace(
+        cited_id, "<id>"
+    ), (match_line, cited_line)
+
+
+@pytest.mark.asyncio
+async def test_enable_json_names_the_authorizing_receipt(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The same, on `enable --json`: stdout is one JSON document whose
+    receipt id is the stored one; an unproven row carries `receipt: null`."""
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+        terminal_state="mismatch",
+        baseline_defect=["CHAOS-5447"],
+        differences_outside_baseline_defect=0,
+    )
+    stored = await _only_receipt_id(session_factory)
+    out, _err, _evidence = await _enable_and_capture(
+        session_factory, capsys, mode="canary", as_json=True
+    )
+    payload = json.loads(out)
+    [row] = payload["operations"]
+    assert (row["operation"], row["proven"]) == ("featureFlags", True), row
+    receipt = row["receipt"]
+    assert receipt["receipt_id"] == stored, (receipt, stored)
+    assert (
+        receipt["terminal_state"],
+        receipt["baseline_defect"],
+        receipt["measurement_route"],
+        receipt["build_binding"],
+    ) == ("mismatch", ["CHAOS-5447"], "edge", "per_request"), receipt
+
+    # Unproven, acknowledged: no receipt, said so.
+    await _reset(session_factory)
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_enable(
+                _ns(
+                    query_api_url=url,
+                    mode="canary",
+                    json=True,
+                    acknowledge_unproven=True,
+                )
+            )
+            == 0
+        )
+    [row] = json.loads(capsys.readouterr().out)["operations"]
+    assert (row["proven"], row["receipt"]) == (False, None), row
+
+
+@pytest.mark.asyncio
+async def test_enable_names_the_newest_admissible_receipt(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Two admissible receipts for one row: the one named is the newest --
+    the latest measurement that satisfies every clause -- and it is the one
+    the row's review_evidence records."""
+    catalog = dict(catalog_entries())
+    for terminal_state, defects in (("match", None), ("mismatch", ["CHAOS-5447"])):
+        await _seed_receipt(
+            session_factory,
+            document_digest=catalog["featureFlags"],
+            measurement_route="edge",
+            build_binding="per_request",
+            terminal_state=terminal_state,
+            baseline_defect=defects,
+            differences_outside_baseline_defect=0,
+        )
+    async with session_factory() as session:
+        newest = (
+            await session.execute(
+                sa.select(ProofRun.id).order_by(ProofRun.observed_at.desc()).limit(1)
+            )
+        ).scalar_one()
+    out, _err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="canary", as_json=True
+    )
+    [row] = json.loads(out)["operations"]
+    assert row["receipt"]["receipt_id"] == str(newest), (row, newest)
+    assert row["receipt"]["terminal_state"] == "mismatch", row
+    assert evidence.startswith(f"proof_receipt={newest} "), evidence
+
+
+@pytest.mark.asyncio
+async def test_enable_and_the_page_select_one_receipt_when_receipts_tie(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Three admissible receipts at ONE observed_at. `enable`
+    orders (observed_at DESC, id); the migration page ordered by observed_at
+    alone and named another receipt for the same row. One rule for both:
+    the newest, then the lowest id -- the Go twin is the tie cell in
+    TestTheMatrixShowsTheNewestAdmissibleReceipt, with the same ids."""
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+    )
+    ids = [
+        "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        "77777777-7777-4777-8777-777777777777",
+        "00000000-0000-4000-8000-000000000000",
+    ]
+    async with session_factory() as session:
+        template = (await session.execute(sa.select(ProofRun))).scalar_one()
+        tied_at = template.observed_at
+        await session.execute(sa.delete(ProofRun))
+        for receipt_id in ids:
+            session.add(
+                ProofRun(
+                    id=uuid.UUID(receipt_id),
+                    schema_digest=template.schema_digest,
+                    document_digest=template.document_digest,
+                    selected_operation=template.selected_operation,
+                    candidate_build=template.candidate_build,
+                    request_identity=f"tie-{receipt_id[:4]}",
+                    stage=template.stage,
+                    terminal_state=template.terminal_state,
+                    observed_at=tied_at,
+                    measurement_route="edge",
+                    build_binding="per_request",
+                )
+            )
+        await session.commit()
+    out, _err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="canary", as_json=True
+    )
+    [row] = json.loads(out)["operations"]
+    assert row["receipt"]["receipt_id"] == ids[2], row
+    assert evidence.startswith(f"proof_receipt={ids[2]} "), evidence
+
+
+@pytest.mark.asyncio
+async def test_the_model_refuses_a_binding_outside_its_vocabulary(
+    session_factory: Any,
+) -> None:
+    """The ORM CheckConstraint on build_binding was pinned by
+    nothing -- the migration test covers alembic, but tables created from this
+    metadata (SQLAlchemyStore.ensure_tables; this fixture) carry the model's
+    own copy. The same vocabulary as 0129: per_request, absent, NULL."""
+    catalog = dict(catalog_entries())
+    for binding in ("per_request", "absent", None):
+        await _reset(session_factory)
+        await _seed_receipt(
+            session_factory,
+            document_digest=catalog["featureFlags"],
+            build_binding=binding,
+        )
+    await _reset(session_factory)
+    with pytest.raises(
+        sa.exc.IntegrityError, match="ck_go_api_proof_run_build_binding"
+    ):
+        await _seed_receipt(
+            session_factory,
+            document_digest=catalog["featureFlags"],
+            build_binding="run_level",
+        )
+
+
+@pytest.mark.asyncio
+async def test_enable_names_what_the_citation_covered(
+    session_factory: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The admission said `(every difference cited)` whatever
+    the citation covered, so "one value differed" and "Go returned no rows"
+    (under a regression) printed alike. The writer records per-shape counts
+    in the receipt's provenance; `enable` prints them on stdout, the INFO
+    line, --json and the row's review_evidence -- in the Go writer's own
+    format, `covered[...] outside[...]`. A receipt with no such provenance
+    says so rather than printing an empty coverage."""
+    catalog = dict(catalog_entries())
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+        terminal_state="mismatch",
+        baseline_defect=["CHAOS-5447"],
+        differences_outside_baseline_defect=0,
+        review_evidence=json.dumps(
+            {"covered_by_shape": {"value": 384, "null": 7}, "measurement_route": "edge"}
+        ),
+    )
+    out, err, evidence = await _enable_and_capture(
+        session_factory, capsys, mode="primary"
+    )
+    counts = "covered[null=7 value=384] outside[]"
+    line = next(x for x in out.splitlines() if x.strip().startswith("featureFlags"))
+    assert counts in line, out
+    assert counts in next(
+        x for x in err.splitlines() if "go_api_routing.enabled " in x
+    ), err
+    assert counts in evidence, evidence
+
+    await _reset(session_factory)
+    await _seed_receipt(
+        session_factory,
+        document_digest=catalog["featureFlags"],
+        measurement_route="edge",
+        build_binding="per_request",
+        review_evidence="an operator's words, not the writer's provenance",
+    )
+    out, _err, _evidence = await _enable_and_capture(
+        session_factory, capsys, mode="canary", as_json=True
+    )
+    [row] = json.loads(out)["operations"]
+    assert (
+        row["receipt"]["covered_by_shape"],
+        row["receipt"]["outside_by_shape"],
+    ) == (None, None), row

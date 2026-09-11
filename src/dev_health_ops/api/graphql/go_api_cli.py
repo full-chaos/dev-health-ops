@@ -37,7 +37,10 @@ Two commands, and the split between them is deliberate:
     already broken -- including when query-api is down, which it reports
     as ``UNREACHABLE`` rather than failing. It prints both planes'
     digests and, per registered operation, whether that operation's row
-    is ``MATCH`` / ``STALE`` / ``MISSING`` and whether it is ``UNPROVEN``.
+    is ``MATCH`` / ``STALE`` / ``MISSING`` and whether it is ``UNPROVEN`` --
+    plus, as a row of its own, any live row serving a document the catalog
+    does not name (``DOCUMENT_DRIFT``) or an operation it does not register
+    (``UNREGISTERED``).
 
 HTTP here is ``urllib.request`` from the standard library, not ``httpx``:
 this is one small JSON GET, and keeping the module free of the web stack
@@ -55,12 +58,16 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .go_api_operation_catalog import (
     catalog_entries,
     catalog_loaded_successfully,
 )
 from .go_api_schema_digest import current_schema_digest
+
+if TYPE_CHECKING:
+    from .go_api_routing_admin import AuthorizingReceipt
 
 __all__ = ["register_commands"]
 
@@ -218,7 +225,7 @@ def _fetch_go_plane_registry(base_url: str) -> GoPlaneRegistry:
             # Silently keeping the last one would let a malformed or
             # tampered registry hide a second, different document digest
             # for the same operation -- and preflight 3 would then compare
-            # against whichever copy happened to win (codex r1, P3).
+            # against whichever copy happened to win.
             raise GoPlaneUnavailable(
                 f"{endpoint}/registry lists operation {operation!r} more than once"
             )
@@ -283,7 +290,9 @@ def _resolve_requested_operations(
     return sorted(set(names)), None
 
 
-def _enable_review_evidence(ns: argparse.Namespace, unproven: bool) -> str | None:
+def _enable_review_evidence(
+    ns: argparse.Namespace, unproven: bool, receipt: AuthorizingReceipt | None = None
+) -> str | None:
     """What goes in the row's `review_evidence`.
 
     An acknowledged-unproven enablement carries its reason DURABLY, on the
@@ -297,6 +306,12 @@ def _enable_review_evidence(ns: argparse.Namespace, unproven: bool) -> str | Non
     if unproven:
         prefix = "ACKNOWLEDGED-UNPROVEN: "
         return prefix + (supplied or "no reason given")
+    # A proven row names the receipt that authorized it: without it the
+    # row records nothing about WHICH
+    # evidence carried the decision, and a predicate that admitted the
+    # wrong receipt is indistinguishable from one that admitted the right one.
+    if receipt is not None:
+        return receipt.evidence() + (f"; {supplied}" if supplied else "")
     return supplied or None
 
 
@@ -305,9 +320,10 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
 
     from .go_api_routing_admin import (
         ENABLEMENT_PROOF_STAGE,
-        ENABLEMENT_PROOF_TERMINAL_STATE,
+        ENABLEMENT_TARGET_MODE_EDGE_ONLY,
+        MEASUREMENT_ROUTE_EDGE,
         enable_operation,
-        operations_with_enablement_proof,
+        enablement_receipts,
     )
 
     catalog = dict(catalog_entries())
@@ -383,27 +399,55 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
 
     # --- Preflight 4: is this candidate build proven? ------------------
     async with get_postgres_session() as session:
-        proven = await operations_with_enablement_proof(
+        proven = await enablement_receipts(
             session,
             schema_digest=local_digest,
             candidate_build=ns.candidate_build,
             operations={op: catalog[op] for op in operations},
+            target_mode=ns.mode,
         )
         unproven = [op for op in operations if op not in proven]
         if unproven and not ns.acknowledge_unproven:
+            route_rule = (
+                f"measured on the {MEASUREMENT_ROUTE_EDGE} route"
+                if ns.mode == ENABLEMENT_TARGET_MODE_EDGE_ONLY
+                else "measured on a recorded route"
+            )
             return _refuse(
-                f"no {ENABLEMENT_PROOF_STAGE}/"
-                f"{ENABLEMENT_PROOF_TERMINAL_STATE} proof run recorded for "
-                f"candidate build {ns.candidate_build} for: "
-                f"{', '.join(sorted(unproven))}.\n"
-                "Plan section 5 stage 3 requires the exact candidate build to "
-                "have served the operation through real ingress, auth, "
+                f"no {ENABLEMENT_PROOF_STAGE} proof run admissible for "
+                f"--mode {ns.mode} recorded for candidate build "
+                f"{ns.candidate_build} for: {', '.join(sorted(unproven))}.\n"
+                "An admissible receipt is a deployed_executed run at this "
+                "exact (schema digest, document digest, operation, candidate "
+                f"build) that is {route_rule}; bound to the serving build per "
+                "request (build_binding = 'per_request' -- a NULL "
+                "build_binding is a row written before alembic 0129, under "
+                "older counting rules, and is never proof); recorded against "
+                "a candidate_build that is not blank; and either terminated "
+                "in 'match', or terminated in 'mismatch' with every "
+                "difference cited against a named Python baseline defect "
+                "(baseline_defect non-empty, no citation NULL or blank, AND "
+                "differences_outside_baseline_defect = 0). Blank means made "
+                "only of space, tab, newline, vertical tab, form feed, "
+                "carriage return or NBSP. A mismatch is never rewritten -- it "
+                "stays a mismatch in the row and is only READ as sufficient "
+                "when fully cited.\n"
+                + (
+                    "Note: --mode primary requires EDGE evidence "
+                    "specifically. A /query/proof receipt shows the build "
+                    "CAN serve the operation, not that the product edge "
+                    "DOES, and primary is served traffic.\n"
+                    if ns.mode == ENABLEMENT_TARGET_MODE_EDGE_ONLY
+                    else ""
+                )
+                + "Plan section 5 stage 3 requires the exact candidate build "
+                "to have served the operation through real ingress, auth, "
                 "parse/validate, dispatch and a real database -- a "
                 "constructor, health check or bare 200 does not qualify. "
-                "Record it with go_api_registry.record_proof_run, or pass "
-                "--acknowledge-unproven to enable anyway (the row is then "
-                "reported as UNPROVEN by `dev-hops go-api routing status` "
-                "for as long as it is in force)."
+                "Record it by running cmd/go-api-prove against the deployed "
+                "stack, or pass --acknowledge-unproven to enable anyway (the "
+                "row is then reported as UNPROVEN by `dev-hops go-api routing "
+                "status` for as long as it is in force)."
             )
 
         for operation in operations:
@@ -419,6 +463,27 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
                     f"schema_digest={local_digest} mode={ns.mode}",
                     file=sys.stderr,
                 )
+            else:
+                # The proven twin of the line above: which receipt turned
+                # this row on, so a log search finds the evidence behind
+                # every enablement, not only behind the unproven ones.
+                receipt = proven[operation]
+                print(
+                    f"INFO: go_api_routing.enabled operation={operation} "
+                    f"receipt_id={receipt.receipt_id} "
+                    f"terminal_state={receipt.terminal_state}"
+                    + (
+                        f" baseline_defect={','.join(receipt.baseline_defect)}"
+                        if receipt.baseline_defect
+                        else ""
+                    )
+                    + f" measurement_route={receipt.measurement_route} "
+                    f"build_binding={receipt.build_binding} "
+                    f"{receipt.shape_counts()} "
+                    f"candidate_build={ns.candidate_build} "
+                    f"schema_digest={local_digest} mode={ns.mode}",
+                    file=sys.stderr,
+                )
             await enable_operation(
                 session,
                 schema_digest=local_digest,
@@ -427,20 +492,86 @@ async def _cmd_routing_enable(ns: argparse.Namespace) -> int:
                 candidate_build=ns.candidate_build,
                 mode=ns.mode,
                 rollout_percentage=ns.rollout,
-                review_evidence=_enable_review_evidence(ns, operation in unproven),
+                review_evidence=_enable_review_evidence(
+                    ns, operation in unproven, proven.get(operation)
+                ),
                 recorded_by=_recorded_by(),
             )
         await session.commit()
 
+    if getattr(ns, "json", False):
+        print(
+            json.dumps(
+                {
+                    "schema_digest": local_digest,
+                    "candidate_build": ns.candidate_build,
+                    "mode": ns.mode,
+                    "rollout": ns.rollout,
+                    "operations": [
+                        {
+                            "operation": operation,
+                            "document_digest": catalog[operation],
+                            "proven": operation in proven,
+                            "receipt": _receipt_json(proven.get(operation)),
+                        }
+                        for operation in operations
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return 0
     print(
         f"enabled {len(operations)} operation(s) at schema_digest="
         f"{local_digest} candidate_build={ns.candidate_build} mode={ns.mode} "
         f"rollout={ns.rollout}"
     )
     for operation in operations:
-        flag = " (UNPROVEN)" if operation in unproven else ""
-        print(f"  {operation}{flag}")
+        authorizing = proven.get(operation)
+        if authorizing is None:
+            print(f"  {operation} (UNPROVEN)")
+            continue
+        # A cited mismatch and a match must not print the same line: the
+        # operator is told which kind of evidence turned the row on.
+        cited = (
+            f" baseline_defect={','.join(authorizing.baseline_defect)} "
+            "(every difference cited)"
+            if authorizing.baseline_defect
+            else ""
+        )
+        print(
+            f"  {operation}  proof: receipt {authorizing.receipt_id} "
+            f"terminal_state={authorizing.terminal_state}{cited} "
+            f"measurement_route={authorizing.measurement_route} "
+            f"build_binding={authorizing.build_binding} "
+            f"{authorizing.shape_counts()}"
+        )
     return 0
+
+
+def _receipt_json(receipt: AuthorizingReceipt | None) -> dict[str, object] | None:
+    if receipt is None:
+        return None
+    return {
+        "receipt_id": receipt.receipt_id,
+        "terminal_state": receipt.terminal_state,
+        "baseline_defect": list(receipt.baseline_defect),
+        "measurement_route": receipt.measurement_route,
+        "build_binding": receipt.build_binding,
+        "observed_at": (
+            receipt.observed_at.isoformat() if receipt.observed_at else None
+        ),
+        "covered_by_shape": (
+            dict(receipt.covered_by_shape)
+            if receipt.covered_by_shape is not None
+            else None
+        ),
+        "outside_by_shape": (
+            dict(receipt.outside_by_shape)
+            if receipt.outside_by_shape is not None
+            else None
+        ),
+    }
 
 
 async def _cmd_routing_disable(ns: argparse.Namespace) -> int:
@@ -561,10 +692,10 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
 
     catalog = catalog_entries()
     catalog_ok = catalog_loaded_successfully()
-    # codex r2 (P1): this was unguarded, so an unreadable SDL raised out of
-    # `status` and emitted NOTHING -- not even invalid JSON. Same contract
-    # breach as the unguarded database read r1 found, one line higher up:
-    # this command reports what it can and never dies on what it cannot.
+    # Unguarded, this raised out of `status` and emitted NOTHING -- not
+    # even invalid JSON -- the same contract breach as the unguarded
+    # database read one line higher up: this command reports what it can
+    # and never dies on what it cannot.
     local_digest: str | None = None
     digest_error: str | None = None
     try:
@@ -590,9 +721,9 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
     else:
         go_error = "no --query-api-url and GO_API_QUERY_API_URL is unset"
 
-    # codex r1 (P1): this block used to be unguarded, so `status` raised a
-    # traceback and exited 1 whenever Postgres was unreachable -- directly
-    # contradicting this command's whole contract. `status` is what an
+    # Unguarded, this block raised a traceback and exited 1 whenever
+    # Postgres was unreachable -- directly contradicting this command's
+    # whole contract. `status` is what an
     # operator runs WHEN THINGS ARE BROKEN; a diagnostic that dies because
     # the thing it diagnoses is down is useless exactly when it is needed,
     # and it is the same "two states, one silence" mistake in a new place:
@@ -623,8 +754,8 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
                     "python_plane_digest_error": digest_error,
                     "go_plane_schema_digest": go_digest,
                     "go_plane_error": go_error,
-                    # None means UNKNOWN, not "different" (codex r3, P1).
-                    # A comparison against a digest this process could not
+                    # None means UNKNOWN, not "different". A comparison
+                    # against a digest this process could not
                     # compute has no truth value, and asserting one is the
                     # exact failure mode this whole change exists to end:
                     # stating a confident wrong answer instead of "unknown".
@@ -716,22 +847,44 @@ async def _cmd_routing_status(ns: argparse.Namespace) -> int:
     else:
         print("  (table is empty -- nothing is enabled for Go)")
     print()
-    print(f"{'OPERATION':<24} {'DIGEST':<8} {'MODE':<10} {'ROLLOUT':<8} PROOF")
+    print(f"{'OPERATION':<24} {'DIGEST':<14} {'MODE':<10} {'ROLLOUT':<8} PROOF")
     for status in statuses:
         mode = status.mode or "-"
         rollout = (
             "-" if status.rollout_percentage is None else str(status.rollout_percentage)
         )
-        if status.digest_state == "MATCH":
+        # A DOCUMENT_DRIFT row is LIVE, is the row actually in the table,
+        # and this command computes `proven` for it -- the JSON says so.
+        # Printing `-` here told the operator nothing about the one row
+        # they are being asked to notice, and the terminal disagreed with
+        # `--json` on the same run.
+        if status.digest_state in ("MATCH", "DOCUMENT_DRIFT", "UNREGISTERED"):
             proof = "ok" if status.proven else "UNPROVEN"
         else:
             proof = "-"
+        # Width 14, not 8: DOCUMENT_DRIFT is 14 characters, so an 8-wide
+        # column shifted MODE / ROLLOUT / PROOF right on exactly that row.
         print(
-            f"{status.operation:<24} {status.digest_state:<8} {mode:<10} "
+            f"{status.operation:<24} {status.digest_state:<14} {mode:<10} "
             f"{rollout:<8} {proof}"
         )
         if status.digest_state == "STALE":
             print(f"    stale rows at: {', '.join(status.stale_digests)}")
+        # A branch per state, so a new one cannot be silently unrendered:
+        # DOCUMENT_DRIFT reached this renderer with nothing printed about
+        # WHICH document is in the table, which is the only question it
+        # raises.
+        if status.digest_state == "DOCUMENT_DRIFT":
+            print(
+                f"    serving document {status.document_digest} -- the catalog "
+                "does not name it, so the edge cannot dispatch this row"
+            )
+        if status.digest_state == "UNREGISTERED":
+            print(
+                f"    serving document {status.document_digest} -- the catalog "
+                "does not register this operation at all, so the edge cannot "
+                "dispatch this row"
+            )
     return 0
 
 
@@ -800,6 +953,14 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
         dest="query_api_url",
         default=None,
         help="Base URL of the running query-api. Env: GO_API_QUERY_API_URL",
+    )
+    enable.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Print the result as one JSON document on stdout: each operation, "
+            "whether it is proven, and the receipt that authorized it."
+        ),
     )
     enable.add_argument(
         "--acknowledge-unproven",

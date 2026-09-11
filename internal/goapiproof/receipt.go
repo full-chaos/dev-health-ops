@@ -3,6 +3,7 @@ package goapiproof
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,13 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// EnablementProofStage and EnablementProofTerminalState are the exact
-// pair `dev-hops go-api routing enable`'s preflight selects on
-// (go_api_routing_admin.build_enablement_proof_select: stage =
-// 'deployed_executed' AND terminal_state = 'match'). A receipt written
-// with any other pair is recorded evidence but authorizes nothing --
-// which is precisely what a shadow operation's recorded divergence
-// should do.
+// EnablementProofStage and EnablementProofTerminalState are two of the
+// values `dev-hops go-api routing enable`'s preflight selects on.
+//
+// They are NOT the whole rule, and this comment used to say they were
+// ("the exact pair ... a receipt written with any other pair authorizes
+// nothing"). CHAOS-5484 made a FULLY-CITED mismatch enablement proof and
+// split admission by target mode, so the rule is now
+// EnablementProofClause -- stage, terminal state, the citation counters,
+// AND the route. Read that function; do not infer the rule from these two
+// constants.
 const (
 	EnablementProofStage         = "deployed_executed"
 	EnablementProofTerminalState = "match"
@@ -48,7 +52,7 @@ type Receipt struct {
 
 	// MeasurementRoute is "edge" or "proof" -- which route executed the
 	// candidate leg. A proof-route receipt must never read as served
-	// traffic (team-lead ruling R50, 2026-09-09), and a receipt that did
+	// traffic, and a receipt that did
 	// not SAY which route produced it would leave that distinction in a
 	// chat message instead of in the row.
 	MeasurementRoute string
@@ -62,6 +66,14 @@ type Receipt struct {
 	// "every difference here is a known Python defect" is a claim a
 	// reader can check rather than take on trust.
 	DifferencesOutsideBaselineDefect int
+
+	// BuildBinding is EdgeBuildPresent or EdgeBuildAbsent -- how strongly
+	// the measurement tied the serving build to the request it compared
+	// (alembic 0129, CHAOS-5484). Required for the same reason
+	// MeasurementRoute is: a receipt that did not say how well it knew
+	// which build served it cannot be told apart later from one that knew
+	// exactly.
+	BuildBinding string
 }
 
 // Querier is the subset of pgx this package needs, so a test can pass a
@@ -83,7 +95,7 @@ type TxBeginner interface {
 //
 // Write is two statements -- a candidate-build upsert and a proof-run
 // insert -- and the runner previously handed it a bare pool, so a failure
-// between them left a registered build with no receipt (codex r1 F7). That
+// between them left a registered build with no receipt. That
 // orphan is harmless on its own (the table is append-only and the upsert is
 // idempotent), but "harmless" was an argument, not a guarantee, and the
 // guarantee costs one BEGIN. The fallback exists so the in-memory tests can
@@ -132,8 +144,32 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 	if err := validateVocabulary(receipt); err != nil {
 		return uuid.Nil, err
 	}
-	if receipt.CandidateBuild == "" {
+	if NamesNothing(receipt.CandidateBuild) {
+		// Trimmed with blankCitationCutset, not `== ""`: `proven` is
+		// keyed on this column, and a
+		// whitespace-only build is as unmatchable as an absent one while
+		// LOOKING present in every listing. Found by enumerating the
+		// guard's input domain rather than by a failure.
 		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt with an empty candidate build")
+	}
+	if !buildBindings[receipt.BuildBinding] {
+		return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt with build binding %q -- expected %q or %q", receipt.BuildBinding, EdgeBuildPresent, EdgeBuildAbsent)
+	}
+	// A citation that names nothing is not a citation. The enablement
+	// predicate admits a mismatch when `cardinality(baseline_defect) > 0`
+	// and every difference is covered -- and `cardinality(ARRAY[''])` is
+	// 1, so a receipt citing a single empty ticket was admitted as fully
+	// cited. Executed against real PostgreSQL before this guard existed:
+	// `EMPTY-STRING CITATION admitted as enablement proof: true`.
+	//
+	// Refused HERE rather than widened in SQL, because both predicates
+	// read the column and a rule stated in two places drifts -- which is
+	// the defect found in this very PR. The writer is the one place
+	// that can refuse it once.
+	for _, ticket := range receipt.BaselineDefects {
+		if NamesNothing(ticket) {
+			return uuid.Nil, fmt.Errorf("goapiproof: refusing to write a receipt whose baseline_defect array contains an empty citation (%d entries) -- cardinality() counts it, so the enablement predicate would read this as a fully-cited mismatch while it cites nothing", len(receipt.BaselineDefects))
+		}
 	}
 	if !measurementRoutes[receipt.MeasurementRoute] {
 		// A receipt with no route cannot be told apart from served
@@ -159,8 +195,9 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 		    request_identity, stage, terminal_state,
 		    baseline_response_ref, candidate_response_ref,
 		    data_watermark, org_id, review_evidence, recorded_by, observed_at,
-		    measurement_route, baseline_defect, differences_outside_baseline_defect)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+		    measurement_route, baseline_defect, differences_outside_baseline_defect,
+		    build_binding)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		id, receipt.SchemaDigest, receipt.DocumentDigest, receipt.SelectedOperation, receipt.CandidateBuild,
 		receipt.RequestIdentity, receipt.Stage, receipt.TerminalState,
 		nullIfEmpty(receipt.BaselineResponseRef), nullIfEmpty(receipt.CandidateResponseRef),
@@ -168,6 +205,7 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 		nullIfEmpty(receipt.ReviewEvidence), nullIfEmpty(receipt.RecordedBy), receipt.ObservedAt,
 		nullIfEmpty(receipt.MeasurementRoute), receipt.BaselineDefects,
 		receipt.DifferencesOutsideBaselineDefect,
+		nullIfEmpty(receipt.BuildBinding),
 	); err != nil {
 		return uuid.Nil, fmt.Errorf("goapiproof: record proof run for %s: %w", receipt.SelectedOperation, err)
 	}
@@ -183,6 +221,8 @@ var stages = map[string]bool{
 }
 
 var measurementRoutes = map[string]bool{RouteEdge: true, RouteProof: true}
+
+var buildBindings = map[string]bool{EdgeBuildPresent: true, EdgeBuildAbsent: true}
 
 var terminalStates = map[string]bool{
 	"match": true, "mismatch": true, "auth_rejected": true, "validation_rejected": true,
@@ -213,6 +253,273 @@ func nullIfEmpty(value string) any {
 	return value
 }
 
+// Target modes `dev-hops go-api routing enable` can be asked for, and the
+// route rule each carries (CHAOS-5484).
+//
+// TargetModeCanary admits a receipt measured on ANY recorded route,
+// because a shadow operation can only ever be measured on /query/proof:
+// PostgresSwitch.Enabled admits canary|primary only, so the deployed
+// build will not execute a shadow operation on /query at all. Requiring
+// edge evidence there would mean an operation could only be proven after
+// it had already been enabled.
+//
+// TargetModePrimary admits ONLY RouteEdge. Promotion to primary is
+// promotion to served traffic, and /query/proof is a measurement-only
+// handler unreachable from the product edge -- a proof-route receipt says
+// the build CAN serve the operation, not that the edge DOES.
+const (
+	TargetModeCanary  = "canary"
+	TargetModePrimary = "primary"
+)
+
+// EnablementCitedMismatchState is the one terminal state other than
+// `match` that can authorize an enablement, and only under the citation
+// conditions below. The receipt is never rewritten: a mismatch stays a
+// mismatch in the row and is merely READ as sufficient when every
+// difference it found was a named defect in the PYTHON baseline.
+const EnablementCitedMismatchState = "mismatch"
+
+// enablementProofPredicate is the admission rule, as SQL over one
+// go_api_proof_run row.
+//
+// The three conditions on the mismatch arm are each load-bearing:
+//
+//   - differences_outside_baseline_defect = 0 -- nothing diverged that no
+//     declared defect covers.
+//   - baseline_defect IS NOT NULL -- because that counter is NOT NULL
+//     DEFAULT 0, so a bare `= 0` cannot tell "computed, and every
+//     difference was cited" apart from "this row predates the column and
+//     nothing ever computed it". A citation is what disambiguates.
+//   - cardinality(...) > 0 -- an empty array is a writer that had the
+//     column and cited nothing; without this, IS NOT NULL could be
+//     satisfied by writing '{}'.
+//
+// The Python preflight (go_api_routing_admin.build_enablement_proof_select)
+// implements the same rule in SQLAlchemy expressions with a tuple-OR join
+// shape, so the two statements can never be compared as text. They are
+// pinned by BEHAVIOUR instead: both sides' tests drive their own
+// production predicate over tests/fixtures/enablement_proof_admission_cases.json.
+//
+// `baseline_defect IS NOT NULL` is deliberately ABSENT. It reads as a
+// guard and is not one: `cardinality(NULL) > 0` evaluates to NULL, which
+// is not TRUE, so a NULL citation list is already excluded by the
+// cardinality clause alone. Testing proved it by removing the IS NOT NULL from
+// both implementations and watching every case still pass. Both the NULL
+// and the empty-array cases are in the shared table
+// (`mismatch_cited_but_defect_null_refused`,
+// `mismatch_cited_but_defect_empty_refused`), so this is covered rather
+// than merely argued -- and a clause that can never change an outcome is
+// one more thing a reader has to reason about for nothing.
+//
+// blankCitationCutset is THE definition of "names nothing", and it is
+// deliberately an explicit character set rather than Unicode's space class.
+//
+// Testing found the change shipping TWO definitions: the writer used
+// strings.TrimSpace, the predicates used one-argument btrim(). Measured,
+// they disagree on every whitespace character except the space itself --
+// a tab, newline, CR, vertical tab, form feed or NBSP citation was
+// refused by the writer and ADMITTED by both predicates, and promoted to
+// primary through the shipped CLI.
+//
+// They cannot share Unicode's definition. Measured against this Postgres
+// (UTF8):
+//
+//	btrim(E'\u00a0', <this set>) = ''   -> true    unicode.IsSpace -> true
+//	btrim(E'\u2028', <this set>) = ''   -> false   unicode.IsSpace -> true
+//	E'\u00a0' ~ '^[[:space:]]+$'        -> false
+//	E'\u2028' ~ '^[[:space:]]+$'        -> true
+//
+// So the explicit set and POSIX [[:space:]] have OPPOSITE gaps, and
+// neither equals unicode.IsSpace, which is open-ended by design. A shared
+// definition therefore has to be enumerated, not named.
+//
+// DIRECTION, stated because it matters: the SQL definition is the
+// authority and Go implements exactly it. SQL is the side that reads rows
+// from producers Go has never seen -- rows already in the table, a future
+// writer, a manual repair -- so the engine that must be right about a
+// stored row owns the rule, and the writer conforms. Go therefore uses
+// strings.Trim with this cutset, NEVER strings.TrimSpace.
+//
+// Characters outside the set (U+2028, U+3000, ...) are treated as REAL
+// citation text by BOTH sides. That is the trade: a ticket identifier made
+// only of exotic Unicode spacing is not a case worth a definition the two
+// engines cannot share, and both agreeing matters more than either being
+// maximal. TestTheBlankDefinitionIsIdenticalInBothEngines pins the
+// agreement character by character, in-set and out.
+const blankCitationCutset = " \t\n\v\f\r\u00a0"
+
+// blankCitationSQL renders blankCitationCutset as a Postgres escape-string
+// literal, GENERATED from the constant one rune at a time, so the SQL below
+// and the Go check above cannot drift: there is one constant.
+//
+// Testing found that sentence false of the code it described. The
+// literal was HAND-TYPED as `E' \t\n\v\f\r\u00a0'`, and `\v` in an
+// escape string is not one byte across server versions. Measured:
+//
+//	PostgreSQL 16.15  E'\v' -> 0x76  (the LETTER v)
+//	PostgreSQL 17.11  E'\v' -> 0x0b
+//	PostgreSQL 18.4   E'\v' -> 0x0b
+//
+// So on PG16 the Go readers and the migration matrix refused the letter v
+// as "names nothing" and admitted a vertical-tab citation, while Python --
+// which BINDS its cutset as a parameter -- did the opposite. Nothing
+// enforces a server version (the helm default is managed Postgres), and
+// the pin ran only on the testcontainers PG18 image, so nothing failed.
+//
+// Only the NUMERIC escapes are emitted: \xNN for ASCII, \uNNNN / \UNNNNNNNN
+// above it. Their meaning is a code point, not a name a server version
+// can learn or forget. A named escape (\t, \n, \v, ...) is never emitted,
+// even the ones that happen to be stable, so the rule is one sentence
+// with no exceptions. TestTheBlankCutsetLiteralIsGeneratedFromTheConstant
+// pins the grammar and decodes the literal back to the constant; the
+// integration suite is run against PG16, PG17 and PG18 by pointing
+// DEV_HEALTH_TEST_POSTGRES_DSN at each.
+func blankCitationSQL() string {
+	return escapeStringLiteral(blankCitationCutset)
+}
+
+// NamesNothing is THE Go definition of "blank": true when value is empty or
+// made only of blankCitationCutset's runes. Every blank judgment this change
+// makes in Go calls it -- the writer's citation and build guards here, the
+// migration matrix's routing-snapshot and catalog guards and its
+// DOCUMENT_DRIFT "cannot be judged" state -- so a sibling check cannot
+// quietly use strings.TrimSpace (Unicode's open-ended space class) while
+// this one uses the enumerated set (a rule applied
+// to one field is a rule for every field of that shape). The SQL side is
+// blankCitationSQL, generated from the same constant; the Python side binds
+// _BLANK_CUTSET, and all three are pinned to the one value the shared
+// admission fixture states as `blank_cutset`.
+func NamesNothing(value string) bool {
+	return strings.Trim(value, blankCitationCutset) == ""
+}
+
+// escapeStringLiteral renders value as a PostgreSQL escape-string literal
+// in which EVERY rune is a numeric escape. Because nothing is emitted raw,
+// a quote or a backslash in value cannot end or bend the literal (they
+// become \x27 and \x5c), and no byte depends on a server version's list
+// of named escapes. Invalid UTF-8 in value is ranged as U+FFFD, as Go
+// ranges it, so the literal is always valid UTF-8.
+func escapeStringLiteral(value string) string {
+	var literal strings.Builder
+	literal.WriteString("E'")
+	for _, r := range value {
+		switch {
+		case r < 0x80:
+			fmt.Fprintf(&literal, `\x%02x`, r)
+		case r <= 0xFFFF:
+			fmt.Fprintf(&literal, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&literal, `\U%08x`, r)
+		}
+	}
+	literal.WriteString("'")
+	return literal.String()
+}
+
+// THE BINDING IS PART OF THE RULE, on both arms, uniformly.
+//
+// Testing found the new admission rule being applied retroactively
+// to rows the OLD writer produced under different counting semantics. At
+// the base build, proveOne did NOT count an $.http.* difference and did
+// NOT count an unbound edge mismatch into
+// differences_outside_baseline_defect -- both increments are this
+// change's. Before it, a mismatch authorized nothing, so that did not
+// matter; it does now. Every row the base build wrote with
+// mismatch/edge/outside=0/cited became PRIMARY-admissible, including rows
+// whose real difference set held an uncited HTTP status difference and
+// rows tied to no replica. Those are exactly the pre-0129 rows:
+// build_binding IS NULL.
+//
+// Requiring per_request excludes precisely them and NOTHING the current
+// writer produces, which is why it is stated once for both arms rather
+// than only on the mismatch arm:
+//
+//   - proof route          -> per_request always
+//   - edge WITH the header -> per_request
+//   - edge WITHOUT it, match    -> downgraded to `unsupported`, never proof
+//   - edge WITHOUT it, mismatch -> outside >= 1, so already excluded
+//
+// So "match or cited mismatch, from this writer" already implies
+// per_request. Saying it out loud closes the retroactive window; a NULL
+// binding now means what it is, a row written before the column existed.
+//
+// It is NOT free, and this comment used to say it was. The
+// base writer could not produce an UNBOUND match either -- the proof route
+// required the header and an unbound edge match was downgraded -- so the
+// pre-0129 MATCH rows were sound evidence, and this clause discards them
+// with the unsafe mismatches: after 0129 deploys, every operation proven
+// before it reads UNPROVEN on `routing status` and on the migration page,
+// and `enable` refuses it, until go-api-prove runs again at the deployed
+// build. That is the ruled trade (one uniform clause over a per-arm
+// exception nobody can audit); JOB 6's re-prove step is what restores the
+// proofs. Stated in the PR's RISK-NOTES and the Wave-0 runbook.
+//
+// A citation that names NOTHING is not a citation. `cardinality(ARRAY[”])`
+// is 1, so before the NOT EXISTS below a mismatch citing a single empty
+// ticket read as fully cited and authorized a promotion -- executed
+// against real PostgreSQL and confirmed `admitted as enablement proof:
+// true`. The writer refuses to create such a row, but the writer is not
+// the only producer the predicate will ever read: rows already in the
+// table, a future writer and a manual repair all reach it. A guard on the
+// producer alone is a guard on today's producers.
+//
+// btrim, not `<> ”`: a whitespace-only citation names nothing either, and
+// so does a whitespace-only candidate_build -- and `proven` is keyed on
+// that column, so such a row is unmatchable while looking present.
+//
+// Every value here is a package CONSTANT, never caller input, so they are
+// inlined rather than bound: that lets EnablementProofClause compose into
+// a query of any shape, which is what makes ONE predicate serve every
+// reader (a third reader had drifted before this).
+func enablementProofPredicate(alias string) string {
+	return alias + `.stage = '` + EnablementProofStage + `'
+		    AND (
+		          ` + alias + `.terminal_state = '` + EnablementProofTerminalState + `'
+		       OR (` + alias + `.terminal_state = '` + EnablementCitedMismatchState + `'
+		           AND ` + alias + `.differences_outside_baseline_defect = 0
+		           AND cardinality(` + alias + `.baseline_defect) > 0
+		           AND NOT EXISTS (
+		                 SELECT 1 FROM unnest(` + alias + `.baseline_defect) AS citation
+		                  WHERE citation IS NULL
+		                     OR btrim(citation, ` + blankCitationSQL() + `) = ''))
+		    )
+		    AND btrim(` + alias + `.candidate_build, ` + blankCitationSQL() + `) <> ''
+		    AND ` + alias + `.build_binding = '` + EdgeBuildPresent + `'`
+}
+
+// EnablementProofClause is THE rule deciding whether a go_api_proof_run
+// row is enablement proof for targetMode, as a SQL fragment over `alias`.
+//
+// It exists because testing found a THIRD reader of this rule --
+// internal/migrationmatrix's routingStateQuery -- carrying its own copy
+// that predated CHAOS-5484's route split. That copy still hardcoded
+// `terminal_state = 'match'` with no route clause at all, so the
+// migration-status page rendered a primary proof-route receipt PROVEN
+// while enablement correctly refused it, and rendered a canary cited
+// mismatch UNPROVEN while enablement accepted it. Its own comment claimed
+// it was "deliberately the same predicate the enablement command uses" --
+// true when written, false the moment the rule moved, and nothing failed.
+//
+// A shared truth table pins the implementations it knows about. It cannot
+// pin one nobody enumerated, so the rule now has ONE source and callers
+// compose it rather than restate it.
+func EnablementProofClause(alias, targetMode string) (string, error) {
+	var routeClause string
+	switch targetMode {
+	case TargetModePrimary:
+		routeClause = alias + ".measurement_route = '" + RouteEdge + "'"
+	case TargetModeCanary:
+		// Recorded, not merely anything. A NULL is a pre-0128 row that
+		// says nothing about how it was measured, and "any route" is not
+		// "no route" -- admitting unknown provenance is the same failure
+		// shape as reading a DEFAULT 0 as an assertion.
+		routeClause = alias + ".measurement_route IS NOT NULL"
+	default:
+		return "", fmt.Errorf("goapiproof: unknown enablement target mode %q -- expected %q or %q; refusing to build a predicate whose route rule is undefined", targetMode, TargetModeCanary, TargetModePrimary)
+	}
+	return enablementProofPredicate(alias) + "\n\t\t    AND " + routeClause, nil
+}
+
 // OperationsWithEnablementProof is the Go reader for the exact predicate
 // `enable`'s preflight uses (go_api_routing_admin.build_enablement_proof_select).
 //
@@ -223,13 +530,24 @@ func nullIfEmpty(value string) any {
 // document digest as a tuple-OR rather than two independent IN lists: the
 // cross-product form would accept a proof recorded against a DIFFERENT
 // registered document.
+//
+// targetMode selects the route rule -- see TargetModeCanary/TargetModePrimary.
+// An unrecognised mode is an ERROR, never a fallthrough to the more
+// permissive branch: that is exactly how a promotion to served traffic
+// would quietly come to rest on measurement-only evidence.
 func OperationsWithEnablementProof(
 	ctx context.Context,
 	db Querier,
 	schemaDigest string,
 	candidateBuild string,
+	targetMode string,
 	documentDigestByOperation map[string]string,
 ) (map[string]bool, error) {
+	clause, err := EnablementProofClause("p", targetMode)
+	if err != nil {
+		return nil, err
+	}
+
 	found := map[string]bool{}
 	if len(documentDigestByOperation) == 0 {
 		return found, nil
@@ -245,15 +563,13 @@ func OperationsWithEnablementProof(
 	rows, err := db.Query(ctx,
 		`SELECT DISTINCT p.selected_operation
 		   FROM go_api_proof_run AS p
-		   JOIN unnest($4::text[], $5::text[]) AS want(operation, document_digest)
+		   JOIN unnest($3::text[], $4::text[]) AS want(operation, document_digest)
 		     ON want.operation = p.selected_operation
 		    AND want.document_digest = p.document_digest
 		  WHERE p.schema_digest = $1
 		    AND p.candidate_build = $2
-		    AND p.stage = $3
-		    AND p.terminal_state = $6`,
-		schemaDigest, candidateBuild, EnablementProofStage,
-		operations, digests, EnablementProofTerminalState,
+		    AND `+clause,
+		schemaDigest, candidateBuild, operations, digests,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("goapiproof: read enablement proof: %w", err)

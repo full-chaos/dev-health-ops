@@ -122,7 +122,12 @@ func renderRegressions(tickets []string) string {
 // RenderOpsBlock renders the per-operation table plus the provenance line.
 // Every cell is machine-read; nothing here is hand-editable, which is the
 // whole reason the block exists.
-func RenderOpsBlock(render *Render) string {
+//
+// catalog is the registered-operation catalog the edge dispatches by. It
+// decides DOCUMENT_DRIFT: a live row whose (operation, document) pair the
+// catalog does not name renders as such in the liveness cell and is
+// counted on its own line, never as a serving row.
+func RenderOpsBlock(render *Render, catalog Catalog) string {
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("_Rendered %s against main merge-base `%s`; SDL digest pin `%s`; fleet read %s via %s._\n\n",
@@ -139,8 +144,15 @@ func RenderOpsBlock(render *Render) string {
 	// mode column while these three said otherwise.
 	b.WriteString(fmt.Sprintf("_Rows in `go_api_proof_run` at read time: **%d**. Operations reachable to real clients with no deployed-executed proof: **%d**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **%d**._\n\n",
 		render.ProofRunTotal,
-		UnprovenReachable(render.Operations),
+		UnprovenReachable(render.Operations, catalog),
 		DeadReachable(render.Operations),
+	))
+	// Always printed, zero included: a count that appears only when it is
+	// non-zero reads the same as a count nobody computed.
+	b.WriteString(fmt.Sprintf("_Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **%d**; for an operation the catalog does not register (UNREGISTERED, as `dev-hops go-api routing status` reports it): **%d**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **%d**._\n\n",
+		DriftedLive(render.Operations, catalog, StateDocumentDrift),
+		DriftedLive(render.Operations, catalog, StateUnregistered),
+		UnjudgedLive(render.Operations),
 	))
 
 	b.WriteString("| Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |\n")
@@ -154,20 +166,34 @@ func RenderOpsBlock(render *Render) string {
 		if rows[i].SchemaDigest != rows[j].SchemaDigest {
 			return rows[i].SchemaDigest < rows[j].SchemaDigest
 		}
-		return rows[i].Operation < rows[j].Operation
+		if rows[i].Operation != rows[j].Operation {
+			return rows[i].Operation < rows[j].Operation
+		}
+		// Two rows sharing (schema digest, operation) differ only by
+		// document -- the DOCUMENT_DRIFT shape. Without this the order of
+		// the pair was sort.Slice's, which is not stable, so the committed
+		// page and -check's re-render could disagree on identical data.
+		return rows[i].DocumentDigest < rows[j].DocumentDigest
 	})
 
 	for _, row := range rows {
 		live := "**DEAD** (digest moved)"
-		if row.Live {
-			live = "yes"
+		switch DispatchState(row, catalog) {
+		case StateDocumentDrift:
+			live = "**DOCUMENT_DRIFT** (serves document `" + shortHex(row.DocumentDigest) + "`, which the catalog does not name)"
+		case StateUnregistered:
+			live = "**UNREGISTERED** (serves document `" + shortHex(row.DocumentDigest) + "`; the catalog does not register this operation)"
+		default:
+			if row.Live {
+				live = "yes"
+			}
 		}
 		proven := "**none**"
 		if row.Proven != NoProof {
 			proven = "`" + row.Proven + "`"
 		}
 		mode := row.Mode
-		if row.Live && reachableModes[row.Mode] && row.Proven == NoProof {
+		if row.Live && reachableModes[row.Mode] && row.Proven == NoProof && !DocumentDrift(row, catalog) {
 			// The row a client can actually hit with nothing proving it.
 			mode = row.Mode + " / **UNPROVEN**"
 		}
@@ -186,6 +212,16 @@ func fleetReadStamp(t time.Time) string {
 		return "(not read)"
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// shortHex shortens a bare hex document digest for a table cell. Anything
+// that is not plain hex is printed whole, so a malformed value is never
+// disguised as a real one by truncation.
+func shortHex(s string) string {
+	if len(s) > 12 && strings.Trim(s, "0123456789abcdef") == "" {
+		return s[:12] + "…"
+	}
+	return s
 }
 
 func shortSha(s string) string {

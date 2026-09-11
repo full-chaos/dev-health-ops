@@ -26,7 +26,12 @@ type fakeEdge struct {
 	// (CHAOS-5479). Empty means the deployment predates the pass-through,
 	// which is what makes an edge measurement unbound.
 	goBuild string
-	seen    []string
+	// goHeaders/pyHeaders let a test drive a HEADER divergence with
+	// identical bodies, which is the only way to prove the header
+	// comparison path counts what it finds.
+	goHeaders map[string]string
+	pyHeaders map[string]string
+	seen      []string
 }
 
 func (e *fakeEdge) handler() http.HandlerFunc {
@@ -39,6 +44,9 @@ func (e *fakeEdge) handler() http.HandlerFunc {
 		e.seen = append(e.seen, parsed.Query)
 
 		if strings.Contains(parsed.Query, "python-plane control") {
+			for name, value := range e.pyHeaders {
+				w.Header().Set(name, value)
+			}
 			w.Header().Set(planeHeader, "python")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(e.pythonBody))
@@ -51,6 +59,9 @@ func (e *fakeEdge) handler() http.HandlerFunc {
 		status := e.goStatus
 		if status == 0 {
 			status = http.StatusOK
+		}
+		for name, value := range e.goHeaders {
+			w.Header().Set(name, value)
 		}
 		w.Header().Set(planeHeader, plane)
 		if e.goBuild != "" {
@@ -549,7 +560,7 @@ func TestServingBuildAgreementStillMatches(t *testing.T) {
 	}
 }
 
-// F6: three sibling guards refuse a run whose declared relaxations matched
+// Three sibling guards refuse a run whose declared relaxations matched
 // nothing. Only RefusalStaleExclusion was pinned; the other two survived
 // removal under both suites.
 //
@@ -626,7 +637,7 @@ func withOverriddenParity(t *testing.T, operation string, parity Options) {
 }
 
 // TestRunRefusesOnAnOrderInsensitiveListDeclarationMatchingNothing is
-// CHAOS-5546 r1's P3 fix pin, first half: OrderInsensitiveList's stale-
+// CHAOS-5546's fix pin, first half: OrderInsensitiveList's stale-
 // declaration guard (run.go) must actually terminate the run as a
 // refusal, not just populate a Result field nothing reads. Deleting the
 // guard (`if len(result.UnusedOrderInsensitiveLists) > 0 { return
@@ -660,7 +671,7 @@ func TestRunRefusesOnAnOrderInsensitiveListDeclarationMatchingNothing(t *testing
 }
 
 // TestRunRefusesOnAnOrderInsensitiveListElementMissingItsKeyField is
-// CHAOS-5546 r1's P3 fix pin, second half: the missing-key-field guard
+// CHAOS-5546's fix pin, second half: the missing-key-field guard
 // must also actually terminate the run. Deleting it (`if
 // len(result.OrderInsensitiveListRefusals) > 0 { return refuse(...) }`)
 // left the full package green before this test existed.
@@ -690,7 +701,7 @@ func TestRunRefusesOnAnOrderInsensitiveListElementMissingItsKeyField(t *testing.
 	}
 }
 
-// r9 F11: Run resets r.sealed so a SECOND Run cannot emit receipts for the
+// Run resets r.sealed so a SECOND Run cannot emit receipts for the
 // FIRST one's measurements. Deleting the reset survived every test,
 // because no test ever called Run twice -- yet the whole point of sealing
 // is that a receipt describes what THIS run measured.
@@ -742,7 +753,7 @@ func TestASecondRunCannotEmitTheFirstRunsReceipts(t *testing.T) {
 	}
 }
 
-// r10 item (4), prover side: a serving-build header of "unknown" must
+// Prover side: a serving-build header of "unknown" must
 // never bind a receipt.
 //
 // "unknown" is internal/platform/version's default for a build with no
@@ -818,7 +829,7 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 	if len(outcomes) != 1 {
 		t.Fatalf("expected one outcome, got %d", len(outcomes))
 	}
-	// r1 P3: comparing against the constant under test is a tautology --
+	// Comparing against the constant under test is a tautology --
 	// renaming RefusalNeedsInstanceID passed this assertion. The WIRE
 	// string is what a reader of ByRefusalReason or review_evidence sees,
 	// so that is what is pinned.
@@ -832,7 +843,7 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 		t.Fatalf("the refusal must NAME the variable it cannot supply, got %q", outcomes[0].RefusalDetail)
 	}
 
-	// r1 P3: the point of refusing BEFORE the request is that no request
+	// The point of refusing BEFORE the request is that no request
 	// happens. Without this, moving the refusal below both HTTP legs left
 	// every assertion above green -- the run would have sent an invented
 	// id to both planes and merely declined to record the result.
@@ -847,5 +858,296 @@ func TestARoutedOperationNeedingAnInstanceIDIsRefusedByName(t *testing.T) {
 	}
 	if len(receipts) != 0 {
 		t.Fatalf("%d receipt(s) written for an operation that was never measured", len(receipts))
+	}
+}
+
+// flowMatrixRunner drives the ONE operation whose committed spec declares
+// a baseline defect, which is what makes a fully-cited mismatch reachable
+// at all.
+func flowMatrixRunner(t *testing.T, edge *fakeEdge) *Runner {
+	t.Helper()
+	runner := newRunner(t, edge, "canary")
+	runner.Documents = map[string]string{"flowMatrix": "query FlowMatrix { analytics { flowMatrix { nodes { value } } } }"}
+	runner.Registry.DocumentDigest = map[string]string{"flowMatrix": "06ca28a0"}
+	runner.Routing = map[string]RoutingRow{"flowMatrix": {
+		Mode: "canary", CandidateBuild: "b18e56fa79cfe20ce0f75df148144b832d92be36",
+	}}
+	return runner
+}
+
+// An HTTP-level difference must count as OUTSIDE the cited
+// baseline defect.
+//
+// The counter was copied from the BODY comparison and the status/header
+// findings were appended after it, so a cited body defect plus an UNCITED
+// HTTP 200-vs-202 produced terminal_state=mismatch with
+// differences_outside_baseline_defect=0 -- which CHAOS-5484's predicate
+// reads as "every difference here is a known Python defect" and admits.
+// The receipt would have authorized an enablement on a divergence nobody
+// ever cited.
+//
+// They are outside by CONSTRUCTION, not by omission: a BaselineDefect
+// declares dotted BODY field paths, so no declaration can cite
+// `$.http.status` even in principle. A citation mechanism that cannot
+// express a difference must never be read as covering it.
+func TestAnHTTPDifferenceCountsOutsideTheCitedBaselineDefect(t *testing.T) {
+	// The body difference IS cited: nodes.value is CHAOS-5448's path.
+	baseline := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":2}]}}}}`
+	candidate := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`
+
+	edge := &fakeEdge{
+		goBody:     candidate,
+		pythonBody: baseline,
+		goBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
+		goStatus:   http.StatusAccepted, // 202 against the baseline's 200 -- UNcited
+	}
+	runner := flowMatrixRunner(t, edge)
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("expected one outcome, got %d", len(outcomes))
+	}
+	outcome := outcomes[0]
+
+	if outcome.TerminalState != TerminalStateMismatch {
+		t.Fatalf("terminal state = %q, want mismatch", outcome.TerminalState)
+	}
+	if len(outcome.BaselineDefects) == 0 {
+		t.Fatal("the body difference must be CITED for this test to mean anything: without a citation the receipt is refused for a different reason and the hole stays hidden")
+	}
+	if outcome.DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("differences_outside_baseline_defect = %d with an UNCITED HTTP status difference present (%+v): this receipt claims every difference is a known Python defect and is enablement-eligible",
+			outcome.DifferencesOutsideBaselineDefect, outcome.Findings)
+	}
+
+	// And the receipt carries it, since that column is what the predicate
+	// actually reads.
+	receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 1 {
+		t.Fatalf("expected one receipt, got %d", len(receipts))
+	}
+	if receipts[0].DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("the RECEIPT says outside=%d: the enablement predicate reads this column, so a zero here admits the run",
+			receipts[0].DifferencesOutsideBaselineDefect)
+	}
+}
+
+// The control: without the HTTP difference the same cited mismatch is
+// still fully cited. Without this, the assertion above would also pass if
+// every mismatch were counted as outside, which would make the
+// fully-cited rule unreachable -- a different defect reading as a fix.
+func TestACitedMismatchWithNoHTTPDifferenceStaysFullyCited(t *testing.T) {
+	baseline := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":2}]}}}}`
+	candidate := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`
+
+	edge := &fakeEdge{
+		goBody:     candidate,
+		pythonBody: baseline,
+		goBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
+	}
+	runner := flowMatrixRunner(t, edge)
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outcome := outcomes[0]
+
+	if outcome.TerminalState != TerminalStateMismatch {
+		t.Fatalf("terminal state = %q, want mismatch", outcome.TerminalState)
+	}
+	if len(outcome.BaselineDefects) == 0 {
+		t.Fatal("the body difference must be cited")
+	}
+	if outcome.DifferencesOutsideBaselineDefect != 0 {
+		t.Fatalf("differences_outside_baseline_defect = %d on a fully-cited mismatch (%+v): the fully-cited rule is now unreachable, which refuses legitimate evidence rather than admitting bad evidence -- the opposite defect",
+			outcome.DifferencesOutsideBaselineDefect, outcome.Findings)
+	}
+}
+
+// The case that actually reaches the hole: an unbound
+// measurement whose every body difference IS cited.
+//
+// A test using an UNcited difference cannot pin this -- the uncited
+// difference alone makes outside non-zero, so the assertion passes
+// whether or not the missing binding is counted. (That is exactly how the
+// first version of this pin was vacuous: the mutation applied and the
+// test still passed.) The citation is what makes `outside` reach zero,
+// and zero is what the predicate reads as "every difference here is a
+// known Python defect".
+//
+// So: flowMatrix, whose spec declares CHAOS-5448 over nodes.value; a body
+// difference on that exact path; and NO serving-build header. Without the
+// disqualification this receipt is enablement proof for canary AND
+// primary, tied to no replica.
+func TestAnUnboundFullyCitedMismatchCannotAuthorizeAnything(t *testing.T) {
+	baseline := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":2}]}}}}`
+	candidate := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}]}}}}`
+
+	// goBuild deliberately EMPTY: the edge dropped the header, which is
+	// the normal state until #2365.
+	edge := &fakeEdge{goBody: candidate, pythonBody: baseline}
+	runner := flowMatrixRunner(t, edge)
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outcome := outcomes[0]
+
+	if outcome.EdgeBuildBinding != EdgeBuildAbsent {
+		t.Fatalf("this test needs an UNBOUND measurement to mean anything, got binding %q", outcome.EdgeBuildBinding)
+	}
+	if outcome.TerminalState != TerminalStateMismatch {
+		t.Fatalf("the divergence must survive as a mismatch, got %q -- rewriting it would destroy the finding", outcome.TerminalState)
+	}
+	if len(outcome.BaselineDefects) == 0 {
+		t.Fatal("the body difference must be CITED for this test to reach the hole: an uncited one makes outside non-zero on its own and the assertion below passes vacuously")
+	}
+	if outcome.DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("outside=%d on an UNBOUND, fully-cited mismatch: the enablement predicate reads that as proof, for primary as well as canary, on a measurement tied to no replica (reproduced with `primary enable rc=0`)",
+			outcome.DifferencesOutsideBaselineDefect)
+	}
+
+	// The receipt carries it, since that column is what the predicate reads.
+	receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
+	if err != nil {
+		t.Fatalf("ReceiptsFor: %v", err)
+	}
+	if len(receipts) != 1 || receipts[0].DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("the RECEIPT says outside=%v -- a zero here admits the run", receipts)
+	}
+}
+
+// The HTTP counter test used a STATUS difference only, so
+// undoing the increment for the HEADER path survived. Both go through
+// one helper now, but a test that exercises one branch cannot prove the
+// helper is used by the other.
+//
+// A content-type divergence is a real parity failure on its own: identical
+// bytes served under different types tell the client to interpret them
+// differently. It is also uncitable -- BaselineDefect declares body paths --
+// so it must count as outside, exactly like a status difference.
+func TestAnUncitedHeaderDifferenceAlsoCountsOutside(t *testing.T) {
+	// Bodies IDENTICAL and the body difference therefore absent: the ONLY
+	// divergence is the content type, so `outside` can only be non-zero
+	// because the header path counted it.
+	// featureFlags, NOT flowMatrix: flowMatrix declares CHAOS-5448, and a
+	// declared baseline defect that matches nothing FAILS the run -- with
+	// identical bodies it matches nothing, so the run is refused before
+	// the comparison is ever read. featureFlags declares none, so the
+	// only divergence in this run is the content type.
+	body := `{"data":{"featureFlags":[{"key":"a"}]}}`
+	edge := &fakeEdge{
+		goBody:     body,
+		pythonBody: body,
+		goBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
+		// Both decodable JSON -- a non-JSON type is refused at admission
+		// and never reaches the comparison, so it could not exercise the
+		// header path at all.
+		goHeaders: map[string]string{contentTypeHeader: "application/json; charset=utf-8"},
+		pyHeaders: map[string]string{contentTypeHeader: "application/json"},
+	}
+	runner := newRunner(t, edge, "canary")
+
+	outcomes, _, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	outcome := outcomes[0]
+
+	if outcome.TerminalState != TerminalStateMismatch {
+		t.Fatalf("a content-type divergence must be a mismatch, got %q", outcome.TerminalState)
+	}
+	var headerFinding bool
+	for _, finding := range outcome.Findings {
+		if finding.Path == "$.http.header."+contentTypeHeader {
+			headerFinding = true
+		}
+	}
+	if !headerFinding {
+		t.Fatalf("no $.http.header.%s finding: this test proves nothing about the header path unless that path ran (%+v)", contentTypeHeader, outcome.Findings)
+	}
+	if outcome.DifferencesOutsideBaselineDefect < 1 {
+		t.Fatalf("outside=%d with an UNCITED content-type difference and NO body difference: the only divergence here is uncitable by construction, so a zero means the header path does not count it and a fully-cited mismatch carrying one is enablement-eligible",
+			outcome.DifferencesOutsideBaselineDefect)
+	}
+}
+
+// The persisted-binding readback started from a HAND-BUILT
+// Receipt, so it proved Write stores what it is handed and nothing about
+// what the Runner hands it. Hardcoding either receipt binding to `absent`
+// survived every suite.
+//
+// Hardcoding the REFUSAL
+// receipt's binding to `per_request` then survived too, because this test ran
+// only a BOUND measurement, where the hardcoded value and the measured one
+// are the same string. A pin on a copied value needs an input where the
+// copy and the constant DIFFER, so it runs both measurements: bound
+// (per_request) and unbound (absent), and asserts both the success and the
+// refusal receipt carry what THIS run measured.
+//
+// Why it matters now: every enablement reader requires
+// build_binding = 'per_request'. A refusal receipt is proof_failed and
+// never admissible, so a wrong binding there authorizes nothing -- but it
+// is the only record of how well that measurement knew its build, and a
+// receipt that says "per_request" for an unbound measurement is a false
+// statement in the table the rule reads.
+func TestTheReceiptCarriesTheBindingTheRunMeasured(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		goBuild string
+		want    string
+	}{
+		{"bound: the edge passed the serving build through", "b18e56fa79cfe20ce0f75df148144b832d92be36", EdgeBuildPresent},
+		{"unbound: the edge dropped the serving-build header", "", EdgeBuildAbsent},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			edge := &fakeEdge{
+				goBody:     `{"data":{"featureFlags":[{"key":"a"}]}}`,
+				pythonBody: `{"data":{"featureFlags":[{"key":"b"}]}}`,
+				goBuild:    c.goBuild,
+			}
+			runner := newRunner(t, edge, "canary")
+
+			outcomes, _, err := runner.Run(context.Background())
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			measured := outcomes[0].EdgeBuildBinding
+			if measured != c.want {
+				t.Fatalf("this case needs a %s measurement to discriminate, got %q", c.want, measured)
+			}
+
+			receipts, err := runner.ReceiptsFor(time.Unix(1757000000, 0).UTC())
+			if err != nil {
+				t.Fatalf("ReceiptsFor: %v", err)
+			}
+			if len(receipts) != 1 {
+				t.Fatalf("expected one receipt, got %d", len(receipts))
+			}
+			if receipts[0].BuildBinding != measured {
+				t.Fatalf("the run measured binding=%q and the receipt says %q: the column is how every enablement reader decides whether this measurement can authorize anything (build_binding = 'per_request'), so a wrong value here is a wrong answer in the rule's own input",
+					measured, receipts[0].BuildBinding)
+			}
+
+			// The refusal path builds receipts too, from the same seal.
+			refusals, err := runner.RefusalReceipts(time.Unix(1757000000, 0).UTC(), "the serving build moved during the run")
+			if err != nil {
+				t.Fatalf("RefusalReceipts: %v", err)
+			}
+			if len(refusals) != 1 {
+				t.Fatalf("expected one refusal receipt, got %d", len(refusals))
+			}
+			if refusals[0].BuildBinding != measured {
+				t.Fatalf("the REFUSAL receipt says binding=%q, the run measured %q", refusals[0].BuildBinding, measured)
+			}
+		})
 	}
 }

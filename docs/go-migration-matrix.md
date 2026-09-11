@@ -138,10 +138,12 @@ and `remaining` and means two different executors with two different correctness
 Regenerate (both blocks in this section, plus the snapshot):
 
 ```bash
-go run ./cmd/dev-health-migration-matrix -render -root . \
-  -routing <(psql "$POSTGRES_URI" -tAc "$(sed -n '/routingStateQuery/,/^`/p' internal/migrationmatrix/live.go)")
-# or, where the operator has no DSN, produce the same JSON via `docker exec … psql` -- see
-# cmd/dev-health-migration-matrix/main.go's routingFilePayload for the exact shape.
+# The routing snapshot is the unedited `psql -At` output of the statement the live reader runs.
+# psql takes its connection from its own environment (PGHOST/PGUSER/PGDATABASE, ~/.pgpass) --
+# never put a DSN or password on a command line.
+go run ./cmd/dev-health-migration-matrix -print-routing-sql > routing.sql
+psql -At -f routing.sql > routing.json   # or: docker exec -i <pg> psql -U <user> -d <db> -At -f - < routing.sql > routing.json
+go run ./cmd/dev-health-migration-matrix -render -root . -routing routing.json
 go run ./cmd/dev-health-migration-matrix -check -root .   # what CI runs: committed sources only, no DB, no docker
 ```
 
@@ -212,6 +214,8 @@ is required before stage 4/5, and "a bare 200 does not qualify".
 _Rendered 2026-09-09T06:26:46Z against main merge-base `720f64bffc7529f1413c84e46542ef7c8eb46241`; SDL digest pin `sha256:29d509cd414cd957a7bcd73a1c0e78a07f17dd8a8794893233954aaa87241b88`; fleet read 2026-09-09T06:26:46Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1 dev-health-api-1._
 
 _Rows in `go_api_proof_run` at read time: **0**. Operations reachable to real clients with no deployed-executed proof: **11**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **12**._
+
+_Live rows the edge cannot dispatch -- serving a document the operation catalog does not name (DOCUMENT_DRIFT, as `dev-hops go-api routing status` reports it): **0**; for an operation the catalog does not register (UNREGISTERED, as `dev-hops go-api routing status` reports it): **0**. Live rows with no recorded document digest, read before the reader carried it, so neither can be judged for them: **15**._
 
 | Operation | Mode | Schema digest | Candidate build | Live at current pin | Proven (derived) | Parity ticket |
 | --- | --- | --- | --- | --- | --- | --- |

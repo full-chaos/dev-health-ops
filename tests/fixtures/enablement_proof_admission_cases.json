@@ -1,0 +1,1065 @@
+{
+  "_comment": [
+    "CHAOS-5484. The single source of truth for WHICH proof receipt authorizes an enablement.",
+    "",
+    "Two readers implement this rule against the same table and they are deliberately",
+    "different SQL: the Python preflight (go_api_routing_admin.build_enablement_proof_select)",
+    "composes SQLAlchemy column expressions and matches the operation/document pairs as a",
+    "tuple-OR; the Go reader (internal/goapiproof.OperationsWithEnablementProof) writes raw",
+    "SQL and matches them with JOIN unnest(...). Neither shape is an accident -- a",
+    "cross-product 'IN ... AND ... IN' would admit a proof recorded against a DIFFERENT",
+    "registered document -- so the two statements can never be compared as text.",
+    "",
+    "They are pinned by BEHAVIOUR instead. Both sides' tests seed a real PostgreSQL from",
+    "this file and drive their own PRODUCTION predicate over it. Neither test rebuilds the",
+    "rule, so a test cannot pass by agreeing with itself, and a case the two answer",
+    "differently fails on whichever side is wrong. Adding a case here is the way to change",
+    "the rule; both suites pick it up with no other edit.",
+    "",
+    "Each case seeds ONE go_api_proof_run row and asks: does this receipt authorize",
+    "'dev-hops go-api routing enable --mode <target_mode>' for that operation? Fields left",
+    "out of 'receipt' take the defaults below.",
+    "",
+    "`blank_cutset` is THE set of characters a citation or build may be made of and still name nothing. It is data here so that neither language owns it: Go's blankCitationCutset, the SQL literal generated from it, and Python's _BLANK_CUTSET are each asserted EQUAL to this value by a database-free test on each side."
+  ],
+  "blank_cutset": " \t\n\u000b\f\r ",
+  "key": {
+    "schema_digest": "sha256:5484aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "document_digest": "sha256:5484bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "selected_operation": "flowMatrix",
+    "candidate_build": "ffd9e5d5dc8ee21de5befa1bae47ba9195be135e"
+  },
+  "receipt_defaults": {
+    "stage": "deployed_executed",
+    "terminal_state": "match",
+    "measurement_route": "edge",
+    "build_binding": "per_request",
+    "baseline_defect": null,
+    "differences_outside_baseline_defect": 0,
+    "request_identity": "go-api-prove/5484-fixture"
+  },
+  "cases": [
+    {
+      "name": "match_edge_canary",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "admits": true,
+      "why": "The unremarkable case, and the one every other case is measured against: an exact match measured through the product edge."
+    },
+    {
+      "name": "match_edge_primary",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "admits": true,
+      "why": "Edge evidence satisfies the stricter promotion too."
+    },
+    {
+      "name": "match_proof_canary",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "proof",
+        "build_binding": "per_request"
+      },
+      "admits": true,
+      "why": "A shadow operation cannot be measured any other way -- PostgresSwitch.Enabled admits canary|primary only, so /query/proof is the ONLY route on which the deployed Go build will execute it. Refusing proof-route evidence here would mean an operation could only be proven after it had already been enabled."
+    },
+    {
+      "name": "match_proof_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "proof",
+        "build_binding": "per_request"
+      },
+      "admits": false,
+      "why": "The load-bearing half of the mode split. /query/proof is a measurement-only handler that is never reachable from the product edge, so a proof-route receipt says the build CAN serve the operation, not that the edge DOES. Promotion to primary is promotion to served traffic and must rest on evidence that traversed the same path real traffic will.",
+      "control": {
+        "receipt": {
+          "measurement_route": "edge"
+        }
+      }
+    },
+    {
+      "name": "mismatch_fully_cited_edge_canary",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "CHAOS-5448"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": true,
+      "why": "The whole point of R60. Every difference is a named defect in the PYTHON baseline, so the mismatch is evidence Go is right, not evidence Go is broken. terminal_state stays 'mismatch' in the row -- the receipt is never rewritten, only read differently."
+    },
+    {
+      "name": "mismatch_fully_cited_edge_primary",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "CHAOS-5448",
+          "CHAOS-5450"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": true,
+      "why": "Two cited tickets, nothing outside them, measured on the edge: the strictest promotion accepts it."
+    },
+    {
+      "name": "mismatch_fully_cited_proof_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "proof",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5448"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "The route rule and the citation rule are independent. Satisfying one does not buy the other.",
+      "control": {
+        "receipt": {
+          "measurement_route": "edge"
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_but_defect_null_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": null,
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "The reason the predicate cannot just say 'differences_outside_baseline_defect = 0'. That column is NOT NULL DEFAULT 0, so a zero is ambiguous between 'computed, and every difference was cited' and 'this row predates the column and nothing ever computed it'. A non-empty baseline_defect is what tells those two apart: only a row that actually named a ticket can promote.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_but_defect_empty_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "Same ambiguity one step along: an EMPTY array is a writer that had the column and cited nothing. If the empty array promoted, the NULL check above could be satisfied by writing '[]' -- which is why the rule is cardinality > 0 and not merely IS NOT NULL.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_with_uncited_difference_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "CHAOS-5448"
+        ],
+        "differences_outside_baseline_defect": 1
+      },
+      "admits": false,
+      "why": "One difference no declared defect covers is one unexplained divergence, and a single unexplained divergence is the thing the gate exists to catch. Citing a real ticket alongside it must not launder it.",
+      "control": {
+        "receipt": {
+          "differences_outside_baseline_defect": 0
+        }
+      }
+    },
+    {
+      "name": "match_route_null_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": null
+      },
+      "admits": false,
+      "why": "A pre-0128 row records no route at all. 'Any route' is not the same as 'no route': admitting an unknown provenance is the same failure shape as reading the DEFAULT 0 as an assertion. The row is otherwise ADMISSIBLE -- bound per_request, a match, the right key -- so the NULL route is the only thing refusing it.",
+      "control": {
+        "receipt": {
+          "measurement_route": "edge"
+        }
+      }
+    },
+    {
+      "name": "terminal_state_unsupported_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "unsupported",
+        "measurement_route": "edge"
+      },
+      "admits": false,
+      "why": "'unsupported' is the runner saying it could not measure. A refusal must never read as a pass.",
+      "control": {
+        "receipt": {
+          "terminal_state": "match"
+        }
+      }
+    },
+    {
+      "name": "terminal_state_proof_failed_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "proof_failed",
+        "measurement_route": "edge"
+      },
+      "admits": false,
+      "why": "Written when the build moved mid-run, so the receipt describes a build that was not serving for all of it.",
+      "control": {
+        "receipt": {
+          "terminal_state": "match"
+        }
+      }
+    },
+    {
+      "name": "terminal_state_fallback_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "fallback",
+        "measurement_route": "edge"
+      },
+      "admits": false,
+      "why": "The edge fell back to Python. Nothing about the Go build was established.",
+      "control": {
+        "receipt": {
+          "terminal_state": "match"
+        }
+      }
+    },
+    {
+      "name": "terminal_state_mismatch_uncited_by_omission_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": null,
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "A mismatch that cites nothing, asked about for PRIMARY. Included so the mismatch arm cannot be read as 'mismatch now promotes': with nothing uncounted (outside = 0) and a bound edge measurement, the missing citation is the only thing refusing it.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "wrong_stage_dual_run_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "stage": "dual_run",
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "admits": false,
+      "why": "dual_run is a local comparison. The gate's entire subject is whether the DEPLOYED build served the operation, which is what deployed_executed means and dual_run does not.",
+      "control": {
+        "receipt": {
+          "stage": "deployed_executed"
+        }
+      }
+    },
+    {
+      "name": "wrong_candidate_build_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "candidate_build": "0000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "First of the four-column controls carried over from the original predicate. A proof is evidence for ONE immutable (schema_digest, document_digest, selected_operation, candidate_build) tuple and is never carried forward across any of the four changing.",
+      "control": {
+        "key_override": null
+      }
+    },
+    {
+      "name": "wrong_document_digest_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "document_digest": "sha256:ffff000000000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "The control that caught a real defect in review: without the document digest in the key, a proof recorded against a DIFFERENT registered document could authorize this enablement.",
+      "control": {
+        "key_override": null
+      }
+    },
+    {
+      "name": "wrong_schema_digest_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "schema_digest": "sha256:eeee000000000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "The SDL moved. This is the exact shape that killed the routing rows on 2026-09-01.",
+      "control": {
+        "key_override": null
+      }
+    },
+    {
+      "name": "wrong_operation_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "selected_operation": "hotspots"
+      },
+      "admits": false,
+      "why": "Proving one operation proves nothing about another.",
+      "control": {
+        "key_override": null
+      }
+    },
+    {
+      "name": "mismatch_cited_with_an_empty_ticket_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          ""
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "cardinality(ARRAY['']) is 1, so this read as fully cited and authorized a promotion while citing nothing. A citation that names nothing is not a citation (executed against real PostgreSQL: 'EMPTY-STRING CITATION admitted as enablement proof: true').",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_whitespace_ticket_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "   "
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "whitespace names nothing either, which is why the predicate uses btrim rather than <> ''.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_one_real_one_empty_ticket_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "CHAOS-5448",
+          ""
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "one real citation does not excuse an empty one: the array is the set of tickets said to cover every difference, and an empty element covers nothing.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_tab_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\t"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "one-argument btrim() strips the SPACE only, so a tab citation passed both predicates and promoted to primary, executed through the CLI.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_newline_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\n"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "same gap as the tab: btrim(E'\\n') is not ''.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_carriage_return_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\r"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "same gap.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_vertical_tab_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\u000b"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "same gap.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_form_feed_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "\f"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "same gap.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_nbsp_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          " "
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "NBSP is in the shared cutset because Go's TrimSpace strips it; POSIX [[:space:]] does NOT match it, which is why the rule is enumerated rather than named.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_sql_null_element_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          null
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "cardinality(ARRAY[NULL]) is 1 and btrim(NULL) is NULL, not '', so the NOT EXISTS arm passed and the row promoted to primary.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_real_ticket_and_a_sql_null_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "CHAOS-5448",
+          null
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "one real citation does not excuse a NULL element.",
+      "control": {
+        "receipt": {
+          "baseline_defect": [
+            "CHAOS-5448"
+          ]
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_line_separator_admitted",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          " "
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": true,
+      "why": "U+2028 is OUTSIDE the shared cutset, so BOTH engines must treat it as a real citation -- the direction that proves the rule is enumerated, not 'any whitespace'."
+    },
+    {
+      "name": "match_with_a_null_build_binding_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "build_binding": null
+      },
+      "admits": false,
+      "why": "a pre-0129 row: written before the column existed, and therefore before the counting rules that make a mismatch admissible -- such rows became PRIMARY-admissible retroactively without it.",
+      "control": {
+        "receipt": {
+          "build_binding": "per_request"
+        }
+      }
+    },
+    {
+      "name": "match_with_an_absent_build_binding_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "build_binding": "absent"
+      },
+      "admits": false,
+      "why": "an edge match with no per-request binding is downgraded to `unsupported` by this writer, so a stored match+absent row did not come from it.",
+      "control": {
+        "receipt": {
+          "build_binding": "per_request"
+        }
+      }
+    },
+    {
+      "name": "mismatch_cited_with_a_null_build_binding_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "baseline_defect": [
+          "CHAOS-5448"
+        ],
+        "differences_outside_baseline_defect": 0,
+        "build_binding": null
+      },
+      "admits": false,
+      "why": "the retroactive case in its exact shape: mismatch, edge, outside=0, cited, binding NULL -- exactly what the base writer produced and what the new rule would otherwise admit for primary.",
+      "control": {
+        "receipt": {
+          "build_binding": "per_request"
+        }
+      }
+    },
+    {
+      "name": "match_with_a_whitespace_candidate_build_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "candidate_build": "   "
+      },
+      "ask_with_overridden_key": true,
+      "admits": false,
+      "why": "A build made only of spaces names no build, and `proven` is keyed on that column, so such a row looks present while matching nothing real. The question asks about the SAME blank build, so build equality holds and only the blank-build clause can refuse it -- the earlier pin for this class asked about a DIFFERENT build and was refused by equality instead, leaving this clause unpinned in both languages.",
+      "control": {
+        "key_override": null
+      }
+    },
+    {
+      "name": "match_with_a_tab_candidate_build_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "candidate_build": "\t"
+      },
+      "ask_with_overridden_key": true,
+      "admits": false,
+      "why": "Same rule, a tab: the blank-build clause uses the shared cutset, not one-argument btrim(), which strips only the space.",
+      "control": {
+        "key_override": null
+      }
+    },
+    {
+      "name": "match_with_a_vertical_tab_candidate_build_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "key_override": {
+        "candidate_build": "\u000b"
+      },
+      "ask_with_overridden_key": true,
+      "admits": false,
+      "why": "Same rule, a vertical tab: the character whose SQL escape meant the LETTER v on PostgreSQL 16. The suites are run against every server major they are pointed at.",
+      "control": {
+        "key_override": null
+      }
+    },
+    {
+      "name": "cited_auth_rejected_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "auth_rejected",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'auth_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'auth_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_validation_rejected_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "validation_rejected",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'validation_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'validation_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_dependency_failed_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "dependency_failed",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'dependency_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'dependency_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_timeout_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "timeout",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'timeout' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'timeout' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_cancelled_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "cancelled",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'cancelled' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'cancelled' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_resource_exhausted_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "resource_exhausted",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'resource_exhausted' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'resource_exhausted' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_fallback_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "fallback",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'fallback' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'fallback' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_unsupported_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "unsupported",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'unsupported' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'unsupported' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_proof_failed_primary_refused",
+      "target_mode": "primary",
+      "receipt": {
+        "terminal_state": "proof_failed",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'proof_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'proof_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode primary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_auth_rejected_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "auth_rejected",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'auth_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'auth_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_validation_rejected_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "validation_rejected",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'validation_rejected' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'validation_rejected' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_dependency_failed_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "dependency_failed",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'dependency_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'dependency_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_timeout_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "timeout",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'timeout' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'timeout' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_cancelled_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "cancelled",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'cancelled' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'cancelled' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_resource_exhausted_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "resource_exhausted",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'resource_exhausted' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'resource_exhausted' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_fallback_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "fallback",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'fallback' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'fallback' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_unsupported_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "unsupported",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'unsupported' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'unsupported' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    },
+    {
+      "name": "cited_proof_failed_canary_refused",
+      "target_mode": "canary",
+      "receipt": {
+        "terminal_state": "proof_failed",
+        "measurement_route": "edge",
+        "build_binding": "per_request",
+        "baseline_defect": [
+          "CHAOS-5447"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "a 'proof_failed' receipt that carries a citation and counts nothing outside. Only a MISMATCH may be read as fully cited: 'proof_failed' means the comparison did not establish what the build serves, and a citation cannot turn it into proof. Without the terminal-state clause on the cited arm, --mode canary admitted exactly this receipt.",
+      "control": {
+        "receipt": {
+          "terminal_state": "mismatch"
+        }
+      }
+    }
+  ]
+}

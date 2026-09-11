@@ -281,6 +281,7 @@ def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
         "0114_add_go_api_operation_registry.py",
         "0127_add_go_api_routing_provenance.py",
         "0128_add_go_api_proof_run_measurement_provenance.py",
+        "0129_add_go_api_proof_run_build_binding.py",
     ):
         source = (_ALEMBIC_DIR / "versions" / migration).read_text(encoding="utf-8")
         for match in column_pattern.finditer(source):

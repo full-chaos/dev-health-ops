@@ -1,0 +1,1042 @@
+//go:build integration
+
+package goapiproof
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// This file and tests/api/graphql/test_enablement_proof_admission_cases.py
+// are the two halves of one pin.
+//
+// The Python preflight and this Go reader implement the SAME admission
+// rule over the same table, in deliberately different SQL: Python composes
+// SQLAlchemy column expressions and matches the operation/document pairs
+// as a tuple-OR; this side writes raw SQL and matches them with JOIN
+// unnest(...). Neither shape is incidental -- a cross-product
+// "IN (...) AND ... IN (...)" would admit a proof recorded against a
+// DIFFERENT registered document -- so the two statements cannot be
+// compared as text, and a text pin would be pinning a proxy anyway.
+//
+// So they are pinned by BEHAVIOUR. Both sides drive their own PRODUCTION
+// predicate over tests/fixtures/enablement_proof_admission_cases.json.
+// Neither test restates the rule, so neither can pass by agreeing with
+// itself, and a case the two answer differently fails on whichever side
+// is wrong. Adding a case to that file changes the rule for both.
+
+type admissionKey struct {
+	SchemaDigest      string `json:"schema_digest"`
+	DocumentDigest    string `json:"document_digest"`
+	SelectedOperation string `json:"selected_operation"`
+	CandidateBuild    string `json:"candidate_build"`
+}
+
+// admissionCase carries only what the assertion needs. The RECEIPT is
+// read from the raw JSON instead (see rawAdmissionCases), because
+// "measurement_route": null and an absent measurement_route are different
+// cases and a typed decode cannot tell them apart.
+type admissionCase struct {
+	Name        string        `json:"name"`
+	TargetMode  string        `json:"target_mode"`
+	KeyOverride *admissionKey `json:"key_override"`
+	// AskWithOverriddenKey makes the QUESTION use the overridden key too.
+	// Without it a key override can only ever test "a receipt for a
+	// different key is not proof" -- refused by equality -- and a clause
+	// about the key's own VALUE (a blank candidate_build) is never
+	// reached.
+	AskWithOverriddenKey bool   `json:"ask_with_overridden_key"`
+	Admits               bool   `json:"admits"`
+	Why                  string `json:"why"`
+}
+
+type admissionFixture struct {
+	Key   admissionKey    `json:"key"`
+	Cases []admissionCase `json:"cases"`
+}
+
+func loadAdmissionFixture(t *testing.T) admissionFixture {
+	t.Helper()
+	// Repo-relative from internal/goapiproof. Named explicitly rather than
+	// discovered so a moved fixture fails loudly instead of silently
+	// running zero cases.
+	path := filepath.Join("..", "..", "tests", "fixtures", "enablement_proof_admission_cases.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read admission fixture: %v", err)
+	}
+	var fixture admissionFixture
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("parse admission fixture: %v", err)
+	}
+	if len(fixture.Cases) == 0 {
+		t.Fatal("admission fixture declares no cases: a pin that asserts nothing is worse than no pin, because it reads as coverage")
+	}
+	return fixture
+}
+
+func TestEnablementPredicateMatchesTheSharedAdmissionTable(t *testing.T) {
+	ctx := context.Background()
+	runs := admissionRuns(t)
+
+	// ONE container for the whole table, truncated between cases. One
+	// Postgres startup per case pushed this package past `go test`'s
+	// 10-minute default and the whole run failed on a timeout that said
+	// nothing about the predicate. Isolation still holds -- each case sees
+	// only its own row -- and it now costs one container rather than one
+	// per case.
+	pool := startRegistryPostgres(t)
+
+	var admits, refuses int
+	for _, run := range runs {
+		run := run
+		t.Run(run.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx,
+				`TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+				t.Fatalf("truncate between cases: %v", err)
+			}
+			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
+
+			found, err := OperationsWithEnablementProof(ctx, pool,
+				run.askKey.SchemaDigest, run.askKey.CandidateBuild, run.targetMode,
+				map[string]string{run.askKey.SelectedOperation: run.askKey.DocumentDigest})
+			if err != nil {
+				t.Fatalf("OperationsWithEnablementProof: %v", err)
+			}
+			got := found[run.askKey.SelectedOperation]
+			if got != run.admits {
+				t.Fatalf("%s: predicate returned admits=%v, fixture says %v.\nwhy: %s",
+					run.describe(), got, run.admits, run.why)
+			}
+		})
+		if run.admits {
+			admits++
+		} else {
+			refuses++
+		}
+	}
+
+	// A table of only-refusals would pass against a predicate that admits
+	// NOTHING, and a table of only-admissions against one that admits
+	// everything. Requiring both directions is what stops this test
+	// holding vacuously -- the same property the admission-invariant test
+	// asserts one layer down.
+	if admits == 0 || refuses == 0 {
+		t.Fatalf("the shared admission table must contain both admitted and refused cases (admits=%d refuses=%d): a one-sided table passes against a predicate that is constant", admits, refuses)
+	}
+}
+
+// An unknown target mode must be an ERROR, never a fallthrough to the
+// more permissive branch. A silent fallthrough is exactly how a promotion
+// to served traffic would come to rest on measurement-only evidence.
+func TestEnablementPredicateRefusesAnUnknownTargetMode(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+	fixture := loadAdmissionFixture(t)
+
+	for _, mode := range []string{"", "shadow", "python", "disabled", "PRIMARY"} {
+		if _, err := OperationsWithEnablementProof(ctx, pool,
+			fixture.Key.SchemaDigest, fixture.Key.CandidateBuild, mode,
+			map[string]string{fixture.Key.SelectedOperation: fixture.Key.DocumentDigest}); err == nil {
+			t.Fatalf("target mode %q was accepted: an undefined route rule must refuse, not default", mode)
+		}
+	}
+}
+
+// admissionRun is one row-and-question the shared table asks: either a
+// case as written, or a refused case's CONTROL.
+type admissionRun struct {
+	name       string
+	targetMode string
+	rowKey     admissionKey // the key the seeded receipt is recorded under
+	askKey     admissionKey // the key the predicate is asked about
+	receipt    seededReceipt
+	admits     bool
+	why        string
+	control    bool
+}
+
+func (r admissionRun) describe() string {
+	if r.control {
+		return fmt.Sprintf("CONTROL of case %q (the case with its stated refusal reason removed, which must therefore be ADMITTED -- if it is refused, the case is refused for a SECOND reason and does not pin the one it names)", strings.TrimSuffix(r.name, "/control"))
+	}
+	return fmt.Sprintf("case %q", r.name)
+}
+
+// admissionRuns reads the fixture as generic maps -- "measurement_route":
+// null and an ABSENT measurement_route are different cases and
+// encoding/json cannot tell a typed struct which happened -- and returns
+// every case plus, for each refused case, its CONTROL.
+//
+// Why a control per refused case. Testing found
+// match_route_null_canary_refused carrying a NULL build_binding as well as
+// the NULL route it is named for. Once the binding became part of the rule,
+// the binding alone refused it, so the case asserted nothing about the
+// route: the Python NULL-route clause could be deleted and all 170 Python
+// tests stayed green. That is the same vacuity found in a Go refusal
+// table, one level over, and a table-level "the base is admissible"
+// control cannot see it -- the base was admissible; THIS case was not
+// one-reason. So each refused case states what removes its reason, and
+// the control -- the case with exactly that removed -- must be ADMITTED
+// by the production predicate. A second hidden reason then fails the
+// control, in the case's own name.
+func admissionRuns(t *testing.T) []admissionRun {
+	t.Helper()
+	fixture := loadAdmissionFixture(t)
+	path := filepath.Join("..", "..", "tests", "fixtures", "enablement_proof_admission_cases.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read admission fixture: %v", err)
+	}
+	var doc struct {
+		Defaults map[string]any   `json:"receipt_defaults"`
+		Cases    []map[string]any `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse admission fixture: %v", err)
+	}
+	if len(doc.Cases) != len(fixture.Cases) {
+		t.Fatalf("typed and raw reads of the fixture disagree on the case count: %d vs %d", len(fixture.Cases), len(doc.Cases))
+	}
+
+	var runs []admissionRun
+	for i, c := range fixture.Cases {
+		merged := map[string]any{}
+		for k, v := range doc.Defaults {
+			merged[k] = v
+		}
+		if override, ok := doc.Cases[i]["receipt"].(map[string]any); ok {
+			for k, v := range override {
+				merged[k] = v
+			}
+		}
+		rowKey := fixture.Key
+		if c.KeyOverride != nil {
+			rowKey = mergeKey(rowKey, *c.KeyOverride)
+		}
+		askKey := fixture.Key
+		if c.AskWithOverriddenKey {
+			if c.KeyOverride == nil {
+				t.Fatalf("case %q sets ask_with_overridden_key with no key_override to ask with", c.Name)
+			}
+			askKey = rowKey
+		}
+		runs = append(runs, admissionRun{
+			name: c.Name, targetMode: c.TargetMode, rowKey: rowKey, askKey: askKey,
+			receipt: mergeReceipt(t, merged), admits: c.Admits, why: c.Why,
+		})
+
+		control, hasControl := doc.Cases[i]["control"].(map[string]any)
+		if c.Admits {
+			if hasControl {
+				t.Fatalf("case %q is ADMITTED and declares a control: a control removes a refusal reason, and an admitted case has none", c.Name)
+			}
+			continue
+		}
+		if !hasControl {
+			t.Fatalf("refused case %q declares no control: without one nothing shows it is refused for the reason it names rather than for another", c.Name)
+		}
+		controlReceipt := map[string]any{}
+		for k, v := range merged {
+			controlReceipt[k] = v
+		}
+		if patch, ok := control["receipt"].(map[string]any); ok {
+			for k, v := range patch {
+				controlReceipt[k] = v
+			}
+		}
+		controlRowKey := rowKey
+		controlAskKey := askKey
+		if override, present := control["key_override"]; present {
+			controlRowKey = fixture.Key
+			if override != nil {
+				encoded, err := json.Marshal(override)
+				if err != nil {
+					t.Fatalf("control of %q: key_override: %v", c.Name, err)
+				}
+				var key admissionKey
+				if err := json.Unmarshal(encoded, &key); err != nil {
+					t.Fatalf("control of %q: key_override: %v", c.Name, err)
+				}
+				controlRowKey = mergeKey(fixture.Key, key)
+			}
+			controlAskKey = fixture.Key
+			if c.AskWithOverriddenKey {
+				controlAskKey = controlRowKey
+			}
+		}
+		runs = append(runs, admissionRun{
+			name: c.Name + "/control", targetMode: c.TargetMode,
+			rowKey: controlRowKey, askKey: controlAskKey,
+			receipt: mergeReceipt(t, controlReceipt), admits: true,
+			why:     "the control must be admitted: " + c.Why,
+			control: true,
+		})
+	}
+	return runs
+}
+
+type seededReceipt struct {
+	stage           string
+	terminalState   string
+	route           any
+	binding         any
+	baselineDefect  any
+	outsideDiffs    int
+	requestIdentity string
+}
+
+func mergeReceipt(t *testing.T, m map[string]any) seededReceipt {
+	t.Helper()
+	str := func(k string) string {
+		v, ok := m[k].(string)
+		if !ok {
+			t.Fatalf("fixture receipt field %q must be a string, got %#v", k, m[k])
+		}
+		return v
+	}
+	out := seededReceipt{
+		stage:           str("stage"),
+		terminalState:   str("terminal_state"),
+		requestIdentity: str("request_identity"),
+		route:           m["measurement_route"],
+		binding:         m["build_binding"],
+	}
+	switch v := m["baseline_defect"].(type) {
+	case nil:
+		out.baselineDefect = nil
+	case []any:
+		// Kept as []any, NOT flattened to []string. A JSON `null` element
+		// is a SQL NULL citation, and coercing every item with
+		// `item.(string)` panicked on it -- so the loader itself could not
+		// REPRESENT the case testing found promoting to primary. A
+		// harness that cannot express an input cannot test it.
+		tickets := make([]any, 0, len(v))
+		for _, item := range v {
+			switch value := item.(type) {
+			case nil:
+				tickets = append(tickets, nil)
+			case string:
+				tickets = append(tickets, value)
+			default:
+				t.Fatalf("fixture baseline_defect element must be a string or null, got %#v", item)
+			}
+		}
+		out.baselineDefect = tickets
+	default:
+		t.Fatalf("fixture baseline_defect must be null or a list, got %#v", v)
+	}
+	if n, ok := m["differences_outside_baseline_defect"].(float64); ok {
+		out.outsideDiffs = int(n)
+	}
+	return out
+}
+
+func mergeKey(base, override admissionKey) admissionKey {
+	if override.SchemaDigest != "" {
+		base.SchemaDigest = override.SchemaDigest
+	}
+	if override.DocumentDigest != "" {
+		base.DocumentDigest = override.DocumentDigest
+	}
+	if override.SelectedOperation != "" {
+		base.SelectedOperation = override.SelectedOperation
+	}
+	if override.CandidateBuild != "" {
+		base.CandidateBuild = override.CandidateBuild
+	}
+	return base
+}
+
+// seedAdmissionRow inserts DIRECTLY rather than through Write.
+//
+// That is deliberate. Write refuses a receipt with no measurement route or
+// no build binding -- correctly, because this package must never produce
+// one -- but rows in those shapes EXIST in the table: every row written
+// before 0128/0129 has them, and the predicate's job is to read the table
+// as it really is, not as this writer would leave it.
+func seedAdmissionRow(ctx context.Context, t *testing.T, pool *pgxpool.Pool, key admissionKey, r seededReceipt) {
+	t.Helper()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_candidate_build
+		   (schema_digest, document_digest, selected_operation, candidate_build, registered_at)
+		 VALUES ($1,$2,$3,$4,$5)
+		 ON CONFLICT DO NOTHING`,
+		key.SchemaDigest, key.DocumentDigest, key.SelectedOperation, key.CandidateBuild, time.Now().UTC(),
+	); err != nil {
+		t.Fatalf("seed candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_proof_run
+		   (id, schema_digest, document_digest, selected_operation, candidate_build,
+		    request_identity, stage, terminal_state, measurement_route, build_binding,
+		    baseline_defect, differences_outside_baseline_defect, observed_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		uuid.New(), key.SchemaDigest, key.DocumentDigest, key.SelectedOperation, key.CandidateBuild,
+		r.requestIdentity, r.stage, r.terminalState, r.route, r.binding,
+		r.baselineDefect, r.outsideDiffs, time.Now().UTC(),
+	); err != nil {
+		t.Fatalf("seed proof run: %v", err)
+	}
+}
+
+// The THIRD reader, pinned to the same table.
+//
+// Testing found internal/migrationmatrix carrying its own copy of this
+// rule, written before CHAOS-5484 split it by target mode. Its comment
+// said it was "deliberately the same predicate the enablement command
+// uses" -- true when written, false the moment the rule moved, and
+// nothing failed. The migration-status page rendered a primary
+// proof-route receipt PROVEN while enablement refused it, and a canary
+// cited mismatch UNPROVEN while enablement accepted it.
+//
+// The copy is gone: goapiproof.EnablementProofClause is the one source
+// and the matrix composes it. This drives that clause over the SAME table
+// the two implementations above are pinned to, in the matrix's own query
+// SHAPE -- a correlated subquery per routing row, not a JOIN unnest --
+// so a change that works in one shape and not the other fails here.
+//
+// A shared truth table pins the implementations it knows about. It cannot
+// pin one nobody enumerated, which is why the PR body now carries the
+// enumerated reader list rather than a claim about how many there are.
+func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
+	ctx := context.Background()
+	runs := admissionRuns(t)
+	pool := startRegistryPostgres(t)
+
+	for _, run := range runs {
+		run := run
+		t.Run(run.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx,
+				`TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+				t.Fatalf("truncate between cases: %v", err)
+			}
+			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
+
+			clause, err := EnablementProofClause("pr", run.targetMode)
+			if err != nil {
+				t.Fatalf("EnablementProofClause(%q): %v", run.targetMode, err)
+			}
+
+			// The matrix's SHAPE: a correlated subquery keyed on the
+			// routing row's own four columns, selecting a proof id.
+			var proofID *string
+			err = pool.QueryRow(ctx, `
+				SELECT (
+				  SELECT pr.id::text
+				    FROM go_api_proof_run pr
+				   WHERE pr.schema_digest = $1
+				     AND pr.document_digest = $2
+				     AND pr.selected_operation = $3
+				     AND pr.candidate_build = $4
+				     AND `+clause+`
+				   ORDER BY pr.observed_at DESC
+				   LIMIT 1
+				)`,
+				run.askKey.SchemaDigest, run.askKey.DocumentDigest,
+				run.askKey.SelectedOperation, run.askKey.CandidateBuild,
+			).Scan(&proofID)
+			if err != nil {
+				t.Fatalf("matrix-shaped query: %v", err)
+			}
+
+			got := proofID != nil && *proofID != ""
+			if got != run.admits {
+				t.Fatalf("%s: the migration matrix would render proven=%v, the admission table says %v.\nwhy: %s\nA status page disagreeing with the command that enforces the rule is a real defect shape.",
+					run.describe(), got, run.admits, run.why)
+			}
+		})
+	}
+}
+
+// The FULL input surface, not a sample.
+//
+// The shared table above is chosen cases. Chosen cases are a sample,
+// and a sample is exactly what repeated testing kept finding gaps in -- an
+// instrument that enumerates only the inputs its author thought of. This
+// enumerates every value the predicate can SEE and asserts the rule over
+// the whole cross-product, with `want` DERIVED from the rule as stated in
+// prose rather than listed per case.
+//
+// What the predicate reads, and nothing else:
+//   - stage                                 (all 4 legal values)
+//   - terminal_state                        (all 11 legal values)
+//   - measurement_route                     (edge, proof, NULL)
+//   - differences_outside_baseline_defect   (0, 1)
+//   - baseline_defect                       (NULL, empty, every blank shape, real, exotic)
+//   - build_binding                         (per_request, absent, NULL)
+//   - the target mode                       (canary, primary)
+//   - candidate_build                       (swept separately, below:
+//     TestTheBlankBuildClauseOverEveryCutsetRune -- crossing it with the
+//     rest would multiply this test by the cutset for no new pairing)
+//
+// build_binding IS in that list now. It was not when this test was
+// written -- the predicate did not read the column, and this comment said
+// so -- and testing showed what that cost: every row the OLD writer
+// produced with mismatch/edge/outside=0/cited became primary-admissible
+// under the new counting rules. The predicate now requires per_request on
+// both arms, so the binding dimension is load-bearing rather than a
+// control.
+//
+// The mutant this test kills that the shared table does NOT, measured both ways
+// rather than argued from the design: admitting a NULL measurement_route
+// for the MISMATCH branch only.
+//
+//	routeClause = "(p.measurement_route IS NOT NULL OR p.terminal_state = 'mismatch')"
+//
+// Both fixture-driven tests PASS under that mutation; this one fails with
+// `terminal=mismatch route=<nil> ... predicate says true, the rule says
+// false`. That is a receipt with NO recorded provenance authorizing a
+// promotion -- the "any route is not no route" rule 0128 exists to
+// enforce. The table misses it because it covers only some of the
+// terminal-state x route pairs and `mismatch x NULL` is not among them,
+// so the NULL-route rule is only ever exercised on the `match` branch.
+//
+// (An earlier version of this comment claimed the fixture would not catch
+// a predicate that started reading build_binding. It does -- both Go
+// readers fail. The claim was made from this test's design instead of
+// from running it, which is the same defect class as a comment asserting
+// two implementations are "deliberately the same predicate".)
+func TestTheEnablementRuleOverItsWholeInputSurface(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	// Stage was FIXED at deployed_executed, so mutating the
+	// predicate to accept stage='canary' or stage='shadow' survived this
+	// test entirely. A dimension held constant is a dimension unasserted,
+	// which is the same "enumerates only the inputs its author chose"
+	// failure this test was written to end.
+	allStages := []string{"dual_run", "deployed_executed", "shadow", "canary"}
+	allTerminalStates := []string{
+		"match", "mismatch", "auth_rejected", "validation_rejected",
+		"dependency_failed", "timeout", "cancelled", "resource_exhausted",
+		"fallback", "unsupported", "proof_failed",
+	}
+	routes := []any{RouteEdge, RouteProof, nil}
+	bindings := []any{EdgeBuildPresent, EdgeBuildAbsent, nil}
+	outsides := []int{0, 1}
+	// The defect-shape dimension gained three cells when enumerating the
+	// writer's input domain found that `cardinality(ARRAY[''])` is 1, so a
+	// citation naming nothing read as fully cited. A shape the predicate
+	// must reject belongs in the dimension, not in a separate test.
+	// This dimension held only the space character, so a
+	// tab / newline / CR / VT / FF / NBSP / SQL-NULL citation passed both
+	// predicates while the writer refused it -- and testing showed
+	// that adding ONE cell here, with no production change, fails the
+	// test in its own words. Every character of the shared cutset is a
+	// cell now, plus a SQL NULL element and a NULL mixed with a real
+	// ticket, plus two Unicode spaces OUTSIDE the cutset which both
+	// engines must treat as real citations.
+	// Derived from the constant, one cell per rune of the cutset plus the
+	// empty string, never a hand copy of it (a hand copy is
+	// how the SQL literal drifted from the constant it claimed to be
+	// generated from).
+	blankTicket := []any{""}
+	for _, r := range blankCitationCutset {
+		blankTicket = append(blankTicket, string(r))
+	}
+	defects := []any{
+		nil, []string{}, []string{"CHAOS-5448"},
+		[]string{"CHAOS-5448", ""},
+		// a SQL NULL element, and one beside a real ticket
+		[]any{nil}, []any{"CHAOS-5448", nil},
+		// outside the cutset: REAL citations, both engines
+		[]string{"\u2028"}, []string{"\u3000"},
+	}
+	for _, blank := range blankTicket {
+		defects = append(defects, []string{blank.(string)})
+	}
+	modes := []string{TargetModeCanary, TargetModePrimary}
+
+	// The rule, in one place, derived rather than tabulated.
+	want := func(stage, terminal string, route any, binding any, outside int, defect any, mode string) bool {
+		if stage != EnablementProofStage {
+			return false
+		}
+		// The binding is part of the rule now, on both arms. A NULL is a
+		// pre-0129 row written under different counting semantics; an
+		// `absent` row is one this writer would have downgraded or
+		// counted. Neither is proof.
+		if binding != EdgeBuildPresent {
+			return false
+		}
+		switch mode {
+		case TargetModePrimary:
+			if route != RouteEdge {
+				return false
+			}
+		default:
+			if route == nil {
+				return false
+			}
+		}
+		switch terminal {
+		case EnablementProofTerminalState:
+			return true
+		case EnablementCitedMismatchState:
+			if outside != 0 {
+				return false
+			}
+			// The rule uses the SHARED cutset, never strings.TrimSpace:
+			// deriving `want` from a definition the predicate does not
+			// use is exactly how the whitespace gap survived this test.
+			switch cited := defect.(type) {
+			case []string:
+				if len(cited) == 0 {
+					return false
+				}
+				for _, ticket := range cited {
+					if strings.Trim(ticket, blankCitationCutset) == "" {
+						return false
+					}
+				}
+				return true
+			case []any:
+				if len(cited) == 0 {
+					return false
+				}
+				for _, ticket := range cited {
+					text, isText := ticket.(string)
+					if !isText || strings.Trim(text, blankCitationCutset) == "" {
+						return false // a SQL NULL element names nothing
+					}
+				}
+				return true
+			default:
+				return false
+			}
+		default:
+			return false
+		}
+	}
+
+	key := admissionKey{
+		SchemaDigest:      "sha256:surface",
+		DocumentDigest:    "doc-surface",
+		SelectedOperation: "featureFlags",
+		CandidateBuild:    "b18e56fa79cfe20ce0f75df148144b832d92be36",
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_candidate_build
+		   (schema_digest, document_digest, selected_operation, candidate_build, registered_at)
+		 VALUES ($1,$2,$3,$4, now()) ON CONFLICT DO NOTHING`,
+		key.SchemaDigest, key.DocumentDigest, key.SelectedOperation, key.CandidateBuild,
+	); err != nil {
+		t.Fatalf("register the candidate build: %v", err)
+	}
+
+	combinations := 0
+	for _, stage := range allStages {
+		for _, terminal := range allTerminalStates {
+			for _, route := range routes {
+				for _, binding := range bindings {
+					for _, outside := range outsides {
+						for _, defect := range defects {
+							// ck_go_api_proof_run_shadow_requires_watermark:
+							// a shadow-stage row without one is not a row
+							// the database accepts, so it is not part of
+							// the input surface. Supplying it keeps
+							// `shadow` IN the enumeration rather than
+							// dropping a stage because one combination
+							// could not be built.
+							var watermark any
+							if stage == "shadow" {
+								watermark = "2026-09-01"
+							}
+							if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run`); err != nil {
+								t.Fatalf("truncate: %v", err)
+							}
+							if _, err := pool.Exec(ctx,
+								`INSERT INTO go_api_proof_run
+							   (id, schema_digest, document_digest, selected_operation,
+							    candidate_build, request_identity, stage, terminal_state,
+							    observed_at, org_id, recorded_by, measurement_route,
+							    build_binding, differences_outside_baseline_defect,
+							    baseline_defect, data_watermark)
+							 VALUES ($1,$2,$3,$4,$5,'surface',$6,$7, now(),'70d529e0','surface',$8,$9,$10,$11,$12)`,
+								uuid.New(), key.SchemaDigest, key.DocumentDigest, key.SelectedOperation,
+								key.CandidateBuild, stage, terminal,
+								route, binding, outside, defect, watermark,
+							); err != nil {
+								t.Fatalf("seed %s/%v/%v/%d/%v: %v", terminal, route, binding, outside, defect, err)
+							}
+
+							for _, mode := range modes {
+								combinations++
+								found, err := OperationsWithEnablementProof(ctx, pool,
+									key.SchemaDigest, key.CandidateBuild, mode,
+									map[string]string{key.SelectedOperation: key.DocumentDigest})
+								if err != nil {
+									t.Fatalf("read: %v", err)
+								}
+								got := found[key.SelectedOperation]
+								expected := want(stage, terminal, route, binding, outside, defect, mode)
+								if got != expected {
+									t.Fatalf("stage=%s terminal=%s route=%v binding=%v outside=%d defect=%v mode=%s: predicate says %v, the rule says %v",
+										stage, terminal, route, binding, outside, defect, mode, got, expected)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 4 stages x 11 terminal states x 3 routes x 3 bindings x 2 outside x
+	// len(defects) shapes x 2 modes, asserted from the slice itself so
+	// the number cannot go stale the way the three hand-written copies of
+	// it did.
+	t.Logf("exercised %d combinations (4 stages x 11 terminal states x 3 routes x 3 bindings x 2 outside x %d citation shapes x 2 modes); every one matched the rule derived in prose", combinations, len(defects))
+	if combinations != 4*11*3*3*2*len(defects)*2 {
+		t.Fatalf("exercised %d combinations, expected the full cross-product of %d", combinations, 4*11*3*3*2*len(defects)*2)
+	}
+}
+
+// Every case above asks about ONE operation/document pair,
+// so deleting the operation equality from `JOIN unnest(...)` survived.
+//
+// With one pair, matching on the document alone still returns the right
+// answer -- there is nothing else to confuse it with. The defect only
+// shows with TWO pairs: a proof recorded for (operationA, documentB) must
+// not answer a request that names (operationA, documentA) and
+// (operationB, documentB). Cross-matching admits it, and the operation
+// comes back proven on a receipt recorded against a document it does not
+// use.
+//
+// This is the multi-pair half of the surface. The cross-product above is
+// the single-pair half; neither is sufficient alone.
+func TestTheProofKeyPairsOperationWithItsOwnDocument(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	const (
+		digest = "sha256:pairs"
+		build  = "b18e56fa79cfe20ce0f75df148144b832d92be36"
+		opA    = "featureFlags"
+		opB    = "hotspots"
+		docA   = "doc-a"
+		docB   = "doc-b"
+	)
+
+	// The ONLY receipt: operation A measured against document B. Neither
+	// requested pair is (opA, docB), so nothing may be proven.
+	//
+	// build_binding is stated on BOTH seeds here (a bound
+	// measurement part of the rule). It matters most for the CONTROL at
+	// the end: without it the control row is refused for its binding, and
+	// the refusals above would then be indistinguishable from a predicate
+	// that admits nothing at all -- which is the exact failure mode this
+	// control was written to rule out. It caught it.
+	for _, pair := range [][2]string{{opA, docB}, {opA, docA}, {opB, docB}} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO go_api_candidate_build
+			   (schema_digest, document_digest, selected_operation, candidate_build, registered_at)
+			 VALUES ($1,$2,$3,$4, now()) ON CONFLICT DO NOTHING`,
+			digest, pair[1], pair[0], build); err != nil {
+			t.Fatalf("register %v: %v", pair, err)
+		}
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_proof_run
+		   (id, schema_digest, document_digest, selected_operation, candidate_build,
+		    request_identity, stage, terminal_state, observed_at, org_id, recorded_by,
+		    measurement_route, build_binding, differences_outside_baseline_defect)
+		 VALUES ($1,$2,$3,$4,$5,'pairs',$6,$7, now(),'70d529e0','pairs','edge','per_request',0)`,
+		uuid.New(), digest, docB, opA, build,
+		EnablementProofStage, EnablementProofTerminalState,
+	); err != nil {
+		t.Fatalf("seed the cross-pair receipt: %v", err)
+	}
+
+	found, err := OperationsWithEnablementProof(ctx, pool, digest, build,
+		TargetModeCanary, map[string]string{opA: docA, opB: docB})
+	if err != nil {
+		t.Fatalf("OperationsWithEnablementProof: %v", err)
+	}
+
+	if found[opA] {
+		t.Fatalf("%s came back proven: the only receipt is against document %q and the request asked about %q -- the predicate matched the operation to another pair's document",
+			opA, docB, docA)
+	}
+	if found[opB] {
+		t.Fatalf("%s came back proven: the only receipt names operation %q -- the predicate matched the document to another pair's operation",
+			opB, opA)
+	}
+
+	// Control: the SAME shape with the receipt on a requested pair must
+	// prove, or this test would also pass with the predicate returning
+	// nothing at all.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO go_api_proof_run
+		   (id, schema_digest, document_digest, selected_operation, candidate_build,
+		    request_identity, stage, terminal_state, observed_at, org_id, recorded_by,
+		    measurement_route, build_binding, differences_outside_baseline_defect)
+		 VALUES ($1,$2,$3,$4,$5,'pairs',$6,$7, now(),'70d529e0','pairs','edge','per_request',0)`,
+		uuid.New(), digest, docA, opA, build,
+		EnablementProofStage, EnablementProofTerminalState,
+	); err != nil {
+		t.Fatalf("seed the matching receipt: %v", err)
+	}
+	found, err = OperationsWithEnablementProof(ctx, pool, digest, build,
+		TargetModeCanary, map[string]string{opA: docA, opB: docB})
+	if err != nil {
+		t.Fatalf("OperationsWithEnablementProof: %v", err)
+	}
+	if !found[opA] {
+		t.Fatal("the matching pair did not prove: the predicate refuses what it should admit, which would make the assertions above pass for the wrong reason")
+	}
+	if found[opB] {
+		t.Fatalf("%s proved off %s's receipt", opB, opA)
+	}
+}
+
+// The two engines agree on "names nothing", character by character.
+//
+// The change shipped TWO definitions -- the writer's
+// strings.TrimSpace and the predicates' one-argument btrim() -- which
+// disagree on every whitespace character except the space itself. A tab,
+// newline, CR, VT, FF or NBSP citation was refused by the writer and
+// ADMITTED by both predicates, and promoted to primary through the
+// shipped CLI.
+//
+// They cannot share Unicode's definition: measured on this Postgres, the
+// explicit cutset strips NBSP but not U+2028, POSIX [[:space:]] is the
+// exact reverse, and unicode.IsSpace strips both. So the shared rule is
+// ENUMERATED, the SQL definition is the authority, and Go implements it.
+//
+// This asserts that, per character, INCLUDING characters outside the set:
+// there, both sides must agree the value is a REAL citation. A test that
+// only checked the in-set characters would pass with Go still using
+// TrimSpace, which is how the original gap survived.
+func TestTheBlankDefinitionIsIdenticalInBothEngines(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	for _, c := range []struct {
+		name  string
+		value string
+		blank bool // the shared rule says this "names nothing"
+	}{
+		{"space", " ", true},
+		{"tab", "\t", true},
+		{"newline", "\n", true},
+		{"carriage return", "\r", true},
+		{"vertical tab", "\v", true},
+		{"form feed", "\f", true},
+		{"NBSP", " ", true},
+		{"all of them together", " \t\n\r\v\f ", true},
+		// OUTSIDE the set on purpose: both sides must call these real.
+		{"line separator U+2028", " ", false},
+		{"ideographic space U+3000", "　", false},
+		{"a real ticket", "CHAOS-5448", false},
+		{"a ticket with padding", "  CHAOS-5448  ", false},
+	} {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			goSaysBlank := strings.Trim(c.value, blankCitationCutset) == ""
+
+			var sqlSaysBlank bool
+			if err := pool.QueryRow(ctx,
+				`SELECT btrim($1, `+blankCitationSQL()+`) = ''`, c.value,
+			).Scan(&sqlSaysBlank); err != nil {
+				t.Fatalf("ask Postgres: %v", err)
+			}
+
+			if goSaysBlank != sqlSaysBlank {
+				t.Fatalf("the two engines DISAGREE on %q: Go says blank=%v, Postgres says blank=%v -- two definitions of \"names nothing\" is the defect class this PR exists to fix",
+					c.value, goSaysBlank, sqlSaysBlank)
+			}
+			if goSaysBlank != c.blank {
+				t.Fatalf("%q: both engines say blank=%v, the shared rule says %v", c.value, goSaysBlank, c.blank)
+			}
+		})
+	}
+
+	// Every single rune from U+0001 to U+00FF, plus the Unicode spaces
+	// named above and the invisible characters a citation could carry.
+	// On PostgreSQL 16 the hand-typed literal's `\v` was the
+	// LETTER v, so the letter v was "blank" to Postgres and a vertical tab
+	// was not -- and the table above, which lists only spaces and one real
+	// ticket, had no cell for a letter. A letter is exactly the input
+	// nobody thinks to put in a whitespace table. The sweep has one
+	// expectation per rune, derived from the constant: blank iff the rune
+	// is in the cutset. U+0000 is skipped because a PostgreSQL text value
+	// cannot contain it.
+	sweep := []rune{0x2028, 0x2029, 0x3000, 0x200b, 0xfeff, 0x0085, 0x1680, 0x205f}
+	for r := rune(1); r <= 0xff; r++ {
+		sweep = append(sweep, r)
+	}
+	var disagree []string
+	for _, r := range sweep {
+		value := string(r)
+		goSaysBlank := strings.Trim(value, blankCitationCutset) == ""
+		var sqlSaysBlank bool
+		if err := pool.QueryRow(ctx,
+			`SELECT btrim($1, `+blankCitationSQL()+`) = ''`, value,
+		).Scan(&sqlSaysBlank); err != nil {
+			t.Fatalf("ask Postgres about U+%04X: %v", r, err)
+		}
+		inCutset := strings.ContainsRune(blankCitationCutset, r)
+		if goSaysBlank != inCutset || sqlSaysBlank != inCutset {
+			disagree = append(disagree, fmt.Sprintf("U+%04X %q: in cutset=%v Go blank=%v Postgres blank=%v", r, value, inCutset, goSaysBlank, sqlSaysBlank))
+		}
+	}
+	var version string
+	_ = pool.QueryRow(ctx, `SELECT current_setting('server_version')`).Scan(&version)
+	var blanks []string
+	for _, r := range sweep {
+		if strings.Trim(string(r), blankCitationCutset) == "" {
+			blanks = append(blanks, fmt.Sprintf("U+%04X", r))
+		}
+	}
+	t.Logf("PostgreSQL %s: %d runes swept (U+0001..U+00FF + 8 Unicode spaces/invisibles); blank in BOTH engines: %s; every other rune real in both; disagreements: %d",
+		version, len(sweep), strings.Join(blanks, " "), len(disagree))
+	if len(disagree) > 0 {
+		t.Fatalf("on PostgreSQL %s the two engines, or an engine and the constant, DISAGREE on %d rune(s):\n  %s",
+			version, len(disagree), strings.Join(disagree, "\n  "))
+	}
+}
+
+// The blank-build clause over its whole input, in both modes.
+//
+// Deleting
+// `btrim(candidate_build, <cutset>) <> ”` once survived every test in both
+// languages, because the only pin asked about a DIFFERENT build than the
+// receipt named, so build EQUALITY refused it before the blank clause was
+// reached. Here every receipt is otherwise admissible and is asked about
+// by exactly the build it names, so equality always holds and the blank
+// clause is the only thing that can refuse. One cell per rune of the
+// shared cutset (derived from the constant), all of them together, and
+// three real builds -- including one made of the letter v, which the
+// hand-typed PG16 literal would have stripped.
+func TestTheBlankBuildClauseOverEveryCutsetRune(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+
+	builds := []string{blankCitationCutset, "b18e56fa79cfe20ce0f75df148144b832d92be36", strings.Repeat("v", 40), "\u2028"}
+	for _, r := range blankCitationCutset {
+		builds = append(builds, string(r), string(r)+string(r))
+	}
+	const (
+		digest    = "sha256:blank-build"
+		document  = "doc-blank-build"
+		operation = "featureFlags"
+	)
+	admitted := 0
+	for _, build := range builds {
+		if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run, go_api_candidate_build CASCADE`); err != nil {
+			t.Fatalf("truncate: %v", err)
+		}
+		seedAdmissionRow(ctx, t, pool,
+			admissionKey{SchemaDigest: digest, DocumentDigest: document, SelectedOperation: operation, CandidateBuild: build},
+			seededReceipt{stage: EnablementProofStage, terminalState: EnablementProofTerminalState, route: RouteEdge,
+				binding: EdgeBuildPresent, requestIdentity: "blank-build"})
+		want := strings.Trim(build, blankCitationCutset) != ""
+		for _, mode := range []string{TargetModeCanary, TargetModePrimary} {
+			found, err := OperationsWithEnablementProof(ctx, pool, digest, build, mode, map[string]string{operation: document})
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if found[operation] != want {
+				t.Fatalf("candidate_build=%q mode=%s: predicate says admitted=%v, the rule says %v (asked about the SAME build the receipt names, so equality holds and only the blank-build clause decides)",
+					build, mode, found[operation], want)
+			}
+			if found[operation] {
+				admitted++
+			}
+			t.Logf("cell candidate_build=%-24q mode=%-7s observed admitted=%v", build, mode, found[operation])
+		}
+	}
+	if admitted != 6 {
+		t.Fatalf("admitted %d (build, mode) cells, want exactly the three real builds x two modes = 6: a sweep with no admissions passes against a predicate that admits nothing", admitted)
+	}
+}
+
+// The generator's output, decoded by the SERVER, is the value it was given.
+//
+// The unit test pins the grammar against this test's own decoder; this pins
+// it against PostgreSQL's, on whichever server major the suite is pointed
+// at. The values include the ones that could end or bend a literal (a quote,
+// a backslash followed by a named-escape letter), the letters PG16 and PG17
+// disagree about after a backslash, and every plane the generator has a
+// branch for.
+func TestTheGeneratedLiteralRoundTripsThroughPostgres(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+	ascii := make([]byte, 0, 127)
+	for b := byte(1); b < 0x80; b++ {
+		ascii = append(ascii, b)
+	}
+	for _, value := range []string{
+		blankCitationCutset, string(ascii), "a'b", `a\vb`, "v", "\v",
+		"\u00a0\u2028\u3000\ufeff", "\U0001F600", "",
+	} {
+		var got string
+		if err := pool.QueryRow(ctx, `SELECT `+escapeStringLiteral(value)).Scan(&got); err != nil {
+			t.Fatalf("PostgreSQL rejected escapeStringLiteral(%q) = %s: %v", value, escapeStringLiteral(value), err)
+		}
+		var version string
+		_ = pool.QueryRow(ctx, `SELECT current_setting('server_version')`).Scan(&version)
+		if got != value {
+			t.Fatalf("on PostgreSQL %s, escapeStringLiteral(%q) = %s decodes to %q", version, value, escapeStringLiteral(value), got)
+		}
+		t.Logf("cell %-24q PostgreSQL %s decodes the generated literal back to the input: true", value, version)
+	}
+}
+
+// End to end through the real writer and the real reader:
+// a Go build returning NO hotspots rows wrote a receipt `enable --mode
+// primary` admitted. Here the same Runner writes the receipt with WriteAtomic
+// and the production predicate is asked, in both modes, for EVERY cell of the
+// comparator table (hotspotsCitationCells): a leaf difference -- a value, a
+// null, another scalar type -- proves; a structural one never does. The
+// leaf cells are the control: without them the refusals could come from a
+// predicate that proves nothing.
+func TestAShapeDifferenceUnderACitationNeverBecomesProof(t *testing.T) {
+	ctx := context.Background()
+	pool := startRegistryPostgres(t)
+	python, cells := hotspotsCitationCells()
+	build := "b18e56fa79cfe20ce0f75df148144b832d92be36"
+	for _, cell := range cells {
+		proves := cell.outside == 0
+		if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+			t.Fatalf("truncate: %v", err)
+		}
+		edge := &fakeEdge{goBody: cell.candidate, pythonBody: python, goBuild: build}
+		runner := newRunner(t, edge, "primary")
+		runner.Documents = map[string]string{"hotspots": "query Hotspots { hotspots { rows { filePath } } }"}
+		runner.Registry = RegistryView{SchemaDigest: "sha256:29d509cd", BuildIdentity: build, DocumentDigest: map[string]string{"hotspots": "6ccfcc78"}}
+		runner.Routing = map[string]RoutingRow{"hotspots": {Mode: "primary", CandidateBuild: build}}
+		if _, _, err := runner.Run(ctx); err != nil {
+			t.Fatalf("%s: Run: %v", cell.name, err)
+		}
+		receipts, err := runner.ReceiptsFor(time.Now().UTC())
+		if err != nil || len(receipts) != 1 {
+			t.Fatalf("%s: ReceiptsFor: %d, %v", cell.name, len(receipts), err)
+		}
+		if _, err := WriteAtomic(ctx, pool, receipts[0]); err != nil {
+			t.Fatalf("%s: WriteAtomic: %v", cell.name, err)
+		}
+		for _, mode := range []string{TargetModeCanary, TargetModePrimary} {
+			found, err := OperationsWithEnablementProof(ctx, pool, "sha256:29d509cd", build, mode, map[string]string{"hotspots": "6ccfcc78"})
+			if err != nil {
+				t.Fatalf("%s: read: %v", cell.name, err)
+			}
+			if receipts[0].DifferencesOutsideBaselineDefect != cell.outside || found["hotspots"] != proves {
+				t.Fatalf("%s mode=%s: the written receipt (outside=%d, cited=%v) proves=%v, want outside=%d proves=%v",
+					cell.name, mode, receipts[0].DifferencesOutsideBaselineDefect, receipts[0].BaselineDefects, found["hotspots"], cell.outside, proves)
+			}
+			t.Logf("cell %-60s mode=%-7s written receipt outside=%-2d -> proves=%v", cell.name, mode, receipts[0].DifferencesOutsideBaselineDefect, found["hotspots"])
+		}
+	}
+}

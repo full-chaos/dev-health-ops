@@ -98,12 +98,108 @@ type Finding struct {
 	Kind   string `json:"kind"`
 	Path   string `json:"path"`
 	Detail string `json:"detail"`
+	// Shape says WHAT differs, and decides whether a baseline-defect
+	// citation may cover it: only a LEAF difference can be (see
+	// leafDifference). Empty on findings the comparator did not classify
+	// (transport-level ones the runner adds), and an empty shape is never
+	// coverable.
+	Shape string `json:"shape,omitempty"`
+}
+
+// Finding shapes. A citation (BaselineDefect) declares that the Python
+// baseline produces wrong VALUES under a path. It covers a difference only
+// where both sides are LEAVES -- a scalar or null -- at the differing path:
+// a scalar against another scalar, a scalar against null, null against a
+// scalar. It never covers a STRUCTURAL difference -- a list of another
+// length, a container (object or list) against null or a scalar, an object
+// against a list, a key or element present on one side only -- whatever the
+// cited path.
+//
+// Before shapes existed a cited path covered EVERY finding
+// beneath it, and compareList reports a LENGTH difference at the list's own
+// path. hotspots cites the whole `data.hotspots.rows` subtree, so a Go build
+// returning `[]`, `null`, or rows of empty objects was a fully-cited mismatch
+// with outside=0 -- primary enablement proof. None of those is the cited
+// defect. A NULL leaf is: row selection (hotspots' defect) surfaces as a
+// null in one plane and a value in the other, in both directions.
+const (
+	// ShapeValue (leaf): two scalars of one JSON type (string, number or
+	// bool), both finite, that differ.
+	ShapeValue = "value"
+	// ShapeNull (leaf): null on one side, a finite scalar on the other.
+	ShapeNull = "null"
+	// ShapeScalarType (leaf): two finite scalars of different JSON types,
+	// e.g. a string where the other plane has a number.
+	ShapeScalarType = "scalar_type"
+	// ShapeStructure (structural): a container (object or list) against
+	// anything of another kind -- null, a scalar, or the other container.
+	ShapeStructure = "structure"
+	// ShapeLength (structural): two lists of different lengths.
+	ShapeLength = "length"
+	// ShapePresence (structural): a key, an element (by key), an error or
+	// `data` itself present on one side only.
+	ShapePresence = "presence"
+	// ShapeEmptyResult (structural): a leaf difference under
+	// a cited path whose CANDIDATE subtree has no non-null leaf while the
+	// baseline's has at least one -- an empty result in disguise (every
+	// field null, the right shape). Assigned by classifyBaselineDefects in
+	// place of the leaf shape the comparator gave.
+	ShapeEmptyResult = "empty_result"
+	// ShapeNonFinite: NaN or Infinity on either side. Never covered: a
+	// non-finite value is forbidden in Go output (null per field at the
+	// write boundary), so one reaching a response is a Go defect no Python
+	// baseline defect can explain; parity rule 3 also reports it even when
+	// both sides carry the same literal.
+	ShapeNonFinite = "non_finite"
+)
+
+// leafDifference reports whether a finding's shape is one a citation may
+// cover: both sides were a scalar or null at the differing path.
+func leafDifference(shape string) bool {
+	return shape == ShapeValue || shape == ShapeNull || shape == ShapeScalarType
+}
+
+// jsonKind names a decoded JSON value's type for the leaf/structure split.
+func jsonKind(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case map[string]any:
+		return "object"
+	case []any:
+		return "array"
+	case bool:
+		return "bool"
+	case string:
+		return "string"
+	}
+	if _, isNumber := asFloat(value); isNumber {
+		return "number"
+	}
+	return fmt.Sprintf("%T", value)
+}
+
+func isContainerKind(kind string) bool {
+	return kind == "object" || kind == "array"
+}
+
+// nonFinite reports a decoded number that is NaN or +/-Inf.
+func nonFinite(value any) bool {
+	f, isNumber := asFloat(value)
+	return isNumber && (math.IsNaN(f) || math.IsInf(f, 0))
 }
 
 // Result is the comparator's verdict plus every observation behind it.
 type Result struct {
 	TerminalState string    `json:"terminal_state"`
 	Findings      []Finding `json:"findings"`
+	// CoveredByShape and OutsideByShape count the mismatch findings a
+	// citation covered and did not cover, by Shape: the
+	// receipt, the go-api-prove line and `enable` show WHAT was counted,
+	// so "one value differed" and "Go returned no rows" are not the same
+	// line. Their sums are the covered count and the outside count.
+	CoveredByShape map[string]int `json:"covered_by_shape,omitempty"`
+	OutsideByShape map[string]int `json:"outside_by_shape,omitempty"`
 	// UnusedExclusions names every VolatileFields entry that matched no
 	// path in this comparison. An exclusion that excuses nothing is
 	// either stale or misspelled, and a misspelled exclusion silently
@@ -180,7 +276,7 @@ type Options struct {
 	// the same dotted, index-free path form. Reserved for values that are
 	// freshly generated per request and therefore cannot agree across two
 	// calls -- capacityForecast's forecastId/computedAt are the measured
-	// instance (CHAOS-5425 comment, 2026-09-07: identical request, Go
+	// instance (CHAOS-5425 comment: identical request, Go
 	// forecastId=33fb9f32..., Python 78296c67..., timestamps ~350ms
 	// apart). This is NOT a general "ignore a difference I do not like"
 	// knob: each entry carries a written reason in exclusions.go, and an
@@ -268,8 +364,11 @@ type BaselineDefect struct {
 	// Reason states, in words, what the baseline gets wrong.
 	Reason string
 	// Paths are dotted, index-free field paths (the same form
-	// FloatTierB and VolatileFields use). A path also covers everything
-	// beneath it, so naming a subtree root covers its fields.
+	// FloatTierB and VolatileFields use). A path also reaches everything
+	// beneath it, so naming a subtree root reaches its fields -- but only
+	// a LEAF difference (scalar or null on both sides) is covered. A
+	// length, presence or structure difference beneath a cited path is
+	// outside every citation (see leafDifference).
 	Paths []string
 }
 
@@ -326,7 +425,7 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 		if !baseline.DataPresent {
 			detail = "present in candidate, absent in baseline"
 		}
-		findings = append(findings, Finding{Kind: FindingMismatch, Path: "$.data", Detail: detail})
+		findings = append(findings, Finding{Kind: FindingMismatch, Path: "$.data", Detail: detail, Shape: ShapePresence})
 	case baseline.DataPresent && candidate.DataPresent:
 		findings = append(findings, compareJSON(baseline.Data, candidate.Data, "$.data", opts, opts.EnvelopeKeys, track)...)
 	}
@@ -344,7 +443,14 @@ func Compare(baseline, candidate Snapshot, opts Options) Result {
 	result := Result{TerminalState: terminal, Findings: findings}
 	result.UnusedExclusions = unmatched(opts.VolatileFields, track.volatile)
 	result.UnusedTierB = unmatched(opts.FloatTierB, track.tierB)
-	classifyBaselineDefects(&result, opts.BaselineDefects)
+	var baselineData, candidateData any
+	if baseline.DataPresent {
+		baselineData = baseline.Data
+	}
+	if candidate.DataPresent {
+		candidateData = candidate.Data
+	}
+	classifyBaselineDefects(&result, opts.BaselineDefects, baselineData, candidateData)
 
 	declaredOrderInsensitive := make(map[string]string, len(opts.OrderInsensitiveLists))
 	for _, decl := range opts.OrderInsensitiveLists {
@@ -387,11 +493,33 @@ func unmatched(declared map[string]string, used map[string]bool) []string {
 // It never touches result.TerminalState. That is the whole contract: a
 // declared, understood, ticketed Python defect is still a divergence, and
 // the receipt still says mismatch.
-func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
-	var mismatches []string
+func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineData, candidateData any) {
+	// Under a cited path, a candidate with NO non-null leaf
+	// while the baseline has at least one is an empty result in disguise.
+	// Its leaf differences are relabelled structural before anything is
+	// covered, so "Go returned every field null" can never pass as the
+	// cited defect. One non-null leaf anywhere under the path keeps the
+	// rule leaf-by-leaf (hotspots' JOB 5 receipt: 7 null of 391 leaves).
+	for _, defect := range defects {
+		for _, cited := range defect.Paths {
+			if nonNullLeaves(candidateData, citedSegments(cited)) > 0 || nonNullLeaves(baselineData, citedSegments(cited)) == 0 {
+				continue
+			}
+			for i := range result.Findings {
+				finding := &result.Findings[i]
+				path := tieredPath(finding.Path)
+				if finding.Kind == FindingMismatch && leafDifference(finding.Shape) && (path == cited || strings.HasPrefix(path, cited+".")) {
+					finding.Shape = ShapeEmptyResult
+				}
+			}
+		}
+	}
+
+	var mismatches, shapes []string
 	for _, finding := range result.Findings {
 		if finding.Kind == FindingMismatch {
 			mismatches = append(mismatches, tieredPath(finding.Path))
+			shapes = append(shapes, finding.Shape)
 		}
 	}
 
@@ -400,9 +528,16 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
 	for _, defect := range defects {
 		hit := false
 		for i, path := range mismatches {
-			if defectCovers(defect, path) {
+			if !defectCovers(defect, path) {
+				continue
+			}
+			// The citation is LIVE -- there is a difference under its
+			// path, so it is not stale -- but it COVERS only a leaf
+			// difference. A length / presence / structure finding under a
+			// cited subtree stays outside every citation.
+			hit = true
+			if leafDifference(shapes[i]) {
 				covered[i] = true
-				hit = true
 			}
 		}
 		if hit {
@@ -415,20 +550,110 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
 	sort.Strings(stale)
 
 	outside := 0
-	for _, isCovered := range covered {
+	coveredByShape, outsideByShape := map[string]int{}, map[string]int{}
+	for i, isCovered := range covered {
 		if !isCovered {
 			outside++
+			outsideByShape[shapeLabel(shapes[i])]++
+			continue
 		}
+		coveredByShape[shapeLabel(shapes[i])]++
 	}
 
+	result.CoveredByShape = coveredByShape
+	result.OutsideByShape = outsideByShape
 	result.BaselineDefectsMatched = matched
 	result.StaleBaselineDefects = stale
 	result.DifferencesOutsideBaselineDefect = outside
 }
 
-// defectCovers reports whether a declared path covers a difference path.
-// A cited path covers itself and everything beneath it, so a subtree root
-// can be named once instead of every leaf under it.
+// FormatShapeCounts renders per-shape counts as `covered[null=7 value=384]
+// outside[length=1]`, keys sorted, one form for every surface that prints
+// them (go-api-prove's line, the tests; `enable` renders the same JSON).
+func FormatShapeCounts(covered, outside map[string]int) string {
+	render := func(counts map[string]int) string {
+		keys := make([]string, 0, len(counts))
+		for key := range counts {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
+		}
+		return strings.Join(parts, " ")
+	}
+	return "covered[" + render(covered) + "] outside[" + render(outside) + "]"
+}
+
+// shapeLabel names a finding's shape for the per-shape counts; a finding
+// the comparator did not classify is counted, never dropped.
+func shapeLabel(shape string) string {
+	if shape == "" {
+		return "unclassified"
+	}
+	return shape
+}
+
+// citedSegments splits a cited path ("data.hotspots.rows") into the keys
+// under the response's `data` value. A path not under `data` has no
+// segments there, so nothing under it is counted. The root itself
+// ("data", naming the whole payload) is the empty segment list, not "not
+// under data" -- conflating the two is F1 (CHAOS-5484 opus-r9): the empty
+// list is what tells nonNullLeaves to walk everything under the value, and
+// nil is what tells it there is nothing to walk, so a bare "data" citation
+// silently disabled the empty-result addendum for its entire payload.
+func citedSegments(cited string) []string {
+	if cited == "data" {
+		return []string{}
+	}
+	rest, ok := strings.CutPrefix(cited, "data.")
+	if !ok {
+		return nil
+	}
+	return strings.Split(rest, ".")
+}
+
+// nonNullLeaves counts the non-null scalar leaves at and under an
+// index-free path: keys are followed, every list element is visited.
+func nonNullLeaves(value any, segments []string) int {
+	if segments == nil {
+		return 0
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		if len(segments) == 0 {
+			total := 0
+			for _, child := range typed {
+				total += nonNullLeaves(child, segments)
+			}
+			return total
+		}
+		child, present := typed[segments[0]]
+		if !present {
+			return 0
+		}
+		return nonNullLeaves(child, segments[1:])
+	case []any:
+		total := 0
+		for _, element := range typed {
+			total += nonNullLeaves(element, segments)
+		}
+		return total
+	case nil:
+		return 0
+	default:
+		if len(segments) == 0 {
+			return 1
+		}
+		return 0
+	}
+}
+
+// defectCovers reports whether a difference path lies under a declared
+// path: itself or anything beneath it, so a subtree root can be named once
+// instead of every leaf under it. Whether the difference is then COVERED
+// also depends on its shape -- see classifyBaselineDefects.
 func defectCovers(defect BaselineDefect, path string) bool {
 	for _, cited := range defect.Paths {
 		if path == cited || strings.HasPrefix(path, cited+".") {
@@ -502,6 +727,7 @@ func compareErrors(baseline, candidate []map[string]any, pathPrefix string) []Fi
 			Kind:   FindingMismatch,
 			Path:   identityPath(id),
 			Detail: "error present in baseline, missing from candidate",
+			Shape:  ShapePresence,
 		})
 	}
 	for _, id := range extra {
@@ -509,6 +735,7 @@ func compareErrors(baseline, candidate []map[string]any, pathPrefix string) []Fi
 			Kind:   FindingMismatch,
 			Path:   identityPath(id),
 			Detail: "error present in candidate, missing from baseline",
+			Shape:  ShapePresence,
 		})
 	}
 	for _, id := range shared {
@@ -583,11 +810,29 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 		return compareList(baselineList, candidateList, path, opts, track)
 	}
 
+	// Different JSON kinds. A container on either side is STRUCTURAL and
+	// no citation covers it; two leaves (scalar or null) are a leaf
+	// difference a citation may cover; a non-finite number is never
+	// covered. Detail text
+	// unchanged.
+	if baselineKind, candidateKind := jsonKind(baseline), jsonKind(candidate); baselineKind != candidateKind {
+		shape := ShapeScalarType
+		switch {
+		case isContainerKind(baselineKind) || isContainerKind(candidateKind):
+			shape = ShapeStructure
+		case nonFinite(baseline) || nonFinite(candidate):
+			shape = ShapeNonFinite
+		case baselineKind == "null" || candidateKind == "null":
+			shape = ShapeNull
+		}
+		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: shape}}
+	}
+
 	baselineBool, baselineIsBool := baseline.(bool)
 	candidateBool, candidateIsBool := candidate.(bool)
 	if baselineIsBool || candidateIsBool {
 		if !baselineIsBool || !candidateIsBool || baselineBool != candidateBool {
-			return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate)}}
+			return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: ShapeValue}}
 		}
 		return nil
 	}
@@ -620,6 +865,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 							Kind:   FindingMismatch,
 							Path:   path,
 							Detail: fmt.Sprintf("%d != %d (Tier A, exact integer)", baselineInt, candidateInt),
+							Shape:  ShapeValue,
 						}}
 					}
 					return nil
@@ -630,7 +876,7 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 	}
 
 	if !sameScalar(baseline, candidate) {
-		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate)}}
+		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: ShapeValue}}
 	}
 	return nil
 }
@@ -719,6 +965,7 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 			Kind:   FindingMismatch,
 			Path:   path,
 			Detail: fmt.Sprintf("non-finite value: %v vs %v (NaN/Infinity always mismatches)", baseline, candidate),
+			Shape:  ShapeNonFinite,
 		}}
 	}
 
@@ -729,6 +976,7 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 				Kind:   FindingMismatch,
 				Path:   path,
 				Detail: fmt.Sprintf("%v != %v (Tier A, exact)", baseline, candidate),
+				Shape:  ShapeValue,
 			}}
 		}
 		return nil
@@ -747,6 +995,7 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 			Kind:   FindingMismatch,
 			Path:   path,
 			Detail: fmt.Sprintf("%v != %v (Tier B, tolerance %v)", baseline, candidate, tolerance),
+			Shape:  ShapeValue,
 		}}
 	}
 	return nil
@@ -789,7 +1038,7 @@ func compareDict(baseline, candidate map[string]any, path string, opts Options, 
 			if !inBaseline {
 				detail = "present in candidate, absent in baseline"
 			}
-			findings = append(findings, Finding{Kind: FindingMismatch, Path: childPath, Detail: detail})
+			findings = append(findings, Finding{Kind: FindingMismatch, Path: childPath, Detail: detail, Shape: ShapePresence})
 			continue
 		}
 		findings = append(findings, compareJSON(baseline[key], candidate[key], childPath, opts, nil, track)...)
@@ -812,6 +1061,7 @@ func compareList(baseline, candidate []any, path string, opts Options, track *tr
 			Kind:   FindingMismatch,
 			Path:   path,
 			Detail: fmt.Sprintf("length %d != %d", len(baseline), len(candidate)),
+			Shape:  ShapeLength,
 		}}
 	}
 	var findings []Finding
@@ -860,7 +1110,7 @@ func orderInsensitiveKey(element any, keyFields []string) (string, bool) {
 // does not describe this data: the whole list is refused (tracked, never
 // silently downgraded to a finding) rather than guessing a partial
 // pairing that could hide a real divergence behind a comparison nobody
-// actually asked for. CHAOS-5546 r1 finding: a naive `byKey[key] =
+// actually asked for. CHAOS-5546 finding: a naive `byKey[key] =
 // element` silently let a LATER duplicate overwrite an EARLIER one,
 // which can make a materially different candidate compare as a clean
 // match (construction: baseline [{id:a,v:1},{id:a,v:2}], candidate
@@ -915,7 +1165,7 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 	for i, key := range keys {
 		// elementPath uses an OPAQUE ORDINAL (the key's position in the
 		// sorted, deduplicated key list), never the raw key value.
-		// CHAOS-5546 r1 finding: embedding the key literally
+		// CHAOS-5546 finding: embedding the key literally
 		// (`[key="..."]`) let a key value containing `]` defeat
 		// tieredPath's bracket-stripping regex, which stops at the FIRST
 		// `]` it finds -- an embedded `]` inside the key closes the
@@ -933,7 +1183,7 @@ func compareListByKey(baseline, candidate []any, path string, decl OrderInsensit
 			if !inBaseline {
 				detail = fmt.Sprintf("key %q present in candidate, absent in baseline", key)
 			}
-			findings = append(findings, Finding{Kind: FindingMismatch, Path: elementPath, Detail: detail})
+			findings = append(findings, Finding{Kind: FindingMismatch, Path: elementPath, Detail: detail, Shape: ShapePresence})
 			continue
 		}
 		for _, finding := range compareJSON(baselineElement, candidateElement, elementPath, opts, nil, track) {

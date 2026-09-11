@@ -15,8 +15,9 @@ import (
 )
 
 // registryDDL mirrors alembic 0114 (the three tables), 0127 (the
-// review_evidence/recorded_by provenance columns) and 0128 (the
-// measurement-route / baseline-defect provenance columns).
+// review_evidence/recorded_by provenance columns), 0128 (the
+// measurement-route / baseline-defect provenance columns) and 0129
+// (build_binding).
 //
 // The constraints are not decoration and are NOT trimmed to "what the
 // test needs": the 4-column composite FK from go_api_proof_run to
@@ -88,6 +89,7 @@ CREATE TABLE go_api_proof_run (
 	measurement_route TEXT,
 	baseline_defect TEXT[],
 	differences_outside_baseline_defect INTEGER NOT NULL DEFAULT 0,
+	build_binding TEXT,
 	observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	CONSTRAINT fk_go_api_proof_run_candidate_build
 		FOREIGN KEY (schema_digest, document_digest, selected_operation, candidate_build)
@@ -98,6 +100,8 @@ CREATE TABLE go_api_proof_run (
 		CHECK (terminal_state IN ('match', 'mismatch', 'auth_rejected', 'validation_rejected',
 			'dependency_failed', 'timeout', 'cancelled', 'resource_exhausted',
 			'fallback', 'unsupported', 'proof_failed')),
+	CONSTRAINT ck_go_api_proof_run_build_binding
+		CHECK (build_binding IS NULL OR build_binding IN ('per_request', 'absent')),
 	CONSTRAINT ck_go_api_proof_run_shadow_requires_watermark
 		CHECK (stage <> 'shadow' OR data_watermark IS NOT NULL),
 	CONSTRAINT ck_go_api_proof_run_measurement_route
@@ -156,22 +160,76 @@ func TestWrittenReceiptSatisfiesTheEnablementPredicate(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
-		OrgID:             "70d529e0",
-		RecordedBy:        "lane-5425-prove",
-		ReviewEvidence:    "CHAOS-5425 integration test",
-		ObservedAt:        time.Now().UTC(),
+		// per_request, not absent. The rule now requires
+		// a BOUND measurement on both arms, so a receipt written with
+		// `absent` is refused for its BINDING -- which would make every
+		// assertion below hold for a reason that has nothing to do with
+		// what the assertion says. The unbound case is the second half
+		// of this test, asserted as a refusal rather than smuggled in
+		// as the base.
+		BuildBinding:   EdgeBuildPresent,
+		OrgID:          "70d529e0",
+		RecordedBy:     "lane-5425-prove",
+		ReviewEvidence: "CHAOS-5425 integration test",
+		ObservedAt:     time.Now().UTC(),
 	}
 	if _, err := Write(ctx, pool, receipt); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
 	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-		map[string]string{"featureFlags": testDocumentDigest})
+		TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("OperationsWithEnablementProof: %v", err)
 	}
 	if !found["featureFlags"] {
 		t.Fatal("a deployed_executed/match receipt must satisfy the enablement predicate")
+	}
+
+	// This test proved the receipt was READABLE by the predicate
+	// and never that what landed in the row was what Write was handed.
+	// Mutating Write's parameter to nullIfEmpty("") persisted NULL and
+	// this test still passed, because the predicate does not look at
+	// build_binding. Nothing else would have noticed either: no
+	// enablement reader consumes the column yet, so a regression writing
+	// the wrong binding stays invisible while enablement goes on reading
+	// green -- which is precisely the "audit data quietly wrong" case the
+	// column exists to prevent.
+	var storedBinding *string
+	if err := pool.QueryRow(ctx,
+		`SELECT build_binding FROM go_api_proof_run
+		  WHERE schema_digest = $1 AND candidate_build = $2 AND selected_operation = $3`,
+		testSchemaDigest, testCandidateBuild, "featureFlags",
+	).Scan(&storedBinding); err != nil {
+		t.Fatalf("read back build_binding: %v", err)
+	}
+	if storedBinding == nil {
+		t.Fatal("build_binding was written as NULL: the run KNEW the binding and the row does not say so, and no reader will ever flag it")
+	}
+	if *storedBinding != EdgeBuildPresent {
+		t.Fatalf("build_binding read back as %q, want %q -- the row must carry the binding the run established, not another one", *storedBinding, EdgeBuildPresent)
+	}
+
+	// The other half of the same seam. An UNBOUND
+	// measurement is a real, recorded observation of a response nobody
+	// can attribute to a replica -- so it is written, and it authorizes
+	// nothing. Asserting only the admitting direction is how the hole
+	// survived: `primary enable` returned rc=0 on exactly this row.
+	unbound := receipt
+	unbound.SelectedOperation = "hotspots"
+	unbound.BuildBinding = EdgeBuildAbsent
+	if _, err := Write(ctx, pool, unbound); err != nil {
+		t.Fatalf("Write the unbound receipt: %v", err)
+	}
+	for _, mode := range []string{TargetModeCanary, TargetModePrimary} {
+		admitted, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
+			mode, map[string]string{"hotspots": testDocumentDigest})
+		if err != nil {
+			t.Fatalf("OperationsWithEnablementProof(%s): %v", mode, err)
+		}
+		if admitted["hotspots"] {
+			t.Fatalf("an UNBOUND deployed_executed/match receipt authorized %s: the response was never attributed to a serving build, so nothing here says WHICH replica was measured", mode)
+		}
 	}
 }
 
@@ -192,8 +250,42 @@ func TestEnablementPredicateRejectsEveryWrongKeyColumn(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
-		ObservedAt:        time.Now().UTC(),
+		// Admissible in every respect EXCEPT the column each subtest
+		// changes. With `absent` here (as this base once had) every
+		// subtest would pass on the BINDING, and the
+		// key columns it claims to pin would be doing no work at all.
+		BuildBinding: EdgeBuildPresent,
+		ObservedAt:   time.Now().UTC(),
 	}
+
+	// The control: the UNMUTATED base IS admitted. Without it, "the base
+	// is admissible" is an assumption, and this whole table can go
+	// vacuous again the next time the rule gains a requirement -- which
+	// is exactly what happened when the binding requirement was added
+	// to a base written with `absent`.
+	//
+	// It is written under its OWN operation, and asked about under that
+	// operation. Writing the base at `featureFlags` would leave an
+	// admitting row in this shared pool, and every subtest below asks
+	// about `featureFlags` -- the control would then make all four of
+	// them fail for its reason instead of passing for theirs. (Measured:
+	// it did.) The table is append-only by design, so there is nothing
+	// to undo afterwards; the fix is to not collide in the first place.
+	t.Run("the unmutated base is admitted", func(t *testing.T) {
+		control := base
+		control.SelectedOperation = "controlOperation"
+		if _, err := Write(ctx, pool, control); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
+			TargetModeCanary, map[string]string{"controlOperation": testDocumentDigest})
+		if err != nil {
+			t.Fatalf("OperationsWithEnablementProof: %v", err)
+		}
+		if !found["controlOperation"] {
+			t.Fatal("the base receipt is not admitted, so every refusal below proves nothing about the key column it names")
+		}
+	})
 
 	for name, mutate := range map[string]func(Receipt) Receipt{
 		"different candidate build": func(r Receipt) Receipt { r.CandidateBuild = "0000000000000000000000000000000000000000"; return r },
@@ -206,7 +298,7 @@ func TestEnablementPredicateRejectsEveryWrongKeyColumn(t *testing.T) {
 				t.Fatalf("Write: %v", err)
 			}
 			found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-				map[string]string{"featureFlags": testDocumentDigest})
+				TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 			if err != nil {
 				t.Fatalf("OperationsWithEnablementProof: %v", err)
 			}
@@ -233,7 +325,10 @@ func TestMismatchReceiptIsRecordedButAuthorizesNothing(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     TerminalStateMismatch,
 		MeasurementRoute:  RouteProof,
-		ObservedAt:        time.Now().UTC(),
+		// Bound, so the refusal below is about the UNCITED MISMATCH this
+		// test is named for and not about the binding.
+		BuildBinding: EdgeBuildPresent,
+		ObservedAt:   time.Now().UTC(),
 	}
 	if _, err := Write(ctx, pool, receipt); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -250,7 +345,7 @@ func TestMismatchReceiptIsRecordedButAuthorizesNothing(t *testing.T) {
 	}
 
 	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-		map[string]string{"featureFlags": testDocumentDigest})
+		TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("OperationsWithEnablementProof: %v", err)
 	}
@@ -275,6 +370,7 @@ func TestReceiptsAreAppendOnly(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}
 	if _, err := Write(ctx, pool, base); err != nil {
@@ -310,6 +406,7 @@ func TestCandidateBuildRegistrationIsIdempotent(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}
 	for i := 0; i < 3; i++ {
@@ -389,6 +486,14 @@ func TestWriteParticipatesInTheCallersTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
+	// Rollback is deferred as well as asserted below, because a t.Fatalf
+	// between here and the explicit Rollback calls runtime.Goexit and
+	// skips it -- and then t.Cleanup's pool.Close blocks forever waiting
+	// for the connection this transaction still holds. That turned a
+	// two-second Write failure into a 25-minute test-binary timeout whose
+	// panic named this test and not the three that had actually failed.
+	// The second Rollback is a no-op on an already-finished transaction.
+	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := Write(ctx, tx, Receipt{
 		SchemaDigest:      testSchemaDigest,
 		DocumentDigest:    testDocumentDigest,
@@ -398,6 +503,7 @@ func TestWriteParticipatesInTheCallersTransaction(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -431,6 +537,7 @@ func TestWriteAtomicCommitsBothRows(t *testing.T) {
 		Stage:             EnablementProofStage,
 		TerminalState:     EnablementProofTerminalState,
 		MeasurementRoute:  RouteEdge,
+		BuildBinding:      EdgeBuildAbsent,
 		ObservedAt:        time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("WriteAtomic: %v", err)
@@ -447,7 +554,7 @@ func TestWriteAtomicCommitsBothRows(t *testing.T) {
 	}
 }
 
-// Round 2's F3, both directions, against a real database.
+// Exercises both directions, against a real database.
 //
 // Receipts used to commit as each operation finished, before the run-level
 // build-stability check ran -- so a build that moved mid-run left
@@ -462,7 +569,7 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 	ctx := context.Background()
 	pool := startRegistryPostgres(t)
 
-	// A REAL measurement, driven through Run against a fake edge. r5
+	// A REAL measurement, driven through Run against a fake edge. Testing
 	// found the previous version of this fixture hand-building an Outcome
 	// and setting the unexported admitted bit directly -- which the seal
 	// then made impossible to complete correctly, because it also had to
@@ -486,7 +593,7 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 
 	// ZERO rows may satisfy the enablement predicate.
 	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-		map[string]string{"featureFlags": testDocumentDigest})
+		TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("OperationsWithEnablementProof: %v", err)
 	}
@@ -503,7 +610,7 @@ func TestNoMatchReceiptSurvivesABuildThatMovedMidRun(t *testing.T) {
 	if state != "proof_failed" {
 		t.Fatalf("the recorded state must say the PROOF failed, got %q", state)
 	}
-	// review_evidence is a JSON provenance object, not prose (r1 P2), so
+	// review_evidence is a JSON provenance object, not prose, so
 	// this reads the fields rather than grepping a sentence -- which is
 	// the whole point of the change: a machine-written fact should be
 	// readable by a machine.
@@ -537,7 +644,7 @@ func TestAStableBuildStillProducesAnEnablingReceipt(t *testing.T) {
 	}
 
 	found, err := OperationsWithEnablementProof(ctx, pool, testSchemaDigest, testCandidateBuild,
-		map[string]string{"featureFlags": testDocumentDigest})
+		TargetModeCanary, map[string]string{"featureFlags": testDocumentDigest})
 	if err != nil {
 		t.Fatalf("OperationsWithEnablementProof: %v", err)
 	}

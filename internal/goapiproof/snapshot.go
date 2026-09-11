@@ -55,6 +55,17 @@ func DecodeSnapshot(body []byte) (Snapshot, error) {
 	if !utf8.Valid(body) {
 		return Snapshot{}, errors.New("goapiproof: response body is not valid UTF-8 -- a byte this decoder cannot represent would otherwise be silently replaced before comparison")
 	}
+	// r4 P1 (reproduced): sibling of the raw-byte check above, one layer
+	// down -- an unpaired `\uXXXX` surrogate escape is valid ASCII (so it
+	// passes utf8.Valid) but decodes to the SAME U+FFFD encoding/json
+	// would substitute for a genuinely invalid byte, collapsing a body
+	// that carries the escape with one that carries a literal replacement
+	// character into an identical comparison value. See
+	// rejectUnpairedSurrogateEscapes's doc comment (registry.go) for the
+	// executed repro.
+	if err := rejectUnpairedSurrogateEscapes(body); err != nil {
+		return Snapshot{}, fmt.Errorf("goapiproof: %w", err)
+	}
 
 	// Decode the envelope into raw messages first so "data": null and an
 	// absent "data" key stay distinguishable -- both decode to a nil `any`

@@ -331,6 +331,34 @@ func TestDecodeSnapshotRefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
+// r4 P1 (reproduced): the reviewer's own executed repro was against this
+// exact function -- a candidate body carrying `\ud800` and a baseline
+// body carrying a literal `�` decoded to the SAME Go value and
+// certified `match`, minting an enablement-eligible receipt from two
+// genuinely different upstream responses.
+func TestDecodeSnapshotRefusesUnpairedSurrogateEscape(t *testing.T) {
+	if _, err := DecodeSnapshot([]byte(`{"data":{"commit":"\ud800x"}}`)); err == nil {
+		t.Fatal("a body carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse to U+FFFD")
+	}
+}
+
+// The collapse itself, proven directly: without the guard these two
+// bodies would compare EQUAL even though a real client (Python's
+// json.loads preserves the lone surrogate) would see them as different.
+func TestDecodeSnapshotUnpairedSurrogateDoesNotMaskAsAMatchingBaseline(t *testing.T) {
+	candidate := []byte(`{"data":{"commit":"\ud800x"}}`)
+	baseline := []byte(`{"data":{"commit":"�x"}}`)
+	if _, err := DecodeSnapshot(candidate); err == nil {
+		t.Fatal("the candidate leg must refuse before it can be compared against anything")
+	}
+	// The baseline (a literal, genuinely valid U+FFFD) must still decode
+	// fine on its own -- this guard is about the ESCAPE, not the
+	// character it would otherwise be confused for.
+	if _, err := DecodeSnapshot(baseline); err != nil {
+		t.Fatalf("a literal U+FFFD is valid UTF-8 and must decode: %v", err)
+	}
+}
+
 // r3 P1 (team-lead's decoder sweep): DecodeSnapshot's envelope is
 // already a map[string]json.RawMessage keyed by exact string, so a
 // "Data"/"DATA" sibling of "data" cannot shadow it -- proven here

@@ -182,6 +182,9 @@ func LoadOperationCatalog(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("%w: %s is not valid UTF-8 -- the Python edge loader decodes this file as text and refuses the WHOLE file on one bad byte anywhere in it, so a Go reader that decoded past it would write rows nothing can dispatch",
 			ErrCatalogUnusable, path)
 	}
+	if err := rejectUnpairedSurrogateEscapes(raw); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrCatalogUnusable, path, err)
+	}
 	var rawEntries []map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rawEntries); err != nil {
 		return nil, fmt.Errorf("%w: decode %s (expected a JSON array of {operation,digest}): %w", ErrCatalogUnusable, path, err)

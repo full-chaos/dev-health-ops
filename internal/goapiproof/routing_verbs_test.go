@@ -40,6 +40,10 @@ func TestLoadOperationCatalogRefusesEveryUnusableShape(t *testing.T) {
 		"invalid UTF-8, UTF-16 surrogate":                      "[{\"operation\":\"a\",\"digest\":\"b\",\"ignored\":\"\xed\xa0\x80\"}]",
 		"invalid UTF-8, above the Unicode code point limit":    "[{\"operation\":\"a\",\"digest\":\"b\",\"ignored\":\"\xf4\x90\x80\x80\"}]",
 		"invalid UTF-8 in the operation KEY, not just a value": "[{\"operation\":\"\xff\",\"digest\":\"b\"}]",
+		// r4 P1 (reproduced): an unpaired UTF-16 surrogate escape is valid
+		// ASCII, so it passes the UTF-8 gate above -- encoding/json
+		// silently collapses it to U+FFFD one layer down instead.
+		"unpaired UTF-16 surrogate escape": `[{"operation":"a","digest":"b","ignored":"\ud800x"}]`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

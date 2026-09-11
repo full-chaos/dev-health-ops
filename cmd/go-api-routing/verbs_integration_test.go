@@ -95,7 +95,11 @@ func startQueryAPI(t *testing.T, schemaDigest string, documentDigest map[string]
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		writeJSON(t, w, map[string]any{"commit": verbTestBuild, "version": "test", "build_time": "2026-09-10T00:00:00Z"})
+		// r4 P2 (reproduced): `modified` must be explicitly present now --
+		// FetchBuildIdentity refuses an absent key rather than defaulting
+		// unknown cleanliness to clean. This fixture's whole purpose is to
+		// exercise a build the guards should ACCEPT, so it says so.
+		writeJSON(t, w, map[string]any{"commit": verbTestBuild, "modified": false, "version": "test", "build_time": "2026-09-10T00:00:00Z"})
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
@@ -575,4 +579,113 @@ func queryRow(t *testing.T, dsn, sql string, into ...any) error {
 	}
 	defer pool.Close()
 	return pool.QueryRow(ctx, sql).Scan(into...)
+}
+
+// r4 P1 (reproduced): `status` used to classify an operation purely from
+// the LOCAL catalog's document digest, discarding the deployed registry's
+// own per-operation digest after checking only schema_digest -- so a
+// deployed plane that agreed on schema_digest but registered a DIFFERENT
+// document digest for one operation still printed that row healthy, MATCH,
+// "ok". `enable`'s own preflight (the same map, cmd/go-api-routing/enable.go)
+// refuses exactly this disagreement. This is the reviewer's own executed
+// repro, reproduced here as a real end-to-end fixture: real Postgres, real
+// HTTP registry, a real proven receipt, then the deployed registry's
+// document digest for the SAME operation drifts while schema_digest does
+// not move.
+func TestStatusReportsDeployedDocumentDigestMismatchNotHealthy(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	digest := "8888888888888888888888888888888888888888888888888888888888888887"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	documentDigests := map[string]string{verbTestOperation: digest}
+	server := startQueryAPI(t, localSchemaDigest(), documentDigests)
+
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+		localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("register candidate build: %v", err)
+	}
+	if _, err := goapiproof.Write(ctx, pool, goapiproof.Receipt{
+		SchemaDigest:      localSchemaDigest(),
+		DocumentDigest:    digest,
+		SelectedOperation: verbTestOperation,
+		CandidateBuild:    verbTestBuild,
+		RequestIdentity:   "status-deployed-digest-mismatch",
+		Stage:             goapiproof.EnablementProofStage,
+		TerminalState:     goapiproof.EnablementProofTerminalState,
+		MeasurementRoute:  goapiproof.RouteEdge,
+		RecordedBy:        "lane-routing-verbs",
+		ReviewEvidence:    "r4 P1 killer: deployed document digest drift after enablement",
+	}); err != nil {
+		t.Fatalf("write receipt: %v", err)
+	}
+	if _, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...); err != nil {
+		t.Fatalf("enable a genuinely proven operation must succeed: %v", err)
+	}
+
+	// The deployed plane's document digest for the SAME operation now
+	// drifts -- schema_digest (embedded in `server`'s handler, unrelated
+	// to this map) does NOT move, so `planes_agree` stays true. This is
+	// exactly the reviewer's repro shape.
+	documentDigests[verbTestOperation] = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+
+	// enable -dry-run must refuse on the same drift -- the control this
+	// test's assertion is measured against.
+	if _, _, err := captureVerb(t, append(enableArgs(server, dsn, catalogPath), "-dry-run")...); err == nil || !strings.Contains(err.Error(), "document digest MISMATCH") {
+		t.Fatalf("control: enable -dry-run must refuse with a document digest MISMATCH once the deployed plane drifts, got err=%v", err)
+	}
+
+	out, _, err := captureVerb(t, "status", "-registry-url", server.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), verbTestOperation) {
+			if strings.Contains(line, "ok") {
+				t.Fatalf("status printed 'ok' for an operation enable would refuse right now:\n%s", out)
+			}
+			break
+		}
+	}
+	if !strings.Contains(out, "DEPLOYED document digest MISMATCH") {
+		t.Fatalf("the text report never named the deployed digest disagreement:\n%s", out)
+	}
+
+	jsonOut, _, err := captureVerb(t, "status", "-registry-url", server.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath, "-json")
+	if err != nil {
+		t.Fatalf("status -json must never refuse: %v", err)
+	}
+	var report struct {
+		PlanesAgree *bool `json:"planes_agree"`
+		Operations  []struct {
+			Operation           string `json:"operation"`
+			DigestState         string `json:"digest_state"`
+			Reachable           bool   `json:"reachable"`
+			DeployedDigestState string `json:"deployed_digest_state"`
+		} `json:"operations"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &report); err != nil {
+		t.Fatalf("decode status -json: %v\n%s", err, jsonOut)
+	}
+	if report.PlanesAgree == nil || !*report.PlanesAgree {
+		t.Fatalf("this fixture's schema_digest must still agree -- the drift is in the PER-OPERATION document digest only: %+v", report.PlanesAgree)
+	}
+	for _, operation := range report.Operations {
+		if operation.Operation != verbTestOperation {
+			continue
+		}
+		if operation.DigestState != "MATCH" {
+			t.Fatalf("this row's schema-level classification must still be MATCH -- only the deployed document digest drifted: %+v", operation)
+		}
+		if operation.DeployedDigestState != "MISMATCH" {
+			t.Fatalf("deployed_digest_state = %q, want MISMATCH", operation.DeployedDigestState)
+		}
+		if operation.Reachable {
+			t.Fatal("reachable=true for an operation enable would refuse right now -- the exact 'output that merely looks healthy' the reviewer found")
+		}
+		return
+	}
+	t.Fatalf("no operation %s in the JSON report:\n%s", verbTestOperation, jsonOut)
 }

@@ -184,6 +184,12 @@ cmd/dev-health-workerctl	13
 # -count=1, twice: 38.673s and 35.637s. Rounded up to 45 for CI headroom,
 # the same treatment the other per-test-container packages in this file
 # get. Re-time if it gains tests.
+#
+# r4 fix round (2026-09-11): ONE more Testcontainers-backed test added
+# (TestStatusReportsDeployedDocumentDigestMismatchNotHealthy, killing M27 --
+# `status` discarding the deployed registry's per-operation document
+# digest). Re-measured, whole package, -count=1: 31.975s. Still comfortably
+# inside the existing 45 weight; not raised.
 cmd/go-api-routing	45
 cmd/query-api	110
 cmd/query-api/internal/analytics	22

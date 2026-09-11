@@ -100,6 +100,48 @@ func TestFetchBuildIdentityRefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
+// r4 P1 (reproduced): `\ud800` is six valid ASCII bytes -- it passes
+// utf8.Valid on the raw body -- but encoding/json unescapes an unpaired
+// UTF-16 surrogate half to U+FFFD rather than erroring, so this body and
+// one carrying a LITERAL U+FFFD commit decode to the identical Go string.
+// Executed: `{"commit":"\ud800","modified":false}` -> commit == "�",
+// the same value a genuinely corrupted build identity would produce.
+func TestFetchBuildIdentityRefusesUnpairedSurrogateEscape(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, `{"commit":"\ud800aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","modified":false}`)
+	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err == nil {
+		t.Fatal("a /buildinfo response carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse to U+FFFD")
+	}
+}
+
+// r4 P2 (reproduced): `"modified": null` decodes through a plain
+// `json.Unmarshal(null, &value)` into a bool as a documented NO-OP --
+// value stays false, its zero value -- so a caller reading only the value
+// (not exactBoolField's presence flag) could not tell an EXPLICIT "clean"
+// from "the process would not say". Executed: this body enabled a row
+// exactly like `"modified":false` would have.
+func TestFetchBuildIdentityRefusesNullModified(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa7","modified":null}`)
+	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err == nil {
+		t.Fatal("`modified: null` must refuse -- an unknown cleanliness answer must never be read as false")
+	}
+}
+
+// r4 P2 (reproduced), the other half: OMITTING `modified` entirely also
+// reached exactBoolField's zero value with present=false, and the caller
+// used to discard that flag (`modified, _, err := exactBoolField(...)`).
+func TestFetchBuildIdentityRefusesAbsentModified(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa7"}`)
+	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err == nil {
+		t.Fatal("an absent `modified` key must refuse -- unknown cleanliness must never default to clean")
+	}
+}
+
 // r3 P1 (team-lead's decoder sweep): /buildinfo must accept an
 // unrecognised key the same way the catalog does -- refusing on it would
 // disagree with a Python reader that simply never looks at it.
@@ -251,6 +293,18 @@ func TestFetchRegistryRefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
+// r4 P1 (reproduced), the /registry sibling: the sweep named all three
+// decoders explicitly (snapshot.go, registry.go, routing_catalog.go).
+func TestFetchRegistryRefusesUnpairedSurrogateEscape(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[{"operation":"flowMatrix","document_digest":"\ud800abc"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+		t.Fatal("a /registry response carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse a document_digest to U+FFFD")
+	}
+}
+
 func TestFetchRegistryRefusesConflictingDuplicateOperations(t *testing.T) {
 	for name, order := range map[string][2]string{
 		"catalog-matching digest first": {"77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
@@ -386,6 +440,18 @@ func TestLoadDocumentsRefusesInvalidUTF8(t *testing.T) {
 	}
 	if _, err := LoadDocuments(path); err == nil {
 		t.Fatal("a documents file containing invalid UTF-8 must refuse")
+	}
+}
+
+// r4 P1 (reproduced): the third named decoder in the surrogate sweep.
+func TestLoadDocumentsRefusesUnpairedSurrogateEscape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	body := `[{"operation":"flowMatrix","document":"query \ud800abc","digest":"d"}]`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadDocuments(path); err == nil {
+		t.Fatal("a documents file carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse the document text to U+FFFD")
 	}
 }
 
@@ -568,5 +634,39 @@ func TestAnOperatorNoteCannotForgeProvenance(t *testing.T) {
 	}
 	if provenance.Operator != runner.Config.ReviewEvidence {
 		t.Fatalf("the operator's text was not preserved verbatim: %q", provenance.Operator)
+	}
+}
+
+// r4 P1 (reproduced): direct coverage of the scanner itself, including
+// the shapes that must NOT be refused (a valid pair, a plain BMP escape,
+// an escaped backslash immediately before a literal "u" that is not an
+// escape at all) alongside every unpaired shape.
+func TestRejectUnpairedSurrogateEscapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"no escapes at all", `{"commit":"plain text"}`, false},
+		{"valid surrogate pair", `{"commit":"𐀀"}`, false},
+		{"plain BMP escape", `{"commit":"A"}`, false},
+		{"literal escaped backslash then the letter u", `{"commit":"\\u0041"}`, false},
+		{"lone high surrogate at string end", `{"commit":"\ud800"}`, true},
+		{"lone high surrogate followed by a literal char", `{"commit":"\ud800x"}`, true},
+		{"lone low surrogate with no preceding high", `{"commit":"\udc00"}`, true},
+		{"reversed pair (low then high)", `{"commit":"\udc00\ud800"}`, true},
+		{"two highs in a row", `{"commit":"\ud800\ud800"}`, true},
+		{"high followed by a non-surrogate escape", `{"commit":"\ud800A"}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := rejectUnpairedSurrogateEscapes([]byte(tc.body))
+			if tc.wantErr && err == nil {
+				t.Fatalf("body %q: want an error, got nil", tc.body)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("body %q: want no error, got %v", tc.body, err)
+			}
+		})
 	}
 }

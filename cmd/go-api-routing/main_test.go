@@ -680,7 +680,7 @@ func TestToReportOperationProjectsEveryStateFaithfully(t *testing.T) {
 		RecordedBy:            "who",
 		Proven:                true,
 	}
-	got := toReportOperation(match)
+	got := toReportOperation(match, map[string]string{"featureFlags": "abc"}, false)
 	if got.Mode == nil || *got.Mode != "canary" || got.CurrentCandidateBuild == nil || *got.CurrentCandidateBuild != "build-1" {
 		t.Fatalf("MATCH projection lost the row: %+v", got)
 	}
@@ -703,7 +703,7 @@ func TestToReportOperationProjectsEveryStateFaithfully(t *testing.T) {
 		StaleDigests:               []string{"sha256:old"},
 		UnreachableDocumentDigests: []string{"ghi"},
 	}
-	got = toReportOperation(stale)
+	got = toReportOperation(stale, nil, false)
 	if got.Mode != nil || got.CurrentCandidateBuild != nil || got.RolloutPercentage != nil || got.UpdatedAt != nil {
 		t.Fatalf("a STALE row must project no row fields: %+v", got)
 	}
@@ -718,9 +718,60 @@ func TestToReportOperationProjectsEveryStateFaithfully(t *testing.T) {
 	// have to tell `null` from `[]` to answer "are there other rows".
 	missing := toReportOperation(goapiproof.OperationStatus{
 		Operation: "flowMatrix", DocumentDigest: "jkl", DigestState: goapiproof.DigestMissing,
-	})
+	}, nil, false)
 	if missing.StaleDigests == nil || missing.UnreachableDocumentDigests == nil {
 		t.Fatalf("empty digest lists must render as [] not null: %+v", missing)
+	}
+}
+
+// r4 P1 (reproduced): `status` used to discard the deployed registry's
+// per-operation document digest after checking only schema_digest, so a
+// MATCH row printed "ok"/reachable=true even when the deployed plane
+// registered a DIFFERENT document digest for that exact operation -- the
+// same disagreement `enable`'s preflight refuses on. Each case below is
+// the projection `enable` would agree or disagree with.
+func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
+	base := goapiproof.OperationStatus{
+		Operation:      "flowMatrix",
+		DocumentDigest: "catalog-digest",
+		DigestState:    goapiproof.DigestMatch,
+		Mode:           "canary",
+		Proven:         true,
+	}
+
+	agree := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false)
+	if agree.DeployedDigestState != "AGREE" {
+		t.Fatalf("deployed_digest_state = %q, want AGREE", agree.DeployedDigestState)
+	}
+	if !agree.Reachable {
+		t.Fatal("a row the deployed plane agrees with must stay reachable")
+	}
+
+	mismatch := toReportOperation(base, map[string]string{"flowMatrix": "deployed-digest"}, false)
+	if mismatch.DeployedDigestState != "MISMATCH" {
+		t.Fatalf("deployed_digest_state = %q, want MISMATCH", mismatch.DeployedDigestState)
+	}
+	if mismatch.DeployedDocumentDigest == nil || *mismatch.DeployedDocumentDigest != "deployed-digest" {
+		t.Fatalf("deployed_document_digest = %v, want the deployed value named", mismatch.DeployedDocumentDigest)
+	}
+	if mismatch.Reachable {
+		t.Fatal("a MATCH row the deployed plane disagrees with must NOT be reported reachable -- enable would refuse it")
+	}
+
+	unregistered := toReportOperation(base, map[string]string{"otherOperation": "x"}, false)
+	if unregistered.DeployedDigestState != "UNREGISTERED" {
+		t.Fatalf("deployed_digest_state = %q, want UNREGISTERED", unregistered.DeployedDigestState)
+	}
+	if unregistered.Reachable {
+		t.Fatal("an operation the deployed plane does not register at all must not be reported reachable")
+	}
+
+	unreachableGoPlane := toReportOperation(base, nil, true)
+	if unreachableGoPlane.DeployedDigestState != "UNKNOWN" {
+		t.Fatalf("deployed_digest_state = %q, want UNKNOWN when the go plane could not be reached", unreachableGoPlane.DeployedDigestState)
+	}
+	if !unreachableGoPlane.Reachable {
+		t.Fatal("an UNKNOWN deployed digest state (go plane unreachable) must not downgrade a row that was otherwise reachable -- that is what GoPlaneError already reports")
 	}
 }
 

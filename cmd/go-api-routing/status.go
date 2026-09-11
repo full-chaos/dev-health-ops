@@ -63,6 +63,24 @@ type statusReportOperation struct {
 	UnreachableDocumentDigests []string `json:"unreachable_document_digests"`
 	Proven                     bool     `json:"proven"`
 	Reachable                  bool     `json:"reachable"`
+
+	// DeployedDigestState and DeployedDocumentDigest report what the
+	// RUNNING go plane's own /registry says about this operation, cross-
+	// checked against DocumentDigest (the catalog's, what a row must
+	// carry to be reachable) -- the same comparison `enable`'s Preflight 3
+	// makes before writing, now made here too so `status` cannot report an
+	// operation healthier than a write verb would treat it (r4 P1).
+	//
+	//   AGREE        the deployed plane registers this operation under
+	//                 DocumentDigest, matching the catalog.
+	//   MISMATCH      the deployed plane registers this operation, but
+	//                 under a DIFFERENT document digest.
+	//   UNREGISTERED  the deployed plane does not register this operation
+	//                 at all.
+	//   UNKNOWN       the go plane could not be reached (GoPlaneError is
+	//                 set) -- deployed agreement genuinely cannot be told.
+	DeployedDigestState    string  `json:"deployed_digest_state"`
+	DeployedDocumentDigest *string `json:"deployed_document_digest"`
 }
 
 func runStatus(argv []string) error {
@@ -115,12 +133,29 @@ func runStatus(argv []string) error {
 	// diagnostic that refused without a credential would be unusable in
 	// exactly the situation it exists for. status therefore never reads
 	// the build identity either -- that is a WRITE verb's preflight.
+	//
+	// r4 P1 (reproduced): `registry.DocumentDigest` used to be read ONLY
+	// for its schema digest and then discarded -- so a deployed registry
+	// that agreed on schema_digest but reported a DIFFERENT document
+	// digest for one operation was invisible here, even though `enable`'s
+	// preflight (cmd/go-api-routing/enable.go's Preflight 3, the same
+	// map) refuses that exact case. Executed: with the go plane's
+	// document digest for `flowMatrix` changed and schema_digest
+	// unchanged, `status` printed `flowMatrix MATCH canary 100 ok` /
+	// `planes_agree=true` while `enable -dry-run` refused with "document
+	// digest MISMATCH". A diagnostic that looks healthier than the write
+	// verb it exists to inform is the exact "output that merely looks
+	// healthy" this package's own doc comment forbids. `deployedDigests`
+	// is now threaded into the per-operation report below so it can say
+	// the same thing `enable` would.
+	var deployedDigests map[string]string
 	if registry, err := goapiproof.FetchRegistry(ctx, httpClient(common.timeout), registryURL); err != nil {
 		report.GoPlaneError = stringPtr(err.Error())
 	} else {
 		report.GoPlaneSchemaDigest = stringPtr(registry.SchemaDigest)
 		agree := registry.SchemaDigest == local
 		report.PlanesAgree = &agree
+		deployedDigests = registry.DocumentDigest
 	}
 
 	var statuses []goapiproof.OperationStatus
@@ -173,7 +208,7 @@ func runStatus(argv []string) error {
 		}
 	}
 	for _, status := range statuses {
-		report.Operations = append(report.Operations, toReportOperation(status))
+		report.Operations = append(report.Operations, toReportOperation(status, deployedDigests, report.GoPlaneError != nil))
 	}
 
 	if asJSON {
@@ -254,6 +289,16 @@ func printStatusText(report statusReport, local string) {
 			if operation.Proven {
 				proof = "ok"
 			}
+			// r4 P1 (reproduced): a proof receipt names a build served at a
+			// document digest -- it says nothing about whether the DEPLOYED
+			// process still registers that digest right now. Printing "ok"
+			// here regardless was the "output that merely looks healthy"
+			// the reviewer's repro caught: `enable -dry-run` refused the
+			// identical operation with a document digest MISMATCH while
+			// this line still read "ok".
+			if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" {
+				proof = "MISMATCH"
+			}
 		}
 		fmt.Fprintf(stdout, "%-24s %-8s %-10s %-8s %s\n", operation.Operation, operation.DigestState, mode, rollout, proof)
 		// r2 R2-05: these were computed and never printed, which made the
@@ -264,10 +309,21 @@ func printStatusText(report statusReport, local string) {
 		if len(operation.UnreachableDocumentDigests) > 0 {
 			fmt.Fprintf(stdout, "    rows at the LIVE schema digest the edge can never reach, document digest: %v\n", operation.UnreachableDocumentDigests)
 		}
+		// r4 P1 (reproduced): the deployed plane's own per-operation
+		// document digest, cross-checked against the catalog's -- the
+		// exact comparison `enable`'s preflight makes before it will write
+		// a row, now surfaced here too so this diagnostic cannot look
+		// healthier than a write verb would treat the same operation.
+		switch operation.DeployedDigestState {
+		case "MISMATCH":
+			fmt.Fprintf(stdout, "    !! DEPLOYED document digest MISMATCH: catalog=%s go=%s -- enable would refuse this operation right now\n", operation.DocumentDigest, derefOr(operation.DeployedDocumentDigest, "unknown"))
+		case "UNREGISTERED":
+			fmt.Fprintln(stdout, "    !! the deployed go plane does not register this operation at all -- enable would refuse it")
+		}
 	}
 }
 
-func toReportOperation(status goapiproof.OperationStatus) statusReportOperation {
+func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[string]string, goPlaneUnreachable bool) statusReportOperation {
 	reported := statusReportOperation{
 		Operation:                  status.Operation,
 		DocumentDigest:             status.DocumentDigest,
@@ -282,6 +338,33 @@ func toReportOperation(status goapiproof.OperationStatus) statusReportOperation 
 	}
 	if reported.UnreachableDocumentDigests == nil {
 		reported.UnreachableDocumentDigests = []string{}
+	}
+	switch {
+	case goPlaneUnreachable:
+		reported.DeployedDigestState = "UNKNOWN"
+	case deployedDigests == nil:
+		reported.DeployedDigestState = "UNKNOWN"
+	default:
+		if deployed, ok := deployedDigests[status.Operation]; !ok {
+			reported.DeployedDigestState = "UNREGISTERED"
+		} else {
+			reported.DeployedDocumentDigest = stringPtr(deployed)
+			if deployed == status.DocumentDigest {
+				reported.DeployedDigestState = "AGREE"
+			} else {
+				reported.DeployedDigestState = "MISMATCH"
+			}
+		}
+	}
+	// r4 P1 (reproduced): a row this binary classifies MATCH/reachable is
+	// only ACTUALLY reachable if the deployed process agrees on the
+	// document digest too -- `enable`'s own preflight refuses on exactly
+	// this disagreement. Downgrading Reachable here, rather than only
+	// adding the new field, is what stops the JSON `reachable: true` a
+	// caller already depends on from being the healthier-than-true answer
+	// the reviewer's repro printed.
+	if reported.DeployedDigestState == "MISMATCH" || reported.DeployedDigestState == "UNREGISTERED" {
+		reported.Reachable = false
 	}
 	if status.DigestState != goapiproof.DigestMatch {
 		return reported

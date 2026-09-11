@@ -1,6 +1,7 @@
 package goapiproof
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode/utf8"
@@ -80,10 +82,122 @@ func exactBoolField(raw map[string]json.RawMessage, key string) (value bool, pre
 	if !present {
 		return false, false, nil
 	}
+	if bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		// r4 P1 (reproduced): a plain `json.Unmarshal(null, &value)` into a
+		// non-pointer bool is a documented NO-OP in encoding/json -- it
+		// returns nil and leaves value at its zero value (false), so
+		// `"modified": null` and `"modified": false` were INDISTINGUISHABLE
+		// to every caller that only looked at `value`. FetchBuildIdentity
+		// discarded the `present` flag this function already computed
+		// (`modified, _, err := exactBoolField(...)`), so a build identity
+		// route that could not say whether its tree was modified was
+		// treated as PROVABLY clean -- executed: `{"commit":"a...a",
+		// "modified":null}` enabled a row exactly like `"modified":false`
+		// would have. Reporting null as PRESENT-BUT-NOT-A-BOOLEAN, rather
+		// than silently coercing it to false, makes the caller decide
+		// on purpose rather than by omission.
+		return false, true, fmt.Errorf("%q is JSON null, not a boolean -- an unknown answer must never be read as false (%s)", key, rawValue)
+	}
 	if err := json.Unmarshal(rawValue, &value); err != nil {
 		return false, true, fmt.Errorf("%q is not a JSON boolean (%s)", key, rawValue)
 	}
 	return value, true, nil
+}
+
+// rejectUnpairedSurrogateEscapes scans a raw JSON body for a `\uXXXX`
+// escape that names one half of a UTF-16 surrogate pair with no matching
+// other half.
+//
+// r4 P1 (reproduced): `utf8.Valid(body)` above only checks the RAW BYTES
+// of the body, and a JSON escape like `\ud800` is six perfectly valid
+// ASCII bytes -- the invalidity is introduced ONE LAYER DOWN, when
+// encoding/json unescapes it. Its string scanner substitutes U+FFFD (the
+// replacement character) for an unpaired surrogate rather than erroring,
+// so a body carrying `\ud800` and a body carrying a literal `�`
+// decode to the IDENTICAL Go string and compare equal downstream.
+// Executed:
+//
+//	{"commit":"\ud800","modified":false}  -> commit == "�"
+//
+// against a baseline body that already carries a literal U+FFFD:
+// candidate and baseline compared equal even though Python's
+// `json.loads` preserves the lone surrogate (`"\ud800"`) and considers
+// the two strings UNEQUAL. Scanning the raw bytes BEFORE any decode runs
+// is the only point this distinction survives -- once encoding/json has
+// rewritten the escape, the fact that it WAS an escape (rather than a
+// genuine literal replacement character already present in the body) is
+// gone.
+func rejectUnpairedSurrogateEscapes(body []byte) error {
+	const (
+		highSurrogateLow  = 0xD800
+		highSurrogateHigh = 0xDBFF
+		lowSurrogateLow   = 0xDC00
+		lowSurrogateHigh  = 0xDFFF
+	)
+	inString := false
+	escaped := false
+	pendingHigh := -1 // -1 == no pending high surrogate half awaiting its pair
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if !inString {
+			if c == '"' {
+				inString = true
+			}
+			continue
+		}
+		if escaped {
+			escaped = false
+			if c != 'u' {
+				if pendingHigh != -1 {
+					return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+				}
+				continue
+			}
+			if i+4 >= len(body) {
+				return errors.New("goapiproof: truncated \\u escape at end of body")
+			}
+			unit, err := strconv.ParseUint(string(body[i+1:i+5]), 16, 32)
+			if err != nil {
+				return fmt.Errorf("goapiproof: malformed \\u escape %q", body[i:i+6])
+			}
+			i += 4
+			code := int(unit)
+			switch {
+			case code >= highSurrogateLow && code <= highSurrogateHigh:
+				if pendingHigh != -1 {
+					return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+				}
+				pendingHigh = code
+			case code >= lowSurrogateLow && code <= lowSurrogateHigh:
+				if pendingHigh == -1 {
+					return fmt.Errorf("goapiproof: unpaired UTF-16 low surrogate \\u%04x with no preceding high half -- encoding/json would silently replace it with U+FFFD rather than erroring, collapsing this response into whatever else also contains a literal U+FFFD", code)
+				}
+				pendingHigh = -1
+			default:
+				if pendingHigh != -1 {
+					return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+				}
+			}
+			continue
+		}
+		switch c {
+		case '\\':
+			escaped = true
+		case '"':
+			if pendingHigh != -1 {
+				return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+			}
+			inString = false
+		default:
+			if pendingHigh != -1 {
+				return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+			}
+		}
+	}
+	if pendingHigh != -1 {
+		return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+	}
+	return nil
 }
 
 // EndpointLabel is a safe name for an endpoint, built from parsed parts
@@ -320,6 +434,9 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	if !utf8.Valid(body) {
 		return RegistryView{}, fmt.Errorf("goapiproof: %s response is not valid UTF-8 -- the Python verb's HTTP client decodes response bytes as UTF-8 before parsing and would refuse the whole body on one bad byte anywhere in it", EndpointLabel(registryURL))
 	}
+	if err := rejectUnpairedSurrogateEscapes(body); err != nil {
+		return RegistryView{}, fmt.Errorf("goapiproof: %s response: %w", EndpointLabel(registryURL), err)
+	}
 
 	var rawTop map[string]json.RawMessage
 	if err := json.Unmarshal(body, &rawTop); err != nil {
@@ -471,6 +588,9 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	if !utf8.Valid(body) {
 		return "", fmt.Errorf("goapiproof: %s response is not valid UTF-8 -- a build identity this corrupted cannot be written as a foreign key value", EndpointLabel(buildInfoURL))
 	}
+	if err := rejectUnpairedSurrogateEscapes(body); err != nil {
+		return "", fmt.Errorf("goapiproof: %s response: %w", EndpointLabel(buildInfoURL), err)
+	}
 	var rawTop map[string]json.RawMessage
 	if err := json.Unmarshal(body, &rawTop); err != nil {
 		return "", fmt.Errorf("goapiproof: decode buildinfo body: %w", err)
@@ -479,7 +599,7 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: %s buildinfo body: %w", EndpointLabel(buildInfoURL), err)
 	}
-	modified, _, err := exactBoolField(rawTop, "modified")
+	modified, modifiedPresent, err := exactBoolField(rawTop, "modified")
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: %s buildinfo body: %w", EndpointLabel(buildInfoURL), err)
 	}
@@ -490,6 +610,18 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 		return "", ErrNoBuildIdentity
 	case commit == "unknown":
 		return "", fmt.Errorf("%w: it reports commit=%q, internal/platform/version's default for a build with no -ldflags and no VCS stamp", ErrNoBuildIdentity, commit)
+	case !modifiedPresent:
+		// r4 P2 (reproduced): the OTHER half of the null-modified finding
+		// above. `exactBoolField` now refuses `"modified": null` outright,
+		// but a body that OMITS the key altogether still reached here with
+		// `modified == false` (its zero value) and `modifiedPresent ==
+		// false` -- a caller that only read the value, not the presence
+		// flag, could not tell "this build reports itself clean" from
+		// "this build said nothing about its tree at all". Executed: a
+		// `/buildinfo` body carrying only `{"commit":"aa...aa"}` enabled a
+		// row exactly like an explicit `"modified":false` would have.
+		// Unknown cleanliness must refuse, not default to clean.
+		return "", fmt.Errorf("%w: it does not report whether its working tree was modified, so cleanliness cannot be assumed", ErrNoBuildIdentity)
 	case modified:
 		return "", fmt.Errorf("%w: it reports a MODIFIED working tree, so its commit does not identify the source it was built from", ErrNoBuildIdentity)
 	}
@@ -641,6 +773,9 @@ func LoadDocuments(path string) (map[string]string, error) {
 	// function hands back as if it were the real registered text.
 	if !utf8.Valid(raw) {
 		return nil, fmt.Errorf("goapiproof: documents file %s is not valid UTF-8", path)
+	}
+	if err := rejectUnpairedSurrogateEscapes(raw); err != nil {
+		return nil, fmt.Errorf("goapiproof: documents file %s: %w", path, err)
 	}
 	// This was the last plain struct-tag decode left in the package
 	// (team-lead's decoder sweep, 01:0xZ): `registrydumpDocument`'s

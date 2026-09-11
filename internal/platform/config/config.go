@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -1254,6 +1255,29 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if strings.TrimSpace(host) != host {
 		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.HostKey)
 	}
+	// Round-8 (2026-09-11) finding: the round-trip check further below
+	// (net/url structural correctness) is not enough -- both pgx and
+	// clickhouse-go's own DSN parsers treat a comma inside the host field
+	// as a MULTI-HOST list delimiter, a driver-level convention net/url
+	// knows nothing about. A HOST value like ",127.0.0.1" or
+	// "127.0.0.1,evil.invalid" round-trips through url.Parse perfectly
+	// (Hostname()/Port()/Path all match) yet the live driver still
+	// connects -- proven against real pgx and clickhouse-go address
+	// parsing. Fixed structurally, not by denylisting the comma: the host
+	// component must be EXACTLY one of an RFC 1123 hostname, an IPv4
+	// literal, or an IPv6 literal (optionally wrapped in the operator's
+	// own brackets, which are stripped here -- net.JoinHostPort brackets
+	// an IPv6 host itself just below, so the bare form is what it must
+	// receive, never a value that is already bracketed). Anything else --
+	// a second host, a bare port stuffed into HOST, a stray '/', '?',
+	// '#', '@', or space -- is refused, naming spec.HostKey. Multi-host
+	// support stays available through the pre-built URI form only (both
+	// drivers' own multi-host DSN syntax already works there unchanged;
+	// see docs/reference/configuration/environment.md).
+	host, err = validComponentHost(host)
+	if err != nil {
+		return secrets.Value{}, true, fmt.Errorf("%s %w", spec.HostKey, err)
+	}
 	// Round-5 (2026-09-11) finding: envOrDefault's OWN presence check trims
 	// before testing for emptiness (a whitespace-only value is treated as
 	// absent, so the DEFAULT is substituted) -- a whitespace-only PORT/DB
@@ -1267,6 +1291,13 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	}
 	if strings.TrimSpace(port) != port {
 		return secrets.Value{}, true, fmt.Errorf("%s must not have leading or trailing whitespace", spec.PortKey)
+	}
+	// Round-8 (2026-09-11) finding, same family: PORT gets the identical
+	// exactly-one-value discipline -- digits only, 1-65535. A driver-
+	// specific list/range syntax in PORT is refused here rather than
+	// discovered downstream.
+	if err := validComponentPort(port); err != nil {
+		return secrets.Value{}, true, fmt.Errorf("%s %w", spec.PortKey, err)
 	}
 	db := rawOrDefault(lookup, spec.DBKey, spec.DefaultDB)
 	if db == "" {
@@ -1420,4 +1451,89 @@ func firstOrEmpty(value string, ok bool) string {
 		return ""
 	}
 	return value
+}
+
+// hostnameLabelPattern matches one RFC 1123 DNS label: 1-63 characters,
+// alphanumeric, with interior hyphens only (never a leading or trailing
+// one). isRFC1123Hostname below joins the requirement across every
+// dot-separated label so an empty label (a leading/trailing/doubled dot)
+// is rejected by construction, not by a separate check.
+var hostnameLabelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+
+// isRFC1123Hostname reports whether host is a single, syntactically valid
+// DNS hostname -- never a comma-, space-, or slash-bearing value a
+// general-purpose URL parser would accept but a database driver's own DSN
+// parser would reinterpret (round-8, 2026-09-11).
+func isRFC1123Hostname(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !hostnameLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+// validComponentHost enforces that host names EXACTLY one endpoint -- an
+// RFC 1123 hostname, an IPv4 literal, or an IPv6 literal -- returning the
+// BARE (never operator-bracketed) form ResolveDSNFromComponents' later
+// net.JoinHostPort call must receive, since JoinHostPort brackets an IPv6
+// host itself and a value bracketed twice is a different, broken host.
+//
+// Round-8 (2026-09-11) finding: net/url's own round-trip check (further
+// below in ResolveDSNFromComponents) verifies only that the ASSEMBLED URI
+// parses back to the same Hostname()/Port()/Path -- it says nothing about
+// what the eventual database driver's OWN DSN parser does with that host
+// string. Both pgx and clickhouse-go treat a comma inside the host as a
+// multi-host failover list delimiter, so ",127.0.0.1" or
+// "127.0.0.1,evil.invalid" pass net/url's round-trip unchanged yet the
+// live driver still connects, potentially to a second, unintended host.
+// This function is the fix: reject everything that is not exactly one
+// hostname or IP literal, rather than denylisting the comma specifically
+// (a denylist is a heuristic for the next reviewer to break; an allowlist
+// of the three shapes a single endpoint can take is not).
+func validComponentHost(host string) (string, error) {
+	bracketed := strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") && len(host) >= 2
+	candidate := host
+	if bracketed {
+		candidate = host[1 : len(host)-1]
+	}
+	if ip := net.ParseIP(candidate); ip != nil {
+		// ip.To4() alone is not the right test here: it also succeeds for
+		// an IPv4-MAPPED IPv6 literal ("::ffff:192.0.2.1"), which is
+		// legitimately colon-shaped and correctly bracketable. The actual
+		// question is whether candidate's own TEXT is IPv6-shaped (a
+		// colon present), not whether the parsed address happens to be
+		// 4-byte-representable.
+		if bracketed && !strings.Contains(candidate, ":") {
+			return "", errors.New("must not bracket an IPv4 address")
+		}
+		return candidate, nil
+	}
+	if bracketed {
+		return "", errors.New("is bracketed but its contents are not a valid IPv6 address")
+	}
+	if isRFC1123Hostname(host) {
+		return host, nil
+	}
+	return "", errors.New("must be exactly one hostname, IPv4 address, or IPv6 address -- not a list, a port, or any other value")
+}
+
+// validComponentPort enforces the identical exactly-one-value discipline
+// for the port component: digits only, 1-65535 -- never a driver-specific
+// list/range syntax net/url's own round-trip check would not catch either
+// (round-8, 2026-09-11, same finding family as validComponentHost).
+func validComponentPort(port string) error {
+	for _, r := range port {
+		if r < '0' || r > '9' {
+			return errors.New("must contain only digits")
+		}
+	}
+	value, err := strconv.Atoi(port)
+	if err != nil || value < 1 || value > 65535 {
+		return errors.New("must be between 1 and 65535")
+	}
+	return nil
 }

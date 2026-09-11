@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func lookup(values map[string]string) secrets.LookupEnv {
@@ -978,6 +980,154 @@ func TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException(t *testing.T) {
 	if !found {
 		t.Fatalf("ClickHouseSpec.componentKeys() must include its own (unshared) DBKey %q, got %v",
 			ClickHouseSpec.DBKey, ClickHouseSpec.componentKeys())
+	}
+}
+
+// TestValidComponentHostAcceptsExactlyOneEndpoint is round-8's (2026-09-11)
+// P1 fix, red-first: a HOST value like ",127.0.0.1" round-tripped through
+// net/url perfectly (Hostname()/Port()/Path all matched) yet BOTH pgx and
+// clickhouse-go's own DSN parsers treat the comma as a multi-host list
+// delimiter and still connect. Every cell here is executed through
+// ResolveDSNFromComponents itself (not validComponentHost in isolation),
+// and every accepted cell is additionally re-parsed by the REAL driver
+// (pgconn.ParseConfig for the three PostgreSQL specs, clickhouse.ParseDSN
+// for ClickHouse) to prove it resolves to EXACTLY one address, not merely
+// that ResolveDSNFromComponents didn't error.
+func TestValidComponentHostAcceptsExactlyOneEndpoint(t *testing.T) {
+	t.Parallel()
+
+	type cell struct {
+		name    string
+		host    string
+		wantErr bool
+	}
+	cells := []cell{
+		{name: "plain hostname", host: "db.internal"},
+		{name: "IPv4 literal", host: "127.0.0.1"},
+		{name: "IPv6 literal unbracketed", host: "::1"},
+		{name: "IPv6 literal bracketed", host: "[::1]"},
+		{name: "IPv4-mapped IPv6 unbracketed", host: "::ffff:192.0.2.1"},
+		{name: "IPv4-mapped IPv6 bracketed", host: "[::ffff:192.0.2.1]"},
+		{name: "leading comma", host: ",127.0.0.1", wantErr: true},
+		{name: "trailing comma", host: "127.0.0.1,", wantErr: true},
+		{name: "inner comma (two hosts)", host: "127.0.0.1,evil.invalid", wantErr: true},
+		{name: "space", host: "127.0.0.1 evil.invalid", wantErr: true},
+		{name: "host:port stuffed into HOST", host: "127.0.0.1:5432", wantErr: true},
+		{name: "empty label (leading dot)", host: ".db.internal", wantErr: true},
+		{name: "empty label (trailing dot)", host: "db.internal.", wantErr: true},
+		{name: "empty label (doubled dot)", host: "db..internal", wantErr: true},
+		{name: "percent", host: "db%2einternal", wantErr: true},
+		{name: "at", host: "user@db.internal", wantErr: true},
+		{name: "slash", host: "db.internal/x", wantErr: true},
+		{name: "hash", host: "db.internal#x", wantErr: true},
+		{name: "question", host: "db.internal?x", wantErr: true},
+		{name: "bracketed IPv4 (invalid)", host: "[127.0.0.1]", wantErr: true},
+	}
+
+	for _, c := range cells {
+		t.Run(c.name+" (PostgreSQL)", func(t *testing.T) {
+			t.Parallel()
+			value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+				"DEV_HEALTH_PG_DOMAIN_HOST": c.host,
+			}), DomainDatabaseSpec)
+			if !used {
+				t.Fatal("expected used=true once HOST is set")
+			}
+			if c.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
+					t.Fatalf("host %q: expected an error naming DEV_HEALTH_PG_DOMAIN_HOST, got value=%v err=%v", c.host, value, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("host %q: expected success, got: %v", c.host, err)
+			}
+			cfg, parseErr := pgconn.ParseConfig(value.Reveal())
+			if parseErr != nil {
+				t.Fatalf("host %q: real pgx driver could not parse the assembled DSN: %v", c.host, parseErr)
+			}
+			// pgconn ALWAYS carries at least one Fallbacks entry for a
+			// single-host DSN -- it is pgx's own sslmode negotiation
+			// retry (same host, an alternate TLS config), not a second
+			// endpoint. The actual vulnerability this test guards against
+			// is a fallback naming a DIFFERENT host (proven live by the
+			// reviewer for ",127.0.0.1"/"127.0.0.1,evil.invalid" reaching
+			// a second, unintended endpoint) -- so assert every fallback
+			// agrees with the primary Host, never merely that the slice
+			// is non-empty.
+			for i, fallback := range cfg.Fallbacks {
+				if fallback.Host != cfg.Host {
+					t.Fatalf("host %q: real pgx driver's fallback[%d] names a DIFFERENT host %q than the primary %q -- multiple endpoints reached the driver", c.host, i, fallback.Host, cfg.Host)
+				}
+			}
+		})
+		t.Run(c.name+" (ClickHouse)", func(t *testing.T) {
+			t.Parallel()
+			value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+				"DEV_HEALTH_CH_HOST": c.host,
+			}), ClickHouseSpec)
+			if !used {
+				t.Fatal("expected used=true once HOST is set")
+			}
+			if c.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_CH_HOST") {
+					t.Fatalf("host %q: expected an error naming DEV_HEALTH_CH_HOST, got value=%v err=%v", c.host, value, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("host %q: expected success, got: %v", c.host, err)
+			}
+			options, parseErr := clickhouse.ParseDSN(value.Reveal())
+			if parseErr != nil {
+				t.Fatalf("host %q: real clickhouse-go driver could not parse the assembled DSN: %v", c.host, parseErr)
+			}
+			if len(options.Addr) != 1 {
+				t.Fatalf("host %q: real clickhouse-go driver resolved %d address(es), want exactly 1: %v", c.host, len(options.Addr), options.Addr)
+			}
+		})
+	}
+}
+
+// TestValidComponentPortAcceptsExactlyOneNumericPort is round-8's
+// (2026-09-11) companion fix: PORT gets the identical exactly-one-value
+// discipline as HOST.
+func TestValidComponentPortAcceptsExactlyOneNumericPort(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct {
+		name    string
+		port    string
+		wantErr bool
+	}{
+		{name: "plain port", port: "5432"},
+		{name: "min valid", port: "1"},
+		{name: "max valid", port: "65535"},
+		{name: "zero", port: "0", wantErr: true},
+		{name: "out of range", port: "65536", wantErr: true},
+		{name: "comma list", port: "5432,5433", wantErr: true},
+		{name: "non-numeric", port: "5432x", wantErr: true},
+		{name: "leading plus", port: "+5432", wantErr: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			_, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+				"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
+				"DEV_HEALTH_PG_DOMAIN_PORT": c.port,
+			}), DomainDatabaseSpec)
+			if !used {
+				t.Fatal("expected used=true once HOST is set")
+			}
+			if c.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_PORT") {
+					t.Fatalf("port %q: expected an error naming DEV_HEALTH_PG_DOMAIN_PORT, got: %v", c.port, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("port %q: expected success, got: %v", c.port, err)
+			}
+		})
 	}
 }
 

@@ -1343,18 +1343,25 @@ func acceptedByDriver(spec ComponentSpec, assembled string, configured component
 	}
 	parsed, parseErr := parseWithDriver(spec.Scheme, assembled)
 	if parseErr != nil {
-		// Whose fault is it? pgconn reads the ambient PG* environment
-		// while parsing (PGSSLROOTCERT, PGCONNECT_TIMEOUT and friends),
-		// so a DSN built from perfectly good components is refused when
-		// one of those is broken. Blaming the component settings for
-		// that sends the operator to the wrong file. A canonical,
-		// known-good DSN of the same scheme is parsed as a control: if
-		// the driver refuses that too, nothing about the components is
-		// wrong and the message has to say so.
+		// pgconn reads the ambient PG* environment while parsing
+		// (PGSSLROOTCERT, PGCONNECT_TIMEOUT and friends), so a DSN built
+		// from perfectly good components is refused when one of those is
+		// broken, and an operator told only about the component settings
+		// goes to the wrong file. A canonical known-good DSN of the same
+		// scheme is parsed as a control to detect that.
+		//
+		// A failed control says the environment is broken. It says
+		// NOTHING about whether the components are also broken, so it
+		// must never be used to declare them innocent: with a bad
+		// PGCONNECT_TIMEOUT and a bad port set together, the old wording
+		// named the port in its own error text and exonerated it in the
+		// same sentence. Both faults are reported and neither is
+		// excused.
 		if _, controlErr := parseWithDriver(spec.Scheme, control); controlErr != nil {
 			return fmt.Errorf(
-				"the %s driver cannot parse any DSN in this process's environment, so %s and its sibling settings are not the cause: %s",
-				spec.Scheme, spec.HostKey, redactDriverError(assembled, parseErr),
+				"%s: the %s driver refused the assembled DSN: %s -- and it also refuses a known-good DSN in this process's environment (%s), so the environment is broken too and either or both may need fixing",
+				strings.Join(spec.componentKeyNames(), ", "), spec.Scheme,
+				redactDriverError(assembled, parseErr), redactDriverError(control, controlErr),
 			)
 		}
 		return componentDriverError(spec, assembled, parseErr)

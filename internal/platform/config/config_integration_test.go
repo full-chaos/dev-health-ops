@@ -20,25 +20,35 @@ import (
 // same reserved character behaves differently depending on WHERE in the
 // identifier it sits. A database named "/app" assembles into a URL path
 // of "//app", which pgconn reads back as "app" -- a successful LIVE
-// connection to a different existing database. Each cell below is
-// executed against a REAL server, for database, user and password at
-// once, on both drivers.
+// connection to a different existing database.
+//
+// The character is placed AT each position, never wrapped. An earlier
+// generator built every value as prefix+infix+suffix, so the "leading"
+// cell was really "d/baseb" and the "only" cell "d/b": both middle
+// positions under different names, and the leading and only positions
+// were never executed live at all. Each cell is run against a REAL
+// server, for database, user and password at once, on both drivers.
 var liveIdentifierCells = func() []struct{ name, db, user, password string } {
 	chars := []struct{ name, char string }{
 		{"hash", "#"}, {"question", "?"}, {"slash", "/"}, {"space", " "}, {"percent", "%"},
 	}
-	positions := []struct{ name, format string }{
-		{"leading", "%sbase"}, {"middle", "ba%sse"}, {"trailing", "base%s"}, {"only", "%s"},
+	place := []struct {
+		name string
+		at   func(char, base string) string
+	}{
+		{"leading", func(char, base string) string { return char + base }},
+		{"middle", func(char, base string) string { return base[:1] + char + base[1:] }},
+		{"trailing", func(char, base string) string { return base + char }},
+		{"only", func(char, base string) string { return char }},
 	}
 	var cells []struct{ name, db, user, password string }
 	for _, c := range chars {
-		for _, p := range positions {
-			infix := fmt.Sprintf(p.format, c.char)
+		for _, p := range place {
 			cells = append(cells, struct{ name, db, user, password string }{
 				name:     c.name + "-" + p.name,
-				db:       "d" + infix + "b",
-				user:     "u" + infix + "r",
-				password: "p" + infix + "w",
+				db:       p.at(c.char, "db"),
+				user:     p.at(c.char, "usr"),
+				password: p.at(c.char, "pw"),
 			})
 		}
 	}
@@ -289,6 +299,12 @@ func assertRefusalPreventsAWrongLiveDatabase(
 	if cfg.Database == configured {
 		t.Fatalf("database %q was refused (%v) but the driver reads it back unchanged -- the refusal is wrong",
 			configured, refusal)
+	}
+	if cfg.Database == "" {
+		// The driver rewrites this one to no database at all, which
+		// cannot be created and so cannot be connected to. The rewrite
+		// itself is the proof; there is no wrong database to reach.
+		return
 	}
 	if _, err := adminPool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", quoteIdent(cfg.Database))); err != nil {
 		t.Fatalf("create the rewritten database %q: %v", cfg.Database, err)

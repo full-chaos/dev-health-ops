@@ -129,15 +129,27 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 		// without a word and the generation would silently lose its types. The
 		// pattern's own directory is therefore resolved first, by the operating
 		// system, before gqlgen globs it.
-		patterns, err := rawSchemaPatterns(filepath.Base(configPath))
+		raw, err := readRawInputs(filepath.Base(configPath))
 		if err != nil {
 			return fmt.Errorf("load gqlgen config %q: %w", configPath, err)
 		}
+		patterns := raw.schema
 		if err := refuseSchemaPatternsLeavingTheModule(patterns, moduleAbs, configDirAbs); err != nil {
 			return err
 		}
 		if err := refuseUnresolvableSchemaDirs(patterns); err != nil {
 			return err
+		}
+		// The schema is one of THREE keys whose value is a file gqlgen reads
+		// (v0.17.66: schema; model.model_template, read by plugin/modelgen;
+		// resolver.resolver_template, read by plugin/resolvergen -- each with
+		// os.ReadFile from the generator's working directory). The template
+		// keys get the same confinement: inside the module, resolvable, a
+		// regular file -- checked before anything is generated.
+		for _, tpl := range raw.templates {
+			if err := refuseTemplateInput(tpl.knob, tpl.path, moduleAbs, configDirAbs); err != nil {
+				return err
+			}
 		}
 
 		cfg, err = config.LoadConfig(filepath.Base(configPath))
@@ -234,23 +246,60 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	return plan, nil
 }
 
-// rawSchemaPatterns returns the `schema` entries of the config at file exactly
-// as written, before gqlgen globs them. It decodes into gqlgen's own Config type
-// with gqlgen's own decoder settings (config.ReadConfig: yaml.v3, KnownFields),
-// so the list -- including the "schema.graphql" default when the key is absent
+// rawInputs are the configuration values that name files gqlgen reads, exactly
+// as written, before gqlgen globs or resolves them.
+type rawInputs struct {
+	schema    []string
+	templates []templateInput
+}
+
+type templateInput struct{ knob, path string }
+
+// readRawInputs decodes the config at file into gqlgen's own Config type with
+// gqlgen's own decoder settings (config.ReadConfig: yaml.v3, KnownFields), so
+// every value -- including the "schema.graphql" default when the key is absent
 // -- is gqlgen's, not a re-parse with different rules.
-func rawSchemaPatterns(file string) ([]string, error) {
+func readRawInputs(file string) (rawInputs, error) {
 	b, err := os.ReadFile(file)
 	if err != nil {
-		return nil, fmt.Errorf("unable to read config: %w", err)
+		return rawInputs{}, fmt.Errorf("unable to read config: %w", err)
 	}
 	raw := config.DefaultConfig()
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
 	if err := dec.Decode(raw); err != nil {
-		return nil, fmt.Errorf("unable to parse config: %w", err)
+		return rawInputs{}, fmt.Errorf("unable to parse config: %w", err)
 	}
-	return raw.SchemaFilename, nil
+	in := rawInputs{schema: raw.SchemaFilename}
+	if raw.Model.ModelTemplate != "" {
+		in.templates = append(in.templates, templateInput{"model.model_template", raw.Model.ModelTemplate})
+	}
+	if raw.Resolver.ResolverTemplate != "" {
+		in.templates = append(in.templates, templateInput{"resolver.resolver_template", raw.Resolver.ResolverTemplate})
+	}
+	return in, nil
+}
+
+// refuseTemplateInput refuses a template path that leaves the module, cannot
+// be resolved (the inert link CopyTree leaves where a link out of the module
+// was, a missing file), or is not a regular file. The path is literal -- gqlgen
+// passes it straight to os.ReadFile -- so no glob syntax is interpreted.
+func refuseTemplateInput(knob, p, moduleAbs, configDirAbs string) error {
+	abs := filepath.FromSlash(p)
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(configDirAbs, abs)
+	}
+	if _, err := moduleRelative(moduleAbs, filepath.Clean(abs)); err != nil {
+		return fmt.Errorf("refusing: %s %q leaves the module (%v); the generator's input must live inside it", knob, p, err)
+	}
+	info, err := os.Stat(filepath.FromSlash(p))
+	if err != nil {
+		return fmt.Errorf("refusing: %s %q cannot be read: %v. A link out of the module is never followed -- keep the template inside the module", knob, p, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refusing: %s %q is not a regular file (%s)", knob, p, info.Mode())
+	}
+	return nil
 }
 
 // refuseSchemaPatternsLeavingTheModule refuses a schema pattern whose literal

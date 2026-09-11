@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -445,4 +446,194 @@ func TestTakeSnapshotContextStopsWhenCancelled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("TakeSnapshotContext with a cancelled context returned %v (%d entries), want context.Canceled", err, len(snap))
 	}
+}
+
+// TestTemplateInputConfinementInputDomain is the class sweep of the
+// schema-input confinement over the other two configuration keys gqlgen READS
+// as files (v0.17.66: codegen/config/package.go ModelTemplate,
+// codegen/config/resolver.go ResolverTemplate; both read with os.ReadFile from
+// the generator's working directory). Round 2 executed an absolute template
+// outside the module reaching the generated output through `generate`; every
+// row here is refused before the generator runs, except the canonical one.
+func TestTemplateInputConfinementInputDomain(t *testing.T) {
+	type knob struct{ name, section, key, from string }
+	knobs := []knob{
+		{"model.model_template", "model", "model_template", "model: {filename: gen/model/models_gen.go, package: model}"},
+		{"resolver.resolver_template", "resolver", "resolver_template", "resolver: {layout: single-file, filename: gen/resolver.go, package: gen}"},
+	}
+	type shape struct {
+		name    string
+		value   func(t *testing.T, f *fixture, outside string) string
+		wantErr string
+	}
+	shapes := []shape{
+		{"canonical (a template file inside the module)", func(t *testing.T, f *fixture, outside string) string {
+			f.write("tmpl/t.gotpl", "{{ reserveImport \"context\" }}\n")
+			return "tmpl/t.gotpl"
+		}, ""},
+		{"absolute path outside the module", func(t *testing.T, f *fixture, outside string) string {
+			p := filepath.Join(outside, "t.gotpl")
+			if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}, "leaves the module"},
+		{"relative ../ out of the module", func(t *testing.T, f *fixture, outside string) string {
+			return "../t.gotpl"
+		}, "leaves the module"},
+		{"absolute path naming the REAL tree (outside the private copy)", func(t *testing.T, f *fixture, outside string) string {
+			f.write("tmpl/t.gotpl", "x")
+			return filepath.Join(f.dir, "tmpl", "t.gotpl")
+		}, "leaves the module"},
+		{"a link out of the module", func(t *testing.T, f *fixture, outside string) string {
+			p := filepath.Join(outside, "t.gotpl")
+			if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(f.dir, "tmpl"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(p, filepath.Join(f.dir, "tmpl", "t.gotpl")); err != nil {
+				t.Fatal(err)
+			}
+			return "tmpl/t.gotpl"
+		}, "too many levels of symbolic links"},
+		{"a path through a directory link out of the module", func(t *testing.T, f *fixture, outside string) string {
+			if err := os.WriteFile(filepath.Join(outside, "t.gotpl"), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(f.dir, "outdir")); err != nil {
+				t.Fatal(err)
+			}
+			return "outdir/t.gotpl"
+		}, "too many levels of symbolic links"},
+		{"absent (names a file that does not exist)", func(t *testing.T, f *fixture, outside string) string {
+			return "tmpl/missing.gotpl"
+		}, "cannot be read"},
+		{"wrong type (a directory)", func(t *testing.T, f *fixture, outside string) string {
+			f.write("tmpl/dir.gotpl/keep", "x")
+			return "tmpl/dir.gotpl"
+		}, "not a regular file"},
+		{"zero (empty string: gqlgen's built-in template)", func(t *testing.T, f *fixture, outside string) string {
+			return ""
+		}, ""},
+	}
+	n := 0
+	for _, k := range knobs {
+		for _, sh := range shapes {
+			id := cellID("G8", n)
+			n++
+			t.Run(id+" "+k.name+"/"+sh.name, func(t *testing.T) {
+				f := guardFixture(t)
+				outside := t.TempDir()
+				v := sh.value(t, f, outside)
+				entry := strings.TrimSuffix(k.from, "}") + fmt.Sprintf(", %s: %q}", k.key, v)
+				f.write("gqlgen.yml", strings.Replace(guardConfig, k.from, entry, 1))
+				before := f.digests()
+				gen := &fakeGenerator{fn: rewriteOutputs("generated")}
+				_, err := UpdateDriftRecord(context.Background(), guardOptions(f, gen))
+				logCell(t, err, "generated with the configured template")
+				if sh.wantErr == "" {
+					if err != nil {
+						t.Fatalf("cell REFUSED but its contract says accept: %v", err)
+					}
+					return
+				}
+				if err == nil || !strings.Contains(err.Error(), sh.wantErr) {
+					t.Fatalf("want a refusal containing %q, got %v", sh.wantErr, err)
+				}
+				if !strings.Contains(err.Error(), k.name) {
+					t.Fatalf("the refusal does not name the knob %s: %v", k.name, err)
+				}
+				if gen.ran {
+					t.Fatal("the generator ran over a template input that was already a refusal")
+				}
+				assertUnchanged(t, before, f.digests(), sh.name)
+			})
+		}
+	}
+}
+
+// TestTheRealGeneratorUsesAnInModuleTemplate is the canonical template row run
+// for real: an in-module model template is NOT refused, and its bytes reach the
+// generated output -- so the confinement did not simply switch the knob off.
+func TestTheRealGeneratorUsesAnInModuleTemplate(t *testing.T) {
+	goAvailable(t)
+	f := guardFixture(t).withModuleFiles()
+	mod, err := os.ReadFile(filepath.Join(gqlgenModuleDir(t), "plugin", "modelgen", "models.gotpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.write("tmpl/models.gotpl", string(mod)+"\n// in_module_template_marker\n")
+	f.write("gqlgen.yml", strings.Replace(guardConfig,
+		"model: {filename: gen/model/models_gen.go, package: model}",
+		"model: {filename: gen/model/models_gen.go, package: model, model_template: tmpl/models.gotpl}", 1))
+	if _, err := Generate(context.Background(), guardOptions(f, nil)); err != nil {
+		t.Fatalf("an in-module template was refused: %v", err)
+	}
+	if !strings.Contains(f.read("gen/model/models_gen.go"), "in_module_template_marker") {
+		t.Fatal("the in-module template did not reach the generated output")
+	}
+}
+
+// TestARecursiveSchemaGlobPassesALinkedDirectoryExactlyAsGqlgenDoes is round
+// 2's second shape, executed both ways. gqlgen's `**` walk (filepath.Walk)
+// never follows a directory link -- in the working tree as much as in the copy
+// -- so a schema behind a nested directory link is left out by gqlgen itself.
+// The guard's generation must be byte-identical to gqlgen's own run in the
+// tree, and the dropped link must be named in the report.
+func TestARecursiveSchemaGlobPassesALinkedDirectoryExactlyAsGqlgenDoes(t *testing.T) {
+	goAvailable(t)
+	layout := func(t *testing.T) *fixture {
+		f := guardFixture(t).withModuleFiles()
+		outside := t.TempDir()
+		if err := os.WriteFile(filepath.Join(outside, "secret.graphql"), []byte("extend type Query { leakedFromOutside: String! }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(f.dir, "schema.graphql")); err != nil {
+			t.Fatal(err)
+		}
+		f.write("sub/deep/inside.graphql", fixtureSchema)
+		if err := os.Symlink(outside, filepath.Join(f.dir, "sub", "deep", "outdir")); err != nil {
+			t.Fatal(err)
+		}
+		f.write("gqlgen.yml", strings.Replace(guardConfig, "schema: [schema.graphql]", `schema: ["sub/**/*.graphql"]`, 1))
+		return f
+	}
+
+	direct := layout(t)
+	var out strings.Builder
+	if err := NewGoRunGenerator(&out, &out).Generate(context.Background(), direct.dir); err != nil {
+		t.Fatalf("gqlgen itself failed in the tree: %v\n%s", err, out.String())
+	}
+
+	guarded := layout(t)
+	var report strings.Builder
+	opts := guardOptions(guarded, nil)
+	opts.Report = &report
+	if _, err := Generate(context.Background(), opts); err != nil {
+		t.Fatalf("the guard refused: %v\n%s", err, report.String())
+	}
+	for _, rel := range []string{"gen/generated.go", "gen/model/models_gen.go", "gen/resolver.go"} {
+		if a, b := direct.read(rel), guarded.read(rel); a != b {
+			t.Fatalf("%s differs between gqlgen's own run in the tree and the guard's generation", rel)
+		}
+	}
+	if strings.Contains(guarded.read("gen/generated.go"), "leakedFromOutside") {
+		t.Fatal("a schema behind the directory link reached the output")
+	}
+	if !strings.Contains(report.String(), "dropped symbolic link sub/deep/outdir (absolute target)") {
+		t.Fatalf("the dropped link was not named:\n%s", report.String())
+	}
+	t.Logf("CELL-OUTPUT: accepted: byte-identical to gqlgen's own run in the tree; report names %q", "sub/deep/outdir")
+}
+
+// gqlgenModuleDir is where the gqlgen module this repository requires lives.
+func gqlgenModuleDir(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/99designs/gqlgen").Output()
+	if err != nil {
+		t.Fatalf("locate the gqlgen module: %v", err)
+	}
+	return strings.TrimSpace(string(out))
 }

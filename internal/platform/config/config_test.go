@@ -1285,52 +1285,82 @@ func TestComponentPortAcceptanceIsExactlyTheDriversOwnParser(t *testing.T) {
 	}
 }
 
-// TestAmbientDriverEnvironmentIsNotBlamedOnTheComponentSettings pins
-// whose fault a driver refusal is said to be. pgconn reads the ambient
-// PG* environment while parsing, so a broken PGSSLROOTCERT or
+// TestABrokenDriverEnvironmentIsReportedWithoutExcusingTheComponents pins
+// what a failed control parse does and does not prove. pgconn reads the
+// ambient PG* environment while parsing, so a broken PGSSLROOTCERT or
 // PGCONNECT_TIMEOUT makes it refuse a DSN assembled from perfectly good
-// components. Naming those components as the cause sends an operator to
-// the wrong file entirely, so the resolver parses a canonical known-good
-// DSN as a control and says which of the two it is.
-func TestAmbientDriverEnvironmentIsNotBlamedOnTheComponentSettings(t *testing.T) {
-	env := map[string]string{
+// components; an operator told only about the component settings goes to
+// the wrong file, which is why the environment is named at all.
+//
+// But a failed control says only that the environment is broken. It says
+// nothing about the components, so it must never excuse them: with a bad
+// timeout and a bad port set together, an earlier wording named the port
+// in its own error text and declared it innocent in the same sentence.
+func TestABrokenDriverEnvironmentIsReportedWithoutExcusingTheComponents(t *testing.T) {
+	const password = "s3cr3t#pw"
+	good := map[string]string{
 		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
 		"DEV_HEALTH_PG_DOMAIN_USER":     "app",
-		"DEV_HEALTH_PG_DOMAIN_PASSWORD": "s3cr3t#pw",
+		"DEV_HEALTH_PG_DOMAIN_PASSWORD": password,
 		"DEV_HEALTH_PG_DB":              "appdb",
 	}
+	badPort := map[string]string{}
+	for k, v := range good {
+		badPort[k] = v
+	}
+	badPort["DEV_HEALTH_PG_DOMAIN_PORT"] = "bad-port"
 
-	// Green first: with nothing ambient set, these components resolve.
-	if _, _, err := ResolveDSNFromComponents(lookup(env), DomainDatabaseSpec); err != nil {
-		t.Fatalf("control: expected the component set to resolve, got: %v", err)
+	// Green first: with nothing ambient set, the good set resolves and the
+	// bad port is refused naming the port and nothing else.
+	if _, _, err := ResolveDSNFromComponents(lookup(good), DomainDatabaseSpec); err != nil {
+		t.Fatalf("control: expected the good component set to resolve, got: %v", err)
+	}
+	_, _, err := ResolveDSNFromComponents(lookup(badPort), DomainDatabaseSpec)
+	if err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_PORT") {
+		t.Fatalf("expected a plain component refusal naming the port, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "environment") {
+		t.Fatalf("a healthy environment must not be mentioned at all: %v", err)
 	}
 
 	for _, ambient := range []struct{ key, value string }{
 		{"PGSSLROOTCERT", "/nonexistent/ca.pem"},
 		{"PGCONNECT_TIMEOUT", "notanumber"},
 	} {
-		t.Run(ambient.key, func(t *testing.T) {
-			t.Setenv(ambient.key, ambient.value)
+		for _, components := range []struct {
+			name     string
+			env      map[string]string
+			mustName string
+		}{
+			{"components are fine", good, "DEV_HEALTH_PG_DOMAIN_HOST"},
+			{"components are also broken", badPort, "DEV_HEALTH_PG_DOMAIN_PORT"},
+		} {
+			t.Run(ambient.key+"/"+components.name, func(t *testing.T) {
+				t.Setenv(ambient.key, ambient.value)
 
-			_, used, err := ResolveDSNFromComponents(lookup(env), DomainDatabaseSpec)
-			if !used {
-				t.Fatal("expected used=true once HOST is set")
-			}
-			if err == nil {
-				t.Fatalf("expected the driver to refuse while %s is broken", ambient.key)
-			}
-			if !strings.Contains(err.Error(), "are not the cause") {
-				t.Fatalf("the refusal blames the component settings for an ambient %s: %v", ambient.key, err)
-			}
-			if strings.Contains(err.Error(), "the assembled DSN") {
-				t.Fatalf("the refusal used the component-fault wording for an ambient %s: %v", ambient.key, err)
-			}
-			for _, leak := range []string{"s3cr3t#pw", url.QueryEscape("s3cr3t#pw")} {
-				if strings.Contains(err.Error(), leak) {
-					t.Fatalf("the refusal leaked the credential: %v", err)
+				_, used, err := ResolveDSNFromComponents(lookup(components.env), DomainDatabaseSpec)
+				if !used {
+					t.Fatal("expected used=true once HOST is set")
 				}
-			}
-		})
+				if err == nil {
+					t.Fatalf("expected a refusal while %s is broken", ambient.key)
+				}
+				if !strings.Contains(err.Error(), "the environment is broken too") {
+					t.Fatalf("the refusal does not report the broken environment: %v", err)
+				}
+				if strings.Contains(err.Error(), "not the cause") {
+					t.Fatalf("a failed control must never excuse the component settings: %v", err)
+				}
+				if !strings.Contains(err.Error(), components.mustName) {
+					t.Fatalf("the refusal does not name %s: %v", components.mustName, err)
+				}
+				for _, leak := range []string{password, url.QueryEscape(password)} {
+					if strings.Contains(err.Error(), leak) {
+						t.Fatalf("the refusal leaked the credential: %v", err)
+					}
+				}
+			})
+		}
 	}
 }
 

@@ -997,27 +997,22 @@ func TestTheGeneratedLiteralRoundTripsThroughPostgres(t *testing.T) {
 // opus r7 (P1-1), end to end through the real writer and the real reader:
 // a Go build returning NO hotspots rows wrote a receipt `enable --mode
 // primary` admitted. Here the same Runner writes the receipt with WriteAtomic
-// and the production predicate is asked, in both modes. The control is the
-// declared defect itself (value differences only), which must still prove --
-// otherwise the refusal could be a predicate that proves nothing.
+// and the production predicate is asked, in both modes, for EVERY cell of the
+// comparator table (hotspotsCitationCells): a leaf difference -- a value, a
+// null, another scalar type -- proves; a structural one never does. The
+// leaf cells are the control: without them the refusals could come from a
+// predicate that proves nothing.
 func TestAShapeDifferenceUnderACitationNeverBecomesProof(t *testing.T) {
 	ctx := context.Background()
 	pool := startRegistryPostgres(t)
-	python := `{"data":{"hotspots":{"rows":[{"filePath":"a.go","churnCommits30d":3},{"filePath":"b.go","churnCommits30d":2}]}}}`
+	python, cells := hotspotsCitationCells()
 	build := "b18e56fa79cfe20ce0f75df148144b832d92be36"
-	for _, cell := range []struct {
-		name, goBody string
-		proves       bool
-	}{
-		{"rows empty", `{"data":{"hotspots":{"rows":[]}}}`, false},
-		{"rows null", `{"data":{"hotspots":{"rows":null}}}`, false},
-		{"rows of empty objects", `{"data":{"hotspots":{"rows":[{},{}]}}}`, false},
-		{"control: value differences only", `{"data":{"hotspots":{"rows":[{"filePath":"a.go","churnCommits30d":9},{"filePath":"c.go","churnCommits30d":2}]}}}`, true},
-	} {
+	for _, cell := range cells {
+		proves := cell.outside == 0
 		if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
 			t.Fatalf("truncate: %v", err)
 		}
-		edge := &fakeEdge{goBody: cell.goBody, pythonBody: python, goBuild: build}
+		edge := &fakeEdge{goBody: cell.candidate, pythonBody: python, goBuild: build}
 		runner := newRunner(t, edge, "primary")
 		runner.Documents = map[string]string{"hotspots": "query Hotspots { hotspots { rows { filePath } } }"}
 		runner.Registry = RegistryView{SchemaDigest: "sha256:29d509cd", BuildIdentity: build, DocumentDigest: map[string]string{"hotspots": "6ccfcc78"}}
@@ -1037,11 +1032,11 @@ func TestAShapeDifferenceUnderACitationNeverBecomesProof(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: read: %v", cell.name, err)
 			}
-			if found["hotspots"] != cell.proves {
-				t.Fatalf("%s mode=%s: the written receipt (outside=%d, cited=%v) proves=%v, want %v",
-					cell.name, mode, receipts[0].DifferencesOutsideBaselineDefect, receipts[0].BaselineDefects, found["hotspots"], cell.proves)
+			if receipts[0].DifferencesOutsideBaselineDefect != cell.outside || found["hotspots"] != proves {
+				t.Fatalf("%s mode=%s: the written receipt (outside=%d, cited=%v) proves=%v, want outside=%d proves=%v",
+					cell.name, mode, receipts[0].DifferencesOutsideBaselineDefect, receipts[0].BaselineDefects, found["hotspots"], cell.outside, proves)
 			}
-			t.Logf("cell %-34s mode=%-7s written receipt outside=%d -> proves=%v", cell.name, mode, receipts[0].DifferencesOutsideBaselineDefect, found["hotspots"])
+			t.Logf("cell %-60s mode=%-7s written receipt outside=%-2d -> proves=%v", cell.name, mode, receipts[0].DifferencesOutsideBaselineDefect, found["hotspots"])
 		}
 	}
 }

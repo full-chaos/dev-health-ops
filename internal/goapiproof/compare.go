@@ -99,46 +99,59 @@ type Finding struct {
 	Path   string `json:"path"`
 	Detail string `json:"detail"`
 	// Shape says WHAT differs, and decides whether a baseline-defect
-	// citation may cover it: only ShapeValue can be. Empty on findings the
-	// comparator did not classify (transport-level ones the runner adds),
-	// and an empty shape is never coverable.
+	// citation may cover it: only a LEAF difference can be (see
+	// leafDifference). Empty on findings the comparator did not classify
+	// (transport-level ones the runner adds), and an empty shape is never
+	// coverable.
 	Shape string `json:"shape,omitempty"`
 }
 
-// Finding shapes. A citation (BaselineDefect) declares that a VALUE the
-// Python baseline produces is known to be wrong. It can say nothing about
-// the candidate returning a different SHAPE -- fewer or more elements, a
-// null where there was a value, an object where there was a list, a key
-// one side lacks -- so only ShapeValue is ever covered by one.
+// Finding shapes. A citation (BaselineDefect) declares that the Python
+// baseline produces wrong VALUES under a path. It covers a difference only
+// where both sides are LEAVES -- a scalar or null -- at the differing path:
+// a scalar against another scalar, a scalar against null, null against a
+// scalar. It never covers a STRUCTURAL difference -- a list of another
+// length, a container (object or list) against null or a scalar, an object
+// against a list, a key or element present on one side only -- whatever the
+// cited path (team-lead ruling on opus r7 P1-1).
 //
 // opus r7 (P1-1): before shapes existed a cited path covered EVERY finding
 // beneath it, and compareList reports a LENGTH difference at the list's own
-// path. hotspots cites the whole `data.hotspots.rows` subtree, so a Go
-// build returning `[]`, `null`, or rows of empty objects was a fully-cited
-// mismatch with outside=0 -- primary enablement proof, executed through the
-// real writer, CLI and migration matrix. The same principle this change
-// already applies to `$.http.*` differences ("a citation that cannot
-// express a difference must never be read as covering it") applies here.
+// path. hotspots cites the whole `data.hotspots.rows` subtree, so a Go build
+// returning `[]`, `null`, or rows of empty objects was a fully-cited mismatch
+// with outside=0 -- primary enablement proof. None of those is the cited
+// defect. A NULL leaf is: row selection (hotspots' defect) surfaces as a
+// null in one plane and a value in the other, in both directions.
 const (
-	// ShapeValue: both sides are non-null scalars of the same JSON type
-	// (string, number or bool), both finite, and they differ.
+	// ShapeValue (leaf): two scalars of one JSON type (string, number or
+	// bool), both finite, that differ.
 	ShapeValue = "value"
-	// ShapeLength: two lists of different lengths.
-	ShapeLength = "length"
-	// ShapePresence: a key, an element (by key) or `data` itself is
-	// present on one side only.
-	ShapePresence = "presence"
-	// ShapeNull: null on one side, a value on the other.
+	// ShapeNull (leaf): null on one side, a finite scalar on the other.
 	ShapeNull = "null"
-	// ShapeType: two values of different JSON types (object, array,
-	// string, number, bool).
-	ShapeType = "type"
+	// ShapeScalarType (leaf): two finite scalars of different JSON types,
+	// e.g. a string where the other plane has a number.
+	ShapeScalarType = "scalar_type"
+	// ShapeStructure (structural): a container (object or list) against
+	// anything of another kind -- null, a scalar, or the other container.
+	ShapeStructure = "structure"
+	// ShapeLength (structural): two lists of different lengths.
+	ShapeLength = "length"
+	// ShapePresence (structural): a key, an element (by key), an error or
+	// `data` itself present on one side only.
+	ShapePresence = "presence"
 	// ShapeNonFinite: NaN or Infinity on either side -- parity rule 3's
-	// "always mismatches", and never a known Python defect to cite.
+	// "always mismatches", reported even when both sides carry the same
+	// literal, so no Python defect can explain it. Never covered.
 	ShapeNonFinite = "non_finite"
 )
 
-// jsonKind names a decoded JSON value's type for ShapeType/ShapeNull.
+// leafDifference reports whether a finding's shape is one a citation may
+// cover: both sides were a scalar or null at the differing path.
+func leafDifference(shape string) bool {
+	return shape == ShapeValue || shape == ShapeNull || shape == ShapeScalarType
+}
+
+// jsonKind names a decoded JSON value's type for the leaf/structure split.
 func jsonKind(value any) string {
 	switch value.(type) {
 	case nil:
@@ -156,6 +169,16 @@ func jsonKind(value any) string {
 		return "number"
 	}
 	return fmt.Sprintf("%T", value)
+}
+
+func isContainerKind(kind string) bool {
+	return kind == "object" || kind == "array"
+}
+
+// nonFinite reports a decoded number that is NaN or +/-Inf.
+func nonFinite(value any) bool {
+	f, isNumber := asFloat(value)
+	return isNumber && (math.IsNaN(f) || math.IsInf(f, 0))
 }
 
 // Result is the comparator's verdict plus every observation behind it.
@@ -328,9 +351,9 @@ type BaselineDefect struct {
 	// Paths are dotted, index-free field paths (the same form
 	// FloatTierB and VolatileFields use). A path also reaches everything
 	// beneath it, so naming a subtree root reaches its fields -- but only
-	// a leaf VALUE difference (ShapeValue) is covered. A length, null,
-	// type or presence difference beneath a cited path is outside every
-	// citation (opus r7 P1-1).
+	// a LEAF difference (scalar or null on both sides) is covered. A
+	// length, presence or structure difference beneath a cited path is
+	// outside every citation (opus r7 P1-1; see leafDifference).
 	Paths []string
 }
 
@@ -466,11 +489,11 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect) {
 				continue
 			}
 			// The citation is LIVE -- there is a difference under its
-			// path, so it is not stale -- but it COVERS only a leaf value
-			// difference. A length / null / type / presence finding under
-			// a cited subtree stays outside every citation (opus r7 P1-1).
+			// path, so it is not stale -- but it COVERS only a leaf
+			// difference. A length / presence / structure finding under a
+			// cited subtree stays outside every citation (opus r7 P1-1).
 			hit = true
-			if shapes[i] == ShapeValue {
+			if leafDifference(shapes[i]) {
 				covered[i] = true
 			}
 		}
@@ -655,12 +678,19 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 		return compareList(baselineList, candidateList, path, opts, track)
 	}
 
-	// Different JSON types (including null against a value) are a SHAPE
-	// difference, never a value one, whatever the path: no citation may
-	// cover them (opus r7 P1-1). Detail text unchanged.
+	// Different JSON kinds. A container on either side is STRUCTURAL and
+	// no citation covers it; two leaves (scalar or null) are a leaf
+	// difference a citation may cover; a non-finite number is never
+	// covered (opus r7 P1-1 and the team-lead ruling on it). Detail text
+	// unchanged.
 	if baselineKind, candidateKind := jsonKind(baseline), jsonKind(candidate); baselineKind != candidateKind {
-		shape := ShapeType
-		if baselineKind == "null" || candidateKind == "null" {
+		shape := ShapeScalarType
+		switch {
+		case isContainerKind(baselineKind) || isContainerKind(candidateKind):
+			shape = ShapeStructure
+		case nonFinite(baseline) || nonFinite(candidate):
+			shape = ShapeNonFinite
+		case baselineKind == "null" || candidateKind == "null":
 			shape = ShapeNull
 		}
 		return []Finding{{Kind: FindingMismatch, Path: path, Detail: fmt.Sprintf("%v != %v", baseline, candidate), Shape: shape}}

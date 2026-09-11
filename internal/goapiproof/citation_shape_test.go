@@ -21,42 +21,59 @@ import (
 // declare that Go is allowed to return a different SHAPE.
 //
 // This drives the real hotspots declaration (operationSpecs, not a copy) over
-// every shape a candidate can take, through the real comparator.
+// every shape a candidate can take, through the real comparator. The same
+// cells run through the writer, WriteAtomic and the production reader on each
+// PostgreSQL major (TestAShapeDifferenceUnderACitationNeverBecomesProof).
+//
+// The rule (team-lead ruling on opus r7 P1-1): a citation covers a difference
+// only where BOTH sides are leaves -- a scalar or null -- at the differing
+// path. A NULL leaf is covered: hotspots' defect is row selection, and a
+// different row surfaces as null in one plane and a value in the other.
+// A list length, a container against null or a scalar, and a key present on
+// one side only are structural and never covered.
+
+type citationShapeCell struct {
+	name      string
+	candidate string
+	outside   int // differences NO citation may cover
+}
+
+func hotspotsRow(file, repo string, churn int, blame string) string {
+	return `{"filePath":"` + file + `","repoId":"` + repo + `","churnCommits30d":` + itoa(churn) + `,"blameConcentration":` + blame + `,"riskScore":1.5}`
+}
+
+func hotspotsBody(rows ...string) string {
+	return `{"data":{"hotspots":{"rows":[` + strings.Join(rows, ",") + `]}}}`
+}
+
+// hotspotsCitationCells is the baseline (the Python plane's answer) and every
+// candidate shape, with the number of differences outside the citation.
+func hotspotsCitationCells() (string, []citationShapeCell) {
+	a, b := hotspotsRow("a.go", "r1", 5, "0.5"), hotspotsRow("b.go", "r1", 2, "0.25")
+	return hotspotsBody(a, b), []citationShapeCell{
+		{"leaf values differ (the declared defect: another physical row)", hotspotsBody(hotspotsRow("a.go", "r1", 9, "0.5"), hotspotsRow("c.go", "r2", 2, "0.75")), 0},
+		{"a leaf null where Python has a value", hotspotsBody(hotspotsRow("a.go", "r1", 5, "null"), b), 0},
+		{"leaf values differ and a leaf is null", hotspotsBody(hotspotsRow("z.go", "r9", 7, "null"), hotspotsRow("b.go", "r1", 3, "0.25")), 0},
+		{"a leaf of another scalar type (string for number)", hotspotsBody(hotspotsRow("a.go", "r1", 5, `"0.5"`), b), 0},
+		{"rows empty (a length difference)", `{"data":{"hotspots":{"rows":[]}}}`, 1},
+		{"one extra row (a length difference)", hotspotsBody(a, b, hotspotsRow("c.go", "r1", 1, "0.1")), 1},
+		{"rows null (a list against null)", `{"data":{"hotspots":{"rows":null}}}`, 1},
+		{"rows of empty objects (every key missing)", `{"data":{"hotspots":{"rows":[{},{}]}}}`, 10},
+		{"a row that is null (an object against null)", hotspotsBody("null", b), 1},
+		{"a row that is an array (an object against a list)", hotspotsBody("[]", b), 1},
+		{"a leaf that is an object (a scalar against a container)", hotspotsBody(hotspotsRow("a.go", "r1", 5, `{}`), b), 1},
+		{"an extra key in a row", hotspotsBody(strings.TrimSuffix(a, "}")+`,"extra":1}`, b), 1},
+	}
+}
+
 func TestACitationCoversOnlyLeafValueDifferences(t *testing.T) {
 	spec, err := SpecFor("hotspots")
 	if err != nil {
 		t.Fatalf("SpecFor(hotspots): %v", err)
 	}
 	opts := spec.Parity
-	row := func(file, repo string, churn int, blame string) string {
-		return `{"filePath":"` + file + `","repoId":"` + repo + `","churnCommits30d":` + itoa(churn) + `,"blameConcentration":` + blame + `,"riskScore":1.5}`
-	}
-	baseline := `{"data":{"hotspots":{"rows":[` + row("a.go", "r1", 5, "0.5") + `,` + row("b.go", "r1", 2, "0.25") + `]}}}`
-
-	for _, c := range []struct {
-		name      string
-		candidate string
-		outside   int  // differences NO citation may cover
-		matched   bool // CHAOS-5447 is recorded as matched (not stale)
-	}{
-		{"leaf value differences only (the declared defect: another physical row)",
-			`{"data":{"hotspots":{"rows":[` + row("a.go", "r1", 9, "0.5") + `,` + row("c.go", "r2", 2, "0.75") + `]}}}`, 0, true},
-		{"rows empty (a length difference)", `{"data":{"hotspots":{"rows":[]}}}`, 1, true},
-		{"rows null (null where a list was)", `{"data":{"hotspots":{"rows":null}}}`, 1, true},
-		{"rows of empty objects (every key missing)", `{"data":{"hotspots":{"rows":[{},{}]}}}`, 10, true},
-		{"one extra row (a length difference)",
-			`{"data":{"hotspots":{"rows":[` + row("a.go", "r1", 5, "0.5") + `,` + row("b.go", "r1", 2, "0.25") + `,` + row("c.go", "r1", 1, "0.1") + `]}}}`, 1, true},
-		{"a leaf null where Python has a value",
-			`{"data":{"hotspots":{"rows":[` + row("a.go", "r1", 5, "null") + `,` + row("b.go", "r1", 2, "0.25") + `]}}}`, 1, true},
-		{"a leaf of another JSON type (string for number)",
-			`{"data":{"hotspots":{"rows":[` + row("a.go", "r1", 5, `"0.5"`) + `,` + row("b.go", "r1", 2, "0.25") + `]}}}`, 1, true},
-		{"a row that is an array, not an object",
-			`{"data":{"hotspots":{"rows":[[],` + row("b.go", "r1", 2, "0.25") + `]}}}`, 1, true},
-		{"an extra key in a row",
-			`{"data":{"hotspots":{"rows":[` + strings.TrimSuffix(row("a.go", "r1", 5, "0.5"), "}") + `,"extra":1}` + `,` + row("b.go", "r1", 2, "0.25") + `]}}}`, 1, true},
-		{"value differences AND one null: the null alone is outside",
-			`{"data":{"hotspots":{"rows":[` + row("z.go", "r9", 7, "null") + `,` + row("b.go", "r1", 3, "0.25") + `]}}}`, 1, true},
-	} {
+	baseline, cells := hotspotsCitationCells()
+	for _, c := range cells {
 		result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, c.candidate), opts)
 		if result.TerminalState != TerminalStateMismatch {
 			t.Fatalf("%s: terminal %q, want mismatch", c.name, result.TerminalState)
@@ -64,16 +81,15 @@ func TestACitationCoversOnlyLeafValueDifferences(t *testing.T) {
 		if result.DifferencesOutsideBaselineDefect != c.outside {
 			t.Fatalf("%s: outside=%d, want %d -- findings %+v", c.name, result.DifferencesOutsideBaselineDefect, c.outside, result.Findings)
 		}
-		gotMatched := len(result.BaselineDefectsMatched) == 1 && result.BaselineDefectsMatched[0] == "CHAOS-5447"
-		if gotMatched != c.matched || len(result.StaleBaselineDefects) != 0 {
-			t.Fatalf("%s: matched=%v stale=%v, want CHAOS-5447 matched=%v and nothing stale (a citation with differences beneath it is live, whether or not it may cover them)",
-				c.name, result.BaselineDefectsMatched, result.StaleBaselineDefects, c.matched)
+		if len(result.BaselineDefectsMatched) != 1 || result.BaselineDefectsMatched[0] != "CHAOS-5447" || len(result.StaleBaselineDefects) != 0 {
+			t.Fatalf("%s: matched=%v stale=%v, want CHAOS-5447 matched and nothing stale (a citation with differences beneath it is live, whether or not it may cover them)",
+				c.name, result.BaselineDefectsMatched, result.StaleBaselineDefects)
 		}
 		shapes := map[string]int{}
 		for _, f := range result.Findings {
 			shapes[f.Shape]++
 		}
-		t.Logf("cell %-72s outside=%-2d findings by shape=%v", c.name, result.DifferencesOutsideBaselineDefect, shapes)
+		t.Logf("cell %-60s outside=%-2d findings by shape=%v", c.name, result.DifferencesOutsideBaselineDefect, shapes)
 	}
 
 	// Control: identical bodies -- the citation covers nothing and is stale,
@@ -112,15 +128,20 @@ func TestTheWriterRecordsShapeDifferencesOutsideTheCitation(t *testing.T) {
 		{"rows null", `{"data":{"hotspots":{"rows":null}}}`, 1, false},
 		{"rows key absent", `{"data":{"hotspots":{"total":0}}}`, 1, false},
 		{"rows of empty objects", `{"data":{"hotspots":{"rows":[{},{}]}}}`, 1, false},
-		{"a null where Python has a value", `{"data":{"hotspots":{"rows":[{"filePath":"a.go","repoId":"r1","churnCommits30d":3,"blameConcentration":null},{"filePath":"b.go","repoId":"r1","churnCommits30d":2,"blameConcentration":0.25}]}}}`, 1, false},
+		{"a row that is null", `{"data":{"hotspots":{"rows":[null,{"filePath":"b.go","repoId":"r1","churnCommits30d":2,"blameConcentration":0.25}]}}}`, 1, false},
+		// A leaf null is a LEAF difference: hotspots' row selection surfaces
+		// as null in one plane and a value in the other (JOB 5 shows both
+		// directions). Covered, by the team-lead ruling on opus r7 P1-1.
+		{"a leaf null where Python has a value", `{"data":{"hotspots":{"rows":[{"filePath":"a.go","repoId":"r1","churnCommits30d":3,"blameConcentration":null},{"filePath":"b.go","repoId":"r1","churnCommits30d":2,"blameConcentration":0.25}]}}}`, 0, true},
 		// The declared defect itself: Python selected another physical row,
 		// so values differ, shape identical. Covered -- this is what the
 		// citation exists to say.
 		{"value differences only (the declared defect)", `{"data":{"hotspots":{"rows":[{"filePath":"a.go","repoId":"r1","churnCommits30d":9,"blameConcentration":0.75},{"filePath":"c.go","repoId":"r2","churnCommits30d":2,"blameConcentration":0.25}]}}}`, 0, true},
-		// Same shape, every value different: indistinguishable BY SHAPE from
-		// the declared defect (the real JOB 5 hotspots diff already differs
-		// in filePath/repoId), so the citation covers it. Recorded as the
-		// contract, not hidden: separating it would need a per-path rule.
+		// Same shape, every value different: another org's files. Leaf
+		// differences, indistinguishable from the declared defect's (the real
+		// JOB 5 hotspots diff already differs in filePath/repoId), so the
+		// citation covers them. Recorded as the contract: the guard for this
+		// class is the org scoping of the proof request, not the citation.
 		{"same-shape rows with foreign values", `{"data":{"hotspots":{"rows":[{"filePath":"zz/x.go","repoId":"other","churnCommits30d":999,"blameConcentration":0.99},{"filePath":"zz/y.go","repoId":"other","churnCommits30d":0,"blameConcentration":0.01}]}}}`, 0, true},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
@@ -153,10 +174,11 @@ func TestTheWriterRecordsShapeDifferencesOutsideTheCitation(t *testing.T) {
 // Every finding site the comparator has, under a citation that reaches it.
 // The hotspots table above exercises lists, dict keys, nulls and types; this
 // one covers the remaining sites -- an order-insensitive (keyed) list, `data`
-// itself, the `errors` list, a non-finite number -- and the scalar kinds a
-// citation MUST still cover (a bool, an integer, a string), so the rule is
-// pinned in both directions at every site: a shape is never covered, a leaf
-// value always is.
+// itself, the `errors` list, every container/leaf kind pair, a non-finite
+// number -- and the leaf kinds a citation MUST still cover (bool, integer,
+// string, null, a scalar type change), so the rule is pinned in both
+// directions at every site: a structural difference is never covered, a leaf
+// difference always is.
 func TestEveryFindingSiteHonoursTheCitationRule(t *testing.T) {
 	keyed := Options{
 		OrderInsensitiveLists: []OrderInsensitiveList{{Path: "data.x.rows", KeyFields: []string{"id"}, Reason: "order carries no signal", Ticket: "CHAOS-0001"}},
@@ -181,6 +203,18 @@ func TestEveryFindingSiteHonoursTheCitationRule(t *testing.T) {
 			`{"data":{"x":1},"errors":[{"message":"boom","path":["x"]}]}`, `{"data":{"x":1}}`, 1},
 		{"a non-finite number (1e400) where Python has 1", cite("data.x"),
 			`{"data":{"x":1}}`, `{"data":{"x":1e400}}`, 1},
+		{"a leaf null against a scalar (covered)", cite("data.x"),
+			`{"data":{"x":"a"}}`, `{"data":{"x":null}}`, 0},
+		{"a scalar of another type (covered)", cite("data.x"),
+			`{"data":{"x":"1"}}`, `{"data":{"x":1}}`, 0},
+		{"an object against null (structure)", cite("data.x"),
+			`{"data":{"x":{"k":1}}}`, `{"data":{"x":null}}`, 1},
+		{"a list against a scalar (structure)", cite("data.x"),
+			`{"data":{"x":[1]}}`, `{"data":{"x":1}}`, 1},
+		{"an object against a list (structure)", cite("data.x"),
+			`{"data":{"x":{"k":1}}}`, `{"data":{"x":[1]}}`, 1},
+		{"a non-finite number against null (never covered)", cite("data.x"),
+			`{"data":{"x":1e400}}`, `{"data":{"x":null}}`, 1},
 		{"a bool value (covered)", cite("data.x"),
 			`{"data":{"x":true}}`, `{"data":{"x":false}}`, 0},
 		{"an integer value (covered)", cite("data.x"),
@@ -199,10 +233,10 @@ func TestEveryFindingSiteHonoursTheCitationRule(t *testing.T) {
 }
 
 // Every BaselineDefect path DECLARED in operationSpecs, not only hotspots':
-// for each, the same five candidates at that exact path -- a leaf value
-// (covered), a null, another JSON type, the key absent, and a list whose
-// length differs (each outside). A new declaration is swept by this test
-// the day it is added.
+// for each, seven candidates at that exact path -- three leaf differences (a
+// value, a null, another scalar type: covered) and four structural ones (key
+// absent, list length, container against null, container against a scalar:
+// outside). A new declaration is swept by this test the day it is added.
 func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
 	nest := func(path string, leaf any, present bool) string {
 		segments := strings.Split(path, ".")
@@ -231,30 +265,27 @@ func TestEveryDeclaredCitationCoversOnlyValueDifferences(t *testing.T) {
 					t.Fatalf("%s %s: cited path %q is not under data", operation, defect.Ticket, cited)
 				}
 				opts := Options{BaselineDefects: []BaselineDefect{defect}}
-				baseline := nest(cited, "python", true)
 				for _, c := range []struct {
-					name      string
-					candidate string
-					outside   int
+					name                string
+					baseline, candidate string
+					outside             int
 				}{
-					{"leaf value", nest(cited, "go", true), 0},
-					{"null", nest(cited, nil, true), 1},
-					{"another type", nest(cited, 7, true), 1},
-					{"key absent", nest(cited, nil, false), 1},
-					{"list length", nest(cited, []any{}, true), 1},
+					{"leaf value", nest(cited, "python", true), nest(cited, "go", true), 0},
+					{"leaf null", nest(cited, "python", true), nest(cited, nil, true), 0},
+					{"leaf of another scalar type", nest(cited, "python", true), nest(cited, 7, true), 0},
+					{"key absent", nest(cited, "python", true), nest(cited, nil, false), 1},
+					{"list length", nest(cited, []any{"python"}, true), nest(cited, []any{}, true), 1},
+					{"container against null", nest(cited, map[string]any{"k": "python"}, true), nest(cited, nil, true), 1},
+					{"container against a scalar", nest(cited, []any{"python"}, true), nest(cited, "go", true), 1},
 				} {
-					base := baseline
-					if c.name == "list length" {
-						base = nest(cited, []any{"python"}, true)
-					}
-					result := Compare(snapshotFromJSON(t, base), snapshotFromJSON(t, c.candidate), opts)
+					result := Compare(snapshotFromJSON(t, c.baseline), snapshotFromJSON(t, c.candidate), opts)
 					if result.DifferencesOutsideBaselineDefect != c.outside || len(result.BaselineDefectsMatched) != 1 {
 						t.Fatalf("%s %s %q, %s: outside=%d matched=%v, want outside=%d with %s matched -- findings %+v",
 							operation, defect.Ticket, cited, c.name, result.DifferencesOutsideBaselineDefect, result.BaselineDefectsMatched, c.outside, defect.Ticket, result.Findings)
 					}
 				}
 				swept++
-				t.Logf("path %-18s %-10s %-48s leaf value covered; null, another type, key absent, list length each outside", operation, defect.Ticket, cited)
+				t.Logf("path %-18s %-10s %-48s leaf value, leaf null, scalar type covered; key absent, list length, container vs null, container vs scalar outside", operation, defect.Ticket, cited)
 			}
 		}
 	}

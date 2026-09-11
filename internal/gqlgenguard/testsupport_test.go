@@ -221,3 +221,19 @@ const fixtureSchemaExtra = `extend type Query {
   farewell: String
 }
 `
+
+// cellID names one input-domain cell so that it is its own -run selector:
+// `go test -run 'TestX/G2-07' ./internal/gqlgenguard/` executes that cell alone.
+func cellID(table string, i int) string { return fmt.Sprintf("%s-%02d", table, i+1) }
+
+// logCell records what the guard actually DID for a cell -- the refusal text,
+// or what it accepted -- as one CELL-OUTPUT line, so the body's domain tables
+// quote the executed output rather than only a pass/fail colour.
+func logCell(t *testing.T, err error, accepted string) {
+	t.Helper()
+	if err != nil {
+		t.Logf("CELL-OUTPUT: refused: %s", strings.ReplaceAll(err.Error(), "\n", " / "))
+		return
+	}
+	t.Logf("CELL-OUTPUT: accepted: %s", accepted)
+}

@@ -270,6 +270,16 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	}
 	defer moduleRoot.Close()
 
+	// The private copy must be made OUTSIDE the module. The directory it is made
+	// under (Options.TempParent, or TMPDIR through os.TempDir when that is
+	// empty) and the module root are two inputs naming a location; when the
+	// first is inside the second, copying the module copies the copy into
+	// itself without end -- measured on the real binary before this check: 91
+	// nested levels and 11 GB in nine minutes.
+	if err := refuseCopyInsideModule(moduleAbs, opts.TempParent); err != nil {
+		return nil, nil, err
+	}
+
 	copyDir, err := os.MkdirTemp(opts.TempParent, "gqlgen-guard-")
 	if err != nil {
 		return nil, nil, fmt.Errorf("create private module copy: %w", err)
@@ -286,7 +296,7 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	fmt.Fprintf(w, "module: %s\n", moduleAbs)
 	fmt.Fprintf(w, "private copy: %s\n", copyDir)
 
-	dropped, err := CopyTree(moduleRoot, copyRoot, skipVCS)
+	dropped, err := CopyTree(ctx, moduleRoot, copyRoot, skipVCS)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("copy module into %q: %w", copyDir, err)
 	}
@@ -317,7 +327,7 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 		return nil, cleanup, err
 	}
 
-	before, err := TakeSnapshot(copyRoot, skipVCS)
+	before, err := TakeSnapshotContext(ctx, copyRoot, skipVCS)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("snapshot private copy: %w", err)
 	}
@@ -335,7 +345,7 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 		return nil, cleanup, fmt.Errorf("cancelled after generating: %w", err)
 	}
 
-	after, err := TakeSnapshot(copyRoot, skipVCS)
+	after, err := TakeSnapshotContext(ctx, copyRoot, skipVCS)
 	if err != nil {
 		return nil, cleanup, fmt.Errorf("snapshot private copy after generating: %w", err)
 	}
@@ -384,6 +394,34 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	return res, cleanup, nil
 }
 
+// refuseCopyInsideModule refuses a temporary parent that resolves to the module
+// root or anywhere beneath it. Both sides are resolved through symbolic links,
+// so an alias of an in-module directory is caught too.
+func refuseCopyInsideModule(moduleAbs, tempParent string) error {
+	parent := tempParent
+	if parent == "" {
+		parent = os.TempDir()
+	}
+	parentAbs, err := filepath.Abs(parent)
+	if err != nil {
+		return fmt.Errorf("resolve the private copy's parent %q: %w", parent, err)
+	}
+	if real, err := filepath.EvalSymlinks(parentAbs); err == nil {
+		parentAbs = real
+	}
+	moduleReal := moduleAbs
+	if real, err := filepath.EvalSymlinks(moduleAbs); err == nil {
+		moduleReal = real
+	}
+	rel, err := filepath.Rel(moduleReal, parentAbs)
+	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf(
+			"refusing: the private copy would be made inside the module (%s is under %s), and copying the module would copy the copy into itself. Point TMPDIR outside the module",
+			parentAbs, moduleReal)
+	}
+	return nil
+}
+
 // refuseHandWrittenCollisions refuses a configuration whose declared outputs
 // would overwrite a file in the tree that gqlgen did not write.
 //
@@ -419,7 +457,7 @@ func refuseHandWrittenCollisions(moduleRoot *os.Root, plan *Plan, w io.Writer) e
 		}
 		if !ok {
 			return fmt.Errorf(
-				"refusing: the %s section declares %q as an output, but that file is hand-written -- %s. "+
+				"refusing: the %s section declares %q as an output, but nothing proves gqlgen wrote that file, so it is treated as hand-written -- %s. "+
 					"Regenerating would overwrite it. Fix the config, or if the file really is generated with omit_gqlgen_file_notice set, remove that setting so provenance is visible",
 				o.Declaree, o.Path, reason)
 		}

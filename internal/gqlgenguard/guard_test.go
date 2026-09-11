@@ -256,6 +256,10 @@ func TestSymlinkCopyPolicyInputDomain(t *testing.T) {
 		{"dangling-outside", "../../nowhere/x", "does not resolve inside the module"},
 		{"self-loop", "self-loop", "does not resolve inside the module"},
 		{"chain-through-an-absolute-link", "abs-inside-the-module", "does not resolve inside the module"},
+		{"chain-inside (a link to an in-module link)", "rel-inside-file", "reproduced"},
+		{"chain-through-a-relative-escaping-link", "rel-escape", "does not resolve inside the module"},
+		{"abs-outside-dir", outsideDir, "absolute target"},
+		{"rel-escape-dir", "../" + filepath.Base(outsideDir), "does not resolve inside the module"},
 	}
 	for _, c := range cells {
 		if err := os.Symlink(c.target, filepath.Join(f.dir, c.name)); err != nil {
@@ -300,9 +304,16 @@ func TestSymlinkCopyPolicyInputDomain(t *testing.T) {
 		t.Fatal("the generator never ran, so the copy was never inspected")
 	}
 
-	for _, c := range cells {
-		t.Run(c.name, func(t *testing.T) {
+	for i, c := range cells {
+		t.Run(cellID("G3", i)+" "+c.name, func(t *testing.T) {
 			got := inCopy[c.name]
+			reported := ""
+			for _, line := range strings.Split(report.String(), "\n") {
+				if strings.HasPrefix(line, "dropped symbolic link "+c.name+" ") {
+					reported = line
+				}
+			}
+			t.Logf("CELL-OUTPUT: copy holds %s -> %q; open in copy: %v; report: %q", c.name, got, readThrough[c.name], reported)
 			line := "dropped symbolic link " + c.name + " (" + c.want + ")"
 			if c.want == "reproduced" {
 				if got != c.target {

@@ -2,7 +2,6 @@ package gqlgenguard
 
 import (
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -259,6 +258,7 @@ resolver: {layout: single-file, filename: gen/resolver.go, package: gen}
 				"gen/model/models_gen.go",
 				"gen/resolver.go",
 			},
+			runReal: true,
 		},
 		{
 			name: "a schema GLOB decides how many resolver files the template produces",
@@ -434,8 +434,12 @@ func assertRealGenerationStaysInsideThePlan(t *testing.T, f *fixture, plan *Plan
 	// guard does not know -- a layout it forgot, a version that moved a line --
 	// fails here, against the real generator, instead of refusing a real
 	// checkout's own generated files as hand-written.
-	if err := refuseHandWrittenCollisions(root, plan, io.Discard); err != nil {
+	var decisions strings.Builder
+	if err := refuseHandWrittenCollisions(root, plan, &decisions); err != nil {
 		t.Fatalf("a file the REAL generator wrote fails the guard's own provenance check: %v", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(decisions.String()), "\n") {
+		t.Logf("PROVENANCE-ROUNDTRIP: %s", line)
 	}
 }
 

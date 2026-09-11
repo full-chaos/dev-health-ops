@@ -2,6 +2,7 @@ package gqlgenguard
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -296,8 +297,8 @@ func TestGqlgenConfigParserInputDomain(t *testing.T) {
 			config: domainBase + `skip_validation: "yes"` + "\n", wantOutputs: domainCanonicalOutputs},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.field+"/"+tc.shape, func(t *testing.T) {
+	for i, tc := range cases {
+		t.Run(cellID("G1", i)+" "+tc.field+"/"+tc.shape, func(t *testing.T) {
 			f := newFixture(t, map[string]string{"schema.graphql": fixtureSchema})
 			outside := filepath.Join(filepath.Dir(f.dir), "outside-the-module")
 			if err := os.MkdirAll(outside, 0o755); err != nil {
@@ -306,6 +307,7 @@ func TestGqlgenConfigParserInputDomain(t *testing.T) {
 			f.write("gqlgen.yml", strings.NewReplacer("{{DIR}}", f.dir, "{{OUTSIDE}}", outside).Replace(tc.config))
 
 			plan, err := EnumerateOutputs(f.dir, "gqlgen.yml")
+			logCell(t, err, fmt.Sprintf("plan %v", planPaths(plan)))
 			if tc.wantErr != "" {
 				if err == nil {
 					t.Fatalf("cell ACCEPTED but its contract says refuse (%q); plan %v", tc.wantErr, planPaths(plan))
@@ -337,6 +339,9 @@ const (
 	singleNotice    = "// THIS CODE WILL BE UPDATED WITH SCHEMA CHANGES. PREVIOUS IMPLEMENTATION FOR SCHEMA CHANGES WILL BE KEPT IN THE COMMENT SECTION. IMPLEMENTATION FOR UNCHANGED SCHEMA WILL BE KEPT.\n"
 	preservedNotice = "// THIS CODE IS A STARTING POINT ONLY. IT WILL NOT BE UPDATED WITH SCHEMA CHANGES.\n"
 )
+
+// federationConfig adds a federation section to the provenance fixture.
+const federationConfig = guardConfig + "federation: {filename: gen/federation.go, package: gen}\n"
 
 // TestTheProvenanceScanWindowIsPinned keeps the two boundary rows below
 // meaningful: they use a literal 4096, so the constant must equal it.
@@ -386,6 +391,8 @@ func TestProvenanceGuardInputDomain(t *testing.T) {
 		// plant replaces body for the rows about a non-file or an absent file.
 		plant   func(t *testing.T, full string)
 		wantErr string
+		// config, when set, replaces the fixture's gqlgen.yml.
+		config string
 	}{
 		// ---- exec output: gqlgen writes the generated header at line 1 ----
 		{shape: "exec: absent (the generator will create it)", target: execOut, plant: func(t *testing.T, full string) {
@@ -478,6 +485,14 @@ func TestProvenanceGuardInputDomain(t *testing.T) {
 			body: strings.ReplaceAll("package gen\n\n"+stubNotice, "\n", "\r\n"), wantErr: "CRLF"},
 		{shape: "resolver: the GENERATED header on a resolver output (a shape gqlgen never writes there)", target: resolverOut,
 			body: headerLine + "\n\npackage gen\n", wantErr: "hand-written"},
+		// ---- federation outputs: the federation file carries the header; the
+		// requires file gqlgen writes with NO provenance at all ----
+		{shape: "federation: the federation file with the generated header", target: "gen/federation.go",
+			body: headerLine + "\n\npackage gen\n", config: federationConfig},
+		{shape: "federation: federation.requires.go as gqlgen writes it (no notice)", target: "gen/federation.requires.go",
+			body: "package gen\n\nimport (\n\t\"context\"\n)\n", config: federationConfig, wantErr: "no provenance notice at all"},
+		{shape: "federation: federation.requires.go even WITH the generated header (a shape gqlgen never writes there)", target: "gen/federation.requires.go",
+			body: headerLine + "\n\npackage gen\n", config: federationConfig, wantErr: "no provenance notice at all"},
 		// The two boundary rows use a LITERAL window size, not markerScanBytes.
 		// Deriving the length from the constant makes the test move with it, so
 		// widening the window would still pass.
@@ -487,9 +502,12 @@ func TestProvenanceGuardInputDomain(t *testing.T) {
 			body: stubResolverOfLength(t, 4097), wantErr: "hand-written"},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.shape, func(t *testing.T) {
+	for i, tc := range cases {
+		t.Run(cellID("G2", i)+" "+tc.shape, func(t *testing.T) {
 			f := guardFixture(t)
+			if tc.config != "" {
+				f.write("gqlgen.yml", tc.config)
+			}
 			full := filepath.Join(f.dir, filepath.FromSlash(tc.target))
 			if tc.plant != nil {
 				tc.plant(t, full)
@@ -503,6 +521,13 @@ func TestProvenanceGuardInputDomain(t *testing.T) {
 			var report strings.Builder
 			opts.Report = &report
 			_, err := UpdateDriftRecord(context.Background(), opts)
+			decision := ""
+			for _, line := range strings.Split(report.String(), "\n") {
+				if strings.HasPrefix(line, "provenance: "+tc.target+": ") {
+					decision = line
+				}
+			}
+			logCell(t, err, decision)
 
 			if tc.wantErr != "" {
 				if err == nil {
@@ -564,12 +589,17 @@ func TestOutputClassifierInputDomain(t *testing.T) {
 		}, wantErr: "link.go"},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.shape, func(t *testing.T) {
+	for i, tc := range cases {
+		t.Run(cellID("G5", i)+" "+tc.shape, func(t *testing.T) {
 			f := guardFixture(t)
 			before := f.digests()
 			gen := &fakeGenerator{fn: tc.gen}
-			_, err := UpdateDriftRecord(context.Background(), guardOptions(f, gen))
+			res, err := UpdateDriftRecord(context.Background(), guardOptions(f, gen))
+			if res != nil {
+				logCell(t, err, fmt.Sprintf("module-file rewrites %v", res.ModuleFileRewrites))
+			} else {
+				logCell(t, err, "")
+			}
 
 			if tc.wantErr != "" {
 				if err == nil {
@@ -626,8 +656,8 @@ func TestRecordComparatorInputDomain(t *testing.T) {
 		{shape: "wrong type (a directory where the record should be)", remove: true, wantErr: "no expected-drift record"},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.shape, func(t *testing.T) {
+	for i, tc := range cases {
+		t.Run(cellID("G6", i)+" "+tc.shape, func(t *testing.T) {
 			f := guardFixture(t)
 			opts := guardOptions(f, &fakeGenerator{fn: rewriteOutputs("generated")})
 			if _, err := UpdateDriftRecord(context.Background(), opts); err != nil {
@@ -643,6 +673,7 @@ func TestRecordComparatorInputDomain(t *testing.T) {
 			before := f.digests()
 
 			_, err := CheckDrift(context.Background(), guardOptions(f, &fakeGenerator{fn: rewriteOutputs("generated")}))
+			logCell(t, err, "record matches byte for byte")
 			if tc.wantErr != "" {
 				if err == nil {
 					t.Fatalf("cell ACCEPTED but its contract says refuse (%q)", tc.wantErr)

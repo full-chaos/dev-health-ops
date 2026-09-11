@@ -395,7 +395,7 @@ func absoluteOutputs(cfg *config.Config, configDirAbs string) ([]absOutput, erro
 	if cfg.Federation.IsDefined() {
 		fed := absFrom(configDirAbs, cfg.Federation.Filename)
 		out = append(out, absOutput{fed, DeclareeFederation})
-		out = append(out, absOutput{filepath.Join(filepath.Dir(fed), "federation.requires.go"), DeclareeFederation})
+		out = append(out, absOutput{filepath.Join(filepath.Dir(fed), federationRequiresFile), DeclareeFederation})
 	}
 
 	// plugin/resolvergen/resolver.go GenerateCode.

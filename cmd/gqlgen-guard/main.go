@@ -183,6 +183,12 @@ func dashIfEmpty(s string) string {
 // discoverModuleRoot asks the go command where the module containing the
 // working directory begins, rather than walking up looking for a go.mod, so a
 // nested module or a workspace resolves the same way the toolchain would.
+//
+// In workspace mode (a go.work, or GOWORK) `go list -m` prints one directory
+// per workspace module. The module wanted is the one containing the working
+// directory -- the deepest listed directory that is the working directory or
+// one of its ancestors -- and a working directory inside none of them is a
+// refusal that says so, never a multi-line string used as a path.
 func discoverModuleRoot() (string, error) {
 	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}")
 	out, err := cmd.Output()
@@ -193,9 +199,42 @@ func discoverModuleRoot() (string, error) {
 		}
 		return "", fmt.Errorf("locate the module root: %w", err)
 	}
-	dir := strings.TrimSpace(string(out))
-	if dir == "" {
+	var dirs []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if d := strings.TrimSpace(line); d != "" {
+			dirs = append(dirs, filepath.Clean(d))
+		}
+	}
+	if len(dirs) == 0 {
 		return "", errors.New("locate the module root: `go list -m` returned no directory")
 	}
-	return filepath.Clean(dir), nil
+	if len(dirs) == 1 {
+		return dirs[0], nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("locate the module root: read the working directory: %w", err)
+	}
+	wd = resolved(wd)
+	best := ""
+	for _, d := range dirs {
+		rel, err := filepath.Rel(resolved(d), wd)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if len(d) > len(best) {
+			best = d
+		}
+	}
+	if best == "" {
+		return "", fmt.Errorf("locate the module root: workspace mode lists %d modules and the working directory is inside none of them; pass -module", len(dirs))
+	}
+	return best, nil
+}
+
+func resolved(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
 }

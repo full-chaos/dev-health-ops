@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"io"
 	"os"
+	"path"
 	"strings"
 )
 
@@ -108,9 +109,21 @@ func provenance(root *os.Root, rel string, declaree Declaree) (shape string, ok 
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return "", false, "", fmt.Errorf("read %q: %w", rel, err)
 	}
+	if declaree == DeclareeFederation && path.Base(rel) == federationRequiresFile {
+		// plugin/federation/federation.go renders this file with
+		// GeneratedHeader false and no FileNotice, so a generated one carries
+		// nothing that tells it from a hand-written one. With no evidence the
+		// guard does not overwrite -- executed: a config with
+		// options.explicit_requires generates it once, and the next run refuses.
+		return "", false, "gqlgen writes " + federationRequiresFile + " with no provenance notice at all, so a generated one cannot be told from a hand-written one", nil
+	}
 	shape, ok, reason = classifyProvenance(buf[:n], declaree)
 	return shape, ok, reason, nil
 }
+
+// federationRequiresFile is the fixed name plugin/federation gives the
+// explicit-requires file beside the federation output.
+const federationRequiresFile = "federation.requires.go"
 
 // classifyProvenance is the pure half of provenance, over the file's first
 // markerScanBytes bytes.

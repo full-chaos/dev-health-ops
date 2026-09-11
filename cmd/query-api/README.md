@@ -254,6 +254,8 @@ and because the generator runs `go mod tidy`, which in a reduced module rewrites
 The private copy carries no symbolic link that leaves the module: each one is
 reported (`dropped symbolic link …`), and a schema reached through one is a
 refusal, so keep every schema the config names inside the module.
+The copy is made under `TMPDIR`, which must therefore be outside the module; the
+guard refuses one inside it.
 
 Every difference between the checked-in files and a fresh generation is
 recorded in [`contracts/gqlgen/v1/expected-drift.record`](../../contracts/gqlgen/v1/expected-drift.record),

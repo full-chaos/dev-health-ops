@@ -2,6 +2,8 @@ package gqlgenguard
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,8 +211,8 @@ func TestSchemaInputConfinementInputDomain(t *testing.T) {
 				}
 			}},
 	}
-	for _, tc := range cases {
-		t.Run(tc.shape, func(t *testing.T) {
+	for i, tc := range cases {
+		t.Run(cellID("G4", i)+" "+tc.shape, func(t *testing.T) {
 			f := guardFixture(t)
 			outside := t.TempDir()
 			if tc.setup != nil {
@@ -223,7 +225,12 @@ func TestSchemaInputConfinementInputDomain(t *testing.T) {
 			var report strings.Builder
 			opts := guardOptions(f, gen)
 			opts.Report = &report
-			_, err := UpdateDriftRecord(context.Background(), opts)
+			res, err := UpdateDriftRecord(context.Background(), opts)
+			accepted := ""
+			if res != nil {
+				accepted = fmt.Sprintf("schemas %v", res.Plan.Schemas)
+			}
+			logCell(t, err, accepted)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("cell REFUSED but its contract says accept: %v", err)
@@ -241,5 +248,192 @@ func TestSchemaInputConfinementInputDomain(t *testing.T) {
 			}
 			assertUnchanged(t, before, f.digests(), tc.shape)
 		})
+	}
+}
+
+// TestThePrivateCopyIsNeverMadeInsideTheModule is the pairwise cell for the two
+// inputs that name a location: the module root and the directory the private
+// copy is made under (Options.TempParent, or TMPDIR when that is empty). When
+// the second is inside the first, copying the module copies the copy into
+// itself. Executed on the real binary before the fix: 91 nested levels and
+// 11 GB in nine minutes, and the SIGTERM `timeout` sent was caught and ignored
+// because the copy walk never looked at the context.
+func TestThePrivateCopyIsNeverMadeInsideTheModule(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts func(f *fixture) Options
+	}{
+		{"TempParent inside the module", func(f *fixture) Options {
+			o := guardOptions(f, nil)
+			o.TempParent = filepath.Join(f.dir, "tmpx")
+			return o
+		}},
+		{"TempParent IS the module root", func(f *fixture) Options {
+			o := guardOptions(f, nil)
+			o.TempParent = f.dir
+			return o
+		}},
+		{"TempParent is a link OUTSIDE the module that resolves INSIDE it", func(f *fixture) Options {
+			alias := filepath.Join(f.t.TempDir(), "alias")
+			if err := os.Symlink(filepath.Join(f.dir, "tmpx"), alias); err != nil {
+				f.t.Fatal(err)
+			}
+			o := guardOptions(f, nil)
+			o.TempParent = alias
+			return o
+		}},
+		{"TMPDIR inside the module, TempParent empty", func(f *fixture) Options {
+			t.Setenv("TMPDIR", filepath.Join(f.dir, "tmpx"))
+			o := guardOptions(f, nil)
+			o.TempParent = ""
+			return o
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := guardFixture(t)
+			if err := os.MkdirAll(filepath.Join(f.dir, "tmpx"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			before := f.digests()
+			gen := &fakeGenerator{fn: rewriteOutputs("generated")}
+			opts := tc.opts(f)
+			opts.Generator = gen
+			_, err := Generate(context.Background(), opts)
+			if err == nil || !strings.Contains(err.Error(), "inside the module") {
+				t.Fatalf("want a refusal naming the private copy inside the module, got %v", err)
+			}
+			if gen.ran {
+				t.Fatal("the generator ran")
+			}
+			entries, _ := os.ReadDir(filepath.Join(f.dir, "tmpx"))
+			if len(entries) != 0 {
+				t.Fatalf("something was created in the in-module temp directory: %v", entries)
+			}
+			assertUnchanged(t, before, f.digests(), tc.name)
+		})
+	}
+}
+
+// TestCopyTreeStopsWhenCancelled pins that the copy walk observes its context:
+// a cancelled context returns the cancellation and copies nothing, so a signal
+// that arrives while a large module is being copied ends the run instead of
+// being caught and then ignored until the walk finishes.
+func TestCopyTreeStopsWhenCancelled(t *testing.T) {
+	f := guardFixture(t)
+	src, err := os.OpenRoot(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	dstDir := t.TempDir()
+	dst, err := os.OpenRoot(dstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := CopyTree(ctx, src, dst, skipVCS); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CopyTree with a cancelled context returned %v, want context.Canceled", err)
+	}
+	entries, _ := os.ReadDir(dstDir)
+	if len(entries) != 0 {
+		t.Fatalf("CopyTree copied %d entries after cancellation", len(entries))
+	}
+}
+
+// TestTheGuardsOwnInputFilesAreNeverReadThroughALinkOutOfTheModule is the
+// sibling sweep of the link policy over the two files the GUARD reads by name:
+// the gqlgen config (read from the private copy, by gqlgen) and the
+// expected-drift record (read from the tree, through the module's root handle).
+// A link out of the module is refused for both; an in-module link works for
+// both.
+func TestTheGuardsOwnInputFilesAreNeverReadThroughALinkOutOfTheModule(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func(t *testing.T, f *fixture, outside string)
+		wantErr string
+	}{
+		{"the config is a link out of the module", func(t *testing.T, f *fixture, outside string) {
+			cfg := filepath.Join(outside, "gqlgen.yml")
+			if err := os.WriteFile(cfg, []byte(guardConfig), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(f.dir, "gqlgen.yml")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(cfg, filepath.Join(f.dir, "gqlgen.yml")); err != nil {
+				t.Fatal(err)
+			}
+		}, "too many levels of symbolic links"},
+		{"the config is an in-module link", func(t *testing.T, f *fixture, outside string) {
+			f.write("conf/real.yml", guardConfig)
+			if err := os.Remove(filepath.Join(f.dir, "gqlgen.yml")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("conf/real.yml", filepath.Join(f.dir, "gqlgen.yml")); err != nil {
+				t.Fatal(err)
+			}
+		}, ""},
+		{"the expected-drift record is a link out of the module", func(t *testing.T, f *fixture, outside string) {
+			rec := filepath.Join(outside, "expected-drift.record")
+			if err := os.WriteFile(rec, []byte(f.read("contracts/expected-drift.record")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(f.dir, "contracts", "expected-drift.record")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(rec, filepath.Join(f.dir, "contracts", "expected-drift.record")); err != nil {
+				t.Fatal(err)
+			}
+		}, "path escapes from parent"},
+		{"the expected-drift record is an in-module link", func(t *testing.T, f *fixture, outside string) {
+			f.write("contracts/real.record", f.read("contracts/expected-drift.record"))
+			if err := os.Remove(filepath.Join(f.dir, "contracts", "expected-drift.record")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("real.record", filepath.Join(f.dir, "contracts", "expected-drift.record")); err != nil {
+				t.Fatal(err)
+			}
+		}, ""},
+	}
+	for i, tc := range cases {
+		t.Run(cellID("G7", i)+" "+tc.name, func(t *testing.T) {
+			f := guardFixture(t)
+			// Every case starts from a committed, matching record.
+			if _, err := UpdateDriftRecord(context.Background(), guardOptions(f, &fakeGenerator{fn: rewriteOutputs("generated")})); err != nil {
+				t.Fatalf("write the record: %v", err)
+			}
+			tc.setup(t, f, t.TempDir())
+			before := f.digests()
+			_, err := CheckDrift(context.Background(), guardOptions(f, &fakeGenerator{fn: rewriteOutputs("generated")}))
+			logCell(t, err, "record matches byte for byte")
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("cell REFUSED but its contract says accept: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want a refusal containing %q, got %v", tc.wantErr, err)
+			}
+			assertUnchanged(t, before, f.digests(), tc.name)
+		})
+	}
+}
+
+// TestTakeSnapshotContextStopsWhenCancelled is TestCopyTreeStopsWhenCancelled's
+// sibling: the two snapshots of the private copy are the other two walks a
+// signal must be able to end.
+func TestTakeSnapshotContextStopsWhenCancelled(t *testing.T) {
+	f := guardFixture(t)
+	root, err := os.OpenRoot(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	snap, err := TakeSnapshotContext(ctx, root, skipVCS)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("TakeSnapshotContext with a cancelled context returned %v (%d entries), want context.Canceled", err, len(snap))
 	}
 }

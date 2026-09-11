@@ -1,6 +1,7 @@
 package gqlgenguard
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -45,10 +46,20 @@ func skipVCS(rel string) bool {
 // tree cannot be followed out of it: the operating system refuses the
 // traversal and the error names the path.
 func TakeSnapshot(root *os.Root, skip func(rel string) bool) (Snapshot, error) {
+	return TakeSnapshotContext(context.Background(), root, skip)
+}
+
+// TakeSnapshotContext is TakeSnapshot that stops, returning the context's
+// error, as soon as ctx is done -- so a signal that arrives while a large tree
+// is being digested ends the run instead of waiting for the walk.
+func TakeSnapshotContext(ctx context.Context, root *os.Root, skip func(rel string) bool) (Snapshot, error) {
 	snap := Snapshot{}
 	err := fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
 		}
 		if rel == "." {
 			return nil
@@ -155,11 +166,18 @@ const (
 // links the generator never needed. Every dropped link is returned so the
 // caller can report it: an input the generator needed and could not see must
 // be explicable from the output.
-func CopyTree(src, dst *os.Root, skip func(rel string) bool) ([]DroppedLink, error) {
+//
+// The walk checks ctx before every entry: the guard catches SIGINT/SIGTERM and
+// turns them into a cancelled context, and a copy that never looked at it made
+// those signals caught-and-ignored for as long as the copy ran.
+func CopyTree(ctx context.Context, src, dst *os.Root, skip func(rel string) bool) ([]DroppedLink, error) {
 	var dropped []DroppedLink
 	err := fs.WalkDir(src.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
 		}
 		if rel == "." {
 			return nil

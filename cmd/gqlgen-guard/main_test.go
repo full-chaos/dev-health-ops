@@ -382,6 +382,37 @@ func TestTheBinaryReportsItsRefusalsAndExitCodes(t *testing.T) {
 	}
 }
 
+// TestTheModuleRootIsTheOneContainingTheWorkingDirectoryInAWorkspace is the
+// pairwise cell for the two inputs that name the module: the working
+// directory and GOWORK. In workspace mode `go list -m` prints one directory per
+// module; before the fix the guard used the whole multi-line answer as a path
+// and refused with it garbled. The module containing the working directory is
+// the one the user is standing in.
+func TestTheModuleRootIsTheOneContainingTheWorkingDirectoryInAWorkspace(t *testing.T) {
+	bin := buildGuard(t)
+	dir := newGeneratableFixture(t)
+	other, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, other, "go.mod", "module example.com/other\n\ngo 1.25\n")
+	work := filepath.Join(t.TempDir(), "go.work")
+	if err := os.WriteFile(work, []byte("go 1.27.0\n\nuse (\n\t"+other+"\n\t"+dir+"\n)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "check-drift", "-config", "gqlgen.yml", "-update")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOWORK="+work, "TMPDIR="+t.TempDir())
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err = cmd.Run()
+	if !strings.Contains(out.String(), "module: "+dir+"\n") {
+		t.Fatalf("the guard did not resolve the module containing the working directory (%s); exit %v\noutput:\n%s", dir, err, out.String())
+	}
+}
+
 func exitCodeOf(t *testing.T, err error) int {
 	t.Helper()
 	if err == nil {

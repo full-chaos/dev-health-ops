@@ -5,14 +5,26 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"flag"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
+// `all-registered` is the ONLY spelling of "every row". An empty value is
+// the operator naming nothing, and is refused below -- see
+// TestRequestedOperationsRefusesAFilterThatNamesNothing.
 func TestRequestedOperationsTreatsAllRegisteredAsEveryRow(t *testing.T) {
-	for _, raw := range []string{"all-registered", "  all-registered  ", "", "   "} {
+	for _, raw := range []string{"all-registered", "  all-registered  "} {
 		got, err := requestedOperations(raw)
 		if err != nil {
 			t.Fatalf("requestedOperations(%q) = %v, want no error", raw, err)
@@ -34,12 +46,18 @@ func TestRequestedOperationsTrimsAndDropsEmptyNames(t *testing.T) {
 	}
 }
 
-// CHAOS-5486 round 1, F1 (reproduced by the lane before fixing): a
+// A
 // separators-only --operations produced an EMPTY filter, which Repoint reads
 // as "every row at the digest" -- an operator who named something got a
 // silent re-point of everything. Asking for all rows must be explicit.
+//
+// THE EMPTY-STRING CASES ARE THE SECOND HALF, found by a codex round
+// probing the binary: the first fix closed `","` and left `""` reading as
+// "all", one input away. This very test asserted that defective behaviour,
+// which is why the first fix looked complete -- a test that encodes the
+// bug is worse than no test, because it makes the gap look covered.
 func TestRequestedOperationsRefusesAFilterThatNamesNothing(t *testing.T) {
-	for _, raw := range []string{",", " , ", ",,,", " ,, , "} {
+	for _, raw := range []string{",", " , ", ",,,", " ,, , ", "", "   ", "\t\n"} {
 		got, err := requestedOperations(raw)
 		if !errors.Is(err, errEmptyOperationFilter) {
 			t.Fatalf("requestedOperations(%q) = (%v, %v), want errEmptyOperationFilter -- a write verb must never widen silently", raw, got, err)
@@ -151,4 +169,1345 @@ func syntheticJWT(t *testing.T, claims map[string]string) string {
 		segment(claims),
 		base64.RawURLEncoding.EncodeToString([]byte("synthetic-signature")),
 	}, ".")
+}
+
+// CHAOS-5486: the four verbs. A first argument beginning with "-" is a
+// FLAG, so it means the flat pre-verb form -- the form JOB 5's step list
+// quotes verbatim -- and that form still means `repoint`. Breaking a
+// recipe an operator is holding is not an acceptable cost for a nicer
+// CLI.
+func TestSplitVerbKeepsTheFlatPreVerbFormWorkingAsRepoint(t *testing.T) {
+	for _, argv := range [][]string{
+		{"-recorded-by", "lane", "-review-evidence", "why"},
+		{"-dry-run"},
+		{},
+	} {
+		verb, rest := splitVerb(argv)
+		if verb != "repoint" {
+			t.Fatalf("splitVerb(%v) = %q, want repoint -- #2415's invocation must keep working", argv, verb)
+		}
+		if len(rest) != len(argv) {
+			t.Fatalf("splitVerb(%v) consumed an argument: rest=%v", argv, rest)
+		}
+	}
+}
+
+func TestSplitVerbTakesAnExplicitVerbOffTheFront(t *testing.T) {
+	for _, want := range []string{"repoint", "enable", "disable", "status"} {
+		verb, rest := splitVerb([]string{want, "-dry-run"})
+		if verb != want {
+			t.Fatalf("splitVerb = %q, want %q", verb, want)
+		}
+		if len(rest) != 1 || rest[0] != "-dry-run" {
+			t.Fatalf("splitVerb left rest=%v, want the flags after the verb", rest)
+		}
+	}
+}
+
+// An unknown verb must NAME itself in the refusal and must not fall
+// through to a write. "go-api-routing repint" quietly re-pointing every
+// row is the shape of defect this whole surface exists to end.
+func TestRunRefusesAnUnknownVerbByName(t *testing.T) {
+	err := run([]string{"repint", "-dry-run"})
+	if err == nil {
+		t.Fatal("an unknown verb must be an error, never a fall-through to a write verb")
+	}
+	if !strings.Contains(err.Error(), "repint") {
+		t.Fatalf("the refusal must name the verb it did not understand, got %q", err)
+	}
+}
+
+// A refusal (a state the operator must resolve) exits 2; a crash exits 1.
+// A calling script has to be able to tell them apart -- the Python CLI's
+// `_refuse` sets the same convention.
+// THE DEFAULT IS REFUSAL, and the test says so explicitly because the
+// default was inverted in r2 (R2-01/R2-02).
+//
+// Classifying crash-by-default and requiring each site to opt IN to
+// being a refusal produced THREE findings of one class across two rounds:
+// an unknown verb, then several raw returns in `repoint`, then a
+// malformed -postgres-uri and a non-sentinel /buildinfo failure. Every
+// failure this command can produce is environmental; the internal-defect
+// set is tiny and now opts OUT explicitly via errInternal.
+func TestAnUnclassifiedErrorIsARefusalAndOnlyErrInternalCrashes(t *testing.T) {
+	if got := exitCodeFor(nil); got != 0 {
+		t.Fatalf("exitCodeFor(nil) = %d, want 0", got)
+	}
+	if got := exitCodeFor(refuse("nope")); got != 2 {
+		t.Fatalf("exitCodeFor(refusal) = %d, want 2", got)
+	}
+	if got := exitCodeFor(fmt.Errorf("wrapped: %w", refuse("nope"))); got != 2 {
+		t.Fatalf("a WRAPPED refusal is still a refusal, got %d", got)
+	}
+	// The inversion itself: an error nobody classified is an operator
+	// state, not a crash. Forgetting to mark one now costs a script a
+	// retryable exit 2; under the old default it cost a spurious alert,
+	// three times.
+	if got := exitCodeFor(errors.New("something nobody classified")); got != 2 {
+		t.Fatalf("an UNCLASSIFIED error must default to a refusal (2), got %d", got)
+	}
+	if got := exitCodeFor(internal("a defect in this program")); got != 1 {
+		t.Fatalf("exitCodeFor(internal) = %d, want 1", got)
+	}
+	if got := exitCodeFor(fmt.Errorf("wrapped: %w", internal("boom"))); got != 1 {
+		t.Fatalf("a WRAPPED internal error is still internal, got %d", got)
+	}
+}
+
+// Preflight 2's local half. Rows are keyed by this value, so the digest
+// this binary compares against the running process must be the one the
+// repo pins -- not a value it computed over some other bytes.
+//
+// The pin file is read at test time rather than hardcoded, so an SDL
+// change that legitimately moves the digest updates one place
+// (contracts/graphql/v1/schema-digest.json, itself gated by
+// ci/check_go_api_routing_digest.py) instead of two.
+func TestLocalSchemaDigestMatchesTheRepositoryPin(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "graphql", "v1", "schema-digest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pin struct {
+		SchemaDigest string `json:"schema_digest"`
+	}
+	if err := json.Unmarshal(raw, &pin); err != nil {
+		t.Fatal(err)
+	}
+	if pin.SchemaDigest == "" {
+		t.Fatal("contracts/graphql/v1/schema-digest.json carries no schema_digest")
+	}
+	if got := localSchemaDigest(); got != pin.SchemaDigest {
+		t.Fatalf("localSchemaDigest() = %s, the repository pins %s -- enable would write rows at a digest neither plane computes", got, pin.SchemaDigest)
+	}
+}
+
+// The refusal an operator reads has to say what to do next. Every digest
+// refusal names the runbook section for the same reason the Python verb's
+// does: the message that stops the command is the one they act on.
+func TestRunbookNamesTheDigestMoveSection(t *testing.T) {
+	if !strings.Contains(runbook, "go-api-wave-0-proof-infrastructure.md") ||
+		!strings.Contains(runbook, "When the schema digest moves") {
+		t.Fatalf("runbook = %q; a digest refusal must point at the recovery procedure", runbook)
+	}
+}
+
+// An unknown verb is a REFUSAL, not a crash. A calling script has
+// to be able to tell "I would not do that" (2) from "I broke" (1), and
+// the split existed but this path did not go through it.
+func TestAnUnknownVerbRefusesWithExitTwo(t *testing.T) {
+	err := run([]string{"definitely-not-a-verb"})
+	if err == nil {
+		t.Fatal("an unknown verb must be an error")
+	}
+	if got := exitCodeFor(err); got != 2 {
+		t.Fatalf("exit code = %d, want 2 -- an unknown verb is a refusal, and the Python CLI sets that convention", got)
+	}
+	if !strings.Contains(err.Error(), "definitely-not-a-verb") {
+		t.Fatalf("the refusal must name the verb it did not understand, got %q", err)
+	}
+}
+
+// Provenance is normalised ONCE, before it is stored. Python
+// strips before persisting; a whitespace-padded identity makes two
+// records of the same operator compare unequal for a reason nobody can
+// see, and the CHAOS-5505 audit table is append-only.
+func TestProvenanceIsTrimmedBeforeItIsStored(t *testing.T) {
+	flags := commonFlags{recordedBy: "  lane-routing-verbs \t", reviewEvidence: "\n why  "}
+	if err := flags.requireProvenance(); err != nil {
+		t.Fatalf("requireProvenance: %v", err)
+	}
+	if flags.recordedBy != "lane-routing-verbs" || flags.reviewEvidence != "why" {
+		t.Fatalf("stored recorded_by=%q review_evidence=%q, want both trimmed", flags.recordedBy, flags.reviewEvidence)
+	}
+	// Whitespace-only is still absent, and the refusal names BOTH flags
+	// rather than stopping at the first.
+	blank := commonFlags{recordedBy: "   ", reviewEvidence: "\t"}
+	err := blank.requireProvenance()
+	if err == nil {
+		t.Fatal("whitespace-only provenance must be refused")
+	}
+	if !strings.Contains(err.Error(), "-recorded-by") || !strings.Contains(err.Error(), "-review-evidence") {
+		t.Fatalf("the refusal must name every missing flag, got %q", err)
+	}
+	if got := exitCodeFor(err); got != 2 {
+		t.Fatalf("a missing-flag refusal must exit 2, got %d", got)
+	}
+}
+
+// The third declared tightening. Python permits an absent reason
+// for a proven enablement and derives recorded_by from the environment,
+// falling back to the literal "unknown". This command refuses instead,
+// and that choice is pinned so it cannot drift back by accident or be
+// mistaken for an oversight.
+func TestEveryWriteVerbRequiresBothProvenanceFlags(t *testing.T) {
+	if err := (&commonFlags{recordedBy: "who"}).requireProvenance(); err == nil {
+		t.Fatal("-review-evidence is required even when -recorded-by is present")
+	}
+	if err := (&commonFlags{reviewEvidence: "why"}).requireProvenance(); err == nil {
+		t.Fatal("-recorded-by is required even when -review-evidence is present")
+	}
+	if err := (&commonFlags{recordedBy: "who", reviewEvidence: "why"}).requireProvenance(); err != nil {
+		t.Fatalf("both present must pass: %v", err)
+	}
+}
+
+// Every verb's own entry point must be exercised: the
+// operator-facing refusals -- the code path an operator hits most --
+// were entirely unexercised. These drive each verb far enough to reach
+// its first semantic refusal without needing a network or a database.
+//
+// Flag PARSING is deliberately not exercised: the flag sets use
+// flag.ExitOnError, so a malformed flag calls os.Exit and would take the
+// test binary with it. Every case below parses cleanly and then refuses.
+func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	// POSTGRES_URI is a SUPPORTED fallback for -postgres-uri, so a
+	// developer or a CI runner that has it exported is an ordinary,
+	// correct environment -- and this test's "with no postgres" cases
+	// silently stopped testing anything there, because the fallback
+	// supplied one (Trap #101; r1 measured it failing on a host that had
+	// it set). A test whose subject is "this flag is ABSENT" has to make
+	// it absent rather than assume the machine did.
+	t.Setenv("POSTGRES_URI", "")
+	for name, testCase := range map[string]struct {
+		argv []string
+		want string
+	}{
+		"enable with no -mode":            {[]string{"enable"}, "-mode is required"},
+		"enable with no provenance":       {[]string{"enable", "-mode", "canary"}, "-recorded-by"},
+		"enable with no postgres":         {[]string{"enable", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
+		"enable with no credential":       {[]string{"enable", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
+		"disable with no -mode":           {[]string{"disable"}, "-mode is required"},
+		"disable with no postgres":        {[]string{"disable", "-mode", "python"}, "-postgres-uri"},
+		"disable applying with no reason": {[]string{"disable", "-mode", "python", "-postgres-uri", "postgres://x", "-apply"}, "-recorded-by"},
+		"repoint with no provenance":      {[]string{"repoint"}, "-recorded-by"},
+		"repoint with no postgres":        {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y"}, "-postgres-uri"},
+		"repoint with no credential":      {[]string{"repoint", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"}, bearerEnvVar},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := run(testCase.argv)
+			if err == nil {
+				t.Fatalf("run(%v) = nil, want a refusal", testCase.argv)
+			}
+			if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("run(%v) = %q, want it to name %q", testCase.argv, err, testCase.want)
+			}
+			if got := exitCodeFor(err); got != 2 {
+				t.Fatalf("run(%v) exits %d, want 2 -- every one of these is a state the operator resolves", testCase.argv, got)
+			}
+		})
+	}
+}
+
+// `-registry-url`/`-buildinfo-url` must never default to
+// a HARDCODED `http://localhost:8090/...`, independently, so `enable`/
+// `repoint` never refused on a genuinely unconfigured endpoint -- they
+// silently probed whatever happened to answer there. This is the LAST
+// precondition checked (mode/provenance/postgres/credential all resolve
+// first, matching TestEveryVerbRefusesItsOwnMissingPreconditions's
+// ordering), so every other required flag is supplied here.
+func TestEnableAndRepointRefuseWithNoQueryAPIURLConfiguredAtAll(t *testing.T) {
+	t.Setenv(bearerEnvVar, "envelope-for-the-test")
+	t.Setenv("GO_API_QUERY_API_URL", "")
+	// enable resolves the catalog before the URL (both are cheap, local
+	// preconditions ahead of any network attempt) -- a real one is
+	// supplied so THAT is not what refuses this specific test.
+	catalogPath := filepath.Join(t.TempDir(), "go_api_operations.json")
+	if err := os.WriteFile(catalogPath, []byte(`[{"operation":"flowMatrix","digest":"d"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, argv := range map[string][]string{
+		"enable, no registry-url":  {"enable", "-mode", "canary", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x", "-catalog", catalogPath},
+		"repoint, no registry-url": {"repoint", "-recorded-by", "w", "-review-evidence", "y", "-postgres-uri", "postgres://x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := run(argv)
+			if err == nil {
+				t.Fatalf("run(%v) = nil, want a refusal naming the missing query-api URL", argv)
+			}
+			if !strings.Contains(err.Error(), "no query-api URL") || !strings.Contains(err.Error(), "GO_API_QUERY_API_URL") {
+				t.Fatalf("run(%v) = %q, want it to name the missing query-api URL and GO_API_QUERY_API_URL", argv, err)
+			}
+			if got := exitCodeFor(err); got != 2 {
+				t.Fatalf("run(%v) exits %d, want 2", argv, got)
+			}
+		})
+	}
+}
+
+// `status` NEVER refuses, even with nothing configured at all. It is what
+// an operator runs when things are already broken, and a diagnostic that
+// dies because the thing it diagnoses is down is useless exactly when it
+// is needed. Driven here with no database, no credential, and a registry
+// URL nothing is listening on.
+func TestStatusNeverFailsEvenWithNothingConfigured(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	t.Setenv("POSTGRES_URI", "")
+	for _, argv := range [][]string{
+		{"status", "-registry-url", "http://127.0.0.1:1", "-timeout", "2s"},
+		{"status", "-registry-url", "http://127.0.0.1:1", "-timeout", "2s", "-json"},
+		{"status", "-registry-url", "http://127.0.0.1:1", "-timeout", "2s", "-catalog", "/nonexistent/catalog.json"},
+	} {
+		if err := run(argv); err != nil {
+			t.Fatalf("run(%v) = %v, want nil -- status never fails on an unhealthy state", argv, err)
+		}
+	}
+}
+
+// With NEITHER `-registry-url` NOR GO_API_QUERY_API_URL
+// set, `status` used to fall back to a hardcoded `http://localhost:8090/
+// registry` and probe it -- an actual, if usually fruitless, network
+// attempt against an address nobody named. Parity with Python's `status`
+// (`go_api_cli.py`'s `go_error = "no --query-api-url and
+// GO_API_QUERY_API_URL is unset"`): no HTTP attempt at all, and the exact
+// sentence Python's own fallback prints.
+func TestStatusReportsNoQueryAPIURLWithoutProbingAnything(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	t.Setenv("POSTGRES_URI", "")
+	t.Setenv("GO_API_QUERY_API_URL", "")
+	out, _, err := captureVerb(t, "status", "-timeout", "2s", "-json")
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	if !strings.Contains(out, `"go_plane_error": "no -registry-url and GO_API_QUERY_API_URL is unset"`) {
+		t.Fatalf("go_plane_error did not name the missing URL configuration:\n%s", out)
+	}
+	if strings.Contains(out, "connection_refused") || strings.Contains(out, "localhost:8090") {
+		t.Fatalf("status attempted an HTTP probe of a hardcoded default nobody configured:\n%s", out)
+	}
+}
+
+// An UNUSABLE (not merely unset) GO_API_QUERY_API_URL
+// -- inherited from the environment, not typed as a flag -- used to make
+// `status` `return err` from sanitizeEndpointURL, which refuses the whole
+// command (non-zero exit, nothing printed): the write verbs' contract, not
+// this diagnostic's. Fixed: status reports go_plane_error and still prints
+// the schema digest / database census, neither of which needs the registry
+// call at all.
+func TestStatusReportsAnUnusableEnvURLInsteadOfRefusing(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	t.Setenv("POSTGRES_URI", "")
+	// No "//", so Go parses "not" as the scheme -- sanitizeEndpointURL's
+	// http(s)-only gate refuses it.
+	t.Setenv("GO_API_QUERY_API_URL", "not a url")
+	out, _, err := captureVerb(t, "status", "-timeout", "2s", "-json")
+	if err != nil {
+		t.Fatalf("status must never refuse, even on an unusable inherited env URL: %v", err)
+	}
+	if !strings.Contains(out, `"python_plane_schema_digest"`) {
+		t.Fatalf("status printed nothing -- an unusable env URL must not suppress the schema digest, which needs no registry call:\n%s", out)
+	}
+	if strings.Contains(out, `"go_plane_error": null`) {
+		t.Fatalf("go_plane_error must name the unusable URL, not read null:\n%s", out)
+	}
+	if strings.Contains(out, `"go_plane_error": "no -registry-url and GO_API_QUERY_API_URL is unset"`) {
+		t.Fatalf("go_plane_error named the wrong cause -- something WAS set, it just could not be used safely:\n%s", out)
+	}
+	// The message must
+	// name the SOURCE that actually supplied the value -- the env var, not
+	// a flag the operator never typed.
+	if !strings.Contains(out, "GO_API_QUERY_API_URL") {
+		t.Fatalf("go_plane_error must name GO_API_QUERY_API_URL, not blame a flag nobody typed:\n%s", out)
+	}
+	if strings.Contains(out, "-registry-url must be") {
+		t.Fatalf("go_plane_error blamed -registry-url, but that flag was never passed -- the value came from the env var:\n%s", out)
+	}
+}
+
+// `<verb> -h` on all four verbs must never fall through
+// parseVerbFlags's generic Parse-error handling and exit 2 ("refused: flag:
+// help requested") -- inconsistent with this binary's OWN top-level `-h`
+// (run's "help" case: exit 0) and with Python's `-h` (argparse: exit 0). A
+// script checking "did that succeed" after asking a verb what it does saw
+// a refusal for asking a question.
+func TestVerbHelpFlagExitsZeroLikeTopLevelHelp(t *testing.T) {
+	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+		for _, flag := range []string{"-h", "-help"} {
+			out, errOut, err := captureVerb(t, verb, flag)
+			if err != nil {
+				t.Fatalf("%s %s: run() = %v, want nil (help is not a refusal)", verb, flag, err)
+			}
+			if !strings.Contains(out+errOut, "Usage") && !strings.Contains(out+errOut, "usage") {
+				t.Fatalf("%s %s: no usage text printed:\nstdout:%s\nstderr:%s", verb, flag, out, errOut)
+			}
+		}
+	}
+}
+
+// A back-quoted word inside a flag's usage string
+// makes Go's `flag` package treat it as the flag's OWN VALUE NAME (its
+// documented mechanism for choosing the usage placeholder) -- so
+// `-acknowledge-unproven`'s usage text, which said "...by `status`
+// for...", made `enable -h` print `-acknowledge-unproven status`, a
+// boolean switch that reads as if it takes an argument.
+func TestEnableHelpDoesNotShowAcknowledgeUnprovenAsTakingAnArgument(t *testing.T) {
+	_, errOut, err := captureVerb(t, "enable", "-h")
+	if err != nil {
+		t.Fatalf("enable -h: run() = %v, want nil", err)
+	}
+	if strings.Contains(errOut, "-acknowledge-unproven status") {
+		t.Fatalf("-acknowledge-unproven still prints as if it takes an argument named status:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "-acknowledge-unproven\n") {
+		t.Fatalf("-acknowledge-unproven must print as a plain boolean switch, own line, no value name:\n%s", errOut)
+	}
+}
+
+// status's half of the
+// GO_API_QUERY_API_URL fallback -- a mutant that made
+// `haveRegistryURL` depend ONLY on the explicit `-registry-url` flag
+// (ignoring the env var entirely) left both suites green. With ONLY the
+// env var set (no -registry-url), the real binary reads the registry and
+// reports AGREE; the mutant never attempts the HTTP call at all and
+// reports the "nobody configured anything" sentence -- FALSE, since the
+// variable IS set.
+func TestStatusReadsTheRegistryFromTheEnvVarAloneNoFlag(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	t.Setenv("POSTGRES_URI", "")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/registry" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"schema_digest": %q, "operations": []}`, localSchemaDigest())
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("GO_API_QUERY_API_URL", server.URL)
+
+	out, _, err := captureVerb(t, "status", "-timeout", "2s", "-json")
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	if !strings.Contains(out, `"planes_agree": true`) {
+		t.Fatalf("status did not read the registry via the env-var fallback (no -registry-url flag was passed):\n%s", out)
+	}
+	if strings.Contains(out, "no -registry-url and GO_API_QUERY_API_URL is unset") {
+		t.Fatalf("go_plane_error falsely claims nothing was configured -- GO_API_QUERY_API_URL IS set:\n%s", out)
+	}
+}
+
+// Direct coverage of the shared resolver both write verbs and status now
+// go through.
+func TestResolveEndpointURL(t *testing.T) {
+	t.Run("explicit flag wins over the env var", func(t *testing.T) {
+		t.Setenv("GO_API_QUERY_API_URL", "http://env-base:1")
+		got, ok := resolveEndpointURL("http://explicit:2/registry", "/registry")
+		if !ok || got != "http://explicit:2/registry" {
+			t.Fatalf("got (%q, %v), want the explicit value unchanged", got, ok)
+		}
+	})
+	t.Run("env var derives the path when the flag is empty", func(t *testing.T) {
+		t.Setenv("GO_API_QUERY_API_URL", "http://env-base:1")
+		got, ok := resolveEndpointURL("", "/buildinfo")
+		if !ok || got != "http://env-base:1/buildinfo" {
+			t.Fatalf("got (%q, %v), want \"http://env-base:1/buildinfo\"", got, ok)
+		}
+	})
+	t.Run("a trailing slash on the env var is not doubled", func(t *testing.T) {
+		t.Setenv("GO_API_QUERY_API_URL", "http://env-base:1/")
+		got, ok := resolveEndpointURL("", "/registry")
+		if !ok || got != "http://env-base:1/registry" {
+			t.Fatalf("got (%q, %v), want \"http://env-base:1/registry\"", got, ok)
+		}
+	})
+	t.Run("neither set is unresolved, not a fabricated default", func(t *testing.T) {
+		t.Setenv("GO_API_QUERY_API_URL", "")
+		got, ok := resolveEndpointURL("", "/registry")
+		if ok || got != "" {
+			t.Fatalf("got (%q, %v), want (\"\", false) -- no hardcoded fallback", got, ok)
+		}
+	})
+}
+
+// r2 R2-01 and R2-10 together: `connectPostgres` was both unclassified
+// (a malformed DSN read as a crash) and uncovered.
+//
+// The leak assertion is the important half. pgx's own parse error EMBEDS
+// the DSN it was given, and a real DSN carries a password -- so the first
+// version of the R2-01 fix wrapped that error with %w and would have put
+// a password in an operator's terminal and shell history. Caught while
+// verifying the fix, which is why the test exists rather than the comment.
+func TestConnectPostgresRefusesAndNeverEchoesTheDSN(t *testing.T) {
+	const password = "SUPERSECRET-NEVER-PRINT"
+	malformed := "postgres://u:" + password + "@ =not a dsn"
+
+	_, err := connectPostgres(t.Context(), malformed, time.Second)
+	if err == nil {
+		t.Fatal("a malformed DSN must be refused")
+	}
+	if got := exitCodeFor(err); got != 2 {
+		t.Fatalf("a malformed DSN exits %d, want 2 -- it is the operator's to fix", got)
+	}
+	if strings.Contains(err.Error(), password) {
+		t.Fatalf("the refusal echoed the DSN's password: %q", err)
+	}
+	if !strings.Contains(err.Error(), "-postgres-uri") {
+		t.Fatalf("the refusal must name the flag the operator has to change, got %q", err)
+	}
+}
+
+// The other half of connectPostgres: a well-formed DSN nothing answers.
+// 192.0.2.1 is TEST-NET-1 (RFC 5737) and is blackholed by definition, so
+// this exercises the dial timeout without depending on the host's network
+// behaving in any particular way.
+func TestConnectPostgresBoundsTheDialAndSaysSo(t *testing.T) {
+	const password = "SUPERSECRET-NEVER-PRINT"
+	started := time.Now()
+	_, err := connectPostgres(t.Context(),
+		"postgres://u:"+password+"@192.0.2.1:5432/db", 2*time.Second)
+	elapsed := time.Since(started)
+
+	if err == nil {
+		t.Fatal("a blackholed address must not connect")
+	}
+	if elapsed > 15*time.Second {
+		t.Fatalf("the dial took %s -- the -timeout flag must bound it, or `status` hangs forever on a dead database", elapsed)
+	}
+	// Exit 1, matching
+	// Python's identical command (an unhandled ConnectionRefusedError,
+	// also exit 1) -- corrected from an earlier version of this test that
+	// asserted exit 2. A syntactically valid DSN naming an endpoint that
+	// will not answer is not an operator typo; see
+	// TestConnectPostgresRefusesAndNeverEchoesTheDSN's PARSE-error case,
+	// which stays exit 2.
+	if got := exitCodeFor(err); got != 1 {
+		t.Fatalf("an unreachable database exits %d, want 1", got)
+	}
+	if strings.Contains(err.Error(), password) {
+		t.Fatalf("the refusal echoed the DSN's password: %q", err)
+	}
+}
+
+// codex r3 SEC-01, reproduced with a real password before the fix.
+//
+// goapiproof.FetchRegistry and FetchBuildIdentity interpolate the URL
+// they are handed straight into their error text, so
+// `-registry-url http://alice:supersecret@host/registry` printed
+// `supersecret` in full on any transport failure. Go's own url.Error
+// masks the password in the NESTED error, which is exactly why it was
+// easy to miss: the leak came from the OUTER interpolation, sitting next
+// to a string that looked already sanitised.
+//
+// The interpolation is in a file this lane may not edit, so the fix is at
+// the boundary this command owns: such a URL never reaches that code.
+func TestCredentialBearingURLsAreRefusedBeforeTheyCanBePrinted(t *testing.T) {
+	const secret = "supersecret-never-print"
+	for _, raw := range []string{
+		"http://alice:" + secret + "@127.0.0.1:1/registry",
+		"https://alice:" + secret + "@example.invalid/buildinfo",
+		// Userinfo with no password still identifies a principal, and
+		// still gets echoed.
+		"http://alice@127.0.0.1:1/registry",
+	} {
+		_, err := sanitizeEndpointURL("-registry-url", raw)
+		if !errors.Is(err, ErrURLCarriesCredentials) {
+			t.Fatalf("requireCredentialFreeURL(%q) = %v, want ErrURLCarriesCredentials", raw, err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("the refusal itself echoed the credential: %q", err)
+		}
+		if got := exitCodeFor(err); got != 2 {
+			t.Fatalf("a credential-bearing URL exits %d, want 2", got)
+		}
+	}
+
+	// The shapes that must still be accepted.
+	for _, raw := range []string{
+		"http://localhost:8090/registry",
+		"https://query-api.internal/buildinfo",
+		"http://172.19.0.12:8090/registry",
+	} {
+		if _, err := sanitizeEndpointURL("-registry-url", raw); err != nil {
+			t.Fatalf("requireCredentialFreeURL(%q) = %v, want nil", raw, err)
+		}
+	}
+}
+
+// The other half: anything unparseable, or not http(s), is refused
+// WITHOUT its text being echoed -- an unparseable string is exactly the
+// one whose shape cannot be reasoned about, which is the lesson
+// go_api_cli.py records after five rounds of trying to redact URLs.
+func TestUnparseableAndNonHTTPURLsAreRefusedWithoutEchoingThem(t *testing.T) {
+	const secret = "supersecret-never-print"
+	for name, raw := range map[string]string{
+		"not a url":     "://" + secret,
+		"file scheme":   "file:///etc/passwd",
+		"ftp scheme":    "ftp://host/" + secret,
+		"no host":       "http:///registry",
+		"bare hostname": "query-api:8090/registry",
+	} {
+		_, err := sanitizeEndpointURL("-registry-url", raw)
+		if err == nil {
+			t.Fatalf("%s must be refused", name)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("%s: the refusal echoed the input: %q", name, err)
+		}
+		if got := exitCodeFor(err); got != 2 {
+			t.Fatalf("%s exits %d, want 2", name, got)
+		}
+	}
+}
+
+// THE NO-`//` FORM, measured rather than assumed (lane-5425-prove found it
+// in its own staged fix; confirmed here with the same input).
+//
+//	url.Parse("alice:supersecret@host/registry")
+//	  scheme="alice"  opaque="supersecret@host/registry"  User=nil
+//	  Redacted() => "alice:supersecret@host/registry"
+//
+// Two consequences, and this test pins both. `u.User` is NIL, so a check
+// that relies on it alone lets the string through -- which is why the
+// first gate here looks for `@` before the first `/` and does not consult
+// the parser at all. And the SCHEME is the username, so a refusal that
+// names the offending scheme prints a credential: the first version of
+// this code refused correctly and leaked `alice` while doing it.
+//
+// `url.Redacted()` is the obvious Go answer and is wrong for the same
+// reason: with User nil it has nothing to redact and hands the password
+// straight back.
+func TestTheNoSlashSlashFormIsRefusedAndNothingAboutItIsEchoed(t *testing.T) {
+	const user = "alice-the-operator"
+	const password = "supersecret-never-print"
+	for name, raw := range map[string]string{
+		"no scheme separator":     user + ":" + password + "@host/registry",
+		"no separator, no colon":  user + "@host/registry",
+		"scheme-relative":         "//" + user + ":" + password + "@host/registry",
+		"scheme-relative no pass": "//" + user + "@host/registry",
+	} {
+		_, err := sanitizeEndpointURL("-registry-url", raw)
+		if err == nil {
+			t.Fatalf("%s must be refused: %q", name, raw)
+		}
+		// Neither half of the credential, and not the username on its own
+		// -- a username is operator-supplied credential material too.
+		if strings.Contains(err.Error(), password) {
+			t.Fatalf("%s: the refusal echoed the PASSWORD: %q", name, err)
+		}
+		if strings.Contains(err.Error(), user) {
+			t.Fatalf("%s: the refusal echoed the USERNAME: %q", name, err)
+		}
+		if got := exitCodeFor(err); got != 2 {
+			t.Fatalf("%s exits %d, want 2", name, got)
+		}
+	}
+}
+
+// The parser-independent gate, on its own. It runs BEFORE url.Parse
+// precisely because the parser is the thing that surprised us: an `@`
+// ahead of the first `/` is userinfo in every URL shape, whatever Go
+// makes of it.
+func TestUserinfoIsCaughtWithoutConsultingTheParser(t *testing.T) {
+	const secret = "supersecret-never-print"
+	for _, raw := range []string{
+		"http://u:" + secret + "@host/registry",
+		"u:" + secret + "@host/registry",
+		"//u:" + secret + "@host/registry",
+		// An `@` AFTER the first slash is a path character, not userinfo,
+		// and must not be refused on that basis.
+	} {
+		if _, err := sanitizeEndpointURL("-registry-url", raw); err == nil {
+			t.Fatalf("%q must be refused", raw)
+		}
+	}
+	if _, err := sanitizeEndpointURL("-registry-url", "http://host/registry@v2"); err != nil {
+		t.Fatalf("an @ in the PATH is not userinfo and must be accepted, got %v", err)
+	}
+}
+
+// r4 CRED-01, reproduced verbatim from the round: a query string carrying
+// a token passed a userinfo-only check and reached the interpolation.
+//
+// THIS IS THE THIRD VARIANT OF ONE LEAK -- userinfo (r3), the no-`//`
+// scheme echo, and now query/fragment. Each earlier fix rejected the
+// shape that had just been found and left the next one open, which is why
+// the check is now an ALLOWLIST over URL components and returns a REBUILT
+// URL rather than the operator's string.
+func TestQueryAndFragmentCredentialsAreRefused(t *testing.T) {
+	const secret = "supersecret-never-print"
+	for name, raw := range map[string]string{
+		"query token":        "http://127.0.0.1:1/registry?token=" + secret,
+		"query, no value":    "http://127.0.0.1:1/registry?" + secret,
+		"forced empty query": "http://127.0.0.1:1/registry?",
+		"fragment":           "http://127.0.0.1:1/registry#" + secret,
+		"query and fragment": "http://127.0.0.1:1/registry?token=" + secret + "#x",
+	} {
+		got, err := sanitizeEndpointURL("-registry-url", raw)
+		if err == nil {
+			t.Fatalf("%s must be refused: %q rebuilt to %q", name, raw, got)
+		}
+		if !errors.Is(err, ErrURLCarriesCredentials) {
+			t.Fatalf("%s = %v, want ErrURLCarriesCredentials", name, err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("%s: the refusal echoed the secret: %q", name, err)
+		}
+		if got != "" {
+			t.Fatalf("%s returned %q alongside its error", name, got)
+		}
+	}
+}
+
+// The REBUILD is the belt to the allowlist's braces: whatever this
+// function did not explicitly account for cannot survive into the value
+// that reaches the code which interpolates it. If a future URL component
+// carries something, it is dropped rather than forwarded.
+func TestTheSanitizedURLIsRebuiltFromComponentsNotForwarded(t *testing.T) {
+	// A path with characters that need escaping still round-trips to a
+	// usable URL -- the rebuild must not corrupt a legitimate endpoint.
+	got, err := sanitizeEndpointURL("-registry-url", "http://host:8090/api%2Fv1/registry")
+	if err != nil {
+		t.Fatalf("sanitizeEndpointURL: %v", err)
+	}
+	parsed, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("the rebuilt URL does not parse: %q: %v", got, err)
+	}
+	if parsed.Scheme != "http" || parsed.Host != "host:8090" {
+		t.Fatalf("rebuild lost the endpoint: %q", got)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		t.Fatalf("the rebuilt URL carries a component it should have dropped: %q", got)
+	}
+}
+
+// r4 TEST-01: `toReportOperation` was the one status path with no direct
+// coverage, and it is the projection an operator actually reads.
+func TestToReportOperationProjectsEveryStateFaithfully(t *testing.T) {
+	rollout := 100
+	updated := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	match := goapiproof.OperationStatus{
+		Operation:             "featureFlags",
+		DocumentDigest:        "abc",
+		DigestState:           goapiproof.DigestMatch,
+		Mode:                  "canary",
+		CurrentCandidateBuild: "build-1",
+		RolloutPercentage:     &rollout,
+		Owner:                 "go",
+		UpdatedAt:             &updated,
+		ReviewEvidence:        "why",
+		RecordedBy:            "who",
+		Proven:                true,
+	}
+	got := toReportOperation(match, map[string]string{"featureFlags": "abc"}, false, false)
+	if got.Mode == nil || *got.Mode != "canary" || got.CurrentCandidateBuild == nil || *got.CurrentCandidateBuild != "build-1" {
+		t.Fatalf("MATCH projection lost the row: %+v", got)
+	}
+	// Value parity with Python's `datetime.isoformat()` (go_api_cli.py's
+	// own `updated_at` field) -- zone spelled `+00:00`, never `Z`, and no
+	// fractional seconds at zero microseconds.
+	if got.UpdatedAt == nil || *got.UpdatedAt != "2026-09-09T12:00:00+00:00" {
+		t.Fatalf("updated_at = %v, want Python isoformat", got.UpdatedAt)
+	}
+	if got.Reachable == nil || !*got.Reachable || !got.Proven {
+		t.Fatalf("a proven canary row at the live digest, deployed plane agreeing, is reachable and proven: %+v", got)
+	}
+	if got.ReviewEvidence == nil || got.RecordedBy == nil {
+		t.Fatal("the provenance an operator needs to read must survive the projection")
+	}
+
+	// A STALE row must project NO row fields at all -- reporting a mode
+	// for a row nothing can reach is the CHAOS-5416 lie in a new column.
+	stale := goapiproof.OperationStatus{
+		Operation:                  "hotspots",
+		DocumentDigest:             "def",
+		DigestState:                goapiproof.DigestStale,
+		StaleDigests:               []string{"sha256:old"},
+		UnreachableDocumentDigests: []string{"ghi"},
+	}
+	got = toReportOperation(stale, nil, false, false)
+	if got.Mode != nil || got.CurrentCandidateBuild != nil || got.RolloutPercentage != nil || got.UpdatedAt != nil {
+		t.Fatalf("a STALE row must project no row fields: %+v", got)
+	}
+	if got.Reachable == nil || *got.Reachable {
+		t.Fatal("a STALE row is never reachable")
+	}
+	if len(got.StaleDigests) != 1 || len(got.UnreachableDocumentDigests) != 1 {
+		t.Fatalf("both kinds of dead row must be named: %+v", got)
+	}
+
+	// MISSING projects empty slices, never nil -- a JSON reader must not
+	// have to tell `null` from `[]` to answer "are there other rows".
+	missing := toReportOperation(goapiproof.OperationStatus{
+		Operation: "flowMatrix", DocumentDigest: "jkl", DigestState: goapiproof.DigestMissing,
+	}, nil, false, false)
+	if missing.StaleDigests == nil || missing.UnreachableDocumentDigests == nil {
+		t.Fatalf("empty digest lists must render as [] not null: %+v", missing)
+	}
+}
+
+// `status` must not discard the deployed registry's
+// per-operation document digest after checking only schema_digest, so a
+// MATCH row printed "ok"/reachable=true even when the deployed plane
+// registered a DIFFERENT document digest for that exact operation -- the
+// same disagreement `enable`'s preflight refuses on. Each case below is
+// the projection `enable` would agree or disagree with.
+func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
+	base := goapiproof.OperationStatus{
+		Operation:      "flowMatrix",
+		DocumentDigest: "catalog-digest",
+		DigestState:    goapiproof.DigestMatch,
+		Mode:           "canary",
+		Proven:         true,
+	}
+
+	agree := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false, false)
+	if agree.DeployedDigestState != "AGREE" {
+		t.Fatalf("deployed_digest_state = %q, want AGREE", agree.DeployedDigestState)
+	}
+	if agree.Reachable == nil || !*agree.Reachable {
+		t.Fatalf("a row the deployed plane agrees with must stay reachable, got %v", agree.Reachable)
+	}
+	if agree.ReachableReason != nil {
+		t.Fatalf("a genuinely reachable row needs no reason, got %q", *agree.ReachableReason)
+	}
+
+	mismatch := toReportOperation(base, map[string]string{"flowMatrix": "deployed-digest"}, false, false)
+	if mismatch.DeployedDigestState != "MISMATCH" {
+		t.Fatalf("deployed_digest_state = %q, want MISMATCH", mismatch.DeployedDigestState)
+	}
+	if mismatch.DeployedDocumentDigest == nil || *mismatch.DeployedDocumentDigest != "deployed-digest" {
+		t.Fatalf("deployed_document_digest = %v, want the deployed value named", mismatch.DeployedDocumentDigest)
+	}
+	if mismatch.Reachable == nil || *mismatch.Reachable {
+		t.Fatalf("a MATCH row the deployed plane disagrees with must be reported reachable=false (known, not unknown) -- enable would refuse it, got %v", mismatch.Reachable)
+	}
+
+	unregistered := toReportOperation(base, map[string]string{"otherOperation": "x"}, false, false)
+	if unregistered.DeployedDigestState != "UNREGISTERED" {
+		t.Fatalf("deployed_digest_state = %q, want UNREGISTERED", unregistered.DeployedDigestState)
+	}
+	if unregistered.Reachable == nil || *unregistered.Reachable {
+		t.Fatalf("an operation the deployed plane does not register at all must be reachable=false, got %v", unregistered.Reachable)
+	}
+
+	// The go plane being genuinely UNREACHABLE means
+	// reachability cannot be told at all -- it must report as UNKNOWN
+	// (nil), never as a silent `true` inherited from the local row alone.
+	// GoPlaneError already names WHY it is unknown; Reachable must not
+	// separately claim to know the answer anyway.
+	unreachableGoPlane := toReportOperation(base, nil, true, false)
+	if unreachableGoPlane.DeployedDigestState != "UNKNOWN" {
+		t.Fatalf("deployed_digest_state = %q, want UNKNOWN when the go plane could not be reached", unreachableGoPlane.DeployedDigestState)
+	}
+	if unreachableGoPlane.Reachable != nil {
+		t.Fatalf("reachable must be nil (unknown) when the go plane is unreachable, got %v", *unreachableGoPlane.Reachable)
+	}
+	if unreachableGoPlane.ReachableReason == nil {
+		t.Fatal("an UNKNOWN reachable state must still name why (r6 observability (6))")
+	}
+
+	// A SCHEMA-level disagreement must also force
+	// reachable=false, even when the per-operation document digest still
+	// happens to agree -- `enable`'s preflight 2 (schema) refuses BEFORE
+	// preflight 3 (per-operation document digest) ever runs, so nothing
+	// is writable once the schemas disagree, regardless of what an
+	// individual operation's digest says.
+	schemaMismatchButDigestAgrees := toReportOperation(base, map[string]string{"flowMatrix": "catalog-digest"}, false, true)
+	if schemaMismatchButDigestAgrees.DeployedDigestState != "AGREE" {
+		t.Fatalf("deployed_digest_state = %q, want AGREE (the per-operation digest itself still matches)", schemaMismatchButDigestAgrees.DeployedDigestState)
+	}
+	if schemaMismatchButDigestAgrees.Reachable == nil || *schemaMismatchButDigestAgrees.Reachable {
+		t.Fatalf("reachable must be false under a schema mismatch even when the per-operation document digest agrees, got %v", schemaMismatchButDigestAgrees.Reachable)
+	}
+
+	// A row this binary's OWN classification
+	// already knows is unreachable (STALE, MISSING, or a non-dispatchable
+	// mode) must report reachable=FALSE even when the go plane is
+	// unreachable -- "we don't know if the deployed plane agrees" does
+	// not make "this row cannot be reached at all" become unknown too.
+	// Python reports false here, never null.
+	unreachableLocalRowAndGoPlaneDown := toReportOperation(goapiproof.OperationStatus{
+		Operation:   "pr",
+		DigestState: goapiproof.DigestMissing,
+	}, nil, true, false)
+	if unreachableLocalRowAndGoPlaneDown.Reachable == nil || *unreachableLocalRowAndGoPlaneDown.Reachable {
+		t.Fatalf("a MISSING row with the go plane down must report reachable=false (known), not nil (unknown), got %v", unreachableLocalRowAndGoPlaneDown.Reachable)
+	}
+	if unreachableLocalRowAndGoPlaneDown.ReachableReason == nil {
+		t.Fatal("reachable=false must still name why (r6 observability (6))")
+	}
+
+	// A MATCH row (digest_state IS live) that is
+	// unreachable because of its MODE must name the MODE, not
+	// digest_state -- digest_state="MATCH" is the one state that IS
+	// live, so naming it as the reason is actively misleading.
+	matchButWrongMode := toReportOperation(goapiproof.OperationStatus{
+		Operation:   "flowMatrix",
+		DigestState: goapiproof.DigestMatch,
+		Mode:        "python",
+	}, nil, true, false)
+	if matchButWrongMode.ReachableReason == nil || strings.Contains(*matchButWrongMode.ReachableReason, "MATCH") {
+		t.Fatalf("reason must not blame digest_state=MATCH for an unreachable row -- it must name the mode, got %v", matchButWrongMode.ReachableReason)
+	}
+	if matchButWrongMode.ReachableReason == nil || !strings.Contains(*matchButWrongMode.ReachableReason, "python") {
+		t.Fatalf("reason must name the actual cause (mode=python), got %v", matchButWrongMode.ReachableReason)
+	}
+}
+
+// The exotic shapes, enumerated because three rounds showed that guessing
+// which ones matter is how this class survives. Each is a way a URL can
+// carry a secret past a naive check; none may reach the code that
+// interpolates the URL into an error.
+func TestNoExoticURLShapeSurvivesTheRebuildWithASecretIntact(t *testing.T) {
+	const secret = "supersecret-never-print"
+	for name, raw := range map[string]string{
+		"percent-encoded userinfo":   "http://%61lice:%73upersecret@host/registry",
+		"userinfo with encoded at":   "http://alice:" + secret + "%40host/registry",
+		"IPv6 literal with userinfo": "http://alice:" + secret + "@[::1]:8090/registry",
+		"at inside an IPv6 literal":  "http://[::1@" + secret + "]:8090/registry",
+		"backslash separators":       `http:\\alice:` + secret + `@host\registry`,
+		"backslash before at":        `http://host\@` + secret + `/registry`,
+		"uppercase scheme":           "HTTP://ALICE:" + secret + "@HOST/registry",
+		"embedded newline":           "http://host/registry\n?token=" + secret,
+		"embedded carriage return":   "http://host/registry\r?token=" + secret,
+		"embedded tab":               "http://host/registry\ttoken=" + secret,
+		"embedded null":              "http://host/registry\x00" + secret,
+		"leading whitespace":         "   http://alice:" + secret + "@host/registry",
+		"query after fragment":       "http://host/registry#x?token=" + secret,
+		"empty":                      "",
+	} {
+		got, err := sanitizeEndpointURL("-registry-url", raw)
+		if err == nil {
+			t.Fatalf("%s: %q was ACCEPTED and rebuilt to %q", name, raw, got)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("%s: the refusal echoed the secret: %q", name, err)
+		}
+		if got != "" {
+			t.Fatalf("%s returned %q alongside its error", name, got)
+		}
+	}
+
+	// Legitimate shapes that must NOT be caught by any of the above --
+	// an over-broad gate is its own outage.
+	for name, raw := range map[string]string{
+		"IPv6 literal":     "http://[::1]:8090/registry",
+		"IDNA punycode":    "http://xn--n28h.example/registry",
+		"at in the path":   "http://host/registry@v2",
+		"deep path prefix": "http://host/api/v1/registry",
+		"https default":    "https://query-api.internal/buildinfo",
+	} {
+		if _, err := sanitizeEndpointURL("-registry-url", raw); err != nil {
+			t.Fatalf("%s (%q) must be accepted, got %v", name, raw, err)
+		}
+	}
+}
+
+// THE RESIDUAL, asserted so it is explicit rather than implied.
+//
+// A credential in a PATH SEGMENT is not distinguishable from the route
+// itself -- the path is the endpoint's address and must be sent to reach
+// it. It is documented in the runbook. This test exists so the residual
+// cannot be silently "fixed" by an over-broad gate that would start
+// rejecting a legitimate proxy prefix, and so a reader can see the
+// boundary of what the allowlist claims.
+//
+// It closes for real when internal/goapiproof stops interpolating raw
+// URLs into its errors, which is owned by the lane that owns that file.
+func TestAPathSegmentSecretIsAcceptedAndThatIsTheKnownResidual(t *testing.T) {
+	const raw = "http://host:8090/registry/a-secret-in-the-path"
+	got, err := sanitizeEndpointURL("-registry-url", raw)
+	if err != nil {
+		t.Fatalf("a path segment cannot be told from a route, so it must be accepted: %v", err)
+	}
+	if got != raw {
+		t.Fatalf("rebuild changed a legitimate endpoint: %q -> %q", raw, got)
+	}
+}
+
+// The confirmation pass's finding, and the reason the first rebuild was
+// not enough.
+//
+// `http://[fe80::1%25zone-secret]:8090/registry` passes EVERY component
+// check -- scheme http, no userinfo, no query, no fragment -- and the
+// first rebuild copied `parsed.Host` across verbatim, so the zone text
+// reached the error that interpolates the URL.
+//
+// THE LESSON: that rebuild reconstructed the STRUCTURE of the URL and
+// copied each component's CONTENTS. A component you copy is a component
+// you have not validated. The host is now taken apart and put back
+// together from a hostname that must be an IP literal or a DNS name and a
+// port that must be digits.
+func TestAnIPv6ZoneIdentifierCannotSurviveTheRebuild(t *testing.T) {
+	const secret = "zone-supersecret-probe"
+	for name, raw := range map[string]string{
+		"encoded zone":          "http://[fe80::1%25" + secret + "]:8090/registry",
+		"encoded zone, no port": "http://[fe80::1%25" + secret + "]/registry",
+		"percent in hostname":   "http://host%25" + secret + "/registry",
+	} {
+		got, err := sanitizeEndpointURL("-registry-url", raw)
+		if err == nil {
+			t.Fatalf("%s: %q was ACCEPTED and rebuilt to %q", name, raw, got)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("%s: the refusal echoed the zone text: %q", name, err)
+		}
+		if got != "" {
+			t.Fatalf("%s returned %q alongside its error", name, got)
+		}
+	}
+}
+
+// The host is rebuilt from validated pieces, so anything that is neither
+// an IP literal nor a DNS name is refused rather than carried. And a
+// non-numeric port cannot ride along either.
+func TestTheHostIsRebuiltFromValidatedPiecesNotCopied(t *testing.T) {
+	const secret = "supersecret-never-print"
+	for name, raw := range map[string]string{
+		"underscore in host": "http://ho_st" + secret + "/registry",
+		"space in host":      "http://ho st/registry",
+		"quote in host":      `http://ho"st/registry`,
+	} {
+		if _, err := sanitizeEndpointURL("-registry-url", raw); err == nil {
+			t.Fatalf("%s (%q) must be refused", name, raw)
+		} else if strings.Contains(err.Error(), secret) {
+			t.Fatalf("%s: refusal echoed the input: %q", name, err)
+		}
+	}
+
+	// Legitimate hosts survive, and IPv6 comes back correctly bracketed.
+	for raw, want := range map[string]string{
+		"http://[::1]:8090/registry":              "http://[::1]:8090/registry",
+		"http://[2001:db8::1]/registry":           "http://[2001:db8::1]/registry",
+		"http://127.0.0.1:8090/registry":          "http://127.0.0.1:8090/registry",
+		"http://query-api.internal:8090/registry": "http://query-api.internal:8090/registry",
+		"http://xn--n28h.example/registry":        "http://xn--n28h.example/registry",
+		"https://host/buildinfo":                  "https://host/buildinfo",
+	} {
+		got, err := sanitizeEndpointURL("-registry-url", raw)
+		if err != nil {
+			t.Fatalf("%q must be accepted, got %v", raw, err)
+		}
+		if got != want {
+			t.Fatalf("%q rebuilt to %q, want %q -- a legitimate endpoint must survive the rebuild intact", raw, got, want)
+		}
+	}
+}
+
+// The host-rebuild attack list, probed before handing it to a reviewer.
+// None of these leaks -- they are pinned so the reassembly's behaviour on
+// each is a decision on the record rather than whatever it happened to do.
+func TestHostReassemblyBehavesDeliberatelyOnEveryOddShape(t *testing.T) {
+	for raw, want := range map[string]string{
+		// Accepted and normalised. An IPv4-mapped IPv6 literal comes back
+		// as dotted-quad: same address, one spelling.
+		"http://[::ffff:127.0.0.1]:8090/registry": "http://127.0.0.1:8090/registry",
+		"http://[::ffff:7f00:1]/registry":         "http://127.0.0.1/registry",
+		// An empty port is dropped rather than carried.
+		"http://host:/registry": "http://host/registry",
+		// A trailing dot is a root-anchored DNS name and is legitimate.
+		"http://host./registry": "http://host./registry",
+		// Case is preserved: DNS is case-insensitive, and rewriting it
+		// would make the URL used differ from the one typed for no gain.
+		"http://HOST.EXAMPLE/registry": "http://HOST.EXAMPLE/registry",
+	} {
+		got, err := sanitizeEndpointURL("-registry-url", raw)
+		if err != nil {
+			t.Fatalf("%q must be accepted, got %v", raw, err)
+		}
+		if got != want {
+			t.Fatalf("%q rebuilt to %q, want %q", raw, got, want)
+		}
+	}
+
+	for name, raw := range map[string]string{
+		// Non-ASCII is refused, not punycoded -- Go's HTTP client does no
+		// IDNA encoding, so it could not be dialled anyway, and refusing
+		// means a homoglyph cannot carry text into an error.
+		"cyrillic homoglyph": "http://examрle.com/registry",
+		"latin-1 umlaut":     "http://exämple.com/registry",
+		// A percent-escape in the host cannot survive the rebuild.
+		"percent-escaped dot":  "http://host%2ename/registry",
+		"percent-escaped char": "http://ho%73t/registry",
+		// A port that cannot be dialled is refused where the failure has
+		// context, not deferred to the dial.
+		"port above 65535": "http://host:99999/registry",
+		"port zero":        "http://host:0/registry",
+	} {
+		if _, err := sanitizeEndpointURL("-registry-url", raw); err == nil {
+			t.Fatalf("%s (%q) must be refused", name, raw)
+		}
+	}
+
+	// Punycode is the supported way to reach an IDN host, and must work.
+	if got, err := sanitizeEndpointURL("-registry-url", "http://xn--n28h.example/registry"); err != nil || got != "http://xn--n28h.example/registry" {
+		t.Fatalf("punycode = (%q, %v), want it accepted unchanged", got, err)
+	}
+}
+
+// The usage text must never print a credential, on ANY verb.
+//
+// Found by RUNNING the binary, not by reading it: `flag` prints each
+// flag's DEFAULT VALUE in its usage dump, so registering -postgres-uri
+// with `os.Getenv("POSTGRES_URI")` as its default made the default the
+// DSN itself. A mistyped flag, a missing value or a plain `-h` then wrote
+// the database password to stderr in full. Measured against a real
+// database before the fix:
+//
+//	-postgres-uri string
+//	  domain Postgres DSN holding go_api_routing_state (default
+//	  "postgresql://postgres:<password>@127.0.0.1:55437/devhealth")
+//
+// The check is on the RENDERED usage text of each verb's real flag set,
+// with POSTGRES_URI set to a value carrying a recognisable secret, so a
+// regression on any one verb fails here rather than in someone's CI log.
+func TestNoVerbsUsageTextEverPrintsTheDSN(t *testing.T) {
+	const secret = "hunter2-not-a-real-password"
+	t.Setenv("POSTGRES_URI", "postgresql://postgres:"+secret+"@db.internal:5432/devhealth")
+
+	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+		t.Run(verb, func(t *testing.T) {
+			// -h makes flag print usage and, under ContinueOnError, return
+			// ErrHelp instead of exiting the test binary.
+			var rendered strings.Builder
+			set := flag.NewFlagSet(verb, flag.ContinueOnError)
+			set.SetOutput(&rendered)
+			var common commonFlags
+			common.bindPostgresURI(set, "domain Postgres DSN holding go_api_routing_state")
+			set.PrintDefaults()
+
+			usage := rendered.String()
+			if strings.Contains(usage, secret) {
+				t.Fatalf("%s usage text prints the DSN's password:\n%s", verb, usage)
+			}
+			if strings.Contains(usage, "db.internal") {
+				t.Fatalf("%s usage text prints the DSN's host, so it is printing the DSN:\n%s", verb, usage)
+			}
+			// ...and it still tells the operator where the value comes
+			// from. Silence would trade a leak for a usability defect.
+			if !strings.Contains(usage, postgresURIEnvVar) {
+				t.Fatalf("%s usage text no longer names %s, so an operator cannot tell where the DSN comes from:\n%s", verb, postgresURIEnvVar, usage)
+			}
+		})
+	}
+}
+
+// The environment fallback still WORKS, which is the half a leak fix is
+// most likely to break: moving the fallback out of the flag's default is
+// only correct if something else applies it.
+func TestThePostgresURIStillFallsBackToTheEnvironment(t *testing.T) {
+	t.Setenv("POSTGRES_URI", "postgresql://postgres:pw@db.internal:5432/devhealth")
+
+	// No flag: the environment supplies it.
+	var fromEnv commonFlags
+	if err := fromEnv.requirePostgres(); err != nil {
+		t.Fatalf("requirePostgres with POSTGRES_URI set: %v", err)
+	}
+	if fromEnv.postgresURI != "postgresql://postgres:pw@db.internal:5432/devhealth" {
+		t.Fatalf("postgresURI = %q, want the environment's value", fromEnv.postgresURI)
+	}
+
+	// The FLAG wins over the environment, same precedence as before.
+	explicit := commonFlags{postgresURI: "postgresql://postgres:pw@flag.internal:5432/devhealth"}
+	if err := explicit.requirePostgres(); err != nil {
+		t.Fatalf("requirePostgres with an explicit flag: %v", err)
+	}
+	if !strings.Contains(explicit.postgresURI, "flag.internal") {
+		t.Fatalf("postgresURI = %q, want the flag to win over the environment", explicit.postgresURI)
+	}
+
+	// Whitespace-only is not a value, in EITHER source.
+	t.Setenv("POSTGRES_URI", "   ")
+	var blank commonFlags
+	blank.postgresURI = "  "
+	if err := blank.requirePostgres(); err == nil {
+		t.Fatal("a whitespace-only flag and a whitespace-only environment variable were accepted as a DSN")
+	}
+}
+
+// A -timeout that disables its own bound is refused on EVERY verb.
+//
+// Found by executing the input-domain table against the real binary, not
+// by reading the code: `-timeout 0` and `-timeout -1s` were accepted with
+// exit 0 on all four verbs. `http.Client` reads a non-positive Timeout as
+// "no timeout", which is the exact opposite of what an operator typing 0
+// means, and it silently undoes the fix that made `status` say
+// "unreachable" instead of hanging on a blackholed endpoint.
+//
+// The boundary is walked on both sides rather than sampled: 0 and -1ns
+// refuse, 1ns and the default accept. A guard pinned only at 0 survives a
+// mutation to `< 0`.
+func TestEveryVerbRefusesATimeoutThatDisablesItsOwnBound(t *testing.T) {
+	refused := []time.Duration{0, -1, -time.Nanosecond, -time.Second, -time.Hour}
+	accepted := []time.Duration{time.Nanosecond, time.Millisecond, 30 * time.Second}
+
+	for _, timeout := range refused {
+		common := commonFlags{timeout: timeout}
+		err := common.requirePositiveTimeout()
+		if err == nil {
+			t.Fatalf("-timeout %s was accepted: a non-positive value means the HTTP leg never times out", timeout)
+		}
+		if exitCodeFor(err) != 2 {
+			t.Fatalf("-timeout %s exited %d, want 2 -- an unusable flag is the operator's to fix", timeout, exitCodeFor(err))
+		}
+		// The refusal must NAME the value, so the operator can see what
+		// was parsed rather than guess.
+		if !strings.Contains(err.Error(), timeout.String()) {
+			t.Fatalf("the refusal for -timeout %s does not name the value: %v", timeout, err)
+		}
+	}
+	for _, timeout := range accepted {
+		common := commonFlags{timeout: timeout}
+		if err := common.requirePositiveTimeout(); err != nil {
+			t.Fatalf("-timeout %s was refused: %v", timeout, err)
+		}
+	}
+}
+
+// Every verb WIRES the guard, which is the half a shared helper is most
+// likely to be missing: a helper nobody calls refuses nothing.
+//
+// Driven through runCommand -- the real dispatch -- rather than by
+// grepping the source, so a verb that stops calling it fails here.
+func TestTheTimeoutGuardIsWiredIntoEveryVerb(t *testing.T) {
+	t.Setenv("POSTGRES_URI", "")
+	t.Setenv(bearerEnvVar, "")
+	for _, argv := range [][]string{
+		{"enable", "-mode", "canary", "-timeout", "0"},
+		{"disable", "-mode", "python", "-timeout", "0"},
+		{"repoint", "-timeout", "0"},
+		{"status", "-timeout", "0"},
+	} {
+		err := run(argv)
+		if err == nil {
+			t.Fatalf("%v was accepted", argv)
+		}
+		if !strings.Contains(err.Error(), "-timeout") {
+			t.Fatalf("%v refused for a different reason (%v) -- the timeout guard is not wired into this verb, or runs after another check that hides it", argv, err)
+		}
+	}
+}
+
+// captureVerb runs a REAL verb through the REAL dispatch and returns what
+// an operator would have seen.
+//
+// This helper is the answer to r1's P3. The tests that used it before
+// rebuilt the thing under test with the same arguments the production
+// line uses, so a mutation at the real call site changed nothing they
+// could observe. Nothing short of running the verb closes that.
+func captureVerb(t *testing.T, argv ...string) (out string, errOut string, err error) {
+	t.Helper()
+	var outBuf, errBuf strings.Builder
+	savedOut, savedErr, savedFlag := stdout, stderr, verbFlagOutput
+	stdout, stderr, verbFlagOutput = &outBuf, &errBuf, &errBuf
+	t.Cleanup(func() { stdout, stderr, verbFlagOutput = savedOut, savedErr, savedFlag })
+	err = run(argv)
+	return outBuf.String(), errBuf.String(), err
+}
+
+// An unconsumed argument is refused by EVERY verb, before anything is
+// read and before anything is written.
+//
+// r1's first P1, and the worst defect this command has had. `flag` stops
+// at the first operand and leaves the rest unparsed, so a stray word
+// silently deletes every flag after it -- including the guards. Executed
+// against a real database on a row that was `python`, BEFORE the fix:
+//
+//	disable -operations flowMatrix -mode shadow -apply -recorded-by lane \
+//	  -review-evidence why UNEXPECTED-OPERAND -candidate-build 0000…0000
+//	  -> applied: 1 row(s) now mode=shadow, exit 0, row read back as shadow
+//
+// The same command WITHOUT the stray word refuses on that guard and
+// writes nothing. The operand deleted the guard and the verb reported
+// success.
+//
+// Driven through `run` so the refusal is proved where it is installed,
+// and asserted on the EXIT CODE as well as the message: a refusal that
+// exits 1 is an internal error to every calling script.
+func TestEveryVerbRefusesAnUnconsumedArgument(t *testing.T) {
+	t.Setenv("POSTGRES_URI", "")
+	t.Setenv(bearerEnvVar, "")
+
+	for name, argv := range map[string][]string{
+		// The exact shapes that bypassed a guard, one per verb.
+		"disable loses -candidate-build": {"disable", "-operations", "flowMatrix", "-mode", "python", "-apply",
+			"-recorded-by", "lane", "-review-evidence", "why", "UNEXPECTED-OPERAND",
+			"-candidate-build", "0000000000000000000000000000000000000000"},
+		"enable loses -dry-run": {"enable", "-mode", "canary", "-recorded-by", "lane",
+			"-review-evidence", "why", "UNEXPECTED-OPERAND", "-dry-run"},
+		"repoint loses -expect-build": {"repoint", "-recorded-by", "lane", "-review-evidence", "why",
+			"UNEXPECTED-OPERAND", "-expect-build", "deadbeef"},
+		"status loses -json": {"status", "UNEXPECTED-OPERAND", "-json"},
+		// The boolean spelling an operator actually reaches for. `flag`
+		// wants -flag=false; -flag false makes `false` an OPERAND, so the
+		// operator who meant to turn the acknowledgement OFF turns it ON
+		// and loses every later flag as well.
+		"a bare boolean value is an operand": {"enable", "-mode", "canary", "-recorded-by", "lane",
+			"-review-evidence", "why", "-acknowledge-unproven", "false", "-dry-run"},
+		// A single trailing word with no flags after it, which is the
+		// harmless-looking version of the same mistake.
+		"one trailing word": {"status", "leftover"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := captureVerb(t, argv...)
+			if err == nil {
+				t.Fatalf("%v was accepted", argv)
+			}
+			if exitCodeFor(err) != 2 {
+				t.Fatalf("%v exited %d, want 2 -- a mistyped command line is the operator's to fix", argv, exitCodeFor(err))
+			}
+			if !strings.Contains(err.Error(), "unexpected argument") {
+				t.Fatalf("%v refused for a different reason, so the operand check is not what stopped it: %v", argv, err)
+			}
+			// The refusal NAMES the word. "unexpected argument" alone
+			// leaves the operator hunting through their own command line.
+			if !strings.Contains(err.Error(), "UNEXPECTED-OPERAND") &&
+				!strings.Contains(err.Error(), "leftover") &&
+				!strings.Contains(err.Error(), "false") {
+				t.Fatalf("%v: the refusal does not name the offending word: %v", argv, err)
+			}
+		})
+	}
+
+	// ...and the same command lines WITHOUT the stray word get past the
+	// operand check. Otherwise a guard that refused everything would pass
+	// the loop above.
+	for name, argv := range map[string][]string{
+		"disable": {"disable", "-operations", "flowMatrix", "-mode", "python", "-apply",
+			"-recorded-by", "lane", "-review-evidence", "why",
+			"-candidate-build", "0000000000000000000000000000000000000000"},
+		"status": {"status"},
+	} {
+		t.Run(name+" without the operand", func(t *testing.T) {
+			_, _, err := captureVerb(t, argv...)
+			if err != nil && strings.Contains(err.Error(), "unexpected argument") {
+				t.Fatalf("%v was refused as carrying an operand: %v", argv, err)
+			}
+		})
+	}
+}
+
+// The DSN never reaches the usage text of the REAL verb's flag set.
+//
+// r1's M10: reintroducing `os.Getenv("POSTGRES_URI")` as the default
+// INSIDE runEnable survived both package suites, because the previous
+// test built its own flag set with the same three arguments and so only
+// proved that the test agreed with itself. This drives `run` with `-h` on
+// each verb and reads the usage text the flag set actually produced.
+func TestNoRealVerbsUsageTextEverPrintsTheDSN(t *testing.T) {
+	const secret = "hunter2-not-a-real-password"
+	t.Setenv("POSTGRES_URI", "postgresql://postgres:"+secret+"@db.internal:5432/devhealth")
+	t.Setenv(bearerEnvVar, "")
+
+	for _, verb := range []string{"enable", "disable", "repoint", "status"} {
+		t.Run(verb, func(t *testing.T) {
+			_, usage, _ := captureVerb(t, verb, "-h")
+			if usage == "" {
+				t.Fatalf("%s -h produced no usage text, so this test can prove nothing", verb)
+			}
+			if !strings.Contains(usage, "-postgres-uri") {
+				t.Fatalf("%s usage text does not list -postgres-uri, so this test is not reading the right flag set:\n%s", verb, usage)
+			}
+			if strings.Contains(usage, secret) {
+				t.Fatalf("%s usage text prints the DSN's password:\n%s", verb, usage)
+			}
+			if strings.Contains(usage, "db.internal") {
+				t.Fatalf("%s usage text prints the DSN's host, so it is printing the DSN:\n%s", verb, usage)
+			}
+			if !strings.Contains(usage, postgresURIEnvVar) {
+				t.Fatalf("%s usage text no longer names %s, so an operator cannot tell where the DSN comes from:\n%s", verb, postgresURIEnvVar, usage)
+			}
+		})
+	}
 }

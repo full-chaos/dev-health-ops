@@ -300,6 +300,196 @@ history. Re-run `go-api-prove` at the deployed build (JOB 6's re-prove step
 does exactly this) and the new receipts, bound per request, restore the
 proofs. Do not `--acknowledge-unproven` around it.
 
+### The same procedure with the Go verbs (CHAOS-5486)
+
+`cmd/go-api-routing` is the Go implementation of the same contract, built
+because the cutover rule forbids new Python compute on the critical path
+of a rollout operation. The Python verbs above are UNTOUCHED and still
+work; these are the ones to reach for on a Go-only fleet, and they are the
+only ones that can re-point a `shadow` row.
+
+```bash
+# A typed -postgres-uri flag value reaches /proc/<pid>/cmdline and shell
+# history, the same leak class this package's own bindPostgresURI guard
+# closes for the usage TEXT -- so this recipe, the operator's document of
+# record, follows the same rule. The binary already falls back to the
+# POSTGRES_URI environment variable on its own (main.go) -- set it in the
+# environment and omit the flag entirely.
+export POSTGRES_URI=<dsn>
+
+# 1. Same question. Never refuses, works with query-api down.
+go-api-routing status -registry-url http://query-api:8090/registry
+
+# 2. Re-enable. NOTE the difference that matters: there is no
+#    -candidate-build to type. The build is READ from the deployed
+#    process's authenticated /buildinfo; -expect-build is a cross-check
+#    that can only FAIL a run, never the source of what is written. The
+#    credential is the effective-principal ENVELOPE in
+#    GO_API_ROUTING_BEARER -- an env var, not a flag, because a flag value
+#    reaches `ps` and shell history.
+GO_API_ROUTING_BEARER=<envelope> go-api-routing enable \
+  -registry-url  http://query-api:8090/registry \
+  -buildinfo-url http://query-api:8090/buildinfo \
+  -operations    all-registered \
+  -mode          canary \
+  -recorded-by   <who> \
+  -review-evidence '<why>'
+
+# 3. Roll back. Contacts NOTHING -- no registry, no buildinfo, no
+#    credential -- because it has to work when the planes disagree and the
+#    deployed process is down. -candidate-build here is a GUARD ("refuse
+#    if somebody repointed this since I looked"), never written.
+go-api-routing disable \
+  -operations all-registered -mode python        # dry run, writes nothing
+go-api-routing disable \
+  -operations all-registered -mode python -apply \
+  -recorded-by <who> -review-evidence '<why>'
+
+# 4. Provenance only: point rows at the running build without touching a
+#    single column that decides reachability. This is the verb the Python
+#    pair cannot express -- `enable --mode` accepts only canary|primary,
+#    and `disable` never writes the build -- so a shadow row could not be
+#    re-pointed at all before it existed.
+GO_API_ROUTING_BEARER=<envelope> go-api-routing repoint ... -dry-run
+```
+
+This is every point where the Go verbs deliberately behave differently
+from the Python ones. Every one is a tightening or an observability
+improvement, never a silent behaviour change, and the rule stands:
+anything else that differs from the Python verbs is a defect, not a
+decision.
+
+* **The candidate build cannot be typed.** `enable --candidate-build` in
+  Python is documented "by CONVENTION, unverified"; the fifteen live rows
+  carry a sha nothing ever checked. The Go verb reads it from
+  `/buildinfo` and refuses when the process cannot identify its build.
+* **`disable` keys its UPDATE on the row's OWN document digest**, not the
+  catalog's. A row whose document digest has drifted from the catalog is
+  still turned off; in Python that write silently matches nothing. An
+  off-ramp that stops working precisely when something has drifted is an
+  off-ramp with a hole in it.
+* **`-recorded-by` and `-review-evidence` are required on every write.**
+  Python derives `recorded_by` from `$DEV_HOPS_OPERATOR` / `$SUDO_USER` /
+  `$USER` and falls back to the literal `unknown`, and it permits an
+  absent reason for a proven enablement. A rollout decision attributed to
+  `unknown` with no reason is the state this whole surface exists to end.
+  This PR writes both durably on the current row's own provenance
+  columns; an append-only audit row carrying the same two fields on every
+  write, independent of the current row, arrives with CHAOS-5505 (the
+  audit PR that follows this one).
+* **`disable` never refuses the WHOLE run over one operation's per-row
+  guard state -- a stale schema digest, or a `-candidate-build` guard
+  named against an operation whose only live-digest rows are DEAD (no
+  catalog document digest)** -- refusing here would contradict this
+  verb's own documented contract of working when the planes disagree.
+  Either state is SKIPPED for that operation alone, reported on its own
+  plan line, so the documented rollback recipe (`-operations
+  all-registered -mode python`) can still turn everything else off when
+  one operation's rows are stale or dead to this checkout. Because
+  something was still skipped, the run exits non-zero (2) even though
+  the healthy operations were disabled -- an operator sees both facts:
+  what moved, and what needed a second look. **This is a declared
+  divergence from Python, in the STRONGER direction**: on the identical
+  fixture, Python's guarded `-operations all-registered` also exits 2,
+  but its plan LISTS the dead-only operation as if it would move, then
+  silently leaves it untouched at apply time and blames a misattributed
+  cause ("their candidate build moved between the plan and the write").
+  Go never lists a row it will not touch as moving, and names the real
+  reason (no catalog row to check the guard against) instead of a
+  generic race that did not happen.
+* **`-candidate-build` passed as an explicitly empty value is refused**,
+  not silently treated as "no guard" -- an empty value reads identically
+  to the flag never being passed at all otherwise, which would apply an
+  unguarded write when an operator's script meant to guard it (e.g. an
+  interpolated but unset shell variable).
+* **The write verbs' `-registry-url`/`-buildinfo-url` pair is resolved
+  TOGETHER, not independently.** Naming one explicitly while the other
+  falls back to `GO_API_QUERY_API_URL` (or nothing) can silently split a
+  single preflight across two different processes; only both-explicit or
+  neither is accepted.
+* **`status`'s `reachable` field is tri-state (`true`/`false`/`null`, not
+  a plain bool) and carries a `reachable_reason` naming the actual cause**
+  -- the row's own mode, the row's own digest_state, a schema-level
+  mismatch, a per-operation document-digest mismatch, or "the go plane
+  could not be reached" -- rather than requiring a JSON consumer to
+  cross-reference several other fields by hand to learn why.
+* **`status` never refuses**, even on an UNUSABLE (not merely unset)
+  `GO_API_QUERY_API_URL` inherited from the environment: it reports
+  `go_plane_error` and still prints everything that needed no registry
+  call (the local schema digest, the database census).
+* **`<verb> -h`/`-help` exits 0**, printing that verb's usage text, the
+  same as this binary's own top-level `-h` and Python's argparse --  not a
+  refusal (exit 2).
+* **A dead database exits 1, matching Python.** Python's
+  `disable`/`enable`/`repoint` against a dead database crash with an
+  unhandled `ConnectionRefusedError`, exit 1; `connectPostgres`'s
+  dial-failure path classifies the same way. A malformed DSN (a
+  parse-time failure, the operator's own typo) is unaffected and stays
+  exit 2.
+* **`status -json`'s key names match Python's exactly**:
+  `python_plane_schema_digest` and
+  `python_plane_digest_error` (always `null` -- computing this value has
+  no runtime failure mode in Go, present for key-set parity only), not
+  the earlier `local_schema_digest` with no digest-error key at all.
+  `catalog_error` and `classification_error` remain Go-only additions
+  Python has no equivalent read for.
+
+`disable` also turns off **every** row an operation has at the live
+digest, not one of them. The routing primary key is `(schema_digest,
+document_digest, selected_operation)`, so one operation can have several
+rows under different document digests; leaving one behind would report
+success while the operation stayed reachable.
+
+**Only one of those rows is ever reachable**, and `status` says which. The
+edge resolves a request to an operation through the catalog and then looks
+the row up by the *catalog's* document digest — so a row at the live
+schema digest under any other document digest is dead in exactly the way a
+row at a stale schema digest is dead. `status` reports it as `STALE`,
+never `MATCH`, never reachable, and names its digest under
+`unreachable_document_digests`. A row that is present in `psql` and can
+never be consulted is the CHAOS-5416 shape; only the column that moved is
+different.
+
+**Endpoint URLs are refused if they carry userinfo, a query or a fragment,
+and what the command actually uses is rebuilt from scheme, host and path.**
+`GET /registry` and `GET /buildinfo` are two fixed routes authenticated by
+a header, so none of those components has a legitimate use — and
+`goapiproof.FetchRegistry` interpolates the URL it is handed into its
+error text, so anything carried in one is printed verbatim on a transport
+failure. Three variants of that leak exist: userinfo; the no-`//` form,
+where Go parses the *username* as the scheme and `url.Redacted()` returns
+the password unchanged; and a query string -- so the check is an
+allowlist over URL components rather than a list of shapes to reject.
+
+The residual, stated rather than left implicit: **a credential placed in a
+path segment is not distinguishable from the route itself** and would
+still reach that error text. Do not put one there. It closes fully when
+`internal/goapiproof` stops interpolating raw URLs, which is tracked
+against the lane that owns that file.
+
+`status` also keeps the per-digest **census** and the per-operation
+**classification** as separate failures. They are separate reads, and
+collapsing them meant a classification error printed "registry database
+UNREACHABLE" and suppressed a census that had already succeeded — hiding
+the one number that says whether anything is enabled at all.
+
+The refusal exit code is 2 (a state the operator must resolve), on both
+planes, with one exception. `classifyWriteError` in `main.go`
+distinguishes a genuine, server-raised failure from a hand-authored
+refusal at the one place `enable`/`repoint`/`disable` reach the database
+write: a `*pgconn.PgError` -- a deadlock abort (SQLSTATE 40P01), a
+trigger's `RAISE EXCEPTION`, any other
+error the POSTGRES SERVER itself raised inside an already-open
+transaction -- now exits **1**, via `errInternal`/`internal()`. Everything
+else the binary can produce (a missing flag, a malformed DSN, a guard
+mismatch, an unproven operation, `connectPostgres`'s own dial/auth
+failures) is still an operator-actionable refusal and stays **2**. An
+unrecovered Go panic still exits 2 by the runtime's own default, not 1 --
+that gap is real and unclosed. A script written to "1 means the server
+itself broke, 2 means fix your input" now reads a genuine deadlock
+correctly; one written to "1 means crashed" still needs to know a panic is
+the one exception.
+
 ### How this is now detected
 
 | Signal | Where | Fires when |

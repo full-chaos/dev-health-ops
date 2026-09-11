@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +59,101 @@ func TestFetchBuildIdentityRefusesAnUnidentifiableBuild(t *testing.T) {
 				t.Fatalf("expected ErrNoBuildIdentity, got %v", err)
 			}
 		})
+	}
+}
+
+// encoding/json's key-case shadowing lets a LATER,
+// differently-cased key win over an EARLIER exact one for the same
+// struct field -- {"modified":true,"MODIFIED":false} decoded Modified as
+// false with the old plain-struct decode, defeating the modified-build
+// refusal outright. exactBoolField (keyed on a real Go map, exact-string
+// equal) closes it: "MODIFIED" and "modified" are two distinct map
+// entries, so the exact "modified" key can never be shadowed by the
+// other one, regardless of which comes first in the body.
+func TestFetchBuildIdentityRefusesAModifiedBuildEvenUnderAShadowKey(t *testing.T) {
+	for name, body := range map[string]string{
+		"exact key first, shadow second": `{"commit":"b18e56fa7","modified":true,"MODIFIED":false}`,
+		"shadow key first, exact second": `{"commit":"b18e56fa7","MODIFIED":false,"modified":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := buildInfoServer(t, http.StatusOK, body)
+			_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+				StaticCredential("Authorization", "test", "Bearer x"))
+			if !errors.Is(err, ErrNoBuildIdentity) {
+				t.Fatalf("a MODIFIED build (real key present, however ordered against a shadow) must refuse, got %v", err)
+			}
+		})
+	}
+}
+
+// A commit byte the JSON string scanner cannot
+// represent decodes SILENTLY into the Unicode replacement character
+// (U+FFFD) rather than erroring -- the corrupted value would otherwise be
+// written as current_candidate_build, a 4-column foreign-key value every
+// routing row and receipt is keyed against.
+func TestFetchBuildIdentityRefusesInvalidUTF8(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, "{\"commit\":\"b18e56\xff\",\"modified\":false}")
+	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err == nil {
+		t.Fatal("a /buildinfo response containing invalid UTF-8 must refuse, not silently substitute U+FFFD into the commit")
+	}
+}
+
+// `\ud800` is six valid ASCII bytes -- it passes
+// utf8.Valid on the raw body -- but encoding/json unescapes an unpaired
+// UTF-16 surrogate half to U+FFFD rather than erroring, so this body and
+// one carrying a LITERAL U+FFFD commit decode to the identical Go string.
+// Executed: `{"commit":"\ud800","modified":false}` -> commit == "�",
+// the same value a genuinely corrupted build identity would produce.
+func TestFetchBuildIdentityRefusesUnpairedSurrogateEscape(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, `{"commit":"\ud800aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","modified":false}`)
+	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err == nil {
+		t.Fatal("a /buildinfo response carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse to U+FFFD")
+	}
+}
+
+// `"modified": null` decodes through a plain
+// `json.Unmarshal(null, &value)` into a bool as a documented NO-OP --
+// value stays false, its zero value -- so a caller reading only the value
+// (not exactBoolField's presence flag) could not tell an EXPLICIT "clean"
+// from "the process would not say". Executed: this body enabled a row
+// exactly like `"modified":false` would have.
+func TestFetchBuildIdentityRefusesNullModified(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa7","modified":null}`)
+	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err == nil {
+		t.Fatal("`modified: null` must refuse -- an unknown cleanliness answer must never be read as false")
+	}
+}
+
+// The other half: OMITTING `modified` entirely also
+// reached exactBoolField's zero value with present=false, and the caller
+// used to discard that flag (`modified, _, err := exactBoolField(...)`).
+func TestFetchBuildIdentityRefusesAbsentModified(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa7"}`)
+	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err == nil {
+		t.Fatal("an absent `modified` key must refuse -- unknown cleanliness must never default to clean")
+	}
+}
+
+// /buildinfo must accept an
+// unrecognised key the same way the catalog does -- refusing on it would
+// disagree with a Python reader that simply never looks at it.
+func TestFetchBuildIdentityAcceptsAnUnknownKey(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, `{"commit":"b18e56fa7","modified":false,"unexpected_future_field":"x"}`)
+	commit, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err != nil {
+		t.Fatalf("an unrecognised key must not refuse the buildinfo body: %v", err)
+	}
+	if commit != "b18e56fa7" {
+		t.Fatalf("commit = %q", commit)
 	}
 }
 
@@ -120,7 +217,7 @@ func TestStaleRoutingRowsNamesDisagreeingRowsAndOnlyThose(t *testing.T) {
 	}
 }
 
-// A stale routing row REFUSES the run again (r1 P1).
+// A stale routing row REFUSES the run again.
 //
 // The demotion assumed /buildinfo identifies the process that served the
 // measured request. With more than one query-api replica and an edge that
@@ -164,13 +261,294 @@ func TestRowsAgreeingWithTheRunningBuildPassTheCheck(t *testing.T) {
 	}
 }
 
-func TestFetchRegistryRefusesAnEmptyRegistration(t *testing.T) {
+// FetchRegistry must not refuse OUTRIGHT on an empty
+// `operations` array -- correct for a write verb, wrong for `status`,
+// which shares this exact function and needs the schema_digest a
+// refusal destroyed along with everything else. Executed: `status`
+// against a process that agrees on schema_digest but currently registers
+// nothing reported `go plane schema_digest: UNREACHABLE (... registers no
+// operations -- there is nothing to prove)`, identical to a genuinely
+// DOWN process -- collapsing two facts an operator needs to tell apart.
+// The refusal moved to enable's and repoint's own preflights (each tested
+// separately); FetchRegistry itself now succeeds with an empty
+// DocumentDigest map, matching the Python reader's own tolerance for
+// this shape (`GoPlaneRegistry(schema_digest=..., operations={})`).
+func TestFetchRegistryAcceptsAnEmptyRegistration(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[]}`))
 	}))
 	t.Cleanup(server.Close)
+	view, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("a process agreeing on schema_digest but registering nothing must not refuse -- status needs the digest: %v", err)
+	}
+	if view.SchemaDigest != "sha256:abc" {
+		t.Fatalf("schema_digest = %q, want it preserved even with an empty registration", view.SchemaDigest)
+	}
+	if view.DocumentDigest == nil || len(view.DocumentDigest) != 0 {
+		t.Fatalf("DocumentDigest = %v, want a non-nil empty map (distinguishable from 'the go plane is unreachable')", view.DocumentDigest)
+	}
+}
+
+// An ABSENT `operations` key or an explicit
+// `"operations": null` used to fall through to the SAME empty-map
+// success path an honest `"operations": []` gets -- so `status` printed
+// [AGREE] and "the deployed go plane does not register this operation at
+// all" for a response that is MALFORMED, not merely empty. Python's
+// dispatcher refuses both (`payload.get("operations")` is None for
+// either, and `isinstance(None, list)` is False); only a genuine JSON
+// array -- empty included -- is accepted.
+func TestFetchRegistryRefusesAMissingOrNullOperationsKey(t *testing.T) {
+	for name, body := range map[string]string{
+		"operations key absent entirely": `{"schema_digest":"sha256:abc"}`,
+		"operations explicitly null":     `{"schema_digest":"sha256:abc","operations":null}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(server.Close)
+			if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+				t.Fatalf("a missing or null operations key must refuse, not silently report an empty (but genuinely present) registry")
+			}
+		})
+	}
+}
+
+// A
+// /registry response naming the same operation twice, under CONFLICTING
+// document digests, used to collapse last-wins -- whichever entry
+// happened to come last silently decided which digest a routing row got
+// written with. The Python verb refuses outright
+// (`GoPlaneUnavailable ... lists operation 'X' more than once`); this
+// must too, and it must refuse regardless of which duplicate would have
+// "won" the old collapse.
+// Sibling of the catalog-file UTF-8 fix: the SAME /registry endpoint is
+// read by go_api_cli.py, whose HTTP client decodes the response as UTF-8
+// before json.loads ever runs. A byte Go's json.Unmarshal tolerates but
+// Python's client cannot decode must refuse here too.
+func TestFetchRegistryRefusesInvalidUTF8(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("{\"schema_digest\":\"sha256:abc\",\"operations\":[{\"operation\":\"flowMatrix\",\"document_digest\":\"\xff\"}]}"))
+	}))
+	t.Cleanup(server.Close)
 	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
-		t.Fatal("a process registering no operations has nothing to prove")
+		t.Fatal("a /registry response containing invalid UTF-8 must refuse -- python's HTTP client cannot decode it either")
+	}
+}
+
+// The /registry sibling: all three
+// decoders explicitly (snapshot.go, registry.go, routing_catalog.go).
+func TestFetchRegistryRefusesUnpairedSurrogateEscape(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[{"operation":"flowMatrix","document_digest":"\ud800abc"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+		t.Fatal("a /registry response carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse a document_digest to U+FFFD")
+	}
+}
+
+func TestFetchRegistryRefusesConflictingDuplicateOperations(t *testing.T) {
+	for name, order := range map[string][2]string{
+		"catalog-matching digest first": {"77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+		"catalog-matching digest last":  {"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "77c998975b27c6d14f0927c167464edaa01d702a3b1960b7a2f5bfd746f213c2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"schema_digest": "sha256:abc",
+				"operations": []map[string]string{
+					{"operation": "flowMatrix", "document_digest": order[0]},
+					{"operation": "flowMatrix", "document_digest": order[1]},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write(body)
+			}))
+			t.Cleanup(server.Close)
+			_, err = FetchRegistry(context.Background(), server.Client(), server.URL)
+			if err == nil {
+				t.Fatal("a registry naming one operation twice under conflicting digests must refuse -- ordering must not decide which digest wins")
+			}
+			if !strings.Contains(err.Error(), "flowMatrix") || !strings.Contains(err.Error(), "more than once") {
+				t.Fatalf("the refusal must name the duplicated operation, got %v", err)
+			}
+		})
+	}
+}
+
+// A duplicate operation naming the IDENTICAL digest twice is still a
+// malformed registry -- the guard is on the SHAPE (an operation listed
+// more than once), not on whether the two entries happen to agree, so a
+// tampered or buggy registry cannot escape the refusal by duplicating
+// consistently.
+func TestFetchRegistryRefusesAnIdenticalDuplicateOperationToo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[
+			{"operation":"flowMatrix","document_digest":"abc"},
+			{"operation":"flowMatrix","document_digest":"abc"}
+		]}`))
+	}))
+	t.Cleanup(server.Close)
+	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+		t.Fatal("an operation listed twice must refuse even when both entries agree")
+	}
+}
+
+// A plain-struct decode would let a differently-cased
+// shadow key win over the exact "operation"/"document_digest" key for
+// the SAME field -- {"operation":"flowMatrix","document_digest":"good",
+// "Operation":"tampered"} decoded Operation as "tampered", not
+// "flowMatrix", regardless of the exact key appearing first. The
+// exact-map read (exactStringField) cannot see this: "Operation" and
+// "operation" are two distinct map entries, so reading the exact key
+// always returns the exact key's own value.
+func TestFetchRegistryOperationFieldIsNeverShadowedByADifferentlyCasedKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[
+			{"operation":"flowMatrix","document_digest":"good","Operation":"tampered","Document_Digest":"tampered-too"}
+		]}`))
+	}))
+	t.Cleanup(server.Close)
+	view, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("FetchRegistry: %v", err)
+	}
+	if _, ok := view.DocumentDigest["tampered"]; ok {
+		t.Fatalf("the shadow-cased key was read instead of the exact one: %+v", view.DocumentDigest)
+	}
+	if got := view.DocumentDigest["flowMatrix"]; got != "good" {
+		t.Fatalf("DocumentDigest[flowMatrix] = %q, want %q (the exact document_digest key, not the shadow)", got, "good")
+	}
+}
+
+// /registry must accept an
+// unrecognised top-level or operation-entry key -- Python's dict
+// subscript ignores them too, so refusing would be a disagreement in
+// the opposite direction from the case-shadow bug.
+func TestFetchRegistryAcceptsAnUnknownKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","unexpected_future_field":"x","operations":[
+			{"operation":"flowMatrix","document_digest":"good","unexpected_future_field":"y"}
+		]}`))
+	}))
+	t.Cleanup(server.Close)
+	view, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("an unrecognised key must not refuse the registry: %v", err)
+	}
+	if view.DocumentDigest["flowMatrix"] != "good" {
+		t.Fatalf("DocumentDigest[flowMatrix] = %q", view.DocumentDigest["flowMatrix"])
+	}
+}
+
+// "A valid operation followed by {} or null also
+// passes Go's whole-response validation and permits a write" -- an empty
+// or null registry entry decoded to an empty-string operation/digest
+// with NO error, because exactStringField correctly reports the key as
+// absent, not malformed, and nothing upstream checked for absence.
+// An empty `schema_digest` must refuse HERE, at the raw-decode
+// boundary, not only be caught incidentally by a write verb's preflight
+// 2 (which compares it against a local digest that is never empty).
+// `status` calls FetchRegistry directly too and has no such preflight.
+func TestFetchRegistryRefusesAnEmptySchemaDigest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"","operations":[{"operation":"flowMatrix","document_digest":"good"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+		t.Fatal("an empty schema_digest must refuse -- it is not a real digest anything computed")
+	}
+}
+
+func TestFetchRegistryRefusesAnEmptyOrNullOperationsEntry(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty object entry": `{"schema_digest":"sha256:abc","operations":[
+			{"operation":"flowMatrix","document_digest":"good"},
+			{}
+		]}`,
+		"null entry": `{"schema_digest":"sha256:abc","operations":[
+			{"operation":"flowMatrix","document_digest":"good"},
+			null
+		]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(server.Close)
+			if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+				t.Fatal("an empty or null operations entry must refuse, not silently decode to an empty operation/digest")
+			}
+		})
+	}
+}
+
+// LoadDocuments has the
+// same silent U+FFFD substitution the other decoders in this package
+// close -- an invalid byte anywhere in the file decoded without error
+// before this check existed.
+func TestLoadDocumentsRefusesInvalidUTF8(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	if err := os.WriteFile(path, []byte("[{\"operation\":\"flowMatrix\",\"document\":\"query \xff\",\"digest\":\"d\"}]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadDocuments(path); err == nil {
+		t.Fatal("a documents file containing invalid UTF-8 must refuse")
+	}
+}
+
+// The third named decoder in the surrogate sweep.
+func TestLoadDocumentsRefusesUnpairedSurrogateEscape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	body := `[{"operation":"flowMatrix","document":"query \ud800abc","digest":"d"}]`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadDocuments(path); err == nil {
+		t.Fatal("a documents file carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse the document text to U+FFFD")
+	}
+}
+
+// LoadDocuments is the LAST plain
+// struct-tag decode in this file -- the same case-shadow class closed
+// for /registry and /buildinfo applied to it too.
+func TestLoadDocumentsFieldsAreNeverShadowedByADifferentlyCasedKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	body := `[{"operation":"flowMatrix","document":"good query text","Document":"tampered"}]`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := LoadDocuments(path)
+	if err != nil {
+		t.Fatalf("LoadDocuments: %v", err)
+	}
+	if got := documents["flowMatrix"]; got != "good query text" {
+		t.Fatalf("documents[flowMatrix] = %q, want the exact \"document\" key's value, not the shadow", got)
+	}
+}
+
+// Every decoder in this package accepts an unrecognised key rather than
+// refusing the whole file on it -- Python's dict subscript ignores extra
+// keys too, so accepting them is AGREEMENT, and refusing them would be
+// the same disagreement pointed the other way (team-lead's decoder
+// sweep: catalog already documents and tests this; the others did not
+// have an explicit executed case).
+func TestLoadDocumentsAcceptsAnUnknownKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	body := `[{"operation":"flowMatrix","document":"good query text","unexpected_future_field":"anything"}]`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	documents, err := LoadDocuments(path)
+	if err != nil {
+		t.Fatalf("an unrecognised key must not refuse the file: %v", err)
+	}
+	if got := documents["flowMatrix"]; got != "good query text" {
+		t.Fatalf("documents[flowMatrix] = %q", got)
 	}
 }
 
@@ -223,7 +601,7 @@ func TestVerifyBuildStableRefusesWhenTheRereadFails(t *testing.T) {
 	}
 }
 
-// r1 P2: the refusal path built its own prose and dropped the provenance
+// The refusal path must not build its own prose and drop the provenance
 // the success path carried, so the receipts that most needed context had
 // the least. Both paths now use ONE constructor, and the result is a JSON
 // object rather than generated text appended to operator text.
@@ -314,5 +692,39 @@ func TestAnOperatorNoteCannotForgeProvenance(t *testing.T) {
 	}
 	if provenance.Operator != runner.Config.ReviewEvidence {
 		t.Fatalf("the operator's text was not preserved verbatim: %q", provenance.Operator)
+	}
+}
+
+// Direct coverage of the scanner itself, including
+// the shapes that must NOT be refused (a valid pair, a plain BMP escape,
+// an escaped backslash immediately before a literal "u" that is not an
+// escape at all) alongside every unpaired shape.
+func TestRejectUnpairedSurrogateEscapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"no escapes at all", `{"commit":"plain text"}`, false},
+		{"valid surrogate pair", `{"commit":"𐀀"}`, false},
+		{"plain BMP escape", `{"commit":"A"}`, false},
+		{"literal escaped backslash then the letter u", `{"commit":"\\u0041"}`, false},
+		{"lone high surrogate at string end", `{"commit":"\ud800"}`, true},
+		{"lone high surrogate followed by a literal char", `{"commit":"\ud800x"}`, true},
+		{"lone low surrogate with no preceding high", `{"commit":"\udc00"}`, true},
+		{"reversed pair (low then high)", `{"commit":"\udc00\ud800"}`, true},
+		{"two highs in a row", `{"commit":"\ud800\ud800"}`, true},
+		{"high followed by a non-surrogate escape", `{"commit":"\ud800A"}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := rejectUnpairedSurrogateEscapes([]byte(tc.body))
+			if tc.wantErr && err == nil {
+				t.Fatalf("body %q: want an error, got nil", tc.body)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("body %q: want no error, got %v", tc.body, err)
+			}
+		})
 	}
 }

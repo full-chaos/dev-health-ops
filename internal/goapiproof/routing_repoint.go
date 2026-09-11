@@ -54,9 +54,26 @@ var ErrRepointBuildMismatch = errors.New("goapiproof: re-point build does not ma
 // "every row is already correct" must not read alike.
 var ErrRepointNoRows = errors.New("goapiproof: no routing rows at this schema digest")
 
+// ErrRepointUnknownOperation reports an --operations name with no row at
+// this schema digest (r2 R2-07).
+//
+// `repoint` takes raw operation names rather than catalog-validated ones,
+// so a filter like `chosen,typo` used to re-point `chosen`, drop `typo`
+// without a word, and report success -- an operator who named two
+// operations was told nothing about the one that did not happen. Same
+// class as the empty-filter widening: the verb quietly doing something
+// other than what was asked. `enable` and `disable` already refuse an
+// unknown name via ResolveOperations; this closes the third verb.
+var ErrRepointUnknownOperation = errors.New("goapiproof: no routing row at this schema digest for a named operation")
+
 // RepointOutcome is what happened to one operation's row.
 type RepointOutcome struct {
 	Operation string
+	// DocumentDigest completes the row's identity. One operation can have
+	// several rows at a schema digest under different document digests,
+	// so an outcome that named only the operation could not be matched
+	// back to the row it describes (codex r3, CONC-01).
+	DocumentDigest string
 	// Mode is read before the write and re-read after it. The two are
 	// compared, so "mode unchanged" is asserted by the code rather than
 	// promised by the SQL.
@@ -103,13 +120,6 @@ func (r RepointRequest) validate() error {
 	}
 	return nil
 }
-
-const selectRepointCandidatesSQL = `
-SELECT selected_operation, document_digest, mode, current_candidate_build
-  FROM public.go_api_routing_state
- WHERE schema_digest = $1
- ORDER BY selected_operation
-   FOR UPDATE`
 
 // registerCandidateBuildSQL mirrors the Python admin layer's ordering
 // exactly: the routing row carries a 4-column foreign key to
@@ -182,6 +192,26 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("%w: %s", ErrRepointNoRows, request.SchemaDigest)
 	}
+	// EVERY named operation must exist, not merely one of them (r2
+	// R2-07), and it is checked BEFORE anything is written so a filter
+	// with a typo in it changes nothing at all.
+	if len(wanted) > 0 {
+		present := make(map[string]bool, len(candidates))
+		for _, c := range candidates {
+			present[c.operation] = true
+		}
+		var missing []string
+		for operation := range wanted {
+			if !present[operation] {
+				missing = append(missing, operation)
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			return nil, fmt.Errorf("%w: %v at %s -- re-pointing the rest and saying nothing about these is how an operator learns too late that half a rollout moved",
+				ErrRepointUnknownOperation, missing, request.SchemaDigest)
+		}
+	}
 
 	now := time.Now().UTC()
 	outcomes := make([]RepointOutcome, 0, len(candidates))
@@ -190,12 +220,13 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 			continue
 		}
 		outcome := RepointOutcome{
-			Operation:  c.operation,
-			ModeBefore: c.mode,
-			ModeAfter:  c.mode,
-			BuildFrom:  c.build,
-			BuildTo:    request.RunningBuild,
-			Changed:    c.build != request.RunningBuild,
+			Operation:      c.operation,
+			DocumentDigest: c.documentDigest,
+			ModeBefore:     c.mode,
+			ModeAfter:      c.mode,
+			BuildFrom:      c.build,
+			BuildTo:        request.RunningBuild,
+			Changed:        c.build != request.RunningBuild,
 		}
 		if !outcome.Changed || request.DryRun {
 			outcomes = append(outcomes, outcome)
@@ -230,47 +261,75 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 	// Asserting it costs one query and turns the contract into a test the
 	// production path runs every time.
 	if !request.DryRun {
-		observed := map[string]string{}
-		// FOR UPDATE on the assertion read too. Every row at this digest is
-		// already locked by selectRepointCandidatesSQL in this same
-		// transaction, so this acquires nothing new -- but an assertion that
-		// silently relied on a lock taken by a DIFFERENT statement would stop
-		// holding the moment that statement's scope narrowed. Locking what you
-		// assert on makes the invariant local to the assertion.
-		modeRows, err := tx.Query(ctx, `SELECT selected_operation, mode FROM public.go_api_routing_state WHERE schema_digest = $1 FOR UPDATE`, request.SchemaDigest)
+		// Keyed by the row's FULL identity, not by operation (codex r3
+		// CONC-01). One operation can have several rows at a schema
+		// digest under different document digests, so a map keyed by
+		// operation alone collapses them -- and the assertion would then
+		// compare one row's mode against another row's before-value. The
+		// whole point of this re-read is proving the verb never touched
+		// reachability; an assertion that can compare the wrong row does
+		// not prove it.
+		//
+		// It runs the SAME ordered, LOCKING predicate the writes were
+		// driven from. Every row at this digest is already locked by that
+		// statement in this same transaction, so this acquires nothing
+		// new -- but an assertion that silently relied on a lock taken by
+		// a DIFFERENT statement would stop holding the moment that
+		// statement's scope narrowed, and re-using the shared predicate
+		// means it cannot introduce a lock order of its own.
+		type rowKey struct{ operation, documentDigest string }
+		after, err := readRoutingRows(ctx, tx, selectRepointCandidatesSQL, request.SchemaDigest)
 		if err != nil {
 			return nil, fmt.Errorf("goapiproof: re-read modes: %w", err)
 		}
-		for modeRows.Next() {
-			var operation, mode string
-			if err := modeRows.Scan(&operation, &mode); err != nil {
-				modeRows.Close()
-				return nil, fmt.Errorf("goapiproof: scan mode: %w", err)
-			}
-			observed[operation] = mode
-		}
-		modeRows.Close()
-		if err := modeRows.Err(); err != nil {
-			return nil, fmt.Errorf("goapiproof: re-read modes: %w", err)
+		observed := make(map[rowKey]string, len(after))
+		for _, row := range after {
+			observed[rowKey{row.operation, row.documentDigest}] = row.mode
 		}
 		for index := range outcomes {
-			after, ok := observed[outcomes[index].Operation]
+			key := rowKey{outcomes[index].Operation, outcomes[index].DocumentDigest}
+			mode, ok := observed[key]
 			if !ok {
-				return nil, fmt.Errorf("goapiproof: %s vanished during re-point", outcomes[index].Operation)
+				return nil, fmt.Errorf("goapiproof: %s (document digest %s) vanished during re-point",
+					outcomes[index].Operation, outcomes[index].DocumentDigest)
 			}
-			if after != outcomes[index].ModeBefore {
+			if mode != outcomes[index].ModeBefore {
 				return nil, fmt.Errorf("goapiproof: %s mode changed %q -> %q during a re-point, which must never touch reachability",
-					outcomes[index].Operation, outcomes[index].ModeBefore, after)
+					outcomes[index].Operation, outcomes[index].ModeBefore, mode)
 			}
-			outcomes[index].ModeAfter = after
+			outcomes[index].ModeAfter = mode
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return nil, fmt.Errorf("goapiproof: commit: %w", err)
 		}
 	}
 
-	sort.Slice(outcomes, func(i, j int) bool { return outcomes[i].Operation < outcomes[j].Operation })
+	sortOutcomes(outcomes)
 	return outcomes, nil
+}
+
+// sortOutcomes puts the report in the row order this table is always read
+// in: (selected_operation, document_digest).
+//
+// TOTAL, not by operation alone. `sort.Slice` is NOT stable, so a
+// comparator that TIES leaves the order of the tied elements up to the
+// algorithm -- and one operation TIES with itself whenever it has several
+// rows at a schema digest under different document digests, which is the
+// shape the whole re-read assertion above exists for. An operator diffing
+// two runs of the same command must not see two rows swap for no reason;
+// worse, a report whose row order is not a function of the data cannot be
+// pinned by a test at all.
+//
+// It is the SAME order `selectRepointCandidatesSQL` reads in, deliberately:
+// the report an operator reads and the order the rows were locked in are
+// one fact, and two spellings of one fact drift.
+func sortOutcomes(outcomes []RepointOutcome) {
+	sort.Slice(outcomes, func(i, j int) bool {
+		if outcomes[i].Operation != outcomes[j].Operation {
+			return outcomes[i].Operation < outcomes[j].Operation
+		}
+		return outcomes[i].DocumentDigest < outcomes[j].DocumentDigest
+	})
 }
 
 // RepointSummary counts what a run did, including the zeros.

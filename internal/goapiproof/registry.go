@@ -1,6 +1,7 @@
 package goapiproof
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,8 +11,10 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 )
 
 // ErrNoBuildIdentity reports that the running query-api did not tell us
@@ -28,23 +31,173 @@ import (
 // it. That is the gap this refusal closes.
 var ErrNoBuildIdentity = errors.New("goapiproof: the running query-api reports no build identity, so no receipt can name the build that served these requests")
 
-// registryBody is GET /registry's response. Deliberately just the schema
-// digest and the operation map -- the build identity lives at
-// /buildinfo, see FetchBuildIdentity.
-type registryBody struct {
-	SchemaDigest string `json:"schema_digest"`
-	Operations   []struct {
-		Operation      string `json:"operation"`
-		DocumentDigest string `json:"document_digest"`
-	} `json:"operations"`
+// registryOperation is one element of /registry's `operations` array,
+// decoded by EXACT key -- see exactStringField for why.
+type registryOperation struct {
+	Operation      string
+	DocumentDigest string
 }
 
-// buildInfoBody is GET /buildinfo's response.
-type buildInfoBody struct {
-	Commit    string `json:"commit"`
-	Version   string `json:"version"`
-	BuildTime string `json:"build_time"`
-	Modified  bool   `json:"modified"`
+// A plain struct-tagged `json.Unmarshal` of
+// /registry's or /buildinfo's body is vulnerable to JSON KEY-CASE
+// SHADOWING. encoding/json processes an object's keys in ENCOUNTER
+// ORDER, and for a field whose JSON tag is an exact lowercase name (every
+// field on both these bodies), a later differently-cased key still wins
+// over an earlier exact one -- it does NOT reliably prefer the exact
+// match across the whole object the way the package docs are often read
+// to imply. Measured directly:
+//
+//	{"modified":true,"MODIFIED":false}  -> Modified == false
+//	{"MODIFIED":false,"modified":true}  -> Modified == true
+//
+// last key wins, case notwithstanding. That is a live guard bypass at
+// /buildinfo: a response naming the build MODIFIED under the correct key
+// and un-modified under a shadow key defeats FetchBuildIdentity's refusal
+// (ErrNoBuildIdentity is meant to fire on any modified build). The same
+// shape at /registry's `operation`/`document_digest` fields can make a
+// registry entry parse as one operation to this reader and another to
+// Python's exact-subscript reader, the identical "Go accepts what Python
+// would not" class the catalog-file and duplicate-operation fixes above
+// already close for their own inputs.
+//
+// exactStringField/exactBoolField close it by reading from a
+// map[string]json.RawMessage: a Go map's keys are exact-string equal, so
+// "MODIFIED" and "modified" are two DISTINCT entries in that map and a
+// lookup by one spelling can never observe the other -- the same
+// agreement Python's dict subscript already has with itself. Both bodies
+// below are now decoded this way instead of via a struct tag.
+func exactStringField(raw map[string]json.RawMessage, key string) (value string, present bool, err error) {
+	rawValue, present := raw[key]
+	if !present {
+		return "", false, nil
+	}
+	if err := json.Unmarshal(rawValue, &value); err != nil {
+		return "", true, fmt.Errorf("%q is not a JSON string (%s)", key, rawValue)
+	}
+	return value, true, nil
+}
+
+func exactBoolField(raw map[string]json.RawMessage, key string) (value bool, present bool, err error) {
+	rawValue, present := raw[key]
+	if !present {
+		return false, false, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
+		// A plain `json.Unmarshal(null, &value)` into a
+		// non-pointer bool is a documented NO-OP in encoding/json -- it
+		// returns nil and leaves value at its zero value (false), so
+		// `"modified": null` and `"modified": false` were INDISTINGUISHABLE
+		// to every caller that only looked at `value`. FetchBuildIdentity
+		// discarded the `present` flag this function already computed
+		// (`modified, _, err := exactBoolField(...)`), so a build identity
+		// route that could not say whether its tree was modified was
+		// treated as PROVABLY clean -- executed: `{"commit":"a...a",
+		// "modified":null}` enabled a row exactly like `"modified":false`
+		// would have. Reporting null as PRESENT-BUT-NOT-A-BOOLEAN, rather
+		// than silently coercing it to false, makes the caller decide
+		// on purpose rather than by omission.
+		return false, true, fmt.Errorf("%q is JSON null, not a boolean -- an unknown answer must never be read as false (%s)", key, rawValue)
+	}
+	if err := json.Unmarshal(rawValue, &value); err != nil {
+		return false, true, fmt.Errorf("%q is not a JSON boolean (%s)", key, rawValue)
+	}
+	return value, true, nil
+}
+
+// rejectUnpairedSurrogateEscapes scans a raw JSON body for a `\uXXXX`
+// escape that names one half of a UTF-16 surrogate pair with no matching
+// other half.
+//
+// `utf8.Valid(body)` above only checks the RAW BYTES
+// of the body, and a JSON escape like `\ud800` is six perfectly valid
+// ASCII bytes -- the invalidity is introduced ONE LAYER DOWN, when
+// encoding/json unescapes it. Its string scanner substitutes U+FFFD (the
+// replacement character) for an unpaired surrogate rather than erroring,
+// so a body carrying `\ud800` and a body carrying a literal `�`
+// decode to the IDENTICAL Go string and compare equal downstream.
+// Executed:
+//
+//	{"commit":"\ud800","modified":false}  -> commit == "�"
+//
+// against a baseline body that already carries a literal U+FFFD:
+// candidate and baseline compared equal even though Python's
+// `json.loads` preserves the lone surrogate (`"\ud800"`) and considers
+// the two strings UNEQUAL. Scanning the raw bytes BEFORE any decode runs
+// is the only point this distinction survives -- once encoding/json has
+// rewritten the escape, the fact that it WAS an escape (rather than a
+// genuine literal replacement character already present in the body) is
+// gone.
+func rejectUnpairedSurrogateEscapes(body []byte) error {
+	const (
+		highSurrogateLow  = 0xD800
+		highSurrogateHigh = 0xDBFF
+		lowSurrogateLow   = 0xDC00
+		lowSurrogateHigh  = 0xDFFF
+	)
+	inString := false
+	escaped := false
+	pendingHigh := -1 // -1 == no pending high surrogate half awaiting its pair
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if !inString {
+			if c == '"' {
+				inString = true
+			}
+			continue
+		}
+		if escaped {
+			escaped = false
+			if c != 'u' {
+				if pendingHigh != -1 {
+					return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+				}
+				continue
+			}
+			if i+4 >= len(body) {
+				return errors.New("goapiproof: truncated \\u escape at end of body")
+			}
+			unit, err := strconv.ParseUint(string(body[i+1:i+5]), 16, 32)
+			if err != nil {
+				return fmt.Errorf("goapiproof: malformed \\u escape %q", body[i:i+6])
+			}
+			i += 4
+			code := int(unit)
+			switch {
+			case code >= highSurrogateLow && code <= highSurrogateHigh:
+				if pendingHigh != -1 {
+					return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+				}
+				pendingHigh = code
+			case code >= lowSurrogateLow && code <= lowSurrogateHigh:
+				if pendingHigh == -1 {
+					return fmt.Errorf("goapiproof: unpaired UTF-16 low surrogate \\u%04x with no preceding high half -- encoding/json would silently replace it with U+FFFD rather than erroring, collapsing this response into whatever else also contains a literal U+FFFD", code)
+				}
+				pendingHigh = -1
+			default:
+				if pendingHigh != -1 {
+					return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+				}
+			}
+			continue
+		}
+		switch c {
+		case '\\':
+			escaped = true
+		case '"':
+			if pendingHigh != -1 {
+				return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+			}
+			inString = false
+		default:
+			if pendingHigh != -1 {
+				return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+			}
+		}
+	}
+	if pendingHigh != -1 {
+		return fmt.Errorf("goapiproof: unpaired UTF-16 high surrogate \\u%04x not immediately followed by its low half", pendingHigh)
+	}
+	return nil
 }
 
 // EndpointLabel is a safe name for an endpoint, built from parsed parts
@@ -82,6 +235,27 @@ func EndpointLabel(raw string) string {
 		return "(unparseable endpoint)"
 	}
 	return parsed.Scheme + "://" + parsed.Hostname()
+}
+
+// EndpointLabelWithPort is EndpointLabel's sibling for the ONE context
+// where the port is exactly the fact that matters: `enable`/`repoint`'s
+// own "which endpoint did I consult" success line.
+//
+// Two local port-forwards to DIFFERENT deployed processes share a
+// hostname (127.0.0.1) and differ ONLY by port -- EndpointLabel's
+// port-omitted `http://127.0.0.1` prints identically for both, so the
+// very observability line meant to expose "registry and buildinfo came
+// from different processes" could not do so. The port carries no
+// credential (`safeEndpoint` has already refused any URL with userinfo,
+// an opaque body, or no host by the time this is called, so `.Host` is
+// exactly as safe to print as `.Hostname()` already was), and it is the
+// one thing that told S2/S2b's two stubs apart.
+func EndpointLabelWithPort(raw string) string {
+	parsed, err := safeEndpoint(raw)
+	if err != nil {
+		return "(unparseable endpoint)"
+	}
+	return parsed.Scheme + "://" + parsed.Host
 }
 
 // safeEndpoint is the ONE predicate that decides whether a URL can be
@@ -270,27 +444,134 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	if err != nil {
 		return RegistryView{}, fmt.Errorf("goapiproof: read registry body: %w", err)
 	}
+	// Sibling of the catalog-file fix (routing_catalog.go's UTF-8 gate):
+	// `go_api_cli.py` reads THIS SAME `/registry` endpoint, and
+	// any Python HTTP client decodes response bytes as UTF-8 before
+	// `json.loads` ever runs -- invalid UTF-8 anywhere in the body fails
+	// there. encoding/json has no such requirement, so without this check
+	// a malformed or tampered registry response one byte away from being
+	// unreadable to the Python verb would still parse here, and this
+	// binary would go on to write a row from it.
+	if !utf8.Valid(body) {
+		return RegistryView{}, fmt.Errorf("goapiproof: %s response is not valid UTF-8 -- the Python verb's HTTP client decodes response bytes as UTF-8 before parsing and would refuse the whole body on one bad byte anywhere in it", EndpointLabel(registryURL))
+	}
+	if err := rejectUnpairedSurrogateEscapes(body); err != nil {
+		return RegistryView{}, fmt.Errorf("goapiproof: %s response: %w", EndpointLabel(registryURL), err)
+	}
 
-	var parsed registryBody
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	var rawTop map[string]json.RawMessage
+	if err := json.Unmarshal(body, &rawTop); err != nil {
 		return RegistryView{}, fmt.Errorf("goapiproof: decode registry body: %w", err)
 	}
-	if parsed.SchemaDigest == "" {
+	schemaDigest, _, err := exactStringField(rawTop, "schema_digest")
+	if err != nil {
+		return RegistryView{}, fmt.Errorf("goapiproof: %s registry body: %w", EndpointLabel(registryURL), err)
+	}
+	if schemaDigest == "" {
 		return RegistryView{}, fmt.Errorf("goapiproof: %s reported an empty schema digest", EndpointLabel(registryURL))
 	}
-	if len(parsed.Operations) == 0 {
-		return RegistryView{}, fmt.Errorf("goapiproof: %s registers no operations -- there is nothing to prove", EndpointLabel(registryURL))
+	rawOperationsValue, present := rawTop["operations"]
+	// An ABSENT `operations` key or an EXPLICIT
+	// `"operations": null` used to fall through to the same empty-map
+	// success path r5's fix gives an honest `"operations": []` -- so
+	// `status` printed [AGREE] and "the deployed go plane does not
+	// register this operation at all" for a response that is actually
+	// MALFORMED, not merely empty. Python's dispatcher distinguishes them
+	// (`go_api_dispatcher.py`: `entries = payload.get("operations"); if
+	// not isinstance(entries, list): raise GoPlaneUnavailable(...)`) --
+	// `.get` returns None for BOTH absent and null, and only a genuine
+	// JSON array (empty array included) is a `list`. Matched here: absent
+	// or null refuses with the same "no usable operations list" Python
+	// reports; an explicit `[]` still succeeds via the r5 path below.
+	if !present || bytes.Equal(bytes.TrimSpace(rawOperationsValue), []byte("null")) {
+		return RegistryView{}, fmt.Errorf("goapiproof: %s returned no usable operations list -- the \"operations\" key is missing or null, not an empty array", EndpointLabel(registryURL))
+	}
+	var rawOperations []map[string]json.RawMessage
+	if err := json.Unmarshal(rawOperationsValue, &rawOperations); err != nil {
+		return RegistryView{}, fmt.Errorf("goapiproof: %s operations field is malformed: %w", EndpointLabel(registryURL), err)
+	}
+	// This used to refuse HERE, unconditionally, on an
+	// empty `operations` array -- which is correct for a WRITE verb (there
+	// is nothing to prove or write against) but wrong for a DIAGNOSTIC:
+	// `status` shares this exact function, and the refusal destroyed the
+	// schema_digest this call had ALREADY successfully read, collapsing
+	// "the deployed process is up, agrees on schema, and currently
+	// registers nothing" into the identical "UNREACHABLE" report a
+	// genuinely down process produces. Python's reader (the parity target
+	// this whole package exists to match) tolerates exactly this shape:
+	// executed against the identical response, it returns
+	// `GoPlaneRegistry(schema_digest=..., operations={})`, not a refusal.
+	// The refusal moves to the WRITE-verb call sites instead (enable.go,
+	// repoint.go -- `disable` calls neither by design), which are the
+	// only callers for which "nothing to prove" is actually true.
+	operations := make([]registryOperation, 0, len(rawOperations))
+	for index, rawOp := range rawOperations {
+		operationName, _, err := exactStringField(rawOp, "operation")
+		if err != nil {
+			return RegistryView{}, fmt.Errorf("goapiproof: %s operations[%d]: %w", EndpointLabel(registryURL), index, err)
+		}
+		documentDigest, _, err := exactStringField(rawOp, "document_digest")
+		if err != nil {
+			return RegistryView{}, fmt.Errorf("goapiproof: %s operations[%d]: %w", EndpointLabel(registryURL), index, err)
+		}
+		// A `{}` or `null` entry (rawOp is an empty or
+		// nil map either way) decoded to an empty-string operation/digest
+		// with no error at all -- exactStringField correctly reports the
+		// key as ABSENT rather than malformed, but nothing upstream of it
+		// used to check for absence, so a plainly incomplete entry passed
+		// straight through to the duplicate check and the view. Refuse it
+		// by name, the same shape the catalog file already refuses.
+		if operationName == "" || documentDigest == "" {
+			return RegistryView{}, fmt.Errorf("goapiproof: %s operations[%d] carries an empty or missing operation or document_digest", EndpointLabel(registryURL), index)
+		}
+		operations = append(operations, registryOperation{Operation: operationName, DocumentDigest: documentDigest})
+	}
+
+	// This map used to be a last-write-wins CONVERSION -- two `/registry`
+	// entries naming the same operation under different document digests
+	// collapsed silently, and whichever happened to come last decided
+	// which digest a routing row got written with. The Python verb refuses
+	// outright (`GoPlaneUnavailable ... lists operation 'X' more than
+	// once`); this now matches, BEFORE the map is built, so a malformed or
+	// tampered registry can never decide anything by ordering.
+	seen := make(map[string]bool, len(operations))
+	var duplicates []string
+	for _, operation := range operations {
+		if seen[operation.Operation] {
+			duplicates = append(duplicates, operation.Operation)
+			continue
+		}
+		seen[operation.Operation] = true
+	}
+	if len(duplicates) > 0 {
+		sort.Strings(duplicates)
+		duplicates = dedupeSorted(duplicates)
+		return RegistryView{}, fmt.Errorf("goapiproof: %s lists operation(s) more than once: %v -- a malformed or tampered registry must not decide which document digest a routing row is written with",
+			EndpointLabel(registryURL), duplicates)
 	}
 
 	view := RegistryView{
-		SchemaDigest:   parsed.SchemaDigest,
-		DocumentDigest: make(map[string]string, len(parsed.Operations)),
+		SchemaDigest:   schemaDigest,
+		DocumentDigest: make(map[string]string, len(operations)),
 	}
-	for _, operation := range parsed.Operations {
+	for _, operation := range operations {
 		view.DocumentDigest[operation.Operation] = operation.DocumentDigest
 	}
 
 	return view, nil
+}
+
+// dedupeSorted collapses adjacent equal strings in an already-sorted
+// slice, so a name repeated more than twice is named once in a refusal
+// rather than once per repeat.
+func dedupeSorted(sorted []string) []string {
+	out := sorted[:0]
+	for i, s := range sorted {
+		if i == 0 || sorted[i-1] != s {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // FetchBuildIdentity asks the RUNNING process which build it is, via the
@@ -339,18 +620,53 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: read buildinfo body: %w", err)
 	}
-	var parsed buildInfoBody
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	// Without this check, a `commit` value carrying
+	// invalid UTF-8 (a single bad byte is enough) decodes silently -- Go's
+	// JSON string scanner substitutes U+FFFD (the replacement character)
+	// for an invalid byte rather than erroring, so the corrupted string
+	// goes on to be written as current_candidate_build, a 4-column
+	// foreign-key value every routing row and receipt is keyed against.
+	// Executed: a commit byte 0xFF produced current_candidate_build='<20>'
+	// (U+FFFD) written durably. Refusing the whole body up front is the
+	// same shape as the catalog-file and /registry UTF-8 gates above.
+	if !utf8.Valid(body) {
+		return "", fmt.Errorf("goapiproof: %s response is not valid UTF-8 -- a build identity this corrupted cannot be written as a foreign key value", EndpointLabel(buildInfoURL))
+	}
+	if err := rejectUnpairedSurrogateEscapes(body); err != nil {
+		return "", fmt.Errorf("goapiproof: %s response: %w", EndpointLabel(buildInfoURL), err)
+	}
+	var rawTop map[string]json.RawMessage
+	if err := json.Unmarshal(body, &rawTop); err != nil {
 		return "", fmt.Errorf("goapiproof: decode buildinfo body: %w", err)
 	}
+	rawCommit, _, err := exactStringField(rawTop, "commit")
+	if err != nil {
+		return "", fmt.Errorf("goapiproof: %s buildinfo body: %w", EndpointLabel(buildInfoURL), err)
+	}
+	modified, modifiedPresent, err := exactBoolField(rawTop, "modified")
+	if err != nil {
+		return "", fmt.Errorf("goapiproof: %s buildinfo body: %w", EndpointLabel(buildInfoURL), err)
+	}
 
-	commit := strings.TrimSpace(parsed.Commit)
+	commit := strings.TrimSpace(rawCommit)
 	switch {
 	case commit == "":
 		return "", ErrNoBuildIdentity
 	case commit == "unknown":
 		return "", fmt.Errorf("%w: it reports commit=%q, internal/platform/version's default for a build with no -ldflags and no VCS stamp", ErrNoBuildIdentity, commit)
-	case parsed.Modified:
+	case !modifiedPresent:
+		// The OTHER half of the null-modified case
+		// above. `exactBoolField` now refuses `"modified": null` outright,
+		// but a body that OMITS the key altogether still reached here with
+		// `modified == false` (its zero value) and `modifiedPresent ==
+		// false` -- a caller that only read the value, not the presence
+		// flag, could not tell "this build reports itself clean" from
+		// "this build said nothing about its tree at all". Executed: a
+		// `/buildinfo` body carrying only `{"commit":"aa...aa"}` enabled a
+		// row exactly like an explicit `"modified":false` would have.
+		// Unknown cleanliness must refuse, not default to clean.
+		return "", fmt.Errorf("%w: it does not report whether its working tree was modified, so cleanliness cannot be assumed", ErrNoBuildIdentity)
+	case modified:
 		return "", fmt.Errorf("%w: it reports a MODIFIED working tree, so its commit does not identify the source it was built from", ErrNoBuildIdentity)
 	}
 	return commit, nil
@@ -468,13 +784,10 @@ func sortedOperations(m map[string]string) []string {
 	return keys
 }
 
-// registrydumpDocument is one element of `registrydump -file
-// cmd/query-api/query_route.go`'s JSON output.
-type registrydumpDocument struct {
-	Operation string `json:"operation"`
-	Document  string `json:"document"`
-	Digest    string `json:"digest"`
-}
+// registrydump's JSON output is one array of {operation, document,
+// digest} objects (produced by `registrydump -file
+// cmd/query-api/query_route.go`). LoadDocuments reads it by exact key,
+// not through a struct tag -- see the comment at its call site.
 
 // LoadDocuments reads registrydump's JSON output and returns operation ->
 // registered document TEXT.
@@ -496,20 +809,47 @@ func LoadDocuments(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("goapiproof: read documents file: %w", err)
 	}
-	var documents []registrydumpDocument
-	if err := json.Unmarshal(raw, &documents); err != nil {
+	// The same silent
+	// U+FFFD substitution the catalog/registry/buildinfo gates close
+	// elsewhere in this package applies here too -- an invalid byte in
+	// the operation name, the document text or the digest field would
+	// otherwise decode without error into a corrupted value this
+	// function hands back as if it were the real registered text.
+	if !utf8.Valid(raw) {
+		return nil, fmt.Errorf("goapiproof: documents file %s is not valid UTF-8", path)
+	}
+	if err := rejectUnpairedSurrogateEscapes(raw); err != nil {
+		return nil, fmt.Errorf("goapiproof: documents file %s: %w", path, err)
+	}
+	// This was the last plain struct-tag decode left in the package
+	// (team-lead's decoder sweep, 01:0xZ): `registrydumpDocument`'s
+	// `json:"operation"`/`json:"document"` tags carry the SAME
+	// case-shadow exposure closed for /registry and /buildinfo above --
+	// a file with both "document" and "Document" keys would let the
+	// wrong one win depending on which came last. Read via the same
+	// exact-key map lookup as every other decoder in this file now uses.
+	var rawDocuments []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawDocuments); err != nil {
 		return nil, fmt.Errorf("goapiproof: decode documents file (expected `registrydump -file ...` output): %w", err)
 	}
-	if len(documents) == 0 {
+	if len(rawDocuments) == 0 {
 		return nil, fmt.Errorf("goapiproof: documents file %s is empty", path)
 	}
 
-	byOperation := make(map[string]string, len(documents))
-	for _, document := range documents {
-		if document.Document == "" {
-			return nil, fmt.Errorf("goapiproof: documents file carries no text for %q", document.Operation)
+	byOperation := make(map[string]string, len(rawDocuments))
+	for index, rawDoc := range rawDocuments {
+		operation, _, err := exactStringField(rawDoc, "operation")
+		if err != nil {
+			return nil, fmt.Errorf("goapiproof: documents file %s entry %d: %w", path, index, err)
 		}
-		byOperation[document.Operation] = document.Document
+		documentText, _, err := exactStringField(rawDoc, "document")
+		if err != nil {
+			return nil, fmt.Errorf("goapiproof: documents file %s entry %d: %w", path, index, err)
+		}
+		if documentText == "" {
+			return nil, fmt.Errorf("goapiproof: documents file carries no text for %q", operation)
+		}
+		byOperation[operation] = documentText
 	}
 	return byOperation, nil
 }

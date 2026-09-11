@@ -318,6 +318,103 @@ func TestDecodeSnapshotRejectsUnparseableBody(t *testing.T) {
 	}
 }
 
+// encoding/json substitutes U+FFFD (the replacement
+// character) for a byte it cannot decode as UTF-8, rather than erroring.
+// Without a whole-body validity check, a candidate carrying a genuinely
+// invalid byte and a baseline that already carries a LITERAL replacement
+// character decode to the identical Go value and would compare equal --
+// the executed proof-runner reproduction confirmed this reaches
+// production as a `match` verdict on a receipt actually written.
+func TestDecodeSnapshotRefusesInvalidUTF8(t *testing.T) {
+	if _, err := DecodeSnapshot([]byte("{\"data\":{\"commit\":\"b18e56\xff\"}}")); err == nil {
+		t.Fatal("a body containing invalid UTF-8 must refuse, not silently substitute U+FFFD")
+	}
+}
+
+// An executed repro against this
+// exact function -- a candidate body carrying `\ud800` and a baseline
+// body carrying a literal `�` decoded to the SAME Go value and
+// certified `match`, minting an enablement-eligible receipt from two
+// genuinely different upstream responses.
+func TestDecodeSnapshotRefusesUnpairedSurrogateEscape(t *testing.T) {
+	if _, err := DecodeSnapshot([]byte(`{"data":{"commit":"\ud800x"}}`)); err == nil {
+		t.Fatal("a body carrying an unpaired UTF-16 surrogate escape must refuse, not silently collapse to U+FFFD")
+	}
+}
+
+// The collapse itself, proven directly: without the guard these two
+// bodies would compare EQUAL even though a real client (Python's
+// json.loads preserves the lone surrogate) would see them as different.
+func TestDecodeSnapshotUnpairedSurrogateDoesNotMaskAsAMatchingBaseline(t *testing.T) {
+	candidate := []byte(`{"data":{"commit":"\ud800x"}}`)
+	baseline := []byte(`{"data":{"commit":"�x"}}`)
+	if _, err := DecodeSnapshot(candidate); err == nil {
+		t.Fatal("the candidate leg must refuse before it can be compared against anything")
+	}
+	// The baseline (a literal, genuinely valid U+FFFD) must still decode
+	// fine on its own -- this guard is about the ESCAPE, not the
+	// character it would otherwise be confused for.
+	if _, err := DecodeSnapshot(baseline); err != nil {
+		t.Fatalf("a literal U+FFFD is valid UTF-8 and must decode: %v", err)
+	}
+}
+
+// DecodeSnapshot's envelope is
+// already a map[string]json.RawMessage keyed by exact string, so a
+// "Data"/"DATA" sibling of "data" cannot shadow it -- proven here
+// rather than assumed from the mechanism alone, the same discipline
+// applied to every other decoder in this package.
+func TestDecodeSnapshotDataFieldIsNeverShadowedByADifferentlyCasedKey(t *testing.T) {
+	snapshot, err := DecodeSnapshot([]byte(`{"data":{"real":true},"Data":{"tampered":true}}`))
+	if err != nil {
+		t.Fatalf("DecodeSnapshot: %v", err)
+	}
+	got, ok := snapshot.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("snapshot.Data is not a map: %#v", snapshot.Data)
+	}
+	if _, tampered := got["tampered"]; tampered {
+		t.Fatalf("the shadow-cased \"Data\" key was read instead of the exact \"data\" one: %#v", got)
+	}
+	if _, real := got["real"]; !real {
+		t.Fatalf("the exact \"data\" key's own content is missing: %#v", got)
+	}
+}
+
+// An unrecognised top-level key in the envelope must not refuse the
+// whole response -- only "data" and "errors" are ever read.
+func TestDecodeSnapshotAcceptsAnUnknownEnvelopeKey(t *testing.T) {
+	snapshot, err := DecodeSnapshot([]byte(`{"data":{"x":1},"extensions":{"anything":"here"}}`))
+	if err != nil {
+		t.Fatalf("an unrecognised envelope key must not refuse: %v", err)
+	}
+	if !snapshot.DataPresent {
+		t.Fatal("data must still be read")
+	}
+}
+
+// The masking case, made concrete: a genuinely invalid byte and an
+// already-replacement-charactered baseline must NOT decode to Snapshots
+// that compare as a match, which is exactly what happened before the
+// UTF-8 gate above existed.
+func TestDecodeSnapshotInvalidUTF8DoesNotMaskAsAMatchingBaseline(t *testing.T) {
+	_, candidateErr := DecodeSnapshot([]byte("{\"data\":{\"commit\":\"b18e56\xff\"}}"))
+	if candidateErr == nil {
+		t.Fatal("the candidate leg must refuse before it can be compared at all")
+	}
+	// The baseline leg (valid UTF-8, already carrying the literal
+	// replacement character) must still decode fine on its own -- this is
+	// not a blanket refusal of the replacement character, only of bytes
+	// that cannot be represented as UTF-8 in the first place.
+	baseline, err := DecodeSnapshot([]byte(`{"data":{"commit":"b18e56�"}}`))
+	if err != nil {
+		t.Fatalf("a body that is already valid UTF-8 (replacement character included) must still decode: %v", err)
+	}
+	if !baseline.DataPresent {
+		t.Fatal("the baseline's data field must still be read")
+	}
+}
+
 // A Tier-B declaration that relaxes nothing must be reported, exactly
 // like a stale volatile-field exclusion: it reads as a relaxation that is
 // there, and the first person to trust it is trusting nothing.

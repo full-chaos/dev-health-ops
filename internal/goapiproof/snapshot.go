@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"unicode/utf8"
 )
 
 // ErrNonFiniteNumber reports a response body carrying a bare NaN,
@@ -39,6 +40,32 @@ func DecodeSnapshot(body []byte) (Snapshot, error) {
 	if nonFiniteLiteral.Match(body) {
 		return Snapshot{}, ErrNonFiniteNumber
 	}
+	// A package-wide sibling of the /registry, /buildinfo and catalog
+	// UTF-8 gates. encoding/json's string scanner
+	// substitutes U+FFFD (the replacement character) for a byte it cannot
+	// decode as UTF-8, rather than erroring -- so a candidate body
+	// carrying a genuinely invalid byte and a baseline body that already
+	// contains a LITERAL replacement character decode to the IDENTICAL Go
+	// value and compare equal. Executed end to end through the real proof
+	// Runner over HTTP: a candidate response with raw byte 0xFF against
+	// such a baseline was certified `match`, a receipt was written, and
+	// the operation reported enablement-eligible -- masking a genuine
+	// data discrepancy as proof of agreement. Refusing here, before any
+	// lossy decode runs, is the only point this distinction survives.
+	if !utf8.Valid(body) {
+		return Snapshot{}, errors.New("goapiproof: response body is not valid UTF-8 -- a byte this decoder cannot represent would otherwise be silently replaced before comparison")
+	}
+	// Sibling of the raw-byte check above, one layer
+	// down -- an unpaired `\uXXXX` surrogate escape is valid ASCII (so it
+	// passes utf8.Valid) but decodes to the SAME U+FFFD encoding/json
+	// would substitute for a genuinely invalid byte, collapsing a body
+	// that carries the escape with one that carries a literal replacement
+	// character into an identical comparison value. See
+	// rejectUnpairedSurrogateEscapes's doc comment (registry.go) for the
+	// executed repro.
+	if err := rejectUnpairedSurrogateEscapes(body); err != nil {
+		return Snapshot{}, fmt.Errorf("goapiproof: %w", err)
+	}
 
 	// Decode the envelope into raw messages first so "data": null and an
 	// absent "data" key stay distinguishable -- both decode to a nil `any`
@@ -56,7 +83,7 @@ func DecodeSnapshot(body []byte) (Snapshot, error) {
 	// the same envelope and compare equal (confirmation pass C3: a 67-byte
 	// candidate and a 39-byte baseline compared as match).
 	//
-	// More() is NOT the check for this, which is round 2's F6: its
+	// More() is NOT the check for this: its
 	// implementation is `err == nil && c != ']' && c != '}'`, so a body
 	// ending in a stray `}` or `]` -- the likeliest real shape, a serializer
 	// emitting one closing brace too many -- makes More() report FALSE and

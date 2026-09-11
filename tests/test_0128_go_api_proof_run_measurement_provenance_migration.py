@@ -64,6 +64,30 @@ def _columns(engine: Engine, table: str) -> dict[str, bool]:
     return {name: nullable == "YES" for name, nullable in rows}
 
 
+def _column_defaults(engine: Engine, table: str) -> dict[str, str | None]:
+    """column name -> its DEFAULT expression, or None for no default.
+
+    The live-nullability comparison above proves name
+    and nullability agree, but says nothing about the DEFAULT VALUE a
+    fresh INSERT actually gets -- changing `differences_outside_baseline_
+    defect`'s fixture default from 0 to 1 passed both DDL-mirror pins
+    (name presence, nullability) with the mirror still declaring a
+    completely different default than the migration. Postgres normalises
+    a literal default to a cast expression (`'0'::integer`), so this
+    compares the RAW `column_default` string as Postgres itself reports
+    it on both sides -- not a value re-derived by either reader.
+    """
+    with engine.connect() as c:
+        rows = c.execute(
+            sa.text(
+                "SELECT column_name, column_default FROM information_schema.columns "
+                "WHERE table_name = :t"
+            ),
+            {"t": table},
+        ).all()
+    return {name: default for name, default in rows}
+
+
 def _constraints(engine: Engine, table: str) -> set[str]:
     with engine.connect() as c:
         rows = c.execute(
@@ -255,8 +279,8 @@ def test_0128_downgrade_removes_the_columns_and_the_constraint(
 
 def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
     """The Go integration suite builds these three tables from a hand-kept
-    DDL string (``registryDDL`` in
-    ``internal/goapiproof/receipt_integration_test.go``) so it can exercise
+    DDL string (``registryschema.DDL`` in
+    ``internal/testsupport/registryschema/schema.go``) so it can exercise
     the real FK and CHECK constraints. A mirror that falls behind the
     migrations would let those tests pass against a schema Postgres does not
     have -- the "relaxed schema" failure that DDL's own comment warns about.
@@ -270,7 +294,7 @@ def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
     enforcing it here keeps the guard and costs no cross-language trigger.
     """
     repo_root = Path(__file__).parents[1]
-    ddl = (repo_root / "internal/goapiproof/receipt_integration_test.go").read_text(
+    ddl = (repo_root / "internal/testsupport/registryschema/schema.go").read_text(
         encoding="utf-8"
     )
     column_pattern = re.compile(r'sa\.Column\(\s*"([a-z_]+)"')
@@ -303,3 +327,98 @@ def test_registry_ddl_mirror_covers_every_migrated_column() -> None:
         f"only {checked} migrated columns were checked -- the column pattern "
         "has stopped matching and this test is now vacuous"
     )
+
+
+def _extract_go_ddl() -> str:
+    """Pull the literal SQL out of registryschema.DDL's backtick string."""
+    repo_root = Path(__file__).parents[1]
+    source = (repo_root / "internal/testsupport/registryschema/schema.go").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"const DDL = `(.*?)`", source, re.DOTALL)
+    assert match, (
+        "internal/testsupport/registryschema/schema.go: const DDL literal not found"
+    )
+    return match.group(1)
+
+
+@pytest.fixture
+def ddl_mirror_db() -> Iterator[Engine]:
+    """A scratch Postgres database built from ONLY registryschema.DDL --
+    the Go integration fixture's own schema, with no alembic involved at
+    all -- so its live column metadata can be compared against the
+    migrated database's, column by column, rather than trusted from a
+    regex read of either source file.
+    """
+    uri = os.environ.get(_POSTGRES_URI_ENV)
+    if uri is None:
+        if os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
+            pytest.fail(f"{_POSTGRES_URI_ENV} must be configured for migration tests")
+        pytest.skip(f"requires {_POSTGRES_URI_ENV}")
+    url = make_url(uri)
+    if url.get_backend_name() != "postgresql":
+        pytest.fail(f"{_POSTGRES_URI_ENV} must use PostgreSQL")
+
+    name = f"test_chaos_5486_ddlmirror_{uuid.uuid4().hex}"
+    admin = sa.create_engine(
+        url.set(drivername="postgresql+psycopg2", database="postgres"),
+        isolation_level="AUTOCOMMIT",
+    )
+    engine: Engine | None = None
+    try:
+        with admin.connect() as c:
+            c.exec_driver_sql(f'CREATE DATABASE "{name}"')
+        engine = sa.create_engine(
+            url.set(drivername="postgresql+psycopg2", database=name)
+        )
+        with engine.begin() as c:
+            c.exec_driver_sql(_extract_go_ddl())
+        yield engine
+    finally:
+        if engine is not None:
+            engine.dispose()
+        with admin.connect() as c:
+            c.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        admin.dispose()
+
+
+def test_registry_ddl_mirror_matches_live_column_nullability(
+    migrated: Engine, ddl_mirror_db: Engine
+) -> None:
+    """The name-presence check above is textual --
+    it finds a tab followed by a column name anywhere in the source, and
+    has no opinion on TYPE, NULLABILITY, DEFAULT or CONSTRAINT. M78
+    removed ``NOT NULL`` from ``differences_outside_baseline_defect`` in
+    the DDL mirror and both that check and both Go integration suites
+    stayed green, because nothing anywhere compared what Postgres itself
+    thinks the two schemas say.
+
+    This reads ``information_schema.columns`` from TWO real, freshly
+    built databases -- one migrated through alembic to 0129 (the current
+    head for these tables; the mirror declares 0129's own ``build_binding``
+    column, so comparing against anything short of it would compare the
+    mirror against a schema it never claimed to match), one built from
+    nothing but ``registryschema.DDL`` -- and compares them column-for-
+    column, name AND nullability together, for every table the mirror
+    declares, so the next drift fails a test instead of waiting for
+    someone to run a comparison by hand.
+    """
+    command.upgrade(_config(), "0129")
+    for table in ("go_api_candidate_build", "go_api_routing_state", "go_api_proof_run"):
+        migrated_columns = _columns(migrated, table)
+        mirror_columns = _columns(ddl_mirror_db, table)
+        assert mirror_columns, (
+            f"{table}: the DDL mirror declares no columns for this table"
+        )
+        assert mirror_columns == migrated_columns, (
+            f"{table}: registryschema.DDL disagrees with the migrated schema on column "
+            f"presence or nullability.\n  mirror  : {sorted(mirror_columns.items())}\n"
+            f"  migrated: {sorted(migrated_columns.items())}"
+        )
+        migrated_defaults = _column_defaults(migrated, table)
+        mirror_defaults = _column_defaults(ddl_mirror_db, table)
+        assert mirror_defaults == migrated_defaults, (
+            f"{table}: registryschema.DDL disagrees with the migrated schema on column "
+            f"DEFAULT values.\n  mirror  : {sorted(mirror_defaults.items())}\n"
+            f"  migrated: {sorted(migrated_defaults.items())}"
+        )

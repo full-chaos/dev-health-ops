@@ -162,6 +162,55 @@ shards	3
 cmd/dev-health-reconciler	10
 cmd/dev-health-worker	24
 cmd/dev-health-workerctl	13
+# cmd/go-api-routing (CHAOS-5486, 2026-09-10): this package's FIRST
+# -tags=integration file, verbs_integration_test.go. It exists because an
+# adversarial round showed that four mutations at REAL call sites in this
+# package -- the DSN-leaking flag default restored inside runEnable, the
+# schema-agreement preflight disabled, the enabled_unproven WARNING
+# suppressed, and an ORDER BY tiebreak dropped -- all survived the whole
+# suite at 53.2% command coverage, because nothing ever ran a verb end to
+# end. Two of the four need a real database to kill.
+# NINE Testcontainers-backed tests as of r2's fix round (up from two):
+# each takes a fresh Postgres container so the real FK and the mode CHECK
+# are exercised against a clean database. r2 added seven -- a held-lock
+# `status` deadline test, the two preflight-3 halves (not-registered,
+# digest-divergent), enable's -expect-build cross-check, a two-operation
+# unproven-warning test, a UTF-8 sibling-sweep unit test (no container),
+# and repoint's OWN -expect-build cross-check (the pairwise-knob sweep's
+# own finding: enable's had an end-to-end killer, repoint's did not) --
+# closing six mutants (M20-M23, M80) plus the repoint expect-build gap
+# that the original two tests' single-operation, no-concurrency shape
+# could not reach. MEASURED on bigboy 2026-09-10, whole package,
+# -count=1, twice: 38.673s and 35.637s. Rounded up to 45 for CI headroom,
+# the same treatment the other per-test-container packages in this file
+# get. Re-time if it gains tests.
+#
+# r4 fix round (2026-09-11): ONE more Testcontainers-backed test added
+# (TestStatusReportsDeployedDocumentDigestMismatchNotHealthy, killing M27 --
+# `status` discarding the deployed registry's per-operation document
+# digest). Re-measured, whole package, -count=1: 31.975s. Still comfortably
+# inside the existing 45 weight; not raised.
+#
+# opus r6 fix round (2026-09-11): TEN more Testcontainers-backed tests
+# added across F1-F5/T1/observability (a deterministic deadlock repro,
+# an empty-registry write-verb refusal pair, a dead-rows guard test, a
+# stale-digest refusal, a classification-vs-database-error separation, a
+# genuine server-side-failure exit-code test, and an endpoint/per-row-log
+# test, among others). Re-measured, whole package, -count=1, twice:
+# 57.222s and 54.166s. Raised 45 -> 70 for CI headroom.
+# opus r7 fix round (2026-09-11): THREE more Testcontainers-backed tests
+# added (F1's all-registered/stale-only skip test, F4's before-state
+# value-naming test, and T1 M38/M40's combined live-row-plus-stale-digest
+# disable test), plus several plain-suite-only fixes (F2/F3/F5/F6/F7/F8)
+# that add no container. Re-measured, whole package, -count=1, twice:
+# 73.754s and 75.610s -- over the 70 ceiling both times. Raised 70 -> 90
+# for CI headroom.
+# opus r9 fix round (2026-09-11): ONE more Testcontainers-backed test
+# added (enable -dry-run's row-count invariance, killing the mutant that
+# silently applied a dry run). Re-measured, whole package, -count=1,
+# three times under concurrent host load: 79.329s, 88.456s, 92.720s --
+# over the 90 ceiling on the third run. Raised 90 -> 110 for CI headroom.
+cmd/go-api-routing	110
 cmd/query-api	110
 cmd/query-api/internal/analytics	22
 # cmd/query-api/internal/featureflags (CHAOS-5523, 2026-09-09): TWO
@@ -180,7 +229,7 @@ cmd/query-api/internal/routeswitch	5
 cmd/query-api/internal/workgraph	60
 internal/cacheinvalidation	2
 internal/externalrecompute	30
-internal/goapiproof	30
+internal/goapiproof	175
 internal/joboperator	13
 internal/joboutbox	12
 internal/jobrescue	5
@@ -199,6 +248,67 @@ internal/migrationmatrix	5
 # fresh Postgres container so the registry's real FK and CHECK constraints are
 # exercised against a clean database. Rounded up to 30 for shard-balance
 # headroom, the same treatment internal/jobs/investment gets below.
+# CHAOS-5486 raises it 30 -> 90: the enable/disable/status verb ports add
+# thirteen more integration tests to the SAME package, each one also taking a
+# fresh Postgres container for the same reason (the real FK, the mode CHECK and
+# the rollout CHECK are the database-level half of what these verbs promise).
+# Measured on bigboy 2026-09-09, whole package, -count=1: 85.24s and 79.26s on
+# two runs -- container startup is the variance, so the higher of the two is
+# what this is rounded from. 90 keeps the same shard-balance headroom the 30
+# carried, and holds shards 2/3 within 1s (893s/894s).
+# CHAOS-5486's review rounds then raised it 90 -> 110 -> 120: r2 added two
+# deterministic concurrency tests (each holds a blocking transaction open until
+# the other verb is provably waiting), r3 added a duplicate-row re-point test.
+# Measured on bigboy 2026-09-09, -count=1: 101.96s, then 113.98s, then 111.12s.
+# The step numbers match the ones recorded beside the shard-balance assertion
+# in tests/tooling/test_go_integration_sharding.py, deliberately: two records
+# of one history that disagree are worse than one.
+#
+# RE-MEASURED 2026-09-10 on the rebase onto 8a0590b22, whole package,
+# -count=1, twice: 108.80s and 109.70s. LOWER than the 113.98s the 120
+# was rounded from, even though this rebase ADDS one integration test
+# (the canary/primary re-point killer) -- container startup is the
+# variance and this host was quieter. 120 is left where it is rather than
+# lowered: it is an upper bound with headroom, the measurement still sits
+# under it, and moving a weight down to chase a quiet run is how a
+# manifest starts under-booking CI. The shard-balance assertion in
+# tests/tooling/test_go_integration_sharding.py was re-run against the 54
+# packages main now discovers (CHAOS-5523 and CHAOS-4806 each added one)
+# and shards 2/3 land at 933s/934s -- still within 1s.
+#
+# THAT AGREEMENT WAS BROKEN ONCE, BY REBASING, AND NOTHING CAUGHT IT. Four
+# successive rebases resolved this file by taking the newer side wholesale --
+# right for the WEIGHT, wrong for the COMMENT -- so the number advanced while
+# its justification reverted, and the file spent several hours recording 120
+# under prose explaining 90. ci/check_go.sh sums the numbers and never reads
+# the prose, so no test could have failed. If you resolve a conflict here,
+# read the result rather than the diff.
+#
+# RAISED 120 -> 135, r2's fix round (2026-09-10): one new test
+# (TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite, a killer
+# for the M29 mutation ledger entry -- a trigger driving the row's mode
+# out from under a re-point, standing in for "anything other than this
+# verb's own UPDATE"), one more Testcontainers Postgres. Measured on
+# bigboy 2026-09-10, whole package, -count=1: 130.89s -- above the 120
+# ceiling this time, not just close to it, so the weight moves. Rounded
+# up to 135 for the same shard-balance headroom the prior raises used.
+# RAISED 135 -> 155, r3's fix round (2026-09-11): no new integration
+# test added to this package this round (the case-shadow/UTF-8 killers
+# for r3's findings are plain-suite unit tests, no container). Re-measured
+# anyway per Trap #105 discipline, whole package, -count=1: 141.43s --
+# still fits under 135 by nothing meaningful, and this host was running
+# 3+ other lanes' Go suites concurrently at measurement time (unlike the
+# 130.89s baseline, which was closer to isolated). Rounded up to 155 for
+# real headroom rather than re-asserting a ceiling already this close to
+# the last clean measurement.
+# RAISED 155 -> 175, same r3 round, second re-measurement (team-lead's
+# decoder-sweep follow-up: LoadDocuments converted off its last struct-tag
+# decode, still no new integration test in this package): -count=1 came
+# back at 157.80s, over 155 by a small amount -- the same concurrent-
+# host-load story as the 141.43s measurement above, not a package
+# regression, but two consecutive over-ceiling reads on a host this busy
+# means the number is being chased instead of given real headroom.
+# Rounded up to 175 to stop re-measuring this weight every round.
 # internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
 # measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run),
 # rounded up one further second to 35 for shard-balance headroom -- combined

@@ -21,6 +21,7 @@ from dev_health_ops.api.graphql.go_api_routing_admin import (
     ENABLEMENT_TARGET_MODES,
     MEASUREMENT_ROUTE_EDGE,
     build_enablement_proof_select,
+    build_enablement_receipt_select,
 )
 
 
@@ -236,3 +237,61 @@ def test_the_python_predicate_binds_the_cutset_rather_than_writing_a_literal(
         f"the cutset must be bound twice (citation and build), found {len(bound)} "
         f"in params {sorted(compiled.params)}"
     )
+
+
+# F2 (CHAOS-5581, opus-r10): SQLAlchemy drops an argument-less `or_()`
+# from a WHERE clause entirely rather than compiling it to FALSE, so an
+# empty `operations` mapping used to remove the one clause that pairs
+# each operation with its own document -- the exact cross-product this
+# module's own comment warns against -- and the predicate matched every
+# row with the right schema/build/stage/state/route instead of none.
+# `enablement_receipts`/`operations_with_enablement_proof` both
+# short-circuit on an empty mapping before reaching this seam (asserted
+# by `test_zero_operations_never_reaches_the_database` above), so the
+# seam itself -- what a test or a future caller compiles directly -- is
+# what needed the fix, not a caller.
+@pytest.mark.parametrize(
+    "builder",
+    [build_enablement_proof_select, build_enablement_receipt_select],
+    ids=["proof_select", "receipt_select"],
+)
+def test_an_empty_operations_mapping_matches_nothing(builder) -> None:
+    compiled = builder(
+        schema_digest="sha256:live",
+        candidate_build="build-1",
+        operations={},
+        target_mode="canary",
+    ).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+    sql = " ".join(str(compiled).split())
+    assert "false" in sql.lower(), (
+        f"an empty operations mapping must compile to a clause that can never "
+        f"match a row, not to the pairing clause being silently dropped:\n{sql}"
+    )
+
+
+# F3 (CHAOS-5581, opus-r10): `build_enablement_proof_select`'s unknown-mode
+# refusal was pinned; its twin in `build_enablement_receipt_select` --
+# the one `enable` actually calls, through `enablement_receipts` -- had
+# no test able to fail it. Without the raise, an unrecognised mode falls
+# through `_admissible_route`'s `else` to the LAXER canary rule
+# (`measurement_route IS NOT NULL`), accepting a proof-route receipt for
+# a mode that should demand edge evidence.
+@pytest.mark.parametrize(
+    "builder",
+    [build_enablement_proof_select, build_enablement_receipt_select],
+    ids=["proof_select", "receipt_select"],
+)
+def test_an_unknown_target_mode_is_refused_on_both_builders(builder) -> None:
+    for unknown in ("", "shadow", "Primary", "canary ", "unknown"):
+        with pytest.raises(ValueError) as caught:
+            builder(
+                schema_digest="sha256:live",
+                candidate_build="b",
+                operations={"featureFlags": "doc-ff"},
+                target_mode=unknown,
+            )
+        message = str(caught.value)
+        assert "unknown target mode" in message, message
+        assert repr(unknown) in message, message
+        for legal in ENABLEMENT_TARGET_MODES:
+            assert legal in message, message

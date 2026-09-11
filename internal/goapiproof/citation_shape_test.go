@@ -77,6 +77,58 @@ func hotspotsCitationCells() (string, []citationShapeCell) {
 	}
 }
 
+// F7 (CHAOS-5581, opus-r10): FormatShapeCounts sorts its keys so the
+// rendered line is stable across runs -- Go map iteration is randomised,
+// and this string is presented as a stable operator-readable value on
+// go-api-prove's own report line, in the receipt's rendered counts and
+// in `enable`'s stdout. Every OTHER test in this package happens to
+// render at most one shape per side, so none of them can fail if the
+// sort is deleted; this pins a map with more than one key on each side.
+func TestFormatShapeCountsSortsItsKeys(t *testing.T) {
+	covered := map[string]int{"value": 384, "null": 7}
+	outside := map[string]int{"length": 1, "empty_result": 3}
+	got := FormatShapeCounts(covered, outside)
+	want := "covered[null=7 value=384] outside[empty_result=3 length=1]"
+	if got != want {
+		t.Fatalf("FormatShapeCounts(%v, %v) = %q, want %q (unsorted map iteration would make this flaky, not merely wrong)", covered, outside, got, want)
+	}
+	// Ten calls: a sort that happened to pass once from map-iteration luck
+	// is not the same as a sort that is actually there.
+	for i := 0; i < 10; i++ {
+		if got := FormatShapeCounts(covered, outside); got != want {
+			t.Fatalf("run %d: FormatShapeCounts(%v, %v) = %q, want %q", i, covered, outside, got, want)
+		}
+	}
+}
+
+// F9 (CHAOS-5581, opus-r10): leafDifference("") and shapeLabel("")'s
+// "unclassified" branch are unreachable in production -- every
+// FindingMismatch site in this package sets a Shape, and the runner's
+// two unshaped findings ($.http.*, an unbound edge mismatch) are
+// appended to the result AFTER classifyBaselineDefects has already run
+// and count outside directly (run.go), never passing through either
+// function. Both survive mutation because nothing calls
+// classifyBaselineDefects with an empty-Shape finding. This does, driving
+// the unexported entry point directly rather than through Compare: an
+// unclassified mismatch under a cited path is never covered (leafDifference
+// refuses it) and renders as its own shape ("unclassified"), so a future
+// finding site that forgets to set Shape fails safe -- outside, not silently
+// covered -- rather than crashing or panicking.
+func TestAnUnclassifiedFindingUnderACitationCountsOutsideNotCovered(t *testing.T) {
+	result := &Result{
+		Findings: []Finding{{Kind: FindingMismatch, Path: "$.data.x", Shape: ""}},
+	}
+	defects := []BaselineDefect{{Ticket: "CHAOS-5581", Reason: "self-review probe", Paths: []string{"data.x"}}}
+	classifyBaselineDefects(result, defects, map[string]any{"x": 1}, map[string]any{"x": 2})
+	if result.DifferencesOutsideBaselineDefect != 1 {
+		t.Fatalf("an unclassified finding must never be covered: outside=%d covered=%v outsideByShape=%v",
+			result.DifferencesOutsideBaselineDefect, result.CoveredByShape, result.OutsideByShape)
+	}
+	if got := FormatShapeCounts(result.CoveredByShape, result.OutsideByShape); got != "covered[] outside[unclassified=1]" {
+		t.Fatalf("shape counts %s, want covered[] outside[unclassified=1]", got)
+	}
+}
+
 func TestACitationCoversOnlyLeafValueDifferences(t *testing.T) {
 	spec, err := SpecFor("hotspots")
 	if err != nil {
@@ -360,6 +412,62 @@ func TestSelfReviewCitedSegmentsWalksOnlyItsOwnSubtreeNotTheWholePayload(t *test
 		if counts != "covered[] outside[empty_result=1]" {
 			t.Fatalf("cited=%q: shape counts %s, want covered[] outside[empty_result=1]", cited, counts)
 		}
+	}
+}
+
+// F1 (CHAOS-5581, opus-r10): classifyBaselineDefects' relabel loop only
+// touches a finding whose path is at or under the CITED path it is
+// currently considering -- but every existing fixture citing more than
+// one path (declared or synthetic) has differences under only ONE of
+// them, so deleting that path restriction changes nothing any test can
+// see: an all-null candidate subtree under citation A would then
+// relabel citation B's own, unrelated leaf difference to ShapeEmptyResult
+// too, uncovering a receipt that is genuine enablement proof.
+//
+// Two cited paths, one all-null under the first (an empty result) and one
+// differing by value under the second (the declared defect) -- the
+// second citation's own leaf difference must stay covered regardless of
+// the first.
+func TestTheEmptyResultRelabelStaysScopedToItsOwnCitedPath(t *testing.T) {
+	opts := Options{BaselineDefects: []BaselineDefect{
+		{Ticket: "CHAOS-A", Reason: "row selection", Paths: []string{"data.emptyOne.rows"}},
+		{Ticket: "CHAOS-B", Reason: "a known wrong value", Paths: []string{"data.other.value"}},
+	}}
+	baseline := `{"data":{"emptyOne":{"rows":[{"a":1}]},"other":{"value":7}}}`
+	candidate := `{"data":{"emptyOne":{"rows":[{"a":null}]},"other":{"value":9}}}`
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), opts)
+	if result.CoveredByShape["value"] != 1 {
+		t.Fatalf("the SECOND citation's own leaf difference must stay covered regardless of the first's empty-result relabel: covered=%v outside=%v -- findings %+v",
+			result.CoveredByShape, result.OutsideByShape, result.Findings)
+	}
+	if result.DifferencesOutsideBaselineDefect != 1 || result.OutsideByShape["empty_result"] != 1 {
+		t.Fatalf("the first citation's empty result must still count outside: outside=%d outsideByShape=%v",
+			result.DifferencesOutsideBaselineDefect, result.OutsideByShape)
+	}
+}
+
+// The same probe against the REAL flowMatrix declaration (CHAOS-5448), whose
+// one BaselineDefect cites TWO paths in a single citation: this is the
+// live shape of the class above, not only a synthetic multi-citation one.
+func TestTheEmptyResultRelabelStaysScopedOnTheRealFlowMatrixCitation(t *testing.T) {
+	spec, err := SpecFor("flowMatrix")
+	if err != nil {
+		t.Fatalf("SpecFor(flowMatrix): %v", err)
+	}
+	opts := spec.Parity
+	if len(opts.BaselineDefects) != 1 || len(opts.BaselineDefects[0].Paths) != 2 {
+		t.Fatalf("flowMatrix's declaration changed shape (%v) -- this test assumes exactly one defect citing exactly two paths", opts.BaselineDefects)
+	}
+	baseline := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":1}],"edges":[{"value":7}]}}}}`
+	candidate := `{"data":{"analytics":{"flowMatrix":{"nodes":[{"value":null}],"edges":[{"value":9}]}}}}`
+	result := Compare(snapshotFromJSON(t, baseline), snapshotFromJSON(t, candidate), opts)
+	if result.CoveredByShape["value"] != 1 {
+		t.Fatalf("edges.value is its own cited leaf difference and must stay covered: covered=%v outside=%v -- findings %+v",
+			result.CoveredByShape, result.OutsideByShape, result.Findings)
+	}
+	if result.DifferencesOutsideBaselineDefect != 1 || result.OutsideByShape["empty_result"] != 1 {
+		t.Fatalf("nodes.value must still count outside as an empty result: outside=%d outsideByShape=%v",
+			result.DifferencesOutsideBaselineDefect, result.OutsideByShape)
 	}
 }
 

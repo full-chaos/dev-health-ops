@@ -726,14 +726,22 @@ def _enablement_proof_conditions(
         ProofRun.stage == ENABLEMENT_PROOF_STAGE,
         _admissible_terminal_state(),
         _admissible_route(target_mode),
+        # `or_()` with no arguments is dropped from the WHERE clause
+        # entirely by SQLAlchemy (a warning, not an error) rather than
+        # compiling to FALSE, so an empty `operations` mapping would
+        # silently remove the one clause that scopes the query to the
+        # operations asked about -- the exact cross-product this
+        # function's own comment above warns against. `sa.false()` as a
+        # standing first argument keeps the clause always present.
         or_(
+            sa.false(),
             *(
                 and_(
                     ProofRun.selected_operation == operation,
                     ProofRun.document_digest == document_digest,
                 )
                 for operation, document_digest in operations.items()
-            )
+            ),
         ),
     ]
 

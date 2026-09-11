@@ -91,37 +91,6 @@ func TestTheDriftCheckIsWiredIntoGoQualityAndIsActive(t *testing.T) {
 	}
 }
 
-func TestTheGuardsOwnInputsCanTriggerTheJobThatRunsIt(t *testing.T) {
-	workflow := readRepoFile(t, ".github/workflows/go.yml")
-
-	// go_relevance.py decides whether go-quality runs, from go.yml's own paths
-	// lists. Both the push list and the pull_request list must carry every
-	// input, or the check is skipped in one venue and not the other.
-	required := []struct {
-		pattern string
-		why     string
-	}{
-		{"'**/*.go'", "the guard's own Go sources and its tests"},
-		{"'cmd/query-api/gqlgen.yml'", "the configuration that decides every output path"},
-		{"'contracts/**'", "the expected-drift record and the SDL the generator reads"},
-		{"'.github/workflows/go-quality.yml'", "the workflow that hosts the guard's step"},
-		{"'.github/workflows/go.yml'", "the file these path lists live in"},
-		{"'**/go.mod'", "tools.go's requires, without which the generator cannot start"},
-		{"'**/go.sum'", "the same"},
-		// Round 1: this file's own TestTheGuardsInputsAreClassifiedRelevant...
-		// EXECUTES ci/go_relevance.py, which makes the script an input of a Go
-		// test. go.yml named it only in comments, so a change to the classifier
-		// alone was classified non-Go and this very test never ran against it.
-		{"'ci/go_relevance.py'", "the relevance classifier the test below executes"},
-	}
-	for _, r := range required {
-		if n := strings.Count(workflow, r.pattern); n < 2 {
-			t.Errorf("go.yml lists %s only %d time(s); it must appear in BOTH the push and the pull_request paths (%s)",
-				r.pattern, n, r.why)
-		}
-	}
-}
-
 func TestTheGuardsInputsAreClassifiedRelevantByTheRelevanceScript(t *testing.T) {
 	// A path list is only as good as the script that reads it. This asserts the
 	// classifier itself, over the real files, rather than the YAML text.

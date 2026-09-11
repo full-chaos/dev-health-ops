@@ -3,11 +3,13 @@ package gqlgenguard
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -339,6 +341,14 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 		return nil, cleanup, err
 	}
 
+	workDir := filepath.Join(copyDir, filepath.FromSlash(plan.ConfigDir))
+	if err := refuseUnconfinedGoEnvironment(ctx, workDir, copyDir, moduleAbs, w); err != nil {
+		return nil, cleanup, err
+	}
+	if err := refuseReplacesOutsideTheCopy(ctx, copyRoot, copyDir); err != nil {
+		return nil, cleanup, err
+	}
+
 	if err := refuseHandWrittenCollisions(moduleRoot, plan, w); err != nil {
 		return nil, cleanup, err
 	}
@@ -354,7 +364,7 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	}
 	fmt.Fprintf(w, "generator: %s (cwd %s)\n", gen.Describe(), plan.ConfigDir)
 
-	if err := gen.Generate(ctx, filepath.Join(copyDir, filepath.FromSlash(plan.ConfigDir)), path.Base(plan.ConfigPath)); err != nil {
+	if err := gen.Generate(ctx, workDir, path.Base(plan.ConfigPath)); err != nil {
 		return nil, cleanup, fmt.Errorf("refusing: the generator failed: %w (nothing was written to %s)", err, moduleAbs)
 	}
 	// No separate "cancelled after generating" check, and none after the copy
@@ -410,6 +420,127 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 
 	res.Record = renderRecord(res, plan, gen, moduleRoot, copyRoot)
 	return res, cleanup, nil
+}
+
+// goEnvLocations are the go command settings that name a directory it writes
+// to. Checked in this order, so a refusal names the setting the user set (an
+// unset GOMODCACHE is derived from GOPATH).
+var goEnvLocations = []string{"GOPATH", "GOMODCACHE", "GOCACHE", "GOTMPDIR"}
+
+// refuseUnconfinedGoEnvironment asks the go command itself -- in the directory
+// the generator will run in, with the generator's exact environment -- for its
+// EFFECTIVE settings, so values from the environment and from a GOENV file are
+// both seen, and refuses any that would make the child read a module other
+// than the private copy's or write inside the module: a -modfile in GOFLAGS, a
+// main module outside the copy, or a cache/path/temp directory inside the
+// module. Round 4 of review executed `GOFLAGS=-mod=mod -modfile=<tree>/x.mod`
+// writing into the working tree while check-drift passed.
+func refuseUnconfinedGoEnvironment(ctx context.Context, workDir, copyDir, moduleAbs string, w io.Writer) error {
+	env, _ := childEnv(os.Environ())
+	args := append([]string{"env", "-json", "GOMOD", "GOFLAGS"}, goEnvLocations...)
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = workDir
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("refusing: could not read the go command's effective environment for the generator: %w", err)
+	}
+	var eff map[string]string
+	if err := json.Unmarshal(out, &eff); err != nil {
+		return fmt.Errorf("refusing: could not parse `go env -json`: %w", err)
+	}
+	fmt.Fprintf(w, "go env: GOMOD=%s GOFLAGS=%q\n", eff["GOMOD"], eff["GOFLAGS"])
+	for _, f := range strings.Fields(eff["GOFLAGS"]) {
+		if strings.HasPrefix(strings.TrimLeft(f, "-"), "modfile") {
+			return fmt.Errorf("refusing: the go environment's GOFLAGS carries %q, so the go command would read and write that module file instead of the private copy's go.mod", f)
+		}
+	}
+	copyReal := resolvedPath(copyDir)
+	moduleReal := resolvedPath(moduleAbs)
+	if m := eff["GOMOD"]; m != "" && m != os.DevNull && !within(copyReal, resolvedPath(m)) {
+		return fmt.Errorf("refusing: the go command resolves the main module to %q, outside the private copy", m)
+	}
+	for _, key := range goEnvLocations {
+		for _, v := range filepath.SplitList(eff[key]) {
+			if v == "" {
+				continue
+			}
+			r := resolvedPath(v)
+			if within(moduleReal, r) || within(copyReal, r) {
+				return fmt.Errorf("refusing: %s=%q is inside the module, so the go command would write there while the generator runs", key, v)
+			}
+		}
+	}
+	return nil
+}
+
+// goModEdit is the part of `go mod edit -json` this package reads.
+type goModEdit struct {
+	Replace []struct {
+		Old struct{ Path, Version string }
+		New struct{ Path, Version string }
+	}
+}
+
+// refuseReplacesOutsideTheCopy refuses a filesystem `replace` in the copy's
+// go.mod that leaves the copy or does not resolve: the generator loads that
+// directory's packages to bind models, so it is an input like the schema.
+// Version replaces resolve through the module cache and go.sum, like any
+// dependency. The go command parses go.mod (`go mod edit -json`), not a regexp.
+func refuseReplacesOutsideTheCopy(ctx context.Context, copyRoot *os.Root, copyDir string) error {
+	if _, err := copyRoot.Lstat("go.mod"); err != nil {
+		if errNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat go.mod: %w", err)
+	}
+	env, _ := childEnv(os.Environ())
+	cmd := exec.CommandContext(ctx, "go", "mod", "edit", "-json")
+	cmd.Dir = copyDir
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("refusing: could not read go.mod with `go mod edit -json`: %w", err)
+	}
+	var mod goModEdit
+	if err := json.Unmarshal(out, &mod); err != nil {
+		return fmt.Errorf("refusing: could not parse `go mod edit -json`: %w", err)
+	}
+	copyReal := resolvedPath(copyDir)
+	for _, r := range mod.Replace {
+		if r.New.Version != "" {
+			continue
+		}
+		p := r.New.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(copyDir, p)
+		}
+		p = filepath.Clean(p)
+		if !within(copyReal, p) && !within(copyDir, p) {
+			return fmt.Errorf("refusing: go.mod replaces %s with %q, a directory outside the module; the generator would load packages from it", r.Old.Path, r.New.Path)
+		}
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("refusing: go.mod replaces %s with %q, which cannot be resolved inside the module (%v)", r.Old.Path, r.New.Path, err)
+		}
+	}
+	return nil
+}
+
+func resolvedPath(p string) string {
+	a, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	if r, err := filepath.EvalSymlinks(a); err == nil {
+		return r
+	}
+	return a
+}
+
+// within reports whether p is root or beneath it (lexically, both absolute).
+func within(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // discoveryConfigNames are the names gqlgen's own config discovery tries, in

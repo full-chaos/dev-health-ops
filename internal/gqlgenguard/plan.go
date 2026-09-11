@@ -107,6 +107,13 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 		return nil, fmt.Errorf("resolve module dir %q: %w", moduleDir, err)
 	}
 
+	// The config path is confined BEFORE anything is changed into or read: a
+	// config outside the module is a file the guard itself would otherwise
+	// open, which round 4 of review executed with `-config ../outside.yml`.
+	if _, err := moduleRelative(moduleAbs, filepath.Join(moduleAbs, filepath.FromSlash(configPath))); err != nil {
+		return nil, fmt.Errorf("refusing: gqlgen config %q leaves the module or names its root (%v)", configPath, err)
+	}
+
 	configDirRel := filepath.Dir(filepath.FromSlash(configPath))
 	configDirAbs := filepath.Join(moduleAbs, configDirRel)
 

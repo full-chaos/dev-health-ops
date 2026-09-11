@@ -161,10 +161,16 @@ x-go-worker-route-activate:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -473,10 +479,16 @@ services:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:local}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -533,10 +545,16 @@ services:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:local}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -738,10 +756,16 @@ services:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:local}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -797,10 +821,16 @@ services:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:local}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -928,10 +958,16 @@ services:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:local}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -1037,10 +1073,16 @@ services:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:local}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -1099,10 +1141,16 @@ services:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:local}
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -1157,10 +1205,16 @@ services:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_GO_CONTRACTCHECK_IMAGE:-ghcr.io/full-chaos/dev-health-go-contractcheck:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_GO_CONTRACTCHECK_IMAGE:-ghcr.io/full-chaos/dev-health-go-contractcheck:local}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1206,10 +1260,16 @@ services:
     # staging file, `pull_policy` is left at Compose's own default, and a
     # one-shot job that keeps building locally while the long-running
     # services honour a release pin is how a setup step ends up running a
-    # different build of the same binary. The default is the tag this
-    # service's own build produces and the family the release workflow
-    # publishes -- never a placeholder that cannot be pulled.
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
+    # different build of the same binary. The default is the `:local` tag
+    # of the same family, which no registry publishes: unpinned, Compose
+    # builds it from THIS tree, so a start is one coherent revision. A
+    # published moving tag as the default was worse than no pin at all --
+    # present on the host from any earlier pull, Compose ran THAT image
+    # instead of building, putting a months-old migration beside a fleet
+    # built today. Two consequences, both deliberate: with no pin and no
+    # prior build there is nothing for `--no-build` to run, and `:local`
+    # is shared across compose projects on one host.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:local}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -1370,7 +1430,7 @@ services:
     # prebuild produces (`job6-prebuild/*:<sha>`), never by forcing a
     # build on every bring-up. `docker compose build`/`up --build` still
     # builds this tree on request via the `build:` block below.
-    image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
+    image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:local}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1539,7 +1599,7 @@ services:
 
   go-reconciler:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
+    image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:local}
     # Default pull_policy, see go-worker-heavy's comment above.
     build:
       context: .
@@ -1609,7 +1669,7 @@ services:
 
   go-scheduler:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:latest}
+    image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:local}
     # Default pull_policy, see go-worker-heavy's comment above.
     build:
       context: .
@@ -1647,7 +1707,7 @@ services:
 
   go-stream-external:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:local}
     # Default pull_policy, see go-worker-heavy's comment above.
     build:
       context: .
@@ -1689,7 +1749,7 @@ services:
 
   go-stream-ingest:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:local}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1733,7 +1793,7 @@ services:
   # runner.
   go-stream-pagerduty:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:local}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile

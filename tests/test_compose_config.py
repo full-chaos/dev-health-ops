@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import re
+import socket
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -421,11 +423,13 @@ def test_every_buildable_service_declares_an_overridable_image() -> None:
     `DEV_HEALTH_GO_*_IMAGE`.
 
     Every buildable service therefore carries `image:` in the
-    `${VAR:-default}` form, so an operator pin is honoured by default and the
-    unset case still resolves to the tag its own build produces. The default
-    must name a family the release workflow actually publishes -- a
-    placeholder that cannot be pulled is how the pin was dropped in the first
-    place.
+    `${VAR:-default}` form, so an operator pin is honoured by default. The
+    default is the `:local` tag of the same family, which no registry
+    publishes: unpinned, Compose builds it from this tree, so a start is one
+    coherent revision. A published moving tag as the default is worse than no
+    pin at all -- once on the host for any reason, Compose runs it instead of
+    building, and a start mixes a months-old migration image with a fleet
+    built today.
     """
     published_families = {
         "ghcr.io/full-chaos/dev-hops-runner",
@@ -462,11 +466,18 @@ def test_every_buildable_service_declares_an_overridable_image() -> None:
             f"{name}'s pin variable should end in _IMAGE like every sibling: "
             f"{variable!r}"
         )
-        family = default.rsplit(":", maxsplit=1)[0]
+        family, _, tag = default.rpartition(":")
         assert family in published_families, (
             f"{name}'s default image {default!r} does not name a family the "
-            f"release workflow publishes -- an unpullable default is how the "
-            f"pin was silently dropped before"
+            f"release workflow publishes, so the pin variable and the image "
+            f"it overrides no longer describe the same thing"
+        )
+        assert tag == "local", (
+            f"{name}'s default must be the :local tag no registry publishes, "
+            f"got {default!r}. A published moving tag is worse than no pin at "
+            f"all here: present on the host from any earlier pull, Compose "
+            f"runs THAT image instead of building this tree, and a start "
+            f"silently mixes revisions across the fleet"
         )
 
 
@@ -1845,6 +1856,18 @@ def test_platform_go_runtime_uses_bounded_session_poolers() -> None:
         assert environment["COORDINATOR_DATABASE_MODE"] == "session"
 
 
+def _a_closed_local_port() -> int:
+    """A loopback port with nothing listening on it.
+
+    Bound and immediately released rather than hardcoded: on a shared host
+    any fixed port may genuinely be in use, which would turn a real
+    liveness failure into a passing test.
+    """
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
 def test_billing_edge_healthcheck_is_liveness_not_readiness() -> None:
     """On
     the real deployed stack the three Stripe/license secrets ARE
@@ -1892,6 +1915,23 @@ def test_billing_edge_healthcheck_is_liveness_not_readiness() -> None:
         "wget --spider fails closed on any non-2xx status (exit 8) -- that "
         "makes this a readiness check again, the exact class this test guards"
     )
+    # The string assertions above cannot tell a working probe from one
+    # that always succeeds: appending "|| true" satisfies every one of
+    # them. EXECUTE the command against a port nothing is listening on
+    # and require a non-zero exit -- that is the liveness guarantee, and
+    # it is the only assertion here a mutant cannot talk its way past.
+    closed_port = _a_closed_local_port()
+    executed = subprocess.run(
+        ["sh", "-c", command.replace(":8000", f":{closed_port}")],
+        capture_output=True,
+        check=False,
+    )
+    assert executed.returncode != 0, (
+        "billing-edge's healthcheck reports success against a closed port, "
+        "so it guarantees nothing about the process being alive: "
+        f"{command!r} exited {executed.returncode}"
+    )
+
     assert re.search(r"-ne\s+4", command) or re.search(r"!=\s*4", command), (
         f"expected the command to explicitly tolerate every wget exit code "
         f"except 4 (connection failure): {command!r}"

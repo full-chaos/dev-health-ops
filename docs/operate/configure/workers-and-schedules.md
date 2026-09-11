@@ -122,7 +122,7 @@ job that keeps building locally while the processes beside it honour a
 release pin is how a setup step ends up running a different build of the
 same binary.
 
-| Pin variable | Default family | Services |
+| Pin variable | Default image (`<family>:local`, never published) | Services |
 | --- | --- | --- |
 | `DEV_HEALTH_GO_WORKER_IMAGE` | `dev-health-go-worker` | the four `go-worker-*` processes |
 | `DEV_HEALTH_GO_RECONCILER_IMAGE` | `dev-health-go-reconciler` | `go-reconciler` |
@@ -133,17 +133,45 @@ same binary.
 | `DEV_HEALTH_IMAGE` | `dev-hops-runner` | `go-river-provision`, `go-river-migrate`, `go-worker-operator-credential`, and the dormant Celery services |
 | `DEV_HEALTH_API_IMAGE` | `dev-hops-api` | `api`, `metrics-api`, `billing-edge`, `migrate` |
 
-Every default names a family the release workflow actually publishes, so
-the unset case resolves to the same tag the local `build:` produces rather
-than to a placeholder that cannot be pulled. `pull_policy` is
+Every default is the `:local` tag of its family, a tag no registry
+publishes. Unpinned, Compose has nothing to fetch under that name and
+builds it from this checkout, so a start is one coherent revision. Two
+consequences follow, both deliberate: with no pin set and no prior build
+there is nothing for `--no-build` to run, and a `:local` tag is shared
+between compose projects on the same host rather than scoped to one.
+`pull_policy` is
 left at Compose's own default (`missing`), so an operator pin -- a
 published tag OR a content digest -- is honoured as given: `docker
 compose up` reuses an already-present local image under that name, or
 pulls it, without ever forcing a rebuild. `docker compose build` /
-`up --build` still build every image from this tree on request, same as
-before. A bare `up` on a host that has neither pulled nor built any of
-these tags yet builds them locally (the `build:` block is the only source
-available), which is what a from-scratch clone actually gets.
+`up --build` still build every image from this tree on request.
+
+**Keeping every family on ONE revision is the operator's job.** Two
+supported paths, and only these two:
+
+- set one release pin across every family above, then `docker compose
+  pull` and `docker compose up -d --no-build`; or
+- `docker compose up -d` with nothing pinned, which builds every image
+  from the checkout you are standing in.
+
+`pull_policy: missing` means Compose uses a tag that is ALREADY on the
+host as-is. Defaulting to `:local` keeps a published moving tag from
+becoming that stale tag by accident, but it does not make the host
+stateless: a `:local` image left by an EARLIER checkout is still reused,
+and on a shared machine another project's build of the same family is the
+same tag. Nothing here reconciles that for you, by design -- rebuild
+(`docker compose build`) when you change branches.
+
+What it does do is fail closed. A mixed set does not run wrong: the
+worker refuses readiness when the posture manifest disagrees with the
+live grants, the reconciler refuses a route that drifts from the
+checked-in policy, and a worker whose ClickHouse schema predates the
+pinned migration says so and stops. The setup jobs still exit 0 -- they
+are the thing that applied the older schema -- so read the PROCESS
+readiness, not the setup exit codes, when a bring-up looks wrong. Clear
+the stale tags (`docker compose down -v` plus `docker image rm` for the
+families above, or `docker compose build`) and start again from one of
+the two paths.
 
 This default was `pull_policy: build` (forced rebuild every time) for one
 PR revision, to guard the CHAOS-5437 cross-tree posture-manifest lockstep

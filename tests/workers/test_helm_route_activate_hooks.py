@@ -134,6 +134,26 @@ def test_route_activate_renders_with_the_full_chain_on() -> None:
     assert _ROUTE_ACTIVATE in jobs, f"did not render; got {sorted(jobs)}"
 
 
+def test_route_activate_respects_the_outer_hook_enabled_gate() -> None:
+    """codex review (r3 REPORT mutation `outer_hook_gate` -- SURVIVED, now
+    killed): this file's whole content (both Secrets and the Job) is wrapped
+    in `{{- if .Values.migrations.hook.enabled }}`, the SAME outer gate
+    migrate-job.yaml and river-hooks.yaml already share -- but nothing
+    anywhere set `migrations.hook.enabled=false` with the rest of the chain
+    on, so mutating this line survived the entire suite. `hook.enabled`
+    defaults to true, so every other test above renders through it
+    unnoticed; this is the one test that actually turns it off."""
+    jobs = _jobs(
+        *_FULL_CHAIN_ON,
+        "migrations.hook.enabled=false",
+    )
+    assert _ROUTE_ACTIVATE not in jobs, sorted(jobs)
+    assert _MIGRATE not in jobs, (
+        "hook.enabled=false must disable every hook Job, not just this "
+        f"one: {sorted(jobs)}"
+    )
+
+
 # --- ordering: after river-migrate (10), fail-closed like its siblings -----
 
 
@@ -249,6 +269,25 @@ def test_route_activate_uses_the_published_operator_image() -> None:
         assert image == "ghcr.io/full-chaos/dev-health-go-operator:latest", image
 
 
+def test_route_activate_operator_image_override_is_honoured() -> None:
+    """codex review (r3 REPORT mutation `image_override` -- SURVIVED, now
+    killed): `migrations.hook.routeActivate.image`'s consumer
+    (`$operatorImage`) was never exercised with a real override set -- only
+    its DEFAULT was pinned above. Pairwise knob x consumer, per the prompt's
+    amendment: set the knob, execute its reader."""
+    jobs = _jobs(
+        *_FULL_CHAIN_ON,
+        "migrations.hook.routeActivate.image=ghcr.io/example/custom-operator:v9",
+    )
+    init_containers = {
+        c["name"]: c
+        for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
+    }
+    for kind in _KINDS:
+        image = init_containers[f"route-activate-{kind.replace('_', '-')}"]["image"]
+        assert image == "ghcr.io/example/custom-operator:v9", image
+
+
 def test_operator_credential_uses_the_ops_image_that_carries_the_cli() -> None:
     jobs = _jobs(*_FULL_CHAIN_ON)
     init_containers = {
@@ -335,6 +374,81 @@ def test_expected_worker_groups_and_deployments_are_consistent() -> None:
             f"goWorkers.expectedWorkerGroups names {name!r}, which "
             f"goWorkers.groups does not deploy: {group_names}"
         )
+
+
+def test_expected_worker_groups_actually_render_as_deployments() -> None:
+    """codex review (r3 REPORT mutation `remove_worker_deployments` --
+    SURVIVED, now killed): the sibling test above reads `values.yaml` as
+    TEXT, so it can never catch a Deployment template that silently stops
+    rendering for an expected group -- that doesn't change either list's
+    own membership. Renders go-workers.yaml for real
+    (`goWorkers.enabled=true`) and checks every EXPECTED group has a real
+    Deployment."""
+    values = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))
+    expected = values["goWorkers"]["expectedWorkerGroups"]
+
+    docs = _render("goWorkers.enabled=true")
+    deployments = {
+        d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"
+    }
+    fullname_prefix = f"{_RELEASE}-dev-health-go-"
+
+    for name in expected:
+        deployment_name = f"{fullname_prefix}{name}"
+        assert deployment_name in deployments, (
+            f"{name!r} is expected but has no rendered Deployment: "
+            f"{sorted(deployments)}"
+        )
+        containers = deployments[deployment_name]["spec"]["template"]["spec"]["containers"]
+        assert len(containers) == 1, containers
+
+
+def test_worker_group_deployment_uses_that_groups_own_declared_image(
+    tmp_path: Path,
+) -> None:
+    """codex review (r3 REPORT mutation `group_pin_wrong_image` -- SURVIVED,
+    now killed): a FIRST version of this check compared the rendered image
+    against a value read from the SAME values.yaml being exercised --
+    mutating the file moved both sides together, so the comparison was
+    vacuous by construction (the family of self-comparison traps elsewhere
+    in this repo's own standing rules). This overrides ONE group's image via
+    a values FILE (never a `--set` on a list index -- that drops the
+    group's sibling keys and crashes the render on a nil pointer) to an
+    independent, test-owned literal, and asserts the Deployment actually
+    used it -- the render path genuinely reads `$group.image`, not a
+    hardcoded string."""
+    values_file = tmp_path / "values.yaml"
+    values_file.write_text(
+        textwrap.dedent(
+            """
+            goWorkers:
+              enabled: true
+              groups:
+                - name: sync-provider
+                  image: ghcr.io/example/sync-provider-test-pin:v42
+                  queues: [sync_provider]
+                  queueConcurrency: {sync_provider: 2}
+                  replicas: 1
+                  terminationGracePeriodSeconds: 960
+                  autoscaling: {enabled: false}
+            """
+        ),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        ["helm", "template", _RELEASE, str(_CHART), "-f", str(values_file)],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    docs = [doc for doc in yaml.safe_load_all(completed.stdout) if doc]
+    deployment = next(
+        d
+        for d in docs
+        if d.get("kind") == "Deployment" and d["metadata"]["name"].endswith("-go-sync-provider")
+    )
+    image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
+    assert image == "ghcr.io/example/sync-provider-test-pin:v42", image
 
 
 # --- credentials never reach the JOB spec or the route-activate containers -
@@ -508,9 +622,20 @@ def test_operator_credential_script_mints_only_once(tmp_path: Path) -> None:
     first = _run()
     assert first.returncode == 0, first.stderr
     assert (run_dir / "token").read_text(encoding="utf-8").strip() == "minted-token"
-    assert calls_log.read_text(encoding="utf-8").count("\n") == 1, (
+    mint_call = calls_log.read_text(encoding="utf-8")
+    assert mint_call.count("\n") == 1, (
         "exactly one mint call on an empty token file"
     )
+    # codex review (r3 REPORT mutations `scope_operate`/`remove_scope_read` --
+    # SURVIVED, now killed): the stub's received argv was logged but never
+    # asserted against -- a mutation dropping either `--scope` flag from the
+    # mint command survived entirely. `service-credentials create` without
+    # `workers:read` would mint a token the operator itself would later
+    # refuse on (`authentication_failed`), same class of invisible-at-Info
+    # regression as the unencoded-DB-name P1 above.
+    assert "--service worker-operator" in mint_call, mint_call
+    assert "--scope workers:read" in mint_call, mint_call
+    assert "--scope workers:operate" in mint_call, mint_call
 
     second = _run()
     assert second.returncode == 0, second.stderr
@@ -670,6 +795,43 @@ def test_route_dsn_script_percent_encodes_the_database_name(tmp_path: Path) -> N
     assert urllib.parse.unquote(parsed.path.lstrip("/")) == "review#db", postgres_uri
 
 
+# --- CLASS SWEEP (r3 amendment): every URI-embedded component, not just ----
+# the password or the database name in isolation. The r3 P1 fix encoded ONLY
+# the database name; team-lead/chris's amendment to the prompt of record
+# names this exact shape (a fix for one field of a class, never swept to its
+# siblings) as its own method failure. The three roles and the host are the
+# remaining operator-settable URI components (port is always numeric). Every
+# cell of the SAME RFC 3986 set already proven against the password is
+# re-executed here against role and host too -- one parametrized sweep,
+# reusing _URI_SPECIAL_PASSWORD_CASES so no sibling of the class is sampled.
+
+_URI_COMPONENT_ENV_VAR = {
+    "role": "RIVER_DOMAIN_DATABASE_ROLE",
+    "host": "POSTGRES_HOST",
+}
+_URI_COMPONENT_BASE = {
+    "role": "devhealth_domain",
+    "host": "postgres.internal",
+}
+
+
+@pytest.mark.parametrize("component", sorted(_URI_COMPONENT_ENV_VAR))
+@pytest.mark.parametrize(("case_id", "value"), _URI_SPECIAL_PASSWORD_CASES)
+def test_route_dsn_script_percent_encodes_every_uri_component(
+    tmp_path: Path, component: str, case_id: str, value: str
+) -> None:
+    import urllib.parse
+
+    env_var = _URI_COMPONENT_ENV_VAR[component]
+    out_dir = _run_route_dsn_script(tmp_path, **{env_var: value})
+    postgres_uri = (out_dir / "POSTGRES_URI").read_text(encoding="utf-8")
+
+    role = urllib.parse.quote(value, safe="") if component == "role" else _URI_COMPONENT_BASE["role"]
+    host = urllib.parse.quote(value, safe="") if component == "host" else _URI_COMPONENT_BASE["host"]
+    expected = f"postgresql://{role}:d-pw@{host}:5432/devhealth"
+    assert postgres_uri == expected, (component, case_id, postgres_uri, expected)
+
+
 # --- input-domain table: migrations.hook.routeActivate.enabled -------------
 #
 # One boolean values key. Its domain: absent (default), true, false, and the
@@ -753,6 +915,69 @@ def test_route_activate_enabled_rejects_an_explicit_null() -> None:
     assert "enabled" in completed.stderr, completed.stderr
 
 
+# codex review (r3, chris amendment -- executed): the mandated domain cell
+# table for this key is {absent, null, "", "true"(string), 1(number)} -- the
+# r3 body LISTED these cells without executing all of them. Each is now an
+# executed test, not a table row: absent (already covered by
+# test_route_activate_enabled_input_domain), null (above), and these two.
+def test_route_activate_enabled_rejects_an_empty_string() -> None:
+    completed = subprocess.run(
+        [
+            "helm",
+            "template",
+            _RELEASE,
+            str(_CHART),
+            *[x for s in _FULL_CHAIN_ON for x in ("--set", s)],
+            "--set-string",
+            "migrations.hook.routeActivate.enabled=",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0, completed.stderr
+    assert "got string, want boolean" in completed.stderr, completed.stderr
+
+
+def test_route_activate_enabled_rejects_the_string_true() -> None:
+    """`--set-string enabled=true` is the STRING "true", not the boolean --
+    Helm's own type coercion never happens for `--set-string`, so this must
+    fail the same way `enabled=maybe` does, not be silently accepted just
+    because the text spells a valid boolean word."""
+    completed = subprocess.run(
+        [
+            "helm",
+            "template",
+            _RELEASE,
+            str(_CHART),
+            *[x for s in _FULL_CHAIN_ON for x in ("--set", s)],
+            "--set-string",
+            "migrations.hook.routeActivate.enabled=true",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0, completed.stderr
+    assert "got string, want boolean" in completed.stderr, completed.stderr
+
+
+def test_route_activate_enabled_rejects_the_number_one() -> None:
+    completed = subprocess.run(
+        [
+            "helm",
+            "template",
+            _RELEASE,
+            str(_CHART),
+            *[x for s in _FULL_CHAIN_ON for x in ("--set", s)],
+            "--set-json",
+            "migrations.hook.routeActivate.enabled=1",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0, completed.stderr
+    assert "got number, want boolean" in completed.stderr, completed.stderr
+
+
 @pytest.mark.parametrize("value", ["true", "false"])
 def test_route_activate_enabled_still_accepts_real_booleans(value: str) -> None:
     """The new schema type must not reject the chart's own documented
@@ -790,9 +1015,19 @@ def test_route_activate_enabled_still_accepts_real_booleans(value: str) -> None:
 def test_route_activate_credential_secret_is_not_minted_when_secrets_are_external() -> None:
     """Mirrors test_route_activate_accepts_a_pre_created_external_secret
     (pgbouncer Secret) but for the migration Secret this hook's
-    operator-credential step actually reads."""
+    operator-credential step actually reads.
+
+    codex review (r3 REPORT mutation `secret_owner_gate` -- SURVIVED against
+    this exact test, now killed): the original combo had NO dsn configured
+    at all, so $riverDSN was ALSO empty -- removing ONLY the
+    `secrets.create` check didn't change the outcome, because the separate
+    `$riverDSN` guard alone already suppressed the Secret. Adding
+    `postgresql.enabled=true` gives this combo a NON-EMPTY $riverDSN (the
+    bundled-postgres default connection string), which isolates the
+    `secrets.create` check: without it, the Secret would now render."""
     secrets = _secrets(
         *_FULL_CHAIN_ON,
+        "postgresql.enabled=true",
         "secrets.create=false",
         "secrets.externalSecretName=app-secrets",
         "migrations.hook.externalSecretName=migration-secrets",
@@ -802,6 +1037,17 @@ def test_route_activate_credential_secret_is_not_minted_when_secrets_are_externa
     assert _ROUTE_ACTIVATE_CREDENTIAL_SECRETS not in secrets, (
         "the chart must not fabricate a copy of a DSN it does not own -- "
         f"got {sorted(secrets)}"
+    )
+    # codex review mutation-table gap found while re-verifying this test
+    # (r3, P1-shaped -- executed, fixed): checking only the INTERNAL name
+    # above missed a worse shape entirely -- removing just the
+    # `secrets.create` gate (keeping `$riverDSN`) makes the chart emit a REAL
+    # `kind: Secret` object named EXACTLY "migration-secrets", the operator's
+    # OWN external Secret name, clobbering it on `helm upgrade`. The chart
+    # must never emit a Secret object under a name this lane does not own.
+    assert "migration-secrets" not in secrets, (
+        "the chart must never render a Secret object under the EXTERNAL "
+        f"secret's own name -- that overwrites what the operator owns: {sorted(secrets)}"
     )
 
 
@@ -846,6 +1092,32 @@ def test_route_activate_credential_secret_still_renders_when_secrets_are_bundled
     secrets = _secrets(*_FULL_CHAIN_ON, "postgresql.enabled=true")
     assert _ROUTE_ACTIVATE_CREDENTIAL_SECRETS in secrets
     assert secrets[_ROUTE_ACTIVATE_CREDENTIAL_SECRETS]["stringData"]["DATABASE_URI"]
+
+
+def test_route_activate_credential_secret_prefers_migration_database_uri(
+) -> None:
+    """codex review (r3 REPORT mutation `fallback_migration_clause` --
+    SURVIVED, now killed): `dev-health.riverMigrationDSN`'s own precedence
+    (MIGRATION_DATABASE_URI first, then the Secret's other compatibility
+    aliases, then a bundled postgres) was never exercised FROM route-activate
+    specifically -- only river-migrate's sibling Secret test covers it.
+
+    A first version of this test set ONLY MIGRATION_DATABASE_URI (no
+    candidate it could lose precedence TO), so an OR-order mutation on the
+    helper survived it too -- both MIGRATION_DATABASE_URI and the bundled
+    postgres (via secretData.POSTGRES_URI, the compatibility alias the
+    helper also checks) are now set AT ONCE, to distinct values, so only
+    the correct precedence produces the expected result."""
+    secrets = _secrets(
+        *_FULL_CHAIN_ON,
+        "postgresql.enabled=true",
+        "migrations.hook.secretData.MIGRATION_DATABASE_URI=postgresql://migrator:pw@postgres:5432/devhealth",
+        "migrations.hook.secretData.POSTGRES_URI=postgresql://should-lose:pw@postgres:5432/devhealth",
+    )
+    assert (
+        secrets[_ROUTE_ACTIVATE_CREDENTIAL_SECRETS]["stringData"]["DATABASE_URI"]
+        == "postgresql://migrator:pw@postgres:5432/devhealth"
+    ), secrets[_ROUTE_ACTIVATE_CREDENTIAL_SECRETS]["stringData"]
 
 
 def test_route_activate_credential_secret_is_absent_when_no_dsn_resolves_and_secrets_are_bundled() -> None:

@@ -298,13 +298,27 @@ spec:
               encode() {
                 python3 -c 'import sys, urllib.parse; sys.stdout.write(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
               }
+              # codex review (r3, P1 -- executed, fixed, class-swept): the r3
+              # P1 fix encoded ONLY the database name -- team-lead/chris's
+              # amendment to the prompt of record names this exact shape
+              # (an encoding fix applied to one field of a class, never swept
+              # to its siblings) as its own method failure. Every remaining
+              # URI component an operator can set to an arbitrary string --
+              # the three roles and the host, same as the three passwords and
+              # the database -- now goes through the SAME encoder. Port is
+              # excluded: it is always numeric (dev-health.goPgbouncerPostgresPort),
+              # never operator-set to an arbitrary string.
+              domain_role=$(encode "$RIVER_DOMAIN_DATABASE_ROLE")
+              queue_role=$(encode "$RIVER_QUEUE_DATABASE_ROLE")
+              coordinator_role=$(encode "$RIVER_COORDINATOR_DATABASE_ROLE")
               domain_pw=$(encode "$RIVER_DOMAIN_DATABASE_PASSWORD")
               queue_pw=$(encode "$RIVER_QUEUE_DATABASE_PASSWORD")
               coordinator_pw=$(encode "$RIVER_COORDINATOR_DATABASE_PASSWORD")
+              host=$(encode "$POSTGRES_HOST")
               db=$(encode "$POSTGRES_DB")
-              printf '%s' "postgresql://${RIVER_DOMAIN_DATABASE_ROLE}:${domain_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${db}" > /run/route-dsn/POSTGRES_URI
-              printf '%s' "postgresql://${RIVER_QUEUE_DATABASE_ROLE}:${queue_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${db}" > /run/route-dsn/WORKER_DATABASE_URI
-              printf '%s' "postgresql://${RIVER_COORDINATOR_DATABASE_ROLE}:${coordinator_pw}@${POSTGRES_HOST}:${POSTGRES_PORT}/${db}" > /run/route-dsn/COORDINATOR_DATABASE_URI
+              printf '%s' "postgresql://${domain_role}:${domain_pw}@${host}:${POSTGRES_PORT}/${db}" > /run/route-dsn/POSTGRES_URI
+              printf '%s' "postgresql://${queue_role}:${queue_pw}@${host}:${POSTGRES_PORT}/${db}" > /run/route-dsn/WORKER_DATABASE_URI
+              printf '%s' "postgresql://${coordinator_role}:${coordinator_pw}@${host}:${POSTGRES_PORT}/${db}" > /run/route-dsn/COORDINATOR_DATABASE_URI
           env:
             - name: POSTGRES_HOST
               value: {{ $postgresHost | quote }}

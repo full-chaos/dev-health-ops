@@ -158,7 +158,7 @@ type fakeGenerator struct {
 	fn           func(workDir string) error
 }
 
-func (g *fakeGenerator) Generate(ctx context.Context, workDir string) error {
+func (g *fakeGenerator) Generate(ctx context.Context, workDir, configFile string) error {
 	g.ran = true
 	if err := ctx.Err(); err != nil && !g.ignoreCancel {
 		return err

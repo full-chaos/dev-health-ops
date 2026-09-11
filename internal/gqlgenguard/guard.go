@@ -174,6 +174,12 @@ func UpdateDriftRecord(ctx context.Context, opts Options) (*Result, error) {
 	}
 	defer moduleRoot.Close()
 
+	// The record describes the tree the generation was checked against; if a
+	// declared output moved meanwhile, the record would describe a tree that
+	// no longer exists.
+	if err := verifyTreeUnchanged(moduleRoot, res); err != nil {
+		return nil, err
+	}
 	if err := moduleRoot.MkdirAll(path.Dir(opts.driftPath()), 0o755); err != nil {
 		return nil, fmt.Errorf("create directory for %q: %w", opts.driftPath(), err)
 	}
@@ -217,6 +223,15 @@ func Generate(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("open module copy %q: %w", res.copyDir, err)
 	}
 	defer copyRoot.Close()
+
+	// Every destination must still be exactly what the generation was checked
+	// against -- the state the private copy was taken from. A file edited,
+	// created, removed or swapped for a link while the generator ran is a
+	// refusal of the WHOLE apply, before anything is written: overwriting it
+	// would destroy work nobody checked.
+	if err := verifyTreeUnchanged(moduleRoot, res); err != nil {
+		return nil, err
+	}
 
 	// Past this line the tree is being changed. Signals are deliberately not
 	// consulted again: the phase is a handful of renames of files already held
@@ -320,6 +335,10 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	fmt.Fprintf(w, "config: %s (%d schema file(s), %d declared output path(s))\n",
 		plan.ConfigPath, len(plan.Schemas), len(plan.Outputs))
 
+	if err := refuseDiscoverableConfigs(copyRoot, plan); err != nil {
+		return nil, cleanup, err
+	}
+
 	if err := refuseHandWrittenCollisions(moduleRoot, plan, w); err != nil {
 		return nil, cleanup, err
 	}
@@ -335,7 +354,7 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	}
 	fmt.Fprintf(w, "generator: %s (cwd %s)\n", gen.Describe(), plan.ConfigDir)
 
-	if err := gen.Generate(ctx, filepath.Join(copyDir, filepath.FromSlash(plan.ConfigDir))); err != nil {
+	if err := gen.Generate(ctx, filepath.Join(copyDir, filepath.FromSlash(plan.ConfigDir)), path.Base(plan.ConfigPath)); err != nil {
 		return nil, cleanup, fmt.Errorf("refusing: the generator failed: %w (nothing was written to %s)", err, moduleAbs)
 	}
 	// No separate "cancelled after generating" check, and none after the copy
@@ -391,6 +410,93 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 
 	res.Record = renderRecord(res, plan, gen, moduleRoot, copyRoot)
 	return res, cleanup, nil
+}
+
+// discoveryConfigNames are the names gqlgen's own config discovery tries, in
+// the working directory and then every parent (gqlgen v0.17.66
+// codegen/config/config.go: cfgFilenames, findCfg). A test reads them back out
+// of the gqlgen source this module requires.
+var discoveryConfigNames = []string{".gqlgen.yml", "gqlgen.yml", "gqlgen.yaml"}
+
+// refuseDiscoverableConfigs refuses a private copy holding any file gqlgen's
+// discovery would find -- beside the validated config or in any directory
+// above it up to the module root -- other than the validated config itself.
+// The generator is handed the validated file with --config, so discovery does
+// not run; this is the second wall, so that a config other than the one the
+// guard checked cannot be selected by any invocation at all.
+func refuseDiscoverableConfigs(copyRoot *os.Root, plan *Plan) error {
+	dir := path.Clean(plan.ConfigDir)
+	for {
+		for _, name := range discoveryConfigNames {
+			rel := path.Join(dir, name)
+			if rel == plan.ConfigPath {
+				continue
+			}
+			if _, err := copyRoot.Lstat(rel); err == nil {
+				return fmt.Errorf(
+					"refusing: %q is a config gqlgen's own discovery would find (it tries %s in %q and every parent); only the validated %q may be present on that path",
+					name, strings.Join(discoveryConfigNames, ", "), dir, plan.ConfigPath)
+			} else if !errNotExist(err) {
+				return fmt.Errorf("stat %q: %w", rel, err)
+			}
+		}
+		if dir == "." {
+			return nil
+		}
+		dir = path.Dir(dir)
+	}
+}
+
+// verifyTreeUnchanged re-reads every declared output in the working tree and
+// refuses if any is no longer in the state the private copy was taken from:
+// the same bytes, or still absent.
+func verifyTreeUnchanged(moduleRoot *os.Root, res *Result) error {
+	for _, c := range res.Changes {
+		now, err := treeState(moduleRoot, c.Path)
+		if err != nil {
+			return err
+		}
+		if now != c.TreeDigest {
+			return fmt.Errorf(
+				"refusing: %q changed in the working tree while the generator ran (checked %s, now %s); nothing was written",
+				c.Path, stateLabel(c.TreeDigest), stateLabel(now))
+		}
+	}
+	return nil
+}
+
+func treeState(root *os.Root, rel string) (string, error) {
+	info, err := root.Lstat(rel)
+	if err != nil {
+		if errNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("stat %q: %w", rel, err)
+	}
+	switch {
+	case info.Mode()&fs.ModeSymlink != 0:
+		target, err := root.Readlink(rel)
+		if err != nil {
+			return "", fmt.Errorf("read symlink %q: %w", rel, err)
+		}
+		return "symlink:" + target, nil
+	case info.Mode().IsRegular():
+		d, _, err := digestFile(root, rel)
+		return d, err
+	default:
+		return "not-a-file:" + info.Mode().String(), nil
+	}
+}
+
+func stateLabel(s string) string {
+	switch {
+	case s == "":
+		return "absent"
+	case strings.HasPrefix(s, "symlink:"), strings.HasPrefix(s, "not-a-file:"):
+		return s
+	default:
+		return "sha256 " + s[:12]
+	}
 }
 
 // refuseCopyInsideModule refuses a temporary parent that resolves to the module

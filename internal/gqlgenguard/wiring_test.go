@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // A guard that is not wired into CI is decoration. These tests read the real
@@ -31,14 +33,41 @@ func readRepoFile(t *testing.T, rel string) string {
 var guardStepPattern = regexp.MustCompile(`(?m)^\s*run:\s*go run \./cmd/gqlgen-guard\s+(\S+)(.*)$`)
 
 func TestTheDriftCheckIsWiredIntoGoQualityAndIsActive(t *testing.T) {
-	workflow := readRepoFile(t, ".github/workflows/go-quality.yml")
-
-	matches := guardStepPattern.FindAllStringSubmatch(workflow, -1)
-	if len(matches) != 1 {
-		t.Fatalf("expected exactly one step running the guard in go-quality.yml, found %d", len(matches))
+	// The workflow is PARSED, not scanned as text. Round 3 of review executed
+	// the text version accepting `if: false # if: steps.relevance...` -- the
+	// operative condition was false and the old gate text survived in a
+	// comment. YAML discards comments, so what is asserted here is what the
+	// Actions runner evaluates.
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []map[string]any `yaml:"steps"`
+		} `yaml:"jobs"`
 	}
-	verb, rest := matches[0][1], strings.TrimSpace(matches[0][2])
-
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, ".github/workflows/go-quality.yml")), &wf); err != nil {
+		t.Fatalf("parse go-quality.yml: %v", err)
+	}
+	type hit struct {
+		job  string
+		step map[string]any
+	}
+	var hits []hit
+	for job, j := range wf.Jobs {
+		for _, st := range j.Steps {
+			if run, ok := st["run"].(string); ok && strings.Contains(run, "gqlgen-guard") {
+				hits = append(hits, hit{job, st})
+			}
+		}
+	}
+	if len(hits) != 1 {
+		t.Fatalf("expected exactly one step running the guard in go-quality.yml, found %d", len(hits))
+	}
+	st := hits[0].step
+	run := strings.TrimSpace(st["run"].(string))
+	m := guardStepPattern.FindStringSubmatch("run: " + run)
+	if m == nil || strings.Contains(run, "\n") {
+		t.Fatalf("the guard step's run is not a single `go run ./cmd/gqlgen-guard <verb>` command: %q", run)
+	}
+	verb, rest := m[1], strings.TrimSpace(m[2])
 	if verb != "check-drift" {
 		t.Fatalf("CI runs the guard's %q verb; only check-drift compares without writing", verb)
 	}
@@ -49,18 +78,16 @@ func TestTheDriftCheckIsWiredIntoGoQualityAndIsActive(t *testing.T) {
 		t.Fatalf("CI passes unexpected arguments to the guard: %q", rest)
 	}
 
-	// The step must be gated the same way every other gate step in this job is.
-	// A step that always runs would be a different (and slower) contract; a step
-	// gated on something else would silently stop running.
-	idx := strings.Index(workflow, "run: go run ./cmd/gqlgen-guard")
-	head := workflow[:idx]
-	stepStart := strings.LastIndex(head, "      - name:")
-	if stepStart < 0 {
-		t.Fatal("could not find the step that runs the guard")
+	// The step's operative condition, exactly -- the same gate every other
+	// step in the job uses. A bool `false`, a different expression, or a
+	// missing `if:` all fail.
+	const gate = "steps.relevance.outputs.relevant == 'true'"
+	cond, ok := st["if"].(string)
+	if !ok || strings.TrimSpace(cond) != gate {
+		t.Fatalf("the guard step's `if:` is %#v; it must be exactly %q", st["if"], gate)
 	}
-	step := workflow[stepStart:idx]
-	if !strings.Contains(step, "if: steps.relevance.outputs.relevant == 'true'") {
-		t.Fatalf("the guard's step is not gated on the job's own relevance check:\n%s", step)
+	if v, ok := st["continue-on-error"]; ok && v != false {
+		t.Fatalf("the guard step sets continue-on-error: %#v, so a failing drift check would not fail the job", v)
 	}
 }
 

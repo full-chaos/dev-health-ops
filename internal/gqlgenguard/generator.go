@@ -26,7 +26,10 @@ const cancelGracePeriod = 3 * time.Second
 // script on disk and reading the result back out. The production
 // implementation runs the real gqlgen binary.
 type Generator interface {
-	Generate(ctx context.Context, workDir string) error
+	// Generate runs in workDir with configFile -- a path relative to workDir
+	// -- as the ONLY configuration it may read. It must never fall back to
+	// discovering one.
+	Generate(ctx context.Context, workDir, configFile string) error
 	// Describe returns a short human-readable identification of the generator,
 	// printed in the guard's report so a run says what actually generated.
 	Describe() string
@@ -98,8 +101,13 @@ func (g *GoRunGenerator) Describe() string {
 // interrupt produces -- kills the child. Nothing has been written to the
 // working tree at this point and nothing will be, because the caller only
 // reaches the copy-back phase on a nil error.
-func (g *GoRunGenerator) Generate(ctx context.Context, workDir string) error {
-	args := append([]string{"run", g.Package}, g.Args...)
+func (g *GoRunGenerator) Generate(ctx context.Context, workDir, configFile string) error {
+	// --config names the validated file. Without it gqlgen DISCOVERS a
+	// config -- `.gqlgen.yml` before `gqlgen.yml` before `gqlgen.yaml`, in the
+	// working directory and every parent, else its built-in default -- so a
+	// shadow file beside the validated one, or a custom name, made the
+	// generator run a configuration the guard never checked.
+	args := append(append([]string{"run", g.Package}, g.Args...), "--config", configFile)
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = workDir
 	cmd.Stdout = g.Stdout
@@ -111,6 +119,9 @@ func (g *GoRunGenerator) Generate(ctx context.Context, workDir string) error {
 	}
 	if g.envNote != "" && g.Stdout != nil {
 		fmt.Fprintln(g.Stdout, g.envNote)
+	}
+	if g.Stdout != nil {
+		fmt.Fprintf(g.Stdout, "generator command: go %s\n", strings.Join(args, " "))
 	}
 	// The generator runs in its own process group so cancellation reaches the
 	// whole tree -- `go run` plus the binary it execs -- rather than only the

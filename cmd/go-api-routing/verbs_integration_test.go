@@ -1242,6 +1242,144 @@ func TestDisableAppliesLiveRowAndReportsStaleDigestAndLogsTheWrite(t *testing.T)
 	}
 }
 
+// The routing table's primary key is (schema_digest, document_digest,
+// selected_operation): two rows of ONE operation, differing only in
+// document digest, are two distinct rows. Neither the plan an operator
+// reads before typing `-apply` nor the durable per-row log line can tell
+// them apart unless both carry the document digest.
+func TestDisableTwoRowsSameOperationDifferentDocumentDigestProduceDistinguishableOutput(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	digestA := "1111111111111111111111111111111111111111111111111111111111111111"
+	digestB := "2222222222222222222222222222222222222222222222222222222222222222"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digestA})
+
+	for _, digest := range []string{digestA, digestB} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+			VALUES ($1, $2, $3, $4)`,
+			localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+			t.Fatalf("seed candidate build at digest %s: %v", digest, err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.go_api_routing_state
+				(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+			VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded', 'test')`,
+			localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+			t.Fatalf("seed row at digest %s: %v", digest, err)
+		}
+	}
+
+	out, errOut, err := captureVerb(t, "disable", "-operations", verbTestOperation, "-mode", "python",
+		"-postgres-uri", dsn, "-catalog", catalogPath,
+		"-apply", "-recorded-by", "lane-routing-verbs", "-review-evidence", "F3 two-row disable killer")
+	if err != nil {
+		t.Fatalf("disable -apply: %v", err)
+	}
+	if !strings.Contains(out, digestA) || !strings.Contains(out, digestB) {
+		t.Fatalf("plan table must name BOTH document digests distinctly:\n%s", out)
+	}
+	if !strings.Contains(errOut, "document_digest="+digestA) || !strings.Contains(errOut, "document_digest="+digestB) {
+		t.Fatalf("structured log lines must name BOTH document digests distinctly:\n%s", errOut)
+	}
+}
+
+// Same invariant as above, for `repoint`: it moves EVERY row at the live
+// schema digest for a requested operation, not only the one the catalog
+// currently carries -- so two rows here is the normal multi-row case, not
+// a corner, and its plan/log output must be equally distinguishable.
+func TestRepointTwoRowsSameOperationDifferentDocumentDigestProduceDistinguishableOutput(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	digestA := "3333333333333333333333333333333333333333333333333333333333333333"
+	digestB := "4444444444444444444444444444444444444444444444444444444444444444"
+	// Seeded with an OLD build, distinct from the running build the stub
+	// reports below -- repoint only emits a structured line for a row it
+	// actually CHANGES (matching disable's convention), so both rows must
+	// have something to move.
+	oldBuild := "0000000000000000000000000000000000000000"
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digestA})
+
+	for _, digest := range []string{digestA, digestB} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+			VALUES ($1, $2, $3, $4)`,
+			localSchemaDigest(), digest, verbTestOperation, oldBuild); err != nil {
+			t.Fatalf("seed candidate build at digest %s: %v", digest, err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO public.go_api_routing_state
+				(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+			VALUES ($1, $2, $3, $4, 'go', 'canary', 100, 'seeded', 'test')`,
+			localSchemaDigest(), digest, verbTestOperation, oldBuild); err != nil {
+			t.Fatalf("seed row at digest %s: %v", digest, err)
+		}
+	}
+
+	out, errOut, err := captureVerb(t, "repoint",
+		"-registry-url", server.URL+"/registry",
+		"-buildinfo-url", server.URL+"/buildinfo",
+		"-postgres-uri", dsn,
+		"-operations", verbTestOperation,
+		"-recorded-by", "lane-routing-verbs",
+		"-review-evidence", "F3 two-row repoint killer")
+	if err != nil {
+		t.Fatalf("repoint: %v", err)
+	}
+	if !strings.Contains(out, digestA) || !strings.Contains(out, digestB) {
+		t.Fatalf("plan output must name BOTH document digests distinctly:\n%s", out)
+	}
+	if !strings.Contains(errOut, "document_digest="+digestA) || !strings.Contains(errOut, "document_digest="+digestB) {
+		t.Fatalf("structured log lines must name BOTH document digests distinctly:\n%s", errOut)
+	}
+}
+
+// `enable` writes only ONE row per operation -- the catalog's own document
+// digest -- by design, so it cannot itself produce two outcomes for one
+// operation in a single call. What it must still get right: its
+// structured line names the LIVE row's own document digest, not a dead
+// sibling row's, when one exists for the same operation at the same
+// schema digest.
+func TestEnableLogNamesTheLiveRowsDocumentDigestNotADeadSiblings(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	ctx := context.Background()
+	liveDigest := "5555555555555555555555555555555555555555555555555555555555555555"
+	deadDigest := "6666666666666666666666666666666666666666666666666666666666666668"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: liveDigest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: liveDigest})
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4)`,
+		localSchemaDigest(), deadDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed dead candidate build: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_routing_state
+			(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by)
+		VALUES ($1, $2, $3, $4, 'go', 'primary', 100, 'seeded dead sibling', 'test')`,
+		localSchemaDigest(), deadDigest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("seed dead row: %v", err)
+	}
+
+	_, errOut, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven")...)
+	if err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	// Anchored to `recorded_by=` immediately after, the `go_api_routing.enabled`
+	// line's own shape -- the `enabled_unproven` WARNING line (not exercised
+	// here; this row is proven) has `document_digest=` followed by `mode=`
+	// instead, so this cannot pass by accident via the sibling line.
+	if !strings.Contains(errOut, "document_digest="+liveDigest+" recorded_by=") {
+		t.Fatalf("enable's log line must name the LIVE row's own document digest:\n%s", errOut)
+	}
+	if strings.Contains(errOut, "document_digest="+deadDigest) {
+		t.Fatalf("enable's log line must never name the dead sibling's document digest:\n%s", errOut)
+	}
+}
+
 // The `-candidate-build` guard must not check
 // EVERY row at the live schema digest, including DEAD ones (a document
 // digest the catalog does not carry) -- rows `status` never shows a

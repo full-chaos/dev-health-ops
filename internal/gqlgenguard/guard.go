@@ -564,6 +564,29 @@ func GuardQueryEnv() []string {
 	return append(os.Environ(), "GOENV="+goenv, "XDG_CONFIG_HOME="+os.DevNull, "GOTOOLCHAIN=local")
 }
 
+// goCommand is every go command the guard runs. The command is the literal
+// name "go", which exec resolves through the guard's PATH into cmd.Path; that
+// resolution is then VERIFIED against the go binary the guard vetted
+// (goBinary: resolved physically, refused inside the module) and a mismatch
+// refuses -- the command is never redirected to a path, only checked. A PATH
+// that changes between the vetting and the command (a `go` shim put first)
+// therefore stops the run before anything is executed.
+func goCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
+	vetted, err := goBinary()
+	if err != nil {
+		return nil, err
+	}
+	stageHook("go-command", "")
+	cmd := exec.CommandContext(ctx, "go", args...)
+	if cmd.Err != nil {
+		return nil, fmt.Errorf("refusing: the go command cannot be located: %w", cmd.Err)
+	}
+	if got := resolvedPath(cmd.Path); got != vetted {
+		return nil, fmt.Errorf("refusing: `go` now resolves to %q, not the vetted go binary %q", got, vetted)
+	}
+	return cmd, nil
+}
+
 func goBinary() (string, error) {
 	p, err := exec.LookPath("go")
 	if err != nil {
@@ -597,7 +620,7 @@ func childEnvironment(ctx context.Context, scratchRoot *os.Root, scratch, workDi
 	// it reports come from the environment and the go env file as the user set
 	// them. (exec keeps the LAST value of a duplicated key.)
 	parent := append(GuardQueryEnv(), "GOWORK=off", "GOFLAGS=")
-	shared, err := goEnv(ctx, goBin, scratch, parent, sharedLocations...)
+	shared, err := goEnv(ctx, scratch, parent, sharedLocations...)
 	if err != nil {
 		return nil, err
 	}
@@ -644,7 +667,7 @@ func childEnvironment(ctx context.Context, scratchRoot *os.Root, scratch, workDi
 	}
 
 	// The executed assertion: what the go command itself will do with it.
-	eff, err := goEnv(ctx, goBin, workDir, env, "GOMOD", "GOFLAGS", "GOENV", "GOWORK", "GOTOOLCHAIN", "GOMODCACHE", "GOCACHE", "GOTMPDIR")
+	eff, err := goEnv(ctx, workDir, env, "GOMOD", "GOFLAGS", "GOENV", "GOWORK", "GOTOOLCHAIN", "GOMODCACHE", "GOCACHE", "GOTMPDIR")
 	if err != nil {
 		return nil, err
 	}
@@ -680,8 +703,11 @@ func checkChildGoEnv(eff map[string]string, copyReal string, inside func(string)
 	return nil
 }
 
-func goEnv(ctx context.Context, goBin, dir string, env []string, keys ...string) (map[string]string, error) {
-	cmd := exec.CommandContext(ctx, goBin, append([]string{"env", "-json"}, keys...)...)
+func goEnv(ctx context.Context, dir string, env []string, keys ...string) (map[string]string, error) {
+	cmd, err := goCommand(ctx, append([]string{"env", "-json"}, keys...)...)
+	if err != nil {
+		return nil, err
+	}
 	cmd.Dir = dir
 	cmd.Env = env
 	out, err := cmd.Output()
@@ -719,11 +745,10 @@ func refuseReplacesOutsideTheCopy(ctx context.Context, copyRoot *os.Root, copyDi
 		}
 		return fmt.Errorf("stat go.mod: %w", err)
 	}
-	goBin, err := goBinary()
+	cmd, err := goCommand(ctx, "mod", "edit", "-json")
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, goBin, "mod", "edit", "-json")
 	cmd.Dir = copyDir
 	cmd.Env = env
 	out, err := cmd.Output()

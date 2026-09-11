@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 	"syscall"
 	"time"
@@ -82,14 +81,11 @@ func (g *GoRunGenerator) Generate(ctx context.Context, workDir, configFile strin
 	if env == nil {
 		return fmt.Errorf("`%s`: no environment was built for the generator; refusing to fall back to the guard's own", g.Describe())
 	}
-	// The go binary is resolved by the guard, once, and the child's PATH
-	// holds only its directory (childEnvironment), so the child runs exactly
-	// the toolchain the guard vetted.
-	goBin, err := goBinary()
+	// goCommand refuses unless `go` resolves to the vetted binary; the child's PATH holds only its directory.
+	cmd, err := goCommand(ctx, args...)
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, goBin, args...)
 	cmd.Dir = workDir
 	cmd.Stdout = g.Stdout
 	cmd.Stderr = g.Stderr

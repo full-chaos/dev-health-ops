@@ -82,11 +82,7 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 		{shape: "GOINSECURE/GONOSUMDB/GOPRIVATE=* (not inherited)", env: set("GOINSECURE", "*", "GONOSUMDB", "*", "GOPRIVATE", "*")},
 		{shape: "GOPROXY=off (not inherited)", env: set("GOPROXY", "off")},
 		{shape: "HOME inside the working tree, cache locations set explicitly (HOME not inherited: the child's is scratch)", env: func(t *testing.T, f *fixture) map[string]string {
-			goBin, err := goBinary()
-			if err != nil {
-				t.Fatal(err)
-			}
-			loc, err := goEnv(context.Background(), goBin, t.TempDir(), os.Environ(), sharedLocations...)
+			loc, err := goEnv(context.Background(), t.TempDir(), os.Environ(), sharedLocations...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,11 +110,7 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(home, ".config", "go", "env"), []byte("GOCACHE="+inTree(f, ".gocache")+"\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			goBin, err := goBinary()
-			if err != nil {
-				t.Fatal(err)
-			}
-			loc, err := goEnv(context.Background(), goBin, t.TempDir(), os.Environ(), sharedLocations...)
+			loc, err := goEnv(context.Background(), t.TempDir(), os.Environ(), sharedLocations...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -565,4 +557,48 @@ func TestAGoCommandThatIgnoresTheEnvironmentIsRefused(t *testing.T) {
 			assertUnchanged(t, before, f.digests(), c.shape)
 		})
 	}
+}
+
+// TestTheGoCommandIsTheVettedBinary: every go command the guard runs is
+// constructed from the literal name "go", which exec resolves through the
+// guard's PATH. A `go` shim put first on PATH AFTER the guard vetted the go
+// binary -- inside the module, logging each run -- must be refused before it
+// runs, by comparing what exec resolved with the vetted binary.
+func TestTheGoCommandIsTheVettedBinary(t *testing.T) {
+	goAvailable(t)
+	f := guardFixture(t).withModuleFiles()
+	realGo, err := goBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran := filepath.Join(t.TempDir(), "ran.log")
+	f.write("bin/go", "#!/bin/sh\necho \"$@\" >> "+ran+"\nexec "+realGo+" \"$@\"\n")
+	if err := os.Chmod(filepath.Join(f.dir, "bin", "go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fired := false
+	testStageHook = func(stage, _ string) {
+		if stage == "go-command" && !fired {
+			fired = true
+			t.Setenv("PATH", filepath.Join(f.dir, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
+	}
+	t.Cleanup(func() { testStageHook = nil })
+	opts := guardOptions(f, &fakeGenerator{fn: rewriteOutputs("generated")})
+	before := f.digests()
+	_, err = CheckDrift(context.Background(), opts)
+	logCell(t, err, "accepted")
+	if !fired {
+		t.Fatal("no go command was constructed, so the cell proves nothing")
+	}
+	if b, rerr := os.ReadFile(ran); rerr == nil && len(b) > 0 {
+		t.Fatalf("the shim ran: %q", b)
+	}
+	if err == nil || !strings.Contains(err.Error(), "not the vetted go binary") {
+		t.Fatalf("want a refusal naming the unvetted go binary, got %v", err)
+	}
+	delete(before, "bin/go")
+	after := f.digests()
+	delete(after, "bin/go")
+	assertUnchanged(t, before, after, "a go shim put on PATH after vetting")
 }

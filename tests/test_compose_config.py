@@ -411,14 +411,80 @@ def test_legacy_compose_migrate_waits_for_postgres_health() -> None:
     assert depends_on.get("clickhouse", {}).get("condition") == "service_healthy"
 
 
-def test_legacy_compose_migrate_uses_local_build_matching_api() -> None:
+def test_every_buildable_service_declares_an_overridable_image() -> None:
+    """A service that declares only `build:` can never honour a release pin:
+    Compose names its image after the project and rebuilds locally, so a
+    one-shot setup job silently keeps running a different build of the same
+    binary the long-running services honour a pin for. That is not
+    hypothetical -- the provisioning and migration jobs shipped exactly that
+    way, while every long-running Go process next to them honoured
+    `DEV_HEALTH_GO_*_IMAGE`.
+
+    Every buildable service therefore carries `image:` in the
+    `${VAR:-default}` form, so an operator pin is honoured by default and the
+    unset case still resolves to the tag its own build produces. The default
+    must name a family the release workflow actually publishes -- a
+    placeholder that cannot be pulled is how the pin was dropped in the first
+    place.
+    """
+    published_families = {
+        "ghcr.io/full-chaos/dev-hops-runner",
+        "ghcr.io/full-chaos/dev-hops-api",
+        "ghcr.io/full-chaos/dev-health-go-worker",
+        "ghcr.io/full-chaos/dev-health-go-scheduler",
+        "ghcr.io/full-chaos/dev-health-go-reconciler",
+        "ghcr.io/full-chaos/dev-health-go-stream-runner",
+        "ghcr.io/full-chaos/dev-health-go-operator",
+        "ghcr.io/full-chaos/dev-health-go-contractcheck",
+        "ghcr.io/full-chaos/dev-health-go-migrate",
+    }
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    buildable = {
+        name: service
+        for name, service in services.items()
+        if isinstance(service.get("build"), dict)
+    }
+    assert buildable, "expected compose.yml to declare buildable services"
+
+    for name, service in sorted(buildable.items()):
+        image = service.get("image")
+        assert image, (
+            f"{name} declares build: with no image:, so a release pin cannot "
+            f"reach it and it will always run a locally built image"
+        )
+        match = re.fullmatch(r"\$\{([A-Z0-9_]+):-(.+)\}", image)
+        assert match, (
+            f"{name}'s image must be an overridable ${{VAR:-default}} pin so "
+            f"an operator can supply a published tag or digest: {image!r}"
+        )
+        variable, default = match.groups()
+        assert variable.endswith("_IMAGE"), (
+            f"{name}'s pin variable should end in _IMAGE like every sibling: "
+            f"{variable!r}"
+        )
+        family = default.rsplit(":", maxsplit=1)[0]
+        assert family in published_families, (
+            f"{name}'s default image {default!r} does not name a family the "
+            f"release workflow publishes -- an unpullable default is how the "
+            f"pin was silently dropped before"
+        )
+
+
+def test_legacy_compose_migrate_runs_the_same_image_as_api() -> None:
+    """`migrate` applies the schema the `api` process then serves. If the two
+    ever resolve to different builds of the same tree, the schema applied and
+    the code reading it disagree, and nothing in the bring-up says so. They
+    must therefore share BOTH halves of their image identity: the same local
+    build block, and the same pin variable so an operator override moves them
+    together or not at all.
+    """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     migrate = services["migrate"]
     api = services["api"]
 
-    assert migrate.get("image") is None
     assert isinstance(migrate.get("build"), dict)
     assert migrate["build"] == api["build"]
+    assert migrate["image"] == api["image"]
 
 
 def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
@@ -1796,11 +1862,19 @@ def test_billing_edge_healthcheck_is_liveness_not_readiness() -> None:
     depends_on chain requires for the rest of the default bring-up to
     succeed.
 
+    The 503 on a bare bring-up is the DESIGNED behaviour, not a masked
+    failure: the three Stripe/license secrets are deliberately absent from
+    the staging compose file, they live in the operator's own `ops/.env`,
+    and webhook delivery is started separately by
+    `scripts/start-stripe.sh`. /health discloses exactly which of them is
+    unset; the healthcheck deliberately does not turn that disclosure into
+    an unhealthy container.
+
     Mutation coverage (manually verified): reverting to `["CMD", "wget",
     "--spider", "-q", "http://localhost:8000/health"]` survives every
     OTHER test in this file (nothing else asserts this array), which is
-    exactly how the pre-r109 shape shipped unnoticed -- pinned here
-    directly.
+    exactly how the readiness-shaped probe shipped unnoticed once already
+    -- pinned here directly.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     healthcheck = services["billing-edge"]["healthcheck"]

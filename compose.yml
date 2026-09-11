@@ -157,6 +157,14 @@ x-go-worker-env-base: &go-worker-env-base
 # changing anything.
 x-go-worker-route-activate:
   template: &go-worker-route-activate
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:latest}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -460,6 +468,14 @@ services:
       start_period: 5s
 
   migrate:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -512,6 +528,14 @@ services:
         condition: service_healthy
 
   api:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -709,6 +733,14 @@ services:
   # match: an idle metrics-api would be a real waste, but a go-worker-heavy
   # that cannot reach its bridge target at all is worse.
   metrics-api:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -760,6 +792,14 @@ services:
       start_period: 30s
 
   billing-edge:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_API_IMAGE:-ghcr.io/full-chaos/dev-hops-api:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -820,7 +860,15 @@ services:
       # egress is a LOCAL DEV concern (this repo's own bare bring-up
       # supplies no secrets at all, so /health legitimately 503s until an
       # operator supplies them -- see TEST-EVIDENCE) -- a liveness check,
-      # not a readiness one, is what this compose file should assert:
+      # NOT a readiness one, is what this compose file should assert.
+      # This is deliberate and is not a masked failure: the three
+      # Stripe/license secrets are absent from this staging file ON
+      # PURPOSE. They live in the operator's own `ops/.env`, and webhook
+      # delivery is started separately by `scripts/start-stripe.sh`, so a
+      # bare bring-up here reports "the process is up" while /health
+      # honestly discloses which secrets are unset. Reading the 503 as a
+      # defect and "fixing" the probe would flip the container unhealthy
+      # on a stack that is behaving exactly as designed. In short:
       # "is the process answering on :8000 at all", never "did every
       # downstream dependency succeed". wget's exit 4 means the TCP
       # connect itself failed (process down / port closed); any other
@@ -874,6 +922,14 @@ services:
   # ---------------------------------------------------------------------------
   worker: &worker-base
     profiles: [celery-legacy]
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -960,22 +1016,29 @@ services:
   # grants see every current semantic table, including an already
   # initialized local volume.
   go-river-provision:
-    # codex review (r2, P2): `image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/...}`
-    # is an unpullable placeholder (confirmed: `docker compose run --pull
-    # never` fails "No such image") -- fine for a production renderer where
-    # an operator always sets DEV_HEALTH_IMAGE, wrong as this file's local
-    # default. This service's own comment above says it needs "the Ops
-    # runtime image... not a bare postgres client image" -- that is exactly
-    # what `worker`'s own build block below produces locally; build it the
-    # same way instead of assuming a registry pull.
-    # R111 (chris, reversing the JOB 6 `pull_policy: build` hardening
-    # below): this root file is a STAGING file that honours an image pin
-    # by default -- `pull_policy` is left at compose's own default
+    # The default here is `dev-hops-runner`, the family the release
+    # workflow actually publishes for `docker/Dockerfile` target `runner`,
+    # not the `ghcr.io/your-org/...` placeholder a production renderer
+    # uses: that placeholder cannot be pulled, which is why carrying it as
+    # this file's local default was wrong. This service needs the Ops
+    # runtime image (it runs `psql` AND the repo's own tooling), not a
+    # bare postgres client image, and that is exactly what the build block
+    # below produces and tags.
+    # This root file is a STAGING file that honours an image pin by
+    # default -- `pull_policy` is left at compose's own default
     # (`missing`: reuse an already-built/pulled local tag if one exists,
     # else build) rather than forcing a rebuild every run. The CHAOS-5437
-    # cross-tree lockstep this used to guard against is now closed by
-    # pinning every image to the ONE sha JOB 6's prebuild produces
+    # cross-tree lockstep this used to guard against is closed by pinning
+    # every image to the ONE sha the prebuild produces
     # (`job6-prebuild/*:<sha>`), not by forcing a build here.
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile
@@ -1030,6 +1093,14 @@ services:
     # R111 (chris): same reversal as go-river-provision above -- default
     # `pull_policy` (reuse a cached local build if one exists), lockstep
     # closed by JOB 6's single-sha pin, not by forcing a rebuild here.
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -1080,6 +1151,14 @@ services:
   # Validate the exact checked-in job registry and worker manifest before
   # Compose is allowed to start any long-running Go process.
   go-contractcheck:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_GO_CONTRACTCHECK_IMAGE:-ghcr.io/full-chaos/dev-health-go-contractcheck:latest}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1121,6 +1200,14 @@ services:
   # above. Idempotent by construction: it only mints a token when the
   # shared volume file is empty.
   go-worker-operator-credential:
+    # Declared alongside `build:` so an operator pin is honoured: this is a
+    # staging file, `pull_policy` is left at Compose's own default, and a
+    # one-shot job that keeps building locally while the long-running
+    # services honour a release pin is how a setup step ends up running a
+    # different build of the same binary. The default is the tag this
+    # service's own build produces and the family the release workflow
+    # publishes -- never a placeholder that cannot be pulled.
+    image: ${DEV_HEALTH_IMAGE:-ghcr.io/full-chaos/dev-hops-runner:latest}
     build:
       context: .
       dockerfile: ./docker/Dockerfile

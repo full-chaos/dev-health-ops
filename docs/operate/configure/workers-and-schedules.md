@@ -114,10 +114,28 @@ left to roll back to.
 
 ### Pinning a published image in the root file
 
-Root `compose.yml` is a **staging file**: each of the nine Go processes
-(plus `go-river-provision`/`go-river-migrate`) declares both `image:`
-(`DEV_HEALTH_GO_WORKER_IMAGE` and its `_RECONCILER_`/`_SCHEDULER_`/
-`_STREAM_RUNNER_` siblings) and a local `build:` block. `pull_policy` is
+Root `compose.yml` is a **staging file**: every service that declares a
+`build:` block also declares `image:` in the `${VAR:-default}` form, so an
+operator pin reaches all of them and not just the long-running ones. The
+one-shot setup jobs are included on purpose -- a provisioning or migration
+job that keeps building locally while the processes beside it honour a
+release pin is how a setup step ends up running a different build of the
+same binary.
+
+| Pin variable | Default family | Services |
+| --- | --- | --- |
+| `DEV_HEALTH_GO_WORKER_IMAGE` | `dev-health-go-worker` | the four `go-worker-*` processes |
+| `DEV_HEALTH_GO_RECONCILER_IMAGE` | `dev-health-go-reconciler` | `go-reconciler` |
+| `DEV_HEALTH_GO_SCHEDULER_IMAGE` | `dev-health-go-scheduler` | `go-scheduler` |
+| `DEV_HEALTH_GO_STREAM_RUNNER_IMAGE` | `dev-health-go-stream-runner` | the three `go-stream-*` processes |
+| `DEV_HEALTH_GO_OPERATOR_IMAGE` | `dev-health-go-operator` | the four `go-sync-*-route-activate` one-shots |
+| `DEV_HEALTH_GO_CONTRACTCHECK_IMAGE` | `dev-health-go-contractcheck` | `go-contractcheck` |
+| `DEV_HEALTH_IMAGE` | `dev-hops-runner` | `go-river-provision`, `go-river-migrate`, `go-worker-operator-credential`, and the dormant Celery services |
+| `DEV_HEALTH_API_IMAGE` | `dev-hops-api` | `api`, `metrics-api`, `billing-edge`, `migrate` |
+
+Every default names a family the release workflow actually publishes, so
+the unset case resolves to the same tag the local `build:` produces rather
+than to a placeholder that cannot be pulled. `pull_policy` is
 left at Compose's own default (`missing`), so an operator pin -- a
 published tag OR a content digest -- is honoured as given: `docker
 compose up` reuses an already-present local image under that name, or

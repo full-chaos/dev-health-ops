@@ -1478,7 +1478,7 @@ var hostnameLabelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a
 // stripping it from the value validComponentHost actually returns, so
 // the assembled DSN preserves it exactly as configured.
 func isRFC1123Hostname(host string) bool {
-	if host == "" || len(host) > 253 {
+	if host == "" {
 		return false
 	}
 	labels := host
@@ -1487,6 +1487,12 @@ func isRFC1123Hostname(host string) bool {
 		if labels == "" {
 			return false // host was exactly "."
 		}
+	}
+	// The 253-character limit applies to the hostname itself, not to the
+	// absolute-form marker appended to it, so it is checked after the
+	// trailing dot is stripped.
+	if len(labels) > 253 {
+		return false
 	}
 	for _, label := range strings.Split(labels, ".") {
 		if !hostnameLabelPattern.MatchString(label) {

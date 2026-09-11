@@ -1122,6 +1122,49 @@ func TestAbsoluteHostnameTrailingDotIsPreservedVerbatim(t *testing.T) {
 	}
 }
 
+// TestAbsoluteHostnameAtTheMaximumLengthIsAccepted is round-10's
+// (2026-09-11) fix: isRFC1123Hostname checked len(host) BEFORE stripping
+// the trailing dot, so a valid, maximum-length (253-character) hostname
+// was rejected the instant it was written in absolute form (254
+// characters with the dot) -- the length limit must apply to the
+// hostname itself, not to the absolute-form marker appended to it.
+func TestAbsoluteHostnameAtTheMaximumLengthIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	// 63.63.63.61 + 3 dots = 253 characters -- the maximum valid
+	// non-absolute hostname. Appending "." makes 254.
+	maxHostname := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." +
+		strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
+	if len(maxHostname) != 253 {
+		t.Fatalf("test setup: maxHostname is %d characters, want 253", len(maxHostname))
+	}
+	absolute := maxHostname + "."
+
+	value, used, err := ResolveDSNFromComponents(lookup(map[string]string{
+		"DEV_HEALTH_PG_DOMAIN_HOST": absolute,
+	}), DomainDatabaseSpec)
+	if !used || err != nil {
+		t.Fatalf("used=%v err=%v (254-character absolute hostname should be accepted)", used, err)
+	}
+	cfg, parseErr := pgconn.ParseConfig(value.Reveal())
+	if parseErr != nil {
+		t.Fatalf("real pgx driver could not parse the assembled DSN: %v", parseErr)
+	}
+	if cfg.Host != absolute {
+		t.Fatalf("host was not preserved verbatim: driver saw host=%q, want %q", cfg.Host, absolute)
+	}
+
+	// One character longer (254-character non-absolute, or the absolute
+	// form one byte past the limit) must still be refused.
+	tooLong := maxHostname + "e"
+	_, used, err = ResolveDSNFromComponents(lookup(map[string]string{
+		"DEV_HEALTH_PG_DOMAIN_HOST": tooLong,
+	}), DomainDatabaseSpec)
+	if !used || err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
+		t.Fatalf("expected a 254-character non-absolute hostname to be refused, got used=%v err=%v", used, err)
+	}
+}
+
 // TestValidComponentPortAcceptsExactlyOneNumericPort is round-8's
 // (2026-09-11) companion fix: PORT gets the identical exactly-one-value
 // discipline as HOST.

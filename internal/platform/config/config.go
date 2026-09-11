@@ -1356,15 +1356,39 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 // -- derived from the struct's own fields, never a second list -- which
 // covers every key correctly, DBKey included wherever it is not marked
 // shared, and both `_FILE` forms.
+//
+// Round-6 (2026-09-11) finding: the mutual-exclusion check for the RAW form
+// tested bare env-var PRESENCE (`lookup(rawKey)`'s ok bool), not whether
+// the raw form is actually CONFIGURED. secrets.Resolve treats a direct,
+// non-`_FILE` value of exactly "" as unconfigured (its own `direct != ""`
+// rule, same file) -- so `POSTGRES_URI=""` alongside a fully valid
+// component set was refused as "mutually exclusive" even though the raw
+// form contributes nothing. Fixed below with the SAME predicate
+// secrets.Resolve applies before it ever reads a `_FILE`: present-and-
+// non-empty for the direct key, OR present at all for its `_FILE`
+// variant (a set `_FILE` var can only ever resolve to configured=true or
+// an error -- never to unconfigured -- so testing its presence here,
+// without reading it, is exactly secrets.Resolve's own predicate, not an
+// approximation of it). This also means a decoy/misconfigured `_FILE`
+// path is never opened just to answer "is the raw form configured" when
+// components are what actually win -- the read only happens where it
+// already happened before this fix, in the tail secrets.Resolve call and
+// inside ResolveDSNFromComponents. A raw value that is merely
+// whitespace-only (never trimmed by secrets.Resolve) is still
+// "configured" under this same rule -- unlike a component field, the raw
+// form has no separate whitespace refusal, so whitespace-only counts as
+// set and still triggers exclusivity exactly like any other non-empty
+// raw value.
 func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (value secrets.Value, configured bool, err error) {
 	foundKeys, setErr := spec.setComponentKeys(lookup)
 	if setErr != nil {
 		return secrets.Value{}, false, setErr
 	}
 	hostSet := firstOrEmpty(lookup(spec.HostKey)) != ""
-	_, rawPresent := lookup(rawKey)
+	directValue, directPresent := lookup(rawKey)
 	_, rawFilePresent := lookup(rawKey + "_FILE")
-	if len(foundKeys) > 0 && (rawPresent || rawFilePresent) {
+	rawConfigured := (directPresent && directValue != "") || rawFilePresent
+	if len(foundKeys) > 0 && rawConfigured {
 		return secrets.Value{}, false, fmt.Errorf(
 			"%s (or %s_FILE) and %s are mutually exclusive -- set exactly one to configure this connection",
 			rawKey, rawKey, strings.Join(foundKeys, ", "),

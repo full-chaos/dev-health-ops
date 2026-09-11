@@ -1364,6 +1364,51 @@ func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 		!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
 		t.Fatalf("expected a partial component set (no HOST, no raw URI) to name the missing HOST key, got: %v", err)
 	}
+
+	// Round-6 (2026-09-11) finding: an empty-string raw URI alongside a full,
+	// valid component set used to be refused as "mutually exclusive" -- the
+	// exclusivity check tested bare env-var PRESENCE, not secrets.Resolve's
+	// own "configured" predicate (a direct value of exactly "" is NOT
+	// configured, per secrets.Resolve's `direct != ""` rule). An operator
+	// who leaves POSTGRES_URI="" set (e.g. a compose file's unset-interpolation
+	// default) while fully configuring components must succeed on components,
+	// not be refused for a raw value that contributes nothing.
+	cfg3, err := Load(workerSpec(map[string]string{
+		"POSTGRES_URI":                  "",
+		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER":     "app",
+		"DEV_HEALTH_PG_DOMAIN_PASSWORD": "app",
+		"DEV_HEALTH_PG_DB":              "appdb",
+		"WORKER_DATABASE_URI":           "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err != nil {
+		t.Fatalf("an empty-string raw URI alongside valid components should succeed on components, got: %v", err)
+	}
+	if cfg3.DomainDatabaseURI.Reveal() != "postgresql://app:app@db.internal:5432/appdb" {
+		t.Fatalf("expected the component-built DSN, got %q", cfg3.DomainDatabaseURI.Reveal())
+	}
+
+	// Companion cell: a WHITESPACE-ONLY raw URI is, unlike "", still
+	// "configured" under secrets.Resolve's own rule (it only special-cases
+	// exactly ""; it never trims). ResolveDSN's exclusivity check must keep
+	// treating it as the raw form being set -- components alongside it is
+	// still refused, for the same reason a real (non-blank) raw value would
+	// be: the raw form has no whitespace refusal of its own, only components
+	// do.
+	_, err = Load(workerSpec(map[string]string{
+		"POSTGRES_URI":                  "   ",
+		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER":     "app",
+		"DEV_HEALTH_PG_DOMAIN_PASSWORD": "app",
+		"DEV_HEALTH_PG_DB":              "appdb",
+		"WORKER_DATABASE_URI":           "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err == nil ||
+		!strings.Contains(err.Error(), "POSTGRES_URI") ||
+		!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") ||
+		!strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected a whitespace-only raw URI alongside components to still be refused as mutually exclusive, got: %v", err)
+	}
 }
 
 // TestNonSharedDBKeyAndFileVariantsAreDetected is round 3's (2026-09-11) two

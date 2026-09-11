@@ -909,6 +909,37 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *
 	}
 }
 
+// TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase is
+// round-6's (2026-09-11) P1 fix: this dispatcher resolves CLICKHOUSE_URI
+// lazily through resolveDSNRequired, entirely bypassing config.Load and
+// configureRuntime's own resolution -- so it never got the Info resolution
+// record every other successful DSN resolution in this ticket promises.
+// The eventual chclickhouse.Open against an unroutable host (127.0.0.1:1,
+// refused immediately) fails closed with operator_backend_unavailable, same
+// as before this fix -- what changed is that the Info record is now
+// emitted first, on the path to that failure, proving the wiring rather
+// than only the helper in isolation.
+func TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	runtime := commandRuntime(t, commandAuthorizer{})
+	runtime.lookup = dsnTestLookup(map[string]string{
+		"DEV_HEALTH_CH_HOST": "127.0.0.1",
+		"DEV_HEALTH_CH_PORT": "1",
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	code := dispatchProvidersyncRetireLinearPseudoProjects(ctx, runtime, nil, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1 (unroutable ClickHouse host)", code)
+	}
+	out := stderr.String()
+	if !strings.Contains(out, `"msg":"clickhouse database resolved"`) ||
+		!strings.Contains(out, `"form":"components"`) ||
+		!strings.Contains(out, `"database":"default"`) {
+		t.Fatalf("expected a components-form resolution record, got: %s", out)
+	}
+}
+
 // TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsInvalidOrg
 // mirrors TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsInvalidOrg
 // for the CHAOS-4548 sibling verb.

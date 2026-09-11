@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -288,10 +289,12 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
 	}
+	logResolvedDatabase(ctx, stderr, lookup, platformconfig.DomainDatabaseSpec, "domain")
 	queueURI, err := resolveDSNRequired("WORKER_DATABASE_URI", platformconfig.QueueDatabaseSpec, lookup)
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
 	}
+	logResolvedDatabase(ctx, stderr, lookup, platformconfig.QueueDatabaseSpec, "queue")
 	// Required, not optional: workerctl is a coordinator binary. Its very first
 	// database action (authenticating the operator token against
 	// internal_service_credentials) is a coordinator-exclusive read, so without
@@ -302,6 +305,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
 	}
+	logResolvedDatabase(ctx, stderr, lookup, platformconfig.CoordinatorDatabaseSpec, "coordinator")
 	token, ok := resolveRequired("WORKER_OPERATOR_TOKEN", lookup)
 	if !ok {
 		return nil, writeError(stderr, joboperator.ReasonAuthenticationFailed)
@@ -323,7 +327,14 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 		var err error
 		domainTransactionPooler, err = strconv.ParseBool(raw)
 		if err != nil {
-			return nil, writeError(stderr, "configuration_error")
+			// Round-6 (2026-09-11) finding: this bypassed the shared writer
+			// entirely, returning a bare {"code":"configuration_error"} with
+			// no indication which key caused it -- the one configuration-
+			// class diagnostic in this file that predates
+			// resolveDSNRequired's own error plumbing. Every other
+			// configuration_error site in this binary already names the
+			// offending key through writeConfigError; this is the last one.
+			return nil, writeConfigError(stderr, fmt.Errorf("PGBOUNCER_TRANSACTION_MODE must be a valid boolean"))
 		}
 	}
 
@@ -1491,6 +1502,7 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 	if err != nil {
 		return writeConfigError(stderr, err)
 	}
+	logResolvedDatabase(ctx, stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse")
 	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
@@ -1583,6 +1595,7 @@ func dispatchProvidersyncRetireStaleLinearProjectOwnership(
 	if err != nil {
 		return writeConfigError(stderr, err)
 	}
+	logResolvedDatabase(ctx, stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse")
 	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
 	if err != nil {
 		return writeError(stderr, "operator_backend_unavailable")
@@ -2543,6 +2556,28 @@ func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup
 		return platformsecrets.Value{}, fmt.Errorf("%s is required", rawKey)
 	}
 	return value, nil
+}
+
+// logResolvedDatabase records, at Info, which form (uri|components) name's
+// DSN resolved through -- and, for the component form only, the database
+// identifier read directly from spec.DBKey. Mirrors
+// cmd/dev-health-worker-migrate's identical rule and internal/platform/config's
+// own Load() binding loop (CHAOS-5560 round 6/7, chris's ruling: "the
+// migrate/worker rule applies to every entry point" -- workerctl resolves
+// these same five DSNs through its own resolveDSNRequired, bypassing
+// config.Load entirely, so it never got this observability wiring until
+// round 6 found the gap). Per R117, a pre-built URI is NEVER parsed for
+// this purpose: the URI form names only itself; the component form's
+// database name is the separate, non-secret spec.DBKey env value,
+// requiring no parsing of the assembled DSN.
+func logResolvedDatabase(ctx context.Context, stderr io.Writer, lookup platformsecrets.LookupEnv, spec platformconfig.ComponentSpec, name string) {
+	infoLogger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if host, present := lookup(spec.HostKey); present && host != "" {
+		infoLogger.InfoContext(ctx, name+" database resolved",
+			"form", "components", "database", platformconfig.ComponentDatabaseName(lookup, spec))
+		return
+	}
+	infoLogger.InfoContext(ctx, name+" database resolved", "form", "uri")
 }
 
 func resolveName(key, fallback string, lookup platformsecrets.LookupEnv) string {

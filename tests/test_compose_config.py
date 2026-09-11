@@ -1586,7 +1586,15 @@ def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
     postgres_env = services["postgres"]["environment"]
     assert postgres_env["POSTGRES_USER"] == "postgres"
     assert postgres_env["POSTGRES_PASSWORD"] == "postgres"
-    assert postgres_env["POSTGRES_DB"] == "postgres"
+    # r5 P1 (executed repro): every downstream consumer below already reads
+    # ${POSTGRES_DB:-postgres} -- the actual server that CREATES the
+    # database at first init was the one hardcoded literal, so overriding
+    # POSTGRES_DB anywhere pointed every consumer at a database that never
+    # got created ("database ... does not exist", exit 2). Unlike
+    # USER/PASSWORD (the fixed bootstrap superuser identity, intentionally
+    # not parameterized), the database NAME is meant to be operator-
+    # choosable -- one source of truth, same var everywhere.
+    assert postgres_env["POSTGRES_DB"] == "${POSTGRES_DB:-postgres}"
 
     provision_entrypoint = _container_command_string(services["go-river-provision"])
     assert '--username="${POSTGRES_USER:-postgres}"' in provision_entrypoint
@@ -1787,6 +1795,26 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
         "start_period",
     }
 
+    # r5 P3 (executed repro): a clause-by-clause mutation setting interval/
+    # timeout/start_period to "-1s" and retries to -1 all SURVIVED this
+    # test before this block existed -- presence-only assertions above
+    # can't catch a nonsensical value, only a missing key. Docker itself
+    # renders a negative interval/timeout/start_period without complaint
+    # (`docker compose config --quiet` also passed on it), so nothing else
+    # in the toolchain catches this either.
+    _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m|h)$")
+    for duration_key in ("interval", "timeout", "start_period"):
+        value = healthcheck[duration_key]
+        match = _DURATION_RE.match(str(value))
+        assert match and float(match.group(1)) > 0, (
+            f"go-reconciler healthcheck {duration_key!r}={value!r} must be a "
+            "positive Compose duration (e.g. '15s'), not zero/negative/malformed"
+        )
+    assert isinstance(healthcheck["retries"], int) and healthcheck["retries"] > 0, (
+        f"go-reconciler healthcheck retries={healthcheck['retries']!r} must be "
+        "a positive integer"
+    )
+
     for other_name, other_spec in services.items():
         if other_name == "go-reconciler" or not other_name.startswith("go-"):
             continue
@@ -1794,6 +1822,51 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
             f"{other_name} declares a healthcheck too, but this test's "
             "docstring claims go-reconciler's is the only one in the go-* "
             "fleet -- update the docstring if that changed on purpose"
+        )
+
+
+def test_go_operator_target_services_declare_a_nonempty_command() -> None:
+    """r5 P3 (executed repro): a service built from `docker/go-worker.
+    Dockerfile`'s `operator` target (the four `go-sync-*-route-activate`
+    services, via the shared `x-go-worker-route-activate` anchor) has no
+    ENTRYPOINT of its own baked into the image -- Compose's `command:` is
+    the only thing that tells `dev-health-workerctl` what to do. The
+    anchor itself declares no `command:` (each concrete service supplies
+    its own `routes apply ...` args), so restoring a service that merges
+    the anchor with nothing else silently ships zero args:
+
+        docker run --rm codex-review-r5-go-sync-dispatch-route-activate
+        {"error":{"code":"invalid_request"}}   # exit 1
+
+    The full two-file focused suite (57 tests) passed with this exact
+    mutant present -- nothing was asserting `command` is non-empty for
+    this service family. This test targets the TARGET, not a hardcoded
+    service-name list, so a fifth `operator`-built service added later is
+    covered automatically.
+    """
+    services = _load_yaml(_LEGACY_COMPOSE)["services"]
+    operator_services = [
+        name
+        for name, spec in services.items()
+        if (spec.get("build") or {}).get("target") == "operator"
+    ]
+    assert operator_services, (
+        "expected at least the four go-sync-*-route-activate services to "
+        "build the 'operator' target -- none found, has the target name "
+        "or build shape changed?"
+    )
+    for name in operator_services:
+        command = services[name].get("command")
+        assert isinstance(command, list) and len(command) > 0, (
+            f"{name} builds the distroless 'operator' target (no image "
+            "ENTRYPOINT args of its own) but declares no non-empty "
+            "`command:` -- it would run with zero args and fail closed "
+            "with {'error': {'code': 'invalid_request'}}"
+        )
+        assert command[:2] == ["routes", "apply"], (
+            f"{name}'s command {command!r} no longer starts with "
+            "['routes', 'apply'] -- update this assertion if that's a "
+            "deliberate change to what the operator binary is invoked to do"
         )
 
 

@@ -225,7 +225,15 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
+      # r5 P1 (executed repro): every OTHER consumer of this database name
+      # (poolers' DB_NAME/healthchecks, migrate's POSTGRES_URI, the Go
+      # worker DSNs, go-river-provision's --dbname) already reads
+      # ${POSTGRES_DB:-postgres} -- only the server that actually CREATES
+      # the database at first init was hardcoded to the literal string
+      # "postgres", so overriding POSTGRES_DB anywhere else pointed every
+      # downstream consumer at a database that was never created
+      # ("database ... does not exist"). One source of truth now.
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
       # Must be a subdirectory of the volume mount (postgres_data is mounted
       # at the parent /var/lib/postgresql/), never the mount root itself --
       # otherwise the image's lost+found and other reserved entries live
@@ -762,7 +770,15 @@ services:
       - ./:/app
     working_dir: /app
     healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/ready" ]
+      # r5 P1 (executed repro): billing-edge (billing_edge.py) is a
+      # separate FastAPI app from api/metrics-api's main.py -- it never
+      # imported the shared /ready route those two serve, only its own
+      # /api/v1/billing/webhooks/stripe and /health. A /ready probe here
+      # always 404s via the app's catch-all handler regardless of actual
+      # readiness, so this healthcheck was permanently unhealthy by
+      # construction. /health (200 postgres+secrets ok, 503 otherwise) is
+      # this app's real readiness surface -- use it.
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8000/health" ]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -1216,8 +1232,20 @@ services:
     # that tag (e.g. an earlier proof run on this one). `pull_policy: build`
     # (the bigboy overlay's own convention) forces the tree's build every
     # time; `DEV_HEALTH_GO_WORKER_IMAGE` still names what gets tagged.
+    # r5 P1 (executed repro): `pull_policy: build` unconditionally REJECTS
+    # a digest-shaped `DEV_HEALTH_GO_WORKER_IMAGE` override -- Compose must
+    # assign `image:` as the BUILD OUTPUT's tag under `build:`, and a
+    # digest (content-addressed, computed FROM a build, never assignable
+    # TO one) can never be a legal build tag ("build tag cannot contain a
+    # digest", confirmed for all four `*_IMAGE` families). Pinning an
+    # EXACT already-published image (by tag or digest) is a different
+    # intent than "build this tree" and needs pull skipped, not forced --
+    # `DEV_HEALTH_GO_WORKER_PULL_POLICY` (default unchanged, `build`) lets
+    # an operator opt out per family: set it to `missing`/`always` alongside
+    # a digest-pinned `DEV_HEALTH_GO_WORKER_IMAGE` to use that exact image
+    # with no local build at all.
     image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
-    pull_policy: build
+    pull_policy: ${DEV_HEALTH_GO_WORKER_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1387,6 +1415,10 @@ services:
   go-reconciler:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_RECONCILER_IMAGE:-ghcr.io/full-chaos/dev-health-go-reconciler:latest}
+    # r5 P1: own pull-policy override, same reasoning as go-worker-heavy's
+    # DEV_HEALTH_GO_WORKER_PULL_POLICY -- this service names a different
+    # `*_IMAGE` family and needs its own opt-out for a digest pin.
+    pull_policy: ${DEV_HEALTH_GO_RECONCILER_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1431,7 +1463,16 @@ services:
     # step-overrun watchdog (internal/syncreconciler) make the process stay
     # up and mark /readyz unhealthy when a stage is stuck; this healthcheck
     # is what turns that into a container status Docker can actually see
-    # and restart on. The runtime image has no shell/curl/wget, so this
+    # (`docker ps`, `depends_on: condition: service_healthy` elsewhere in
+    # this file). r5 P3 (executed repro): it does NOT itself trigger a
+    # restart -- `restart: unless-stopped` (inherited from &go-worker)
+    # restarts on container EXIT only; a process that stays running but
+    # reports unhealthy (proven by freezing it with SIGSTOP: RestartCount
+    # stayed 0, State.Health.Status went healthy->unhealthy->healthy again
+    # on SIGCONT, container never restarted) is exactly the case this
+    # healthcheck exists to make OBSERVABLE, not to remediate -- recovery
+    # from a stuck stage is the step-overrun watchdog's own job inside the
+    # process. The runtime image has no shell/curl/wget, so this
     # invokes the reconciler binary's own `healthcheck` subcommand
     # (cmd/dev-health-reconciler/main.go), which queries this same
     # container's own /readyz over loopback and mirrors that status as its
@@ -1447,6 +1488,8 @@ services:
   go-scheduler:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:latest}
+    # r5 P1: own pull-policy override, see go-worker-heavy's comment.
+    pull_policy: ${DEV_HEALTH_GO_SCHEDULER_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1484,6 +1527,9 @@ services:
   go-stream-external:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    # r5 P1: own pull-policy override, see go-worker-heavy's comment.
+    # Shared by all three go-stream-* services (same `*_IMAGE` family).
+    pull_policy: ${DEV_HEALTH_GO_STREAM_RUNNER_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1525,6 +1571,7 @@ services:
   go-stream-ingest:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    pull_policy: ${DEV_HEALTH_GO_STREAM_RUNNER_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
@@ -1569,6 +1616,7 @@ services:
   go-stream-pagerduty:
     <<: *go-worker
     image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    pull_policy: ${DEV_HEALTH_GO_STREAM_RUNNER_PULL_POLICY:-build}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile

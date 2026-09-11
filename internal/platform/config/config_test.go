@@ -1023,11 +1023,11 @@ func TestLoadPrefersComponentFormAndSurvivesAReservedCharacterPassword(t *testin
 
 	// Green: the same password through the component form.
 	cfg, err := Load(workerSpec(map[string]string{
-		"POSTGRES_DOMAIN_HOST":           "db.internal",
-		"RIVER_DOMAIN_DATABASE_ROLE":     "app",
-		"RIVER_DOMAIN_DATABASE_PASSWORD": reservedPassword,
-		"POSTGRES_DB":                    "appdb",
-		"WORKER_DATABASE_URI":            "postgresql://app:app@db.internal:5432/appdb",
+		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER":     "app",
+		"DEV_HEALTH_PG_DOMAIN_PASSWORD": reservedPassword,
+		"DEV_HEALTH_PG_DB":              "appdb",
+		"WORKER_DATABASE_URI":           "postgresql://app:app@db.internal:5432/appdb",
 	}))
 	if err != nil {
 		t.Fatalf("component form should accept the reserved-character password: %v", err)
@@ -1052,45 +1052,84 @@ func TestLoadPrefersComponentFormAndSurvivesAReservedCharacterPassword(t *testin
 	}
 }
 
-// TestComponentHostSkipsThePreBuiltKeysOwnFileConflictCheck is round-1's
-// (2026-09-11) second finding, reproduced then fixed: POSTGRES_URI and
-// POSTGRES_URI_FILE are mutually exclusive when POSTGRES_URI is actually
-// consulted, and that check used to run unconditionally, before the
-// component path was ever considered -- so an operator who set
-// POSTGRES_DOMAIN_HOST specifically to bypass a stale/conflicting
-// POSTGRES_URI/_FILE pair was refused on a conflict irrelevant to the path
-// actually taken. Setting the host var must skip that raw key's resolution
-// (and its conflict check) entirely, not just its result.
-func TestComponentHostSkipsThePreBuiltKeysOwnFileConflictCheck(t *testing.T) {
+// TestURIAndComponentFormsAreMutuallyExclusivePerDSN is round-1's
+// (2026-09-11) design ruling: NEITHER form may silently win over the other
+// (both directions were tried and both left the losing form's value sitting
+// in the environment with no way to tell a deliberate override from a stale
+// leftover). Setting both a DSN's pre-built key (or its `_FILE` variant) and
+// its component HOST var is refused outright, naming both keys in one
+// message, checked before the raw key's own KEY/KEY_FILE rule.
+func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 	t.Parallel()
 
-	// Unfixed behavior, reproduced first: no host var set -> the conflict is
-	// real and must still be reported.
+	// URI + URI_FILE, no host var: the pre-existing KEY/KEY_FILE rule alone
+	// is still enforced, unchanged.
 	_, err := Load(workerSpec(map[string]string{
 		"POSTGRES_URI":        "postgresql://old:old@old.invalid:5432/old",
 		"POSTGRES_URI_FILE":   "/does/not/matter",
 		"WORKER_DATABASE_URI": "postgresql://app:app@db.internal:5432/appdb",
 	}))
 	if err == nil || !strings.Contains(err.Error(), "POSTGRES_URI and POSTGRES_URI_FILE are mutually exclusive") {
-		t.Fatalf("expected the mutual-exclusivity error when no host var is set, got: %v", err)
+		t.Fatalf("expected the pre-existing KEY/KEY_FILE error when no host var is set, got: %v", err)
 	}
 
-	// Fixed behavior: the SAME conflicting pair, but POSTGRES_DOMAIN_HOST is
-	// also set -- the raw pair must never be consulted, and Load must
-	// succeed via components alone.
+	// URI + component HOST, both set: refused, naming both keys -- this is
+	// round-1's exact reproduction (an operator set POSTGRES_DOMAIN_HOST to
+	// move to components while a stale POSTGRES_URI/_FILE pair still sat in
+	// the environment).
+	_, err = Load(workerSpec(map[string]string{
+		"POSTGRES_URI":                  "postgresql://old:old@old.invalid:5432/old",
+		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER":     "app",
+		"DEV_HEALTH_PG_DOMAIN_PASSWORD": "app",
+		"WORKER_DATABASE_URI":           "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err == nil ||
+		!strings.Contains(err.Error(), "POSTGRES_URI") ||
+		!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") ||
+		!strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected a mutual-exclusivity error naming both POSTGRES_URI and DEV_HEALTH_PG_DOMAIN_HOST, got: %v", err)
+	}
+
+	// URI_FILE (not the direct key) + component HOST: also refused -- the
+	// `_FILE` variant counts as "the raw form is present" too.
+	_, err = Load(workerSpec(map[string]string{
+		"POSTGRES_URI_FILE":         "/does/not/matter",
+		"DEV_HEALTH_PG_DOMAIN_HOST": "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER": "app",
+		"WORKER_DATABASE_URI":       "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_HOST") {
+		t.Fatalf("expected POSTGRES_URI_FILE + a set HOST var to be refused too, got: %v", err)
+	}
+
+	// Components only: succeeds, exactly as the reserved-character-password
+	// test above already proves end to end.
 	cfg, err := Load(workerSpec(map[string]string{
-		"POSTGRES_URI":                   "postgresql://old:old@old.invalid:5432/old",
-		"POSTGRES_URI_FILE":              "/does/not/matter",
-		"POSTGRES_DOMAIN_HOST":           "db.internal",
-		"RIVER_DOMAIN_DATABASE_ROLE":     "app",
-		"RIVER_DOMAIN_DATABASE_PASSWORD": "app",
-		"POSTGRES_DB":                    "appdb",
-		"WORKER_DATABASE_URI":            "postgresql://app:app@db.internal:5432/appdb",
+		"DEV_HEALTH_PG_DOMAIN_HOST":     "db.internal",
+		"DEV_HEALTH_PG_DOMAIN_USER":     "app",
+		"DEV_HEALTH_PG_DOMAIN_PASSWORD": "app",
+		"DEV_HEALTH_PG_DB":              "appdb",
+		"WORKER_DATABASE_URI":           "postgresql://app:app@db.internal:5432/appdb",
 	}))
 	if err != nil {
-		t.Fatalf("a set host var must skip the conflicting raw pair entirely, got error: %v", err)
+		t.Fatalf("components-only should succeed, got: %v", err)
 	}
 	if cfg.DomainDatabaseURI.Reveal() != "postgresql://app:app@db.internal:5432/appdb" {
 		t.Fatalf("expected the component-built DSN, got %q", cfg.DomainDatabaseURI.Reveal())
+	}
+
+	// Neither URI nor HOST set for a required DSN: today's unchanged
+	// "required" behavior (POSTGRES_URI has no default and Load's caller
+	// reports it missing further up the stack; here just confirm no
+	// mutual-exclusivity error is raised when neither form is present).
+	cfg2, err := Load(workerSpec(map[string]string{
+		"WORKER_DATABASE_URI": "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err != nil {
+		t.Fatalf("neither form set should not itself be an error at Load() level, got: %v", err)
+	}
+	if cfg2.DomainDatabaseURI.Configured() {
+		t.Fatalf("expected DomainDatabaseURI to be unconfigured when neither form is set, got %q", cfg2.DomainDatabaseURI.Reveal())
 	}
 }

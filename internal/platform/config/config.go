@@ -357,14 +357,6 @@ func Load(spec Spec) (Config, error) {
 		name   string
 		target *secrets.Value
 	}{
-		{name: "POSTGRES_URI", target: &cfg.DomainDatabaseURI},
-		{name: "WORKER_DATABASE_URI", target: &cfg.QueueDatabaseURI},
-		// Optional here on purpose: only coordinator binaries require it, and
-		// they enforce that themselves through
-		// postgres.RuntimeConfig.RequireCoordinator. A domain-only worker must
-		// not fail to start merely because this is unset.
-		{name: "COORDINATOR_DATABASE_URI", target: &cfg.CoordinatorDatabaseURI},
-		{name: "CLICKHOUSE_URI", target: &cfg.ClickHouseURI},
 		{name: "VALKEY_URI", target: &cfg.ValkeyURI},
 		{name: "SETTINGS_ENCRYPTION_KEY", target: &cfg.SettingsEncryptionKey},
 		{name: "SETTINGS_ENCRYPTION_SALT", target: &cfg.SettingsEncryptionSalt},
@@ -372,84 +364,88 @@ func Load(spec Spec) (Config, error) {
 		{name: "PAGER_DUTY_SECRET", target: &cfg.PagerDutyOAuthSecret},
 		{name: "WORKER_OPERATIONAL_BRIDGE_TOKEN", target: &cfg.OperationalBridgeToken},
 	}
-	// CHAOS-5560: a pre-built URI (POSTGRES_URI/WORKER_DATABASE_URI/
-	// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI) requires whoever assembles it
-	// (a compose file, a shell script, an operator's own tooling) to
-	// correctly URL-encode every credential component -- a `#`/`@`/`/`/`?`
-	// in a password silently truncates or corrupts the DSN, and that
-	// failure mode was hit repeatedly at the deploy-manifest layer, never
-	// here. The component form below lets each URI be assembled from its
-	// own host/port/user/password/db pieces instead, encoded correctly by
-	// net/url regardless of their content. Components win outright when the
-	// HOST var is set; the pre-built URI (and its `_FILE` variant) stay for
-	// compatibility when it isn't.
-	//
-	// Round-1 (2026-09-11) finding: the pre-built key's own resolution --
-	// including its `KEY`/`KEY_FILE` mutual-exclusivity check -- used to run
-	// unconditionally, before this component check, for every one of these
-	// four keys. An operator who set the matching HOST var specifically to
-	// bypass a stale/conflicting pre-built pair (leftover `_FILE` mount from
-	// an earlier config generation, say) was refused before the code ever
-	// looked at HOST, on a conflict irrelevant to the path actually taken.
-	// dsnComponentSpecs below is now consulted FIRST so a set HOST var skips
-	// the raw key's resolution (and that check) entirely, not just its
-	// result.
-	dsnComponentSpecs := []ComponentSpec{
-		{
-			HostKey: "POSTGRES_DOMAIN_HOST", PortKey: "POSTGRES_DOMAIN_PORT", DefaultPort: "5432",
-			UserKey: "RIVER_DOMAIN_DATABASE_ROLE", PasswordKey: "RIVER_DOMAIN_DATABASE_PASSWORD",
-			DBKey: "POSTGRES_DB", DefaultDB: "postgres", Scheme: "postgresql",
-			Target: &cfg.DomainDatabaseURI,
-		},
-		{
-			HostKey: "POSTGRES_QUEUE_HOST", PortKey: "POSTGRES_QUEUE_PORT", DefaultPort: "5432",
-			UserKey: "RIVER_QUEUE_DATABASE_ROLE", PasswordKey: "RIVER_QUEUE_DATABASE_PASSWORD",
-			DBKey: "POSTGRES_DB", DefaultDB: "postgres", Scheme: "postgresql",
-			Target: &cfg.QueueDatabaseURI,
-		},
-		{
-			HostKey: "POSTGRES_COORDINATOR_HOST", PortKey: "POSTGRES_COORDINATOR_PORT", DefaultPort: "5432",
-			UserKey: "RIVER_COORDINATOR_DATABASE_ROLE", PasswordKey: "RIVER_COORDINATOR_DATABASE_PASSWORD",
-			DBKey: "POSTGRES_DB", DefaultDB: "postgres", Scheme: "postgresql",
-			Target: &cfg.CoordinatorDatabaseURI,
-		},
-		{
-			HostKey: "CLICKHOUSE_HOST", PortKey: "CLICKHOUSE_PORT", DefaultPort: "9000",
-			UserKey: "CLICKHOUSE_USER", PasswordKey: "CLICKHOUSE_PASSWORD",
-			DBKey: "CLICKHOUSE_DB", DefaultDB: "default", Scheme: "clickhouse",
-			Target: &cfg.ClickHouseURI,
-		},
-	}
-	rawKeyByHostKey := map[string]string{
-		"POSTGRES_DOMAIN_HOST":      "POSTGRES_URI",
-		"POSTGRES_QUEUE_HOST":       "WORKER_DATABASE_URI",
-		"POSTGRES_COORDINATOR_HOST": "COORDINATOR_DATABASE_URI",
-		"CLICKHOUSE_HOST":           "CLICKHOUSE_URI",
-	}
-	componentOverridden := make(map[string]bool, len(dsnComponentSpecs))
-	for _, spec := range dsnComponentSpecs {
-		if host, present := lookup(spec.HostKey); present && strings.TrimSpace(host) != "" {
-			componentOverridden[rawKeyByHostKey[spec.HostKey]] = true
-		}
-	}
 	for _, item := range secretTargets {
-		if componentOverridden[item.name] {
-			continue
-		}
 		value, _, resolveErr := secrets.Resolve(item.name, lookup)
 		if resolveErr != nil {
 			return Config{}, resolveErr
 		}
 		*item.target = value
 	}
-	for _, spec := range dsnComponentSpecs {
-		built, used, buildErr := ResolveDSNFromComponents(lookup, spec)
-		if buildErr != nil {
-			return Config{}, buildErr
+	// CHAOS-5560: a pre-built URI (POSTGRES_URI/WORKER_DATABASE_URI/
+	// COORDINATOR_DATABASE_URI/CLICKHOUSE_URI) requires whoever assembles it
+	// (a compose file, a shell script, an operator's own tooling) to
+	// correctly URL-encode every credential component -- a `#`/`@`/`/`/`?`
+	// in a password silently truncates or corrupts the DSN, and that
+	// failure mode was hit repeatedly at the deploy-manifest layer, never
+	// here. ResolveDSN below lets each URI be assembled from its own
+	// host/port/user/password/db pieces instead, encoded correctly by
+	// net/url regardless of their content.
+	//
+	// Round-1 (2026-09-11) review found two problems with "one form wins
+	// outright over the other": (1) whichever precedence direction is
+	// chosen, the LOSING form's value still sits in the environment with no
+	// way to tell a deliberate override from a stale leftover, and (2) the
+	// component HOST names first chosen (POSTGRES_DOMAIN_HOST et al) risked
+	// exactly this ambiguity the moment any deploy manifest defaulted them.
+	// Fixed at the root, per team-lead's ruling: every component key below
+	// is a name NOTHING in compose.yml, either overlay, deploy/helm, or the
+	// docs sets today (swept before choosing), and ResolveDSN refuses
+	// outright -- naming both keys in one message -- if BOTH a HOST var and
+	// its DSN's pre-built key (or that key's `_FILE` variant) are set,
+	// rather than silently picking one. Neither set keeps today's
+	// "%s is required" behavior unchanged.
+	dsnBindings := []struct {
+		rawKey string
+		spec   ComponentSpec
+		target *secrets.Value
+	}{
+		{
+			rawKey: "POSTGRES_URI",
+			spec: ComponentSpec{
+				HostKey: "DEV_HEALTH_PG_DOMAIN_HOST", PortKey: "DEV_HEALTH_PG_DOMAIN_PORT", DefaultPort: "5432",
+				UserKey: "DEV_HEALTH_PG_DOMAIN_USER", PasswordKey: "DEV_HEALTH_PG_DOMAIN_PASSWORD",
+				DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+			},
+			target: &cfg.DomainDatabaseURI,
+		},
+		{
+			rawKey: "WORKER_DATABASE_URI",
+			spec: ComponentSpec{
+				HostKey: "DEV_HEALTH_PG_QUEUE_HOST", PortKey: "DEV_HEALTH_PG_QUEUE_PORT", DefaultPort: "5432",
+				UserKey: "DEV_HEALTH_PG_QUEUE_USER", PasswordKey: "DEV_HEALTH_PG_QUEUE_PASSWORD",
+				DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+			},
+			target: &cfg.QueueDatabaseURI,
+		},
+		{
+			// Optional here on purpose: only coordinator binaries require it,
+			// and they enforce that themselves through
+			// postgres.RuntimeConfig.RequireCoordinator. A domain-only worker
+			// must not fail to start merely because this is unset.
+			rawKey: "COORDINATOR_DATABASE_URI",
+			spec: ComponentSpec{
+				HostKey: "DEV_HEALTH_PG_COORDINATOR_HOST", PortKey: "DEV_HEALTH_PG_COORDINATOR_PORT", DefaultPort: "5432",
+				UserKey: "DEV_HEALTH_PG_COORDINATOR_USER", PasswordKey: "DEV_HEALTH_PG_COORDINATOR_PASSWORD",
+				DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+			},
+			target: &cfg.CoordinatorDatabaseURI,
+		},
+		{
+			rawKey: "CLICKHOUSE_URI",
+			spec: ComponentSpec{
+				HostKey: "DEV_HEALTH_CH_HOST", PortKey: "DEV_HEALTH_CH_PORT", DefaultPort: "9000",
+				UserKey: "DEV_HEALTH_CH_USER", PasswordKey: "DEV_HEALTH_CH_PASSWORD",
+				DBKey: "DEV_HEALTH_CH_DB", DefaultDB: "default", Scheme: "clickhouse",
+			},
+			target: &cfg.ClickHouseURI,
+		},
+	}
+	for _, binding := range dsnBindings {
+		value, _, resolveErr := ResolveDSN(lookup, binding.rawKey, binding.spec)
+		if resolveErr != nil {
+			return Config{}, resolveErr
 		}
-		if used {
-			*spec.Target = built
-		}
+		*binding.target = value
 	}
 	cfg.OperationalBridgeURL = envOrDefault(
 		lookup, "WORKER_OPERATIONAL_BRIDGE_URL", "",
@@ -977,15 +973,13 @@ type ComponentSpec struct {
 	UserKey, PasswordKey          string
 	DBKey, DefaultDB              string
 	Scheme                        string
-	Target                        *secrets.Value
 }
 
 // ResolveDSNFromComponents builds a DSN from spec's component env vars.
 // used is false (built is the zero Value, never an error) when the host var
-// is unset or blank -- the caller keeps whatever the pre-built-URI form
-// already resolved. Once the host var is set, components win outright: the
-// pre-built URI for the same field, if also set, is silently superseded (not
-// merged), so the two forms can never disagree about their target.
+// is unset or blank. It never looks at any pre-built-URI env var itself --
+// ResolveDSN is the caller that decides which of the two forms a given
+// environment is allowed to use at all.
 //
 // host/port are round-tripped through a fresh url.Parse of the assembled
 // URI and compared back against the inputs (Hostname()/Port()) before
@@ -1044,6 +1038,41 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 		)
 	}
 	return secrets.NewValue(assembled), true, nil
+}
+
+// ResolveDSN resolves one DSN as EITHER a pre-built URI (rawKey, and its
+// rawKey_FILE variant, exactly as secrets.Resolve already handles) OR a set
+// of discrete components (spec) -- never both, and never one silently
+// overriding the other.
+//
+// Round-1 review (2026-09-11) tried letting one form win over the other by
+// precedence and found it unsafe either direction: whichever form loses is
+// still sitting in the environment, with nothing to say whether that was a
+// deliberate override or a stale leftover from an earlier config generation
+// -- and a deploy manifest that already defaults the "losing" var (as
+// deploy/docker-compose/compose.go-workers.yml does for POSTGRES_HOST)
+// makes the ambiguity permanent, not occasional. Setting both is refused
+// outright, naming both keys in one message, checked before rawKey's own
+// KEY/KEY_FILE exclusivity rule ever runs (a caller with both a stale
+// rawKey_FILE mount AND a HOST var is refused for the real reason, not an
+// unrelated file-conflict message). Setting neither returns
+// configured=false, unchanged from calling secrets.Resolve(rawKey, lookup)
+// directly -- every existing "%s is required" caller keeps working exactly
+// as before this function existed.
+func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (value secrets.Value, configured bool, err error) {
+	hostSet := strings.TrimSpace(firstOrEmpty(lookup(spec.HostKey))) != ""
+	_, rawPresent := lookup(rawKey)
+	_, rawFilePresent := lookup(rawKey + "_FILE")
+	if hostSet && (rawPresent || rawFilePresent) {
+		return secrets.Value{}, false, fmt.Errorf(
+			"%s (or %s_FILE) and %s are mutually exclusive -- set exactly one to configure this connection",
+			rawKey, rawKey, spec.HostKey,
+		)
+	}
+	if hostSet {
+		return ResolveDSNFromComponents(lookup, spec)
+	}
+	return secrets.Resolve(rawKey, lookup)
 }
 
 func firstOrEmpty(value string, ok bool) string {

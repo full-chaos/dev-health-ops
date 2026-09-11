@@ -213,23 +213,29 @@ func TestExecuteRequiresThreeSeparatedRolesBeforeConnecting(t *testing.T) {
 // shell-interpolated postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB
 // when MIGRATION_DATABASE_URI is unset -- the exact unescaped-password shape
 // this ticket exists to fix, one layer further out than internal/platform/
-// config's own URIs. The component path here must survive it.
+// config's own URIs. The component path here must survive it, using
+// DEV_HEALTH_MIGRATION_PG_* names (never POSTGRES_HOST/_PORT/_USER/
+// _PASSWORD/_DB, which deploy/docker-compose/compose.go-workers.yml --
+// not touched by this PR -- already sets unconditionally for that same
+// shell fallback; round-1 (2026-09-11) proved reusing those names made
+// this function silently discard a real, working MIGRATION_DATABASE_URI
+// override the instant that compose service ran).
 func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 	t.Parallel()
 
-	t.Run("no host var -- falls back to the required pre-built URI", func(t *testing.T) {
+	t.Run("neither form set -- required error", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
 		_, ok := resolveMigrationDatabaseURI(env(nil), &stderr)
 		if ok {
-			t.Fatal("expected failure: neither POSTGRES_HOST nor MIGRATION_DATABASE_URI is set")
+			t.Fatal("expected failure: neither the component host var nor MIGRATION_DATABASE_URI is set")
 		}
 		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") {
 			t.Fatalf("expected the MIGRATION_DATABASE_URI required-secret message, got: %s", stderr.String())
 		}
 	})
 
-	t.Run("pre-built URI still works when host var is unset", func(t *testing.T) {
+	t.Run("pre-built URI only -- still works", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
 		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
@@ -243,15 +249,15 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		}
 	})
 
-	t.Run("component form survives a reserved-character password", func(t *testing.T) {
+	t.Run("component form only survives a reserved-character password", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
 		reserved := "p#ss/w@rd"
 		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
-			"POSTGRES_HOST":     "postgres",
-			"POSTGRES_USER":     "postgres",
-			"POSTGRES_PASSWORD": reserved,
-			"POSTGRES_DB":       "postgres",
+			"DEV_HEALTH_MIGRATION_PG_HOST":     "postgres",
+			"DEV_HEALTH_MIGRATION_PG_USER":     "postgres",
+			"DEV_HEALTH_MIGRATION_PG_PASSWORD": reserved,
+			"DEV_HEALTH_MIGRATION_PG_DB":       "postgres",
 		}), &stderr)
 		if !ok {
 			t.Fatalf("expected success, stderr=%s", stderr.String())
@@ -265,18 +271,37 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		}
 	})
 
-	// Round-1 (2026-09-11) finding: deploy/docker-compose/compose.go-workers.yml
-	// (not touched by this PR) unconditionally sets POSTGRES_HOST, defaulted
-	// to "postgres", for its own pre-existing shell-fallback entrypoint --
-	// so "component form wins whenever HOST is set" (this sub-test's old
-	// name and assertion) silently discarded a real, working
-	// MIGRATION_DATABASE_URI override the moment that compose service ran.
-	// Precedence is flipped: the pre-built URI wins whenever it is set.
-	t.Run("pre-built URI wins even when a host var is also set", func(t *testing.T) {
+	// Round-1 (2026-09-11) ruling: URI and component forms are mutually
+	// exclusive, refused loudly naming both keys -- neither silently wins.
+	t.Run("both forms set -- refused naming both keys", func(t *testing.T) {
+		t.Parallel()
+		var stderr bytes.Buffer
+		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
+			"MIGRATION_DATABASE_URI":       "postgresql://real:real@real-host:5432/real",
+			"DEV_HEALTH_MIGRATION_PG_HOST": "postgres",
+			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
+		}), &stderr)
+		if ok {
+			t.Fatal("expected failure when both forms are set")
+		}
+		if !strings.Contains(stderr.String(), "MIGRATION_DATABASE_URI") ||
+			!strings.Contains(stderr.String(), "DEV_HEALTH_MIGRATION_PG_HOST") ||
+			!strings.Contains(stderr.String(), "mutually exclusive") {
+			t.Fatalf("expected an error naming both keys, got: %s", stderr.String())
+		}
+	})
+
+	// The exact overlay scenario named in the round-1 ruling: this binary
+	// must behave EXACTLY as it did before this ticket when
+	// deploy/docker-compose/compose.go-workers.yml's own POSTGRES_HOST
+	// default (or any of its raw shell-fallback vars) is present --
+	// POSTGRES_HOST is not a component key this binary reads at all
+	// anymore, so it has zero effect on which form wins.
+	t.Run("compose overlay's own POSTGRES_HOST default has no effect", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
 		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
-			"MIGRATION_DATABASE_URI": "postgresql://real:real@real-host:5432/real",
+			"MIGRATION_DATABASE_URI": "postgresql://postgres:postgres@postgres:5432/postgres",
 			"POSTGRES_HOST":          "postgres",
 			"POSTGRES_USER":          "postgres",
 			"POSTGRES_PASSWORD":      "postgres",
@@ -285,38 +310,19 @@ func TestResolveMigrationDatabaseURIComponentForm(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected success, stderr=%s", stderr.String())
 		}
-		if got.Reveal() != "postgresql://real:real@real-host:5432/real" {
-			t.Fatalf("pre-built MIGRATION_DATABASE_URI should have won over the component form, got %q", got.Reveal())
-		}
-	})
-
-	// The exact round-1 reproduction: a real, reachable MIGRATION_DATABASE_URI
-	// plus compose's own always-present POSTGRES_HOST default must still
-	// resolve to the real endpoint, never the host var's (here, deliberately
-	// wrong) value.
-	t.Run("a compose-defaulted host var never redirects a working pre-built URI", func(t *testing.T) {
-		t.Parallel()
-		var stderr bytes.Buffer
-		got, ok := resolveMigrationDatabaseURI(env(map[string]string{
-			"MIGRATION_DATABASE_URI": "postgresql://postgres:postgres@postgres:5432/postgres",
-			"POSTGRES_HOST":          "does-not-exist.invalid",
-		}), &stderr)
-		if !ok {
-			t.Fatalf("expected success, stderr=%s", stderr.String())
-		}
 		if got.Reveal() != "postgresql://postgres:postgres@postgres:5432/postgres" {
-			t.Fatalf("a bogus compose-defaulted POSTGRES_HOST must not redirect a working URI, got %q", got.Reveal())
+			t.Fatalf("POSTGRES_HOST must not be read as a component trigger by this binary, got %q", got.Reveal())
 		}
 	})
 
-	t.Run("bad port with host set is refused, not silently defaulted", func(t *testing.T) {
+	t.Run("bad port with component host set is refused, not silently defaulted", func(t *testing.T) {
 		t.Parallel()
 		var stderr bytes.Buffer
 		_, ok := resolveMigrationDatabaseURI(env(map[string]string{
-			"POSTGRES_HOST": "postgres",
-			"POSTGRES_PORT": "not-a-port",
-			"POSTGRES_USER": "postgres",
-			"POSTGRES_DB":   "postgres",
+			"DEV_HEALTH_MIGRATION_PG_HOST": "postgres",
+			"DEV_HEALTH_MIGRATION_PG_PORT": "not-a-port",
+			"DEV_HEALTH_MIGRATION_PG_USER": "postgres",
+			"DEV_HEALTH_MIGRATION_PG_DB":   "postgres",
 		}), &stderr)
 		if ok {
 			t.Fatal("expected failure on a non-numeric port")

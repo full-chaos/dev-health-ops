@@ -463,3 +463,68 @@ func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	return lines[len(lines)-1]
 }
+
+// TestTheWorkspaceModuleIsTheDeepestContainingTheWorkingDirectory: a
+// workspace holding the root module AND a module nested inside it, with the
+// working directory in the nested one. Both listed directories contain the
+// working directory; the module is the DEEPEST (round 5b's mutant X27 picked
+// the root and survived every test).
+func TestTheWorkspaceModuleIsTheDeepestContainingTheWorkingDirectory(t *testing.T) {
+	bin := buildGuard(t)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "go.mod", "module example.com/root\n\ngo 1.22\n")
+	write(t, dir, "nested/go.mod", "module example.com/nested\n\ngo 1.22\n")
+	write(t, dir, "nested/sub/keep.txt", "x\n")
+	write(t, dir, "go.work", "go 1.22\n\nuse (\n\t.\n\t./nested\n)\n")
+	cmd := exec.Command(bin, "check-drift")
+	cmd.Dir = filepath.Join(dir, "nested", "sub")
+	cmd.Env = append(os.Environ(), "GOWORK=", "TMPDIR="+t.TempDir())
+	out, _ := cmd.CombinedOutput()
+	t.Logf("CELL-OUTPUT: %s", firstLineWith(string(out), "module: "))
+	if !strings.Contains(string(out), "module: "+filepath.Join(dir, "nested")+"\n") {
+		t.Fatalf("the guard did not pick the deepest workspace module containing the working directory:\n%s", out)
+	}
+}
+
+// TestTheWorkingDirectoryIsResolvedThroughLinksInAWorkspace: the working
+// directory reached through a symbolic link to the workspace. go lists the
+// modules by their real paths; the working directory must be resolved the
+// same way before it is compared (round 5b's mutant X28 dropped that and
+// survived).
+func TestTheWorkingDirectoryIsResolvedThroughLinksInAWorkspace(t *testing.T) {
+	bin := buildGuard(t)
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, real, "a/go.mod", "module example.com/a\n\ngo 1.22\n")
+	write(t, real, "a/sub/keep.txt", "x\n")
+	write(t, real, "b/go.mod", "module example.com/b\n\ngo 1.22\n")
+	write(t, real, "go.work", "go 1.22\n\nuse (\n\t./a\n\t./b\n)\n")
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "check-drift")
+	cmd.Dir = filepath.Join(alias, "a", "sub")
+	cmd.Env = append(os.Environ(), "GOWORK=", "TMPDIR="+t.TempDir(), "PWD="+cmd.Dir)
+	out, _ := cmd.CombinedOutput()
+	t.Logf("CELL-OUTPUT: %s", firstLineWith(string(out), "module: "))
+	// go lists the module by the path it was reached through (PWD); either
+	// spelling names module a -- a refusal ("inside none of them") does not.
+	if !strings.Contains(string(out), "module: "+filepath.Join(real, "a")+"\n") && !strings.Contains(string(out), "module: "+filepath.Join(alias, "a")+"\n") {
+		t.Fatalf("the guard did not resolve the working directory through the link before choosing the module:\n%s", out)
+	}
+}
+
+func firstLineWith(s, prefix string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.HasPrefix(l, prefix) || strings.Contains(l, "gqlgen-guard:") {
+			return l
+		}
+	}
+	return ""
+}

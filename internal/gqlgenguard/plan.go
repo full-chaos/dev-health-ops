@@ -62,8 +62,13 @@ type Plan struct {
 	ConfigPath string
 	// ConfigDir is the module-relative directory the generator runs in.
 	ConfigDir string
-	// Schemas lists the schema files the config globbed to, module-relative.
+	// Schemas lists the schema files the config globbed to, by their PHYSICAL
+	// module-relative path.
 	Schemas []string
+	// SchemaInputs and Templates are every file the generator reads from the
+	// config: as gqlgen names it, and where it physically resolves.
+	SchemaInputs []Input
+	Templates    []Input
 	// Outputs is sorted by Path and contains no duplicates.
 	Outputs []Output
 }
@@ -113,13 +118,38 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	if _, err := moduleRelative(moduleAbs, filepath.Join(moduleAbs, filepath.FromSlash(configPath))); err != nil {
 		return nil, fmt.Errorf("refusing: gqlgen config %q leaves the module or names its root (%v)", configPath, err)
 	}
-
-	configDirRel := filepath.Dir(filepath.FromSlash(configPath))
-	configDirAbs := filepath.Join(moduleAbs, configDirRel)
+	if err := refuseDotDotAfterAName("gqlgen config", configPath); err != nil {
+		return nil, err
+	}
+	// Where the config physically is. gqlgen changes into the config's
+	// directory as the operating system resolves it, so every relative path in
+	// the config is judged from THAT directory, never from the lexical one --
+	// round 5b of review executed `-config a/b/cfg/custom.yml` with
+	// `a/b/cfg -> ../..`: the guard judged the schema from a/b/cfg, gqlgen read
+	// it from above the module.
+	//
+	// The DIRECTORY is what matters: the generator runs there and gqlgen
+	// (handed --config <base name>) resolves every relative path in the file
+	// against it. The file itself may be an in-module link; it is read through
+	// the module root below, which follows it only inside the module.
+	configDirAbs, err := physicalPath(moduleAbs + string(filepath.Separator) + filepath.FromSlash(filepath.Dir(configPath)))
+	if err != nil {
+		return nil, fmt.Errorf("refusing: the directory of gqlgen config %q cannot be resolved: %v", configPath, err)
+	}
+	configDirRel, err := filepath.Rel(moduleAbs, configDirAbs)
+	if err != nil || configDirRel == ".." || strings.HasPrefix(configDirRel, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("refusing: the directory of gqlgen config %q resolves physically to %q, outside the module", configPath, configDirAbs)
+	}
+	configBase := filepath.Base(filepath.FromSlash(configPath))
+	if _, err := physicallyInside(moduleAbs, configDirAbs+string(filepath.Separator)+configBase); err != nil {
+		return nil, fmt.Errorf("refusing: gqlgen config %q %v", configPath, err)
+	}
+	configRel := filepath.ToSlash(filepath.Join(configDirRel, configBase))
 
 	var (
 		cfg        *config.Config
 		absOutputs []absOutput
+		templates  []Input
 	)
 	// Everything that resolves a path must happen with the working directory
 	// set to the config's own directory, because gqlgen's config.abs() -- which
@@ -134,7 +164,7 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open module root %q: %w", moduleAbs, err)
 	}
-	rawConfig, err := ReadThroughRoot(root, filepath.ToSlash(filepath.Clean(filepath.FromSlash(configPath))))
+	rawConfig, err := ReadThroughRoot(root, configRel)
 	root.Close()
 	if err != nil {
 		return nil, fmt.Errorf("load gqlgen config %q: unable to read config: %w", configPath, err)
@@ -154,10 +184,20 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 			return fmt.Errorf("load gqlgen config %q: %w", configPath, err)
 		}
 		patterns := raw.schema
+		for _, pat := range patterns {
+			if err := refuseDotDotAfterAName("schema pattern", pat); err != nil {
+				return err
+			}
+		}
+		for _, o := range raw.outputs {
+			if err := refuseDotDotAfterAName(o.knob, o.path); err != nil {
+				return err
+			}
+		}
 		if err := refuseSchemaPatternsLeavingTheModule(patterns, moduleAbs, configDirAbs); err != nil {
 			return err
 		}
-		if err := refuseUnresolvableSchemaDirs(patterns); err != nil {
+		if err := refuseUnresolvableSchemaDirs(patterns, moduleAbs); err != nil {
 			return err
 		}
 		// The schema is one of THREE keys whose value is a file gqlgen reads
@@ -167,12 +207,14 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 		// keys get the same confinement: inside the module, resolvable, a
 		// regular file -- checked before anything is generated.
 		for _, tpl := range raw.templates {
-			if err := refuseTemplateInput(tpl.knob, tpl.path, moduleAbs, configDirAbs); err != nil {
+			phys, err := refuseTemplateInput(tpl.knob, tpl.path, moduleAbs, configDirAbs)
+			if err != nil {
 				return err
 			}
+			templates = append(templates, Input{Knob: tpl.knob, Path: tpl.path, Physical: phys})
 		}
 
-		cfg, err = config.LoadConfig(filepath.Base(configPath))
+		cfg, err = config.LoadConfig(configBase)
 		if err != nil {
 			return fmt.Errorf("load gqlgen config %q: %w", configPath, err)
 		}
@@ -228,19 +270,24 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 	}
 
 	plan := &Plan{
-		ConfigPath: filepath.ToSlash(filepath.Clean(filepath.FromSlash(configPath))),
+		ConfigPath: configRel,
 		ConfigDir:  filepath.ToSlash(configDirRel),
+		Templates:  templates,
 	}
 	if plan.ConfigDir == "" {
 		plan.ConfigDir = "."
 	}
 
-	for _, s := range cfg.SchemaFilename {
-		rel, err := moduleRelative(moduleAbs, absFrom(configDirAbs, s))
-		if err != nil {
-			return nil, fmt.Errorf("schema %q: %w", s, err)
-		}
-		plan.Schemas = append(plan.Schemas, rel)
+	// Every schema file gqlgen matched, resolved exactly as gqlgen opens it:
+	// the string it stored, from the directory it runs in, through every link
+	// as the operating system follows it. The plan (and so the record's
+	// `# schema:` lines) names the PHYSICAL module-relative path.
+	plan.SchemaInputs, err = physicalSchemaInputs(moduleAbs, configDirAbs, cfg.SchemaFilename)
+	if err != nil {
+		return nil, err
+	}
+	for _, in := range plan.SchemaInputs {
+		plan.Schemas = append(plan.Schemas, in.Physical)
 	}
 	sort.Strings(plan.Schemas)
 
@@ -271,9 +318,75 @@ func EnumerateOutputs(moduleDir, configPath string) (*Plan, error) {
 type rawInputs struct {
 	schema    []string
 	templates []templateInput
+	outputs   []templateInput
 }
 
 type templateInput struct{ knob, path string }
+
+// Input is one file the generator reads: the config key, the value as
+// written, and where it physically resolves (module-relative).
+type Input struct {
+	Knob, Path, Physical string
+}
+
+// refuseDotDotAfterAName refuses a path with a `..` component after a
+// non-`..` one. Such a `..` climbs from wherever the name before it resolves,
+// which through a link is not where filepath.Clean says; a path that needs it
+// is always writable without it. Leading `..` components (a config under
+// cmd/query-api naming ../../contracts/...) climb from the config's physical
+// directory and stay.
+func refuseDotDotAfterAName(knob, p string) error {
+	named := false
+	for _, c := range strings.Split(filepath.ToSlash(p), "/") {
+		switch c {
+		case "", ".":
+		case "..":
+			if named {
+				return fmt.Errorf("refusing: %s %q has a `..` after a directory name; through a link that climbs somewhere other than the path reads -- write it without the `..`", knob, p)
+			}
+		default:
+			named = true
+		}
+	}
+	return nil
+}
+
+// physicalSchemaInputs resolves every schema file gqlgen matched exactly as
+// gqlgen opens it -- the string it stored, from the directory it runs in,
+// through every link -- and refuses one that lands outside the module.
+func physicalSchemaInputs(moduleAbs, configDirAbs string, names []string) ([]Input, error) {
+	var out []Input
+	for _, s := range names {
+		p := filepath.FromSlash(s)
+		if !filepath.IsAbs(p) {
+			p = configDirAbs + string(filepath.Separator) + p
+		}
+		phys, err := physicallyInside(moduleAbs, p)
+		if err != nil {
+			return nil, fmt.Errorf("refusing: schema %q %v", s, err)
+		}
+		rel, err := moduleRelative(moduleAbs, phys)
+		if err != nil {
+			return nil, fmt.Errorf("refusing: schema %q: %w", s, err)
+		}
+		out = append(out, Input{Knob: "schema", Path: s, Physical: rel})
+	}
+	return out, nil
+}
+
+// physicallyInside returns where p physically resolves (physicalPath) and
+// refuses a p that resolves outside moduleAbs, is the root itself, or cannot
+// be resolved.
+func physicallyInside(moduleAbs, p string) (string, error) {
+	phys, err := physicalPath(p)
+	if err != nil {
+		return "", fmt.Errorf("cannot be resolved: %v", err)
+	}
+	if _, err := moduleRelative(moduleAbs, phys); err != nil {
+		return "", fmt.Errorf("resolves physically to %q, outside the module (%v)", phys, err)
+	}
+	return phys, nil
+}
 
 // readRawInputs decodes the config bytes into gqlgen's own Config type with
 // gqlgen's own decoder settings (config.ReadConfig: yaml.v3, KnownFields), so
@@ -287,6 +400,15 @@ func readRawInputs(b []byte) (rawInputs, error) {
 		return rawInputs{}, fmt.Errorf("unable to parse config: %w", err)
 	}
 	in := rawInputs{schema: raw.SchemaFilename}
+	for _, o := range []templateInput{
+		{"exec.filename", raw.Exec.Filename}, {"exec.dir", raw.Exec.DirName}, {"exec.filename_template", raw.Exec.FilenameTemplate},
+		{"model.filename", raw.Model.Filename}, {"federation.filename", raw.Federation.Filename},
+		{"resolver.filename", raw.Resolver.Filename}, {"resolver.dir", raw.Resolver.DirName}, {"resolver.filename_template", raw.Resolver.FilenameTemplate},
+	} {
+		if o.path != "" {
+			in.outputs = append(in.outputs, o)
+		}
+	}
 	if raw.Model.ModelTemplate != "" {
 		in.templates = append(in.templates, templateInput{"model.model_template", raw.Model.ModelTemplate})
 	}
@@ -306,22 +428,36 @@ func readRawInputs(b []byte) (rawInputs, error) {
 // be resolved (the inert link CopyTree leaves where a link out of the module
 // was, a missing file), or is not a regular file. The path is literal -- gqlgen
 // passes it straight to os.ReadFile -- so no glob syntax is interpreted.
-func refuseTemplateInput(knob, p, moduleAbs, configDirAbs string) error {
+func refuseTemplateInput(knob, p, moduleAbs, configDirAbs string) (string, error) {
+	if err := refuseDotDotAfterAName(knob, p); err != nil {
+		return "", err
+	}
 	abs := filepath.FromSlash(p)
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(configDirAbs, abs)
 	}
 	if _, err := moduleRelative(moduleAbs, filepath.Clean(abs)); err != nil {
-		return fmt.Errorf("refusing: %s %q leaves the module (%v); the generator's input must live inside it", knob, p, err)
+		return "", fmt.Errorf("refusing: %s %q leaves the module (%v); the generator's input must live inside it", knob, p, err)
 	}
-	info, err := os.Stat(filepath.FromSlash(p))
+	// Judged where gqlgen's os.ReadFile lands: the value as written, from the
+	// physical config directory, through every link.
+	raw := filepath.FromSlash(p)
+	if !filepath.IsAbs(raw) {
+		raw = configDirAbs + string(filepath.Separator) + raw
+	}
+	info, err := os.Stat(raw)
 	if err != nil {
-		return fmt.Errorf("refusing: %s %q cannot be read: %v. A link out of the module is never followed -- keep the template inside the module", knob, p, err)
+		return "", fmt.Errorf("refusing: %s %q cannot be read: %v. A link out of the module is never followed -- keep the template inside the module", knob, p, err)
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("refusing: %s %q is not a regular file (%s)", knob, p, info.Mode())
+		return "", fmt.Errorf("refusing: %s %q is not a regular file (%s)", knob, p, info.Mode())
 	}
-	return nil
+	phys, err := physicallyInside(moduleAbs, raw)
+	if err != nil {
+		return "", fmt.Errorf("refusing: %s %q %v; the generator's input must live inside it", knob, p, err)
+	}
+	rel, _ := moduleRelative(moduleAbs, phys)
+	return rel, nil
 }
 
 // refuseSchemaPatternsLeavingTheModule refuses a schema pattern whose literal
@@ -359,6 +495,19 @@ func refuseSchemaPatternsLeavingTheModule(patterns []string, moduleAbs, configDi
 		if _, err := moduleRelative(moduleAbs, abs); err != nil {
 			return fmt.Errorf("refusing: schema pattern %q leaves the module (%v); the generator's input must live inside it", p, err)
 		}
+		// And where the operating system puts that prefix, through its links.
+		raw := filepath.FromSlash(prefix)
+		if !filepath.IsAbs(raw) {
+			raw = configDirAbs + string(filepath.Separator) + raw
+		}
+		// (An unresolvable prefix -- a loop, a file where a directory is
+		// named -- is the traversal check's to report, with its own reason.)
+		phys, err := physicalPath(raw)
+		if err == nil && phys != moduleAbs {
+			if _, err := moduleRelative(moduleAbs, phys); err != nil {
+				return fmt.Errorf("refusing: schema pattern %q resolves physically to %q, outside the module (%v); the generator's input must live inside it", p, phys, err)
+			}
+		}
 	}
 	return nil
 }
@@ -382,9 +531,9 @@ const globMeta = `*?[\\`
 // matches nothing overall is refused separately. A LITERAL directory component
 // that exists but is not a directory is refused too: it can match nothing, and
 // gqlgen would not say so.
-func refuseUnresolvableSchemaDirs(patterns []string) error {
+func refuseUnresolvableSchemaDirs(patterns []string, moduleAbs string) error {
 	for _, p := range patterns {
-		if err := schemaTraversalErr(p); err != nil {
+		if err := schemaTraversalErr(p, moduleAbs); err != nil {
 			return fmt.Errorf(
 				"refusing: schema pattern %q cannot be resolved: %w; gqlgen would skip it silently. A link out of the module is never followed -- move the schema inside the module",
 				p, err)
@@ -393,7 +542,7 @@ func refuseUnresolvableSchemaDirs(patterns []string) error {
 	return nil
 }
 
-func schemaTraversalErr(pattern string) error {
+func schemaTraversalErr(pattern, moduleAbs string) error {
 	comps := strings.Split(filepath.ToSlash(pattern), "/")
 	start := "."
 	if comps[0] == "" && len(comps) > 1 {
@@ -455,6 +604,21 @@ func schemaTraversalErr(pattern string) error {
 					return fmt.Errorf("directory %q: %w", filepath.ToSlash(p), err)
 				case info.IsDir():
 					next = append(next, p)
+				}
+			}
+		}
+		// Every directory the traversal passes is judged where it physically
+		// is: a reproduced link resolves inside the module by construction
+		// (CopyTree), and this makes that a checked fact rather than a
+		// consequence.
+		for _, d := range next {
+			phys, err := physicalPath(d)
+			if err != nil {
+				return fmt.Errorf("directory %q: %v", filepath.ToSlash(d), err)
+			}
+			if phys != moduleAbs {
+				if _, err := moduleRelative(moduleAbs, phys); err != nil {
+					return fmt.Errorf("directory %q resolves physically to %q, outside the module", filepath.ToSlash(d), phys)
 				}
 			}
 		}

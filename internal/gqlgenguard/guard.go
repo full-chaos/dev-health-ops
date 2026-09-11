@@ -321,7 +321,11 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 
 	w := opts.report()
 	fmt.Fprintf(w, "module: %s\n", moduleAbs)
-	fmt.Fprintf(w, "private copy: %s\n", copyDir)
+	if real := resolvedPath(copyDir); real != copyDir {
+		fmt.Fprintf(w, "private copy: %s (physically %s)\n", copyDir, real)
+	} else {
+		fmt.Fprintf(w, "private copy: %s\n", copyDir)
+	}
 
 	dropped, err := CopyTree(ctx, moduleRoot, copyRoot, skipVCS)
 	if err != nil {
@@ -346,6 +350,12 @@ func generateIntoCopy(ctx context.Context, opts Options) (*Result, func(), error
 	}
 	fmt.Fprintf(w, "config: %s (%d schema file(s), %d declared output path(s))\n",
 		plan.ConfigPath, len(plan.Schemas), len(plan.Outputs))
+	// Every file the generator will read from the config, as the config names
+	// it and where it physically resolves -- so a change that widens the
+	// generator's inputs shows on the line that names the input.
+	for _, in := range append(append([]Input(nil), plan.SchemaInputs...), plan.Templates...) {
+		fmt.Fprintf(w, "generator input: %s %s -> %s\n", in.Knob, in.Path, in.Physical)
+	}
 
 	if err := refuseDiscoverableConfigs(copyRoot, plan); err != nil {
 		return nil, cleanup, err
@@ -567,6 +577,8 @@ func childEnvironment(ctx context.Context, scratch, workDir, copyDir, moduleAbs 
 	}
 	fmt.Fprintf(w, "generator env (allowlist %s; nothing inherited): GOMOD=%s GOFLAGS=%s GOENV=%q GOWORK=%s GOTOOLCHAIN=%s\n",
 		strings.Join(childEnvKeys, ","), eff["GOMOD"], eff["GOFLAGS"], eff["GOENV"], eff["GOWORK"], eff["GOTOOLCHAIN"])
+	fmt.Fprintf(w, "generator locations (physical): GOCACHE=%s GOMODCACHE=%s GOPATH=%s\n",
+		physicalList(shared["GOCACHE"]), physicalList(shared["GOMODCACHE"]), physicalList(shared["GOPATH"]))
 	if err := checkChildGoEnv(eff, copyReal, inside); err != nil {
 		return nil, err
 	}
@@ -669,15 +681,27 @@ func refuseReplacesOutsideTheCopy(ctx context.Context, copyRoot *os.Root, copyDi
 	return nil
 }
 
+// resolvedPath is p where the operating system would find it (physicalPath):
+// never cleaned before its links are followed, so `<link>/..` is judged where
+// it lands. An unresolvable p (a loop) is returned cleaned, which no caller
+// treats as confinement: every caller refuses on a location INSIDE the module.
 func resolvedPath(p string) string {
-	a, err := filepath.Abs(p)
-	if err != nil {
-		return p
-	}
-	if r, err := filepath.EvalSymlinks(a); err == nil {
+	if r, err := physicalPath(p); err == nil {
 		return r
 	}
-	return a
+	if a, err := filepath.Abs(p); err == nil {
+		return a
+	}
+	return p
+}
+
+// physicalList is resolvedPath over each entry of a path list (GOPATH).
+func physicalList(v string) string {
+	var out []string
+	for _, e := range filepath.SplitList(v) {
+		out = append(out, resolvedPath(e))
+	}
+	return strings.Join(out, string(filepath.ListSeparator))
 }
 
 // within reports whether p is root or beneath it (lexically, both absolute).
@@ -781,17 +805,15 @@ func refuseCopyInsideModule(moduleAbs, tempParent string) error {
 	if parent == "" {
 		parent = os.TempDir()
 	}
-	parentAbs, err := filepath.Abs(parent)
+	// Resolved PHYSICALLY, never cleaned first: `<a link to an in-module
+	// dir>/../<dir>` is inside the module to the operating system that creates
+	// the copy and outside it to filepath.Abs -- round 5b of review restarted
+	// the self-copy in the tree with exactly that TMPDIR.
+	parentAbs, err := physicalPath(parent)
 	if err != nil {
-		return fmt.Errorf("resolve the private copy's parent %q: %w", parent, err)
+		return fmt.Errorf("refusing: the private copy's parent %q cannot be resolved: %w", parent, err)
 	}
-	if real, err := filepath.EvalSymlinks(parentAbs); err == nil {
-		parentAbs = real
-	}
-	moduleReal := moduleAbs
-	if real, err := filepath.EvalSymlinks(moduleAbs); err == nil {
-		moduleReal = real
-	}
+	moduleReal := resolvedPath(moduleAbs)
 	rel, err := filepath.Rel(moduleReal, parentAbs)
 	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf(

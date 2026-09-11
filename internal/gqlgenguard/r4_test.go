@@ -95,6 +95,17 @@ func TestGoEnvironmentInputDomain(t *testing.T) {
 		{shape: "HOME inside the working tree, cache locations left to their HOME defaults (a shared location: refused)", env: func(t *testing.T, f *fixture) map[string]string {
 			return map[string]string{"HOME": inTree(f, ".home"), "GOCACHE": "", "GOMODCACHE": "", "GOPATH": "", "XDG_CACHE_HOME": ""}
 		}, wantErr: "is inside the module, so the go command would write there"},
+		{shape: "the go command on PATH resolves INSIDE the module (a wrapper at <tree>/bin/go: refused before it runs)", env: func(t *testing.T, f *fixture) map[string]string {
+			goBin, err := goBinary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.write("bin/go", "#!/bin/sh\necho ran >> "+filepath.Join(t.TempDir(), "ran.log")+"\nexec "+goBin+" \"$@\"\n")
+			if err := os.Chmod(filepath.Join(f.dir, "bin", "go"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return map[string]string{"PATH": filepath.Join(f.dir, "bin") + string(os.PathListSeparator) + os.Getenv("PATH")}
+		}, wantErr: "the go command resolves to"},
 		{shape: "the user's DEFAULT go env file (no GOENV set) carrying GOCACHE inside the working tree (still read for the shared location: refused)", env: func(t *testing.T, f *fixture) map[string]string {
 			home := t.TempDir()
 			if err := os.MkdirAll(filepath.Join(home, ".config", "go"), 0o755); err != nil {
@@ -297,32 +308,32 @@ func TestGoModReplaceInputDomain(t *testing.T) {
 	goAvailable(t)
 	cells := []struct {
 		shape   string
-		replace func(t *testing.T, f *fixture) string
+		replace func(t *testing.T, f *fixture, beside string) string
 		wantErr string
 	}{
-		{shape: "canonical (no replace)", replace: func(t *testing.T, f *fixture) string { return "" }},
-		{shape: "a replace to a directory INSIDE the module", replace: func(t *testing.T, f *fixture) string {
+		{shape: "canonical (no replace)", replace: func(t *testing.T, f *fixture, beside string) string { return "" }},
+		{shape: "a replace to a directory INSIDE the module", replace: func(t *testing.T, f *fixture, beside string) string {
 			f.write("inmod/go.mod", "module example.com/inmod\n\ngo 1.25\n")
 			return "replace example.com/inmod => ./inmod\n"
 		}},
-		{shape: "a version replace (module cache, go.sum)", replace: func(t *testing.T, f *fixture) string {
+		{shape: "a version replace (module cache, go.sum)", replace: func(t *testing.T, f *fixture, beside string) string {
 			return "replace example.com/versioned => example.com/other v1.0.0\n"
 		}},
-		{shape: "an ABSOLUTE replace outside the module (round 4's shape)", replace: func(t *testing.T, f *fixture) string {
+		{shape: "an ABSOLUTE replace outside the module (round 4's shape)", replace: func(t *testing.T, f *fixture, beside string) string {
 			ext := t.TempDir()
 			if err := os.WriteFile(filepath.Join(ext, "go.mod"), []byte("module example.com/ext\n\ngo 1.25\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			return "replace example.com/ext => " + ext + "\n"
 		}, wantErr: "go.mod replaces example.com/"},
-		{shape: "a RELATIVE ../ replace outside the module", replace: func(t *testing.T, f *fixture) string {
+		{shape: "a RELATIVE ../ replace outside the module", replace: func(t *testing.T, f *fixture, beside string) string {
 			return "replace example.com/ext => ../external-domain\n"
 		}, wantErr: "go.mod replaces example.com/"},
-		{shape: "an absolute replace naming the REAL tree (outside the private copy)", replace: func(t *testing.T, f *fixture) string {
+		{shape: "an absolute replace naming the REAL tree (outside the private copy)", replace: func(t *testing.T, f *fixture, beside string) string {
 			f.write("inmod/go.mod", "module example.com/inmod\n\ngo 1.25\n")
 			return "replace example.com/inmod => " + filepath.Join(f.dir, "inmod") + "\n"
 		}, wantErr: "go.mod replaces example.com/"},
-		{shape: "a replace through a directory link out of the module", replace: func(t *testing.T, f *fixture) string {
+		{shape: "a replace through a directory link out of the module", replace: func(t *testing.T, f *fixture, beside string) string {
 			ext := t.TempDir()
 			if err := os.WriteFile(filepath.Join(ext, "go.mod"), []byte("module example.com/ext\n\ngo 1.25\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -332,19 +343,29 @@ func TestGoModReplaceInputDomain(t *testing.T) {
 			}
 			return "replace example.com/ext => ./extlink\n"
 		}, wantErr: "go.mod replaces example.com/"},
+		{shape: "a RELATIVE ../ replace whose target EXISTS beside the private copy (the confinement check, not the resolution one)", replace: func(t *testing.T, f *fixture, beside string) string {
+			if err := os.MkdirAll(filepath.Join(beside, "ext-beside"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(beside, "ext-beside", "go.mod"), []byte("module example.com/ext\n\ngo 1.25\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return "replace example.com/ext => ../ext-beside\n"
+		}, wantErr: "a directory outside the module"},
 	}
 	for i, c := range cells {
 		t.Run(cellID("G13", i)+" "+c.shape, func(t *testing.T) {
 			f := guardFixture(t).withModuleFiles()
-			if r := c.replace(t, f); r != "" {
+			gen := &fakeGenerator{fn: rewriteOutputs("generated")}
+			opts := guardOptions(f, gen)
+			if r := c.replace(t, f, opts.TempParent); r != "" {
 				f.write("go.mod", f.read("go.mod")+"\n"+r)
 			}
 			if c.wantErr != "" && strings.Contains(f.dir, c.wantErr) {
 				t.Fatalf("wantErr %q also occurs in the fixture path %s", c.wantErr, f.dir)
 			}
 			before := f.digests()
-			gen := &fakeGenerator{fn: rewriteOutputs("generated")}
-			_, err := UpdateDriftRecord(context.Background(), guardOptions(f, gen))
+			_, err := UpdateDriftRecord(context.Background(), opts)
 			logCell(t, err, "go.mod accepted")
 			if c.wantErr == "" {
 				if err != nil {
@@ -372,7 +393,7 @@ func TestConfigPathInputDomain(t *testing.T) {
 		wantErr     string
 	}{
 		{"canonical", "gqlgen.yml", ""},
-		{"a ../ that stays inside the module", "gen/../gqlgen.yml", ""},
+		{"a ../ after a directory name, lexically inside the module (refused)", "gen/../gqlgen.yml", "has a `..` after a directory name"},
 		{"../ out of the module (round 4's shape)", "../outside.yml", "leaves the module"},
 		{"a deeper escape", "gen/../../outside.yml", "leaves the module"},
 		{"absolute", "/etc/hostname", "module-relative"},

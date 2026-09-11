@@ -204,6 +204,15 @@ func TestCopyBackInputDomain(t *testing.T) {
 		{shape: "an unrelated file edited during generation (not a destination)", during: func(t *testing.T, f *fixture) {
 			f.write("unrelated/notes.md", "edited\n")
 		}},
+		{shape: "an ABSENT declared output that becomes a symbolic link during generation", setup: func(t *testing.T, f *fixture) {
+			if err := os.Remove(filepath.Join(f.dir, "gen", "model", "models_gen.go")); err != nil {
+				t.Fatal(err)
+			}
+		}, during: func(t *testing.T, f *fixture) {
+			if err := os.Symlink("../../unrelated/notes.md", filepath.Join(f.dir, "gen", "model", "models_gen.go")); err != nil {
+				t.Fatal(err)
+			}
+		}, wantErr: `"gen/model/models_gen.go" changed in the working tree`},
 	}
 	for i, tc := range cases {
 		t.Run(cellID("G11", i)+" "+tc.shape, func(t *testing.T) {

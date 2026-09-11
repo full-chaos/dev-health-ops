@@ -271,6 +271,23 @@ func TestSymlinkCopyPolicyInputDomain(t *testing.T) {
 		t.Fatalf("plant the nested link: %v", err)
 	}
 	cells = append(cells, cell{"inside/nested-escape", "../../" + filepath.Base(outsideDir) + "/outside.txt", "does not resolve inside the module"})
+	// Links whose target is their own directory or an ancestor: inside the
+	// module, but cycles, and the one shape through which a later `..` climbs
+	// out physically while staying in lexically (round 5b). Never reproduced.
+	// A link to a SIBLING directory is not an ancestor and stays.
+	f.write("inside/deeper/keep.txt", "x\n")
+	for _, c := range []cell{
+		{"inside/own-dir", ".", droppedAncestor},
+		{"inside/up-to-the-root", "..", droppedAncestor},
+		{"inside/deeper/up-to-inside", "..", droppedAncestor},
+		{"inside/deeper/up-two-to-the-root", "../..", droppedAncestor},
+		{"inside/deeper/sibling-dir", "../../unrelated", "reproduced"},
+	} {
+		if err := os.Symlink(c.target, filepath.Join(f.dir, filepath.FromSlash(c.name))); err != nil {
+			t.Fatalf("plant %s: %v", c.name, err)
+		}
+		cells = append(cells, c)
+	}
 
 	var inCopy map[string]string
 	readThrough := map[string]error{}

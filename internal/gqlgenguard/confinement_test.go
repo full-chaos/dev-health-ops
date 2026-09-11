@@ -176,7 +176,7 @@ func TestSchemaInputConfinementInputDomain(t *testing.T) {
 				linkOutsideDir("sub/outdir")(t, f, outside)
 			}, wantErr: `cannot be resolved: directory "sub/outdir"`},
 		{shape: "a literal schema path that climbs BACK through a dropped link", schema: "outdir/../schema.graphql",
-			setup: linkOutsideDir("outdir"), wantErr: `cannot be resolved: directory "outdir"`},
+			setup: linkOutsideDir("outdir"), wantErr: "has a `..` after a directory name"},
 		{shape: "a glob matching one in-module schema AND one leaf link out of the module", schema: "sch/*.graphql",
 			setup: func(t *testing.T, f *fixture, outside string) {
 				f.write("sch/a.graphql", fixtureSchema)
@@ -208,7 +208,7 @@ func TestSchemaInputConfinementInputDomain(t *testing.T) {
 			}, wantErr: `schema pattern "../outside-schema.graphql" leaves the module`},
 		{shape: "a glob whose literal directory climbs OUT of the module", schema: "../*.graphql",
 			wantErr: `schema pattern "../*.graphql" leaves the module`},
-		{shape: "a ../ that stays INSIDE the module (canonical-equivalent)", schema: "gen/../schema.graphql"},
+		{shape: "a ../ after a directory name, lexically inside the module (refused: it climbs from wherever the name resolves)", schema: "gen/../schema.graphql", wantErr: "has a `..` after a directory name"},
 		{shape: "a ** walk passing a directory link out of the module at depth 2 (round 2's shape)", schema: `"sub/**/*.graphql"`,
 			setup: func(t *testing.T, f *fixture, outside string) {
 				f.write("sub/deep/inside.graphql", fixtureSchema)

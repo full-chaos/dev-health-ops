@@ -133,6 +133,7 @@ type DroppedLink struct {
 const (
 	droppedAbsolute   = "absolute target"
 	droppedUnresolved = "does not resolve inside the module"
+	droppedAncestor   = "target is the link's own directory or one of its ancestors (a cycle)"
 )
 
 // CopyTree copies every file and directory from src to dst, and every symbolic
@@ -246,7 +247,82 @@ func linkDropReason(src *os.Root, rel, target string) (reason, detail string) {
 	if _, err := src.Stat(rel); err != nil {
 		return droppedUnresolved, err.Error()
 	}
+	// A link to its own directory or an ancestor resolves inside the module but
+	// is a cycle, and it is the one shape through which `..` climbs PHYSICALLY
+	// out of the module while climbing lexically inside it: after
+	// `a/b/L -> ../..` (the root), `a/b/L/..` is the root's PARENT to the
+	// operating system and `a/b` to filepath.Clean. Round 5b of review read a
+	// schema, a template and a config directory outside the module that way.
+	// Nothing needs such a link to generate, so it is never reproduced.
+	linkDir, derr := physicalPath(filepath.Join(src.Name(), filepath.FromSlash(path.Dir(rel))))
+	target, terr := physicalPath(filepath.Join(src.Name(), filepath.FromSlash(rel)))
+	if derr != nil || terr != nil {
+		return droppedUnresolved, errors.Join(derr, terr).Error()
+	}
+	if within(target, linkDir) {
+		return droppedAncestor, ""
+	}
 	return "", ""
+}
+
+// physicalPath resolves p the way the operating system does when it opens it:
+// component by component, following every link where it stands, so a `..`
+// after a link climbs from the link's TARGET. filepath.Clean, Abs and Join
+// climb from the link's NAME instead, which is the difference round 5b of
+// review executed three escapes through. Nothing is cleaned first. A relative
+// p is taken from the working directory. Components that do not exist are
+// kept as written (there is nothing to follow), so the result also says where
+// a create -- os.MkdirAll, os.MkdirTemp -- would land.
+func physicalPath(p string) (string, error) {
+	if !filepath.IsAbs(p) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve %q: read the working directory: %w", p, err)
+		}
+		p = wd + string(filepath.Separator) + p
+	}
+	sep := string(filepath.Separator)
+	split := func(s string) []string {
+		var out []string
+		for _, c := range strings.Split(s, sep) {
+			if c != "" && c != "." {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	cur, rest, links := sep, split(p), 0
+	for len(rest) > 0 {
+		c := rest[0]
+		rest = rest[1:]
+		if c == ".." {
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, c)
+		info, err := os.Lstat(next)
+		switch {
+		case err != nil && errors.Is(err, fs.ErrNotExist):
+			cur = next
+		case err != nil:
+			return "", fmt.Errorf("resolve %q: %w", p, err)
+		case info.Mode()&fs.ModeSymlink != 0:
+			if links++; links > 255 {
+				return "", fmt.Errorf("resolve %q: too many levels of symbolic links", p)
+			}
+			target, err := os.Readlink(next)
+			if err != nil {
+				return "", fmt.Errorf("resolve %q: %w", p, err)
+			}
+			if filepath.IsAbs(target) {
+				cur = sep
+			}
+			rest = append(split(target), rest...)
+		default:
+			cur = next
+		}
+	}
+	return cur, nil
 }
 
 func copyFile(src, dst *os.Root, rel string, perm fs.FileMode) error {

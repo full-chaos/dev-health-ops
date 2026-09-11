@@ -2162,6 +2162,36 @@ def _declared_image(constant: str) -> str:
     return match.group("image")
 
 
+def _mirrored_image(image: str, prefix: str) -> str:
+    """Mirror ONE test-dependency image through TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
+    exactly as ci/check_go.sh's own mirrored_image() shell function does (see
+    that function's comment for the "why" of each branch) -- this test's own
+    prepull-consumer assertions must apply the SAME rule the harness applies,
+    or a supported, non-empty prefix in the test's environment makes the
+    literal source-declared image string wrong on purpose.
+
+    r3 P1 (reproduced): `_declared_image`/`_pinned_clickhouse_image` never
+    read this env var at all, so a host with a mirror configured in its
+    environment (this repo's own documented, supported override) failed
+    BOTH prepull tests -- the consumer (ci/check_go.sh) honoured the
+    override, the test's hardcoded unprefixed expectation did not.
+    Duplicated here (bash -> Python) rather than shared, deliberately: the
+    rule is three lines and test-only, and spawning check_go.sh per
+    expected-image lookup would be slower and no more trustworthy than a
+    pinned, commented copy of the same three lines.
+    """
+    if not prefix:
+        return image
+    first = image.split("/", 1)[0]
+    if first != image and first.lower() == "docker.io":
+        raise AssertionError(
+            f"test dependency image {image!r} names docker.io explicitly"
+        )
+    if first != image and ("." in first or ":" in first):
+        return image
+    return f"{prefix.rstrip('/')}/{image}"
+
+
 def _prepull_stub_bin(tmp_path: Path) -> Path:
     """A docker+sleep pair that fails until the DOCKER_SUCCEED_ON'th call."""
     bin_dir = tmp_path / "bin"
@@ -2200,7 +2230,6 @@ def test_prepull_retries_the_exact_source_declared_image(tmp_path: Path) -> None
     sleep_args = tmp_path / "sleep-args"
     bin_dir = _prepull_stub_bin(tmp_path)
 
-    postgres = _declared_image("PostgresImage")
     env = os.environ.copy()
     env.update(
         {
@@ -2211,6 +2240,8 @@ def test_prepull_retries_the_exact_source_declared_image(tmp_path: Path) -> None
             "SLEEP_ARGS_FILE": str(sleep_args),
         }
     )
+    prefix = env.get("TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX", "")
+    postgres = _mirrored_image(_declared_image("PostgresImage"), prefix)
     result = subprocess.run(
         ["bash", "ci/check_go.sh", "integration-prepull"],
         cwd=ROOT,
@@ -2228,9 +2259,9 @@ def test_prepull_retries_the_exact_source_declared_image(tmp_path: Path) -> None
         f"pull {postgres}",
         f"pull {postgres}",
         f"pull {postgres}",
-        f"pull {_pinned_clickhouse_image()}",
-        f"pull {_declared_image('ValkeyImage')}",
-        f"pull {_declared_image('ReaperImage')}",
+        f"pull {_mirrored_image(_pinned_clickhouse_image(), prefix)}",
+        f"pull {_mirrored_image(_declared_image('ValkeyImage'), prefix)}",
+        f"pull {_mirrored_image(_declared_image('ReaperImage'), prefix)}",
     ]
     assert sleep_args.read_text(encoding="utf-8").splitlines() == ["5", "10"]
     assert f"pre-pulled postgres test dependency image {postgres} on attempt 3/3" in (
@@ -2285,6 +2316,7 @@ def test_prepull_warms_every_declared_image(tmp_path: Path) -> None:
             "SLEEP_ARGS_FILE": str(tmp_path / "sleep-args"),
         }
     )
+    prefix = env.get("TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX", "")
     result = subprocess.run(
         ["bash", "ci/check_go.sh", "integration-prepull"],
         cwd=ROOT,
@@ -2297,10 +2329,10 @@ def test_prepull_warms_every_declared_image(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert docker_args.read_text(encoding="utf-8").splitlines() == [
-        f"pull {_declared_image('PostgresImage')}",
-        f"pull {_pinned_clickhouse_image()}",
-        f"pull {_declared_image('ValkeyImage')}",
-        f"pull {_declared_image('ReaperImage')}",
+        f"pull {_mirrored_image(_declared_image('PostgresImage'), prefix)}",
+        f"pull {_mirrored_image(_pinned_clickhouse_image(), prefix)}",
+        f"pull {_mirrored_image(_declared_image('ValkeyImage'), prefix)}",
+        f"pull {_mirrored_image(_declared_image('ReaperImage'), prefix)}",
     ]
 
 

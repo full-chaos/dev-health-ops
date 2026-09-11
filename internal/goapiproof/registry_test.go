@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +59,44 @@ func TestFetchBuildIdentityRefusesAnUnidentifiableBuild(t *testing.T) {
 				t.Fatalf("expected ErrNoBuildIdentity, got %v", err)
 			}
 		})
+	}
+}
+
+// r3 P1 (reproduced): encoding/json's key-case shadowing lets a LATER,
+// differently-cased key win over an EARLIER exact one for the same
+// struct field -- {"modified":true,"MODIFIED":false} decoded Modified as
+// false with the old plain-struct decode, defeating the modified-build
+// refusal outright. exactBoolField (keyed on a real Go map, exact-string
+// equal) closes it: "MODIFIED" and "modified" are two distinct map
+// entries, so the exact "modified" key can never be shadowed by the
+// other one, regardless of which comes first in the body.
+func TestFetchBuildIdentityRefusesAModifiedBuildEvenUnderAShadowKey(t *testing.T) {
+	for name, body := range map[string]string{
+		"exact key first, shadow second": `{"commit":"b18e56fa7","modified":true,"MODIFIED":false}`,
+		"shadow key first, exact second": `{"commit":"b18e56fa7","MODIFIED":false,"modified":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := buildInfoServer(t, http.StatusOK, body)
+			_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+				StaticCredential("Authorization", "test", "Bearer x"))
+			if !errors.Is(err, ErrNoBuildIdentity) {
+				t.Fatalf("a MODIFIED build (real key present, however ordered against a shadow) must refuse, got %v", err)
+			}
+		})
+	}
+}
+
+// r3 P1 (reproduced): a commit byte the JSON string scanner cannot
+// represent decodes SILENTLY into the Unicode replacement character
+// (U+FFFD) rather than erroring -- the corrupted value would otherwise be
+// written as current_candidate_build, a 4-column foreign-key value every
+// routing row and receipt is keyed against.
+func TestFetchBuildIdentityRefusesInvalidUTF8(t *testing.T) {
+	server := buildInfoServer(t, http.StatusOK, "{\"commit\":\"b18e56\xff\",\"modified\":false}")
+	_, err := FetchBuildIdentity(context.Background(), server.Client(), server.URL,
+		StaticCredential("Authorization", "test", "Bearer x"))
+	if err == nil {
+		t.Fatal("a /buildinfo response containing invalid UTF-8 must refuse, not silently substitute U+FFFD into the commit")
 	}
 }
 
@@ -242,6 +282,75 @@ func TestFetchRegistryRefusesAnIdenticalDuplicateOperationToo(t *testing.T) {
 	t.Cleanup(server.Close)
 	if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
 		t.Fatal("an operation listed twice must refuse even when both entries agree")
+	}
+}
+
+// r3 P1 (reproduced): the OLD plain-struct decode let a differently-cased
+// shadow key win over the exact "operation"/"document_digest" key for
+// the SAME field -- {"operation":"flowMatrix","document_digest":"good",
+// "Operation":"tampered"} decoded Operation as "tampered", not
+// "flowMatrix", regardless of the exact key appearing first. The
+// exact-map read (exactStringField) cannot see this: "Operation" and
+// "operation" are two distinct map entries, so reading the exact key
+// always returns the exact key's own value.
+func TestFetchRegistryOperationFieldIsNeverShadowedByADifferentlyCasedKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"schema_digest":"sha256:abc","operations":[
+			{"operation":"flowMatrix","document_digest":"good","Operation":"tampered","Document_Digest":"tampered-too"}
+		]}`))
+	}))
+	t.Cleanup(server.Close)
+	view, err := FetchRegistry(context.Background(), server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("FetchRegistry: %v", err)
+	}
+	if _, ok := view.DocumentDigest["tampered"]; ok {
+		t.Fatalf("the shadow-cased key was read instead of the exact one: %+v", view.DocumentDigest)
+	}
+	if got := view.DocumentDigest["flowMatrix"]; got != "good" {
+		t.Fatalf("DocumentDigest[flowMatrix] = %q, want %q (the exact document_digest key, not the shadow)", got, "good")
+	}
+}
+
+// r3 P1 (reproduced): "a valid operation followed by {} or null also
+// passes Go's whole-response validation and permits a write" -- an empty
+// or null registry entry decoded to an empty-string operation/digest
+// with NO error, because exactStringField correctly reports the key as
+// absent, not malformed, and nothing upstream checked for absence.
+func TestFetchRegistryRefusesAnEmptyOrNullOperationsEntry(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty object entry": `{"schema_digest":"sha256:abc","operations":[
+			{"operation":"flowMatrix","document_digest":"good"},
+			{}
+		]}`,
+		"null entry": `{"schema_digest":"sha256:abc","operations":[
+			{"operation":"flowMatrix","document_digest":"good"},
+			null
+		]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(server.Close)
+			if _, err := FetchRegistry(context.Background(), server.Client(), server.URL); err == nil {
+				t.Fatal("an empty or null operations entry must refuse, not silently decode to an empty operation/digest")
+			}
+		})
+	}
+}
+
+// r3 P1 (reproduced, package-wide UTF-8 sweep): LoadDocuments has the
+// same silent U+FFFD substitution the other decoders in this package
+// close -- an invalid byte anywhere in the file decoded without error
+// before this check existed.
+func TestLoadDocumentsRefusesInvalidUTF8(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "documents.json")
+	if err := os.WriteFile(path, []byte("[{\"operation\":\"flowMatrix\",\"document\":\"query \xff\",\"digest\":\"d\"}]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadDocuments(path); err == nil {
+		t.Fatal("a documents file containing invalid UTF-8 must refuse")
 	}
 }
 

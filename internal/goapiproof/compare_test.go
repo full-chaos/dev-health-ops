@@ -318,6 +318,41 @@ func TestDecodeSnapshotRejectsUnparseableBody(t *testing.T) {
 	}
 }
 
+// r3 P1 (reproduced): encoding/json substitutes U+FFFD (the replacement
+// character) for a byte it cannot decode as UTF-8, rather than erroring.
+// Without a whole-body validity check, a candidate carrying a genuinely
+// invalid byte and a baseline that already carries a LITERAL replacement
+// character decode to the identical Go value and would compare equal --
+// the executed proof-runner reproduction confirmed this reaches
+// production as a `match` verdict on a receipt actually written.
+func TestDecodeSnapshotRefusesInvalidUTF8(t *testing.T) {
+	if _, err := DecodeSnapshot([]byte("{\"data\":{\"commit\":\"b18e56\xff\"}}")); err == nil {
+		t.Fatal("a body containing invalid UTF-8 must refuse, not silently substitute U+FFFD")
+	}
+}
+
+// The masking case, made concrete: a genuinely invalid byte and an
+// already-replacement-charactered baseline must NOT decode to Snapshots
+// that compare as a match, which is exactly what happened before the
+// UTF-8 gate above existed.
+func TestDecodeSnapshotInvalidUTF8DoesNotMaskAsAMatchingBaseline(t *testing.T) {
+	_, candidateErr := DecodeSnapshot([]byte("{\"data\":{\"commit\":\"b18e56\xff\"}}"))
+	if candidateErr == nil {
+		t.Fatal("the candidate leg must refuse before it can be compared at all")
+	}
+	// The baseline leg (valid UTF-8, already carrying the literal
+	// replacement character) must still decode fine on its own -- this is
+	// not a blanket refusal of the replacement character, only of bytes
+	// that cannot be represented as UTF-8 in the first place.
+	baseline, err := DecodeSnapshot([]byte(`{"data":{"commit":"b18e56�"}}`))
+	if err != nil {
+		t.Fatalf("a body that is already valid UTF-8 (replacement character included) must still decode: %v", err)
+	}
+	if !baseline.DataPresent {
+		t.Fatal("the baseline's data field must still be read")
+	}
+}
+
 // A Tier-B declaration that relaxes nothing must be reported, exactly
 // like a stale volatile-field exclusion: it reads as a relaxation that is
 // there, and the first person to trust it is trusting nothing.

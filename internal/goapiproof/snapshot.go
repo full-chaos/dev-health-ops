@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"unicode/utf8"
 )
 
 // ErrNonFiniteNumber reports a response body carrying a bare NaN,
@@ -38,6 +39,21 @@ var nonFiniteLiteral = regexp.MustCompile(`[:,\[]\s*-?(NaN|Infinity)\b`)
 func DecodeSnapshot(body []byte) (Snapshot, error) {
 	if nonFiniteLiteral.Match(body) {
 		return Snapshot{}, ErrNonFiniteNumber
+	}
+	// r3 P1 (reproduced): a package-wide sibling of the /registry,
+	// /buildinfo and catalog UTF-8 gates. encoding/json's string scanner
+	// substitutes U+FFFD (the replacement character) for a byte it cannot
+	// decode as UTF-8, rather than erroring -- so a candidate body
+	// carrying a genuinely invalid byte and a baseline body that already
+	// contains a LITERAL replacement character decode to the IDENTICAL Go
+	// value and compare equal. Executed end to end through the real proof
+	// Runner over HTTP: a candidate response with raw byte 0xFF against
+	// such a baseline was certified `match`, a receipt was written, and
+	// the operation reported enablement-eligible -- masking a genuine
+	// data discrepancy as proof of agreement. Refusing here, before any
+	// lossy decode runs, is the only point this distinction survives.
+	if !utf8.Valid(body) {
+		return Snapshot{}, errors.New("goapiproof: response body is not valid UTF-8 -- a byte this decoder cannot represent would otherwise be silently replaced before comparison")
 	}
 
 	// Decode the envelope into raw messages first so "data": null and an

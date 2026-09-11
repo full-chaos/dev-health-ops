@@ -64,6 +64,30 @@ def _columns(engine: Engine, table: str) -> dict[str, bool]:
     return {name: nullable == "YES" for name, nullable in rows}
 
 
+def _column_defaults(engine: Engine, table: str) -> dict[str, str | None]:
+    """column name -> its DEFAULT expression, or None for no default.
+
+    r3 P3 (reproduced): the live-nullability comparison above proves name
+    and nullability agree, but says nothing about the DEFAULT VALUE a
+    fresh INSERT actually gets -- changing `differences_outside_baseline_
+    defect`'s fixture default from 0 to 1 passed both DDL-mirror pins
+    (name presence, nullability) with the mirror still declaring a
+    completely different default than the migration. Postgres normalises
+    a literal default to a cast expression (`'0'::integer`), so this
+    compares the RAW `column_default` string as Postgres itself reports
+    it on both sides -- not a value re-derived by either reader.
+    """
+    with engine.connect() as c:
+        rows = c.execute(
+            sa.text(
+                "SELECT column_name, column_default FROM information_schema.columns "
+                "WHERE table_name = :t"
+            ),
+            {"t": table},
+        ).all()
+    return dict(rows)
+
+
 def _constraints(engine: Engine, table: str) -> set[str]:
     with engine.connect() as c:
         rows = c.execute(
@@ -388,4 +412,11 @@ def test_registry_ddl_mirror_matches_live_column_nullability(
             f"{table}: registryschema.DDL disagrees with the migrated schema on column "
             f"presence or nullability.\n  mirror  : {sorted(mirror_columns.items())}\n"
             f"  migrated: {sorted(migrated_columns.items())}"
+        )
+        migrated_defaults = _column_defaults(migrated, table)
+        mirror_defaults = _column_defaults(ddl_mirror_db, table)
+        assert mirror_defaults == migrated_defaults, (
+            f"{table}: registryschema.DDL disagrees with the migrated schema on column "
+            f"DEFAULT values.\n  mirror  : {sorted(mirror_defaults.items())}\n"
+            f"  migrated: {sorted(migrated_defaults.items())}"
         )

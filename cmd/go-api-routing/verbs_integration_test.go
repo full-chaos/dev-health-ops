@@ -33,6 +33,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/registryschema"
 )
@@ -265,18 +266,44 @@ func TestStatusReturnsWithinItsTimeoutUnderAHeldLock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	start := time.Now()
-	out, _, err := captureVerb(t,
-		"status",
-		"-registry-url", server.URL+"/registry",
-		"-postgres-uri", dsn,
-		"-catalog", catalogPath,
-		"-timeout", "300ms",
-	)
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("status must NEVER refuse, even with the database blocked: %v", err)
+	// r3 P3 (reproduced): captureVerb calls run(argv) SYNCHRONOUSLY, and
+	// the lock this test holds is only released by a t.Cleanup that fires
+	// when the test function RETURNS -- so under the exact mutation this
+	// test exists to kill (the deadline removed), the blocked query never
+	// times out, captureVerb never returns, the test function never
+	// returns, and the lock-releasing cleanup never runs: a genuine
+	// deadlock, not a slow test. The reviewer's own repro needed to
+	// cancel the query externally to get an assertion failure at all.
+	// Running the call on its own goroutine with a bounded external wait
+	// turns that hang into a clean, fast test FAILURE instead.
+	type verbResult struct {
+		out, errOut string
+		err         error
 	}
+	done := make(chan verbResult, 1)
+	start := time.Now()
+	go func() {
+		out, errOut, err := captureVerb(t,
+			"status",
+			"-registry-url", server.URL+"/registry",
+			"-postgres-uri", dsn,
+			"-catalog", catalogPath,
+			"-timeout", "300ms",
+		)
+		done <- verbResult{out, errOut, err}
+	}()
+
+	var out string
+	select {
+	case result := <-done:
+		out = result.out
+		if result.err != nil {
+			t.Fatalf("status must NEVER refuse, even with the database blocked: %v", result.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("status did not return within 10s under a held lock -- the deadline is not bounding the blocked query (this would otherwise hang forever, not just fail slowly)")
+	}
+	elapsed := time.Since(start)
 	// The bound is the verb's OWN -timeout, not the test harness's external
 	// cutoff. Comfortably above 300ms to absorb scheduling jitter, and
 	// nowhere near the 2s the mutant needed to be caught at.
@@ -461,6 +488,71 @@ func TestRepointExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a MATCHING -expect-build must not be refused: %v", err)
 	}
+}
+
+// r3 P3 (reproduced): `printStatusText`'s PROOF column has no killer at
+// its real call site -- both full suites stayed green with `if
+// operation.Proven` mutated to `if false && operation.Proven`, which
+// makes the text report label every matching row UNPROVEN even when a
+// real deployed_executed/match proof exists. Function coverage for
+// printStatusText was only 22.9%. This drives status in TEXT mode (no
+// -json) against a row that is GENUINELY proven and asserts the real
+// printed line, not the JSON projection main_test.go already covers.
+func TestStatusTextMarksAGenuinelyProvenRowOkNotUnproven(t *testing.T) {
+	pool, dsn := startVerbPostgres(t)
+	digest := "8888888888888888888888888888888888888888888888888888888888888887"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	ctx := context.Background()
+	// Register the candidate build directly (enable's own preflight would
+	// refuse before ever registering it, since no proof exists yet) so
+	// the receipt's foreign key has something to reference.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
+		VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+		localSchemaDigest(), digest, verbTestOperation, verbTestBuild); err != nil {
+		t.Fatalf("register candidate build: %v", err)
+	}
+	if _, err := goapiproof.Write(ctx, pool, goapiproof.Receipt{
+		SchemaDigest:      localSchemaDigest(),
+		DocumentDigest:    digest,
+		SelectedOperation: verbTestOperation,
+		CandidateBuild:    verbTestBuild,
+		RequestIdentity:   "status-text-proven-row",
+		Stage:             goapiproof.EnablementProofStage,
+		TerminalState:     goapiproof.EnablementProofTerminalState,
+		MeasurementRoute:  goapiproof.RouteEdge,
+		RecordedBy:        "lane-routing-verbs",
+		ReviewEvidence:    "r3 P3 killer: genuinely proven row",
+	}); err != nil {
+		t.Fatalf("write receipt: %v", err)
+	}
+
+	// enable WITHOUT -acknowledge-unproven: the proof above must be what
+	// lets this succeed, proving the row really is proven, not just
+	// asserted to be.
+	if _, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath)...); err != nil {
+		t.Fatalf("enable a genuinely proven operation must succeed without acknowledgement: %v", err)
+	}
+
+	out, _, err := captureVerb(t, "status", "-registry-url", server.URL+"/registry", "-postgres-uri", dsn, "-catalog", catalogPath)
+	if err != nil {
+		t.Fatalf("status must never refuse: %v", err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), verbTestOperation) {
+			if strings.Contains(line, "UNPROVEN") {
+				t.Fatalf("a genuinely proven row printed UNPROVEN in the text report:\n%s", out)
+			}
+			if !strings.Contains(line, "ok") {
+				t.Fatalf("a genuinely proven row's PROOF column is not 'ok':\n%s", out)
+			}
+			return
+		}
+	}
+	t.Fatalf("no line for %s found in the text report:\n%s", verbTestOperation, out)
 }
 
 func assertNoRows(t *testing.T, dsn string) {

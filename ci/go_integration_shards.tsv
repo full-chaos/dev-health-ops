@@ -203,7 +203,7 @@ cmd/query-api/internal/routeswitch	5
 cmd/query-api/internal/workgraph	60
 internal/cacheinvalidation	2
 internal/externalrecompute	30
-internal/goapiproof	135
+internal/goapiproof	155
 internal/joboperator	13
 internal/joboutbox	12
 internal/jobrescue	5
@@ -266,6 +266,15 @@ internal/migrationmatrix	5
 # bigboy 2026-09-10, whole package, -count=1: 130.89s -- above the 120
 # ceiling this time, not just close to it, so the weight moves. Rounded
 # up to 135 for the same shard-balance headroom the prior raises used.
+# RAISED 135 -> 155, r3's fix round (2026-09-11): no new integration
+# test added to this package this round (the case-shadow/UTF-8 killers
+# for r3's findings are plain-suite unit tests, no container). Re-measured
+# anyway per Trap #105 discipline, whole package, -count=1: 141.43s --
+# still fits under 135 by nothing meaningful, and this host was running
+# 3+ other lanes' Go suites concurrently at measurement time (unlike the
+# 130.89s baseline, which was closer to isolated). Rounded up to 155 for
+# real headroom rather than re-asserting a ceiling already this close to
+# the last clean measurement.
 # internal/jobs/investment (CHAOS-5359): ceil() of the one integration test's
 # measured bigboy run, 33.26s (one ClickHouse container, one Materializer.Run),
 # rounded up one further second to 35 for shard-balance headroom -- combined

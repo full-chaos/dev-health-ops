@@ -34,6 +34,28 @@ func TestExecuteHelpAndVersionDoNotRequireDatabase(t *testing.T) {
 	}
 }
 
+// TestHelpDocumentsBothDSNForms is round-2's (2026-09-11) P3 fix: --help
+// documented zero environment variables (not even the pre-existing
+// MIGRATION_DATABASE_URI), so an operator had no way to discover either DSN
+// form from this binary itself.
+func TestHelpDocumentsBothDSNForms(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	if status := execute(context.Background(), []string{"--help"}, env(nil), &stdout, &stderr); status != 0 {
+		t.Fatalf("execute(--help) = %d, stderr=%s", status, stderr.String())
+	}
+	for _, want := range []string{
+		"MIGRATION_DATABASE_URI",
+		"DEV_HEALTH_MIGRATION_PG_HOST",
+		"DEV_HEALTH_MIGRATION_PG_PASSWORD",
+		"mutually exclusive",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("--help output missing %q, got: %s", want, stderr.String())
+		}
+	}
+}
+
 // coordinatorGrants is the only translation between the coordinator posture
 // and what the migration actually grants, so a dropped entry here is a
 // readiness deadlock: the check would demand a privilege no GRANT ever

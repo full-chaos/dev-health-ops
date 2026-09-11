@@ -284,11 +284,11 @@ func execute(parent context.Context, args []string, lookup platformsecrets.Looku
 }
 
 func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, stderr io.Writer) (*operatorRuntime, int) {
-	domainURI, ok := resolveRequired("POSTGRES_URI", lookup)
+	domainURI, ok := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, lookup)
 	if !ok {
 		return nil, writeError(stderr, "configuration_error")
 	}
-	queueURI, ok := resolveRequired("WORKER_DATABASE_URI", lookup)
+	queueURI, ok := resolveDSNRequired("WORKER_DATABASE_URI", platformconfig.QueueDatabaseSpec, lookup)
 	if !ok {
 		return nil, writeError(stderr, "configuration_error")
 	}
@@ -298,7 +298,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	// this DSN the whole CLI is non-functional. Failing here with
 	// configuration_error is the honest outcome; falling back to the domain pool
 	// would reproduce the 42501 this change exists to remove.
-	coordinatorURI, ok := resolveRequired("COORDINATOR_DATABASE_URI", lookup)
+	coordinatorURI, ok := resolveDSNRequired("COORDINATOR_DATABASE_URI", platformconfig.CoordinatorDatabaseSpec, lookup)
 	if !ok {
 		return nil, writeError(stderr, "configuration_error")
 	}
@@ -1487,7 +1487,7 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 	if runtime.lookup == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	dsn, ok := resolveRequired("CLICKHOUSE_URI", runtime.lookup)
+	dsn, ok := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
 	if !ok {
 		return writeError(stderr, "configuration_error")
 	}
@@ -1579,7 +1579,7 @@ func dispatchProvidersyncRetireStaleLinearProjectOwnership(
 	if runtime.lookup == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	dsn, ok := resolveRequired("CLICKHOUSE_URI", runtime.lookup)
+	dsn, ok := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
 	if !ok {
 		return writeError(stderr, "configuration_error")
 	}
@@ -2516,6 +2516,19 @@ func positiveID(raw string) (int64, bool) {
 
 func resolveRequired(key string, lookup platformsecrets.LookupEnv) (platformsecrets.Value, bool) {
 	value, configured, err := platformsecrets.Resolve(key, lookup)
+	return value, err == nil && configured
+}
+
+// resolveDSNRequired is CHAOS-5560's component-aware counterpart to
+// resolveRequired, for the DSNs this binary needs. Round-2 (2026-09-11)
+// found this binary reading DSNs directly via resolveRequired, entirely
+// bypassing config.ResolveDSN -- meaning it could never use the component
+// form at all, unlike every long-running worker binary. Every error shape
+// (a plain "configuration_error" JSON code, no detail) is unchanged: this
+// binary's stderr contract has never carried Go error text, and adding it
+// only for this one caller would be its own inconsistency.
+func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup platformsecrets.LookupEnv) (platformsecrets.Value, bool) {
+	value, configured, err := platformconfig.ResolveDSN(lookup, rawKey, spec)
 	return value, err == nil && configured
 }
 

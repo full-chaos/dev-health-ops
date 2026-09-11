@@ -43,6 +43,26 @@ func execute(
 	flags.SetOutput(stderr)
 	check := flags.Bool("check", false, "verify the pinned River schema without applying DDL")
 	showVersion := flags.Bool("version", false, "print build metadata as JSON and exit")
+	// CHAOS-5560 round-2 P3: this binary's own flag.NewFlagSet documented
+	// zero environment variables (not even the pre-existing
+	// MIGRATION_DATABASE_URI) -- the only place either DSN form was
+	// discoverable was this file's source or the PR history. defaultUsage
+	// is flag's own generated text; appending the env section keeps it
+	// rather than replacing it.
+	defaultUsage := flags.Usage
+	flags.Usage = func() {
+		defaultUsage()
+		fmt.Fprint(stderr, "\nEnvironment:\n"+
+			"  MIGRATION_DATABASE_URI (or _FILE)   pre-built PostgreSQL DSN\n"+
+			"  DEV_HEALTH_MIGRATION_PG_HOST         component form: host (also enables _PORT/_USER/_PASSWORD/_DB below)\n"+
+			"  DEV_HEALTH_MIGRATION_PG_PORT         component form: port (default 5432)\n"+
+			"  DEV_HEALTH_MIGRATION_PG_USER         component form: user\n"+
+			"  DEV_HEALTH_MIGRATION_PG_PASSWORD     component form: password\n"+
+			"  DEV_HEALTH_MIGRATION_PG_DB           component form: database name (default postgres)\n"+
+			"  RIVER_DOMAIN_DATABASE_ROLE, RIVER_QUEUE_DATABASE_ROLE, RIVER_COORDINATOR_DATABASE_ROLE (optional)\n"+
+			"  RIVER_DATABASE_SCHEMA (optional)\n"+
+			"MIGRATION_DATABASE_URI and the DEV_HEALTH_MIGRATION_PG_* component form are mutually exclusive; set exactly one.\n")
+	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0

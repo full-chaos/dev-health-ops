@@ -1132,4 +1132,21 @@ func TestURIAndComponentFormsAreMutuallyExclusivePerDSN(t *testing.T) {
 	if cfg2.DomainDatabaseURI.Configured() {
 		t.Fatalf("expected DomainDatabaseURI to be unconfigured when neither form is set, got %q", cfg2.DomainDatabaseURI.Reveal())
 	}
+
+	// Round-2 (2026-09-11) finding: the exclusivity check only inspected
+	// HOST. A non-host component (here, USER) set alongside a raw URI was
+	// silently ignored -- ResolveDSNFromComponents never activates without
+	// HOST, so the raw URI won with no error and no indication the stray
+	// USER var was sitting unused.
+	_, err = Load(workerSpec(map[string]string{
+		"POSTGRES_URI":              "postgresql://raw:raw@raw.invalid:5432/rawdb",
+		"DEV_HEALTH_PG_DOMAIN_USER": "app",
+		"WORKER_DATABASE_URI":       "postgresql://app:app@db.internal:5432/appdb",
+	}))
+	if err == nil ||
+		!strings.Contains(err.Error(), "POSTGRES_URI") ||
+		!strings.Contains(err.Error(), "DEV_HEALTH_PG_DOMAIN_USER") ||
+		!strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected a non-host component set alongside a raw URI to be refused, got: %v", err)
+	}
 }

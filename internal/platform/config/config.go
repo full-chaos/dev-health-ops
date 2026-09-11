@@ -399,46 +399,14 @@ func Load(spec Spec) (Config, error) {
 		spec   ComponentSpec
 		target *secrets.Value
 	}{
-		{
-			rawKey: "POSTGRES_URI",
-			spec: ComponentSpec{
-				HostKey: "DEV_HEALTH_PG_DOMAIN_HOST", PortKey: "DEV_HEALTH_PG_DOMAIN_PORT", DefaultPort: "5432",
-				UserKey: "DEV_HEALTH_PG_DOMAIN_USER", PasswordKey: "DEV_HEALTH_PG_DOMAIN_PASSWORD",
-				DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
-			},
-			target: &cfg.DomainDatabaseURI,
-		},
-		{
-			rawKey: "WORKER_DATABASE_URI",
-			spec: ComponentSpec{
-				HostKey: "DEV_HEALTH_PG_QUEUE_HOST", PortKey: "DEV_HEALTH_PG_QUEUE_PORT", DefaultPort: "5432",
-				UserKey: "DEV_HEALTH_PG_QUEUE_USER", PasswordKey: "DEV_HEALTH_PG_QUEUE_PASSWORD",
-				DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
-			},
-			target: &cfg.QueueDatabaseURI,
-		},
-		{
-			// Optional here on purpose: only coordinator binaries require it,
-			// and they enforce that themselves through
-			// postgres.RuntimeConfig.RequireCoordinator. A domain-only worker
-			// must not fail to start merely because this is unset.
-			rawKey: "COORDINATOR_DATABASE_URI",
-			spec: ComponentSpec{
-				HostKey: "DEV_HEALTH_PG_COORDINATOR_HOST", PortKey: "DEV_HEALTH_PG_COORDINATOR_PORT", DefaultPort: "5432",
-				UserKey: "DEV_HEALTH_PG_COORDINATOR_USER", PasswordKey: "DEV_HEALTH_PG_COORDINATOR_PASSWORD",
-				DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
-			},
-			target: &cfg.CoordinatorDatabaseURI,
-		},
-		{
-			rawKey: "CLICKHOUSE_URI",
-			spec: ComponentSpec{
-				HostKey: "DEV_HEALTH_CH_HOST", PortKey: "DEV_HEALTH_CH_PORT", DefaultPort: "9000",
-				UserKey: "DEV_HEALTH_CH_USER", PasswordKey: "DEV_HEALTH_CH_PASSWORD",
-				DBKey: "DEV_HEALTH_CH_DB", DefaultDB: "default", Scheme: "clickhouse",
-			},
-			target: &cfg.ClickHouseURI,
-		},
+		{rawKey: "POSTGRES_URI", spec: DomainDatabaseSpec, target: &cfg.DomainDatabaseURI},
+		{rawKey: "WORKER_DATABASE_URI", spec: QueueDatabaseSpec, target: &cfg.QueueDatabaseURI},
+		// COORDINATOR_DATABASE_URI is optional here on purpose: only
+		// coordinator binaries require it, and they enforce that themselves
+		// through postgres.RuntimeConfig.RequireCoordinator. A domain-only
+		// worker must not fail to start merely because this is unset.
+		{rawKey: "COORDINATOR_DATABASE_URI", spec: CoordinatorDatabaseSpec, target: &cfg.CoordinatorDatabaseURI},
+		{rawKey: "CLICKHOUSE_URI", spec: ClickHouseSpec, target: &cfg.ClickHouseURI},
 	}
 	for _, binding := range dsnBindings {
 		value, _, resolveErr := ResolveDSN(lookup, binding.rawKey, binding.spec)
@@ -975,6 +943,38 @@ type ComponentSpec struct {
 	Scheme                        string
 }
 
+// DomainDatabaseSpec, QueueDatabaseSpec, CoordinatorDatabaseSpec, and
+// ClickHouseSpec are the canonical component definitions for CHAOS-5560's
+// four Load()-resolved DSNs, exported so every caller that needs one of
+// these connections shares the exact same field names and defaults --
+// round-2 (2026-09-11) found cmd/dev-health-workerctl reading
+// POSTGRES_URI/WORKER_DATABASE_URI/COORDINATOR_DATABASE_URI/CLICKHOUSE_URI
+// directly instead of going through Load(), which meant it could not use
+// the component form at all; it now calls ResolveDSN with these same specs
+// rather than re-declaring (and risking drifting from) its own copy.
+var (
+	DomainDatabaseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_PG_DOMAIN_HOST", PortKey: "DEV_HEALTH_PG_DOMAIN_PORT", DefaultPort: "5432",
+		UserKey: "DEV_HEALTH_PG_DOMAIN_USER", PasswordKey: "DEV_HEALTH_PG_DOMAIN_PASSWORD",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+	}
+	QueueDatabaseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_PG_QUEUE_HOST", PortKey: "DEV_HEALTH_PG_QUEUE_PORT", DefaultPort: "5432",
+		UserKey: "DEV_HEALTH_PG_QUEUE_USER", PasswordKey: "DEV_HEALTH_PG_QUEUE_PASSWORD",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+	}
+	CoordinatorDatabaseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_PG_COORDINATOR_HOST", PortKey: "DEV_HEALTH_PG_COORDINATOR_PORT", DefaultPort: "5432",
+		UserKey: "DEV_HEALTH_PG_COORDINATOR_USER", PasswordKey: "DEV_HEALTH_PG_COORDINATOR_PASSWORD",
+		DBKey: "DEV_HEALTH_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
+	}
+	ClickHouseSpec = ComponentSpec{
+		HostKey: "DEV_HEALTH_CH_HOST", PortKey: "DEV_HEALTH_CH_PORT", DefaultPort: "9000",
+		UserKey: "DEV_HEALTH_CH_USER", PasswordKey: "DEV_HEALTH_CH_PASSWORD",
+		DBKey: "DEV_HEALTH_CH_DB", DefaultDB: "default", Scheme: "clickhouse",
+	}
+)
+
 // ResolveDSNFromComponents builds a DSN from spec's component env vars.
 // used is false (built is the zero Value, never an error) when the host var
 // is unset or blank. It never looks at any pre-built-URI env var itself --
@@ -1059,14 +1059,39 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 // configured=false, unchanged from calling secrets.Resolve(rawKey, lookup)
 // directly -- every existing "%s is required" caller keeps working exactly
 // as before this function existed.
+//
+// Round-2 (2026-09-11) finding: the exclusivity check above only inspected
+// HostKey. A non-host component (port/user/password) set alongside a
+// pre-built URI was silently ignored -- ResolveDSNFromComponents never
+// activates without a host, so the raw URI won with no error and no
+// indication a stray/mistyped component var was sitting unused. The check
+// below now inspects every PER-CONNECTION component field, not only the
+// one that gates activation, and names every one of them that was
+// actually set. DBKey is deliberately excluded from this trigger set: it
+// is shared across all three Postgres connections by design (one
+// DEV_HEALTH_PG_DB default, matching the pre-existing single-database-name
+// convention), so its mere presence says nothing about which connection,
+// if any, an operator means to move to components -- flagging it here
+// would make "domain via components, queue via its pre-built URI" (a
+// supported, tested combination) spuriously refuse itself the moment
+// DEV_HEALTH_PG_DB is set for the domain side.
 func ResolveDSN(lookup secrets.LookupEnv, rawKey string, spec ComponentSpec) (value secrets.Value, configured bool, err error) {
+	var setComponentKeys []string
+	for _, key := range []string{spec.HostKey, spec.PortKey, spec.UserKey, spec.PasswordKey} {
+		if key == "" {
+			continue
+		}
+		if v, present := lookup(key); present && strings.TrimSpace(v) != "" {
+			setComponentKeys = append(setComponentKeys, key)
+		}
+	}
 	hostSet := strings.TrimSpace(firstOrEmpty(lookup(spec.HostKey))) != ""
 	_, rawPresent := lookup(rawKey)
 	_, rawFilePresent := lookup(rawKey + "_FILE")
-	if hostSet && (rawPresent || rawFilePresent) {
+	if len(setComponentKeys) > 0 && (rawPresent || rawFilePresent) {
 		return secrets.Value{}, false, fmt.Errorf(
 			"%s (or %s_FILE) and %s are mutually exclusive -- set exactly one to configure this connection",
-			rawKey, rawKey, spec.HostKey,
+			rawKey, rawKey, strings.Join(setComponentKeys, ", "),
 		)
 	}
 	if hostSet {

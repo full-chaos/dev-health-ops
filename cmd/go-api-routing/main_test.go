@@ -893,8 +893,11 @@ func TestToReportOperationProjectsEveryStateFaithfully(t *testing.T) {
 	if got.Mode == nil || *got.Mode != "canary" || got.CurrentCandidateBuild == nil || *got.CurrentCandidateBuild != "build-1" {
 		t.Fatalf("MATCH projection lost the row: %+v", got)
 	}
-	if got.UpdatedAt == nil || *got.UpdatedAt != "2026-09-09T12:00:00Z" {
-		t.Fatalf("updated_at = %v, want RFC3339 UTC", got.UpdatedAt)
+	// Value parity with Python's `datetime.isoformat()` (go_api_cli.py's
+	// own `updated_at` field) -- zone spelled `+00:00`, never `Z`, and no
+	// fractional seconds at zero microseconds.
+	if got.UpdatedAt == nil || *got.UpdatedAt != "2026-09-09T12:00:00+00:00" {
+		t.Fatalf("updated_at = %v, want Python isoformat", got.UpdatedAt)
 	}
 	if got.Reachable == nil || !*got.Reachable || !got.Proven {
 		t.Fatalf("a proven canary row at the live digest, deployed plane agreeing, is reachable and proven: %+v", got)

@@ -115,7 +115,7 @@ func runDisable(argv []string) error {
 
 	summary := goapiproof.SummarizeDisable(changes)
 	fmt.Fprintf(stdout, "schema_digest %s\n", local)
-	fmt.Fprintf(stdout, "%-24s %-10s -> %-10s CANDIDATE BUILD\n", "OPERATION", "FROM", "TO")
+	fmt.Fprintf(stdout, "%-24s %-10s -> %-10s CANDIDATE BUILD                           DOCUMENT DIGEST\n", "OPERATION", "FROM", "TO")
 	for _, change := range changes {
 		current := change.CurrentMode
 		if current == "" {
@@ -129,7 +129,11 @@ func runDisable(argv []string) error {
 		if change.IsNoop() {
 			suffix = "   [no change]"
 		}
-		fmt.Fprintf(stdout, "%-24s %-10s -> %-10s %s%s\n", change.Operation, current, change.NewMode, build, suffix)
+		// document_digest is the row's identity alongside operation and
+		// schema_digest: two rows for the same operation, differing only
+		// here, must print as two distinguishable lines, not two copies of
+		// the same one.
+		fmt.Fprintf(stdout, "%-24s %-10s -> %-10s %-40s %s%s\n", change.Operation, current, change.NewMode, build, change.DocumentDigest, suffix)
 		// A `primary` operation is the one Go is fully serving; saying so
 		// out loud is cheap and the operator may not have realised.
 		if change.CurrentMode == "primary" && change.NewMode == "disabled" {
@@ -166,8 +170,8 @@ func runDisable(argv []string) error {
 		}
 		// One structured line per row, so a log search finds the specific
 		// operation and not merely that "something was disabled".
-		fmt.Fprintf(stderr, "go_api_routing.disabled operation=%s from=%s to=%s schema_digest=%s recorded_by=%s\n",
-			change.Operation, change.CurrentMode, change.NewMode, local, common.recordedBy)
+		fmt.Fprintf(stderr, "go_api_routing.disabled operation=%s from=%s to=%s schema_digest=%s document_digest=%s recorded_by=%s\n",
+			change.Operation, change.CurrentMode, change.NewMode, local, change.DocumentDigest, common.recordedBy)
 	}
 	fmt.Fprintf(stdout, "\napplied: %d row(s) now mode=%s\n", summary.Applied, mode)
 	// No `summary.Applied != expected` refusal here: the race it would

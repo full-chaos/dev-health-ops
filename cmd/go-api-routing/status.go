@@ -515,9 +515,23 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 	reported.ReviewEvidence = stringPtr(status.ReviewEvidence)
 	reported.RecordedBy = stringPtr(status.RecordedBy)
 	if status.UpdatedAt != nil {
-		reported.UpdatedAt = stringPtr(status.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		reported.UpdatedAt = stringPtr(pythonUTCIsoFormat(*status.UpdatedAt))
 	}
 	return reported
+}
+
+// pythonUTCIsoFormat renders a UTC time byte-identically to Python's
+// `datetime.isoformat()` (`go_api_cli.py`'s own `updated_at` field): zone
+// spelled `+00:00`, never `Z`, and a `.ffffff` fraction only when the value
+// carries one -- Python omits it entirely at zero microseconds rather than
+// padding, unlike `time.RFC3339Nano`, which prints neither.
+func pythonUTCIsoFormat(t time.Time) string {
+	t = t.UTC()
+	formatted := t.Format("2006-01-02T15:04:05")
+	if microseconds := t.Nanosecond() / 1000; microseconds != 0 {
+		formatted += fmt.Sprintf(".%06d", microseconds)
+	}
+	return formatted + "+00:00"
 }
 
 func stringPtr(value string) *string { return &value }

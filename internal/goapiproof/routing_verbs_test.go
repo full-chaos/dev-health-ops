@@ -30,6 +30,14 @@ func TestLoadOperationCatalogRefusesEveryUnusableShape(t *testing.T) {
 		"an entry with no operation": `[{"operation":"","digest":"b"}]`,
 		"a duplicate operation":      `[{"operation":"a","digest":"b"},{"operation":"a","digest":"c"}]`,
 		"a duplicate digest":         `[{"operation":"a","digest":"b"},{"operation":"c","digest":"b"}]`,
+		// catalogEntryKey reads by EXACT key -- an
+		// entry carrying only the capitalised spelling has no lowercase
+		// "operation"/"digest" key at all, the same shape as "an entry
+		// with no operation" above, not a case-insensitive hit. The
+		// shadow test below proves the two spellings don't collide when
+		// BOTH are present; this proves the lowercase key's absence is
+		// refused when it is the ONLY spelling present.
+		"an entry whose keys are capitalised": `[{"Operation":"a","Digest":"b"}]`,
 		// A byte the Python edge's `Path.read_text()`
 		// cannot decode anywhere in the file, including in a key this
 		// program never reads -- the edge rejects the WHOLE file, so this

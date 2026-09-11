@@ -193,6 +193,28 @@ func TestEnableRefusesWhenThePlanesDisagreeOnTheSchemaDigest(t *testing.T) {
 	}
 }
 
+// `enable -dry-run` must never write a row. Every existing `-dry-run`
+// fixture checks stdout/exit code but never counts rows afterwards, so a
+// build that silently applies on a dry run looked identical to a correct
+// one. `disable`'s opt-in half of this same invariant is already pinned by
+// assertNoRows; this is the opt-out half.
+func TestEnableDryRunNeverWritesARow(t *testing.T) {
+	_, dsn := startVerbPostgres(t)
+	digest := "9999999999999999999999999999999999999999999999999999999999999999"
+	catalogPath := writeCatalog(t, map[string]string{verbTestOperation: digest})
+	t.Setenv(bearerEnvVar, "envelope-for-the-fixture")
+	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
+
+	out, _, err := captureVerb(t, enableArgs(server, dsn, catalogPath, "-acknowledge-unproven", "-dry-run")...)
+	if err != nil {
+		t.Fatalf("enable -dry-run: %v", err)
+	}
+	if !strings.Contains(out, "would enable") {
+		t.Fatalf("dry-run must say what it WOULD do: %s", out)
+	}
+	assertNoRows(t, dsn)
+}
+
 // The enabled_unproven WARNING is emitted, per row, at its real call site.
 //
 // r1's M11 suppressed it and both suites stayed green. It is the only
@@ -1205,8 +1227,8 @@ func TestDisableAppliesLiveRowAndReportsStaleDigestAndLogsTheWrite(t *testing.T)
 	// M40: the per-row structured log, the only durable record of the
 	// write -- stated in full so a mutant that logs an EMPTY line, or logs
 	// the wrong operation/transition, is caught too.
-	wantLog := fmt.Sprintf("go_api_routing.disabled operation=%s from=canary to=python schema_digest=%s recorded_by=lane-routing-verbs",
-		verbTestOperation, localSchemaDigest())
+	wantLog := fmt.Sprintf("go_api_routing.disabled operation=%s from=canary to=python schema_digest=%s document_digest=%s recorded_by=lane-routing-verbs",
+		verbTestOperation, localSchemaDigest(), liveDigest)
 	if !strings.Contains(errOut, wantLog) {
 		t.Fatalf("stderr missing the disabled-row log line.\nwant substring: %s\ngot:\n%s", wantLog, errOut)
 	}

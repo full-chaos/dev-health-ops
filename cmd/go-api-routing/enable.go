@@ -207,9 +207,9 @@ func runEnable(argv []string) error {
 	running, err := goapiproof.FetchBuildIdentity(ctx, client, buildInfoURL, credential)
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
-			return refuse("%v\n  the deployed query-api must identify its build at %s before any row can be pointed at it", err, buildInfoURL)
+			return refuse("%v\n  the deployed query-api must identify its build at %s before any row can be pointed at it", err, goapiproof.EndpointLabelWithPort(buildInfoURL))
 		}
-		return err
+		return refuse("%v", err)
 	}
 	if expectBuild != "" && expectBuild != running {
 		return refuse("-expect-build %q does not match the running build %q -- the flag is a cross-check, never the source", expectBuild, running)
@@ -260,8 +260,8 @@ func runEnable(argv []string) error {
 			// find WHICH operations were turned on without proof, not
 			// merely that some were.
 			fmt.Fprintf(stderr,
-				"WARNING: go_api_routing.enabled_unproven operation=%s stage_evidence=none candidate_build=%s schema_digest=%s mode=%s dry_run=%t\n",
-				outcome.Operation, running, registry.SchemaDigest, mode, dryRun)
+				"WARNING: go_api_routing.enabled_unproven operation=%s stage_evidence=none candidate_build=%s schema_digest=%s document_digest=%s mode=%s dry_run=%t\n",
+				outcome.Operation, running, registry.SchemaDigest, outcome.DocumentDigest, mode, dryRun)
 		}
 	}
 
@@ -287,7 +287,7 @@ func runEnable(argv []string) error {
 		if !outcome.Proven {
 			flag = "  (UNPROVEN)"
 		}
-		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %s%s\n", outcome.Operation, outcome.Mode, outcome.CandidateBuild, flag)
+		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %-40s digest=%s%s\n", outcome.Operation, outcome.Mode, outcome.CandidateBuild, outcome.DocumentDigest, flag)
 		// r6 observability (1) (team-lead ruling): a structured line PER
 		// ROW, mirroring disable's `go_api_routing.disabled` and
 		// repoint's `go_api_routing.repointed` -- BEFORE-and-AFTER
@@ -304,8 +304,8 @@ func runEnable(argv []string) error {
 			if outcome.HadRowBefore {
 				modeBefore, buildBefore = outcome.ModeBefore, outcome.CandidateBuildBefore
 			}
-			fmt.Fprintf(stderr, "go_api_routing.enabled operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s recorded_by=%s\n",
-				outcome.Operation, modeBefore, outcome.Mode, buildBefore, outcome.CandidateBuild, registry.SchemaDigest, common.recordedBy)
+			fmt.Fprintf(stderr, "go_api_routing.enabled operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s document_digest=%s recorded_by=%s\n",
+				outcome.Operation, modeBefore, outcome.Mode, buildBefore, outcome.CandidateBuild, registry.SchemaDigest, outcome.DocumentDigest, common.recordedBy)
 		}
 	}
 	return nil

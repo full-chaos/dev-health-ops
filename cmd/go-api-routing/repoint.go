@@ -102,7 +102,7 @@ func runRepoint(argv []string) error {
 	running, err := goapiproof.FetchBuildIdentity(ctx, client, buildInfoURL, credential)
 	if err != nil {
 		if errors.Is(err, goapiproof.ErrNoBuildIdentity) {
-			return refuse("%v\n  the deployed query-api must identify its build at %s before any row can be pointed at it", err, buildInfoURL)
+			return refuse("%v\n  the deployed query-api must identify its build at %s before any row can be pointed at it", err, goapiproof.EndpointLabelWithPort(buildInfoURL))
 		}
 		return refuse("%v", err)
 	}
@@ -149,8 +149,8 @@ func runRepoint(argv []string) error {
 		if outcome.Changed {
 			state = "repointed"
 		}
-		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %s  %s -> %s\n",
-			outcome.Operation, outcome.ModeAfter, state, outcome.BuildFrom, outcome.BuildTo)
+		fmt.Fprintf(stdout, "go-api-routing:   %-24s mode=%-8s %s  %s -> %s  digest=%s\n",
+			outcome.Operation, outcome.ModeAfter, state, outcome.BuildFrom, outcome.BuildTo, outcome.DocumentDigest)
 		// r6 observability (1)/(5) (team-lead ruling): a structured line
 		// PER CHANGED ROW, mirroring disable's own `go_api_routing.disabled`
 		// line -- BEFORE-and-AFTER mode/build, not just "some rows moved".
@@ -159,8 +159,8 @@ func runRepoint(argv []string) error {
 		// for every unchanged row on a large rollout would bury the ones
 		// that actually moved.
 		if outcome.Changed && !dryRun {
-			fmt.Fprintf(stderr, "go_api_routing.repointed operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s recorded_by=%s\n",
-				outcome.Operation, outcome.ModeBefore, outcome.ModeAfter, outcome.BuildFrom, outcome.BuildTo, registry.SchemaDigest, common.recordedBy)
+			fmt.Fprintf(stderr, "go_api_routing.repointed operation=%s mode_before=%s mode_after=%s build_before=%s build_after=%s schema_digest=%s document_digest=%s recorded_by=%s\n",
+				outcome.Operation, outcome.ModeBefore, outcome.ModeAfter, outcome.BuildFrom, outcome.BuildTo, registry.SchemaDigest, outcome.DocumentDigest, common.recordedBy)
 		}
 	}
 	return nil

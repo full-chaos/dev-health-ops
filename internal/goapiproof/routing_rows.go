@@ -20,25 +20,37 @@ import (
 // cannot silently shift another's scan.
 const routingRowColumns = `selected_operation, document_digest, mode, current_candidate_build`
 
-// selectRepointCandidatesSQL reads every row at a schema digest, in a
-// TOTAL order, LOCKING each one.
+// surveyRoutingRowsSQL is the UNLOCKED read.
 //
-// The order is not cosmetic, and it must be total (r2 R2-09):
-// `selected_operation` alone TIES whenever an operation has several rows
-// under different document digests, and a tie means two concurrent
-// writers can take the same rows in different orders -- which is a
-// deadlock cycle on this table by itself, with the candidate-build table
-// never involved. `(selected_operation, document_digest)` is the row's
-// full identity within a schema digest, so it cannot tie.
+// Its only job is to learn each row's document_digest so the candidate
+// build can be registered BEFORE any routing-row lock is taken
+// (CHAOS-5507). It takes no lock precisely because taking one here is the
+// defect: document_digest is one of the four columns in the
+// candidate-build key, so a verb cannot register without first reading
+// it, and reading it under a lock is what put the two writers in opposite
+// orders.
+const surveyRoutingRowsSQL = `
+SELECT ` + routingRowColumns + `
+  FROM public.go_api_routing_state
+ WHERE schema_digest = $1
+ ORDER BY selected_operation, document_digest`
+
+// selectRepointCandidatesSQL is that same read, now LOCKING.
+//
+// Defined AS the survey plus FOR UPDATE rather than retyped, so the two
+// passes cannot drift into scanning different rows in a different order.
+//
+// The order must be TOTAL: `selected_operation` alone TIES whenever an
+// operation has several rows under different document digests, and a tie
+// means two concurrent writers can take the same rows in different orders
+// -- a deadlock cycle on this table by itself, with the candidate-build
+// table never involved. `(selected_operation, document_digest)` is the
+// row's full identity within a schema digest, so it cannot tie.
 //
 // Unfiltered by operation on purpose: a verb that locked only the rows it
 // intended to write would leave two concurrent writers holding
 // overlapping-but-different sets.
-const selectRepointCandidatesSQL = `
-SELECT ` + routingRowColumns + `
-  FROM public.go_api_routing_state
- WHERE schema_digest = $1
- ORDER BY selected_operation, document_digest
+const selectRepointCandidatesSQL = surveyRoutingRowsSQL + `
    FOR UPDATE`
 
 // selectDisableCandidatesSQL is the SAME read, and it LOCKS.

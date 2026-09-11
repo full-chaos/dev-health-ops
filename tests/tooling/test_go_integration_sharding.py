@@ -588,7 +588,13 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # CHAOS-5505, rebased onto that 175, adds ten more audit-row tests, and
     # every routing verb's existing test now also builds
     # go_api_routing_audits. See ci/go_integration_shards.tsv for the
-    # measured weight this landed at.
+    # measured weight this landed at, then corrected 175 -> 235 once PR
+    # #2448's isolated hosted CI run (not a host-contended local one) gave
+    # a real measurement (234.482s, shard 2 job 103446098966).
+    # CHAOS-5507, stacked on that corrected 235, adds three 20-round
+    # concurrency tests plus a deterministic TOCTOU test: 235 -> 245 (see
+    # ci/go_integration_shards.tsv for the full measurement history and
+    # why the post-rebase local re-run was discounted).
     assert abs(estimated[2] - estimated[3]) <= 1
 
     expected_provider_tests = _providersync_top_level_tests()

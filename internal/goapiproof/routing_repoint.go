@@ -155,6 +155,22 @@ UPDATE public.go_api_routing_state
    AND document_digest = $2
    AND selected_operation = $3`
 
+// ErrRepointRacedAnotherWriter reports that a routing row changed between
+// this verb's unlocked survey and the locked read that follows it.
+//
+// It is a REFUSAL, not a wrong write: see the lock-order note on Repoint
+// for why the survey has to be unlocked, and why the only safe answer to
+// "the shape changed underneath me" is to start over rather than register
+// a candidate build while already holding routing-row locks -- precisely
+// the ordering CHAOS-5507 exists to remove.
+var ErrRepointRacedAnotherWriter = errors.New("goapiproof: a routing row changed while this re-point was preparing")
+
+// repointAttempts bounds the retry. The race it retries is a genuine
+// concurrent writer, so a retry usually succeeds immediately; a bound
+// keeps a pathological loop from becoming a hang, and the refusal after
+// it names what happened rather than pretending the run was clean.
+const repointAttempts = 3
+
 // Repoint points every selected routing row at the running build, leaving
 // every reachability column untouched.
 //
@@ -162,6 +178,40 @@ UPDATE public.go_api_routing_state
 // proof runner refuses on, so committing some rows and failing others
 // would leave the deployment in exactly the condition this verb exists to
 // clear.
+//
+// THE LOCK ORDER (CHAOS-5507). Every writer of go_api_routing_state in
+// this package obeys ONE rule:
+//
+//	register the candidate build BEFORE taking any routing-row lock,
+//	and visit routing rows in (selected_operation, document_digest) order.
+//
+// `enable` obeys it by construction -- it registers, then reads the
+// before-state under the shared ordered predicate, then upserts.
+// `disable` obeys it vacuously: it registers no build at all, so it can
+// never hold a candidate-build lock while waiting for a row. This verb
+// used to do the OPPOSITE: SELECT ... FOR UPDATE over the routing rows,
+// THEN insert the build. Two transactions doing that concurrently on the
+// same (schema_digest, document_digest, selected_operation,
+// candidate_build) key each held what the other waited for, and Postgres
+// broke the cycle by aborting one -- SQLSTATE 40P01, cleanly, with no
+// partial write, which is exactly why nobody noticed until a review round
+// read the two orders side by side.
+//
+// Obeying the rule costs a SECOND read. The build cannot be registered
+// without each row's document_digest (it is one of the four key columns),
+// and learning it is what the locking read used to do. So the survey pass
+// reads it WITHOUT a lock, the build is registered, and only then is the
+// locking read taken -- which is also the read the writes are driven
+// from, so nothing is ever written from the unlocked snapshot.
+//
+// THE TOCTOU THAT OPENS, and how it is closed. Between the unlocked
+// survey and the locked read another writer can change a row's
+// document_digest, or move a row onto or off the running build. Every one
+// of those is detected by comparing the locked read against the survey
+// inside the transaction, and the answer is always to roll back and start
+// over -- never to register a build while holding locks, which would put
+// the original ordering back for the rare path only. A bounded number of
+// attempts, then a named refusal.
 func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([]RepointOutcome, error) {
 	if pool == nil {
 		return nil, errors.New("goapiproof: nil pool")
@@ -169,10 +219,35 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 	if err := request.validate(); err != nil {
 		return nil, err
 	}
+	var lastRace error
+	for attempt := 0; attempt < repointAttempts; attempt++ {
+		outcomes, err := repointOnce(ctx, pool, request)
+		if err == nil {
+			return outcomes, nil
+		}
+		if !errors.Is(err, ErrRepointRacedAnotherWriter) {
+			return nil, err
+		}
+		lastRace = err
+	}
+	return nil, fmt.Errorf("%w after %d attempts: another writer is changing these rows continuously -- re-run once it settles (last: %v)",
+		ErrRepointRacedAnotherWriter, repointAttempts, lastRace)
+}
+
+// rowKey is a routing row's full identity within one schema digest.
+//
+// Keyed by BOTH columns, never by operation alone: one operation can have
+// several rows at a schema digest under different document digests, and
+// three separate findings across three review rounds were all a map that
+// forgot that (r1 F5, r2 R2-03, r3 CONC-01).
+type rowKey struct{ operation, documentDigest string }
+
+func repointOnce(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([]RepointOutcome, error) {
 	wanted := map[string]bool{}
 	for _, operation := range request.Operations {
 		wanted[operation] = true
 	}
+	selected := func(operation string) bool { return len(wanted) == 0 || wanted[operation] }
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -180,40 +255,29 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	type candidate struct {
-		operation, documentDigest, mode, build string
-	}
-	var candidates []candidate
-	rows, err := tx.Query(ctx, selectRepointCandidatesSQL, request.SchemaDigest)
+	// --- PASS ONE: survey, no locks. ---------------------------------
+	surveyed, err := readRoutingRows(ctx, tx, surveyRoutingRowsSQL, request.SchemaDigest)
 	if err != nil {
-		return nil, fmt.Errorf("goapiproof: read routing rows: %w", err)
+		return nil, err
 	}
-	for rows.Next() {
-		var c candidate
-		if err := rows.Scan(&c.operation, &c.documentDigest, &c.mode, &c.build); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("goapiproof: scan routing row: %w", err)
-		}
-		candidates = append(candidates, c)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("goapiproof: read routing rows: %w", err)
-	}
-	if len(candidates) == 0 {
+	if len(surveyed) == 0 {
 		return nil, fmt.Errorf("%w: %s", ErrRepointNoRows, request.SchemaDigest)
 	}
+	surveyedByKey := make(map[rowKey]routingRow, len(surveyed))
+	surveyedOperations := map[string]bool{}
+	for _, row := range surveyed {
+		surveyedByKey[rowKey{row.operation, row.documentDigest}] = row
+		surveyedOperations[row.operation] = true
+	}
+
 	// EVERY named operation must exist, not merely one of them (r2
-	// R2-07), and it is checked BEFORE anything is written so a filter
-	// with a typo in it changes nothing at all.
+	// R2-07), checked against the SURVEY -- before the registration below
+	// and before any write -- so a filter with a typo in it registers
+	// nothing and changes nothing.
 	if len(wanted) > 0 {
-		present := make(map[string]bool, len(candidates))
-		for _, c := range candidates {
-			present[c.operation] = true
-		}
 		var missing []string
 		for operation := range wanted {
-			if !present[operation] {
+			if !surveyedOperations[operation] {
 				missing = append(missing, operation)
 			}
 		}
@@ -222,6 +286,32 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 			return nil, fmt.Errorf("%w: %v at %s -- re-pointing the rest and saying nothing about these is how an operator learns too late that half a rollout moved",
 				ErrRepointUnknownOperation, missing, request.SchemaDigest)
 		}
+	}
+
+	// --- Register the candidate build, BEFORE any routing-row lock. ---
+	// In the shared total order, which readRoutingRows preserves. Only
+	// for rows that will actually be written: a dry run writes nothing at
+	// all, and a row already naming the running build needs no
+	// registration it does not already have.
+	if !request.DryRun {
+		for _, row := range surveyed {
+			if !selected(row.operation) || row.build == request.RunningBuild {
+				continue
+			}
+			if _, err := tx.Exec(ctx, registerCandidateBuildSQL,
+				request.SchemaDigest, row.documentDigest, row.operation, request.RunningBuild); err != nil {
+				return nil, fmt.Errorf("goapiproof: register candidate build for %s: %w", row.operation, err)
+			}
+		}
+	}
+
+	// --- PASS TWO: the locking read the writes are driven from. -------
+	locked, err := readRoutingRows(ctx, tx, selectRepointCandidatesSQL, request.SchemaDigest)
+	if err != nil {
+		return nil, err
+	}
+	if len(locked) == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrRepointNoRows, request.SchemaDigest)
 	}
 
 	now := time.Now().UTC()
@@ -233,52 +323,67 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 		ReviewEvidence:  request.ReviewEvidence,
 		SchemaDigest:    request.SchemaDigest,
 	}
-	outcomes := make([]RepointOutcome, 0, len(candidates))
-	for _, c := range candidates {
-		if len(wanted) > 0 && !wanted[c.operation] {
+
+	outcomes := make([]RepointOutcome, 0, len(locked))
+	for _, row := range locked {
+		if !selected(row.operation) {
 			continue
 		}
 		outcome := RepointOutcome{
-			Operation:      c.operation,
-			DocumentDigest: c.documentDigest,
-			ModeBefore:     c.mode,
-			ModeAfter:      c.mode,
-			BuildFrom:      c.build,
+			Operation:      row.operation,
+			DocumentDigest: row.documentDigest,
+			ModeBefore:     row.mode,
+			ModeAfter:      row.mode,
+			BuildFrom:      row.build,
 			BuildTo:        request.RunningBuild,
-			Changed:        c.build != request.RunningBuild,
+			Changed:        row.build != request.RunningBuild,
 		}
 		if !outcome.Changed || request.DryRun {
 			outcomes = append(outcomes, outcome)
 			continue
 		}
-		if _, err := tx.Exec(ctx, registerCandidateBuildSQL,
-			request.SchemaDigest, c.documentDigest, c.operation, request.RunningBuild); err != nil {
-			return nil, fmt.Errorf("goapiproof: register candidate build for %s: %w", c.operation, err)
+		// This row needs a write. The build was registered from the
+		// SURVEY, so the survey has to still describe it: a row that
+		// appeared, or whose document digest moved, has no registration
+		// under the key this UPDATE is about to reference, and its
+		// foreign key would refuse. Start over rather than register one
+		// here, which would be the old lock order in a rare path.
+		before, surveyedBefore := surveyedByKey[rowKey{row.operation, row.documentDigest}]
+		switch {
+		case !surveyedBefore:
+			return nil, fmt.Errorf("%w: %s (document digest %s) appeared between the survey and the locked read",
+				ErrRepointRacedAnotherWriter, row.operation, row.documentDigest)
+		case before.build == request.RunningBuild:
+			// The survey said this row was already correct, so nothing
+			// was registered for it -- and now it is not.
+			return nil, fmt.Errorf("%w: %s (document digest %s) left the running build between the survey and the locked read",
+				ErrRepointRacedAnotherWriter, row.operation, row.documentDigest)
 		}
+
 		tag, err := tx.Exec(ctx, repointRoutingRowSQL,
-			request.SchemaDigest, c.documentDigest, c.operation,
+			request.SchemaDigest, row.documentDigest, row.operation,
 			request.RunningBuild, request.ReviewEvidence, request.RecordedBy, now)
 		if err != nil {
-			return nil, fmt.Errorf("goapiproof: re-point %s: %w", c.operation, err)
+			return nil, fmt.Errorf("goapiproof: re-point %s: %w", row.operation, err)
 		}
 		// A re-point that matched no row is a silent no-op the operator
 		// would read as success, which is the failure mode CHAOS-5416
 		// spent six days in. Refuse instead.
 		if tag.RowsAffected() != 1 {
-			return nil, fmt.Errorf("goapiproof: re-point %s affected %d rows, want exactly 1", c.operation, tag.RowsAffected())
+			return nil, fmt.Errorf("goapiproof: re-point %s affected %d rows, want exactly 1", row.operation, tag.RowsAffected())
 		}
-		buildBefore, modeBefore := c.build, c.mode
+		buildBefore, modeBefore := row.build, row.mode
 		audit.Entries = append(audit.Entries, RoutingAuditEntry{
-			DocumentDigest:       c.documentDigest,
-			Operation:            c.operation,
+			DocumentDigest:       row.documentDigest,
+			Operation:            row.operation,
 			CandidateBuildBefore: &buildBefore,
 			CandidateBuildAfter:  request.RunningBuild,
 			// A re-point NEVER touches reachability, so before and after
-			// are the same mode by contract -- and recording both is what
-			// turns that contract into something a reader can check
-			// rather than take on trust.
+			// are the same mode by contract -- and recording both turns
+			// that contract into something a reader can check rather than
+			// take on trust.
 			ModeBefore: &modeBefore,
-			ModeAfter:  c.mode,
+			ModeAfter:  row.mode,
 		})
 		outcomes = append(outcomes, outcome)
 	}
@@ -290,26 +395,13 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 	// The UPDATE cannot change mode -- the column is not in its SET list --
 	// but a trigger, a rule or a later edit to that statement could, and
 	// this verb's entire contract is that it does not touch reachability.
-	// Asserting it costs one query and turns the contract into a test the
-	// production path runs every time.
 	if !request.DryRun {
-		// Keyed by the row's FULL identity, not by operation (codex r3
-		// CONC-01). One operation can have several rows at a schema
-		// digest under different document digests, so a map keyed by
-		// operation alone collapses them -- and the assertion would then
-		// compare one row's mode against another row's before-value. The
-		// whole point of this re-read is proving the verb never touched
-		// reachability; an assertion that can compare the wrong row does
-		// not prove it.
-		//
-		// It runs the SAME ordered, LOCKING predicate the writes were
-		// driven from. Every row at this digest is already locked by that
-		// statement in this same transaction, so this acquires nothing
-		// new -- but an assertion that silently relied on a lock taken by
-		// a DIFFERENT statement would stop holding the moment that
-		// statement's scope narrowed, and re-using the shared predicate
-		// means it cannot introduce a lock order of its own.
-		type rowKey struct{ operation, documentDigest string }
+		// Keyed by the row's FULL identity (r3 CONC-01): keyed by
+		// operation alone this collapses duplicate rows and can compare
+		// one row's mode against another row's before-value, which
+		// establishes nothing. It runs the SAME ordered, LOCKING
+		// predicate the writes were driven from, so it locks what it
+		// asserts on and introduces no lock order of its own.
 		after, err := readRoutingRows(ctx, tx, selectRepointCandidatesSQL, request.SchemaDigest)
 		if err != nil {
 			return nil, fmt.Errorf("goapiproof: re-read modes: %w", err)
@@ -331,11 +423,7 @@ func Repoint(ctx context.Context, pool *pgxpool.Pool, request RepointRequest) ([
 			}
 			outcomes[index].ModeAfter = mode
 		}
-		// CHAOS-5505: only rows that actually MOVED are audited. A row
-		// already naming the running build was not written, and an audit
-		// entry for it would record a change that did not happen in a
-		// table nothing can later correct. A re-run that moves nothing
-		// therefore writes no audit rows, which is the truth.
+		// CHAOS-5505: only rows that actually MOVED are audited.
 		if len(audit.Entries) > 0 {
 			if _, err := writeRoutingAudit(ctx, tx, audit, now); err != nil {
 				return nil, err

@@ -638,3 +638,49 @@ func TestPrincipalIDAndRecordedByAreSeparateRequiredFields(t *testing.T) {
 		t.Fatal("-recorded-by must not stand in for the principal id")
 	}
 }
+
+// CHAOS-5507, pinned in the SQL itself. The convention is:
+//
+//	register the candidate build BEFORE taking any routing-row lock,
+//	and visit routing rows in (selected_operation, document_digest) order.
+//
+// The survey read is what makes the first half possible, so it must NOT
+// lock; the locking read must be that same statement plus FOR UPDATE, so
+// the two passes cannot drift into scanning different rows in different
+// orders.
+func TestRepointSurveyReadTakesNoLockAndTheLockedReadIsTheSameOrderedQuery(t *testing.T) {
+	if strings.Contains(surveyRoutingRowsSQL, "FOR UPDATE") {
+		t.Fatal("the survey read must NOT lock: registering the candidate build before any routing-row lock is the whole of CHAOS-5507's fix")
+	}
+	if !strings.Contains(surveyRoutingRowsSQL, "ORDER BY selected_operation, document_digest") {
+		t.Fatal("both reads must carry the TOTAL order: selected_operation alone ties when an operation has several document digests")
+	}
+	if !strings.HasPrefix(selectRepointCandidatesSQL, surveyRoutingRowsSQL) {
+		t.Fatal("the locking read must be the survey read plus FOR UPDATE, so the two passes cannot drift apart")
+	}
+	if !strings.Contains(selectRepointCandidatesSQL, "FOR UPDATE") {
+		t.Fatal("the second pass must lock: the writes are driven from it, never from the unlocked snapshot")
+	}
+}
+
+// The other half of the convention, from the writing verbs' side: neither
+// `enable` nor `disable` has a lock to take before the registration, and
+// the registration targets the candidate-build table. Together with the
+// assertion above, all three verbs provably acquire in the same order.
+func TestNoVerbLocksARoutingRowBeforeRegisteringTheCandidateBuild(t *testing.T) {
+	if strings.Contains(registerCandidateBuildSQL, "FOR UPDATE") {
+		t.Fatal("registering a candidate build must not lock anything else")
+	}
+	if !strings.Contains(registerCandidateBuildSQL, "go_api_candidate_build") {
+		t.Fatal("the registration must target go_api_candidate_build -- it is the FIRST lock every writer takes")
+	}
+	if strings.Contains(upsertRoutingStateSQL, "FOR UPDATE") {
+		t.Fatal("enable's upsert must take no explicit lock of its own: it comes AFTER the registration and after the shared locking read")
+	}
+	if selectDisableCandidatesSQL != selectRepointCandidatesSQL {
+		t.Fatal("disable must read with the shared ordered predicate, not one of its own")
+	}
+	if strings.Contains(disableRoutingRowSQL, "go_api_candidate_build") {
+		t.Fatal("disable must never touch the candidate-build table -- that is what makes its single-table locking safe by construction")
+	}
+}

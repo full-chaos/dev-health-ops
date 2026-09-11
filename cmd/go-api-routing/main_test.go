@@ -46,7 +46,7 @@ func TestRequestedOperationsTrimsAndDropsEmptyNames(t *testing.T) {
 	}
 }
 
-// CHAOS-5486 round 1, F1 (reproduced by the lane before fixing): a
+// A
 // separators-only --operations produced an EMPTY filter, which Repoint reads
 // as "every row at the digest" -- an operator who named something got a
 // silent re-point of everything. Asking for all rows must be explicit.
@@ -291,7 +291,7 @@ func TestRunbookNamesTheDigestMoveSection(t *testing.T) {
 	}
 }
 
-// r1 F2: an unknown verb is a REFUSAL, not a crash. A calling script has
+// An unknown verb is a REFUSAL, not a crash. A calling script has
 // to be able to tell "I would not do that" (2) from "I broke" (1), and
 // the split existed but this path did not go through it.
 func TestAnUnknownVerbRefusesWithExitTwo(t *testing.T) {
@@ -307,7 +307,7 @@ func TestAnUnknownVerbRefusesWithExitTwo(t *testing.T) {
 	}
 }
 
-// r1 F8: provenance is normalised ONCE, before it is stored. Python
+// Provenance is normalised ONCE, before it is stored. Python
 // strips before persisting; a whitespace-padded identity makes two
 // records of the same operator compare unequal for a reason nobody can
 // see, and the CHAOS-5505 audit table is append-only.
@@ -334,7 +334,7 @@ func TestProvenanceIsTrimmedBeforeItIsStored(t *testing.T) {
 	}
 }
 
-// The third declared tightening (r1 F3). Python permits an absent reason
+// The third declared tightening. Python permits an absent reason
 // for a proven enablement and derives recorded_by from the environment,
 // falling back to the literal "unknown". This command refuses instead,
 // and that choice is pinned so it cannot drift back by accident or be
@@ -351,7 +351,7 @@ func TestEveryWriteVerbRequiresBothProvenanceFlags(t *testing.T) {
 	}
 }
 
-// r1 F7: every verb's own entry point was at 0% coverage, so the
+// Every verb's own entry point must be exercised: the
 // operator-facing refusals -- the code path an operator hits most --
 // were entirely unexercised. These drive each verb far enough to reach
 // its first semantic refusal without needing a network or a database.
@@ -399,7 +399,7 @@ func TestEveryVerbRefusesItsOwnMissingPreconditions(t *testing.T) {
 	}
 }
 
-// r6 P2 (reproduced): `-registry-url`/`-buildinfo-url` used to default to
+// `-registry-url`/`-buildinfo-url` must never default to
 // a HARDCODED `http://localhost:8090/...`, independently, so `enable`/
 // `repoint` never refused on a genuinely unconfigured endpoint -- they
 // silently probed whatever happened to answer there. This is the LAST
@@ -454,7 +454,7 @@ func TestStatusNeverFailsEvenWithNothingConfigured(t *testing.T) {
 	}
 }
 
-// r6 P2 (reproduced): with NEITHER `-registry-url` NOR GO_API_QUERY_API_URL
+// With NEITHER `-registry-url` NOR GO_API_QUERY_API_URL
 // set, `status` used to fall back to a hardcoded `http://localhost:8090/
 // registry` and probe it -- an actual, if usually fruitless, network
 // attempt against an address nobody named. Parity with Python's `status`
@@ -477,7 +477,7 @@ func TestStatusReportsNoQueryAPIURLWithoutProbingAnything(t *testing.T) {
 	}
 }
 
-// r7 F6 (reproduced): an UNUSABLE (not merely unset) GO_API_QUERY_API_URL
+// An UNUSABLE (not merely unset) GO_API_QUERY_API_URL
 // -- inherited from the environment, not typed as a flag -- used to make
 // `status` `return err` from sanitizeEndpointURL, which refuses the whole
 // command (non-zero exit, nothing printed): the write verbs' contract, not
@@ -503,7 +503,7 @@ func TestStatusReportsAnUnusableEnvURLInsteadOfRefusing(t *testing.T) {
 	if strings.Contains(out, `"go_plane_error": "no -registry-url and GO_API_QUERY_API_URL is unset"`) {
 		t.Fatalf("go_plane_error named the wrong cause -- something WAS set, it just could not be used safely:\n%s", out)
 	}
-	// r7 F6, second half (reproduced, team-lead ruling): the message must
+	// The message must
 	// name the SOURCE that actually supplied the value -- the env var, not
 	// a flag the operator never typed.
 	if !strings.Contains(out, "GO_API_QUERY_API_URL") {
@@ -514,7 +514,7 @@ func TestStatusReportsAnUnusableEnvURLInsteadOfRefusing(t *testing.T) {
 	}
 }
 
-// r7 F7 (reproduced): `<verb> -h` on all four verbs used to fall through
+// `<verb> -h` on all four verbs must never fall through
 // parseVerbFlags's generic Parse-error handling and exit 2 ("refused: flag:
 // help requested") -- inconsistent with this binary's OWN top-level `-h`
 // (run's "help" case: exit 0) and with Python's `-h` (argparse: exit 0). A
@@ -534,7 +534,7 @@ func TestVerbHelpFlagExitsZeroLikeTopLevelHelp(t *testing.T) {
 	}
 }
 
-// r8 F5 (reproduced): a back-quoted word inside a flag's usage string
+// A back-quoted word inside a flag's usage string
 // makes Go's `flag` package treat it as the flag's OWN VALUE NAME (its
 // documented mechanism for choosing the usage placeholder) -- so
 // `-acknowledge-unproven`'s usage text, which said "...by `status`
@@ -553,8 +553,8 @@ func TestEnableHelpDoesNotShowAcknowledgeUnprovenAsTakingAnArgument(t *testing.T
 	}
 }
 
-// T1 M48 (opus r7, reproduced): status's half of the r6 P2
-// GO_API_QUERY_API_URL fallback was unpinned -- a mutant that made
+// status's half of the
+// GO_API_QUERY_API_URL fallback -- a mutant that made
 // `haveRegistryURL` depend ONLY on the explicit `-registry-url` flag
 // (ignoring the env var entirely) left both suites green. With ONLY the
 // env var set (no -registry-url), the real binary reads the registry and
@@ -663,7 +663,7 @@ func TestConnectPostgresBoundsTheDialAndSaysSo(t *testing.T) {
 	if elapsed > 15*time.Second {
 		t.Fatalf("the dial took %s -- the -timeout flag must bound it, or `status` hangs forever on a dead database", elapsed)
 	}
-	// r8 F6 (reproduced, team-lead ruling R126): exit 1, matching
+	// Exit 1, matching
 	// Python's identical command (an unhandled ConnectionRefusedError,
 	// also exit 1) -- corrected from an earlier version of this test that
 	// asserted exit 2. A syntactically valid DSN naming an endpoint that
@@ -933,7 +933,7 @@ func TestToReportOperationProjectsEveryStateFaithfully(t *testing.T) {
 	}
 }
 
-// r4 P1 (reproduced): `status` used to discard the deployed registry's
+// `status` must not discard the deployed registry's
 // per-operation document digest after checking only schema_digest, so a
 // MATCH row printed "ok"/reachable=true even when the deployed plane
 // registered a DIFFERENT document digest for that exact operation -- the
@@ -978,7 +978,7 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 		t.Fatalf("an operation the deployed plane does not register at all must be reachable=false, got %v", unregistered.Reachable)
 	}
 
-	// r5 P1 (reproduced): the go plane being genuinely UNREACHABLE means
+	// The go plane being genuinely UNREACHABLE means
 	// reachability cannot be told at all -- it must report as UNKNOWN
 	// (nil), never as a silent `true` inherited from the local row alone.
 	// GoPlaneError already names WHY it is unknown; Reachable must not
@@ -994,7 +994,7 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 		t.Fatal("an UNKNOWN reachable state must still name why (r6 observability (6))")
 	}
 
-	// r5 P1 (reproduced): a SCHEMA-level disagreement must also force
+	// A SCHEMA-level disagreement must also force
 	// reachable=false, even when the per-operation document digest still
 	// happens to agree -- `enable`'s preflight 2 (schema) refuses BEFORE
 	// preflight 3 (per-operation document digest) ever runs, so nothing
@@ -1008,7 +1008,7 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 		t.Fatalf("reachable must be false under a schema mismatch even when the per-operation document digest agrees, got %v", schemaMismatchButDigestAgrees.Reachable)
 	}
 
-	// r6 F3(a) (reproduced): a row this binary's OWN classification
+	// A row this binary's OWN classification
 	// already knows is unreachable (STALE, MISSING, or a non-dispatchable
 	// mode) must report reachable=FALSE even when the go plane is
 	// unreachable -- "we don't know if the deployed plane agrees" does
@@ -1025,7 +1025,7 @@ func TestToReportOperationSurfacesDeployedDigestDisagreement(t *testing.T) {
 		t.Fatal("reachable=false must still name why (r6 observability (6))")
 	}
 
-	// r7 F5 (reproduced): a MATCH row (digest_state IS live) that is
+	// A MATCH row (digest_state IS live) that is
 	// unreachable because of its MODE must name the MODE, not
 	// digest_state -- digest_state="MATCH" is the one state that IS
 	// live, so naming it as the reason is actively misleading.
@@ -1319,7 +1319,7 @@ func TestThePostgresURIStillFallsBackToTheEnvironment(t *testing.T) {
 // by reading the code: `-timeout 0` and `-timeout -1s` were accepted with
 // exit 0 on all four verbs. `http.Client` reads a non-positive Timeout as
 // "no timeout", which is the exact opposite of what an operator typing 0
-// means, and it silently undoes r1 F10 -- the fix that made `status` say
+// means, and it silently undoes the fix that made `status` say
 // "unreachable" instead of hanging on a blackholed endpoint.
 //
 // The boundary is walked on both sides rather than sampled: 0 and -1ns

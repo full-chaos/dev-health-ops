@@ -63,13 +63,13 @@ func runEnable(argv []string) error {
 	set.StringVar(&mode, "mode", "", "routing mode: canary or primary. Only these two make an operation reachable, so they are the only ones an 'enable' verb offers (required)")
 	set.IntVar(&rollout, "rollout", 100, "rollout_percentage written to the row. NOTE: neither plane enforces this yet -- canary means 'on for everyone, revocable'. Recorded, not obeyed")
 	set.StringVar(&expectBuild, "expect-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written")
-	// r8 F5 (reproduced): backticks around "status" here made Go's `flag`
-	// package treat the back-quoted word as the FLAG'S OWN VALUE NAME (its
+	// No backticks around "status" here: Go's `flag`
+	// package treats a back-quoted word as the FLAG'S OWN VALUE NAME (its
 	// documented convention for choosing the placeholder shown in usage
-	// text) -- so `enable -h` printed `-acknowledge-unproven status`, a
-	// boolean switch that reads as if it takes an argument named "status".
-	// Following that literally is refused safely (an unexpected operand),
-	// so the only real cost was a confused operator; still worth fixing.
+	// text) -- one there made `enable -h` print `-acknowledge-unproven
+	// status`, a boolean switch that reads as if it takes an argument
+	// named "status". Following that literally is refused safely (an
+	// unexpected operand), so the only real cost is a confused operator.
 	set.BoolVar(&acknowledgeUnproven, "acknowledge-unproven", false, "enable operations with no deployed-executed proof run for this build. Each such row records ACKNOWLEDGED-UNPROVEN durably and is reported UNPROVEN by status for as long as it is in force")
 	set.BoolVar(&dryRun, "dry-run", false, "run every preflight and write NOTHING")
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "per-request timeout")
@@ -105,12 +105,12 @@ func runEnable(argv []string) error {
 	ctx := context.Background()
 	client := httpClient(common.timeout)
 
-	// r6 P2 (reproduced): both flags used to default to a HARDCODED
-	// `http://localhost:8090/...`, independently, so an operator who
-	// forgot ONE of the two silently sent that half of the preflight --
-	// and the effective-principal envelope -- to whatever happened to
-	// answer on localhost:8090, rather than refusing. See
-	// resolveEndpointURL's doc comment (main.go) for the executed repro.
+	// Neither flag defaults to a HARDCODED
+	// `http://localhost:8090/...` -- an operator who forgets ONE of the
+	// two must not silently send that half of the preflight -- and the
+	// effective-principal envelope -- to whatever happens to answer on
+	// localhost:8090, rather than a refusal. See resolveEndpointURL's
+	// doc comment (main.go) for the executed repro.
 	// Resolved HERE, after every other precondition, so the FIRST thing
 	// an operator missing several is told is still the cheapest one to
 	// fix (-mode, provenance, -postgres-uri, the credential) -- the same
@@ -119,9 +119,9 @@ func runEnable(argv []string) error {
 	// must produce THIS refusal, not sanitizeEndpointURL's "must be
 	// http:// or https://" (a confusing message for an operator who typed
 	// nothing at all).
-	// r7 F2 (reproduced): resolved TOGETHER, not per-route -- see
+	// Resolved TOGETHER, not per-route -- see
 	// resolveQueryAPIEndpoints's own doc comment. A mix of one explicit
-	// flag and one env-derived route split the preflight across two
+	// flag and one env-derived route must not silently split the preflight across two
 	// different processes with no second flag named at all.
 	registryURL, buildInfoURL, err = resolveQueryAPIEndpoints(registryURL, buildInfoURL)
 	if err != nil {
@@ -147,8 +147,8 @@ func runEnable(argv []string) error {
 		return refuse("cannot read the running query-api's registry: %v.\n"+
 			"  A measurement that did not happen is not a pass -- fix the deployment or point -registry-url at the right process.", err)
 	}
-	// r5 P1 (reproduced): `FetchRegistry` no longer refuses on an empty
-	// `operations` array by itself (that refusal moved here, and to
+	// `FetchRegistry` does not refuse on an empty
+	// `operations` array by itself (that refusal lives here, and in
 	// repoint's identical preflight) -- `status` shares the same function
 	// and needs the schema_digest from an otherwise-empty registry for its
 	// own diagnostic, which the old shared refusal destroyed. A WRITE verb
@@ -184,13 +184,12 @@ func runEnable(argv []string) error {
 				fmt.Sprintf("%s: catalog=%s go=%s", operation, catalog[operation], registered))
 		}
 	}
-	// r7 F8 (reproduced): CLOSED, not a known gap -- corrected, this
-	// comment used to describe a still-open defect. `FetchRegistry`
-	// (internal/goapiproof/registry.go) now REFUSES a /registry response
+	// `FetchRegistry`
+	// (internal/goapiproof/registry.go) REFUSES a /registry response
 	// that lists the same operation twice, matching the Python verb,
-	// rather than silently keeping the last one (codex r1 F6's original
-	// finding). This preflight's `registry.DocumentDigest` map can
-	// therefore no longer be decided by a malformed or tampered registry
+	// rather than silently keeping the last one. This preflight's
+	// `registry.DocumentDigest` map can
+	// therefore never be decided by a malformed or tampered registry
 	// picking whichever duplicate the JSON decoder scanned last.
 	if len(notRegistered) > 0 {
 		return refuse("the running query-api does not register: %v. It serves %d operation(s); the catalog lists %d.\n"+
@@ -222,16 +221,15 @@ func runEnable(argv []string) error {
 	}
 	defer pool.Close()
 
-	// r8 F1 (reproduced, fixed in goapiproof.Enable itself): the
-	// before-state used to be read here, plain and UNLOCKED, before this
-	// call even started -- so under real concurrency (a third session
-	// holding the row, a racing `disable` landing between this read and
-	// Enable's own write) the log line could print a STALE state that
-	// looked like nothing had changed. See EnableOutcome.ModeBefore's own
-	// doc comment (routing_enable.go) for the executed repro and the
-	// fix: the read now happens INSIDE Enable's write transaction, under
-	// the SAME lock the write itself takes, so `outcome.ModeBefore` below
-	// is always the value this write ACTUALLY replaced.
+	// The before-state is read inside goapiproof.Enable itself, under
+	// the SAME lock and the SAME transaction as the write that replaces
+	// it -- never a plain, UNLOCKED read taken here before that call even
+	// starts, which under real concurrency (a third session holding the
+	// row, a racing `disable` landing in between) would print a STALE
+	// state that looks like nothing had changed. See
+	// EnableOutcome.ModeBefore's own doc comment (routing_enable.go) for
+	// the executed repro: `outcome.ModeBefore` below is always the value
+	// this write ACTUALLY replaced.
 
 	// --- Preflight 4 (inside Enable) + the write, one transaction ------
 	outcomes, err := goapiproof.Enable(ctx, pool, goapiproof.EnableRequest{
@@ -271,10 +269,10 @@ func runEnable(argv []string) error {
 	if dryRun {
 		verb = "would enable"
 	}
-	// r6 F5 observability (reproduced): on success this line never named
+	// On success this line names
 	// WHICH endpoint was actually consulted -- so a wrong-process enable
-	// (F5's own repro: an omitted URL flag silently resolving to a
-	// different process) looked identical to a correct one except for
+	// (an omitted URL flag silently resolving to a
+	// different process) cannot look identical to a correct one except for
 	// the build value. EndpointLabel is host-only, never a full URL (see
 	// its own doc comment) -- it cannot leak a credential even if one
 	// somehow ended up in the resolved URL.
@@ -296,10 +294,10 @@ func runEnable(argv []string) error {
 		// mode/build, so a log search finds what a specific enable
 		// REPLACED, not just that it wrote something.
 		if !dryRun {
-			// r8 F1 (reproduced): these values are now read under the
-			// SAME lock the write itself took, inside goapiproof.Enable
-			// -- see EnableOutcome.ModeBefore's own doc comment. No
-			// "(unknown)" case survives: a genuine read failure there now
+			// These values are read under the
+			// SAME lock the write itself takes, inside goapiproof.Enable
+			// -- see EnableOutcome.ModeBefore's own doc comment. There is
+			// no "(unknown)" case: a genuine read failure there
 			// aborts the whole enable rather than reaching this line at
 			// all.
 			modeBefore, buildBefore := "(no row)", "-"

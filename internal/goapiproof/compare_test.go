@@ -318,7 +318,7 @@ func TestDecodeSnapshotRejectsUnparseableBody(t *testing.T) {
 	}
 }
 
-// r3 P1 (reproduced): encoding/json substitutes U+FFFD (the replacement
+// encoding/json substitutes U+FFFD (the replacement
 // character) for a byte it cannot decode as UTF-8, rather than erroring.
 // Without a whole-body validity check, a candidate carrying a genuinely
 // invalid byte and a baseline that already carries a LITERAL replacement
@@ -331,7 +331,7 @@ func TestDecodeSnapshotRefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
-// r4 P1 (reproduced): the reviewer's own executed repro was against this
+// An executed repro against this
 // exact function -- a candidate body carrying `\ud800` and a baseline
 // body carrying a literal `�` decoded to the SAME Go value and
 // certified `match`, minting an enablement-eligible receipt from two
@@ -359,7 +359,7 @@ func TestDecodeSnapshotUnpairedSurrogateDoesNotMaskAsAMatchingBaseline(t *testin
 	}
 }
 
-// r3 P1 (team-lead's decoder sweep): DecodeSnapshot's envelope is
+// DecodeSnapshot's envelope is
 // already a map[string]json.RawMessage keyed by exact string, so a
 // "Data"/"DATA" sibling of "data" cannot shadow it -- proven here
 // rather than assumed from the mechanism alone, the same discipline

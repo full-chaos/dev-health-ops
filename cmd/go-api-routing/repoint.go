@@ -58,12 +58,12 @@ func runRepoint(argv []string) error {
 	ctx := context.Background()
 	client := httpClient(common.timeout)
 
-	// r6 P2 (reproduced): same shape as enable's identical preflight --
+	// Same shape as enable's identical preflight --
 	// see resolveEndpointURL's doc comment (main.go) for the executed
 	// repro. Resolved HERE, after every other precondition (same ordering
 	// `TestEveryVerbRefusesItsOwnMissingPreconditions` pins), and BEFORE
 	// sanitizeEndpointURL, same reason as enable's.
-	// r7 F2 (reproduced): resolved TOGETHER, same reason as enable's
+	// Resolved TOGETHER, same reason as enable's
 	// identical fix -- see resolveQueryAPIEndpoints's own doc comment.
 	registryURL, buildInfoURL, err = resolveQueryAPIEndpoints(registryURL, buildInfoURL)
 	if err != nil {
@@ -85,16 +85,15 @@ func runRepoint(argv []string) error {
 
 	// Every one of these is a state the OPERATOR resolves -- an
 	// unreachable process, a build the process cannot name, a filter that
-	// names nothing -- so each exits 2, not 1. `enable` already routed
-	// them through refuse(); this verb returned some of them raw, which
-	// is the same class as r1 F2 one file over.
+	// names nothing -- so each exits 2, not 1. `enable` routes
+	// them through refuse() too; never return one of them raw.
 	registry, err := goapiproof.FetchRegistry(ctx, client, registryURL)
 	if err != nil {
 		return refuse("cannot read the running query-api's registry: %v.\n"+
 			"  A measurement that did not happen is not a pass -- fix the deployment or point -registry-url at the right process.", err)
 	}
-	// r5 P1 (reproduced): same shape as enable's identical preflight --
-	// `FetchRegistry` itself no longer refuses on an empty registry
+	// Same shape as enable's identical preflight --
+	// `FetchRegistry` itself does not refuse on an empty registry
 	// (status needs the schema digest it still reports), so the write
 	// verb refuses here instead.
 	if len(registry.DocumentDigest) == 0 {
@@ -137,7 +136,7 @@ func runRepoint(argv []string) error {
 	if dryRun {
 		verb = "would repoint"
 	}
-	// r6 F5 observability (reproduced): same fix as enable's, so a
+	// Same as enable's endpoint line, so a
 	// wrong-process repoint looks the same way wrong on stdout.
 	fmt.Fprintf(stdout, "go-api-routing: registry=%s buildinfo=%s\n",
 		goapiproof.EndpointLabelWithPort(registryURL), goapiproof.EndpointLabelWithPort(buildInfoURL))

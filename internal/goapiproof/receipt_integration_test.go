@@ -16,7 +16,7 @@ import (
 )
 
 // registryDDL now lives in internal/testsupport/registryschema, shared
-// with cmd/go-api-routing's end-to-end verb tests (r1 P3: those tests
+// with cmd/go-api-routing's end-to-end verb tests (those tests
 // have to drive the REAL verbs, and a second hand-kept copy of this DDL
 // would drift from this one with nothing to notice). The alias keeps this
 // file's existing references and its one name for the thing.

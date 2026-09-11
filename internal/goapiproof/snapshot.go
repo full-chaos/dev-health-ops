@@ -40,8 +40,8 @@ func DecodeSnapshot(body []byte) (Snapshot, error) {
 	if nonFiniteLiteral.Match(body) {
 		return Snapshot{}, ErrNonFiniteNumber
 	}
-	// r3 P1 (reproduced): a package-wide sibling of the /registry,
-	// /buildinfo and catalog UTF-8 gates. encoding/json's string scanner
+	// A package-wide sibling of the /registry, /buildinfo and catalog
+	// UTF-8 gates. encoding/json's string scanner
 	// substitutes U+FFFD (the replacement character) for a byte it cannot
 	// decode as UTF-8, rather than erroring -- so a candidate body
 	// carrying a genuinely invalid byte and a baseline body that already
@@ -55,7 +55,7 @@ func DecodeSnapshot(body []byte) (Snapshot, error) {
 	if !utf8.Valid(body) {
 		return Snapshot{}, errors.New("goapiproof: response body is not valid UTF-8 -- a byte this decoder cannot represent would otherwise be silently replaced before comparison")
 	}
-	// r4 P1 (reproduced): sibling of the raw-byte check above, one layer
+	// Sibling of the raw-byte check above, one layer
 	// down -- an unpaired `\uXXXX` surrogate escape is valid ASCII (so it
 	// passes utf8.Valid) but decodes to the SAME U+FFFD encoding/json
 	// would substitute for a genuinely invalid byte, collapsing a body
@@ -83,7 +83,7 @@ func DecodeSnapshot(body []byte) (Snapshot, error) {
 	// the same envelope and compare equal (confirmation pass C3: a 67-byte
 	// candidate and a 39-byte baseline compared as match).
 	//
-	// More() is NOT the check for this, which is round 2's F6: its
+	// More() is NOT the check for this: its
 	// implementation is `err == nil && c != ']' && c != '}'`, so a body
 	// ending in a stray `}` or `]` -- the likeliest real shape, a serializer
 	// emitting one closing brace too many -- makes More() report FALSE and

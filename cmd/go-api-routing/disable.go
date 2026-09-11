@@ -45,13 +45,14 @@ func runDisable(argv []string) error {
 	if err := parseVerbFlags(set, argv); err != nil {
 		return err
 	}
-	// r7 F3 (reproduced): `-candidate-build ""` -- e.g. `-candidate-build
-	// "$SEEN"` in a script where $SEEN happened to be unset -- silently
+	// `-candidate-build ""` -- e.g. `-candidate-build
+	// "$SEEN"` in a script where $SEEN happened to be unset -- must never
 	// read the SAME as never passing the flag at all: `""` is exactly
-	// what `ExpectedCandidateBuild == ""` already means as "no guard".
-	// Python refuses the identical command (`REFUSED: ...row points at
-	// candidate build ..., not the  you named`, exit 2); Go applied the
-	// write unguarded, exit 0. `set.Visit` only walks flags actually
+	// what `ExpectedCandidateBuild == ""` already means as "no guard", so
+	// an explicitly empty value would otherwise apply the write
+	// completely unguarded. Python refuses the identical command
+	// (`REFUSED: ...row points at candidate build ..., not the  you
+	// named`, exit 2). `set.Visit` only walks flags actually
 	// PASSED, so this tells "typed empty" from "never typed" -- the flag
 	// package itself cannot.
 	var candidateBuildPassedEmpty bool
@@ -134,15 +135,15 @@ func runDisable(argv []string) error {
 		if change.CurrentMode == "primary" && change.NewMode == "disabled" {
 			fmt.Fprintln(stdout, "    NOTE: this removes Go entirely for this operation -- Python serves it from the next request.")
 		}
-		// r6 F2 (reproduced): this binary computes SchemaDigest from its
+		// This binary computes SchemaDigest from its
 		// OWN embedded SDL, and (unlike the Python verb, which runs
 		// inside the deployed edge image) is built from an operator
-		// checkout by design -- so a stale checkout silently no-ops here
+		// checkout by design -- so a stale checkout would silently no-op
 		// while leaving a real row, at the digest the deployed process
-		// actually uses, completely untouched. `status`'s census already
-		// has this fact; naming it here is the fix.
+		// actually uses, completely untouched, unless named here.
+		// `status`'s census already has this fact.
 		if len(change.StaleSchemaDigests) > 0 {
-			// r8 T1c (reproduced): `StaleSchemaDigests` is a deduplicated
+			// `StaleSchemaDigests` is a deduplicated
 			// list of DIGESTS, not a row count -- two rows for this
 			// operation at ONE stale digest still print as a single
 			// entry here, so labelling that count "row(s)" understates
@@ -169,12 +170,10 @@ func runDisable(argv []string) error {
 			change.Operation, change.CurrentMode, change.NewMode, local, common.recordedBy)
 	}
 	fmt.Fprintf(stdout, "\napplied: %d row(s) now mode=%s\n", summary.Applied, mode)
-	// r6 T1 (reproduced): the `summary.Applied != expected` refusal that
-	// used to live here described a race ("a row was repointed between
-	// the read and the write") the r2 R2-08 `FOR UPDATE` plan read
-	// already makes impossible -- see goapiproof.Disable's own write
-	// loop, which now marks every row Applied unconditionally on a
-	// successful write for exactly this reason. Dead code removed rather
-	// than kept as unreachable dressing around a stale comment.
+	// No `summary.Applied != expected` refusal here: the race it would
+	// describe ("a row was repointed between the read and the write") is
+	// made impossible by the `FOR UPDATE` plan read -- see
+	// goapiproof.Disable's own write loop, which marks every row Applied
+	// unconditionally on a successful write for exactly this reason.
 	return nil
 }

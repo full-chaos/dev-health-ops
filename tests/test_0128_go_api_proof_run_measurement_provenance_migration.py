@@ -67,7 +67,7 @@ def _columns(engine: Engine, table: str) -> dict[str, bool]:
 def _column_defaults(engine: Engine, table: str) -> dict[str, str | None]:
     """column name -> its DEFAULT expression, or None for no default.
 
-    r3 P3 (reproduced): the live-nullability comparison above proves name
+    The live-nullability comparison above proves name
     and nullability agree, but says nothing about the DEFAULT VALUE a
     fresh INSERT actually gets -- changing `differences_outside_baseline_
     defect`'s fixture default from 0 to 1 passed both DDL-mirror pins
@@ -385,7 +385,7 @@ def ddl_mirror_db() -> Iterator[Engine]:
 def test_registry_ddl_mirror_matches_live_column_nullability(
     migrated: Engine, ddl_mirror_db: Engine
 ) -> None:
-    """r2 P3 (reproduced): the name-presence check above is textual --
+    """The name-presence check above is textual --
     it finds a tab followed by a column name anywhere in the source, and
     has no opinion on TYPE, NULLABILITY, DEFAULT or CONSTRAINT. M78
     removed ``NOT NULL`` from ``differences_outside_baseline_defect`` in
@@ -397,9 +397,8 @@ def test_registry_ddl_mirror_matches_live_column_nullability(
     built databases -- one migrated through alembic to 0128, one built
     from nothing but ``registryschema.DDL`` -- and compares them
     column-for-column, name AND nullability together, for every table the
-    mirror declares. The same live comparison the r2 review ran by hand
-    (``schema_compare.py``); this pins it so the next drift fails a test
-    instead of waiting for a reviewer to run one.
+    mirror declares, so the next drift fails a test instead of waiting
+    for someone to run a comparison by hand.
     """
     command.upgrade(_config(), "0128")
     for table in ("go_api_candidate_build", "go_api_routing_state", "go_api_proof_run"):

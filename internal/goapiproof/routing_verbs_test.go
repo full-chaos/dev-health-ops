@@ -30,7 +30,7 @@ func TestLoadOperationCatalogRefusesEveryUnusableShape(t *testing.T) {
 		"an entry with no operation": `[{"operation":"","digest":"b"}]`,
 		"a duplicate operation":      `[{"operation":"a","digest":"b"},{"operation":"a","digest":"c"}]`,
 		"a duplicate digest":         `[{"operation":"a","digest":"b"},{"operation":"c","digest":"b"}]`,
-		// r2 P1 (reproduced): a byte the Python edge's `Path.read_text()`
+		// A byte the Python edge's `Path.read_text()`
 		// cannot decode anywhere in the file, including in a key this
 		// program never reads -- the edge rejects the WHOLE file, so this
 		// must too, or Go would write a row nothing can dispatch.
@@ -40,7 +40,7 @@ func TestLoadOperationCatalogRefusesEveryUnusableShape(t *testing.T) {
 		"invalid UTF-8, UTF-16 surrogate":                      "[{\"operation\":\"a\",\"digest\":\"b\",\"ignored\":\"\xed\xa0\x80\"}]",
 		"invalid UTF-8, above the Unicode code point limit":    "[{\"operation\":\"a\",\"digest\":\"b\",\"ignored\":\"\xf4\x90\x80\x80\"}]",
 		"invalid UTF-8 in the operation KEY, not just a value": "[{\"operation\":\"\xff\",\"digest\":\"b\"}]",
-		// r4 P1 (reproduced): an unpaired UTF-16 surrogate escape is valid
+		// An unpaired UTF-16 surrogate escape is valid
 		// ASCII, so it passes the UTF-8 gate above -- encoding/json
 		// silently collapses it to U+FFFD one layer down instead.
 		"unpaired UTF-16 surrogate escape": `[{"operation":"a","digest":"b","ignored":"\ud800x"}]`,
@@ -75,8 +75,8 @@ func TestLoadOperationCatalogAcceptsTheCheckedInEdgeCatalog(t *testing.T) {
 	}
 }
 
-// r3 P1 (team-lead's decoder sweep, executed evidence for a claim the
-// package comment only argued): "extra keys stay ACCEPTED, deliberately"
+// Executed evidence for the
+// package comment's claim: "extra keys stay ACCEPTED, deliberately"
 // -- Python's subscript ignores them, so this file must too.
 func TestLoadOperationCatalogAcceptsAnUnknownKey(t *testing.T) {
 	catalog, err := LoadOperationCatalog(writeCatalog(t, `[{"operation":"flowMatrix","digest":"b","unexpected_future_field":"anything"}]`))
@@ -88,7 +88,7 @@ func TestLoadOperationCatalogAcceptsAnUnknownKey(t *testing.T) {
 	}
 }
 
-// r3 P1 (team-lead's decoder sweep, executed evidence): catalogEntryKey
+// Executed evidence: catalogEntryKey
 // reads by EXACT key out of a raw map, which is why the catalog was
 // already immune to the case-shadow class that /registry, /buildinfo and
 // LoadDocuments needed a fix for -- proven here rather than assumed from
@@ -129,7 +129,7 @@ func TestResolveOperationsRefusesANameTheCatalogDoesNotCarry(t *testing.T) {
 	}
 }
 
-// CHAOS-5486 r1 F1, now shared by all four verbs: a separators-only value
+// Shared by all four verbs: a separators-only value
 // must never widen to "everything".
 // The r1 finding and its second half. `","` was the reported case; `""`
 // was the one that survived the first fix and was found by a codex round
@@ -181,7 +181,7 @@ func TestDisableSQLNeverAssignsTheCandidateBuild(t *testing.T) {
 	}
 	// The guard has to be part of the WRITE, not a separate earlier read:
 	// a row repointed between the plan and the write must simply not
-	// match (go_api_routing_admin.apply_disable, codex r1 P1).
+	// match (go_api_routing_admin.apply_disable).
 	if !strings.Contains(disableRoutingRowSQL, "$6::text IS NULL OR current_candidate_build = $6") {
 		t.Fatal("the candidate-build guard must be part of the UPDATE's WHERE, not a separate read")
 	}

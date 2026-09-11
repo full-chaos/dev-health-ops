@@ -2170,7 +2170,7 @@ def _mirrored_image(image: str, prefix: str) -> str:
     or a supported, non-empty prefix in the test's environment makes the
     literal source-declared image string wrong on purpose.
 
-    r3 P1 (reproduced): `_declared_image`/`_pinned_clickhouse_image` never
+    `_declared_image`/`_pinned_clickhouse_image` never
     read this env var at all, so a host with a mirror configured in its
     environment (this repo's own documented, supported override) failed
     BOTH prepull tests -- the consumer (ci/check_go.sh) honoured the

@@ -30,9 +30,7 @@ package goapiproof
 // only FAIL a run (team-lead ruling R51). A row's provenance must not rest
 // on somebody having typed the right thing.
 //
-// WHY THERE IS NO PRE-READ OF THE ROW, AND THE LIVE DEADLOCK THIS LEAVES
-// (r6 P3, reproduced -- CORRECTED from an earlier version of this
-// comment that claimed the opposite of the executed behaviour).
+// WHY THERE IS NO PRE-READ OF THE ROW, AND THE LIVE DEADLOCK THIS LEAVES.
 //
 // Enable inserts the candidate build and then upserts the routing row,
 // per operation, in that order -- CB then RS. It does NOT first
@@ -40,9 +38,8 @@ package goapiproof
 // (routing_rows.go's selectRepointCandidatesSQL locks EVERY routing row
 // at a schema digest, UP FRONT, before it registers a single candidate
 // build -- RS then, per row, CB then RS again). That is a genuine
-// LOCK-ORDER INVERSION, not the deadlock-AVOIDING opposite this comment
-// used to claim: the textbook rule for avoiding a deadlock between two
-// transactions is that they acquire contended resources in the SAME
+// LOCK-ORDER INVERSION: the textbook rule for avoiding a deadlock between
+// two transactions is that they acquire contended resources in the SAME
 // order, and CB-then-RS vs RS-then-CB is exactly the shape that produces
 // one when they run concurrently over the same rows.
 //
@@ -55,22 +52,15 @@ package goapiproof
 // process 137. Process 137 waits for ShareLock on transaction 798;
 // blocked by process 139.` Both sides roll back cleanly -- Postgres
 // aborts one, and no row is left half-written -- so this is a FAILED
-// WRITE an operator retries, not corruption, which is why it is P3 and
-// not P1/P2.
+// WRITE an operator retries, not corruption.
 //
-// NOT FIXED IN THIS PR (RISK-NOTES names it explicitly, corrected to
-// describe the actual defect rather than a "convention" that does not
-// exist): the real fix is making `enable` acquire the SAME lock in the
-// SAME order `repoint` does -- pre-locking the target routing rows
-// (where one already exists) via routing_rows.go's shared reader BEFORE
-// touching go_api_candidate_build -- and it is deferred to a dedicated
-// follow-up PR rather than folded in here, per team-lead ruling.
-// CHAOS-5507 is the ticket that fix belongs to; this PR's contribution is
-// correcting the false claim and pinning the reproduced behaviour with a
-// test (r7 F8, reproduced: corrected the test's own name here --
-// TestEnableAndRepointLockOrderInversionDeadlocks, in
-// routing_repoint_integration_test.go -- this comment used to cite a name
-// that was never the test's actual name), so the follow-up starts from
+// NOT FIXED IN THIS PR (RISK-NOTES names it explicitly): the real fix is
+// making `enable` acquire the SAME lock in the SAME order `repoint` does
+// -- pre-locking the target routing rows (where one already exists) via
+// routing_rows.go's shared reader BEFORE touching go_api_candidate_build
+// -- and it is deferred to a dedicated follow-up PR rather than folded
+// in here. Pinned by `TestEnableAndRepointLockOrderInversionDeadlocks`,
+// in routing_repoint_integration_test.go, so that follow-up starts from
 // what the code actually does.
 
 import (
@@ -151,7 +141,7 @@ type EnableOutcome struct {
 	Proven bool
 	// ReviewEvidence is what was actually written, prefix included.
 	ReviewEvidence string
-	// ModeBefore/CandidateBuildBefore/HadRowBefore (r8 F1, reproduced) are
+	// ModeBefore/CandidateBuildBefore/HadRowBefore are
 	// the row's own state, read with the SAME lock and the SAME
 	// transaction as the write that replaces it -- see the SELECT ... FOR
 	// UPDATE in Enable's write loop, below. HadRowBefore is false when no
@@ -159,20 +149,21 @@ type EnableOutcome struct {
 	// value); only set when Apply actually wrote (empty on a dry run,
 	// which reads nothing).
 	//
-	// This REPLACES an earlier, unlocked, OUTSIDE-the-transaction pre-read
-	// that used to live in cmd/go-api-routing/enable.go, purely for this
-	// log line. Executed (opus r8, two real binaries): a third session
-	// holds the target row for 3s; `disable -apply` (queued first) turns
-	// it python; `enable` (queued second, unaware) turns it back on. The
-	// OLD unlocked read ran before `disable`'s write landed, so the log
-	// printed `mode_before=canary mode_after=canary` -- durably recording
+	// Reading under the SAME FOR-UPDATE lock the write itself takes is
+	// what makes this safe under concurrency: a naive read taken before
+	// this call even starts can run BEFORE a racing writer's commit lands
+	// -- executed (two real binaries): a third session holds the target
+	// row for 3s; `disable -apply` (queued first) turns it python;
+	// `enable` (queued second, unaware) turns it back on. An unlocked
+	// pre-read taken before `disable`'s write landed would log
+	// `mode_before=canary mode_after=canary` -- durably recording
 	// "nothing happened" for the one event (a re-enable of a just-rolled-
-	// back operation) a rollback investigation most needs to find. Reading
-	// under the SAME FOR-UPDATE lock the write itself takes closes that
-	// window: by the time this read runs, `disable`'s commit has already
-	// happened or this transaction is already waiting behind it, so
-	// ModeBefore is always the value the write ACTUALLY replaced, never a
-	// stale snapshot from before a concurrent writer ran.
+	// back operation) a rollback investigation most needs to find. Under
+	// the SAME lock the write itself takes, that window closes: by the
+	// time this read runs, `disable`'s commit has already happened or
+	// this transaction is already waiting behind it, so ModeBefore is
+	// always the value the write ACTUALLY replaced, never a stale
+	// snapshot from before a concurrent writer ran.
 	ModeBefore           string
 	CandidateBuildBefore string
 	HadRowBefore         bool
@@ -273,8 +264,8 @@ ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE
        updated_at = EXCLUDED.updated_at`
 
 // selectEnableBeforeStateSQL reads the target row's mode/build UNDER THE
-// SAME LOCK the upsert immediately below it takes (r8 F1, reproduced --
-// see EnableOutcome.ModeBefore's own doc comment). Scoped to the row's
+// SAME LOCK the upsert immediately below it takes -- see
+// EnableOutcome.ModeBefore's own doc comment. Scoped to the row's
 // FULL identity, matching the upsert's own ON CONFLICT columns exactly --
 // there is no ambiguity to resolve with an ORDER BY the way the shared
 // multi-row reads elsewhere in this package need one.
@@ -356,9 +347,7 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		outcome := &outcomes[i]
 		// Candidate build FIRST. The routing row's 4-column foreign key
 		// makes the order mandatory -- but this is NOT a deadlock-avoiding
-		// "lock-order convention" (r7 F8, reproduced: corrected, this
-		// comment used to claim the opposite of what the package's own
-		// doc comment above now says). `repoint` locks the routing row
+		// "lock-order convention". `repoint` locks the routing row
 		// FIRST, then registers the build; this locks the build FIRST,
 		// then the routing row. That is the exact lock-order INVERSION
 		// the package comment (above, "WHY THERE IS NO PRE-READ OF THE
@@ -373,21 +362,20 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 			request.SchemaDigest, outcome.DocumentDigest, outcome.Operation, request.RunningBuild); err != nil {
 			return nil, fmt.Errorf("goapiproof: register candidate build for %s: %w", outcome.Operation, err)
 		}
-		// r8 F1 (reproduced): the row's BEFORE state, read under the SAME
+		// The row's BEFORE state, read under the SAME
 		// FOR-UPDATE lock the upsert immediately below takes, in the SAME
 		// CB-then-RS order the upsert already uses -- see
-		// EnableOutcome.ModeBefore's own doc comment for why this
-		// replaced an unlocked, outside-the-transaction pre-read that
-		// used to live in the cmd layer. A genuine query error here
-		// (never observed with a real role in either r7's or r8's own
-		// attempts to reach it -- Postgres's privilege model requires the
-		// SAME grant for the UPSERT immediately below, so a role that
-		// cannot run this SELECT cannot run that UPSERT either) now
-		// aborts the WHOLE enable the same way any other mid-transaction
-		// database error already does, rather than degrading to a
-		// silently-wrong logged value -- the CHAOS-5416 "a measurement
-		// that did not happen is not a pass" rule applied to this read
-		// too.
+		// EnableOutcome.ModeBefore's own doc comment for why this is a
+		// locked read rather than an unlocked, outside-the-transaction
+		// pre-read. A genuine query error here (never observed with a
+		// real, privilege-restricted role -- Postgres's privilege model
+		// requires the SAME grant for the UPSERT immediately below, so a
+		// role that cannot run this SELECT cannot run that UPSERT either)
+		// now aborts the WHOLE enable the same way any other
+		// mid-transaction database error already does, rather than
+		// degrading to a silently-wrong logged value -- the same "a
+		// measurement that did not happen is not a pass" rule applied to
+		// this read too.
 		switch err := tx.QueryRow(ctx, selectEnableBeforeStateSQL,
 			request.SchemaDigest, outcome.DocumentDigest, outcome.Operation,
 		).Scan(&outcome.ModeBefore, &outcome.CandidateBuildBefore); {

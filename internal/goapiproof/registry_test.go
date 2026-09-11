@@ -62,7 +62,7 @@ func TestFetchBuildIdentityRefusesAnUnidentifiableBuild(t *testing.T) {
 	}
 }
 
-// r3 P1 (reproduced): encoding/json's key-case shadowing lets a LATER,
+// encoding/json's key-case shadowing lets a LATER,
 // differently-cased key win over an EARLIER exact one for the same
 // struct field -- {"modified":true,"MODIFIED":false} decoded Modified as
 // false with the old plain-struct decode, defeating the modified-build
@@ -86,7 +86,7 @@ func TestFetchBuildIdentityRefusesAModifiedBuildEvenUnderAShadowKey(t *testing.T
 	}
 }
 
-// r3 P1 (reproduced): a commit byte the JSON string scanner cannot
+// A commit byte the JSON string scanner cannot
 // represent decodes SILENTLY into the Unicode replacement character
 // (U+FFFD) rather than erroring -- the corrupted value would otherwise be
 // written as current_candidate_build, a 4-column foreign-key value every
@@ -100,7 +100,7 @@ func TestFetchBuildIdentityRefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
-// r4 P1 (reproduced): `\ud800` is six valid ASCII bytes -- it passes
+// `\ud800` is six valid ASCII bytes -- it passes
 // utf8.Valid on the raw body -- but encoding/json unescapes an unpaired
 // UTF-16 surrogate half to U+FFFD rather than erroring, so this body and
 // one carrying a LITERAL U+FFFD commit decode to the identical Go string.
@@ -115,7 +115,7 @@ func TestFetchBuildIdentityRefusesUnpairedSurrogateEscape(t *testing.T) {
 	}
 }
 
-// r4 P2 (reproduced): `"modified": null` decodes through a plain
+// `"modified": null` decodes through a plain
 // `json.Unmarshal(null, &value)` into a bool as a documented NO-OP --
 // value stays false, its zero value -- so a caller reading only the value
 // (not exactBoolField's presence flag) could not tell an EXPLICIT "clean"
@@ -130,7 +130,7 @@ func TestFetchBuildIdentityRefusesNullModified(t *testing.T) {
 	}
 }
 
-// r4 P2 (reproduced), the other half: OMITTING `modified` entirely also
+// The other half: OMITTING `modified` entirely also
 // reached exactBoolField's zero value with present=false, and the caller
 // used to discard that flag (`modified, _, err := exactBoolField(...)`).
 func TestFetchBuildIdentityRefusesAbsentModified(t *testing.T) {
@@ -142,7 +142,7 @@ func TestFetchBuildIdentityRefusesAbsentModified(t *testing.T) {
 	}
 }
 
-// r3 P1 (team-lead's decoder sweep): /buildinfo must accept an
+// /buildinfo must accept an
 // unrecognised key the same way the catalog does -- refusing on it would
 // disagree with a Python reader that simply never looks at it.
 func TestFetchBuildIdentityAcceptsAnUnknownKey(t *testing.T) {
@@ -217,7 +217,7 @@ func TestStaleRoutingRowsNamesDisagreeingRowsAndOnlyThose(t *testing.T) {
 	}
 }
 
-// A stale routing row REFUSES the run again (r1 P1).
+// A stale routing row REFUSES the run again.
 //
 // The demotion assumed /buildinfo identifies the process that served the
 // measured request. With more than one query-api replica and an edge that
@@ -261,7 +261,7 @@ func TestRowsAgreeingWithTheRunningBuildPassTheCheck(t *testing.T) {
 	}
 }
 
-// r5 P1 (reproduced): FetchRegistry used to refuse OUTRIGHT on an empty
+// FetchRegistry must not refuse OUTRIGHT on an empty
 // `operations` array -- correct for a write verb, wrong for `status`,
 // which shares this exact function and needs the schema_digest a
 // refusal destroyed along with everything else. Executed: `status`
@@ -290,7 +290,7 @@ func TestFetchRegistryAcceptsAnEmptyRegistration(t *testing.T) {
 	}
 }
 
-// r6 F3(b) (reproduced): an ABSENT `operations` key or an explicit
+// An ABSENT `operations` key or an explicit
 // `"operations": null` used to fall through to the SAME empty-map
 // success path an honest `"operations": []` gets -- so `status` printed
 // [AGREE] and "the deployed go plane does not register this operation at
@@ -315,7 +315,7 @@ func TestFetchRegistryRefusesAMissingOrNullOperationsKey(t *testing.T) {
 	}
 }
 
-// r2 P1 (reproduced, CHAOS-5524 folded in per team-lead ruling): a
+// A
 // /registry response naming the same operation twice, under CONFLICTING
 // document digests, used to collapse last-wins -- whichever entry
 // happened to come last silently decided which digest a routing row got
@@ -337,7 +337,7 @@ func TestFetchRegistryRefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
-// r4 P1 (reproduced), the /registry sibling: the sweep named all three
+// The /registry sibling: all three
 // decoders explicitly (snapshot.go, registry.go, routing_catalog.go).
 func TestFetchRegistryRefusesUnpairedSurrogateEscape(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -398,7 +398,7 @@ func TestFetchRegistryRefusesAnIdenticalDuplicateOperationToo(t *testing.T) {
 	}
 }
 
-// r3 P1 (reproduced): the OLD plain-struct decode let a differently-cased
+// A plain-struct decode would let a differently-cased
 // shadow key win over the exact "operation"/"document_digest" key for
 // the SAME field -- {"operation":"flowMatrix","document_digest":"good",
 // "Operation":"tampered"} decoded Operation as "tampered", not
@@ -425,7 +425,7 @@ func TestFetchRegistryOperationFieldIsNeverShadowedByADifferentlyCasedKey(t *tes
 	}
 }
 
-// r3 P1 (team-lead's decoder sweep): /registry must accept an
+// /registry must accept an
 // unrecognised top-level or operation-entry key -- Python's dict
 // subscript ignores them too, so refusing would be a disagreement in
 // the opposite direction from the case-shadow bug.
@@ -445,13 +445,12 @@ func TestFetchRegistryAcceptsAnUnknownKey(t *testing.T) {
 	}
 }
 
-// r3 P1 (reproduced): "a valid operation followed by {} or null also
+// "A valid operation followed by {} or null also
 // passes Go's whole-response validation and permits a write" -- an empty
 // or null registry entry decoded to an empty-string operation/digest
 // with NO error, because exactStringField correctly reports the key as
 // absent, not malformed, and nothing upstream checked for absence.
-// r6 T1 (M31, noted as production-subsumed but untested at this exact
-// line): an empty `schema_digest` must refuse HERE, at the raw-decode
+// An empty `schema_digest` must refuse HERE, at the raw-decode
 // boundary, not only be caught incidentally by a write verb's preflight
 // 2 (which compares it against a local digest that is never empty).
 // `status` calls FetchRegistry directly too and has no such preflight.
@@ -488,7 +487,7 @@ func TestFetchRegistryRefusesAnEmptyOrNullOperationsEntry(t *testing.T) {
 	}
 }
 
-// r3 P1 (reproduced, package-wide UTF-8 sweep): LoadDocuments has the
+// LoadDocuments has the
 // same silent U+FFFD substitution the other decoders in this package
 // close -- an invalid byte anywhere in the file decoded without error
 // before this check existed.
@@ -502,7 +501,7 @@ func TestLoadDocumentsRefusesInvalidUTF8(t *testing.T) {
 	}
 }
 
-// r4 P1 (reproduced): the third named decoder in the surrogate sweep.
+// The third named decoder in the surrogate sweep.
 func TestLoadDocumentsRefusesUnpairedSurrogateEscape(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "documents.json")
 	body := `[{"operation":"flowMatrix","document":"query \ud800abc","digest":"d"}]`
@@ -514,7 +513,7 @@ func TestLoadDocumentsRefusesUnpairedSurrogateEscape(t *testing.T) {
 	}
 }
 
-// r3 P1 (team-lead's decoder sweep): LoadDocuments was the LAST plain
+// LoadDocuments is the LAST plain
 // struct-tag decode in this file -- the same case-shadow class closed
 // for /registry and /buildinfo applied to it too.
 func TestLoadDocumentsFieldsAreNeverShadowedByADifferentlyCasedKey(t *testing.T) {
@@ -602,7 +601,7 @@ func TestVerifyBuildStableRefusesWhenTheRereadFails(t *testing.T) {
 	}
 }
 
-// r1 P2: the refusal path built its own prose and dropped the provenance
+// The refusal path must not build its own prose and drop the provenance
 // the success path carried, so the receipts that most needed context had
 // the least. Both paths now use ONE constructor, and the result is a JSON
 // object rather than generated text appended to operator text.
@@ -696,7 +695,7 @@ func TestAnOperatorNoteCannotForgeProvenance(t *testing.T) {
 	}
 }
 
-// r4 P1 (reproduced): direct coverage of the scanner itself, including
+// Direct coverage of the scanner itself, including
 // the shapes that must NOT be refused (a valid pair, a plain BMP escape,
 // an escaped backslash immediately before a literal "u" that is not an
 // escape at all) alongside every unpaired shape.

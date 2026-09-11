@@ -29,7 +29,7 @@ import (
 // pointer or a nullable string, so "we could not tell" is a value a
 // reader can see rather than a zero that looks like an answer.
 type statusReport struct {
-	// r8 F6 (reproduced, team-lead ruling R126): the JSON key names
+	// The JSON key names
 	// LocalSchemaDigest -- named "local" from THIS binary's own
 	// perspective, matching every other Go-side naming in this file --
 	// now match Python's `status --json` key names EXACTLY:
@@ -79,15 +79,14 @@ type statusReportOperation struct {
 	StaleDigests               []string `json:"stale_digests"`
 	UnreachableDocumentDigests []string `json:"unreachable_document_digests"`
 	Proven                     bool     `json:"proven"`
-	// r5 P1 (reproduced): a plain `bool` can only ever say "yes" or "no",
+	// A plain `bool` can only ever say "yes" or "no",
 	// so the moment reachability genuinely CANNOT be told (the go plane
-	// is unreachable) it defaulted to the local row's own classification
-	// -- which reads as "yes". Tri-state, matching every other "we could
+	// is unreachable) defaulting to the local row's own classification
+	// reads as "yes". Tri-state, matching every other "we could
 	// not tell" field on this report (see the type's own doc comment):
 	// nil is UNKNOWN, not a silent true.
 	Reachable *bool `json:"reachable"`
-	// ReachableReason names WHY, whenever Reachable is not true (r6
-	// observability (6), team-lead ruling): a JSON consumer reading
+	// ReachableReason names WHY, whenever Reachable is not true: a JSON consumer reading
 	// `reachable: false` or `null` had to cross-reference DigestState,
 	// DeployedDigestState and PlanesAgree by hand to learn which of them
 	// is the actual cause. nil when Reachable is true -- a healthy row
@@ -99,7 +98,7 @@ type statusReportOperation struct {
 	// checked against DocumentDigest (the catalog's, what a row must
 	// carry to be reachable) -- the same comparison `enable`'s Preflight 3
 	// makes before writing, now made here too so `status` cannot report an
-	// operation healthier than a write verb would treat it (r4 P1).
+	// operation healthier than a write verb would treat it.
 	//
 	//   AGREE        the deployed plane registers this operation under
 	//                 DocumentDigest, matching the catalog.
@@ -134,33 +133,29 @@ func runStatus(argv []string) error {
 	// printed in full by `flag`'s usage text, and this one is a DSN with a
 	// password in it.
 	common.resolvePostgresURI()
-	// r6 P2 (reproduced): `-registry-url` used to default to a HARDCODED
-	// `http://localhost:8090/registry` -- an operator who never
-	// configured this at all got a silent probe of whatever happened to
-	// answer there, rather than the honest "nobody told me" this
-	// diagnostic can afford to print (status never refuses). Parity with
+	// `-registry-url` falls back to `GO_API_QUERY_API_URL` when the
+	// operator names no explicit flag -- no hardcoded default. Parity with
 	// Python's `status`, which also never refuses on a missing URL --
 	// see resolveEndpointURL's doc comment (main.go).
 	registryURLResolved, haveRegistryURL := resolveEndpointURL(registryURL, "/registry")
-	// r7 F6 (reproduced): a `sanitizeEndpointURL` failure used to `return
-	// err` here, which -- via runVerb/main -- REFUSES the whole command,
-	// non-zero exit, nothing printed. That is the write verbs' contract,
-	// not this one's: this package's own doc comment says status NEVER
+	// A `sanitizeEndpointURL` failure must never REFUSE the whole
+	// command (non-zero exit, nothing printed) the way the write verbs'
+	// contract does: this package's own doc comment says status NEVER
 	// refuses, precisely because it is what an operator runs when things
-	// are ALREADY broken. RISK-NOTES's refuse-on-bad-input carve-out was
-	// written for a bad FLAG an operator just typed; an unusable
-	// GO_API_QUERY_API_URL inherited from the environment (the r6
-	// env-fallback fix) is exactly the kind of already-broken state this
-	// verb exists to report, not die on. Executed: with
-	// GO_API_QUERY_API_URL="not a url" and no -registry-url, `status`
-	// used to exit 2 printing nothing about the schema digest or the
-	// database census (both of which need no registry call at all);
-	// fixed, it now reports go_plane_error and prints everything else.
-	// The error is stashed here (report does not exist yet) and applied
-	// to the report right after it is constructed, below.
+	// are ALREADY broken. RISK-NOTES's refuse-on-bad-input carve-out is
+	// for a bad FLAG an operator just typed; an unusable
+	// GO_API_QUERY_API_URL inherited from the environment is exactly the
+	// kind of already-broken state this verb exists to report, not die
+	// on. Executed: with GO_API_QUERY_API_URL="not a url" and no
+	// -registry-url, an unguarded `return err` here exits 2 printing
+	// nothing about the schema digest or the database census (both of
+	// which need no registry call at all); fixed, it reports
+	// go_plane_error and prints everything else. The error is stashed
+	// here (report does not exist yet) and applied to the report right
+	// after it is constructed, below.
 	var registryURLSanitizeErr error
 	if haveRegistryURL {
-		// r7 F6, second half (reproduced, team-lead ruling): the sanitize
+		// The sanitize
 		// failure must name the SOURCE that actually supplied the value --
 		// "-registry-url" only when the OPERATOR typed that flag. When the
 		// value came from GO_API_QUERY_API_URL instead (registryURL, the
@@ -209,7 +204,7 @@ func runStatus(argv []string) error {
 	// exactly the situation it exists for. status therefore never reads
 	// the build identity either -- that is a WRITE verb's preflight.
 	//
-	// r4 P1 (reproduced): `registry.DocumentDigest` used to be read ONLY
+	// `registry.DocumentDigest` must not be read ONLY
 	// for its schema digest and then discarded -- so a deployed registry
 	// that agreed on schema_digest but reported a DIFFERENT document
 	// digest for one operation was invisible here, even though `enable`'s
@@ -225,7 +220,7 @@ func runStatus(argv []string) error {
 	// the same thing `enable` would.
 	var deployedDigests map[string]string
 	if !haveRegistryURL && registryURLSanitizeErr != nil {
-		// r7 F6: GoPlaneError is ALREADY set to the sanitize failure above
+		// GoPlaneError is ALREADY set to the sanitize failure above
 		// -- do not overwrite it with the generic "nothing was named"
 		// sentence, which would be false (something WAS named; it just
 		// could not be used safely).
@@ -248,23 +243,23 @@ func runStatus(argv []string) error {
 	if common.postgresURI == "" {
 		report.RegistryDBError = stringPtr("no -postgres-uri and " + postgresURIEnvVar + " is unset")
 	} else if pool, err := connectPostgres(ctx, common.postgresURI, common.timeout); err != nil {
-		// REPORTED, never fatal -- and now bounded, so a blackholed
+		// REPORTED, never fatal -- and bounded, so a blackholed
 		// database makes this verb say "unreachable" instead of hanging
-		// forever (r1 F10). A diagnostic that never returns is worse than
+		// forever. A diagnostic that never returns is worse than
 		// one that returns bad news.
 		report.RegistryDBError = stringPtr(err.Error())
 	} else {
 		defer pool.Close()
 		// EVERY database read gets the deadline, not just the dial.
 		//
-		// r1's third P1, executed: with `LOCK TABLE go_api_routing_state
+		// Executed: with `LOCK TABLE go_api_routing_state
 		// IN ACCESS EXCLUSIVE MODE` held in another transaction,
 		// `status -timeout 2s` was killed at 12s having printed NOTHING
 		// -- not even the schema digests and the /registry comparison,
-		// which had already succeeded and need no database at all. The
-		// dial bound (r1 F10) only ever covered `pool.Ping`; a lock lets
-		// the connection open and then blocks the QUERY, so the bound
-		// never applied to the thing that actually waits.
+		// which had already succeeded and need no database at all. A
+		// dial-only bound only ever covers `pool.Ping`; a lock lets
+		// the connection open and then blocks the QUERY, so such a bound
+		// never applies to the thing that actually waits.
 		//
 		// A diagnostic that never returns is worse than one that returns
 		// bad news, and this is the verb whose entire contract is that an
@@ -293,7 +288,7 @@ func runStatus(argv []string) error {
 			}
 		}
 	}
-	// r5 P1 (reproduced): schema-level disagreement must prevent a
+	// Schema-level disagreement must prevent a
 	// positive `reachable` answer the same way a per-operation document
 	// digest disagreement already does -- `enable`'s preflight 2 refuses
 	// on it BEFORE preflight 3 (the per-operation check) ever runs, so
@@ -369,7 +364,7 @@ func printStatusText(report statusReport, local string) {
 		fmt.Fprintln(stdout, "  The per-digest census above is still accurate; only the per-operation table could not be built.")
 		return
 	}
-	// r5 P1 (reproduced): the PROOF column must degrade to MISMATCH on a
+	// The PROOF column must degrade to MISMATCH on a
 	// schema-level disagreement too, not only a per-operation document
 	// digest one -- the top-of-report banner above already says [MISMATCH]
 	// once; this is the same fact, per row, where an operator's eye
@@ -388,13 +383,13 @@ func printStatusText(report statusReport, local string) {
 			if operation.Proven {
 				proof = "ok"
 			}
-			// r4 P1 (reproduced): a proof receipt names a build served at a
+			// A proof receipt names a build served at a
 			// document digest -- it says nothing about whether the DEPLOYED
 			// process still registers that digest right now. Printing "ok"
-			// here regardless was the "output that merely looks healthy"
-			// the reviewer's repro caught: `enable -dry-run` refused the
-			// identical operation with a document digest MISMATCH while
-			// this line still read "ok".
+			// here regardless is the "output that merely looks healthy"
+			// this diagnostic must avoid: executed, `enable -dry-run`
+			// refused the identical operation with a document digest
+			// MISMATCH while this line still read "ok".
 			if operation.DeployedDigestState == "MISMATCH" || operation.DeployedDigestState == "UNREGISTERED" || schemaMismatch {
 				proof = "MISMATCH"
 			}
@@ -408,7 +403,7 @@ func printStatusText(report statusReport, local string) {
 		if len(operation.UnreachableDocumentDigests) > 0 {
 			fmt.Fprintf(stdout, "    rows at the LIVE schema digest the edge can never reach, document digest: %v\n", operation.UnreachableDocumentDigests)
 		}
-		// r4 P1 (reproduced): the deployed plane's own per-operation
+		// The deployed plane's own per-operation
 		// document digest, cross-checked against the catalog's -- the
 		// exact comparison `enable`'s preflight makes before it will write
 		// a row, now surfaced here too so this diagnostic cannot look
@@ -454,9 +449,9 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 			}
 		}
 	}
-	// r5 P1 (reproduced): the r4 fix downgraded Reachable on a per-
-	// operation document-digest disagreement, but left TWO other ways to
-	// report a positive answer that `enable`'s own preflights would
+	// Reachable degrades on a per-
+	// operation document-digest disagreement, and on TWO other ways an
+	// operation would still report a positive answer that `enable`'s own preflights would
 	// refuse: an unreachable/down go plane (preflight 1) and a SCHEMA-
 	// level digest disagreement (preflight 2, which runs and refuses
 	// BEFORE preflight 3's per-operation check ever does). Executed: a
@@ -468,9 +463,9 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 	// Order matters: an unreachable go plane is checked FIRST, because it
 	// makes the schema comparison itself impossible to have made (nothing
 	// downstream of "we could not even ask" gets to claim a known state).
-	// r6 F3(a) (reproduced): with the go plane down, EVERY row -- including
-	// a `pr` with no row at all (MISSING) -- reported `reachable: null`.
-	// That is wrong for a row this binary's OWN classification already
+	// With the go plane down, EVERY row -- including
+	// a `pr` with no row at all (MISSING) -- reporting `reachable: null`
+	// is wrong for a row this binary's OWN classification already
 	// knows is unreachable regardless of what the go plane says: a
 	// MISSING/STALE row, or one sitting in mode python/disabled/shadow,
 	// cannot become reachable no matter how the deployed plane answers.
@@ -481,7 +476,7 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 	switch {
 	case !localReachable:
 		reported.Reachable = boolPtr(false)
-		// r7 F5 (reproduced): this used to ALWAYS name digest_state, even
+		// Never ALWAYS name digest_state: naming it
 		// when digest_state IS "MATCH" (a live row) and the row is
 		// unreachable ONLY because of its MODE (python/disabled/shadow --
 		// see goapiproof.OperationStatus.Reachable's own doc comment: only

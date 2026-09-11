@@ -38,7 +38,7 @@ type registryOperation struct {
 	DocumentDigest string
 }
 
-// r3 P1 (reproduced): a plain struct-tagged `json.Unmarshal` of
+// A plain struct-tagged `json.Unmarshal` of
 // /registry's or /buildinfo's body is vulnerable to JSON KEY-CASE
 // SHADOWING. encoding/json processes an object's keys in ENCOUNTER
 // ORDER, and for a field whose JSON tag is an exact lowercase name (every
@@ -83,7 +83,7 @@ func exactBoolField(raw map[string]json.RawMessage, key string) (value bool, pre
 		return false, false, nil
 	}
 	if bytes.Equal(bytes.TrimSpace(rawValue), []byte("null")) {
-		// r4 P1 (reproduced): a plain `json.Unmarshal(null, &value)` into a
+		// A plain `json.Unmarshal(null, &value)` into a
 		// non-pointer bool is a documented NO-OP in encoding/json -- it
 		// returns nil and leaves value at its zero value (false), so
 		// `"modified": null` and `"modified": false` were INDISTINGUISHABLE
@@ -108,7 +108,7 @@ func exactBoolField(raw map[string]json.RawMessage, key string) (value bool, pre
 // escape that names one half of a UTF-16 surrogate pair with no matching
 // other half.
 //
-// r4 P1 (reproduced): `utf8.Valid(body)` above only checks the RAW BYTES
+// `utf8.Valid(body)` above only checks the RAW BYTES
 // of the body, and a JSON escape like `\ud800` is six perfectly valid
 // ASCII bytes -- the invalidity is introduced ONE LAYER DOWN, when
 // encoding/json unescapes it. Its string scanner substitutes U+FFFD (the
@@ -239,7 +239,7 @@ func EndpointLabel(raw string) string {
 
 // EndpointLabelWithPort is EndpointLabel's sibling for the ONE context
 // where the port is exactly the fact that matters: `enable`/`repoint`'s
-// own "which endpoint did I consult" success line (r7 F2, reproduced).
+// own "which endpoint did I consult" success line.
 //
 // Two local port-forwards to DIFFERENT deployed processes share a
 // hostname (127.0.0.1) and differ ONLY by port -- EndpointLabel's
@@ -444,8 +444,8 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	if err != nil {
 		return RegistryView{}, fmt.Errorf("goapiproof: read registry body: %w", err)
 	}
-	// Sibling of the catalog-file fix (routing_catalog.go's UTF-8 gate,
-	// r2 P1): `go_api_cli.py` reads THIS SAME `/registry` endpoint, and
+	// Sibling of the catalog-file fix (routing_catalog.go's UTF-8 gate):
+	// `go_api_cli.py` reads THIS SAME `/registry` endpoint, and
 	// any Python HTTP client decodes response bytes as UTF-8 before
 	// `json.loads` ever runs -- invalid UTF-8 anywhere in the body fails
 	// there. encoding/json has no such requirement, so without this check
@@ -471,7 +471,7 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 		return RegistryView{}, fmt.Errorf("goapiproof: %s reported an empty schema digest", EndpointLabel(registryURL))
 	}
 	rawOperationsValue, present := rawTop["operations"]
-	// r6 F3(b) (reproduced): an ABSENT `operations` key or an EXPLICIT
+	// An ABSENT `operations` key or an EXPLICIT
 	// `"operations": null` used to fall through to the same empty-map
 	// success path r5's fix gives an honest `"operations": []` -- so
 	// `status` printed [AGREE] and "the deployed go plane does not
@@ -490,7 +490,7 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 	if err := json.Unmarshal(rawOperationsValue, &rawOperations); err != nil {
 		return RegistryView{}, fmt.Errorf("goapiproof: %s operations field is malformed: %w", EndpointLabel(registryURL), err)
 	}
-	// r5 P1 (reproduced): this used to refuse HERE, unconditionally, on an
+	// This used to refuse HERE, unconditionally, on an
 	// empty `operations` array -- which is correct for a WRITE verb (there
 	// is nothing to prove or write against) but wrong for a DIAGNOSTIC:
 	// `status` shares this exact function, and the refusal destroyed the
@@ -514,7 +514,7 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 		if err != nil {
 			return RegistryView{}, fmt.Errorf("goapiproof: %s operations[%d]: %w", EndpointLabel(registryURL), index, err)
 		}
-		// r3 P1 (reproduced): a `{}` or `null` entry (rawOp is an empty or
+		// A `{}` or `null` entry (rawOp is an empty or
 		// nil map either way) decoded to an empty-string operation/digest
 		// with no error at all -- exactStringField correctly reports the
 		// key as ABSENT rather than malformed, but nothing upstream of it
@@ -527,8 +527,7 @@ func FetchRegistry(ctx context.Context, client *http.Client, registryURL string)
 		operations = append(operations, registryOperation{Operation: operationName, DocumentDigest: documentDigest})
 	}
 
-	// r2 P1 (reproduced, CHAOS-5524 folded in per team-lead ruling): this
-	// map used to be a last-write-wins CONVERSION -- two `/registry`
+	// This map used to be a last-write-wins CONVERSION -- two `/registry`
 	// entries naming the same operation under different document digests
 	// collapsed silently, and whichever happened to come last decided
 	// which digest a routing row got written with. The Python verb refuses
@@ -621,7 +620,7 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: read buildinfo body: %w", err)
 	}
-	// r3 P1 (reproduced): without this check, a `commit` value carrying
+	// Without this check, a `commit` value carrying
 	// invalid UTF-8 (a single bad byte is enough) decodes silently -- Go's
 	// JSON string scanner substitutes U+FFFD (the replacement character)
 	// for an invalid byte rather than erroring, so the corrupted string
@@ -656,7 +655,7 @@ func FetchBuildIdentity(ctx context.Context, client *http.Client, buildInfoURL s
 	case commit == "unknown":
 		return "", fmt.Errorf("%w: it reports commit=%q, internal/platform/version's default for a build with no -ldflags and no VCS stamp", ErrNoBuildIdentity, commit)
 	case !modifiedPresent:
-		// r4 P2 (reproduced): the OTHER half of the null-modified finding
+		// The OTHER half of the null-modified case
 		// above. `exactBoolField` now refuses `"modified": null` outright,
 		// but a body that OMITS the key altogether still reached here with
 		// `modified == false` (its zero value) and `modifiedPresent ==
@@ -810,7 +809,7 @@ func LoadDocuments(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("goapiproof: read documents file: %w", err)
 	}
-	// r3 P1 (reproduced, package-wide UTF-8 sweep): the same silent
+	// The same silent
 	// U+FFFD substitution the catalog/registry/buildinfo gates close
 	// elsewhere in this package applies here too -- an invalid byte in
 	// the operation name, the document text or the digest field would

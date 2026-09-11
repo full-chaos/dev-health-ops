@@ -166,7 +166,7 @@ func LoadOperationCatalog(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: read %s: %w", ErrCatalogUnusable, path, err)
 	}
-	// r2 P1 (reproduced): the Python edge loads this file with
+	// The Python edge loads this file with
 	// `Path.read_text()`, which decodes the WHOLE file as UTF-8 and raises
 	// UnicodeDecodeError on the FIRST bad byte anywhere in it --
 	// `catalog_loaded_successfully=False`, the operation undispatchable.
@@ -268,8 +268,7 @@ var ErrUnknownOperation = errors.New("goapiproof: operation is not in the regist
 // catalog-validated list.
 //
 // `all-registered` is the only value meaning "every catalog operation";
-// anything that names nothing at all is refused rather than widened
-// (CHAOS-5486 r1 F1 and its second half).
+// anything that names nothing at all is refused rather than widened.
 func ResolveOperations(requested string, catalog map[string]string) ([]string, error) {
 	names, err := SplitOperations(requested)
 	if err != nil {

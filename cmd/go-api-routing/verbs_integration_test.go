@@ -96,7 +96,7 @@ func startQueryAPI(t *testing.T, schemaDigest string, documentDigest map[string]
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		// r4 P2 (reproduced): `modified` must be explicitly present now --
+		// `modified` must be explicitly present now --
 		// FetchBuildIdentity refuses an absent key rather than defaulting
 		// unknown cleanliness to clean. This fixture's whole purpose is to
 		// exercise a build the guards should ACCEPT, so it says so.
@@ -246,8 +246,8 @@ func TestEnableWarnsOnEveryUnprovenRowItActuallyWrites(t *testing.T) {
 	}
 }
 
-// r2 P3 (reproduced): the whole reason status.go:155 covers the census
-// AND the classification with one deadline is r1's F10 -- a diagnostic
+// The whole reason status.go:155 covers the census
+// AND the classification with one deadline: a diagnostic
 // that never returns is worse than one that returns bad news. r2's M23
 // replaced that `context.WithTimeout` with a cancellation-only context
 // and BOTH suites stayed green, because nothing in either suite ever put
@@ -271,7 +271,7 @@ func TestStatusReturnsWithinItsTimeoutUnderAHeldLock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// r3 P3 (reproduced): captureVerb calls run(argv) SYNCHRONOUSLY, and
+	// captureVerb calls run(argv) SYNCHRONOUSLY, and
 	// the lock this test holds is only released by a t.Cleanup that fires
 	// when the test function RETURNS -- so under the exact mutation this
 	// test exists to kill (the deadline removed), the blocked query never
@@ -341,7 +341,7 @@ func TestEnableRefusesAnOperationTheRunningProcessDoesNotRegister(t *testing.T) 
 	// The running process registers SOME operation, agreeing on the
 	// schema digest -- but not the one this run asks for. Without at
 	// least one operation, enable's OWN "registers no operations" check
-	// (r5 P1: moved out of the shared FetchRegistry so status can read an
+	// (moved out of the shared FetchRegistry so status can read an
 	// empty registry's schema digest without being refused) would fire
 	// first, which would prove nothing about preflight 3.
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{"someOtherOperation": "3333333333333333333333333333333333333333333333333333333333333333"})
@@ -496,7 +496,7 @@ func TestRepointExpectBuildCrossCheckRefusesAMismatch(t *testing.T) {
 	}
 }
 
-// r3 P3 (reproduced): `printStatusText`'s PROOF column has no killer at
+// `printStatusText`'s PROOF column has no killer at
 // its real call site -- both full suites stayed green with `if
 // operation.Proven` mutated to `if false && operation.Proven`, which
 // makes the text report label every matching row UNPROVEN even when a
@@ -583,7 +583,7 @@ func queryRow(t *testing.T, dsn, sql string, into ...any) error {
 	return pool.QueryRow(ctx, sql).Scan(into...)
 }
 
-// r4 P1 (reproduced): `status` used to classify an operation purely from
+// `status` must not classify an operation purely from
 // the LOCAL catalog's document digest, discarding the deployed registry's
 // own per-operation digest after checking only schema_digest -- so a
 // deployed plane that agreed on schema_digest but registered a DIFFERENT
@@ -692,7 +692,7 @@ func TestStatusReportsDeployedDocumentDigestMismatchNotHealthy(t *testing.T) {
 	t.Fatalf("no operation %s in the JSON report:\n%s", verbTestOperation, jsonOut)
 }
 
-// r8 T1a (reproduced, test-strength only -- the code at status.go's text
+// The code at status.go's text
 // PROOF column already handles DeployedDigestState == "UNREGISTERED"
 // correctly, it was simply unpinned): the SAME "output that merely looks
 // healthy" class as TestStatusReportsDeployedDocumentDigestMismatchNotHealthy
@@ -754,7 +754,7 @@ func TestStatusTextReportsMismatchWhenTheDeployedPlaneStopsRegisteringTheOperati
 	t.Fatalf("no line for %s found in the text report:\n%s", verbTestOperation, out)
 }
 
-// r5 P1 (reproduced): `enable`'s Preflight 1 used to rely entirely on
+// `enable`'s Preflight 1 must not rely entirely on
 // `FetchRegistry` refusing an empty `operations` array by itself; now
 // that the refusal moved out of the shared reader (so `status` can read
 // an otherwise-empty registry's schema digest -- see registry_test.go's
@@ -778,7 +778,7 @@ func TestEnableRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 	assertNoRows(t, dsn)
 }
 
-// r5 P1 (reproduced), repoint's identical preflight.
+// repoint's identical preflight.
 func TestRepointRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 	_, dsn := startVerbPostgres(t)
 	digest := "5555555555555555555555555555555555555555555555555555555555555555"
@@ -810,7 +810,7 @@ func TestRepointRefusesARegistryThatRegistersNothingAtAll(t *testing.T) {
 	}
 }
 
-// r5 P1 (reproduced): the reviewer's own repro, end to end. Two ways
+// End to end. Two ways
 // `status` used to report a positive `reachable` answer that `enable`
 // would refuse: a SCHEMA-level digest disagreement (checked before the
 // per-operation document digest ever is), and the go plane being
@@ -887,7 +887,7 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 		t.Fatalf("reachable must be false (known, not unknown) under a schema mismatch, got %v", schemaOperation.Reachable)
 	}
 
-	// r6 T1 (M19, unpinned before this fix): the TEXT report's PROOF
+	// The TEXT report's PROOF
 	// column must degrade to MISMATCH under a schema-level disagreement
 	// too -- not only a per-operation document-digest one -- even though
 	// DeployedDigestState reads AGREE (the per-operation digest itself
@@ -938,7 +938,7 @@ func TestStatusReachableDegradesOnSchemaMismatchAndOnAnUnreachableGoPlane(t *tes
 	}
 }
 
-// r6 P2 (reproduced): `enable` used to default `-registry-url` and
+// `enable` must never default `-registry-url` and
 // `-buildinfo-url` INDEPENDENTLY to a hardcoded `http://localhost:8090/
 // ...` each -- so with neither flag given, it silently probed whatever
 // happened to answer there instead of refusing, and if the two flags
@@ -1005,17 +1005,16 @@ func TestEnableRefusesWithNoQueryAPIURLConfiguredAtAllRealBinary(t *testing.T) {
 	assertNoRows(t, dsn)
 }
 
-// r6 F2 (reproduced, team-lead ruling: REFUSE, not warn): `disable`
+// `disable`
 // computes its schema digest from THIS BINARY's own embedded SDL and
-// never checked whether a named operation has a row at any OTHER digest
+// must check whether a named operation has a row at any OTHER digest
 // -- so a stale checkout (built from an operator's own tree, not the
 // deployed image -- see disable.go's own package comment) silently
 // reported `applied: 0`, exit 0, while the real row, at the digest the
 // deployed process actually uses, sat completely untouched. Fixed by
 // REFUSING outright (exit 2) rather than merely warning, both dry-run
 // and -apply, naming the digest(s) the row actually lives at.
-// r7 F1 (reproduced, team-lead ruling, corrected from an earlier version
-// of this test that expected a REFUSAL): disable must never abort over a
+// disable must never abort over a
 // named operation whose only rows sit at another schema digest -- that
 // contradicts this verb's own documented contract ("must work when the
 // planes disagree and when the deployed process is down"). It SKIPS the
@@ -1077,7 +1076,7 @@ func TestDisableSkipsAndNamesAnOperationWithRowsOnlyAtOtherSchemaDigests(t *test
 	}
 }
 
-// r8 T1c (reproduced): `StaleSchemaDigests` is deduplicated (dedupeSorted
+// `StaleSchemaDigests` is deduplicated (dedupeSorted
 // in routing_disable.go), but nothing proved it -- two rows for the SAME
 // operation at ONE stale schema digest (two different document digests,
 // the shape an SDL move followed by a catalog change leaves behind) must
@@ -1140,8 +1139,8 @@ func TestDisableDeduplicatesTwoRowsAtTheSameStaleSchemaDigest(t *testing.T) {
 	}
 }
 
-// T1 M38/M40 (opus r7, reproduced): two lines in disable's -apply path
-// were unpinned by every prior test -- the r6 F2 stale-digest note in the
+// Two lines in disable's -apply path
+// were unpinned by every prior test -- the stale-digest note in the
 // plan output (M38: neutralising the `if len(change.StaleSchemaDigests) >
 // 0` guard left both suites green) and the per-row
 // `go_api_routing.disabled` structured stderr line, the only durable log
@@ -1221,7 +1220,7 @@ func TestDisableAppliesLiveRowAndReportsStaleDigestAndLogsTheWrite(t *testing.T)
 	}
 }
 
-// r6 F3(c) (reproduced): the `-candidate-build` guard used to check
+// The `-candidate-build` guard must not check
 // EVERY row at the live schema digest, including DEAD ones (a document
 // digest the catalog does not carry) -- rows `status` never shows a
 // build for at all. An operator who copied `-candidate-build` from
@@ -1292,17 +1291,16 @@ func TestDisableCandidateBuildGuardIgnoresDeadRows(t *testing.T) {
 	}
 }
 
-// r8 F2 (reproduced, team-lead ruling R123, corrected): when an
+// When an
 // operation's ONLY row at the live digest is a DEAD one (no catalog row
-// exists at all for it), r6 F3(c)'s catalog-row scoping used to make
-// `-candidate-build` guard ZERO rows -- the write went ahead completely
-// unguarded, with nothing said about it. Python refuses the identical
-// command. Fixed: a guard the operation has NO catalog row to check
-// against now REFUSES unconditionally ("nothing to compare"), the SAME
-// way whether the dead row's build happens to match the guard or not --
-// the guard is defined (r6 F3(c)) to never read a dead row's build at
-// all, so there being no OTHER row to check is itself the refusal, not a
-// build comparison against the dead one.
+// exists at all for it), the guard must not silently guard ZERO rows --
+// the write must not go ahead completely unguarded with nothing said
+// about it. Python refuses the identical command. A guard the operation
+// has NO catalog row to check against REFUSES unconditionally ("nothing
+// to compare"), the SAME way whether the dead row's build happens to
+// match the guard or not -- the guard is defined to never read a dead
+// row's build at all, so there being no OTHER row to check is itself the
+// refusal, not a build comparison against the dead one.
 func TestDisableCandidateBuildGuardRefusesWhenNoCatalogRowExistsToCheck(t *testing.T) {
 	pool, dsn := startVerbPostgres(t)
 	ctx := context.Background()
@@ -1340,8 +1338,8 @@ func TestDisableCandidateBuildGuardRefusesWhenNoCatalogRowExistsToCheck(t *testi
 	}
 
 	// The SAME guard, this time MATCHING the dead row's actual build --
-	// must ALSO refuse. The guard never reads a dead row's build at all
-	// (r6 F3(c)), so a coincidental match does not make this write safe;
+	// must ALSO refuse. The guard never reads a dead row's build at all,
+	// so a coincidental match does not make this write safe;
 	// "nothing to compare" is unconditional.
 	_, _, err = captureVerb(t, "disable",
 		"-operations", verbTestOperation, "-mode", "python",
@@ -1380,7 +1378,7 @@ func TestDisableCandidateBuildGuardRefusesWhenNoCatalogRowExistsToCheck(t *testi
 	}
 }
 
-// r6 T1 (M21, unpinned before this fix): a classification failure
+// A classification failure
 // (`RoutingStatusRows`) must file into `ClassificationError`, NEVER into
 // `RegistryDBError` -- the census (`CountRowsBySchemaDigest`) reads only
 // `go_api_routing_state` and can succeed on its own even when the
@@ -1449,8 +1447,8 @@ func TestStatusFilesAClassificationFailureSeparatelyFromADatabaseFailure(t *test
 	}
 }
 
-// r6 F4 (reproduced): a genuine server-side write failure -- here a
-// synthetic trigger, opus's own repro shape -- must exit 1, not 2. Before
+// A genuine server-side write failure -- here a
+// synthetic trigger -- must exit 1, not 2. Before
 // this fix EVERY error out of Enable's write path exited 2, indistinguishable
 // from an ordinary "-mode is required" typo.
 func TestEnableExitsOneOnAGenuineServerSideWriteFailure(t *testing.T) {
@@ -1462,13 +1460,13 @@ func TestEnableExitsOneOnAGenuineServerSideWriteFailure(t *testing.T) {
 	server := startQueryAPI(t, localSchemaDigest(), map[string]string{verbTestOperation: digest})
 
 	if _, err := pool.Exec(ctx, `
-		CREATE OR REPLACE FUNCTION test_r6_f4_write_failure() RETURNS trigger AS $$
+		CREATE OR REPLACE FUNCTION test_synthetic_write_failure() RETURNS trigger AS $$
 		BEGIN
-			RAISE EXCEPTION 'r6 F4 synthetic write failure';
+			RAISE EXCEPTION 'synthetic write failure';
 		END;
 		$$ LANGUAGE plpgsql;
-		CREATE TRIGGER test_r6_f4_write_failure BEFORE INSERT ON go_api_routing_state
-			FOR EACH ROW EXECUTE FUNCTION test_r6_f4_write_failure();
+		CREATE TRIGGER test_synthetic_write_failure BEFORE INSERT ON go_api_routing_state
+			FOR EACH ROW EXECUTE FUNCTION test_synthetic_write_failure();
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -1477,7 +1475,7 @@ func TestEnableExitsOneOnAGenuineServerSideWriteFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("enable must refuse when the database itself raises inside the write")
 	}
-	if !strings.Contains(err.Error(), "r6 F4 synthetic write failure") {
+	if !strings.Contains(err.Error(), "synthetic write failure") {
 		t.Fatalf("refused for a different reason: %v", err)
 	}
 	if got := exitCodeFor(err); got != 1 {
@@ -1560,7 +1558,7 @@ func TestEnableAndRepointEmitEndpointAndPerRowStructuredLines(t *testing.T) {
 	}
 }
 
-// r7 F1 (reproduced): the r6 F2 stale-digest-only refusal must NOT fire
+// The stale-digest-only refusal must NOT fire
 // under `-operations all-registered` -- the documented rollback recipe's
 // own flag value (docs/contribute/architecture/go-api-wave-0-proof-
 // infrastructure.md, "The same procedure with the Go verbs"). One
@@ -1654,7 +1652,7 @@ func TestDisableAllRegisteredSkipsStaleOnlyOperationsInsteadOfRefusing(t *testin
 	}
 }
 
-// r7 F2 (reproduced): ONE explicit URL flag plus GO_API_QUERY_API_URL set
+// ONE explicit URL flag plus GO_API_QUERY_API_URL set
 // to a DIFFERENT process used to split the preflight across two
 // processes silently -- no second flag was ever named on the command
 // line. Must now refuse instead.
@@ -1682,7 +1680,7 @@ func TestEnableRefusesAMixOfOneExplicitURLFlagAndTheEnvVar(t *testing.T) {
 	assertNoRows(t, dsn)
 }
 
-// r7 F2 (reproduced): the endpoint-print line must be able to tell two
+// The endpoint-print line must be able to tell two
 // LOCAL processes apart -- EndpointLabel (used elsewhere for credential
 // safety) drops the port, and 127.0.0.1:A vs 127.0.0.1:B differ ONLY by
 // port.
@@ -1706,7 +1704,7 @@ func TestEnableEndpointLineDistinguishesTwoLocalProcessesByPort(t *testing.T) {
 	}
 }
 
-// r7 F3 (reproduced): `-candidate-build ""` (e.g. `-candidate-build
+// `-candidate-build ""` (e.g. `-candidate-build
 // "$SEEN"` where $SEEN happens to be unset in a script) must refuse, not
 // silently apply the write UNGUARDED -- Python refuses the identical
 // command.
@@ -1758,7 +1756,7 @@ func TestDisableRefusesAnExplicitlyEmptyCandidateBuildGuard(t *testing.T) {
 	}
 }
 
-// r7 F4 (reproduced): the before-state log line used to be keyed by
+// The before-state log line must not be keyed by
 // OPERATION ALONE, with no ORDER BY -- so with a DEAD row (a document
 // digest not in the catalog) and the LIVE row both present at the live
 // schema digest, the log could name the dead row's state as if it were

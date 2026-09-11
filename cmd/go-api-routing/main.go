@@ -109,8 +109,8 @@ var errRefused = errors.New("refused")
 // an operator can fix. It exits 1.
 var errInternal = errors.New("internal error")
 
-// errHelpRequested marks `-h`/`-help` on a VERB's own flag set (r7 F7,
-// reproduced -- see parseVerbFlags). It is not a refusal and not a crash:
+// errHelpRequested marks `-h`/`-help` on a VERB's own flag set -- see
+// parseVerbFlags. It is not a refusal and not a crash:
 // asking what a command does must exit 0, matching this binary's own
 // top-level `-h` (run's "help" case, below) and Python's argparse `-h`.
 // parseVerbFlags returns this so the verb's own early
@@ -126,13 +126,13 @@ var errHelpRequested = errors.New("help requested")
 // Every failure this command can produce is environmental -- an
 // unreachable service, a malformed DSN, a missing flag, an unproven
 // operation, a digest that moved. The set of genuine internal defects is
-// tiny and nameable. Yet the first version classified crash-by-default
-// and required each site to opt IN to being a refusal, and that produced
-// THREE findings across two review rounds: an unknown verb (r1 F2), then
-// several raw returns in `repoint` (found while fixing F2), then a
-// malformed `-postgres-uri` and a non-sentinel `/buildinfo` failure (r2
-// R2-01, R2-02). Three misses of one class is the default being wrong,
-// not three separate oversights.
+// tiny and nameable. Classifying crash-by-default and requiring each site
+// to opt IN to being a refusal is the wrong shape for this surface: an
+// unknown verb, several raw returns in `repoint`, a malformed
+// `-postgres-uri`, and a non-sentinel `/buildinfo` failure are all
+// independent instances of the SAME class of miss -- one class of miss
+// recurring independently is the default being wrong, not separate
+// oversights.
 //
 // So classification happens ONCE, here, and an unclassified error is a
 // refusal. Forgetting to mark something now costs a script a retryable
@@ -162,8 +162,8 @@ func internal(format string, args ...any) error {
 // failure, any other unclassified error the SERVER itself raised inside
 // an already-open transaction -- from an operator-actionable refusal.
 //
-// r6 F4 (reproduced): before this fix EVERY error out of
-// goapiproof.Enable/Repoint/Disable's write path exited 2, exactly like
+// Without this, EVERY error out of
+// goapiproof.Enable/Repoint/Disable's write path exits 2, exactly like
 // an ordinary "-mode is required" typo -- so a script reading "2 means
 // fix your input" could not tell a deadlock, a commit failure or a Go
 // panic (which exits 2 by the RUNTIME's own default, not 1) from a
@@ -215,7 +215,7 @@ func run(argv []string) error {
 	}
 }
 
-// helpAsSuccess turns errHelpRequested (r7 F7) into a plain nil -- a verb
+// helpAsSuccess turns errHelpRequested into a plain nil -- a verb
 // asked to explain itself already printed its usage text via
 // flag.ContinueOnError, and asking is not a failure.  Any other error
 // (including nil) passes through unchanged.
@@ -287,8 +287,8 @@ func buildInfoCredential(bearer string) *goapiproof.Credential {
 // requireProvenance refuses a WRITE with no durable who/why, and
 // NORMALISES both values in place.
 //
-// Trimming here rather than only inside the presence check is the point
-// (r1 F8): the Python verb strips before persisting, and storing a
+// Trimming here rather than only inside the presence check matters:
+// the Python verb strips before persisting, and storing a
 // whitespace-padded identity makes two records of the same operator
 // compare unequal for a reason nobody can see.
 func (c *commonFlags) requireProvenance() error {
@@ -364,37 +364,36 @@ const queryAPIURLEnvVar = "GO_API_QUERY_API_URL"
 // flag if the operator set one, otherwise queryAPIURLEnvVar with path
 // appended, otherwise "nothing is configured at all" (ok == false).
 //
-// r6 P2 (reproduced): `-registry-url` and `-buildinfo-url` used to
+// `-registry-url` and `-buildinfo-url` must never
 // default to a HARDCODED `http://localhost:8090/...`, INDEPENDENTLY of
-// each other -- so an operator who forgot just ONE of the two flags
-// silently sent that half of the preflight, and for `-buildinfo-url`
-// specifically the effective-principal envelope too, to whatever
-// happened to be listening on localhost:8090 (a port-forward to another
-// environment, a stray local process, or on a shared host any
-// unprivileged process bound to 127.0.0.1:8090) rather than refusing.
+// each other -- an operator who forgets just ONE of the two flags would
+// otherwise silently send that half of the preflight, and for
+// `-buildinfo-url` specifically the effective-principal envelope too, to
+// whatever happens to be listening on localhost:8090 (a port-forward to
+// another environment, a stray local process, or on a shared host any
+// unprivileged process bound to 127.0.0.1:8090) rather than a refusal.
 // Python's identical CLI has ONE `--query-api-url` (or
 // GO_API_QUERY_API_URL) serving BOTH reads and NO default at all --
 // unset, it refuses outright.
 //
-// Executed: two stub query-apis, one at the URL GO_API_QUERY_API_URL
-// named (build aaaa...), one answering on the OLD hardcoded default
-// (build cccc..., nothing "deployed" there). `enable` with no URL flags
-// at all wrote `flowMatrix|cccc...`, mode=canary, exit=0 -- the row named
-// a build the deployed process never ran, and the 8090 stub's log showed
-// the effective-principal envelope reached IT (`/buildinfo auth=yes`),
-// not the process GO_API_QUERY_API_URL pointed at.
+// Executed against the pre-fix shape: two stub query-apis, one at the URL
+// GO_API_QUERY_API_URL named (build aaaa...), one answering on a
+// hardcoded localhost:8090 default (build cccc..., nothing "deployed"
+// there). `enable` with no URL flags at all wrote `flowMatrix|cccc...`,
+// mode=canary, exit=0 -- the row named a build the deployed process never
+// ran, and the 8090 stub's log showed the effective-principal envelope
+// reached IT (`/buildinfo auth=yes`), not the process
+// GO_API_QUERY_API_URL pointed at.
 //
 // Deriving BOTH routes from the SAME env-var base closes the silent-
-// default half of this. r7 F2 (reproduced) CORRECTS the claim that used
-// to stand here -- "the only way the two can still diverge is an
-// operator EXPLICITLY naming two different URLs" was false: ONE explicit
-// flag plus GO_API_QUERY_API_URL set to something ELSE also splits the
+// default half of this. The other half: naming ONE route explicitly
+// while GO_API_QUERY_API_URL is set to something ELSE also splits the
 // two routes across different processes, silently, with no second flag
 // named on the command line at all. Executed: `-registry-url <A>` with
 // GO_API_QUERY_API_URL=<B> read the registry from A and sent the
 // effective-principal envelope to, and took the build from, B -- `enable`
 // wrote a row naming B's build under A's digests, exit 0. This low-level
-// function is now called ONLY through resolveQueryAPIEndpoints (below),
+// function is called ONLY through resolveQueryAPIEndpoints (below),
 // which refuses that exact mix; it is kept as the single-route primitive
 // `status` still uses (status has no /buildinfo route to split against).
 func resolveEndpointURL(explicit, path string) (resolved string, ok bool) {
@@ -408,8 +407,8 @@ func resolveEndpointURL(explicit, path string) (resolved string, ok bool) {
 }
 
 // resolveQueryAPIEndpoints resolves BOTH of query-api's routes together,
-// for the two write verbs (r7 F2, reproduced -- see resolveEndpointURL's
-// corrected doc comment for the executed repro). It refuses the one
+// for the two write verbs -- see resolveEndpointURL's
+// doc comment for the executed repro. It refuses the one
 // shape `resolveEndpointURL` alone cannot catch: ONE route named
 // explicitly and the OTHER left to a DIFFERENT source (the env var, or
 // nothing) -- that is not a deliberate two-URL override, it is a half-set
@@ -515,11 +514,11 @@ func newVerbFlagSet(name string) *flag.FlagSet {
 // operator nothing about which word broke their command.
 func parseVerbFlags(set *flag.FlagSet, argv []string) error {
 	if err := set.Parse(argv); err != nil {
-		// r7 F7 (reproduced): `-h`/`-help` on any of the four verbs used to
+		// `-h`/`-help` on any of the four verbs must never
 		// fall through to the refuse() below like any other malformed flag
-		// -- `go-api-routing disable -h` printed its usage text (via
-		// ContinueOnError) and then STILL exited 2, "refused: flag: help
-		// requested". That is inconsistent with THIS binary's own top-level
+		// -- falling through there would print the usage text (via
+		// ContinueOnError) and then STILL exit 2, "refused: flag: help
+		// requested". That would be inconsistent with THIS binary's own top-level
 		// `-h` (run's "help" case, above: prints usage, returns nil, exit
 		// 0) and with Python's `-h` (argparse: exit 0). A script piping
 		// `<verb> -h --help-only` into a "did it work" check saw a refusal
@@ -553,7 +552,7 @@ func parseVerbFlags(set *flag.FlagSet, argv []string) error {
 // Executed evidence (CHAOS-5486's input-domain sweep, through the real
 // binary): `-timeout 0` and `-timeout -1s` were both ACCEPTED, exit 0.
 // `http.Client` treats a non-positive Timeout as "no timeout at all", and
-// `status`'s whole r1 F10 fix was that a blackholed endpoint must make
+// `status`'s whole contract is that a blackholed endpoint must make
 // this verb say "unreachable" rather than hang forever -- so the two
 // values an operator is most likely to type when they mean "don't wait"
 // are exactly the two that mean "wait indefinitely". A flag whose value
@@ -769,7 +768,7 @@ func sanitizeEndpointURL(flagName, raw string) (string, error) {
 }
 
 // connectPostgres applies the command's own -timeout to CONNECTING, which
-// context.Background() did not (r1 F10).
+// a bare context.Background() would not.
 //
 // pgxpool.New does not dial; the first Acquire does. So a blackholed
 // database left `status` -- the one verb whose whole contract is that it
@@ -799,15 +798,10 @@ func connectPostgres(ctx context.Context, uri string, timeout time.Duration) (*p
 		pool.Close()
 		// The dial error names host/port, not the password, and an
 		// operator needs to know WHICH endpoint went dark -- so this one
-		// IS wrapped. Asserted by TestConnectPostgresBoundsTheDialAndSaysSo
-		// (r8 F8-class fix in passing: the name cited here was never this
-		// test's real name).
+		// IS wrapped. Asserted by TestConnectPostgresBoundsTheDialAndSaysSo.
 		//
-		// r8 F6 (reproduced, team-lead ruling R126): exit 1, not 2 --
-		// corrected from an earlier version of this fix, which left a
-		// dead database refusing (exit 2) and only DECLARED the
-		// divergence from Python's identical command (an unhandled
-		// `ConnectionRefusedError`, exit 1) rather than closing it. A
+		// Exit 1, not 2, matching Python's identical command (an unhandled
+		// `ConnectionRefusedError`, exit 1): a
 		// syntactically valid DSN naming an endpoint that will not answer
 		// is not something the operator TYPED wrong (that is the parse
 		// error above, still exit 2) -- it is the database itself being
@@ -815,7 +809,7 @@ func connectPostgres(ctx context.Context, uri string, timeout time.Duration) (*p
 		// already exits 1 for once inside a write transaction. `status`
 		// is unaffected: it catches this error and reports it as
 		// `registry_db_error`, never propagating it as an exit code, so
-		// this reclassification only changes enable/disable/repoint.
+		// this classification only affects enable/disable/repoint.
 		return nil, internal("Postgres did not answer within %s: %w", timeout, err)
 	}
 	return pool, nil
@@ -824,8 +818,8 @@ func connectPostgres(ctx context.Context, uri string, timeout time.Duration) (*p
 // requestedOperations forwards to the package parser so the four verbs
 // share ONE definition of what an --operations value means. Kept as a
 // named function here because this command's own tests pin its
-// behaviour, and because a second copy of the rule is exactly what the
-// r1 F1 fix existed to prevent.
+// behaviour, and because a second copy of the rule is exactly what
+// this exists to prevent.
 func requestedOperations(raw string) ([]string, error) {
 	return goapiproof.SplitOperations(raw)
 }

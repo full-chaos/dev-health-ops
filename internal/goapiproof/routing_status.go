@@ -64,8 +64,7 @@ type OperationStatus struct {
 	Proven       bool
 
 	// UnreachableDocumentDigests names rows this operation has AT THE LIVE
-	// SCHEMA DIGEST whose document digest is NOT the catalog's (r1 F5,
-	// corrected by r2 R2-03).
+	// SCHEMA DIGEST whose document digest is NOT the catalog's.
 	//
 	// The routing table's primary key is (schema_digest, document_digest,
 	// selected_operation), so one operation can have several rows at the

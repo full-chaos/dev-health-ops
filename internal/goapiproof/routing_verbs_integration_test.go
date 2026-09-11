@@ -462,7 +462,7 @@ func TestDisableTurnsOffARowWhoseDocumentDigestDriftedFromTheCatalog(t *testing.
 	}
 }
 
-// r1 F5, reproduced then fixed. The routing table's primary key is
+// The routing table's primary key is
 // (schema_digest, document_digest, selected_operation), so ONE operation
 // can legitimately have several rows at the live digest under different
 // document digests -- a state a document-digest change produces without
@@ -521,7 +521,7 @@ func TestDisableTurnsOffEveryRowAnOperationHasAtTheLiveDigest(t *testing.T) {
 	}
 }
 
-// The status half of r1 F5, CORRECTED by r2 R2-03.
+// The status half of the same fix.
 //
 // Only ONE row per operation is reachable: the edge resolves a request to
 // an operation through the catalog, then looks the row up by the
@@ -979,8 +979,8 @@ func TestTheSharedReadReturnsRowsInTheirFullIdentityOrder(t *testing.T) {
 	}
 }
 
-// r6 T1 (M43, unpinned before this fix): the same class as r2's M29
-// (routing_repoint_integration_test.go's mode-drift trigger) at Enable's
+// The same class as routing_repoint_integration_test.go's mode-drift
+// trigger, at Enable's
 // OWN call site. A BEFORE INSERT trigger that swallows the routing-row
 // write (RowsAffected() == 0) must refuse the whole enable, leaving NO
 // orphan candidate-build row committed -- not silently report
@@ -1029,7 +1029,7 @@ func TestEnableRefusesWhenTheRoutingRowWriteIsSwallowed(t *testing.T) {
 	}
 }
 
-// r8 F1 (reproduced): EnableOutcome now carries the row's OWN prior state,
+// EnableOutcome carries the row's OWN prior state,
 // read under the same lock the write itself takes -- this is the
 // non-concurrent half: does it read back what was actually there.
 func TestEnableOutcomeReportsThePriorRowWhenOneExisted(t *testing.T) {
@@ -1056,7 +1056,7 @@ func TestEnableOutcomeReportsThePriorRowWhenOneExisted(t *testing.T) {
 	}
 }
 
-// r8 F1 (reproduced), the other half: no row existed at all.
+// The other half: no row existed at all.
 func TestEnableOutcomeReportsNoPriorRowWhenNoneExisted(t *testing.T) {
 	ctx := t.Context()
 	pool := startRegistryPostgres(t)
@@ -1077,7 +1077,7 @@ func TestEnableOutcomeReportsNoPriorRowWhenNoneExisted(t *testing.T) {
 	}
 }
 
-// r8 F1 (reproduced), the concurrency repro itself: a genuinely
+// The concurrency repro itself: a genuinely
 // deterministic proof that the before-state read sees a CONCURRENT
 // writer's COMMITTED value, not a stale snapshot -- the exact shape
 // opus r8 found with two real binaries (a disable landing between an

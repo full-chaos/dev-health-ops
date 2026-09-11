@@ -309,7 +309,7 @@ func TestRepointRefusesWhenSomethingElseDriftsModeDuringTheWrite(t *testing.T) {
 	}
 }
 
-// r6 P3 (reproduced): `enable` and `repoint` acquire the routing-state
+// `enable` and `repoint` acquire the routing-state
 // row lock and the candidate-build row lock in OPPOSITE orders (see
 // routing_enable.go's package-level comment, corrected by this same
 // change) -- CB then RS in `enable`, RS (a FOR UPDATE pre-lock, up

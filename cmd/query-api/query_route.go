@@ -902,24 +902,23 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 	return cfg, true
 }
 
-// queryRouteMaxResultRows overrides dev-health-go/clickhouse's per-request
-// safety-net default (Options.MaxResultRows=1,000) for THIS route.
-// queryRouteMaxBytesToRead has been RETIRED (CHAOS-4651, below); the route
-// now sends ClickHouse's own "unrestricted" for that setting instead of
-// naming a client-side value at all.
-//
-// ROOT DEFECT (CHAOS-4647): those two defaults were calibrated by
-// CHAOS-3848 for a completely different endpoint -- a 200-row
-// pull_requests batch -- and borrowed here, unexamined, for an endpoint
-// that legitimately reads whole-org history. That mismatch, not either
-// specific number, is what actually broke hotspots and workGraphEdges
-// against real org 70d529e0 data (EXECUTED, live-local runner) while
-// every unit test, gofmt/vet/build, and prior codex review stayed green
-// -- none of those send SQL to a real engine. Both PASS on
-// producer-seeded scratch, whose working set sits far below either
-// ceiling, and neither failure is malformed SQL or caller error: an
-// org-wide hotspots read and a real membership graph are both
-// spec-valid per contracts/graphql/v1/schema.graphql.
+// newUnrestrictedReadClickHouseOptions is the ONE place any query-api read
+// client gets ClickHouse's own "unrestricted" MaxBytesToRead posture
+// (CHAOS-4651/CHAOS-4653, below) -- every read client this service builds
+// must start from this, not a hand-rolled dhclickhouse.Options{DSN: dsn}
+// literal, because a bare literal's MaxBytesToRead is nil, which
+// dev-health-go/clickhouse silently defaults to a 64 MiB per-query ceiling
+// (CHAOS-4647's original defect). CHAOS-5610 pulled this out of
+// newQueryRouteClickHouseClient below -- /query was the only route that
+// applied this fix; investment_explain_route.go's own read client
+// (buildInvestmentExplainRoute) built a bare Options{DSN: ...} and hit the
+// SAME 64 MiB ceiling in prod (code 307 at 64.46 MiB, `investment/explain
+// streaming error: ... iterate work unit investment rows: ClickHouse row
+// iteration failed`) -- the earlier row-iteration incident recurring in a
+// second route because the fix lived on one call site instead of the
+// class. Callers may layer additional, route-specific options (e.g.
+// queryRouteMaxResultRows below) onto the returned value; none of them may
+// overwrite MaxBytesToRead.
 //
 //   - MaxBytesToRead: RETIRED (CHAOS-4651, dev-health-go v0.6.1). This was
 //     never a capacity-boundable value -- it protects ClickHouse's OWN
@@ -951,14 +950,50 @@ func loadQueryRouteConfig() (queryRouteConfig, bool) {
 //     to 0 means literal "unrestricted", sent to the driver unchanged
 //     (clickhouse/options.go's resolveCeilingUint64). Those are NOT
 //     interchangeable -- deleting the field lands on nil, i.e. the 64 MiB
-//     default, i.e. CHAOS-4647 again. newQueryRouteClickHouseClient below
-//     therefore passes an explicit pointer to a zero-valued local, never
-//     an absent field. See query_route_integration_test.go's
+//     default, i.e. CHAOS-4647 again. newUnrestrictedReadClickHouseOptions
+//     below therefore returns an explicit pointer to a zero-valued local,
+//     never an absent field. See query_route_integration_test.go's
 //     tip_config_sends_unrestricted_max_bytes_to_read subtest, which
 //     reads system.settings back through this exact constructor and
 //     failed RED (observed "67108864", not "0") against a deliberate
 //     "just delete the field" version of this function before this fix
 //     was written.
+func newUnrestrictedReadClickHouseOptions(dsn string) dhclickhouse.Options {
+	// Explicit pointer to a zero-valued local, NOT an absent field: nil
+	// means "unset, use the 64 MiB default" under dev-health-go v0.6.1
+	// (clickhouse/options.go's resolveCeilingUint64), and a deleted field
+	// zero-values to nil. A non-nil pointer to 0 is the only way to reach
+	// ClickHouse's own "unrestricted" -- see the doc comment above.
+	maxBytesToRead := uint64(0)
+	return dhclickhouse.Options{
+		DSN:            dsn,
+		MaxBytesToRead: &maxBytesToRead,
+	}
+}
+
+// queryRouteMaxResultRows overrides dev-health-go/clickhouse's per-request
+// safety-net default (Options.MaxResultRows=1,000) for THIS route only --
+// unlike MaxBytesToRead above, this protects THIS PROCESS's own memory,
+// not ClickHouse, and its value is derived from /query's own workload
+// (workgraph.MaxEdgesLimit fan-out); it is intentionally NOT part of
+// newUnrestrictedReadClickHouseOptions, so investment/explain and any
+// future route each reason about their own row-buffering workload rather
+// than inheriting a number derived from a different endpoint's fan-out --
+// exactly the CHAOS-4647 mistake (borrowing CHAOS-3848's untouched
+// numbers for a different endpoint) this PR exists to stop repeating.
+//
+// ROOT DEFECT (CHAOS-4647): those two defaults were calibrated by
+// CHAOS-3848 for a completely different endpoint -- a 200-row
+// pull_requests batch -- and borrowed here, unexamined, for an endpoint
+// that legitimately reads whole-org history. That mismatch, not either
+// specific number, is what actually broke hotspots and workGraphEdges
+// against real org 70d529e0 data (EXECUTED, live-local runner) while
+// every unit test, gofmt/vet/build, and prior codex review stayed green
+// -- none of those send SQL to a real engine. Both PASS on
+// producer-seeded scratch, whose working set sits far below either
+// ceiling, and neither failure is malformed SQL or caller error: an
+// org-wide hotspots read and a real membership graph are both
+// spec-valid per contracts/graphql/v1/schema.graphql.
 //
 //   - MaxResultRows (queryRouteMaxResultRows below): still PROVISIONAL,
 //     successor CHAOS-4654, unchanged by this PR. This
@@ -1002,20 +1037,15 @@ const queryRouteMaxResultRows uint = 4*workgraph.MaxEdgesLimit + 100_000 // = 50
 // ClickHouse client -- pulled out of buildQueryRoute so a test can exercise
 // the REAL production wiring (these exact options reaching the real
 // driver) instead of a hand-copied literal that could silently drift from
-// what buildQueryRoute actually does (codex review round 1, P3).
+// what buildQueryRoute actually does (codex review round 1, P3). Layers
+// this route's own MaxResultRows on top of
+// newUnrestrictedReadClickHouseOptions's shared MaxBytesToRead posture,
+// per that function's doc comment.
 func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
+	opts := newUnrestrictedReadClickHouseOptions(dsn)
 	maxResultRows := queryRouteMaxResultRows
-	// Explicit pointer to a zero-valued local, NOT an absent field: nil
-	// means "unset, use the 64 MiB default" under dev-health-go v0.6.1
-	// (clickhouse/options.go's resolveCeilingUint64), and a deleted field
-	// zero-values to nil. A non-nil pointer to 0 is the only way to reach
-	// ClickHouse's own "unrestricted" -- see the long comment above.
-	maxBytesToRead := uint64(0)
-	return dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{
-		DSN:            dsn,
-		MaxResultRows:  &maxResultRows,
-		MaxBytesToRead: &maxBytesToRead,
-	})
+	opts.MaxResultRows = &maxResultRows
+	return dhclickhouse.NewClickHouseQueryClientWithOptions(opts)
 }
 
 // buildQueryRoute wires the real featureFlags path from env-sourced

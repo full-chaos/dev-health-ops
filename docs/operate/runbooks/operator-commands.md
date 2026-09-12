@@ -116,6 +116,60 @@ resolution (admin override in `identities`/`teams.manual_members`, else provider
 `team_memberships`/`teams.members`) → `linked_issue` inheritance → `author_membership` → `manual_fallback`.
 9 total precedence tiers; `docs/contribute/architecture/team-attribution.md` §0.1/§0.2 is authoritative.
 
+## Workerctl on Kubernetes (Trap #169, amended)
+
+**No pod on k8s carries both `dev-health-workerctl` AND the coordinator DSN it needs.** The workerctl binary ships only in the go-worker image, but `COORDINATOR_DATABASE_URI` is set only on scheduler and reconciler Deployments.
+
+**Solution: one-off corrective Pod.** Apply a temporary Pod manifest with secrets via `secretKeyRef` (never flags/argv — Trap #121, R167):
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dev-health-workerctl-oneoff
+  namespace: default
+spec:
+  serviceAccountName: default
+  imagePullSecrets:
+  - name: ghcr-pull
+  containers:
+  - name: workerctl
+    image: gcr.io/full-chaos/dev-health-go-operator:sha-<COMMIT>
+    restartPolicy: Never
+    env:
+    - name: COORDINATOR_DATABASE_URI
+      valueFrom:
+        secretKeyRef:
+          name: dev-health-ops-migrate
+          key: POSTGRES_URI
+    - name: WORKER_METRIC_REPAIR_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: dev-health-ops
+          key: WORKER_METRIC_REPAIR_TOKEN
+    command:
+    - workerctl
+    - metrics
+    - finalize-redrive
+    - --org
+    - <uuid>
+    - --from
+    - <date>
+    - --to
+    - <date>
+    - --review-evidence
+    - <text>
+```
+
+**Critical**: use the **`dev-health-go-operator` image, NOT `go-worker`.** The go-worker image lacks sync-dispatch contracts and will fail with `{"error":{"code":"contract_registry_invalid"}}` (Trap #169 amended, CHAOS-5614).
+
+The runtime is distroless (no shell); one Pod per verb. Delete after completion:
+```bash
+kubectl delete pod dev-health-workerctl-oneoff
+```
+
+**Required**: `--review-evidence` is REQUIRED on trigger verbs **even with `--dry-run`** (unlike `finalize-redrive` where dry-run omits it). Never use `--daily-redrive` on already-succeeded days.
+
 ## (d) Workgraph rebuild (issue-PR links, operational edges, pr_commit)
 
 | Command | Source | When to use |
@@ -148,6 +202,18 @@ behavior rather than giving concrete invocations.
 family]) tuple. **Not rehearsed, no timings** -- this is a composed sequence assembled from the commands
 above, not a tested runbook. Dry-run it against a non-prod target first.
 
+### Corrective-run sequence after a metric defect fix
+
+After fixing a defect in daily metrics computation, run this sequence to backfill affected days:
+
+1. Deploy the fix (native path, new River kind).
+2. `metrics daily-redrive --org <uuid> --from <date> --to <date> --review-evidence "..."` — repair runs stranded by River discard.
+3. `metrics finalize-redrive --org <uuid> --from <date> --to <date> --review-evidence "..."` — re-run finalize for already-completed days, backfilling new fields (e.g., new investment dimensions). **Pass `--include-succeeded=true` explicitly** (it is the default, but makes intent clear).
+4. `workgraph trigger` then `investment trigger` per §(c) — re-derive work graph and investment tables against corrected metrics.
+5. Verify via readback queries.
+
+### Full reset (wipe + re-sync)
+
 1. `migrate` (Alembic + ClickHouse) → `go-river-provision` (grants) → `go-river-migrate` (River schema) →
    `go-contractcheck` → workers/reconciler/scheduler/stream runners. This ordering is a dependency chain, not
    a convention -- see [Run workers and jobs § Deploy the Go fleet in order](../run/workers-and-jobs.md#deploy-the-go-fleet-in-order).
@@ -160,6 +226,16 @@ above, not a tested runbook. Dry-run it against a non-prod target first.
 5. Team ownership/attribution falls out of steps 2-3 automatically (native `sync.team_repo_ownership_derivation`);
    admin overrides in `identities`/`teams.manual_members` are **not** re-derivable from providers and must
    be re-entered by hand.
+
+### Note on ClickHouse ReplacingMergeTree (Trap #103)
+
+`work_item_team_attributions` uses `ReplacingMergeTree(computed_at)`. **Every query reading this table must include `FINAL`** to get the true latest row per key:
+
+```sql
+SELECT ... FROM work_item_team_attributions FINAL WHERE ...
+```
+
+Without `FINAL`, ClickHouse returns an arbitrary version of rows with the same `ORDER BY` key until background merges physically collapse them. Pre-cutover Python queries omitted `FINAL`, causing row-count mismatches on certain queries. Go-side queries include it.
 
 **Not re-derivable on a wipe** (found, not exhaustive -- back these up separately if a wipe is ever planned):
 

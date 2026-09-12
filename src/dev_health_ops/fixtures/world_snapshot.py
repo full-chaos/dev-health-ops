@@ -377,11 +377,11 @@ async def _clickhouse_materialized_view_targets(client: Any) -> set[str]:
     """Tables that a materialized view writes into.
 
     They must NOT be restored in the same pass as everything else: inserting
-    the snapshot's ``git_commits`` makes ``commit_daily_rollup_mv`` fire and
-    write its own rows into ``commit_daily_rollup``, so restoring that table's
-    snapshot rows too leaves it holding both (live: ``commit_daily_rollup:
-    expected +161, got +302``). :func:`_restore_clickhouse` therefore restores
-    every other table first, then truncates and refills these.
+    a snapshot's source rows makes a materialized view fire and write its own
+    rows into its target table, so restoring that table's snapshot rows too
+    leaves it holding both (live: a target table with roughly double the
+    expected row count). :func:`_restore_clickhouse` therefore restores every
+    other table first, then truncates and refills these.
     """
 
     result = await asyncio.to_thread(
@@ -1404,10 +1404,11 @@ async def _restore_clickhouse(
 ) -> None:
     """Two passes, because materialized views fire on the first one.
 
-    Inserting the snapshot's ``git_commits`` makes ``commit_daily_rollup_mv``
-    write its own rows into ``commit_daily_rollup``; inserting that table's
-    snapshot rows as well leaves it holding both copies (live: ``expected
-    +161, got +302``). So every non-MV-target table is restored first, and
+    Inserting a snapshot's source rows makes any materialized view write its
+    own rows into its target table; inserting that table's snapshot rows as
+    well leaves it holding both copies (live: a target table with roughly
+    double the expected row count). So every non-MV-target table is restored
+    first, and
     each MV target is then TRUNCATEd and refilled from the snapshot, which
     leaves it holding exactly what the generated database held.
 

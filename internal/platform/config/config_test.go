@@ -236,6 +236,66 @@ func TestLoadDefaultsAndTypedOverrides(t *testing.T) {
 	}
 }
 
+// TestQueueTelemetryTimeoutFloorsAtHealthCheckTimeout pins CHAOS-5615's knob:
+// QueueTelemetryTimeout must never end up BELOW HealthCheckTimeout, since a
+// telemetry query bound by less time than the readiness probe budget it runs
+// inside is simply cut off by the probe's own deadline first, not its own.
+func TestQueueTelemetryTimeoutFloorsAtHealthCheckTimeout(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unset defaults to 2s and is floored up when health-check-timeout is larger", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := Load(workerSpec(map[string]string{
+			"DEV_HEALTH_HEALTH_CHECK_TIMEOUT": "10s",
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.QueueTelemetryTimeout != 10*time.Second {
+			t.Fatalf("QueueTelemetryTimeout = %s, want floored to the 10s health-check-timeout", cfg.QueueTelemetryTimeout)
+		}
+	})
+
+	t.Run("an explicit value below health-check-timeout is still floored up", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := Load(workerSpec(map[string]string{
+			"DEV_HEALTH_HEALTH_CHECK_TIMEOUT":    "10s",
+			"DEV_HEALTH_QUEUE_TELEMETRY_TIMEOUT": "1s",
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.QueueTelemetryTimeout != 10*time.Second {
+			t.Fatalf("QueueTelemetryTimeout = %s, want floored to the 10s health-check-timeout, never the smaller explicit value", cfg.QueueTelemetryTimeout)
+		}
+	})
+
+	t.Run("an explicit value above health-check-timeout is honored, not clamped down", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := Load(workerSpec(map[string]string{
+			"DEV_HEALTH_HEALTH_CHECK_TIMEOUT":    "2s",
+			"DEV_HEALTH_QUEUE_TELEMETRY_TIMEOUT": "15s",
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.QueueTelemetryTimeout != 15*time.Second {
+			t.Fatalf("QueueTelemetryTimeout = %s, want the wider explicit 15s value honored", cfg.QueueTelemetryTimeout)
+		}
+	})
+
+	t.Run("neither set defaults to the 2s default for both", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := Load(workerSpec(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.QueueTelemetryTimeout != 2*time.Second || cfg.HealthCheckTimeout != 2*time.Second {
+			t.Fatalf("defaults = queue=%s health=%s, want both 2s", cfg.QueueTelemetryTimeout, cfg.HealthCheckTimeout)
+		}
+	})
+}
+
 func TestShutdownTimeoutSupportsDeploymentGraceWindows(t *testing.T) {
 	t.Parallel()
 

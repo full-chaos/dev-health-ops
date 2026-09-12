@@ -345,6 +345,161 @@ func TestQueueSaturationIsPerProcessAcrossReplicas(t *testing.T) {
 	}
 }
 
+// TestQueueTelemetryContractVersionScanBoundsWorkToTheBacklogNotTheWholeTable
+// is CHAOS-5615's part (b): before the supplemental index, the
+// queued_contract_versions check's contract-version extraction had no index
+// to use for state='available' rows in the configured queues, so it
+// sequentially scanned the WHOLE river_job table -- every completed/
+// discarded job ever run, not just the live backlog. On a restored backlog
+// (11,428 available `metrics` rows, the live incident) that scan blew the
+// query's timeout budget. This pins that river_job_available_contract_version_idx
+// (added in ApplyPinnedMigrations) changes the plan from a sequential scan
+// of the whole table to an index scan bounded to the matching subset, on a
+// synthetic backlog sized past the live incident's own count plus 400k
+// unrelated completed rows standing in for retained job history.
+//
+// It does NOT claim an index-ONLY scan: measured directly against Postgres
+// 18 (both the pinned ghcr.io/full-chaos/postgres:18-alpine test image and
+// upstream postgres:18), a btree index whose key includes a jsonb
+// extraction expression is never used to serve that expression's value at
+// execution time -- the planner always re-reads it from the heap even
+// though the exact value is already sitting in the index, a real, verified
+// limitation, not an implementation gap here. The win this index delivers
+// is bounding which rows are visited at all (backlog-sized, not
+// table-sized), not eliminating the per-row heap/args read.
+//
+// It does not exercise QueueTelemetrySampler directly (that type has no
+// EXPLAIN seam); it proves the INDEX ITSELF is usable for the exact
+// predicate shape unsupported_available's subquery in telemetry.go issues.
+func TestQueueTelemetryContractVersionScanBoundsWorkToTheBacklogNotTheWholeTable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeInstance(t, instance)
+
+	domainRole, err := containers.RoleName("worker_domain_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueRole, err := containers.RoleName("worker_queue_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adminPool := openPool(t, ctx, instance.URI)
+	defer adminPool.Close()
+	defer containers.DropRole(adminPool, domainRole, t.Logf)
+	defer containers.DropRole(adminPool, queueRole, t.Logf)
+	createRuntimeRoles(t, ctx, adminPool, domainRole, queueRole)
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, adminPool, riverstore.MigrationOptions{
+		Schema: "river", DomainRole: domainRole, QueueRole: queueRole,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sized past the live incident's own 11,428-row backlog.
+	const backlogRows = 12_000
+	if _, err := adminPool.Exec(ctx, `
+		INSERT INTO river.river_job (state, max_attempts, args, kind, queue, scheduled_at)
+		SELECT
+			'available',
+			3,
+			jsonb_build_object(
+				'contract_version', 1,
+				'org_id', gen_random_uuid(),
+				'payload', repeat('x', 512)
+			),
+			'metrics.compute',
+			'metrics',
+			now() - (generated.ordinal * interval '1 second')
+		FROM generate_series(1, $1) AS generated(ordinal)`,
+		backlogRows,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// A second, unrelated queue proves the index (queue, kind, ...) leading
+	// column is what makes the plan selective -- if the planner ever fell
+	// back to scanning both queues' rows the row count doubles.
+	if _, err := adminPool.Exec(ctx, `
+		INSERT INTO river.river_job (state, max_attempts, args, kind, queue, scheduled_at, finalized_at)
+		VALUES ('available', 3, '{"contract_version":1}'::jsonb, 'system.heartbeat', 'heartbeat', now(), NULL)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// A real river_job table is never just its live backlog -- completed/
+	// discarded rows accumulate for the whole retention window. A seq scan's
+	// cost is proportional to the WHOLE relation, not the matched subset, so
+	// without enough non-'available' filler the table is small enough that
+	// Postgres correctly prefers a seq scan regardless of any index (measured
+	// live: it does, on the backlog alone). This filler is what makes the
+	// synthetic backlog representative of the incident's actual table shape,
+	// not just its available-row count.
+	const fillerRows = 400_000
+	if _, err := adminPool.Exec(ctx, `
+		INSERT INTO river.river_job (state, max_attempts, args, kind, queue, scheduled_at, finalized_at)
+		SELECT
+			'completed',
+			3,
+			jsonb_build_object('contract_version', 1, 'payload', repeat('y', 512)),
+			'metrics.compute',
+			'metrics',
+			now() - (generated.ordinal * interval '1 second'),
+			now() - (generated.ordinal * interval '1 second')
+		FROM generate_series(1, $1) AS generated(ordinal)`,
+		fillerRows,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// CHAOS-5615 runbook step (c): ANALYZE after a restore/bulk load so the
+	// planner's row-count estimate is fresh -- without this the planner can
+	// choose the wrong plan (a sequential scan) regardless of which indexes
+	// exist.
+	if _, err := adminPool.Exec(ctx, "ANALYZE river.river_job"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The exact predicate shape unsupported_available's subquery in
+	// telemetry.go issues: queue = ANY(configured queues), state='available',
+	// projecting queue/kind/contract_version -- never args itself.
+	var plan strings.Builder
+	rows, err := adminPool.Query(ctx, `
+		EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+		SELECT DISTINCT river_job.queue, river_job.kind, river_job.args ->> 'contract_version'
+		FROM river.river_job
+		WHERE river_job.queue = ANY($1::text[])
+			AND river_job.state = 'available'`,
+		[]string{"metrics"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		plan.WriteString(line)
+		plan.WriteString("\n")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	rows.Close()
+
+	planText := plan.String()
+	if !strings.Contains(planText, "Index Scan using river_job_available_contract_version_idx") {
+		t.Fatalf("plan did not use the contract-version index at all:\n%s", planText)
+	}
+	if strings.Contains(planText, "Seq Scan on river_job") {
+		t.Fatalf("plan fell back to a sequential scan over the %d-row table instead of the %d-row backlog:\n%s", backlogRows+fillerRows+1, backlogRows, planText)
+	}
+}
+
 func insertRunningRetentionJob(t *testing.T, ctx context.Context, pool *pgxpool.Pool, clientID string) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `

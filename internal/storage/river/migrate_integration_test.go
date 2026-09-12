@@ -398,6 +398,10 @@ func assertRequiredIndexes(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 		"river_job_state_and_finalized_at_index",
 		"river_job_unique_idx",
 		"river_notification_created_at_idx",
+		// CHAOS-5615: the queued_contract_versions telemetry check's own
+		// supplemental index, applied alongside River's pinned schema (see
+		// ApplyPinnedMigrations) -- not part of the upstream River bundle.
+		"river_job_available_contract_version_idx",
 	} {
 		if !found[required] {
 			t.Errorf("pinned River schema missing index %s", required)

@@ -117,3 +117,24 @@ docker exec dev-health-clickhouse-1 clickhouse-client \
 
 Verify with a real query per store, not by inference — see "Test restore
 in isolation" above.
+
+## After any Postgres restore: ANALYZE `river.river_job` (CHAOS-5615)
+
+A restore leaves Postgres's planner statistics stale for the restored
+tables, `river.river_job` included. On 2026-09-11, a restore left 11,428
+`available` `metrics` rows queued; the Go worker's queued-contract-version
+startup check queries this table on every restart, and against stale
+statistics it chose a plan that missed its own timeout budget, aborting
+readiness (13 restarts on the affected deployment) until `ANALYZE
+river.river_job` and a wider `--health-check-timeout` were applied by
+hand. Run
+
+```sql
+ANALYZE river.river_job;
+```
+
+against the queue-control database immediately after restoring it,
+before restarting the Go worker/reconciler/scheduler fleet — this is
+cheap (a statistics-only pass, no table rewrite or lock beyond a normal
+`ANALYZE`) and is not optional when the restored table has a
+nontrivial backlog.

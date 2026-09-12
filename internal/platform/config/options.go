@@ -148,6 +148,14 @@ var optionRegistry = []Option{
 		Usage: "per-dependency readiness probe timeout",
 	},
 	{
+		// CHAOS-5615: floored at --health-check-timeout in config.Load, so it
+		// only ever WIDENS the River queue-telemetry query's budget past the
+		// general per-dependency probe timeout, never narrows it below.
+		Flag: "queue-telemetry-timeout", Env: "DEV_HEALTH_QUEUE_TELEMETRY_TIMEOUT", Kind: KindDuration,
+		Default: defaultQueueTelemetryTimeout.String(), Group: GroupRuntime,
+		Usage: "River queue-telemetry query timeout; floored at --health-check-timeout",
+	},
+	{
 		// celery worker spells this --loglevel; both are accepted.
 		Flag: "log-level", Aliases: []string{"loglevel"},
 		Env: "DEV_HEALTH_LOG_LEVEL", Kind: KindString,

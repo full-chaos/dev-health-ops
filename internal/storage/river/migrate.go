@@ -256,6 +256,36 @@ func ApplyPinnedMigrations(
 			return MigrationResult{}, migrationStageError("create posture manifest table")
 		}
 	}
+	// CHAOS-5615: queued_contract_versions readiness
+	// (QueueTelemetrySampler.CheckAvailableContractVersions) filters
+	// river_job down to state='available' rows in the configured queues, then
+	// extracts args->>'contract_version' from every one of them. Without a
+	// supporting index this is a sequential scan over the WHOLE river_job
+	// table -- every completed/discarded job ever run, not just the live
+	// backlog -- so its cost scales with total table history, not with the
+	// available backlog. On a restored backlog (11,428 available `metrics`
+	// rows, the live incident this closes) that scan blew the query's
+	// timeout budget. This partial index bounds the scan to exactly the
+	// state='available' rows in the configured queues (measured on a
+	// synthetic 12k-row backlog against a 400k-row table: the planner
+	// switches from a sequential scan of the whole table to an index scan
+	// touching only the matching subset -- see
+	// TestQueueTelemetryContractVersionScanBoundsWorkToTheBacklogNotTheWholeTable).
+	// It does NOT make the scan an index-ONLY scan -- measured directly,
+	// Postgres 18 does not serve an indexed jsonb-extraction expression's
+	// value from the index alone at execution time, so args is still read
+	// (and detoasted if large) per matching row; the win is bounding which
+	// rows are visited at all, from the whole table down to the backlog.
+	// Built inside the same transaction and IF NOT EXISTS like every other
+	// DDL in this function -- see the posture manifest table above for why
+	// that is safe on a repeat run.
+	riverJobRelation := pgx.Identifier{options.Schema, "river_job"}.Sanitize()
+	if _, err := tx.Exec(ctx, `CREATE INDEX IF NOT EXISTS river_job_available_contract_version_idx
+		ON `+riverJobRelation+` (queue, kind, (args ->> 'contract_version'))
+		WHERE state = 'available'`); err != nil {
+		logMigrationStageFailure(ctx, options.Logger, "create queue telemetry contract version index", err)
+		return MigrationResult{}, migrationStageError("create queue telemetry contract version index")
+	}
 	if err := applyRuntimeGrants(ctx, tx, options); err != nil {
 		return MigrationResult{}, migrationStageError("apply runtime grants")
 	}

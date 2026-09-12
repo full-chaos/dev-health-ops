@@ -180,7 +180,7 @@ Userlist exposure and pooler convergence move to CHAOS-5604 scope. For now, dire
 
 ## See also
 
-- [Operator commands § workerctl one-off Pod](operator-commands.md#workerctl-on-k8s) — running corrective verbs from a one-off Pod.
+- [Operator commands § Workerctl on Kubernetes](operator-commands.md#workerctl-on-kubernetes-trap-169-amended) — running corrective verbs from a one-off Pod.
 - [Prod k3s operate](prod-k3s-deploy-and-operate.md) — restore procedures, secrets, rollouts.
 - CHAOS-5606 — Query-api bootstrap epic (JOB 7).
 - CHAOS-5604 — Chart and pooler convergence (pooler exposures, CPU limits, future DSN form).

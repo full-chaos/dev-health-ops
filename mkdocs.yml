@@ -169,6 +169,10 @@ nav:
           - Performance or rate limit: operate/runbooks/performance-or-rate-limit.md
           - Backup or restore failure: operate/runbooks/backup-or-restore-failure.md
           - Disaster recovery: operate/runbooks/disaster-recovery.md
+          - Prod k3s operate: operate/runbooks/prod-k3s-deploy-and-operate.md
+          - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
+      - Prod cutover 2026-09-11:
+          - operate/prod-cutover-2026-09-11-lessons/index.md
   - Integrate and extend:
       - integrate/index.md
       - Customer Push:
